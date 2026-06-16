@@ -316,6 +316,12 @@ try {
     $pepp_courses = [];
 }
 
+$all_active_courses = [];
+try {
+    $stmt = $pdo->query("SELECT course_name, academic_year FROM pepp_courses WHERE status = 'active' ORDER BY course_name");
+    $all_active_courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {}
+
 // Fee lookup map: "course||year" => total_fee (used to auto-show the fee)
 $fee_map = [];
 try {
@@ -2037,6 +2043,7 @@ $country_codes = [
 // ── Course fee auto-display + coupon/referral apply ──
 (function () {
     var feeMap = <?php echo json_encode($fee_map, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
+    var activeCourses = <?php echo json_encode($all_active_courses, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
     var courseSel = document.querySelector('select[name="pepp_course"]');
     var yearSel   = document.querySelector('select[name="pepp_academic_year"]');
     var codeInput = document.getElementById('coupon_code');
@@ -2059,8 +2066,43 @@ $country_codes = [
         var c = courseSel ? courseSel.value : '', y = yearSel ? yearSel.value : '';
         if (!c) return 0;
         if (feeMap[c + '||' + y] !== undefined) return feeMap[c + '||' + y];
+        if (feeMap[c + '||All years'] !== undefined) return feeMap[c + '||All years'];
         if (feeMap[c + '||'] !== undefined) return feeMap[c + '||'];
         return 0;
+    }
+
+    function filterCourses() {
+        if (!courseSel || !yearSel) return;
+        var selectedYear = yearSel.value;
+        var currentSelectedCourse = courseSel.value || "<?php echo htmlspecialchars($form_data['pepp_course'] ?? ''); ?>";
+        
+        courseSel.innerHTML = '<option value="">Select PEPP Course&hellip;</option>';
+        
+        var filtered = activeCourses.filter(function(c) {
+            return !selectedYear || c.academic_year === selectedYear || c.academic_year === 'All years';
+        });
+        
+        var seenNames = {};
+        filtered.forEach(function(c) {
+            if (!seenNames[c.course_name]) {
+                seenNames[c.course_name] = true;
+                var opt = document.createElement('option');
+                opt.value = c.course_name;
+                opt.textContent = c.course_name;
+                if (c.course_name === currentSelectedCourse) {
+                    opt.selected = true;
+                }
+                courseSel.appendChild(opt);
+            }
+        });
+        
+        renderFee();
+    }
+
+    if (yearSel) {
+        yearSel.addEventListener('change', function() {
+            filterCourses();
+        });
     }
     function renderFee() {
         currentFee = lookupFee();
@@ -2115,6 +2157,7 @@ $country_codes = [
     var pre = params.get('ref') || params.get('coupon') || params.get('code');
     if (pre && codeInput) { codeInput.value = pre.toUpperCase(); }
 
+    filterCourses();
     renderFee();
     // If a code is prefilled and course/year already chosen (e.g. form repost), validate
     if (codeInput && codeInput.value.trim() && courseSel && courseSel.value && yearSel && yearSel.value) applyCode();

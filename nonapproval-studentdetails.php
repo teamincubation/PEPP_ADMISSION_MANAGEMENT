@@ -82,7 +82,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // Course options
 try {
-    $courses = $pdo->query("SELECT course_name, total_fee FROM pepp_courses WHERE status = 'active' ORDER BY course_name")->fetchAll();
+    $courses = $pdo->query("SELECT course_name, total_fee, academic_year FROM pepp_courses WHERE status = 'active' ORDER BY course_name")->fetchAll();
 } catch (Exception $e) { $courses = []; }
 try {
     $years = $pdo->query("SELECT year FROM academic_years ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN);
@@ -224,7 +224,7 @@ include 'includes/admin_nav.php';
                 <div class="field"><label>University / Board</label>
                     <input type="text" name="university_board" value="<?php echo e($student['university_board']); ?>"></div>
                 <div class="field"><label>PEPP Course</label>
-                    <select name="pepp_course">
+                    <select name="pepp_course" id="pepp-course">
                         <?php
                         $found = false;
                         foreach ($courses as $c) {
@@ -238,7 +238,7 @@ include 'includes/admin_nav.php';
                         ?>
                     </select></div>
                 <div class="field"><label>Academic Year</label>
-                    <select name="pepp_academic_year">
+                    <select name="pepp_academic_year" id="pepp-academic-year">
                         <?php
                         $foundY = false;
                         foreach ($years as $y) {
@@ -284,4 +284,50 @@ include 'includes/admin_nav.php';
     </div>
 </form>
 
-<?php include 'includes/admin_footer.php'; ?>
+<?php
+$extra_scripts = "<script>
+const activeCourses = " . json_encode($courses, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) . ";
+const courseSel = document.getElementById('pepp-course');
+const yearSel = document.getElementById('pepp-academic-year');
+
+function filterCourses() {
+    if (!courseSel || !yearSel) return;
+    const selectedYear = yearSel.value;
+    const currentSelectedCourse = courseSel.value || \"" . htmlspecialchars($student['pepp_course'] ?? '') . "\";
+    
+    courseSel.innerHTML = '';
+    
+    const filtered = activeCourses.filter(function(c) {
+        return !selectedYear || c.academic_year === selectedYear || c.academic_year === 'All years';
+    });
+    
+    let foundCurrent = false;
+    filtered.forEach(function(c) {
+        if (c.course_name === currentSelectedCourse) foundCurrent = true;
+    });
+    if (!foundCurrent && currentSelectedCourse) {
+        const opt = document.createElement('option');
+        opt.value = currentSelectedCourse;
+        opt.textContent = currentSelectedCourse;
+        opt.selected = true;
+        courseSel.appendChild(opt);
+    }
+
+    filtered.forEach(function(c) {
+        const opt = document.createElement('option');
+        opt.value = c.course_name;
+        opt.textContent = c.course_name + ' (₹' + Number(c.total_fee).toLocaleString('en-IN') + ')';
+        if (c.course_name === currentSelectedCourse) {
+            opt.selected = true;
+        }
+        courseSel.appendChild(opt);
+    });
+}
+
+if (yearSel) {
+    yearSel.addEventListener('change', filterCourses);
+}
+filterCourses();
+</script>";
+include 'includes/admin_footer.php';
+?>

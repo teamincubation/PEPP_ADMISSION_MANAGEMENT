@@ -268,7 +268,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'impor
 
 /* ── Page data ──────────────────────────────────────────────────── */
 try {
-    $courses = $pdo->query("SELECT course_name, total_fee, course_type FROM pepp_courses WHERE status = 'active' ORDER BY course_name")->fetchAll();
+    $courses = $pdo->query("SELECT course_name, total_fee, course_type, academic_year FROM pepp_courses WHERE status = 'active' ORDER BY course_name")->fetchAll();
 } catch (Exception $e) { $courses = []; }
 try {
     $years = $pdo->query("SELECT year FROM academic_years WHERE status = 'active' ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN);
@@ -456,9 +456,13 @@ include 'includes/admin_nav.php';
 
 <?php
 $extra_scripts = "<script>
+const activeCourses = " . json_encode($courses, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) . ";
+const courseSel = document.getElementById('pepp-course');
+const yearSel = document.querySelector('select[name=\"pepp_academic_year\"]');
+
 function courseFee() {
     const sel = document.getElementById('pepp-course');
-    const opt = sel.options[sel.selectedIndex];
+    const opt = sel ? sel.options[sel.selectedIndex] : null;
     return opt ? parseFloat(opt.dataset.fee || 0) : 0;
 }
 function updateFeeHint() {
@@ -466,6 +470,35 @@ function updateFeeHint() {
     document.getElementById('fee-hint').textContent = f ? 'Course fee: ₹' + f.toLocaleString('en-IN') : '';
     renderInstallments();
 }
+function filterCourses() {
+    if (!courseSel || !yearSel) return;
+    const selectedYear = yearSel.value;
+    const currentSelectedCourse = courseSel.value || \"" . htmlspecialchars($form_data['pepp_course'] ?? '') . "\";
+    
+    courseSel.innerHTML = '<option value=\"\">- Select course -</option>';
+    
+    const filtered = activeCourses.filter(function(c) {
+        return !selectedYear || c.academic_year === selectedYear || c.academic_year === 'All years';
+    });
+    
+    filtered.forEach(function(c) {
+        const opt = document.createElement('option');
+        opt.value = c.course_name;
+        opt.textContent = c.course_name + ' (₹' + Number(c.total_fee).toLocaleString('en-IN') + ')';
+        opt.dataset.fee = c.total_fee;
+        if (c.course_name === currentSelectedCourse) {
+            opt.selected = true;
+        }
+        courseSel.appendChild(opt);
+    });
+    
+    updateFeeHint();
+}
+
+if (yearSel) {
+    yearSel.addEventListener('change', filterCourses);
+}
+
 function renderInstallments() {
     const plan = document.getElementById('pay-plan').value;
     const box = document.getElementById('installments-box');
@@ -484,7 +517,7 @@ function renderInstallments() {
     }
     box.innerHTML = html + '</div>';
 }
-updateFeeHint();
+filterCourses();
 </script>";
 include 'includes/admin_footer.php';
 ?>

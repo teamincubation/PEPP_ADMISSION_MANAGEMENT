@@ -345,13 +345,7 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
-<!-- ── ALUMNI DATABASE LINK ── -->
-<div class="panel">
-    <div class="panel-head"><span class="head-icon"><i class="fas fa-user-graduate"></i></span><h2>Alumni Database</h2>
-        <div class="head-right"><a class="btn btn-sm btn-primary" href="alumni-database.php"><i class="fas fa-arrow-right"></i> Open Alumni Database</a></div>
-    </div>
-    <div class="panel-body"><div class="cell-sub">Manage past students (add or bulk-import) used to verify PEPPian alumni accounts for the referral program.</div></div>
-</div>
+
 
 <!-- ── EXPENSE TYPES ── -->
 <div class="panel">

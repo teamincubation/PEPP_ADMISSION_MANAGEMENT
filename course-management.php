@@ -142,7 +142,7 @@ include 'includes/admin_nav.php';
                 <div class="field"><label>Type</label>
                     <select name="course_type"><?php foreach (['UG','PG','NCET','NET','KESA'] as $t) echo "<option>$t</option>"; ?></select></div>
                 <div class="field"><label>Academic Year</label>
-                    <select name="academic_year"><?php foreach ($years as $y) echo '<option>' . e($y) . '</option>'; ?></select></div>
+                    <select name="academic_year"><option value="All years">All years</option><?php foreach ($years as $y) echo '<option>' . e($y) . '</option>'; ?></select></div>
                 <div class="field"><label>Total Fee (₹)</label><input type="number" name="total_fee" min="0" step="0.01" value="0"></div>
             </div>
             <div style="display:flex; justify-content:flex-end; margin-top:14px;">
@@ -223,7 +223,7 @@ include 'includes/admin_nav.php';
                     <div class="field"><label>Type</label>
                         <select name="course_type" id="ed-type"><?php foreach (['UG','PG','NCET','NET','KESA'] as $t) echo "<option>$t</option>"; ?></select></div>
                     <div class="field"><label>Academic Year</label>
-                        <select name="academic_year" id="ed-year"><?php foreach ($years as $y) echo '<option>' . e($y) . '</option>'; ?></select></div>
+                        <select name="academic_year" id="ed-year"><option value="All years">All years</option><?php foreach ($years as $y) echo '<option>' . e($y) . '</option>'; ?></select></div>
                     <div class="field"><label>Total Fee (₹)</label><input type="number" name="total_fee" id="ed-fee" min="0" step="0.01"></div>
                 </div>
                 <div class="alert alert-warn" style="margin-top:12px; margin-bottom:0;">

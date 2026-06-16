@@ -22,8 +22,8 @@ function pepp_tables_exist($pdo, $tables) {
 function course_fee($pdo, $course_name, $year = '') {
     try {
         if ($year !== '') {
-            $stmt = $pdo->prepare("SELECT total_fee FROM pepp_courses WHERE course_name = ? AND academic_year = ? LIMIT 1");
-            $stmt->execute([$course_name, $year]);
+            $stmt = $pdo->prepare("SELECT total_fee FROM pepp_courses WHERE course_name = ? AND (academic_year = ? OR academic_year = 'All years') ORDER BY CASE WHEN academic_year = ? THEN 0 ELSE 1 END LIMIT 1");
+            $stmt->execute([$course_name, $year, $year]);
             $f = $stmt->fetchColumn();
             if ($f !== false && $f !== null) return (float)$f;
         }

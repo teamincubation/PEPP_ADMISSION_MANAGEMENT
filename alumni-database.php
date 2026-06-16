@@ -1,24 +1,210 @@
 <?php
 require_once 'includes/auth.php';
-require_super_admin();   // Super Admin only
+require_permission('alumni');
 
-/* Alumni Database - Super Admin manages past students for the referral
+/* Alumni Database - Admins manage past students for the referral
    program's verification. Add individually or bulk-import CSV. Duplicate
    mobile/email is folded into the secondary mobile/email of the existing row. */
 
 $success_message = ''; $error_message = '';
+
+function check_and_update_alumni_schema($pdo) {
+    try {
+        $stmt = $pdo->query("DESCRIBE alumni");
+        $existing_cols = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        $existing_cols = array_map('strtolower', $existing_cols);
+        
+        $columns_to_ensure = [
+            'gender' => "ENUM('Male','Female','Other') DEFAULT NULL",
+            'date_of_birth' => "DATE DEFAULT NULL",
+            'whatsapp_country_code' => "VARCHAR(10) DEFAULT '+91'",
+            'whatsapp_number' => "VARCHAR(20) DEFAULT NULL",
+            'mobile_same_as_whatsapp' => "ENUM('yes','no') DEFAULT 'yes'",
+            'mobile_number' => "VARCHAR(20) DEFAULT NULL",
+            'emergency_contact' => "VARCHAR(20) DEFAULT NULL",
+            'college_school' => "VARCHAR(255) DEFAULT NULL",
+            'course' => "VARCHAR(255) DEFAULT NULL",
+            'university_board' => "VARCHAR(255) DEFAULT NULL",
+            'remaining_semesters' => "TEXT DEFAULT NULL",
+            'postal_address' => "TEXT DEFAULT NULL",
+            'postal_pincode' => "VARCHAR(10) DEFAULT NULL",
+            'state' => "VARCHAR(100) DEFAULT NULL",
+            'district' => "VARCHAR(100) DEFAULT NULL",
+            'place_post_office' => "VARCHAR(100) DEFAULT NULL",
+            'pepp_course' => "VARCHAR(255) DEFAULT NULL",
+            'pepp_academic_year' => "VARCHAR(20) DEFAULT NULL",
+            'paid_amount' => "DECIMAL(10,2) DEFAULT 0.00",
+            'paid_date' => "DATE DEFAULT NULL",
+            'payment_screenshot' => "VARCHAR(255) DEFAULT NULL",
+            'user_photo' => "VARCHAR(255) DEFAULT NULL",
+            'instagram_id' => "VARCHAR(100) DEFAULT NULL",
+            'how_know_pepp' => "VARCHAR(255) DEFAULT NULL",
+            'terms_agreed' => "ENUM('yes','no') DEFAULT 'no'",
+            'user_id' => "VARCHAR(20) DEFAULT NULL",
+            'ip_address' => "VARCHAR(45) DEFAULT NULL",
+            'entry_datetime' => "DATETIME DEFAULT NULL",
+            'submit_datetime' => "DATETIME DEFAULT NULL",
+            'time_spent' => "INT(11) DEFAULT 0",
+            'isp' => "VARCHAR(255) DEFAULT NULL",
+            'as_name' => "VARCHAR(255) DEFAULT NULL",
+            'network_type' => "VARCHAR(50) DEFAULT NULL",
+            'country' => "VARCHAR(100) DEFAULT NULL",
+            'region' => "VARCHAR(100) DEFAULT NULL",
+            'device_details' => "TEXT DEFAULT NULL",
+            'os_details' => "TEXT DEFAULT NULL",
+            'status' => "ENUM('pending','approved','rejected') DEFAULT 'pending'",
+            'approved_by' => "VARCHAR(255) DEFAULT NULL",
+            'approval_date' => "DATETIME DEFAULT NULL",
+            'payment_mode' => "ENUM('Online','Cash','100% Scholarship','Pay later') DEFAULT NULL",
+            'payment_account_id' => "INT(11) DEFAULT NULL",
+            'discount_amount' => "DECIMAL(10,2) DEFAULT 0.00",
+            'discount_remark' => "TEXT DEFAULT NULL",
+            'payment_plan' => "VARCHAR(50) DEFAULT 'One Time'",
+            'peppkit_eligibility' => "ENUM('Eligible','Not Eligible') DEFAULT 'Not Eligible'",
+            'student_status' => "ENUM('active','inactive','suspended','completed') DEFAULT 'active'",
+            'joined_date' => "DATE DEFAULT NULL",
+            'peppkit_eligible' => "ENUM('Eligible','Not Eligible') DEFAULT 'Not Eligible'",
+            'total_fee' => "DECIMAL(10,2) DEFAULT 0.00",
+            'course_expiry_date' => "DATE DEFAULT NULL",
+            'course_access_provided' => "ENUM('yes','no') DEFAULT 'no'",
+            'course_status' => "ENUM('active','completed','suspended') DEFAULT 'active'",
+            'course_end_date' => "DATE DEFAULT NULL",
+            'phone' => "VARCHAR(20) DEFAULT NULL",
+            'onboarding_status' => "ENUM('pending','completed') DEFAULT 'pending'",
+            'remaining_semester_exams' => "TEXT DEFAULT NULL",
+            'last_visit_ip' => "VARCHAR(45) DEFAULT NULL",
+            'last_visit_location' => "VARCHAR(255) DEFAULT NULL",
+            'last_visit_isp' => "VARCHAR(255) DEFAULT NULL",
+            'last_visit_as' => "VARCHAR(255) DEFAULT NULL",
+            'last_visit_time' => "DATETIME DEFAULT NULL",
+            'course_duration_date' => "DATE DEFAULT NULL",
+            'device_type' => "VARCHAR(50) DEFAULT NULL",
+            'device_name' => "VARCHAR(100) DEFAULT NULL",
+            'device_brand' => "VARCHAR(50) DEFAULT NULL",
+            'os' => "VARCHAR(50) DEFAULT NULL",
+            'os_version' => "VARCHAR(50) DEFAULT NULL",
+            'browser' => "VARCHAR(50) DEFAULT NULL",
+            'browser_version' => "VARCHAR(50) DEFAULT NULL",
+            'applied_coupon' => "VARCHAR(40) DEFAULT NULL",
+            'referral_code' => "VARCHAR(40) DEFAULT NULL",
+            'coupon_discount' => "DECIMAL(10,2) DEFAULT 0.00",
+            'academic_track_after_pepp' => "TEXT DEFAULT NULL",
+            'current_profession_details' => "TEXT DEFAULT NULL",
+            'profile_photo' => "VARCHAR(255) DEFAULT NULL",
+            'is_verified' => "TINYINT(1) NOT NULL DEFAULT 0",
+            'synced_at' => "DATETIME DEFAULT NULL"
+        ];
+        
+        $to_add = [];
+        foreach ($columns_to_ensure as $col => $def) {
+            if (!in_array(strtolower($col), $existing_cols)) {
+                $to_add[] = "ADD COLUMN `$col` $def";
+            }
+        }
+        
+        if (!empty($to_add)) {
+            $sql = "ALTER TABLE alumni " . implode(", ", $to_add);
+            $pdo->exec($sql);
+        }
+    } catch (Exception $e) {
+        error_log("Alumni schema self-healing error: " . $e->getMessage());
+    }
+}
 
 function alumni_ready($pdo) {
     try { return (bool)$pdo->query("SHOW TABLES LIKE 'alumni'")->fetchColumn(); }
     catch (Exception $e) { return false; }
 }
 if (!alumni_ready($pdo)) {
-    $active_page = 'settings'; $page_title = 'Alumni Database'; $page_sub = '';
+    $active_page = 'alumni'; $page_title = 'Alumni Database'; $page_sub = '';
     include 'includes/admin_nav.php';
     echo '<div class="alert alert-warn"><i class="fas fa-triangle-exclamation"></i><span>Run <strong>database-update-8.sql</strong> once in phpMyAdmin, then reload.</span></div>';
     include 'includes/admin_footer.php';
     exit();
 }
+
+check_and_update_alumni_schema($pdo);
+
+function auto_copy_completed_years_to_alumni($pdo) {
+    try {
+        $ended_years_stmt = $pdo->query("SELECT year FROM academic_years WHERE end_date IS NOT NULL AND end_date <= CURDATE()");
+        $ended_years = $ended_years_stmt->fetchAll(PDO::FETCH_COLUMN);
+        
+        if (empty($ended_years)) {
+            return;
+        }
+        
+        $placeholders = implode(',', array_fill(0, count($ended_years), '?'));
+        $sql = "SELECT u.* FROM users u 
+                LEFT JOIN alumni a ON a.user_id = u.user_id 
+                WHERE u.pepp_academic_year IN ($placeholders) AND u.status = 'approved' AND a.user_id IS NULL";
+        
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($ended_years);
+        $students_to_copy = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        if (empty($students_to_copy)) {
+            return;
+        }
+        
+        $columns_to_copy = [
+            'gender', 'date_of_birth', 'whatsapp_country_code', 'whatsapp_number', 'mobile_same_as_whatsapp',
+            'mobile_number', 'emergency_contact', 'email', 'college_school', 'course', 'university_board',
+            'remaining_semesters', 'postal_address', 'postal_pincode', 'state', 'district', 'place_post_office',
+            'pepp_course', 'pepp_academic_year', 'paid_amount', 'paid_date', 'user_photo', 'instagram_id',
+            'how_know_pepp', 'terms_agreed', 'user_id', 'ip_address', 'entry_datetime', 'submit_datetime',
+            'time_spent', 'isp', 'as_name', 'network_type', 'country', 'region', 'device_details', 'os_details',
+            'status', 'approved_by', 'approval_date', 'payment_mode', 'payment_account_id', 'discount_amount',
+            'discount_remark', 'payment_plan', 'peppkit_eligibility', 'student_status', 'joined_date',
+            'peppkit_eligible', 'total_fee', 'course_expiry_date', 'course_access_provided', 'course_status',
+            'course_end_date', 'phone', 'onboarding_status', 'remaining_semester_exams', 'last_visit_ip',
+            'last_visit_location', 'last_visit_isp', 'last_visit_as', 'last_visit_time', 'course_duration_date',
+            'device_type', 'device_name', 'device_brand', 'os', 'os_version', 'browser', 'browser_version',
+            'applied_coupon', 'referral_code', 'coupon_discount'
+        ];
+        
+        $pdo->beginTransaction();
+        
+        $insert_fields = array_merge($columns_to_copy, [
+            'payment_screenshot', 'academic_year', 'course_name', 'mobile', 'secondary_mobile', 'profile_photo', 'created_by', 'created_at'
+        ]);
+        
+        $field_placeholders = implode(',', array_fill(0, count($insert_fields), '?'));
+        $insert_sql = "INSERT INTO alumni (" . implode(',', array_map(function($f){ return "`$f`"; }, $insert_fields)) . ") VALUES ($field_placeholders)";
+        $insert_stmt = $pdo->prepare($insert_sql);
+        
+        $copied_count = 0;
+        foreach ($students_to_copy as $student) {
+            $insert_values = [];
+            foreach ($columns_to_copy as $col) {
+                $insert_values[] = $student[$col];
+            }
+            $insert_values[] = null;
+            $insert_values[] = $student['pepp_academic_year'];
+            $insert_values[] = $student['pepp_course'];
+            $insert_values[] = $student['whatsapp_number'] ?: $student['mobile_number'];
+            $insert_values[] = $student['mobile_number'];
+            $insert_values[] = $student['user_photo'];
+            $insert_values[] = 'system_auto_copy';
+            $insert_values[] = date('Y-m-d H:i:s');
+            
+            $insert_stmt->execute($insert_values);
+            $copied_count++;
+        }
+        
+        $pdo->commit();
+        if ($copied_count > 0) {
+            log_admin_activity($pdo, 'system', 'alumni_auto_copied', "Auto-copied $copied_count approved students from ended academic years to alumni database.");
+        }
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log("Alumni auto-copy failed: " . $e->getMessage());
+    }
+}
+
+auto_copy_completed_years_to_alumni($pdo);
 
 function norm_phone($p) { $p = preg_replace('/\D/', '', (string)$p); return $p !== '' ? substr($p, -10) : ''; }
 
@@ -214,18 +400,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($action === 'edit_alumni') {
                 $id = (int)($_POST['alumni_id'] ?? 0);
                 if ($id && trim($_POST['mobile'] ?? '') !== '') {
-                    $pdo->prepare("UPDATE alumni SET name=?, academic_year=?, course_name=?, email=?, secondary_email=?, mobile=?, secondary_mobile=? WHERE id=?")
-                        ->execute([
-                            mb_substr(trim($_POST['name'] ?? ''), 0, 150),
-                            mb_substr(trim($_POST['academic_year'] ?? ''), 0, 20) ?: null,
-                            mb_substr(trim($_POST['course_name'] ?? ''), 0, 255) ?: null,
-                            mb_substr(strtolower(trim($_POST['email'] ?? '')), 0, 190) ?: null,
-                            mb_substr(strtolower(trim($_POST['secondary_email'] ?? '')), 0, 190) ?: null,
-                            mb_substr(trim($_POST['mobile'] ?? ''), 0, 20),
-                            mb_substr(trim($_POST['secondary_mobile'] ?? ''), 0, 20) ?: null,
-                            $id
-                        ]);
-                    log_admin_activity($pdo, $admin_username, 'alumni_edited', "Edited alumni #{$id}");
+                    $profile_photo = $_POST['existing_profile_photo'] ?? null;
+                    if (isset($_FILES['profile_photo']) && $_FILES['profile_photo']['error'] === UPLOAD_ERR_OK) {
+                        $ext = strtolower(pathinfo($_FILES['profile_photo']['name'], PATHINFO_EXTENSION));
+                        $imgok = @getimagesize($_FILES['profile_photo']['tmp_name']) !== false;
+                        if ($imgok && in_array($ext, ['jpg', 'jpeg', 'png', 'webp'], true) && $_FILES['profile_photo']['size'] <= 4 * 1024 * 1024) {
+                            $dir = __DIR__ . '/uploads/alumni';
+                            if (!is_dir($dir)) @mkdir($dir, 0755, true);
+                            $fn = 'alum_' . $id . '_' . time() . '.' . $ext;
+                            if (@move_uploaded_file($_FILES['profile_photo']['tmp_name'], $dir . '/' . $fn)) {
+                                $profile_photo = 'uploads/alumni/' . $fn;
+                            }
+                        }
+                    }
+
+                    $fields_to_update = [
+                        'name' => mb_substr(trim($_POST['name'] ?? ''), 0, 150),
+                        'academic_year' => mb_substr(trim($_POST['academic_year'] ?? ''), 0, 20) ?: null,
+                        'course_name' => mb_substr(trim($_POST['course_name'] ?? ''), 0, 255) ?: null,
+                        'email' => mb_substr(strtolower(trim($_POST['email'] ?? '')), 0, 190) ?: null,
+                        'secondary_email' => mb_substr(strtolower(trim($_POST['secondary_email'] ?? '')), 0, 190) ?: null,
+                        'mobile' => mb_substr(trim($_POST['mobile'] ?? ''), 0, 20),
+                        'secondary_mobile' => mb_substr(trim($_POST['secondary_mobile'] ?? ''), 0, 20) ?: null,
+                        
+                        'gender' => $_POST['gender'] ?: null,
+                        'date_of_birth' => $_POST['date_of_birth'] ?: null,
+                        'whatsapp_country_code' => $_POST['whatsapp_country_code'] ?: '+91',
+                        'whatsapp_number' => $_POST['whatsapp_number'] ?: null,
+                        'mobile_same_as_whatsapp' => $_POST['mobile_same_as_whatsapp'] ?? 'yes',
+                        'mobile_number' => $_POST['mobile_number'] ?: null,
+                        'emergency_contact' => $_POST['emergency_contact'] ?: null,
+                        'college_school' => $_POST['college_school'] ?: null,
+                        'course' => $_POST['course'] ?: null,
+                        'university_board' => $_POST['university_board'] ?: null,
+                        'remaining_semesters' => $_POST['remaining_semesters'] ?: null,
+                        'postal_address' => $_POST['postal_address'] ?: null,
+                        'postal_pincode' => $_POST['postal_pincode'] ?: null,
+                        'state' => $_POST['state'] ?: null,
+                        'district' => $_POST['district'] ?: null,
+                        'place_post_office' => $_POST['place_post_office'] ?: null,
+                        'pepp_course' => $_POST['course_name'] ?? null,
+                        'pepp_academic_year' => $_POST['academic_year'] ?? null,
+                        
+                        'paid_amount' => (float)($_POST['paid_amount'] ?? 0),
+                        'paid_date' => $_POST['paid_date'] ?: null,
+                        'instagram_id' => $_POST['instagram_id'] ?: null,
+                        'how_know_pepp' => $_POST['how_know_pepp'] ?: null,
+                        'terms_agreed' => $_POST['terms_agreed'] ?? 'no',
+                        'user_id' => $_POST['user_id'] ?: null,
+                        'status' => $_POST['status'] ?? 'pending',
+                        'approved_by' => $_POST['approved_by'] ?: null,
+                        'approval_date' => $_POST['approval_date'] ?: null,
+                        'payment_mode' => $_POST['payment_mode'] ?: null,
+                        'payment_account_id' => $_POST['payment_account_id'] ? (int)$_POST['payment_account_id'] : null,
+                        'discount_amount' => (float)($_POST['discount_amount'] ?? 0),
+                        'discount_remark' => $_POST['discount_remark'] ?: null,
+                        'payment_plan' => $_POST['payment_plan'] ?: 'One Time',
+                        'peppkit_eligibility' => $_POST['peppkit_eligibility'] ?: 'Not Eligible',
+                        'student_status' => $_POST['student_status'] ?: 'active',
+                        'joined_date' => $_POST['joined_date'] ?: null,
+                        'peppkit_eligible' => $_POST['peppkit_eligible'] ?: 'Not Eligible',
+                        'total_fee' => (float)($_POST['total_fee'] ?? 0),
+                        'course_expiry_date' => $_POST['course_expiry_date'] ?: null,
+                        'course_access_provided' => $_POST['course_access_provided'] ?? 'no',
+                        'course_status' => $_POST['course_status'] ?? 'active',
+                        'course_end_date' => $_POST['course_end_date'] ?: null,
+                        'phone' => $_POST['phone'] ?: null,
+                        'onboarding_status' => $_POST['onboarding_status'] ?? 'pending',
+                        'remaining_semester_exams' => $_POST['remaining_semester_exams'] ?: null,
+                        
+                        'academic_track_after_pepp' => $_POST['academic_track_after_pepp'] ?: null,
+                        'current_profession_details' => $_POST['current_profession_details'] ?: null,
+                        'profile_photo' => $profile_photo
+                    ];
+
+                    $set_sql = []; $vals = [];
+                    foreach ($fields_to_update as $col => $val) {
+                        $set_sql[] = "`$col` = ?";
+                        $vals[] = $val;
+                    }
+                    $vals[] = $id;
+
+                    $pdo->prepare("UPDATE alumni SET " . implode(', ', $set_sql) . " WHERE id = ?")
+                        ->execute($vals);
+
+                    log_admin_activity($pdo, $admin_username, 'alumni_edited', "Edited alumni #{$id} ({$_POST['name']}) with all fields");
                     $success_message = 'Alumnus updated.';
                 } else { $error_message = 'Mobile number is required.'; }
             } elseif ($action === 'delete_alumni') {
@@ -233,6 +492,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->prepare("DELETE FROM alumni WHERE id = ?")->execute([$id]);
                 log_admin_activity($pdo, $admin_username, 'alumni_deleted', "Deleted alumni #{$id}");
                 $success_message = 'Alumnus deleted.';
+            } elseif ($action === 'batch_update_course') {
+                $new_course = trim($_POST['new_course_name'] ?? '');
+                if ($new_course === '') {
+                    $error_message = 'Please select a course.';
+                } else {
+                    $target = $_POST['target_type'] ?? 'selected';
+                    if ($target === 'selected') {
+                        $ids = array_filter(array_map('intval', explode(',', (string)($_POST['selected_ids'] ?? ''))));
+                        if (empty($ids)) {
+                            $error_message = 'No alumni selected.';
+                        } else {
+                            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+                            $stmt = $pdo->prepare("UPDATE alumni SET course_name = ?, pepp_course = ? WHERE id IN ($placeholders)");
+                            $stmt->execute(array_merge([$new_course, $new_course], $ids));
+                            log_admin_activity($pdo, $admin_username, 'alumni_batch_course_update', "Updated course of " . count($ids) . " selected alumni to: $new_course");
+                            $success_message = 'Course updated for selected alumni.';
+                        }
+                    } else {
+                        $b_where = []; $b_params = [$new_course, $new_course];
+                        $b_q = trim($_POST['filter_q'] ?? '');
+                        $b_course_q = trim($_POST['filter_course_q'] ?? '');
+                        $b_year = trim($_POST['filter_year'] ?? '');
+                        $b_course = trim($_POST['filter_course'] ?? '');
+                        $b_email = $_POST['filter_email'] ?? '';
+                        
+                        if ($b_q !== '') {
+                            $b_where[] = "(name LIKE ? OR mobile LIKE ? OR secondary_mobile LIKE ? OR email LIKE ? OR secondary_email LIKE ? OR course_name LIKE ?)";
+                            $like = "%$b_q%"; array_push($b_params, $like, $like, $like, $like, $like, $like);
+                        }
+                        if ($b_course_q !== '') {
+                            $b_where[] = "course_name LIKE ?";
+                            $b_params[] = "%$b_course_q%";
+                        }
+                        if ($b_year !== '')   { $b_where[] = "academic_year = ?"; $b_params[] = $b_year; }
+                        if ($b_course !== '') { $b_where[] = "course_name = ?"; $b_params[] = $b_course; }
+                        if ($b_email === 'yes') { $b_where[] = "(email IS NOT NULL AND email <> '')"; }
+                        elseif ($b_email === 'no') { $b_where[] = "(email IS NULL OR email = '')"; }
+                        
+                        $b_wsql = $b_where ? ('WHERE ' . implode(' AND ', $b_where)) : '';
+                        $sql = "UPDATE alumni SET course_name = ?, pepp_course = ? $b_wsql";
+                        $stmt = $pdo->prepare($sql);
+                        $stmt->execute($b_params);
+                        $affected = $stmt->rowCount();
+                        
+                        log_admin_activity($pdo, $admin_username, 'alumni_batch_course_update', "Updated course of $affected filtered alumni to: $new_course");
+                        $success_message = "Course updated for all $affected filtered alumni.";
+                    }
+                }
             }
         } catch (Exception $e) {
             if ($pdo->inTransaction()) { try { $pdo->rollBack(); } catch (Exception $e2) {} }
@@ -242,11 +549,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// Inactive academic years only (per requirement)
+$all_years = [];
+try { $all_years = $pdo->query("SELECT year FROM academic_years ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN); } catch (Exception $e) {}
+
 $inactive_years = [];
 try { $inactive_years = $pdo->query("SELECT year FROM academic_years WHERE status='inactive' ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN); } catch (Exception $e) {}
 
+$active_courses_list = [];
+try {
+    $active_courses_list = $pdo->query("SELECT DISTINCT course_name FROM pepp_courses WHERE status='active' ORDER BY course_name")->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {}
+
 $f_q = trim($_GET['q'] ?? '');
+$f_course_q = trim($_GET['f_course_q'] ?? '');
 $f_year = trim($_GET['fyear'] ?? '');
 $f_course = trim($_GET['fcourse'] ?? '');
 $f_email = $_GET['femail'] ?? '';   // '', 'yes', 'no'
@@ -267,6 +582,10 @@ if ($f_q !== '') {
     $where[] = "(name LIKE ? OR mobile LIKE ? OR secondary_mobile LIKE ? OR email LIKE ? OR secondary_email LIKE ? OR course_name LIKE ?)";
     $like = "%$f_q%"; array_push($params, $like, $like, $like, $like, $like, $like);
 }
+if ($f_course_q !== '') {
+    $where[] = "course_name LIKE ?";
+    $params[] = "%$f_course_q%";
+}
 if ($f_year !== '')   { $where[] = "academic_year = ?"; $params[] = $f_year; }
 if ($f_course !== '') { $where[] = "course_name = ?"; $params[] = $f_course; }
 if ($f_email === 'yes') { $where[] = "(email IS NOT NULL AND email <> '')"; }
@@ -281,13 +600,13 @@ try {
 } catch (Exception $e) { error_log('Alumni list: ' . $e->getMessage()); }
 $total_pages = max(1, (int)ceil($total / $per));
 
-$active_page = 'settings';
+$active_page = 'alumni';
 $page_title  = 'Alumni Database';
 $page_sub    = 'Past students - used to verify PEPPians';
 include 'includes/admin_nav.php';
 ?>
 
-<div style="margin-bottom:16px;"><a href="settings.php" class="btn btn-sm btn-outline"><i class="fas fa-arrow-left"></i> Back to Settings</a></div>
+<div style="margin-bottom:16px;"><a href="dashboard.php" class="btn btn-sm btn-outline"><i class="fas fa-arrow-left"></i> Back to Dashboard</a></div>
 
 <?php if ($success_message): ?><div class="alert alert-success"><i class="fas fa-circle-check"></i><span><?php echo e($success_message); ?></span></div><?php endif; ?>
 <?php if ($error_message):   ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($error_message); ?></span></div><?php endif; ?>
@@ -304,9 +623,14 @@ include 'includes/admin_nav.php';
             <div class="form-grid">
                 <div class="field"><label>Name</label><input type="text" name="name"></div>
                 <div class="field"><label>PEPP Academic Year</label>
-                    <select name="academic_year"><option value="">-</option><?php foreach ($inactive_years as $y): ?><option value="<?php echo e($y); ?>"><?php echo e($y); ?></option><?php endforeach; ?></select>
-                    <div class="help">Only inactive (past) batches are listed</div></div>
-                <div class="field"><label>Course Name</label><input type="text" name="course_name" placeholder="Type the course name"></div>
+                    <select name="academic_year"><option value="">-</option><option value="All years">All years</option><?php foreach ($all_years as $y): ?><option value="<?php echo e($y); ?>"><?php echo e($y); ?></option><?php endforeach; ?></select></div>
+                <div class="field"><label>Course Name</label>
+                    <select name="course_name">
+                        <option value="">- Select active course -</option>
+                        <?php foreach ($active_courses_list as $cname): ?>
+                            <option value="<?php echo e($cname); ?>"><?php echo e($cname); ?></option>
+                        <?php endforeach; ?>
+                    </select></div>
                 <div class="field"><label>Mobile Number <span class="req">*</span></label><input type="text" name="mobile" required></div>
                 <div class="field"><label>Secondary Mobile</label><input type="text" name="secondary_mobile"></div>
                 <div class="field"><label>Email ID</label><input type="email" name="email"></div>
@@ -321,33 +645,109 @@ include 'includes/admin_nav.php';
     <div class="panel-head"><span class="head-icon" style="background:var(--accent-soft);color:var(--accent-dark);"><i class="fas fa-list"></i></span><h2>Alumni (<?php echo number_format($total); ?>)</h2></div>
     <div class="panel-body" style="border-bottom:1px solid var(--border);">
         <form method="GET" class="filter-bar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;">
-            <div class="field grow-2" style="margin:0;flex:1;min-width:180px;"><label>Search</label><input type="text" name="q" value="<?php echo e($f_q); ?>" placeholder="Name, mobile, email, course"></div>
+            <div class="field grow-2" style="margin:0;flex:1;min-width:180px;"><label>Search Student</label><input type="text" name="q" value="<?php echo e($f_q); ?>" placeholder="Name, mobile, email"></div>
+            <div class="field grow-2" style="margin:0;flex:1;min-width:180px;"><label>Course Keyword</label><input type="text" name="f_course_q" value="<?php echo e($f_course_q); ?>" placeholder="Search course keyword..."></div>
             <div class="field" style="margin:0;"><label>Academic Year</label><select name="fyear"><option value="">All</option><?php foreach ($alumni_years as $y): ?><option value="<?php echo e($y); ?>" <?php echo $f_year===$y?'selected':''; ?>><?php echo e($y); ?></option><?php endforeach; ?></select></div>
-            <div class="field" style="margin:0;"><label>Course</label><select name="fcourse"><option value="">All</option><?php foreach ($alumni_courses as $c): ?><option value="<?php echo e($c); ?>" <?php echo $f_course===$c?'selected':''; ?>><?php echo e($c); ?></option><?php endforeach; ?></select></div>
+            <div class="field" style="margin:0;"><label>Course Dropdown</label><select name="fcourse"><option value="">All</option><?php foreach ($alumni_courses as $c): ?><option value="<?php echo e($c); ?>" <?php echo $f_course===$c?'selected':''; ?>><?php echo e($c); ?></option><?php endforeach; ?></select></div>
             <div class="field" style="margin:0;"><label>Email</label><select name="femail"><option value="">Any</option><option value="yes" <?php echo $f_email==='yes'?'selected':''; ?>>Has email</option><option value="no" <?php echo $f_email==='no'?'selected':''; ?>>No email</option></select></div>
             <button class="btn btn-sm btn-primary"><i class="fas fa-filter"></i> Filter</button>
-            <?php if ($f_q!==''||$f_year!==''||$f_course!==''||$f_email!==''): ?><a class="btn btn-sm btn-outline" href="alumni-database.php">Clear</a><?php endif; ?>
+            <?php if ($f_q!==''||$f_course_q!==''||$f_year!==''||$f_course!==''||$f_email!==''): ?><a class="btn btn-sm btn-outline" href="alumni-database.php">Clear</a><?php endif; ?>
         </form>
     </div>
+    
+    <!-- Bulk update action bar -->
+    <?php if (!empty($rows)): ?>
+    <div class="panel-body" id="batch-action-bar" style="background:var(--accent-soft); border-bottom:1px solid var(--border); padding:12px; display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+        <div style="font-weight:600; color:var(--accent-dark);"><i class="fas fa-square-check"></i> <span id="checked-count">0</span> alumni selected</div>
+        <form method="POST" style="display:inline-flex; align-items:center; gap:10px; margin:0;" onsubmit="return confirmBatchUpdate();">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="batch_update_course">
+            <input type="hidden" name="target_type" id="batch-target-type" value="selected">
+            <input type="hidden" name="selected_ids" id="batch-selected-ids" value="">
+            
+            <input type="hidden" name="filter_q" value="<?php echo e($f_q); ?>">
+            <input type="hidden" name="filter_course_q" value="<?php echo e($f_course_q); ?>">
+            <input type="hidden" name="filter_year" value="<?php echo e($f_year); ?>">
+            <input type="hidden" name="filter_course" value="<?php echo e($f_course); ?>">
+            <input type="hidden" name="filter_email" value="<?php echo e($f_email); ?>">
+            
+            <div class="field" style="margin:0;">
+                <select id="batch-scope-select" onchange="toggleBatchScope()" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px; border: 1px solid var(--border);">
+                    <option value="selected">Apply to ticked rows only</option>
+                    <option value="filtered">Apply to all matching filters (<?php echo $total; ?> records)</option>
+                </select>
+            </div>
+            
+            <div class="field" style="margin:0;">
+                <select name="new_course_name" required style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px; border: 1px solid var(--border);">
+                    <option value="">- Change Course To -</option>
+                    <?php foreach ($active_courses_list as $cname): ?>
+                        <option value="<?php echo e($cname); ?>"><?php echo e($cname); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-sm btn-primary">Update Course</button>
+        </form>
+    </div>
+    <?php endif; ?>
+
     <div class="panel-body flush table-wrap">
         <?php if (empty($rows)): ?>
             <div class="empty-state"><i class="fas fa-user-graduate"></i><p>No alumni yet. Add individually or import a CSV.</p></div>
         <?php else: ?>
         <table class="data-table">
-            <thead><tr><th>Name</th><th>Year / Course</th><th>Mobile(s)</th><th>Email(s)</th><th style="text-align:right;">Actions</th></tr></thead>
+            <thead>
+                <tr>
+                    <th style="width: 40px; text-align: center;"><input type="checkbox" id="select-all-master" onclick="toggleSelectAll(this)"></th>
+                    <th style="width: 60px; text-align: center;">Photo</th>
+                    <th>Name</th>
+                    <th>Year / Course</th>
+                    <th>Mobile(s)</th>
+                    <th>Email(s)</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
             <tbody>
             <?php foreach ($rows as $a): ?>
                 <tr>
-                    <td class="cell-main"><?php echo e($a['name'] ?: '-'); ?></td>
+                    <td style="text-align: center;"><input type="checkbox" class="alumni-checkbox" value="<?php echo (int)$a['id']; ?>" onclick="updateBatchUI()"></td>
+                    <td style="text-align: center;">
+                        <?php 
+                        $photo = $a['profile_photo'] ?: $a['user_photo'] ?: 'assets/img/default-avatar.png';
+                        if (strpos($photo, 'uploads/') === 0 && !file_exists(__DIR__ . '/' . $photo)) {
+                            // If relative upload path but doesn't exist, we fall back to user_photo or default
+                            $photo = $a['user_photo'] ?: 'assets/img/default-avatar.png';
+                        }
+                        if (strpos($photo, 'uploads/') === 0) {
+                            $photoUrl = $photo;
+                        } else {
+                            $photoUrl = $photo;
+                        }
+                        ?>
+                        <img src="<?php echo e($photoUrl); ?>" style="width:40px; height:40px; border-radius:50%; object-fit:cover; border:2px solid var(--border); cursor:pointer;" onclick="viewPhoto('<?php echo e($photoUrl); ?>')" alt="Photo">
+                    </td>
+                    <td>
+                        <div class="cell-main"><?php echo e($a['name'] ?: '-'); ?></div>
+                        <div style="margin-top:2px;">
+                            <?php if ($a['is_verified'] == 1): ?>
+                                <span class="badge green" style="font-size:0.7rem; padding: 2px 6px;"><i class="fas fa-circle-check"></i> Verified</span>
+                            <?php else: ?>
+                                <span class="badge gray" style="font-size:0.7rem; padding: 2px 6px;">Unverified</span>
+                            <?php endif; ?>
+                        </div>
+                    </td>
                     <td class="cell-sub"><?php echo e($a['academic_year'] ?: '-'); ?><?php echo $a['course_name'] ? '<br>' . e($a['course_name']) : ''; ?></td>
                     <td class="cell-sub"><?php echo e($a['mobile']); ?><?php echo $a['secondary_mobile'] ? '<br>' . e($a['secondary_mobile']) : ''; ?></td>
                     <td class="cell-sub"><?php echo e($a['email'] ?: '-'); ?><?php echo $a['secondary_email'] ? '<br>' . e($a['secondary_email']) : ''; ?></td>
                     <td style="text-align:right; white-space:nowrap;">
-                        <button class="btn btn-sm btn-outline" onclick='editAlum(<?php echo json_encode([
-                            "id"=>(int)$a["id"],"name"=>(string)$a["name"],"academic_year"=>(string)$a["academic_year"],"course_name"=>(string)$a["course_name"],
-                            "email"=>(string)$a["email"],"secondary_email"=>(string)$a["secondary_email"],"mobile"=>(string)$a["mobile"],"secondary_mobile"=>(string)$a["secondary_mobile"],
-                        ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
-                        <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this alumnus?');"><?php echo csrf_field(); ?><input type="hidden" name="action" value="delete_alumni"><input type="hidden" name="alumni_id" value="<?php echo (int)$a['id']; ?>"><button class="btn btn-sm btn-soft-red"><i class="fas fa-trash"></i></button></form>
+                        <button class="btn btn-sm btn-soft-blue" onclick='showDetails(<?php echo json_encode($a, JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-eye"></i> Details</button>
+                        <button class="btn btn-sm btn-outline" onclick='editAlum(<?php echo json_encode($a, JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this alumnus?');">
+                            <?php echo csrf_field(); ?>
+                            <input type="hidden" name="action" value="delete_alumni">
+                            <input type="hidden" name="alumni_id" value="<?php echo (int)$a['id']; ?>">
+                            <button class="btn btn-sm btn-soft-red"><i class="fas fa-trash"></i></button>
+                        </form>
                     </td>
                 </tr>
             <?php endforeach; ?>
@@ -364,46 +764,387 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- Detailed View Modal -->
+<div class="modal-backdrop" id="detail-modal">
+    <div class="modal" style="max-width:800px; width:90%; max-height: 90vh; overflow-y: auto;">
+        <div class="modal-head">
+            <h3><i class="fas fa-id-card" style="color:var(--accent);"></i> Alumnus Profile Details</h3>
+            <button class="modal-close" onclick="closeModal('detail-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div class="modal-body" id="detail-modal-body">
+            <!-- Loaded dynamically in JS -->
+        </div>
+        <div class="modal-foot">
+            <button type="button" class="btn btn-outline" onclick="closeModal('detail-modal')">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Image Viewer Modal -->
+<div class="modal-backdrop" id="photo-modal">
+    <div class="modal" style="max-width:400px; text-align: center;">
+        <div class="modal-head">
+            <h3>Profile Photo</h3>
+            <button class="modal-close" onclick="closeModal('photo-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div class="modal-body">
+            <img id="photo-zoom" src="" style="width: 100%; border-radius: 8px; max-height: 350px; object-fit: contain;">
+        </div>
+    </div>
+</div>
+
 <div class="modal-backdrop" id="edit-modal">
-    <div class="modal" style="max-width:600px;">
-        <div class="modal-head"><h3><i class="fas fa-pen" style="color:var(--accent);"></i> Edit Alumnus</h3><button class="modal-close" onclick="closeModal('edit-modal')"><i class="fas fa-xmark"></i></button></div>
-        <form method="POST">
+    <div class="modal" style="max-width:750px; width:95%; max-height: 90vh; overflow-y: auto;">
+        <div class="modal-head">
+            <h3><i class="fas fa-pen" style="color:var(--accent);"></i> Edit Alumnus Record</h3>
+            <button class="modal-close" onclick="closeModal('edit-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST" enctype="multipart/form-data">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="edit_alumni">
             <input type="hidden" name="alumni_id" id="e-id">
+            <input type="hidden" name="existing_profile_photo" id="e-existing-photo">
+            
             <div class="modal-body">
+                <div style="display:flex; gap:16px; align-items:center; margin-bottom:16px;">
+                    <img id="e-photo-preview" src="assets/img/default-avatar.png" style="width:60px; height:60px; border-radius:50%; object-fit:cover; border:2px solid var(--border);">
+                    <div class="field" style="margin:0;"><label>Update Profile Photo</label><input type="file" name="profile_photo" accept="image/*"></div>
+                </div>
+
+                <h3 style="margin-top: 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; color: var(--accent-dark);">Personal &amp; Contact Info</h3>
                 <div class="form-grid">
-                    <div class="field"><label>Name</label><input type="text" name="name" id="e-name"></div>
-                    <div class="field"><label>PEPP Academic Year</label>
-                        <select name="academic_year" id="e-year"><option value="">-</option><?php foreach ($inactive_years as $y): ?><option value="<?php echo e($y); ?>"><?php echo e($y); ?></option><?php endforeach; ?></select></div>
-                    <div class="field"><label>Course Name</label><input type="text" name="course_name" id="e-course"></div>
-                    <div class="field"><label>Mobile Number <span class="req">*</span></label><input type="text" name="mobile" id="e-mobile" required></div>
-                    <div class="field"><label>Secondary Mobile</label><input type="text" name="secondary_mobile" id="e-mobile2"></div>
-                    <div class="field"><label>Email ID</label><input type="email" name="email" id="e-email"></div>
+                    <div class="field"><label>Name</label><input type="text" name="name" id="e-name" required></div>
+                    <div class="field"><label>Gender</label>
+                        <select name="gender" id="e-gender">
+                            <option value="">Select</option>
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                            <option value="Other">Other</option>
+                        </select></div>
+                    <div class="field"><label>Date of Birth</label><input type="date" name="date_of_birth" id="e-dob"></div>
+                    <div class="field"><label>Email</label><input type="email" name="email" id="e-email"></div>
                     <div class="field"><label>Secondary Email</label><input type="email" name="secondary_email" id="e-email2"></div>
+                    <div class="field"><label>Mobile (Primary) <span class="req">*</span></label><input type="text" name="mobile" id="e-mobile" required></div>
+                    <div class="field"><label>Secondary Mobile</label><input type="text" name="secondary_mobile" id="e-mobile2"></div>
+                    <div class="field"><label>WhatsApp Country Code</label><input type="text" name="whatsapp_country_code" id="e-wa-cc"></div>
+                    <div class="field"><label>WhatsApp Number</label><input type="text" name="whatsapp_number" id="e-wa-num"></div>
+                    <div class="field"><label>Mobile Same As WhatsApp</label>
+                        <select name="mobile_same_as_whatsapp" id="e-mobile-same">
+                            <option value="yes">Yes</option>
+                            <option value="no">No</option>
+                        </select></div>
+                    <div class="field"><label>Emergency Contact</label><input type="text" name="emergency_contact" id="e-emergency"></div>
+                    <div class="field"><label>Instagram ID</label><input type="text" name="instagram_id" id="e-instagram"></div>
+                </div>
+
+                <h3 style="margin-top:20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; color: var(--accent-dark);">Address &amp; Education</h3>
+                <div class="form-grid">
+                    <div class="field full"><label>Postal Address</label><input type="text" name="postal_address" id="e-address"></div>
+                    <div class="field"><label>PIN Code</label><input type="text" name="postal_pincode" id="e-pincode"></div>
+                    <div class="field"><label>Place / Post Office</label><input type="text" name="place_post_office" id="e-place"></div>
+                    <div class="field"><label>District</label><input type="text" name="district" id="e-district"></div>
+                    <div class="field"><label>State</label><input type="text" name="state" id="e-state"></div>
+                    <div class="field"><label>College / School</label><input type="text" name="college_school" id="e-college"></div>
+                    <div class="field"><label>Current Course</label><input type="text" name="course" id="e-course-curr"></div>
+                    <div class="field"><label>University / Board</label><input type="text" name="university_board" id="e-board"></div>
+                    <div class="field"><label>Remaining Semesters</label><input type="text" name="remaining_semesters" id="e-remaining"></div>
+                </div>
+
+                <h3 style="margin-top:20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; color: var(--accent-dark);">PEPP Study Program</h3>
+                <div class="form-grid">
+                    <div class="field"><label>PEPP Academic Year</label>
+                        <select name="academic_year" id="e-year">
+                            <option value="">-</option>
+                            <option value="All years">All years</option>
+                            <?php foreach ($all_years as $y): ?><option value="<?php echo e($y); ?>"><?php echo e($y); ?></option><?php endforeach; ?>
+                        </select></div>
+                    <div class="field"><label>PEPP Course Name</label>
+                        <select name="course_name" id="e-course" required>
+                            <option value="">- Select active course -</option>
+                            <?php foreach ($active_courses_list as $cname): ?><option value="<?php echo e($cname); ?>"><?php echo e($cname); ?></option><?php endforeach; ?>
+                        </select></div>
+                    <div class="field"><label>Joined Date</label><input type="date" name="joined_date" id="e-joined"></div>
+                    <div class="field"><label>Student Status</label>
+                        <select name="student_status" id="e-stud-status">
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                            <option value="suspended">Suspended</option>
+                            <option value="completed">Completed</option>
+                        </select></div>
+                    <div class="field"><label>Onboarding Status</label>
+                        <select name="onboarding_status" id="e-onboard-status">
+                            <option value="pending">Pending</option>
+                            <option value="completed">Completed</option>
+                        </select></div>
+                </div>
+
+                <h3 style="margin-top:20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; color: var(--accent-dark);">Payout &amp; Payment Details</h3>
+                <div class="form-grid">
+                    <div class="field"><label>Total Fee (₹)</label><input type="number" name="total_fee" id="e-total-fee" min="0" step="0.01"></div>
+                    <div class="field"><label>Paid Amount (₹)</label><input type="number" name="paid_amount" id="e-paid-amount" min="0" step="0.01"></div>
+                    <div class="field"><label>Paid Date</label><input type="date" name="paid_date" id="e-paid-date"></div>
+                    <div class="field"><label>Discount Amount (₹)</label><input type="number" name="discount_amount" id="e-discount-amount" min="0" step="0.01"></div>
+                    <div class="field"><label>Discount Remark</label><input type="text" name="discount_remark" id="e-discount-remark"></div>
+                    <div class="field"><label>Payment Plan</label><input type="text" name="payment_plan" id="e-pay-plan"></div>
+                    <div class="field"><label>Payment Mode</label><input type="text" name="payment_mode" id="e-pay-mode"></div>
+                    <div class="field"><label>PEPP Kit Eligibility</label>
+                        <select name="peppkit_eligibility" id="e-peppkit-elig">
+                            <option value="Eligible">Eligible</option>
+                            <option value="Not Eligible">Not Eligible</option>
+                        </select></div>
+                </div>
+
+                <h3 style="margin-top:20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; color: var(--accent-dark);">Community Career Sync Info</h3>
+                <div class="form-grid">
+                    <div class="field full"><label>Academic Tracks After PEPP (JSON string e.g. [{"course":"BSc","institute":"LPU"}])</label>
+                        <textarea name="academic_track_after_pepp" id="e-tracks" rows="2" placeholder='[{"course":"MSc","institute":"University of Kerala"}]'></textarea></div>
+                    <div class="field full"><label>Profession details (JSON string e.g. {"status":"professional","profession":"Software Engineer","working_institute":"Google"})</label>
+                        <textarea name="current_profession_details" id="e-prof" rows="2" placeholder='{"status":"professional","profession":"Manager","working_institute":"TCS"}'></textarea></div>
                 </div>
             </div>
-            <div class="modal-foot"><button type="button" class="btn btn-outline" onclick="closeModal('edit-modal')">Cancel</button><button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save Changes</button></div>
+            
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('edit-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save Changes</button>
+            </div>
         </form>
     </div>
 </div>
 
 <script>
+function escapeHtml(text) {
+    if (!text) return '';
+    return text.toString()
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function viewPhoto(url) {
+    document.getElementById('photo-zoom').src = url;
+    openModal('photo-modal');
+}
+
+function showDetails(a) {
+    const body = document.getElementById('detail-modal-body');
+    
+    let tracksHtml = '<em>No academic tracks recorded</em>';
+    if (a.academic_track_after_pepp) {
+        try {
+            const tracks = JSON.parse(a.academic_track_after_pepp);
+            if (Array.isArray(tracks) && tracks.length > 0) {
+                tracksHtml = '<table class="data-table" style="width:100%;"><thead><tr><th>Course</th><th>Institute</th></tr></thead><tbody>';
+                tracks.forEach(t => {
+                    tracksHtml += `<tr><td>${escapeHtml(t.course)}</td><td>${escapeHtml(t.institute)}</td></tr>`;
+                });
+                tracksHtml += '</tbody></table>';
+            }
+        } catch(e) {}
+    }
+    
+    let profHtml = '<em>No profession details recorded</em>';
+    if (a.current_profession_details) {
+        try {
+            const prof = JSON.parse(a.current_profession_details);
+            if (prof && typeof prof === 'object') {
+                profHtml = `<div class="detail-list">
+                    <div class="detail-row"><div class="dl">Status</div><div class="dv">${escapeHtml(prof.status || '-')}</div></div>
+                    <div class="detail-row"><div class="dl">Profession</div><div class="dv">${escapeHtml(prof.profession || '-')}</div></div>
+                    <div class="detail-row"><div class="dl">Working Institute</div><div class="dv">${escapeHtml(prof.working_institute || '-')}</div></div>
+                </div>`;
+            } else if (typeof prof === 'string') {
+                profHtml = `<div>${escapeHtml(prof)}</div>`;
+            }
+        } catch(e) {}
+    }
+
+    const photo = a.profile_photo || a.user_photo || 'assets/img/default-avatar.png';
+
+    body.innerHTML = `
+        <div style="display:flex; gap:20px; flex-wrap:wrap; margin-bottom:20px; align-items:center;">
+            <img src="${photo}" style="width:90px; height:90px; border-radius:50%; object-fit:cover; border:3px solid var(--accent); cursor:pointer;" onclick="viewPhoto('${photo}')">
+            <div>
+                <h2 style="margin:0; font-size:1.5rem;">${escapeHtml(a.name)}</h2>
+                <p class="cell-sub" style="margin:4px 0 0 0;">User ID: ${escapeHtml(a.user_id || '-')}</p>
+                <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap;">
+                    ${a.is_verified == 1 ? '<span class="badge green"><i class="fas fa-circle-check"></i> Verified PEPPian</span>' : '<span class="badge gray">Unverified</span>'}
+                    ${a.synced_at ? `<span class="badge blue">Synced: ${a.synced_at}</span>` : ''}
+                    ${a.student_status ? `<span class="badge blue">Status: ${escapeHtml(a.student_status)}</span>` : ''}
+                </div>
+            </div>
+        </div>
+        
+        <div class="panel">
+            <div class="panel-head"><h2>Personal &amp; Contact Details</h2></div>
+            <div class="panel-body">
+                <div class="detail-list">
+                    <div class="detail-row"><div class="dl">Gender / DOB</div><div class="dv">${escapeHtml(a.gender || '-')} / ${escapeHtml(a.date_of_birth || '-')}</div></div>
+                    <div class="detail-row"><div class="dl">Email</div><div class="dv">${escapeHtml(a.email || '-')} ${a.secondary_email ? `(Sec: ${escapeHtml(a.secondary_email)})` : ''}</div></div>
+                    <div class="detail-row"><div class="dl">Mobile / WhatsApp</div><div class="dv">${escapeHtml(a.whatsapp_country_code || '+91')} ${escapeHtml(a.whatsapp_number || a.mobile || '-')} ${a.secondary_mobile ? `(Sec: ${escapeHtml(a.secondary_mobile)})` : ''}</div></div>
+                    <div class="detail-row"><div class="dl">Emergency Contact</div><div class="dv">${escapeHtml(a.emergency_contact || '-')}</div></div>
+                    <div class="detail-row"><div class="dl">Address</div><div class="dv">${escapeHtml(a.postal_address || '')}, ${escapeHtml(a.place_post_office || '')}, ${escapeHtml(a.district || '')}, ${escapeHtml(a.state || '')} - ${escapeHtml(a.postal_pincode || '')}</div></div>
+                    <div class="detail-row"><div class="dl">Instagram ID</div><div class="dv">${escapeHtml(a.instagram_id || '-')}</div></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-head"><h2>PEPP Course &amp; Admission</h2></div>
+            <div class="panel-body">
+                <div class="detail-list">
+                    <div class="detail-row"><div class="dl">PEPP Course</div><div class="dv">${escapeHtml(a.course_name || '-')}</div></div>
+                    <div class="detail-row"><div class="dl">Academic Year</div><div class="dv">${escapeHtml(a.academic_year || '-')}</div></div>
+                    <div class="detail-row"><div class="dl">School/College</div><div class="dv">${escapeHtml(a.college_school || '-')}</div></div>
+                    <div class="detail-row"><div class="dl">Current College Course</div><div class="dv">${escapeHtml(a.course || '-')} (${escapeHtml(a.university_board || '-')})</div></div>
+                    <div class="detail-row"><div class="dl">Remaining Semesters</div><div class="dv">${escapeHtml(a.remaining_semesters || '-')}</div></div>
+                    <div class="detail-row"><div class="dl">Joined Date</div><div class="dv">${escapeHtml(a.joined_date || '-')}</div></div>
+                    <div class="detail-row"><div class="dl">Onboarding Status</div><div class="dv"><span class="badge ${a.onboarding_status === 'completed' ? 'green' : 'amber'}">${escapeHtml(a.onboarding_status || 'pending')}</span></div></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-head"><h2>Payment Summary</h2></div>
+            <div class="panel-body">
+                <div class="detail-list">
+                    <div class="detail-row"><div class="dl">Total Fee</div><div class="dv">₹${Number(a.total_fee || 0).toLocaleString('en-IN')}</div></div>
+                    <div class="detail-row"><div class="dl">Paid Amount</div><div class="dv">₹${Number(a.paid_amount || 0).toLocaleString('en-IN')} (on ${escapeHtml(a.paid_date || '-')})</div></div>
+                    <div class="detail-row"><div class="dl">Discount</div><div class="dv">₹${Number(a.discount_amount || 0).toLocaleString('en-IN')} (${escapeHtml(a.discount_remark || '-')})</div></div>
+                    <div class="detail-row"><div class="dl">Payment Plan</div><div class="dv">${escapeHtml(a.payment_plan || '-')}</div></div>
+                    <div class="detail-row"><div class="dl">Payment Mode</div><div class="dv">${escapeHtml(a.payment_mode || '-')}</div></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-head"><h2>Community Career &amp; Post-PEPP Info</h2></div>
+            <div class="panel-body">
+                <h4 style="margin: 0 0 8px 0; color: var(--accent-dark);">Academic Track After PEPP</h4>
+                <div style="margin-bottom:15px; margin-top:5px;">${tracksHtml}</div>
+                <h4 style="margin: 0 0 8px 0; color: var(--accent-dark);">Current Profession details</h4>
+                <div>${profHtml}</div>
+            </div>
+        </div>
+    `;
+    openModal('detail-modal');
+}
+
 function editAlum(a) {
     document.getElementById('e-id').value = a.id;
     document.getElementById('e-name').value = a.name || '';
+    document.getElementById('e-gender').value = a.gender || '';
+    document.getElementById('e-dob').value = a.date_of_birth || '';
+    document.getElementById('e-email').value = a.email || '';
+    document.getElementById('e-email2').value = a.secondary_email || '';
+    document.getElementById('e-mobile').value = a.mobile || '';
+    document.getElementById('e-mobile2').value = a.secondary_mobile || '';
+    document.getElementById('e-wa-cc').value = a.whatsapp_country_code || '+91';
+    document.getElementById('e-wa-num').value = a.whatsapp_number || '';
+    document.getElementById('e-mobile-same').value = a.mobile_same_as_whatsapp || 'yes';
+    document.getElementById('e-emergency').value = a.emergency_contact || '';
+    document.getElementById('e-instagram').value = a.instagram_id || '';
+    
+    document.getElementById('e-address').value = a.postal_address || '';
+    document.getElementById('e-pincode').value = a.postal_pincode || '';
+    document.getElementById('e-place').value = a.place_post_office || '';
+    document.getElementById('e-district').value = a.district || '';
+    document.getElementById('e-state').value = a.state || '';
+    document.getElementById('e-college').value = a.college_school || '';
+    document.getElementById('e-course-curr').value = a.course || '';
+    document.getElementById('e-board').value = a.university_board || '';
+    document.getElementById('e-remaining').value = a.remaining_semesters || '';
+    
     var ys = document.getElementById('e-year');
-    // If the alumnus's year isn't in the inactive list, add it so it shows
     if (a.academic_year && ![].some.call(ys.options, function(o){return o.value===a.academic_year;})) {
         var op = document.createElement('option'); op.value = a.academic_year; op.textContent = a.academic_year; ys.appendChild(op);
     }
     ys.value = a.academic_year || '';
-    document.getElementById('e-course').value = a.course_name || '';
-    document.getElementById('e-mobile').value = a.mobile || '';
-    document.getElementById('e-mobile2').value = a.secondary_mobile || '';
-    document.getElementById('e-email').value = a.email || '';
-    document.getElementById('e-email2').value = a.secondary_email || '';
+    
+    var cs = document.getElementById('e-course');
+    if (a.course_name && ![].some.call(cs.options, function(o){return o.value===a.course_name;})) {
+        var opc = document.createElement('option'); opc.value = a.course_name; opc.textContent = a.course_name; cs.appendChild(opc);
+    }
+    cs.value = a.course_name || '';
+    
+    document.getElementById('e-joined').value = a.joined_date || '';
+    document.getElementById('e-stud-status').value = a.student_status || 'active';
+    document.getElementById('e-onboard-status').value = a.onboarding_status || 'pending';
+    
+    document.getElementById('e-total-fee').value = a.total_fee || 0;
+    document.getElementById('e-paid-amount').value = a.paid_amount || 0;
+    document.getElementById('e-paid-date').value = a.paid_date || '';
+    document.getElementById('e-discount-amount').value = a.discount_amount || 0;
+    document.getElementById('e-discount-remark').value = a.discount_remark || '';
+    document.getElementById('e-pay-plan').value = a.payment_plan || 'One Time';
+    document.getElementById('e-pay-mode').value = a.payment_mode || '';
+    document.getElementById('e-peppkit-elig').value = a.peppkit_eligibility || 'Not Eligible';
+    
+    document.getElementById('e-tracks').value = a.academic_track_after_pepp || '';
+    document.getElementById('e-prof').value = a.current_profession_details || '';
+    
+    document.getElementById('e-existing-photo').value = a.profile_photo || '';
+    document.getElementById('e-photo-preview').src = a.profile_photo || a.user_photo || 'assets/img/default-avatar.png';
+    
     openModal('edit-modal');
+}
+
+function toggleSelectAll(master) {
+    const checkboxes = document.querySelectorAll('.alumni-checkbox');
+    checkboxes.forEach(cb => {
+        if (!cb.disabled) cb.checked = master.checked;
+    });
+    updateBatchUI();
+}
+
+function updateBatchUI() {
+    const checkboxes = document.querySelectorAll('.alumni-checkbox:checked');
+    const checkedCount = checkboxes.length;
+    document.getElementById('checked-count').textContent = checkedCount;
+    
+    const scopeSelect = document.getElementById('batch-scope-select');
+    const targetInput = document.getElementById('batch-target-type');
+    const selectedIdsInput = document.getElementById('batch-selected-ids');
+    
+    const ids = Array.from(checkboxes).map(cb => cb.value);
+    selectedIdsInput.value = ids.join(',');
+    
+    if (scopeSelect.value === 'selected') {
+        targetInput.value = 'selected';
+    } else {
+        targetInput.value = 'filtered';
+    }
+}
+
+function toggleBatchScope() {
+    const scopeSelect = document.getElementById('batch-scope-select');
+    const checkboxes = document.querySelectorAll('.alumni-checkbox');
+    
+    if (scopeSelect.value === 'filtered') {
+        checkboxes.forEach(cb => cb.disabled = true);
+        document.getElementById('select-all-master').disabled = true;
+    } else {
+        checkboxes.forEach(cb => cb.disabled = false);
+        document.getElementById('select-all-master').disabled = false;
+    }
+    updateBatchUI();
+}
+
+function confirmBatchUpdate() {
+    const scope = document.getElementById('batch-scope-select').value;
+    const checkboxes = document.querySelectorAll('.alumni-checkbox:checked');
+    
+    if (scope === 'selected' && checkboxes.length === 0) {
+        alert('Please select at least one alumnus using the checkboxes.');
+        return false;
+    }
+    
+    const msg = scope === 'selected' 
+        ? `Are you sure you want to update the course for the ${checkboxes.length} selected alumni?`
+        : `Are you sure you want to update the course for ALL matching alumni?`;
+        
+    return confirm(msg);
 }
 </script>
 

@@ -138,7 +138,7 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
         </div>
         <?php endif; ?>
 
-        <?php if (can_access('leads') || can_access('accounts') || can_access('marketing')): ?>
+        <?php if (can_access('leads') || can_access('accounts') || can_access('marketing') || can_access('alumni')): ?>
         <div class="nav-section">
             <div class="nav-section-label">CRM</div>
             <?php if (can_access('leads')): ?>
@@ -154,6 +154,11 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
                     <?php if (!empty($nav_mkt['referral'])): ?><span class="nav-badge" style="background:#16a34a;" title="New referral updates"><?php echo (int)$nav_mkt['referral']; ?></span><?php endif; ?>
                     <?php if (!empty($nav_mkt['coupon'])): ?><span class="nav-badge" style="background:#dc2626;" title="New coupon updates"><?php echo (int)$nav_mkt['coupon']; ?></span><?php endif; ?>
                 </span>
+            </a>
+            <?php endif; ?>
+            <?php if (can_access('alumni')): ?>
+            <a class="nav-item <?php echo nav_active('alumni', $active_page); ?>" href="alumni-database.php">
+                <i class="fas fa-user-graduate"></i> Alumni Database
             </a>
             <?php endif; ?>
             <?php if (can_access('accounts')): ?>

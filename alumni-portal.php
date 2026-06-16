@@ -31,6 +31,45 @@ function pep_norm_phone($p) {
     return $d;
 }
 
+function sync_peppian_to_alumni($pdo, $peppian_id) {
+    try {
+        $stmt = $pdo->prepare("SELECT * FROM peppians WHERE id = ?");
+        $stmt->execute([$peppian_id]);
+        $peppian = $stmt->fetch();
+        if ($peppian && $peppian['verified'] && $peppian['linked_alumni_id']) {
+            $alumni_id = $peppian['linked_alumni_id'];
+            
+            $prof_details = null;
+            if ($peppian['current_status'] || $peppian['current_profession'] || $peppian['working_institute']) {
+                $prof_details = json_encode([
+                    'status' => $peppian['current_status'],
+                    'profession' => $peppian['current_profession'],
+                    'working_institute' => $peppian['working_institute']
+                ]);
+            }
+            
+            $stmt = $pdo->prepare("
+                UPDATE alumni SET 
+                    academic_track_after_pepp = ?,
+                    current_profession_details = ?,
+                    profile_photo = ?,
+                    is_verified = 1,
+                    synced_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([
+                $peppian['academic_tracks'],
+                $prof_details,
+                $peppian['profile_picture'],
+                $alumni_id
+            ]);
+        }
+    } catch (Exception $e) {
+        error_log("Failed to sync peppian {$peppian_id} to alumni: " . $e->getMessage());
+    }
+}
+
+
 $DEFAULT_HOW_TO_EARN = "1. Share your unique referral link or coupon card with prospective learners who want to join PEPP.\n"
     . "2. Ensure they apply your referral code during their registration on PEPP.\n"
     . "3. Once their registration is approved by the admin and onboarding checklist is completed, your referral earning is credited to your wallet.\n"
@@ -163,6 +202,7 @@ if ($portal_ready && $_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $first = reset($valid);
                                 $pdo->prepare("UPDATE peppians SET verified = 1, linked_alumni_id = ?, linked_courses = ? WHERE id = ?")
                                     ->execute([$first['id'], implode('; ', $courses), $_SESSION['peppian_id']]);
+                                sync_peppian_to_alumni($pdo, $_SESSION['peppian_id']);
                                 $msg = 'Verified! Your PEPP alumni account is now linked.';
                                 try {
                                     $vstmt = $pdo->prepare("SELECT * FROM peppians WHERE id = ?"); $vstmt->execute([$_SESSION['peppian_id']]);
@@ -208,6 +248,7 @@ if ($portal_ready && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $pdo->prepare("UPDATE peppians SET current_status=?, academic_tracks=?, current_profession=?, working_institute=?, profile_picture=?, profile_completed=? WHERE id=?")
                     ->execute([$status, json_encode($tracks), $profession ?: null, $working ?: null, $pic, $complete, $_SESSION['peppian_id']]);
+                sync_peppian_to_alumni($pdo, $_SESSION['peppian_id']);
                 $msg = $complete ? 'Profile completed - thank you!' : 'Profile saved. Add the remaining details to reach 100%.';
             } elseif ($act === 'apply_referral' && !empty($_SESSION['peppian_id'])) {
                 $method = $_POST['payout_method'] ?? '';

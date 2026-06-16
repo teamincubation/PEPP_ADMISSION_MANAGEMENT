@@ -33,6 +33,7 @@ $GLOBALS['ADMIN_PAGES'] = [
     'accounts'     => ['Accounts & Expenses',     'fa-wallet'],
     'leads'        => ['Lead Management',         'fa-user-tag'],
     'marketing'    => ['Marketing',               'fa-bullhorn'],
+    'alumni'       => ['Alumni Database',         'fa-user-graduate'],
     'settings'     => ['Settings',                'fa-gear'],
     // Future pages: add 'key' => ['Label', 'fa-icon'] and grant in Admin Management.
 ];
