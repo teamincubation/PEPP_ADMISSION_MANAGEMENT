@@ -2,6 +2,9 @@
 require_once 'includes/auth.php';
 require_once 'config/database.php';
 require_permission('students');
+if (file_exists(__DIR__ . '/includes/referral_helper.php')) {
+    require_once __DIR__ . '/includes/referral_helper.php';
+}
 
 /* Full profile of an approved/registered student.
    Linked from: studentpage.php, dashboard.php, phpinstalmentpaymentupdate.php. */
@@ -82,6 +85,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'rever
             // 3) Undo onboarding.
             $pdo->prepare("DELETE FROM student_onboarding WHERE user_id = ?")->execute([$user_id]);
 
+            if (function_exists('reset_referral_earning_for_user')) {
+                reset_referral_earning_for_user($pdo, $user_id);
+            }
+
             // 4) Void any invoices generated for this student's payments
             //    (registration + installments) so numbering stays clean only
             //    if you re-approve; we delete the records here.
@@ -119,6 +126,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
     } else {
         try {
             $pdo->beginTransaction();
+            if (function_exists('cleanup_referral_and_coupon_for_user')) {
+                cleanup_referral_and_coupon_for_user($pdo, $user_id);
+            }
             // Permanent record before removal
             $stmt = $pdo->prepare("
                 INSERT INTO student_approval_history (user_id, action, approved_by, payment_mode, approval_date, notes)
@@ -165,6 +175,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !in_array(($_POST['action'] ?? ''),
             if ($set) {
                 $vals[] = $user_id;
                 $pdo->prepare("UPDATE users SET " . implode(', ', $set) . " WHERE user_id = ?")->execute($vals);
+                
+                // If discount_amount was changed, recalculate and update total_fee, and sync coupon_redemptions.discount_applied
+                if (in_array('discount_amount', $changed, true)) {
+                    $new_discount = max(0, floatval($_POST['discount_amount'] ?? 0));
+                    $course_fee = (float)($student['course_fee'] ?? 0);
+                    $new_total_fee = max(0, $course_fee - $new_discount);
+                    
+                    $pdo->prepare("UPDATE users SET total_fee = ? WHERE user_id = ?")->execute([$new_total_fee, $user_id]);
+                    $pdo->prepare("UPDATE coupon_redemptions SET discount_applied = ? WHERE user_id = ?")->execute([$new_discount, $user_id]);
+                }
+
                 if ($changed) {
                     track_record($pdo, $user_id, 'profile_edited', 'Fields changed: ' . implode(', ', $changed), $admin_username);
                 }

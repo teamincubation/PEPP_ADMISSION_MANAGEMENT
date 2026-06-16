@@ -87,6 +87,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $discount_amount, $discount_remark, $payment_plan, $peppkit, $total_fee, $user_id
             ]);
 
+            // Update discount_applied in coupon_redemptions to match the final discount if a redemption exists
+            $stmt = $pdo->prepare("UPDATE coupon_redemptions SET discount_applied = ? WHERE user_id = ?");
+            $stmt->execute([$discount_amount, $user_id]);
+
             // Future installments (installment #1 = the registration payment, already paid)
             $created_installments = 0;
             if ($payment_plan !== 'One Time') {
@@ -154,6 +158,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $pdo->beginTransaction();
 
+            if (file_exists(__DIR__ . '/includes/referral_helper.php')) {
+                require_once __DIR__ . '/includes/referral_helper.php';
+                cleanup_referral_and_coupon_for_user($pdo, $user_id);
+            }
+
             $stmt = $pdo->prepare("UPDATE users SET status = 'rejected', approved_by = ?, approval_date = NOW() WHERE user_id = ?");
             $stmt->execute([$admin_username, $user_id]);
 
@@ -179,6 +188,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             $pdo->beginTransaction();
+
+            if (file_exists(__DIR__ . '/includes/referral_helper.php')) {
+                require_once __DIR__ . '/includes/referral_helper.php';
+                cleanup_referral_and_coupon_for_user($pdo, $user_id);
+            }
 
             // History first (so the record survives the user deletion)
             $stmt = $pdo->prepare("
@@ -232,6 +246,7 @@ try {
         SELECT u.user_id, u.name, u.email, u.whatsapp_country_code, u.whatsapp_number,
                u.pepp_course, u.pepp_academic_year, u.paid_amount, u.paid_date,
                u.payment_screenshot, u.user_photo, u.created_at,
+               u.applied_coupon, u.referral_code, u.coupon_discount,
                pc.total_fee AS course_fee
         FROM users u
         LEFT JOIN pepp_courses pc ON pc.course_name = u.pepp_course
@@ -321,6 +336,19 @@ include 'includes/admin_nav.php';
                     <td>
                         <div class="cell-main">₹<?php echo number_format((float)$s['paid_amount'], 0); ?></div>
                         <div class="cell-sub"><?php echo $s['paid_date'] ? date('d M Y', strtotime($s['paid_date'])) : '-'; ?></div>
+                        <?php if ((float)($s['coupon_discount'] ?? 0) > 0): ?>
+                            <div style="margin-top: 4px;">
+                                <?php if (!empty($s['referral_code'])): ?>
+                                    <span class="badge violet" title="Referral Code Applied" style="font-size: 0.72rem; padding: 2px 6px; display: inline-flex; align-items: center; gap: 4px;">
+                                        <i class="fas fa-gift"></i> <?php echo e($s['referral_code']); ?> (-₹<?php echo number_format((float)$s['coupon_discount'], 0); ?>)
+                                    </span>
+                                <?php elseif (!empty($s['applied_coupon'])): ?>
+                                    <span class="badge green" title="Coupon Applied" style="font-size: 0.72rem; padding: 2px 6px; display: inline-flex; align-items: center; gap: 4px;">
+                                        <i class="fas fa-ticket"></i> <?php echo e($s['applied_coupon']); ?> (-₹<?php echo number_format((float)$s['coupon_discount'], 0); ?>)
+                                    </span>
+                                <?php endif; ?>
+                            </div>
+                        <?php endif; ?>
                     </td>
                     <td>
                         <?php if (!empty($s['payment_screenshot'])): ?>
@@ -333,7 +361,10 @@ include 'includes/admin_nav.php';
                         <button class="btn btn-sm btn-soft-green" onclick='openApproveModal(<?php echo json_encode([
                             "user_id" => $s["user_id"], "name" => $s["name"],
                             "course" => $s["pepp_course"], "fee" => (float)($s["course_fee"] ?? 0),
-                            "paid" => (float)$s["paid_amount"]
+                            "paid" => (float)$s["paid_amount"],
+                            "applied_coupon" => $s["applied_coupon"] ?? "",
+                            "referral_code" => $s["referral_code"] ?? "",
+                            "coupon_discount" => (float)($s["coupon_discount"] ?? 0)
                         ], JSON_HEX_APOS | JSON_HEX_QUOT); ?>)'><i class="fas fa-check"></i> Approve</button>
                         <button class="btn btn-sm btn-soft-red" onclick="rejectStudent('<?php echo e($s['user_id']); ?>', '<?php echo e(addslashes($s['name'])); ?>')"><i class="fas fa-xmark"></i></button>
                         <?php if (can_delete()): ?><button class="btn btn-sm btn-outline" onclick="deleteStudent('<?php echo e($s['user_id']); ?>', '<?php echo e(addslashes($s['name'])); ?>')" title="Delete registration (Super Admin)"><i class="fas fa-trash"></i></button><?php endif; ?>
@@ -360,6 +391,7 @@ include 'includes/admin_nav.php';
                     <i class="fas fa-circle-info"></i>
                     <span id="ap-summary"></span>
                 </div>
+                <div id="ap-coupon-alert" style="display:none; margin-bottom:16px;"></div>
                 <div class="form-grid">
                     <div class="field">
                         <label>Course access until <span class="req">*</span></label>
@@ -406,7 +438,7 @@ include 'includes/admin_nav.php';
                     </div>
                     <div class="field full">
                         <label>Discount remark</label>
-                        <input type="text" name="discount_remark" placeholder="e.g. Early-bird offer">
+                        <input type="text" name="discount_remark" id="ap-discount-remark" placeholder="e.g. Early-bird offer">
                     </div>
                 </div>
                 <div id="installment-rows" style="margin-top:14px;"></div>
@@ -450,6 +482,38 @@ function openApproveModal(s) {
         ' · Paid at registration ₹' + s.paid.toLocaleString('en-IN');
     document.getElementById('approve-form').reset();
     document.getElementById('ap-user-id').value = s.user_id;
+
+    // Set default discount and remark based on coupon/referral details
+    const discountInput = document.getElementById('ap-discount');
+    const remarkInput = document.getElementById('ap-discount-remark');
+    const couponAlert = document.getElementById('ap-coupon-alert');
+
+    if (s.coupon_discount > 0) {
+        discountInput.value = s.coupon_discount;
+        if (s.referral_code) {
+            remarkInput.value = 'Referral code \'' + s.referral_code + '\' applied';
+            couponAlert.style.display = 'flex';
+            couponAlert.className = 'alert';
+            couponAlert.style.background = 'var(--accent-soft)';
+            couponAlert.style.color = 'var(--accent-dark)';
+            couponAlert.style.border = '1px solid #ddd6fe';
+            couponAlert.innerHTML = '<i class=\"fas fa-gift\" style=\"margin-top:2px;\"></i><span><strong>Referral code Applied:</strong> ' + s.referral_code + ' (₹' + s.coupon_discount.toLocaleString('en-IN') + ' discount)</span>';
+        } else if (s.applied_coupon) {
+            remarkInput.value = 'Coupon code \'' + s.applied_coupon + '\' applied';
+            couponAlert.style.display = 'flex';
+            couponAlert.className = 'alert alert-success';
+            couponAlert.style.background = '';
+            couponAlert.style.color = '';
+            couponAlert.style.border = '';
+            couponAlert.innerHTML = '<i class=\"fas fa-ticket\" style=\"margin-top:2px;\"></i><span><strong>Coupon Applied:</strong> ' + s.applied_coupon + ' (₹' + s.coupon_discount.toLocaleString('en-IN') + ' discount)</span>';
+        } else {
+            couponAlert.style.display = 'none';
+        }
+    } else {
+        discountInput.value = 0;
+        couponAlert.style.display = 'none';
+    }
+
     // sensible default: 1 year of access
     const d = new Date(); d.setFullYear(d.getFullYear() + 1);
     document.getElementById('ap-duration').value = d.toISOString().slice(0, 10);

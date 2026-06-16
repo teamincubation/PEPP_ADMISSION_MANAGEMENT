@@ -228,3 +228,39 @@ function referee_wallet($pdo, $referee_id) {
     } catch (Exception $e) { error_log('referee_wallet: ' . $e->getMessage()); }
     return $w;
 }
+
+/** Clean up coupon redemptions and referral earnings when a student registration is deleted or rejected. */
+function cleanup_referral_and_coupon_for_user($pdo, $user_id) {
+    if (!pepp_tables_exist($pdo, ['coupon_redemptions', 'referral_earnings'])) return;
+    try {
+        // 1) Find redemption record
+        $stmt = $pdo->prepare("SELECT coupon_code FROM coupon_redemptions WHERE user_id = ?");
+        $stmt->execute([$user_id]);
+        $redemptions = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        
+        foreach ($redemptions as $code) {
+            // Decrement used_count in coupons if it exists
+            if (pepp_tables_exist($pdo, ['coupons'])) {
+                $pdo->prepare("UPDATE coupons SET used_count = GREATEST(0, used_count - 1) WHERE code = ?")->execute([$code]);
+            }
+        }
+        
+        // 2) Delete redemption and earnings records
+        $pdo->prepare("DELETE FROM coupon_redemptions WHERE user_id = ?")->execute([$user_id]);
+        $pdo->prepare("DELETE FROM referral_earnings WHERE user_id = ?")->execute([$user_id]);
+        
+    } catch (Exception $e) {
+        error_log('cleanup_referral_and_coupon_for_user: ' . $e->getMessage());
+    }
+}
+
+/** Reset referral earnings to pending when a student's approval is reverted. */
+function reset_referral_earning_for_user($pdo, $user_id) {
+    if (!pepp_tables_exist($pdo, ['referral_earnings'])) return;
+    try {
+        $pdo->prepare("UPDATE referral_earnings SET status = 'pending', credited_amount = 0.00, updated_at = NOW() WHERE user_id = ?")
+            ->execute([$user_id]);
+    } catch (Exception $e) {
+        error_log('reset_referral_earning_for_user: ' . $e->getMessage());
+    }
+}
