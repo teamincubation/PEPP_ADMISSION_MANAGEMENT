@@ -216,16 +216,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     if (isset($_FILES['payment_screenshot']) && $_FILES['payment_screenshot']['error'] === UPLOAD_ERR_OK) {
         $upload_dir = 'uploads/payments/';
-        if (!is_dir($upload_dir)) mkdir($upload_dir, 0755, true);
-        $payment_screenshot_path = $upload_dir . uniqid() . '_' . $_FILES['payment_screenshot']['name'];
-        move_uploaded_file($_FILES['payment_screenshot']['tmp_name'], $payment_screenshot_path);
+        $target_dir = '../' . $upload_dir;
+        if (!is_dir($target_dir)) mkdir($target_dir, 0755, true);
+        $filename = uniqid() . '_' . $_FILES['payment_screenshot']['name'];
+        $payment_screenshot_path = $upload_dir . $filename;
+        move_uploaded_file($_FILES['payment_screenshot']['tmp_name'], $target_dir . $filename);
     }
     
     if (isset($_FILES['photo_upload']) && $_FILES['photo_upload']['error'] === UPLOAD_ERR_OK) {
         $upload_dir = 'uploads/photos/';
-        if (!is_dir($upload_dir)) mkdir($upload_dir, 0755, true);
-        $photo_upload_path = $upload_dir . uniqid() . '_' . $_FILES['photo_upload']['name'];
-        move_uploaded_file($_FILES['photo_upload']['tmp_name'], $photo_upload_path);
+        $target_dir = '../' . $upload_dir;
+        if (!is_dir($target_dir)) mkdir($target_dir, 0755, true);
+        $filename = uniqid() . '_' . $_FILES['photo_upload']['name'];
+        $photo_upload_path = $upload_dir . $filename;
+        move_uploaded_file($_FILES['photo_upload']['tmp_name'], $target_dir . $filename);
     }
     
     if (empty($validation_errors)) {

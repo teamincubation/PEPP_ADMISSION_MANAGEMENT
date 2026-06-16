@@ -33,10 +33,13 @@ function handle_upload($field, $dir) {
     $ext = strtolower(pathinfo($_FILES[$field]['name'], PATHINFO_EXTENSION));
     if (!in_array($ext, $allowed, true)) return null;
     if ($_FILES[$field]['size'] > 5 * 1024 * 1024) return null;
-    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    
+    $target_dir = '../' . $dir;
+    if (!is_dir($target_dir)) @mkdir($target_dir, 0755, true);
     $name = uniqid() . '_' . preg_replace('/[^A-Za-z0-9._-]/', '_', basename($_FILES[$field]['name']));
-    $path = rtrim($dir, '/') . '/' . $name;
-    return move_uploaded_file($_FILES[$field]['tmp_name'], $path) ? $path : null;
+    $target_path = rtrim($target_dir, '/') . '/' . $name;
+    $db_path = rtrim($dir, '/') . '/' . $name;
+    return move_uploaded_file($_FILES[$field]['tmp_name'], $target_path) ? $db_path : null;
 }
 
 /** Insert one approved student. Returns the new user_id. Throws on failure. */

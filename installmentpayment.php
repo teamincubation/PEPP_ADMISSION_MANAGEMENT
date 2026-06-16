@@ -108,10 +108,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             
             if (isset($_FILES['payment_screenshot']) && $_FILES['payment_screenshot']['error'] === UPLOAD_ERR_OK) {
                 $upload_dir = 'uploads/installment_payments/';
+                $target_dir = '../' . $upload_dir;
                 
                 // Create directory if it doesn't exist
-                if (!is_dir($upload_dir)) {
-                    if (!mkdir($upload_dir, 0755, true)) {
+                if (!is_dir($target_dir)) {
+                    if (!mkdir($target_dir, 0755, true)) {
                         throw new Exception('Failed to create upload directory');
                     }
                 }
@@ -136,12 +137,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $payment_screenshot_path = $upload_dir . $new_filename;
                 
                 // Move uploaded file
-                if (!move_uploaded_file($_FILES['payment_screenshot']['tmp_name'], $payment_screenshot_path)) {
+                if (!move_uploaded_file($_FILES['payment_screenshot']['tmp_name'], $target_dir . $new_filename)) {
                     throw new Exception('Failed to upload payment screenshot. Please try again.');
                 }
                 
                 // Verify file was actually uploaded
-                if (!file_exists($payment_screenshot_path)) {
+                if (!file_exists($target_dir . $new_filename)) {
                     throw new Exception('File upload verification failed. Please try again.');
                 }
                 
@@ -194,8 +195,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         } catch (Exception $e) {
             $pdo->rollBack();
             // Clean up uploaded file if there was an error
-            if (!empty($payment_screenshot_path) && file_exists($payment_screenshot_path)) {
-                unlink($payment_screenshot_path);
+            if (!empty($payment_screenshot_path) && file_exists('../' . $payment_screenshot_path)) {
+                unlink('../' . $payment_screenshot_path);
             }
             $error_message = "Error updating payment: " . $e->getMessage();
             

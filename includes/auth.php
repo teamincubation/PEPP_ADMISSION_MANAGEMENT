@@ -174,7 +174,13 @@ function csrf_verify() {
 }
 
 /* ── Output helper ──────────────────────────────────────────────────────── */
-function e($v) { return htmlspecialchars((string)($v ?? ''), ENT_QUOTES, 'UTF-8'); }
+function e($v) {
+    $str = (string)($v ?? '');
+    if (strpos($str, 'uploads/') === 0) {
+        $str = '../' . $str;
+    }
+    return htmlspecialchars($str, ENT_QUOTES, 'UTF-8');
+}
 
 /* ── Photo / upload rendering ───────────────────────────────────────────────
    Handles the case where a student uploaded a PDF (or other non-image) where

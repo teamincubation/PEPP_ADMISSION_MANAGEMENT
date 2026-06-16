@@ -33,7 +33,7 @@ if (!marketing_ready($pdo)) {
 }
 
 /* ── Uploads dir for payout proofs ── */
-$UP_DIR = __DIR__ . '/uploads/payouts';
+$UP_DIR = __DIR__ . '/../uploads/payouts';
 if (!is_dir($UP_DIR)) @mkdir($UP_DIR, 0755, true);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {

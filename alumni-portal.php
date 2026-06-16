@@ -11,7 +11,13 @@ require_once 'config/database.php';
 require_once 'includes/referral_helper.php';
 require_once 'includes/peppian_notify.php';
 
-function pep_e($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+function pep_e($s) {
+    $str = (string)$s;
+    if (strpos($str, 'uploads/') === 0) {
+        $str = '../' . $str;
+    }
+    return htmlspecialchars($str, ENT_QUOTES, 'UTF-8');
+}
 function pep_csrf() {
     if (empty($_SESSION['pep_csrf'])) $_SESSION['pep_csrf'] = bin2hex(random_bytes(16));
     return $_SESSION['pep_csrf'];
@@ -172,7 +178,7 @@ if ($portal_ready && $_SERVER['REQUEST_METHOD'] === 'POST') {
                     $ext = strtolower(pathinfo($_FILES['profile_picture']['name'], PATHINFO_EXTENSION));
                     $imgok = @getimagesize($_FILES['profile_picture']['tmp_name']) !== false;
                     if ($imgok && in_array($ext, ['jpg', 'jpeg', 'png', 'webp'], true) && $_FILES['profile_picture']['size'] <= 4 * 1024 * 1024) {
-                        $dir = __DIR__ . '/uploads/peppians';
+                        $dir = __DIR__ . '/../uploads/peppians';
                         if (!is_dir($dir)) @mkdir($dir, 0755, true);
                         $fn = 'pep_' . (int)$_SESSION['peppian_id'] . '_' . time() . '.' . $ext;
                         if (@move_uploaded_file($_FILES['profile_picture']['tmp_name'], $dir . '/' . $fn)) $pic = 'uploads/peppians/' . $fn;
