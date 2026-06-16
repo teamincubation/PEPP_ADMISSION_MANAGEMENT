@@ -137,6 +137,11 @@ include 'includes/admin_nav.php';
             <div class="cell-sub">IP: <?php echo e($student['ip_address'] ?: '-'); ?></div>
             <div class="cell-sub">Submitted: <?php echo $student['submit_datetime'] ? date('d M Y, h:i A', strtotime($student['submit_datetime'])) : '-'; ?></div>
             <div class="cell-sub">Terms agreed: <?php echo e($student['terms_agreed']); ?></div>
+            <?php if (!empty($student['referral_code'])): ?>
+                <div class="cell-sub" style="margin-top:6px;">Referral Applied: <span class="badge violet" style="font-size:0.75rem; padding: 2px 6px; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-gift"></i> <?php echo e($student['referral_code']); ?></span> (₹<?php echo number_format((float)$student['coupon_discount'], 0); ?> discount)</div>
+            <?php elseif (!empty($student['applied_coupon'])): ?>
+                <div class="cell-sub" style="margin-top:6px;">Coupon Applied: <span class="badge green" style="font-size:0.75rem; padding: 2px 6px; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-ticket"></i> <?php echo e($student['applied_coupon']); ?></span> (₹<?php echo number_format((float)$student['coupon_discount'], 0); ?> discount)</div>
+            <?php endif; ?>
         </div>
     </div>
 </div>

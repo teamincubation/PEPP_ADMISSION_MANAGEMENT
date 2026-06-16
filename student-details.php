@@ -331,6 +331,11 @@ include 'includes/admin_nav.php';
             <div class="detail-row"><div class="dl">Address</div><div class="dv"><?php echo e($student['postal_address']); ?>, <?php echo e($student['place_post_office']); ?>, <?php echo e($student['district']); ?>, <?php echo e($student['state']); ?> - <?php echo e($student['postal_pincode']); ?></div></div>
             <div class="detail-row"><div class="dl">Registered</div><div class="dv"><?php echo date('d M Y, h:i A', strtotime($student['created_at'])); ?><?php echo $student['ip_address'] ? ' · IP ' . e($student['ip_address']) : ''; ?></div></div>
             <div class="detail-row"><div class="dl">Source</div><div class="dv"><?php echo e($student['how_know_pepp'] ?: '-'); ?></div></div>
+            <?php if (!empty($student['referral_code'])): ?>
+                <div class="detail-row"><div class="dl">Referral Code</div><div class="dv"><span class="badge violet" style="font-size:0.75rem; padding: 2px 8px; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-gift"></i> <?php echo e($student['referral_code']); ?></span> (₹<?php echo number_format((float)$student['coupon_discount'], 0); ?> discount)</div></div>
+            <?php elseif (!empty($student['applied_coupon'])): ?>
+                <div class="detail-row"><div class="dl">Applied Coupon</div><div class="dv"><span class="badge green" style="font-size:0.75rem; padding: 2px 8px; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-ticket"></i> <?php echo e($student['applied_coupon']); ?></span> (₹<?php echo number_format((float)$student['coupon_discount'], 0); ?> discount)</div></div>
+            <?php endif; ?>
         </div>
     </div>
 </div>

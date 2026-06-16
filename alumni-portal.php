@@ -301,196 +301,891 @@ if ($step === 'dashboard') {
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <style>
 :root {
-    --gold:#d4a13a; --gold-d:#b8861f; --gold-l:#f0d595;
-    --plum:#3d1528; --plum-2:#5b1f3a; --plum-3:#7a2b4f;
-    --ink:#2a2118; --muted:#8a8175; --line:#ece6dc; --bg:#f6f1e8;
-    --card:#fffdf9; --ok:#1f9d63; --ok-bg:#e6f7ee; --err:#c0392b; --err-bg:#fdecea;
-    --shadow:0 4px 24px rgba(61,21,40,.08); --shadow-lg:0 18px 50px rgba(61,21,40,.18);
-    --radius:20px;
+    --gold: #d4a13a; 
+    --gold-d: #b8861f; 
+    --gold-l: #fcd34d;
+    --gold-metal: linear-gradient(135deg, #fef08a 0%, #d4a13a 50%, #b8861f 100%);
+    --bg-dark: #0a0609;
+    --bg-surface: #140d12;
+    --bg-surface-elevated: #1e141b;
+    --border-gold: rgba(212, 161, 58, 0.25);
+    --border-gold-focus: rgba(212, 161, 58, 0.65);
+    --ink: #f5f5f4;
+    --muted: #a8a29e;
+    --card-bg: rgba(20, 13, 18, 0.75);
+    --radius: 20px;
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    --ok: #10b981;
+    --ok-bg: rgba(16, 185, 129, 0.12);
+    --err: #ef4444;
+    --err-bg: rgba(239, 68, 68, 0.12);
 }
-* { box-sizing:border-box; margin:0; padding:0; }
-html { scroll-behavior:smooth; }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
 body {
-    font-family:'Plus Jakarta Sans','Segoe UI',system-ui,sans-serif; color:var(--ink);
-    background:
-        radial-gradient(ellipse 70% 55% at 8% 0%, rgba(212,161,58,.10) 0%, transparent 55%),
-        radial-gradient(ellipse 60% 50% at 95% 100%, rgba(123,43,79,.10) 0%, transparent 55%),
-        var(--bg);
-    min-height:100vh; line-height:1.55; -webkit-font-smoothing:antialiased;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    color: var(--ink);
+    background: 
+        radial-gradient(circle at 10% 20%, rgba(212, 161, 58, 0.08) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(122, 43, 79, 0.12) 0%, transparent 45%),
+        var(--bg-dark);
+    min-height: 100vh;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
 }
-a { color:var(--gold-d); text-decoration:none; }
-a:hover { text-decoration:underline; }
 
-/* ── Top bar ── */
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-dark); }
+::-webkit-scrollbar-thumb { background: var(--bg-surface-elevated); border-radius: 4px; border: 2px solid var(--bg-dark); }
+::-webkit-scrollbar-thumb:hover { background: var(--gold); }
+
+/* Mobile first layout wrapping */
+.wrap {
+    width: 100%;
+    max-width: 640px; /* target optimal mobile reading width */
+    margin: 0 auto;
+    padding: 24px 16px 80px;
+}
+
+@media (min-width: 768px) {
+    .wrap {
+        max-width: 720px;
+        padding: 40px 24px 100px;
+    }
+}
+
+/* Top bar glassmorphism */
 .topbar {
-    background:rgba(255,253,249,.85); backdrop-filter:blur(14px);
-    border-bottom:1px solid var(--line); padding:15px 26px;
-    display:flex; align-items:center; justify-content:space-between;
-    position:sticky; top:0; z-index:20;
+    background: rgba(10, 6, 9, 0.82);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border-gold);
+    padding: 14px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 20;
 }
-.brand { display:flex; align-items:center; gap:11px; font-size:1.45rem; font-weight:800; color:var(--plum-2); letter-spacing:-.6px; }
+
+@media (min-width: 520px) {
+    .topbar {
+        flex-direction: row;
+        justify-content: space-between;
+        padding: 16px 32px;
+    }
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: -0.5px;
+}
+
 .brand .logo-badge {
-    width:38px; height:38px; border-radius:11px; display:flex; align-items:center; justify-content:center;
-    background:linear-gradient(135deg, var(--gold), var(--gold-d)); color:#fff; font-size:1.05rem;
-    box-shadow:0 4px 12px rgba(212,161,58,.4);
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--gold), var(--gold-d));
+    color: #fff;
+    font-size: 1rem;
+    box-shadow: 0 4px 12px rgba(212, 161, 58, 0.3);
 }
-.brand small { display:block; font-weight:500; font-size:.6rem; letter-spacing:3px; color:var(--muted); margin-top:-2px; }
-.topbar-right { display:flex; align-items:center; gap:14px; }
-.who { font-size:.84rem; color:var(--muted); }
-.who strong { color:var(--ink); font-weight:600; }
 
-/* ── Layout ── */
-.wrap { max-width:940px; margin:0 auto; padding:30px 18px 70px; }
+.brand small {
+    display: block;
+    font-weight: 600;
+    font-size: 0.58rem;
+    letter-spacing: 2px;
+    color: var(--muted);
+    margin-top: -2px;
+}
 
-/* ── Hero ── */
-.hero {
-    position:relative; overflow:hidden; color:#fff; border-radius:26px; padding:42px 38px;
-    margin-bottom:26px;
-    background:linear-gradient(135deg, var(--plum) 0%, var(--plum-2) 50%, var(--plum-3) 100%);
-    box-shadow:var(--shadow-lg);
+.topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
 }
-.hero::before {
-    content:''; position:absolute; inset:0; pointer-events:none;
-    background:
-        radial-gradient(circle 280px at 100% 0%, rgba(212,161,58,.35) 0%, transparent 60%),
-        radial-gradient(circle 220px at 0% 120%, rgba(240,213,149,.18) 0%, transparent 55%);
-}
-.hero::after {
-    content:''; position:absolute; right:-40px; top:-40px; width:200px; height:200px; border-radius:50%;
-    border:1.5px solid rgba(255,255,255,.08); pointer-events:none;
-}
-.hero-badge {
-    display:inline-flex; align-items:center; gap:7px; background:rgba(255,255,255,.14);
-    border:1px solid rgba(255,255,255,.22); backdrop-filter:blur(8px);
-    color:var(--gold-l); font-size:.74rem; font-weight:700; letter-spacing:.6px; text-transform:uppercase;
-    padding:6px 14px; border-radius:50px; margin-bottom:16px; position:relative; z-index:1;
-}
-.hero h1 { font-size:2rem; font-weight:800; letter-spacing:-.7px; margin-bottom:10px; position:relative; z-index:1; line-height:1.15; }
-.hero p { opacity:.92; font-size:1rem; max-width:560px; position:relative; z-index:1; }
-.hero .perks { display:flex; gap:22px; flex-wrap:wrap; margin-top:20px; position:relative; z-index:1; }
-.hero .perk { display:flex; align-items:center; gap:9px; font-size:.86rem; font-weight:500; }
-.hero .perk i { width:30px; height:30px; border-radius:9px; background:rgba(255,255,255,.16); display:flex; align-items:center; justify-content:center; color:var(--gold-l); }
 
-/* ── Cards ── */
+.who {
+    font-size: 0.8rem;
+    color: var(--muted);
+}
+.who strong {
+    color: #fff;
+    font-weight: 600;
+}
+
+/* Premium Card Panels */
 .card {
-    background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
-    padding:30px; margin-bottom:22px; box-shadow:var(--shadow);
-    animation:rise .5s cubic-bezier(.2,.7,.3,1) both;
+    background: var(--card-bg);
+    border: 1px solid var(--border-gold);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    animation: rise 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-@keyframes rise { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:none; } }
-.card h2 { font-size:1.3rem; font-weight:800; letter-spacing:-.4px; margin-bottom:6px; }
-.card .sub { color:var(--muted); font-size:.92rem; margin-bottom:22px; }
 
-/* ── Fields ── */
-.field { margin-bottom:16px; }
-.field label { display:block; font-size:.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:#6b6357; margin-bottom:7px; }
+@media (min-width: 768px) {
+    .card {
+        padding: 32px;
+        margin-bottom: 24px;
+    }
+}
+
+@keyframes rise {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: none; }
+}
+
+.card h2 {
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: -0.3px;
+    margin-bottom: 6px;
+}
+
+.card .sub {
+    color: var(--muted);
+    font-size: 0.88rem;
+    margin-bottom: 20px;
+}
+
+/* Fields & Inputs */
+.field {
+    margin-bottom: 16px;
+}
+
+.field label {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--gold);
+    margin-bottom: 6px;
+}
+
 .field input, .field select, .field textarea {
-    width:100%; padding:13px 15px; border:1.6px solid var(--line); border-radius:12px;
-    font-size:.94rem; font-family:inherit; color:var(--ink); background:#fffefb; transition:border-color .18s, box-shadow .18s;
+    width: 100%;
+    padding: 12px 14px;
+    border: 1.5px solid var(--border-gold);
+    border-radius: 12px;
+    font-size: 0.92rem;
+    font-family: inherit;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.02);
+    transition: all 0.2s;
 }
-.field input:focus, .field select:focus, .field textarea:focus { outline:none; border-color:var(--gold); box-shadow:0 0 0 4px rgba(212,161,58,.14); }
-.field input::placeholder { color:#b9b1a4; }
-.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:15px; }
-@media(max-width:560px){ .grid2{ grid-template-columns:1fr; } }
 
-/* ── Buttons ── */
+.field input:focus, .field select:focus, .field textarea:focus {
+    outline: none;
+    border-color: var(--border-gold-focus);
+    box-shadow: 0 0 0 4px rgba(212, 161, 58, 0.15);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.field input::placeholder {
+    color: #57534e;
+}
+
+.grid2 {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+}
+
+@media (min-width: 480px) {
+    .grid2 {
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+    }
+}
+
+/* Buttons */
 .btn {
-    display:inline-flex; align-items:center; justify-content:center; gap:9px;
-    background:linear-gradient(135deg, var(--gold), var(--gold-d)); color:#fff; border:none;
-    border-radius:12px; padding:13px 26px; font-weight:700; font-size:.94rem; font-family:inherit;
-    cursor:pointer; text-decoration:none; transition:transform .15s, box-shadow .15s, filter .15s;
-    box-shadow:0 6px 18px rgba(184,134,31,.32);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: linear-gradient(135deg, var(--gold), var(--gold-d));
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    padding: 12px 24px;
+    font-weight: 700;
+    font-size: 0.92rem;
+    font-family: inherit;
+    cursor: pointer;
+    text-decoration: none !important;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 14px rgba(212, 161, 58, 0.2);
 }
-.btn:hover { transform:translateY(-2px); box-shadow:0 10px 26px rgba(184,134,31,.4); text-decoration:none; filter:brightness(1.03); }
-.btn:active { transform:translateY(0); }
-.btn-block { width:100%; }
-.btn-ghost { background:#fff; color:var(--ink); border:1.6px solid var(--line); box-shadow:none; }
-.btn-ghost:hover { background:#faf7f0; box-shadow:0 4px 12px rgba(0,0,0,.05); }
-.btn-google { background:#fff; color:#3c4043; border:1.6px solid var(--line); box-shadow:none; font-weight:600; }
-.btn-google:hover { background:#fafafa; box-shadow:0 3px 10px rgba(0,0,0,.07); }
 
-.or { display:flex; align-items:center; gap:14px; margin:18px 0; color:var(--muted); font-size:.76rem; font-weight:600; text-transform:uppercase; letter-spacing:.8px; }
-.or::before, .or::after { content:''; flex:1; height:1px; background:var(--line); }
+.btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(212, 161, 58, 0.35);
+    filter: brightness(1.06);
+}
 
-/* ── Alerts ── */
-.alert { padding:14px 18px; border-radius:13px; font-size:.9rem; font-weight:600; margin-bottom:18px; display:flex; gap:10px; align-items:center; }
-.alert.ok { background:var(--ok-bg); color:var(--ok); }
-.alert.err { background:var(--err-bg); color:var(--err); }
-.alert.info { background:#fdf6e7; color:#8a6d1e; font-weight:500; border:1px solid #f0e3c0; }
+.btn:active {
+    transform: translateY(0);
+}
 
-/* ── Tabs (auth) ── */
-.tab-row { display:flex; gap:0; margin-bottom:22px; background:#f3ede2; padding:5px; border-radius:14px; }
-.tab-row button { flex:1; padding:11px; border:none; background:transparent; border-radius:10px; font-weight:700; font-size:.9rem; cursor:pointer; color:var(--muted); transition:all .2s; font-family:inherit; }
-.tab-row button.on { background:var(--card); color:var(--plum-2); box-shadow:0 2px 8px rgba(0,0,0,.08); }
+.btn-block {
+    width: 100%;
+}
 
-/* ── Stats ── */
-.stat-row { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:20px; }
-@media(max-width:680px){ .stat-row{ grid-template-columns:1fr 1fr; } }
-.stat { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; text-align:center; box-shadow:var(--shadow); transition:transform .2s; }
-.stat:hover { transform:translateY(-3px); }
-.stat .v { font-size:1.7rem; font-weight:800; color:var(--plum-2); letter-spacing:-.5px; }
-.stat .l { font-size:.68rem; color:var(--muted); text-transform:uppercase; letter-spacing:.6px; margin-top:5px; font-weight:700; }
+.btn-ghost {
+    background: rgba(255, 255, 255, 0.03);
+    color: #fff;
+    border: 1.5px solid var(--border-gold);
+    box-shadow: none;
+}
 
-/* ── Chips & pills ── */
-.chip { display:inline-flex; align-items:center; gap:7px; background:linear-gradient(135deg, var(--gold-l), #f7e6bd); color:#7a5a12; font-weight:700; padding:6px 15px; border-radius:50px; font-size:.82rem; }
-.pill-list { display:flex; flex-wrap:wrap; gap:9px; }
-.pill { background:#f3ede2; border-radius:50px; padding:7px 16px; font-size:.83rem; font-weight:600; color:#6b5d44; }
+.btn-ghost:hover {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: var(--gold);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
 
-/* ── Referral link row ── */
-.ref-link { display:flex; gap:9px; margin-top:11px; }
-.ref-link input { flex:1; padding:12px 14px; border:1.6px solid var(--line); border-radius:11px; font-size:.86rem; background:#faf7f0; color:var(--plum-2); font-weight:600; }
+.btn-google {
+    background: #fff;
+    color: #1f2937;
+    border: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    font-weight: 600;
+}
 
-/* ── Loading overlay ── */
-.loading-overlay { position:fixed; inset:0; background:rgba(61,21,40,.9); backdrop-filter:blur(6px); display:none; align-items:center; justify-content:center; z-index:200; flex-direction:column; color:#fff; }
-.spinner { width:58px; height:58px; border:5px solid rgba(255,255,255,.22); border-top-color:var(--gold-l); border-radius:50%; animation:spin .9s linear infinite; margin-bottom:20px; }
-@keyframes spin { to { transform:rotate(360deg); } }
-.loading-overlay .lt { font-weight:700; font-size:1.05rem; letter-spacing:.3px; }
-.loading-overlay .ls { font-size:.85rem; opacity:.75; margin-top:6px; }
+.btn-google:hover {
+    background: #f5f5f4;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+}
 
-/* ── Premium referral coupon (mirrors the printed card) ── */
+.or {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 16px 0;
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.or::before, .or::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border-gold);
+}
+
+/* Alerts */
+.alert {
+    padding: 12px 16px;
+    border-radius: 12px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    margin-bottom: 16px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.alert.ok { background: var(--ok-bg); color: var(--ok); border: 1px solid rgba(16, 185, 129, 0.3); }
+.alert.err { background: var(--err-bg); color: var(--err); border: 1px solid rgba(239, 68, 68, 0.3); }
+.alert.info { background: rgba(212, 161, 58, 0.08); color: var(--gold-l); border: 1px solid var(--border-gold); }
+
+/* Navigation Tab Bar */
+.tab-row {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 20px;
+    background: rgba(255, 255, 255, 0.03);
+    padding: 4px;
+    border-radius: 14px;
+    border: 1px solid var(--border-gold);
+}
+
+.tab-row button {
+    flex: 1;
+    padding: 10px;
+    border: none;
+    background: transparent;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: 0.85rem;
+    cursor: pointer;
+    color: var(--muted);
+    transition: all 0.2s;
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.tab-row button.on {
+    background: linear-gradient(135deg, var(--gold), var(--gold-d));
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(212, 161, 58, 0.2);
+}
+
+/* Stats view */
+.stat-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+@media (min-width: 480px) {
+    .stat-row {
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+    }
+}
+
+.stat {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border-gold);
+    border-radius: 14px;
+    padding: 14px 10px;
+    text-align: center;
+    transition: all 0.2s ease;
+}
+
+.stat:hover {
+    transform: translateY(-2px);
+    background: rgba(255, 255, 255, 0.04);
+    border-color: var(--gold);
+}
+
+.stat .v {
+    font-size: 1.45rem;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: -0.5px;
+}
+
+.stat .l {
+    font-size: 0.62rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+    font-weight: 700;
+}
+
+/* Chips and badges */
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(212, 161, 58, 0.15);
+    color: var(--gold-l);
+    font-weight: 700;
+    padding: 4px 12px;
+    border-radius: 50px;
+    font-size: 0.78rem;
+    border: 1px solid var(--border-gold);
+}
+
+.pill-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.pill {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-gold);
+    border-radius: 50px;
+    padding: 6px 14px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--muted);
+}
+
+.ref-link {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.ref-link input {
+    flex: 1;
+    padding: 10px 12px;
+    border: 1.5px solid var(--border-gold);
+    border-radius: 10px;
+    font-size: 0.84rem;
+    background: rgba(255, 255, 255, 0.02);
+    color: #fff;
+    font-weight: 600;
+}
+
+/* Hero Section */
+.hero {
+    position: relative;
+    overflow: hidden;
+    color: #fff;
+    border-radius: var(--radius);
+    padding: 32px 24px;
+    margin-bottom: 20px;
+    background: linear-gradient(135deg, var(--plum) 0%, var(--plum-2) 50%, var(--plum-3) 100%);
+    border: 1px solid var(--border-gold);
+    box-shadow: var(--shadow-lg);
+}
+
+@media (min-width: 768px) {
+    .hero {
+        padding: 42px 38px;
+        margin-bottom: 26px;
+    }
+}
+
+.hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: 
+        radial-gradient(circle 280px at 100% 0%, rgba(212, 161, 58, 0.22) 0%, transparent 60%),
+        radial-gradient(circle 220px at 0% 120%, rgba(240, 213, 149, 0.1) 0%, transparent 55%);
+}
+
+.hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--gold-l);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 4px 12px;
+    border-radius: 50px;
+    margin-bottom: 12px;
+    position: relative;
+    z-index: 1;
+}
+
+.hero h1 {
+    font-size: 1.6rem;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    margin-bottom: 8px;
+    position: relative;
+    z-index: 1;
+    line-height: 1.2;
+}
+
+@media (min-width: 520px) {
+    .hero h1 {
+        font-size: 2rem;
+    }
+}
+
+.hero p {
+    opacity: 0.85;
+    font-size: 0.92rem;
+    max-width: 560px;
+    position: relative;
+    z-index: 1;
+}
+
+.hero .perks {
+    display: flex;
+    gap: 12px 20px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+    position: relative;
+    z-index: 1;
+}
+
+.hero .perk {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #fff;
+}
+
+.hero .perk i {
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--gold-l);
+    font-size: 0.8rem;
+}
+
+/* Premium Credit Card Coupon Design */
 .coupon-card {
-    position:relative; overflow:hidden; max-width:430px; aspect-ratio:1.75/1;
-    border-radius:18px; padding:24px 26px; color:#7a3d00;
-    background:linear-gradient(135deg,#fbe6b4 0%, #f4c66e 48%, #eaa94d 100%);
-    box-shadow:0 14px 38px rgba(184,134,31,.3);
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+    max-width: 400px;
+    margin: 0 auto;
+    aspect-ratio: 1.75/1;
+    border-radius: 16px;
+    padding: 20px 24px;
+    color: #fcd34d;
+    background: linear-gradient(135deg, #1c1917 0%, #0c0a09 100%);
+    border: 1px solid rgba(212, 161, 58, 0.45);
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+    box-sizing: border-box;
 }
-.coupon-card::before { content:''; position:absolute; inset:0; background:radial-gradient(circle 180px at 88% 18%, rgba(255,255,255,.4) 0%, transparent 60%); pointer-events:none; }
-.coupon-card .cc-exp { font-size:.78rem; font-weight:700; opacity:.85; position:relative; z-index:1; }
-.coupon-card .cc-brand { position:absolute; top:18px; right:22px; z-index:1; }
-.coupon-card .cc-brand img { height:34px; width:auto; display:block; filter:drop-shadow(0 1px 2px rgba(150,90,0,.25)); }
-.coupon-card .cc-tag { position:absolute; top:48px; right:24px; font-size:.62rem; font-weight:700; letter-spacing:1.5px; color:rgba(122,61,0,.7); z-index:1; }
-.coupon-card .cc-gift { position:absolute; left:26px; top:48px; font-size:2.8rem; color:#e8703f; filter:drop-shadow(0 4px 6px rgba(160,60,20,.25)); z-index:1; }
-.coupon-card .cc-name { font-size:1.55rem; font-weight:800; margin-top:88px; position:relative; z-index:1; font-family:Georgia,serif; }
-.coupon-card .cc-phone { font-size:.82rem; font-weight:600; opacity:.8; position:relative; z-index:1; }
-.coupon-card .cc-code { position:absolute; right:24px; bottom:22px; font-size:1.25rem; font-weight:800; letter-spacing:1px; border:2px dashed rgba(122,61,0,.55); padding:7px 16px; border-radius:9px; background:rgba(255,255,255,.25); z-index:1; }
 
-/* ── Empty/section helpers ── */
-.section-tag { display:inline-flex; align-items:center; gap:8px; font-size:.72rem; font-weight:800; text-transform:uppercase; letter-spacing:.8px; color:var(--gold-d); margin-bottom:14px; }
-.divider { height:1px; background:var(--line); margin:22px 0; }
-.foot { text-align:center; color:var(--muted); font-size:.82rem; margin-top:36px; }
-.foot .fb { font-weight:800; color:var(--plum-2); }
+.coupon-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: 
+        radial-gradient(circle 200px at 90% 10%, rgba(212, 161, 58, 0.14) 0%, transparent 60%),
+        repeating-linear-gradient(45deg, rgba(212, 161, 58, 0.02) 0px, rgba(212, 161, 58, 0.02) 1px, transparent 1px, transparent 6px);
+    pointer-events: none;
+}
 
-/* Terms toggle box */
-.terms-box { background:#faf7f0; border:1px solid var(--line); border-radius:12px; padding:16px; font-size:.84rem; white-space:pre-wrap; margin-bottom:16px; max-height:220px; overflow:auto; color:#5c5343; }
-.tc-check { display:flex; gap:10px; align-items:flex-start; font-size:.88rem; margin:8px 0 18px; }
-.tc-check input { margin-top:3px; width:17px; height:17px; accent-color:var(--gold-d); }
+.coupon-card .cc-exp {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--muted);
+    letter-spacing: 0.5px;
+    position: relative;
+    z-index: 1;
+}
 
-/* Alumni profile card */
-.profile-card .profile-head { display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
-.profile-pic { width:66px; height:66px; border-radius:50%; overflow:hidden; flex-shrink:0; background:linear-gradient(135deg,var(--gold),var(--gold-d)); display:flex; align-items:center; justify-content:center; color:#fff; font-size:1.6rem; font-weight:800; box-shadow:0 6px 16px rgba(184,134,31,.3); }
-.profile-pic img { width:100%; height:100%; object-fit:cover; }
-.pc-meter { height:11px; background:#efe7d8; border-radius:50px; overflow:hidden; margin-bottom:6px; }
-.pc-fill { height:100%; border-radius:50px; background:linear-gradient(90deg,#f0b54a,#d4a13a); transition:width 1.1s cubic-bezier(.2,.8,.3,1); position:relative; }
-.pc-fill::after { content:''; position:absolute; inset:0; background:linear-gradient(90deg,transparent,rgba(255,255,255,.5),transparent); animation:pc-shine 2s linear infinite; }
-.pc-fill.done { background:linear-gradient(90deg,#1f9d63,#27c27a); }
-@keyframes pc-shine { from{transform:translateX(-100%);} to{transform:translateX(100%);} }
-.pc-label { font-size:.84rem; font-weight:700; color:var(--gold-d); }
-.status-pill { display:inline-flex; align-items:center; gap:8px; padding:9px 18px; border:1.6px solid var(--line); border-radius:50px; font-weight:600; font-size:.88rem; cursor:pointer; }
-.status-pill input { accent-color:var(--gold-d); }
-.track-row { display:flex; gap:9px; margin-bottom:9px; align-items:center; }
-.track-row input { flex:1; padding:11px 13px; border:1.6px solid var(--line); border-radius:11px; font-size:.9rem; }
-.track-del { background:#fdecea; color:#c0392b; border:none; border-radius:9px; width:38px; height:38px; cursor:pointer; flex-shrink:0; }
-.track-del:hover { background:#f8d7d2; }
+.coupon-card .cc-brand {
+    position: absolute;
+    top: 16px;
+    right: 20px;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.coupon-card .cc-brand-logo {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #fef08a 0%, #d4a13a 50%, #b8861f 100%);
+    color: #0c0a09;
+    font-size: 0.7rem;
+    box-shadow: 0 2px 6px rgba(212, 161, 58, 0.4);
+}
+
+.coupon-card .cc-brand-text {
+    font-size: 0.95rem;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: #fff;
+    text-transform: lowercase;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+
+.coupon-card .cc-tag {
+    position: absolute;
+    top: 44px;
+    right: 20px;
+    font-size: 0.55rem;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    color: var(--gold);
+    z-index: 1;
+}
+
+.coupon-card .cc-chip {
+    position: absolute;
+    left: 24px;
+    top: 44px;
+    font-size: 1.8rem;
+    background: linear-gradient(135deg, #fef08a, #d4a13a);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 2px 3px rgba(0,0,0,0.5));
+    z-index: 1;
+}
+
+.coupon-card .cc-name {
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin-top: 48px;
+    color: #fff;
+    letter-spacing: -0.3px;
+    position: relative;
+    z-index: 1;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+
+.coupon-card .cc-phone {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--muted);
+    position: relative;
+    z-index: 1;
+}
+
+.coupon-card .cc-code {
+    position: absolute;
+    right: 20px;
+    bottom: 18px;
+    font-size: 1.05rem;
+    font-weight: 800;
+    letter-spacing: 1px;
+    border: 1.5px dashed rgba(212, 161, 58, 0.55);
+    padding: 4px 10px;
+    border-radius: 8px;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.03);
+    z-index: 1;
+}
+
+/* Section elements */
+.section-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.65rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--gold);
+    margin-bottom: 10px;
+}
+
+.divider {
+    height: 1px;
+    background: var(--border-gold);
+    margin: 20px 0;
+}
+
+.foot {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.78rem;
+    margin-top: 32px;
+}
+
+.foot .fb {
+    font-weight: 800;
+    color: #fff;
+}
+
+/* Terms box */
+.terms-box {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--border-gold);
+    border-radius: 12px;
+    padding: 14px;
+    font-size: 0.82rem;
+    white-space: pre-wrap;
+    margin-bottom: 14px;
+    max-height: 180px;
+    overflow: auto;
+    color: var(--muted);
+}
+
+.tc-check {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    font-size: 0.84rem;
+    margin: 8px 0 16px;
+    color: var(--muted);
+}
+
+.tc-check input {
+    margin-top: 2px;
+    width: 16px;
+    height: 16px;
+    accent-color: var(--gold);
+}
+
+/* Profile cards & items */
+.profile-card .profile-head {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.profile-pic {
+    width: 58px;
+    height: 58px;
+    border-radius: 50%;
+    overflow: hidden;
+    flex-shrink: 0;
+    background: linear-gradient(135deg, var(--gold), var(--gold-d));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 1.4rem;
+    font-weight: 800;
+    box-shadow: 0 4px 12px rgba(212, 161, 58, 0.25);
+}
+
+.profile-pic img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.pc-meter {
+    height: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-gold);
+    border-radius: 50px;
+    overflow: hidden;
+    margin-bottom: 6px;
+}
+
+.pc-fill {
+    height: 100%;
+    border-radius: 50px;
+    background: linear-gradient(90deg, #f59e0b, #d4a13a);
+    transition: width 1.1s cubic-bezier(0.16, 1, 0.3, 1);
+    position: relative;
+}
+
+.pc-fill::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+    animation: pc-shine 2s linear infinite;
+}
+
+.pc-fill.done {
+    background: linear-gradient(90deg, #10b981, #34d399);
+}
+
+@keyframes pc-shine {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(100%); }
+}
+
+.pc-label {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--gold-l);
+}
+
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border: 1.5px solid var(--border-gold);
+    border-radius: 50px;
+    font-weight: 600;
+    font-size: 0.86rem;
+    cursor: pointer;
+    color: var(--muted);
+    transition: all 0.2s;
+}
+
+.status-pill:has(input:checked) {
+    border-color: var(--gold);
+    background: rgba(212, 161, 58, 0.1);
+    color: #fff;
+}
+
+.status-pill input {
+    display: none;
+}
+
+.track-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: center;
+}
+
+.track-row input {
+    flex: 1;
+    padding: 10px 12px;
+    border: 1.5px solid var(--border-gold);
+    border-radius: 10px;
+    font-size: 0.88rem;
+    background: rgba(255, 255, 255, 0.02);
+    color: #fff;
+}
+
+.track-del {
+    background: var(--err-bg);
+    color: var(--err);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 9px;
+    width: 36px;
+    height: 36px;
+    cursor: pointer;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+}
+
+.track-del:hover {
+    background: rgba(239, 68, 68, 0.22);
+}
+
+.loading-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 6, 9, 0.95);
+    backdrop-filter: blur(8px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    flex-direction: column;
+    color: #fff;
+}
+
+.spinner {
+    width: 50px;
+    height: 50px;
+    border: 4px solid rgba(255, 255, 255, 0.1);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 16px;
+}
+
+.loading-overlay .lt { font-weight: 800; font-size: 1.05rem; color: #fff; }
+.loading-overlay .ls { font-size: 0.84rem; color: var(--muted); margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -610,128 +1305,142 @@ a:hover { text-decoration:underline; }
         <?php endif; ?>
     </div>
 
-    <!-- Alumni Profile + completion meter -->
-    <div class="card profile-card">
-        <div class="profile-head">
-            <div class="profile-pic">
-                <?php if (!empty($me['profile_picture'])): ?>
-                    <img src="<?php echo pep_e($me['profile_picture']); ?>" alt="Profile">
-                <?php else: ?>
-                    <span><?php echo strtoupper(substr($me['full_name'], 0, 1)); ?></span>
-                <?php endif; ?>
-            </div>
-            <div style="flex:1;">
-                <h2 style="margin-bottom:2px;">My Alumni Profile</h2>
-                <p class="sub" style="margin-bottom:10px;">A complete profile unlocks future PEPP alumni benefits, community access and priority offers.</p>
-                <div class="pc-meter"><div class="pc-fill <?php echo $profile_pct >= 100 ? 'done' : ''; ?>" style="width:<?php echo (int)$profile_pct; ?>%;"></div></div>
-                <div class="pc-label"><span id="pc-num"><?php echo (int)$profile_pct; ?></span>% complete <?php echo $profile_pct >= 100 ? '<i class="fas fa-circle-check" style="color:var(--ok);"></i>' : '- finish it to earn your benefits!'; ?></div>
-            </div>
-            <button type="button" class="btn btn-ghost" onclick="document.getElementById('profile-form').style.display=(document.getElementById('profile-form').style.display==='none'?'block':'none');"><i class="fas fa-pen"></i> Edit</button>
-        </div>
+    <!-- Dashboard Sub-Navigation Tabs -->
+    <div class="tab-row">
+        <button id="db-tab-referral" class="on" onclick="switchDashboardTab('referral')"><i class="fas fa-bullhorn"></i> Referrals</button>
+        <button id="db-tab-profile" onclick="switchDashboardTab('profile')"><i class="fas fa-user-gear"></i> My Profile</button>
+    </div>
 
-        <form method="POST" enctype="multipart/form-data" id="profile-form" style="display:<?php echo $profile_pct >= 100 ? 'none' : 'block'; ?>; margin-top:20px;">
-            <input type="hidden" name="csrf" value="<?php echo pep_csrf(); ?>"><input type="hidden" name="act" value="save_profile">
-            <div class="field">
-                <label>Current status</label>
-                <div style="display:flex; gap:12px;">
-                    <label class="status-pill"><input type="radio" name="current_status" value="student" <?php echo ($me['current_status'] ?? '')==='student'?'checked':''; ?> onclick="toggleProf(false)"> Student</label>
-                    <label class="status-pill"><input type="radio" name="current_status" value="professional" <?php echo ($me['current_status'] ?? '')==='professional'?'checked':''; ?> onclick="toggleProf(true)"> Professional</label>
-                </div>
-            </div>
-
-            <label style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b6357;margin:6px 0 7px;display:block;">Academic tracks after PEPP (most recent first)</label>
-            <div id="tracks-wrap">
-                <?php
-                $exist_tracks = $profile_tracks ?: [['course'=>'','institute'=>'']];
-                foreach ($exist_tracks as $t): ?>
-                <div class="track-row">
-                    <input type="text" name="track_course[]" placeholder="Course / Degree" value="<?php echo pep_e($t['course'] ?? ''); ?>">
-                    <input type="text" name="track_institute[]" placeholder="University / Institute" value="<?php echo pep_e($t['institute'] ?? ''); ?>">
-                    <button type="button" class="track-del" onclick="this.parentNode.remove()"><i class="fas fa-xmark"></i></button>
-                </div>
-                <?php endforeach; ?>
-            </div>
-            <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:.85rem;margin-bottom:14px;" onclick="addTrack()"><i class="fas fa-plus"></i> Add another</button>
-
-            <div id="prof-fields" style="display:<?php echo ($me['current_status'] ?? '')==='professional'?'block':'none'; ?>;">
+    <!-- Tab 1: Referral Content -->
+    <div id="db-content-referral">
+        <!-- Apply for joinable programs -->
+        <?php foreach ($joinable as $p): ?>
+        <div class="card">
+            <div class="section-tag"><i class="fas fa-bullhorn"></i> Now Open</div>
+            <span class="chip"><i class="fas fa-gift"></i> Referral Program - <?php echo pep_e($p['academic_year']); ?></span>
+            <h2 style="margin-top:14px;">Earn ₹<?php echo number_format((float)$p['alumni_earning'], 0); ?> per referral</h2>
+            <p class="sub">Invite new learners to PEPP for the <?php echo pep_e($p['academic_year']); ?> batch. They save ₹<?php echo number_format((float)$p['user_discount'], 0); ?>, and you earn ₹<?php echo number_format((float)$p['alumni_earning'], 0); ?> for each one who joins.<?php echo $p['end_date'] ? ' Apply before ' . date('d M Y', strtotime($p['end_date'])) . '.' : ''; ?></p>
+            <form method="POST" onsubmit="return showLoading();">
+                <input type="hidden" name="csrf" value="<?php echo pep_csrf(); ?>"><input type="hidden" name="act" value="apply_referral"><input type="hidden" name="program_year" value="<?php echo pep_e($p['academic_year']); ?>">
                 <div class="grid2">
-                    <div class="field"><label>Current profession</label><input type="text" name="current_profession" value="<?php echo pep_e($me['current_profession'] ?? ''); ?>" placeholder="e.g. Clinical Psychologist"></div>
-                    <div class="field"><label>Working institute / company</label><input type="text" name="working_institute" value="<?php echo pep_e($me['working_institute'] ?? ''); ?>" placeholder="Where you work"></div>
+                    <div class="field"><label>Payout Method</label><select name="payout_method"><option value="UPI">UPI / GPay / PhonePe</option><option value="Bank">Bank Account</option></select></div>
+                    <div class="field"><label>Payout Details (UPI ID or Account no.)</label><input type="text" name="payout_details" required placeholder="name@upi or A/C + IFSC"></div>
                 </div>
+                <label class="tc-check">
+                    <input type="checkbox" name="terms" required>
+                    <span>I have read and accept the <a href="#" onclick="document.getElementById('terms-<?php echo (int)$p['id']; ?>').style.display='block';return false;">referral terms &amp; conditions</a>.</span>
+                </label>
+                <div id="terms-<?php echo (int)$p['id']; ?>" class="terms-box" style="display:none;"><?php echo pep_e($p['terms'] ?: 'Standard referral terms apply.'); ?></div>
+                <button class="btn" type="submit"><i class="fas fa-rocket"></i> Apply &amp; Get Code</button>
+            </form>
+        </div>
+        <?php endforeach; ?>
+
+        <?php if (empty($joinable) && empty($my_referees)): ?>
+        <div class="card"><div class="alert info"><i class="fas fa-circle-info"></i> No active referral program right now. Check back when PEPP opens the next one.</div></div>
+        <?php endif; ?>
+
+        <!-- My referral codes + wallets -->
+        <?php foreach ($my_referees as $r): $w = $r['wallet'];
+            $link = $base_url . '/register.php?ref=' . urlencode($r['referral_code']); ?>
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+                <h2>Referral - <?php echo pep_e($r['academic_year']); ?></h2>
+                <span class="chip">Code: <?php echo pep_e($r['referral_code']); ?></span>
+            </div>
+            <div class="stat-row" style="margin-top:16px;">
+                <div class="stat"><div class="v"><?php echo (int)$w['joined']; ?></div><div class="l">Joined</div></div>
+                <div class="stat"><div class="v">₹<?php echo number_format($w['credited'], 0); ?></div><div class="l">Credited</div></div>
+                <div class="stat"><div class="v">₹<?php echo number_format($w['paid'], 0); ?></div><div class="l">Paid</div></div>
+                <div class="stat"><div class="v">₹<?php echo number_format($w['balance'], 0); ?></div><div class="l">Balance</div></div>
+            </div>
+            <?php if ($w['pending'] > 0): ?><div class="alert info"><i class="fas fa-hourglass-half"></i> ₹<?php echo number_format($w['pending'], 0); ?> pending - from referred learners on instalment plans, credited as their dues clear.</div><?php endif; ?>
+
+            <label style="font-size:.82rem;font-weight:600;">Your shareable referral link</label>
+            <div class="ref-link">
+                <input type="text" id="link-<?php echo (int)$r['id']; ?>" value="<?php echo pep_e($link); ?>" readonly>
+                <button class="btn" type="button" onclick="copyLink(<?php echo (int)$r['id']; ?>)"><i class="fas fa-copy"></i></button>
+            </div>
+            <?php if (!empty($r['end_date'])): ?><p style="font-size:.8rem;color:var(--muted);margin-top:8px;">Expires <?php echo date('d M Y', strtotime($r['end_date'])); ?></p><?php endif; ?>
+
+            <!-- Downloadable referral coupon -->
+            <div style="margin-top:18px;">
+                <label style="font-size:.82rem;font-weight:600;display:block;margin-bottom:8px;">Your referral coupon</label>
+                <div class="coupon-card" id="coupon-<?php echo (int)$r['id']; ?>">
+                    <div class="cc-exp">VALID UNTIL: <?php echo !empty($r['end_date']) ? date('M d, Y', strtotime($r['end_date'])) : 'PERMANENT'; ?></div>
+                    <div class="cc-brand">
+                        <span class="cc-brand-logo"><i class="fas fa-graduation-cap"></i></span>
+                        <span class="cc-brand-text">pepp</span>
+                    </div>
+                    <div class="cc-tag">PREMIUM MEMBERSHIP</div>
+                    <div class="cc-chip"><i class="fas fa-microchip"></i></div>
+                    <div class="cc-name"><?php echo pep_e($me['full_name']); ?></div>
+                    <div class="cc-phone">ALUMNI PARTICIPANT</div>
+                    <div class="cc-code"><?php echo pep_e($r['referral_code']); ?></div>
+                </div>
+                <button class="btn btn-ghost" type="button" style="margin-top:10px; width: 100%; max-width: 400px; display: block; margin-left: auto; margin-right: auto;" onclick="downloadCoupon(<?php echo (int)$r['id']; ?>)"><i class="fas fa-download"></i> Download Coupon</button>
+            </div>
+        </div>
+        <?php endforeach; ?>
+    </div> <!-- End of db-content-referral -->
+
+    <!-- Tab 2: Profile Content -->
+    <div id="db-content-profile" style="display: none;">
+        <!-- Alumni Profile + completion meter -->
+        <div class="card profile-card">
+            <div class="profile-head">
+                <div class="profile-pic">
+                    <?php if (!empty($me['profile_picture'])): ?>
+                        <img src="<?php echo pep_e($me['profile_picture']); ?>" alt="Profile">
+                    <?php else: ?>
+                        <span><?php echo strtoupper(substr($me['full_name'], 0, 1)); ?></span>
+                    <?php endif; ?>
+                </div>
+                <div style="flex:1;">
+                    <h2 style="margin-bottom:2px;">My Alumni Profile</h2>
+                    <p class="sub" style="margin-bottom:10px;">A complete profile unlocks future PEPP alumni benefits, community access and priority offers.</p>
+                    <div class="pc-meter"><div class="pc-fill <?php echo $profile_pct >= 100 ? 'done' : ''; ?>" style="width:<?php echo (int)$profile_pct; ?>%;"></div></div>
+                    <div class="pc-label"><span id="pc-num"><?php echo (int)$profile_pct; ?></span>% complete <?php echo $profile_pct >= 100 ? '<i class="fas fa-circle-check" style="color:var(--ok);"></i>' : '- finish it to earn your benefits!'; ?></div>
+                </div>
+                <button type="button" class="btn btn-ghost" onclick="document.getElementById('profile-form').style.display=(document.getElementById('profile-form').style.display==='none'?'block':'none');"><i class="fas fa-pen"></i> Edit</button>
             </div>
 
-            <div class="field"><label>Profile picture</label><input type="file" name="profile_picture" accept="image/*"></div>
-            <button class="btn" type="submit"><i class="fas fa-floppy-disk"></i> Save Profile</button>
-        </form>
-    </div>
+            <form method="POST" enctype="multipart/form-data" id="profile-form" style="display:<?php echo $profile_pct >= 100 ? 'none' : 'block'; ?>; margin-top:20px;">
+                <input type="hidden" name="csrf" value="<?php echo pep_csrf(); ?>"><input type="hidden" name="act" value="save_profile">
+                <div class="field">
+                    <label>Current status</label>
+                    <div style="display:flex; gap:12px;">
+                        <label class="status-pill"><input type="radio" name="current_status" value="student" <?php echo ($me['current_status'] ?? '')==='student'?'checked':''; ?> onclick="toggleProf(false)"> Student</label>
+                        <label class="status-pill"><input type="radio" name="current_status" value="professional" <?php echo ($me['current_status'] ?? '')==='professional'?'checked':''; ?> onclick="toggleProf(true)"> Professional</label>
+                    </div>
+                </div>
 
-    <!-- Apply for joinable programs -->
-    <?php foreach ($joinable as $p): ?>
-    <div class="card">
-        <div class="section-tag"><i class="fas fa-bullhorn"></i> Now Open</div>
-        <span class="chip"><i class="fas fa-gift"></i> Referral Program - <?php echo pep_e($p['academic_year']); ?></span>
-        <h2 style="margin-top:14px;">Earn ₹<?php echo number_format((float)$p['alumni_earning'], 0); ?> per referral</h2>
-        <p class="sub">Invite new learners to PEPP for the <?php echo pep_e($p['academic_year']); ?> batch. They save ₹<?php echo number_format((float)$p['user_discount'], 0); ?>, and you earn ₹<?php echo number_format((float)$p['alumni_earning'], 0); ?> for each one who joins.<?php echo $p['end_date'] ? ' Apply before ' . date('d M Y', strtotime($p['end_date'])) . '.' : ''; ?></p>
-        <form method="POST" onsubmit="return showLoading();">
-            <input type="hidden" name="csrf" value="<?php echo pep_csrf(); ?>"><input type="hidden" name="act" value="apply_referral"><input type="hidden" name="program_year" value="<?php echo pep_e($p['academic_year']); ?>">
-            <div class="grid2">
-                <div class="field"><label>Payout Method</label><select name="payout_method"><option value="UPI">UPI / GPay / PhonePe</option><option value="Bank">Bank Account</option></select></div>
-                <div class="field"><label>Payout Details (UPI ID or Account no.)</label><input type="text" name="payout_details" required placeholder="name@upi or A/C + IFSC"></div>
-            </div>
-            <label class="tc-check">
-                <input type="checkbox" name="terms" required>
-                <span>I have read and accept the <a href="#" onclick="document.getElementById('terms-<?php echo (int)$p['id']; ?>').style.display='block';return false;">referral terms &amp; conditions</a>.</span>
-            </label>
-            <div id="terms-<?php echo (int)$p['id']; ?>" class="terms-box" style="display:none;"><?php echo pep_e($p['terms'] ?: 'Standard referral terms apply.'); ?></div>
-            <button class="btn" type="submit"><i class="fas fa-rocket"></i> Apply &amp; Get My Referral Code</button>
-        </form>
-    </div>
-    <?php endforeach; ?>
+                <label style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b6357;margin:6px 0 7px;display:block;">Academic tracks after PEPP (most recent first)</label>
+                <div id="tracks-wrap">
+                    <?php
+                    $exist_tracks = $profile_tracks ?: [['course'=>'','institute'=>'']];
+                    foreach ($exist_tracks as $t): ?>
+                    <div class="track-row">
+                        <input type="text" name="track_course[]" placeholder="Course / Degree" value="<?php echo pep_e($t['course'] ?? ''); ?>">
+                        <input type="text" name="track_institute[]" placeholder="University / Institute" value="<?php echo pep_e($t['institute'] ?? ''); ?>">
+                        <button type="button" class="track-del" onclick="this.parentNode.remove()"><i class="fas fa-xmark"></i></button>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+                <button type="button" class="btn btn-ghost" style="padding:8px 16px;font-size:.85rem;margin-bottom:14px;" onclick="addTrack()"><i class="fas fa-plus"></i> Add another</button>
 
-    <?php if (empty($joinable) && empty($my_referees)): ?>
-    <div class="card"><div class="alert info"><i class="fas fa-circle-info"></i> No active referral program right now. Check back when PEPP opens the next one.</div></div>
-    <?php endif; ?>
+                <div id="prof-fields" style="display:<?php echo ($me['current_status'] ?? '')==='professional'?'block':'none'; ?>;">
+                    <div class="grid2">
+                        <div class="field"><label>Current profession</label><input type="text" name="current_profession" value="<?php echo pep_e($me['current_profession'] ?? ''); ?>" placeholder="e.g. Clinical Psychologist"></div>
+                        <div class="field"><label>Working institute / company</label><input type="text" name="working_institute" value="<?php echo pep_e($me['working_institute'] ?? ''); ?>" placeholder="Where you work"></div>
+                    </div>
+                </div>
 
-    <!-- My referral codes + wallets -->
-    <?php foreach ($my_referees as $r): $w = $r['wallet'];
-        $link = $base_url . '/register.php?ref=' . urlencode($r['referral_code']); ?>
-    <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
-            <h2>Referral - <?php echo pep_e($r['academic_year']); ?></h2>
-            <span class="chip">Code: <?php echo pep_e($r['referral_code']); ?></span>
+                <div class="field"><label>Profile picture</label><input type="file" name="profile_picture" accept="image/*"></div>
+                <button class="btn" type="submit"><i class="fas fa-floppy-disk"></i> Save Profile</button>
+            </form>
         </div>
-        <div class="stat-row" style="margin-top:16px;">
-            <div class="stat"><div class="v"><?php echo (int)$w['joined']; ?></div><div class="l">Joined</div></div>
-            <div class="stat"><div class="v">₹<?php echo number_format($w['credited'], 0); ?></div><div class="l">Credited</div></div>
-            <div class="stat"><div class="v">₹<?php echo number_format($w['paid'], 0); ?></div><div class="l">Paid</div></div>
-            <div class="stat"><div class="v">₹<?php echo number_format($w['balance'], 0); ?></div><div class="l">Balance</div></div>
-        </div>
-        <?php if ($w['pending'] > 0): ?><div class="alert info"><i class="fas fa-hourglass-half"></i> ₹<?php echo number_format($w['pending'], 0); ?> pending - from referred learners on instalment plans, credited as their dues clear.</div><?php endif; ?>
-
-        <label style="font-size:.82rem;font-weight:600;">Your shareable referral link</label>
-        <div class="ref-link">
-            <input type="text" id="link-<?php echo (int)$r['id']; ?>" value="<?php echo pep_e($link); ?>" readonly>
-            <button class="btn" type="button" onclick="copyLink(<?php echo (int)$r['id']; ?>)"><i class="fas fa-copy"></i></button>
-        </div>
-        <?php if (!empty($r['end_date'])): ?><p style="font-size:.8rem;color:var(--muted);margin-top:8px;">Expires <?php echo date('d M Y', strtotime($r['end_date'])); ?></p><?php endif; ?>
-
-        <!-- Downloadable referral coupon -->
-        <div style="margin-top:18px;">
-            <label style="font-size:.82rem;font-weight:600;display:block;margin-bottom:8px;">Your referral coupon</label>
-            <div class="coupon-card" id="coupon-<?php echo (int)$r['id']; ?>">
-                <div class="cc-exp">Exp. Date <?php echo !empty($r['end_date']) ? date('F j, Y', strtotime($r['end_date'])) : '-'; ?></div>
-                <div class="cc-brand"><img src="assets/img/pepp-logo-text.png" alt="PEPP" crossorigin="anonymous"></div>
-                <div class="cc-tag">REFERRAL COUPON</div>
-                <div class="cc-gift"><i class="fas fa-gift"></i></div>
-                <div class="cc-name"><?php echo pep_e($me['full_name']); ?></div>
-                <div class="cc-phone">(<?php echo pep_e($me['whatsapp']); ?>)</div>
-                <div class="cc-code"><?php echo pep_e($r['referral_code']); ?></div>
-            </div>
-            <button class="btn btn-ghost" type="button" style="margin-top:10px;" onclick="downloadCoupon(<?php echo (int)$r['id']; ?>)"><i class="fas fa-download"></i> Download Coupon</button>
-        </div>
-    </div>
-    <?php endforeach; ?>
-
+    </div> <!-- End of db-content-profile -->
 <?php endif; ?>
 
     <div class="foot">&copy; <?php echo date('Y'); ?> PEPP Learning - Labinc Education Pvt. Ltd.</div>
@@ -747,6 +1456,20 @@ function swTab(t) {
     document.getElementById('form-signin').style.display = t==='signin'?'block':'none';
     document.getElementById('form-signup').style.display = t==='signup'?'block':'none';
 }
+function switchDashboardTab(tab) {
+    const isReferral = tab === 'referral';
+    const tabRef = document.getElementById('db-tab-referral');
+    const tabProf = document.getElementById('db-tab-profile');
+    const contentRef = document.getElementById('db-content-referral');
+    const contentProf = document.getElementById('db-content-profile');
+    
+    if (tabRef) tabRef.classList.toggle('on', isReferral);
+    if (tabProf) tabProf.classList.toggle('on', !isReferral);
+    if (contentRef) contentRef.style.display = isReferral ? 'block' : 'none';
+    if (contentProf) contentProf.style.display = isReferral ? 'none' : 'block';
+    
+    sessionStorage.setItem('alumni_active_tab', tab);
+}
 function copyLink(id) {
     var el = document.getElementById('link-'+id); el.select(); el.setSelectionRange(0,99999);
     navigator.clipboard.writeText(el.value).then(function(){ alert('Referral link copied!'); });
@@ -761,10 +1484,15 @@ function addTrack() {
     w.appendChild(d);
 }
 function toggleProf(show) { var el = document.getElementById('prof-fields'); if (el) el.style.display = show ? 'block' : 'none'; }
-// Animate the completion meter on load
+// Animate the completion meter on load and restore active dashboard tab
 window.addEventListener('load', function () {
     var fill = document.querySelector('.pc-fill');
     if (fill) { var w = fill.style.width; fill.style.width = '0%'; setTimeout(function(){ fill.style.width = w; }, 200); }
+    
+    const activeTab = sessionStorage.getItem('alumni_active_tab') || 'referral';
+    if (activeTab === 'profile') {
+        switchDashboardTab('profile');
+    }
 });
 function downloadCoupon(id) {
     var node = document.getElementById('coupon-'+id);
