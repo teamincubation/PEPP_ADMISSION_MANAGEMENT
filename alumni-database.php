@@ -706,14 +706,17 @@ include 'includes/admin_nav.php';
                     <td style="text-align: center;"><input type="checkbox" class="alumni-checkbox" value="<?php echo (int)$a['id']; ?>" onclick="updateBatchUI()"></td>
                     <td style="text-align: center;">
                         <?php 
-                        $photo = $a['profile_photo'] ?: $a['user_photo'] ?: 'assets/img/default-avatar.png';
+                        $photo = $a['profile_photo'] ?: $a['user_photo'] ?: 'assets/img/default-avatar.svg';
                         if (strpos($photo, 'uploads/') === 0 && !file_exists(__DIR__ . '/../' . $photo)) {
                             // If relative upload path but doesn't exist, we fall back to user_photo or default
-                            $photo = $a['user_photo'] ?: 'assets/img/default-avatar.png';
+                            $photo = $a['user_photo'] ?: 'assets/img/default-avatar.svg';
+                        }
+                        if (strpos($photo, 'uploads/') === 0 && !file_exists(__DIR__ . '/../' . $photo)) {
+                            $photo = 'assets/img/default-avatar.svg';
                         }
                         $photoUrl = (strpos($photo, 'uploads/') === 0) ? '../' . $photo : $photo;
                         ?>
-                        <img src="<?php echo e($photoUrl); ?>" style="width:40px; height:40px; border-radius:50%; object-fit:cover; border:2px solid var(--border); cursor:pointer;" onclick="viewPhoto('<?php echo e($photoUrl); ?>')" alt="Photo">
+                        <img src="<?php echo e($photoUrl); ?>" onerror="this.src='assets/img/default-avatar.svg'; this.onerror=null;" style="width:40px; height:40px; border-radius:50%; object-fit:cover; border:2px solid var(--border); cursor:pointer;" onclick="viewPhoto('<?php echo e($photoUrl); ?>')" alt="Photo">
                     </td>
                     <td>
                         <div class="cell-main"><?php echo e($a['name'] ?: '-'); ?></div>
@@ -796,7 +799,7 @@ include 'includes/admin_nav.php';
             
             <div class="modal-body">
                 <div style="display:flex; gap:16px; align-items:center; margin-bottom:16px;">
-                    <img id="e-photo-preview" src="assets/img/default-avatar.png" style="width:60px; height:60px; border-radius:50%; object-fit:cover; border:2px solid var(--border);">
+                    <img id="e-photo-preview" src="assets/img/default-avatar.svg" onerror="this.src='assets/img/default-avatar.svg'; this.onerror=null;" style="width:60px; height:60px; border-radius:50%; object-fit:cover; border:2px solid var(--border);">
                     <div class="field" style="margin:0;"><label>Update Profile Photo</label><input type="file" name="profile_photo" accept="image/*"></div>
                 </div>
 
@@ -949,14 +952,14 @@ function showDetails(a) {
         } catch(e) {}
     }
 
-    let photo = a.profile_photo || a.user_photo || 'assets/img/default-avatar.png';
+    let photo = a.profile_photo || a.user_photo || 'assets/img/default-avatar.svg';
     if (photo.startsWith('uploads/')) {
         photo = '../' + photo;
     }
 
     body.innerHTML = `
         <div style="display:flex; gap:20px; flex-wrap:wrap; margin-bottom:20px; align-items:center;">
-            <img src="${photo}" style="width:90px; height:90px; border-radius:50%; object-fit:cover; border:3px solid var(--accent); cursor:pointer;" onclick="viewPhoto('${photo}')">
+            <img src="${photo}" onerror="this.src='assets/img/default-avatar.svg'; this.onerror=null;" style="width:90px; height:90px; border-radius:50%; object-fit:cover; border:3px solid var(--accent); cursor:pointer;" onclick="viewPhoto('${photo}')">
             <div>
                 <h2 style="margin:0; font-size:1.5rem;">${escapeHtml(a.name)}</h2>
                 <p class="cell-sub" style="margin:4px 0 0 0;">User ID: ${escapeHtml(a.user_id || '-')}</p>
@@ -1077,7 +1080,7 @@ function editAlum(a) {
     document.getElementById('e-prof').value = a.current_profession_details || '';
     
     document.getElementById('e-existing-photo').value = a.profile_photo || '';
-    let pSrc = a.profile_photo || a.user_photo || 'assets/img/default-avatar.png';
+    let pSrc = a.profile_photo || a.user_photo || 'assets/img/default-avatar.svg';
     if (pSrc.startsWith('uploads/')) {
         pSrc = '../' + pSrc;
     }
