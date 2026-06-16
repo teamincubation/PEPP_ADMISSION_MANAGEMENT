@@ -3,6 +3,7 @@ require_once 'includes/auth.php';
 require_permission('marketing');
 require_once 'includes/referral_helper.php';
 require_once 'includes/peppian_notify.php';
+require_once 'includes/file_helper.php';
 
 /* Marketing (CRM) - two sections:
    1. Alumni Referral Earning Program: configure per active academic year,
@@ -108,16 +109,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $rid = (int)($_POST['referee_id'] ?? 0);
                 $amt = (float)($_POST['amount'] ?? 0);
                 if ($rid && $amt > 0) {
-                    $proof = null;
-                    if (isset($_FILES['proof']) && $_FILES['proof']['error'] === UPLOAD_ERR_OK) {
-                        $ext = strtolower(pathinfo($_FILES['proof']['name'], PATHINFO_EXTENSION));
-                        $isImg = @getimagesize($_FILES['proof']['tmp_name']) !== false;
-                        $isPdf = ($ext === 'pdf');
-                        if (in_array($ext, ['jpg','jpeg','png','pdf','webp'], true) && ($isImg || $isPdf) && $_FILES['proof']['size'] <= 6 * 1024 * 1024) {
-                            $fn = 'payout_' . $rid . '_' . time() . '.' . $ext;
-                            if (@move_uploaded_file($_FILES['proof']['tmp_name'], $GLOBALS['UP_DIR'] . '/' . $fn)) $proof = 'uploads/payouts/' . $fn;
-                        }
-                    }
+                    $proof = handle_file_upload_with_replace('proof', 'payouts', null, ['jpg','jpeg','png','pdf','webp']);
                     $pdo->prepare("INSERT INTO referral_payouts (referee_id, amount, paid_date, payment_account_id, proof_path, remarks, created_by, created_at) VALUES (?,?,?,?,?,?,?,NOW())")
                         ->execute([$rid, $amt, $_POST['paid_date'] ?: date('Y-m-d'), ((int)($_POST['payment_account_id'] ?? 0)) ?: null, $proof, trim($_POST['remarks'] ?? '') ?: null, $admin_username]);
                     // Mark fully-credited earnings as paid (best-effort: oldest first up to amount)

@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'config/database.php';
+require_once 'includes/file_helper.php';
 
 // ── AJAX: validate a coupon / referral code and return the discounted fee ──
 if (isset($_GET['check_code'])) {
@@ -214,23 +215,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $payment_screenshot_path = '';
     $photo_upload_path = '';
     
-    if (isset($_FILES['payment_screenshot']) && $_FILES['payment_screenshot']['error'] === UPLOAD_ERR_OK) {
-        $upload_dir = 'uploads/payments/';
-        $target_dir = '../' . $upload_dir;
-        if (!is_dir($target_dir)) mkdir($target_dir, 0755, true);
-        $filename = uniqid() . '_' . $_FILES['payment_screenshot']['name'];
-        $payment_screenshot_path = $upload_dir . $filename;
-        move_uploaded_file($_FILES['payment_screenshot']['tmp_name'], $target_dir . $filename);
-    }
+    $payment_screenshot_path = handle_file_upload_with_replace('payment_screenshot', 'payments', null, ['jpg', 'jpeg', 'png', 'webp', 'pdf']);
+    if ($payment_screenshot_path === null) $payment_screenshot_path = '';
     
-    if (isset($_FILES['photo_upload']) && $_FILES['photo_upload']['error'] === UPLOAD_ERR_OK) {
-        $upload_dir = 'uploads/photos/';
-        $target_dir = '../' . $upload_dir;
-        if (!is_dir($target_dir)) mkdir($target_dir, 0755, true);
-        $filename = uniqid() . '_' . $_FILES['photo_upload']['name'];
-        $photo_upload_path = $upload_dir . $filename;
-        move_uploaded_file($_FILES['photo_upload']['tmp_name'], $target_dir . $filename);
-    }
+    $photo_upload_path = handle_file_upload_with_replace('photo_upload', 'photos', null, ['jpg', 'jpeg', 'png', 'webp']);
+    if ($photo_upload_path === null) $photo_upload_path = '';
     
     if (empty($validation_errors)) {
         try {

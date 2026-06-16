@@ -10,6 +10,7 @@ session_start();
 require_once 'config/database.php';
 require_once 'includes/referral_helper.php';
 require_once 'includes/peppian_notify.php';
+require_once 'includes/file_helper.php';
 
 function pep_e($s) {
     $str = (string)$s;
@@ -230,15 +231,9 @@ if ($portal_ready && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 // Profile picture upload (optional)
                 $pic = $me['profile_picture'] ?? null;
-                if (isset($_FILES['profile_picture']) && $_FILES['profile_picture']['error'] === UPLOAD_ERR_OK) {
-                    $ext = strtolower(pathinfo($_FILES['profile_picture']['name'], PATHINFO_EXTENSION));
-                    $imgok = @getimagesize($_FILES['profile_picture']['tmp_name']) !== false;
-                    if ($imgok && in_array($ext, ['jpg', 'jpeg', 'png', 'webp'], true) && $_FILES['profile_picture']['size'] <= 4 * 1024 * 1024) {
-                        $dir = __DIR__ . '/../uploads/peppians';
-                        if (!is_dir($dir)) @mkdir($dir, 0755, true);
-                        $fn = 'pep_' . (int)$_SESSION['peppian_id'] . '_' . time() . '.' . $ext;
-                        if (@move_uploaded_file($_FILES['profile_picture']['tmp_name'], $dir . '/' . $fn)) $pic = 'uploads/peppians/' . $fn;
-                    }
+                $uploaded_pic = handle_file_upload_with_replace('profile_picture', 'peppians', $pic, ['jpg', 'jpeg', 'png', 'webp']);
+                if ($uploaded_pic !== null) {
+                    $pic = $uploaded_pic;
                 }
 
                 // Completion: status + >=1 track + (professional ? profession+working : true) + picture

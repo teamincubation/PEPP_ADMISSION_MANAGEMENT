@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'config/database.php';
+require_once 'includes/file_helper.php';
 
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
@@ -104,66 +105,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $pdo->beginTransaction();
             
             // Handle payment screenshot upload
-            $payment_screenshot_path = '';
-            
-            if (isset($_FILES['payment_screenshot']) && $_FILES['payment_screenshot']['error'] === UPLOAD_ERR_OK) {
-                $upload_dir = 'uploads/installment_payments/';
-                $target_dir = '../' . $upload_dir;
-                
-                // Create directory if it doesn't exist
-                if (!is_dir($target_dir)) {
-                    if (!mkdir($target_dir, 0755, true)) {
-                        throw new Exception('Failed to create upload directory');
-                    }
-                }
-                
-                $allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
-                $file_type = $_FILES['payment_screenshot']['type'];
-                $file_size = $_FILES['payment_screenshot']['size'];
-                
-                // Validate file type
-                if (!in_array($file_type, $allowed_types)) {
-                    throw new Exception('Invalid file type. Only JPG, PNG, and PDF files are allowed.');
-                }
-                
-                // Validate file size (5MB limit)
-                if ($file_size > 5 * 1024 * 1024) {
-                    throw new Exception('File size too large. Maximum 5MB allowed.');
-                }
-                
-                // Generate unique filename
-                $file_extension = pathinfo($_FILES['payment_screenshot']['name'], PATHINFO_EXTENSION);
-                $new_filename = 'installment_' . $user_id . '_' . $installment_id . '_' . time() . '.' . $file_extension;
-                $payment_screenshot_path = $upload_dir . $new_filename;
-                
-                // Move uploaded file
-                if (!move_uploaded_file($_FILES['payment_screenshot']['tmp_name'], $target_dir . $new_filename)) {
-                    throw new Exception('Failed to upload payment screenshot. Please try again.');
-                }
-                
-                // Verify file was actually uploaded
-                if (!file_exists($target_dir . $new_filename)) {
-                    throw new Exception('File upload verification failed. Please try again.');
-                }
-                
-            } else {
-                if (!isset($_FILES['payment_screenshot']) || $_FILES['payment_screenshot']['error'] === UPLOAD_ERR_NO_FILE) {
-                    throw new Exception('Please select a payment screenshot to upload.');
+            $stmt_old = $pdo->prepare("SELECT payment_reference FROM instalment_details WHERE id = ? AND user_id = ?");
+            $stmt_old->execute([$installment_id, $user_id]);
+            $old_screenshot = $stmt_old->fetchColumn();
+
+            $payment_screenshot_path = handle_file_upload_with_replace('payment_screenshot', 'installment_payments', $old_screenshot ?: null, ['jpg', 'jpeg', 'png', 'webp', 'pdf']);
+            if (empty($payment_screenshot_path)) {
+                if ($old_screenshot) {
+                    $payment_screenshot_path = $old_screenshot;
                 } else {
-                    $upload_error = $_FILES['payment_screenshot']['error'];
-                    switch ($upload_error) {
-                        case UPLOAD_ERR_INI_SIZE:
-                        case UPLOAD_ERR_FORM_SIZE:
-                            throw new Exception('File too large. Maximum 5MB allowed.');
-                        case UPLOAD_ERR_PARTIAL:
-                            throw new Exception('File upload was interrupted. Please try again.');
-                        case UPLOAD_ERR_NO_TMP_DIR:
-                            throw new Exception('Server configuration error. Please contact support.');
-                        case UPLOAD_ERR_CANT_WRITE:
-                            throw new Exception('Failed to save file. Please try again.');
-                        default:
-                            throw new Exception('File upload failed. Please try again.');
-                    }
+                    throw new Exception('Please select a payment screenshot to upload.');
                 }
             }
             

@@ -1,6 +1,7 @@
 <?php
 require_once 'includes/auth.php';
 require_permission('alumni');
+require_once 'includes/file_helper.php';
 
 /* Alumni Database - Admins manage past students for the referral
    program's verification. Add individually or bulk-import CSV. Duplicate
@@ -401,17 +402,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $id = (int)($_POST['alumni_id'] ?? 0);
                 if ($id && trim($_POST['mobile'] ?? '') !== '') {
                     $profile_photo = $_POST['existing_profile_photo'] ?? null;
-                    if (isset($_FILES['profile_photo']) && $_FILES['profile_photo']['error'] === UPLOAD_ERR_OK) {
-                        $ext = strtolower(pathinfo($_FILES['profile_photo']['name'], PATHINFO_EXTENSION));
-                        $imgok = @getimagesize($_FILES['profile_photo']['tmp_name']) !== false;
-                        if ($imgok && in_array($ext, ['jpg', 'jpeg', 'png', 'webp'], true) && $_FILES['profile_photo']['size'] <= 4 * 1024 * 1024) {
-                            $dir = __DIR__ . '/uploads/alumni';
-                            if (!is_dir($dir)) @mkdir($dir, 0755, true);
-                            $fn = 'alum_' . $id . '_' . time() . '.' . $ext;
-                            if (@move_uploaded_file($_FILES['profile_photo']['tmp_name'], $dir . '/' . $fn)) {
-                                $profile_photo = 'uploads/alumni/' . $fn;
-                            }
-                        }
+                    $uploaded_photo = handle_file_upload_with_replace('profile_photo', 'alumni', $profile_photo, ['jpg', 'jpeg', 'png', 'webp']);
+                    if ($uploaded_photo !== null) {
+                        $profile_photo = $uploaded_photo;
                     }
 
                     $fields_to_update = [
@@ -714,15 +707,11 @@ include 'includes/admin_nav.php';
                     <td style="text-align: center;">
                         <?php 
                         $photo = $a['profile_photo'] ?: $a['user_photo'] ?: 'assets/img/default-avatar.png';
-                        if (strpos($photo, 'uploads/') === 0 && !file_exists(__DIR__ . '/' . $photo)) {
+                        if (strpos($photo, 'uploads/') === 0 && !file_exists(__DIR__ . '/../' . $photo)) {
                             // If relative upload path but doesn't exist, we fall back to user_photo or default
                             $photo = $a['user_photo'] ?: 'assets/img/default-avatar.png';
                         }
-                        if (strpos($photo, 'uploads/') === 0) {
-                            $photoUrl = $photo;
-                        } else {
-                            $photoUrl = $photo;
-                        }
+                        $photoUrl = (strpos($photo, 'uploads/') === 0) ? '../' . $photo : $photo;
                         ?>
                         <img src="<?php echo e($photoUrl); ?>" style="width:40px; height:40px; border-radius:50%; object-fit:cover; border:2px solid var(--border); cursor:pointer;" onclick="viewPhoto('<?php echo e($photoUrl); ?>')" alt="Photo">
                     </td>
@@ -960,7 +949,10 @@ function showDetails(a) {
         } catch(e) {}
     }
 
-    const photo = a.profile_photo || a.user_photo || 'assets/img/default-avatar.png';
+    let photo = a.profile_photo || a.user_photo || 'assets/img/default-avatar.png';
+    if (photo.startsWith('uploads/')) {
+        photo = '../' + photo;
+    }
 
     body.innerHTML = `
         <div style="display:flex; gap:20px; flex-wrap:wrap; margin-bottom:20px; align-items:center;">
@@ -1085,7 +1077,11 @@ function editAlum(a) {
     document.getElementById('e-prof').value = a.current_profession_details || '';
     
     document.getElementById('e-existing-photo').value = a.profile_photo || '';
-    document.getElementById('e-photo-preview').src = a.profile_photo || a.user_photo || 'assets/img/default-avatar.png';
+    let pSrc = a.profile_photo || a.user_photo || 'assets/img/default-avatar.png';
+    if (pSrc.startsWith('uploads/')) {
+        pSrc = '../' + pSrc;
+    }
+    document.getElementById('e-photo-preview').src = pSrc;
     
     openModal('edit-modal');
 }

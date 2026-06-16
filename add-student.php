@@ -3,6 +3,7 @@ require_once 'includes/auth.php';
 require_once 'config/database.php';
 require_permission('add-student');
 require_once 'includes/invoice_helper.php';
+require_once 'includes/file_helper.php';
 
 /* Admin manually adds an already-approved student.
    Fixes vs old version:
@@ -28,18 +29,8 @@ function gen_user_id($pdo) {
 }
 
 function handle_upload($field, $dir) {
-    if (empty($_FILES[$field]['name']) || $_FILES[$field]['error'] !== UPLOAD_ERR_OK) return null;
-    $allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf'];
-    $ext = strtolower(pathinfo($_FILES[$field]['name'], PATHINFO_EXTENSION));
-    if (!in_array($ext, $allowed, true)) return null;
-    if ($_FILES[$field]['size'] > 5 * 1024 * 1024) return null;
-    
-    $target_dir = '../' . $dir;
-    if (!is_dir($target_dir)) @mkdir($target_dir, 0755, true);
-    $name = uniqid() . '_' . preg_replace('/[^A-Za-z0-9._-]/', '_', basename($_FILES[$field]['name']));
-    $target_path = rtrim($target_dir, '/') . '/' . $name;
-    $db_path = rtrim($dir, '/') . '/' . $name;
-    return move_uploaded_file($_FILES[$field]['tmp_name'], $target_path) ? $db_path : null;
+    $sub_dir = str_replace('uploads/', '', $dir);
+    return handle_file_upload_with_replace($field, $sub_dir, null, ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf']);
 }
 
 /** Insert one approved student. Returns the new user_id. Throws on failure. */
