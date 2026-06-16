@@ -862,17 +862,16 @@ body {
 
 /* Premium Credit Card Coupon Design - Scale-based Responsive */
 .coupon-card-container {
-    container-type: inline-size;
     width: 100%;
     max-width: 480px;
     margin: 0 auto;
+    position: relative;
 }
 
 .coupon-card-wrapper {
     width: 100%;
     position: relative;
-    height: 0;
-    padding-bottom: 56.25%; /* Aspect ratio 800:450 = 56.25% */
+    overflow: hidden;
 }
 
 .coupon-card {
@@ -889,13 +888,12 @@ body {
     overflow: hidden;
     box-sizing: border-box;
     transform-origin: top left;
-    transform: scale(calc(100cqw / 800));
 }
 
 .coupon-card .cc-exp {
     position: absolute;
-    top: 45px;
-    left: 64px;
+    top: 55px;
+    left: 80px;
     font-size: 28px;
     font-weight: 700;
     color: #1c1917;
@@ -904,9 +902,9 @@ body {
 
 .coupon-card .cc-name {
     position: absolute;
-    top: 190px;
-    left: 64px;
-    font-size: 42px;
+    top: 195px;
+    left: 80px;
+    font-size: 36px;
     font-weight: 800;
     color: #0c0a09;
     letter-spacing: -0.5px;
@@ -918,9 +916,9 @@ body {
 
 .coupon-card .cc-role {
     position: absolute;
-    top: 248px;
-    left: 64px;
-    font-size: 26px;
+    top: 242px;
+    left: 80px;
+    font-size: 22px;
     font-weight: 700;
     color: #44403c;
     letter-spacing: 0.5px;
@@ -929,12 +927,12 @@ body {
 
 .coupon-card .cc-qr-wrap {
     position: absolute;
-    bottom: 36px;
-    left: 64px;
-    width: 144px;
-    height: 144px;
+    bottom: 40px;
+    left: 80px;
+    width: 110px;
+    height: 110px;
     background: #fff;
-    padding: 10px;
+    padding: 8px;
     border-radius: 8px;
     box-sizing: border-box;
     display: flex;
@@ -950,10 +948,10 @@ body {
 
 .coupon-card .cc-code-wrap {
     position: absolute;
-    bottom: 36px;
-    right: 56px;
-    width: 384px;
-    height: 144px;
+    bottom: 40px;
+    right: 70px;
+    width: 340px;
+    height: 110px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -961,7 +959,7 @@ body {
 }
 
 .coupon-card .cc-code {
-    font-size: 58px;
+    font-size: 46px;
     font-weight: 900;
     color: #0c0a09;
     letter-spacing: 2px;
@@ -1400,9 +1398,9 @@ body {
     <div id="db-content-referral">
         <?php
         $how_to_earn_text = '';
-        if (!empty($my_referees)) {
+        if (!empty($my_referees) && !empty($my_referees[0]['how_to_earn'])) {
             $how_to_earn_text = $my_referees[0]['how_to_earn'];
-        } elseif (!empty($active_programs)) {
+        } elseif (!empty($active_programs) && !empty($active_programs[0]['how_to_earn'])) {
             $how_to_earn_text = $active_programs[0]['how_to_earn'];
         } else {
             $how_to_earn_text = $DEFAULT_HOW_TO_EARN ?? '';
@@ -1637,7 +1635,19 @@ function toggleTutorial() {
     }
 }
 
-// Animate completion meter, load active tab, and generate QR codes
+function scaleCoupons() {
+    document.querySelectorAll('.coupon-card-container').forEach(function(container) {
+        var wrapper = container.querySelector('.coupon-card-wrapper');
+        var card = container.querySelector('.coupon-card');
+        if (!wrapper || !card) return;
+        var containerWidth = container.offsetWidth;
+        var scale = containerWidth / 800;
+        card.style.transform = 'scale(' + scale + ')';
+        wrapper.style.height = (450 * scale) + 'px';
+    });
+}
+
+// Animate completion meter, load active tab, generate QR codes, and scale coupons
 window.addEventListener('load', function () {
     var fill = document.querySelector('.pc-fill');
     if (fill) { var w = fill.style.width; fill.style.width = '0%'; setTimeout(function(){ fill.style.width = w; }, 200); }
@@ -1659,12 +1669,21 @@ window.addEventListener('load', function () {
             correctLevel : QRCode.CorrectLevel.M
         });
     });
+    
+    // Initial card scaling calculation
+    scaleCoupons();
 });
+
+window.addEventListener('resize', scaleCoupons);
 
 function downloadCoupon(id) {
     var node = document.getElementById('coupon-'+id);
+    var wrapper = node.closest('.coupon-card-wrapper');
     var oldTransform = node.style.transform;
+    var oldHeight = wrapper ? wrapper.style.height : '';
+    
     node.style.transform = 'none'; // Temporarily disable scale transform for rendering
+    if (wrapper) wrapper.style.height = '450px'; // Set to full size for capture
     
     html2canvas(node, {
         scale: 2, 
@@ -1674,6 +1693,7 @@ function downloadCoupon(id) {
         logging: false
     }).then(function(canvas){
         node.style.transform = oldTransform; // Restore original scale
+        if (wrapper) wrapper.style.height = oldHeight;
         var a = document.createElement('a');
         a.href = canvas.toDataURL('image/png');
         a.download = 'pepp-referral-coupon.png';

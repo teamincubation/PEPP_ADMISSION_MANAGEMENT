@@ -41,6 +41,14 @@ if (!marketing_ready($pdo)) {
 $UP_DIR = __DIR__ . '/../uploads/payouts';
 if (!is_dir($UP_DIR)) @mkdir($UP_DIR, 0755, true);
 
+// Self-healing database check for how_to_earn column
+try {
+    $stmt = $pdo->query("SHOW COLUMNS FROM referral_programs LIKE 'how_to_earn'");
+    if (!$stmt->fetch()) {
+        $pdo->exec("ALTER TABLE referral_programs ADD COLUMN how_to_earn TEXT DEFAULT NULL");
+    }
+} catch (Exception $e) {}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!csrf_verify()) {
         $error_message = 'Security token mismatch. Please retry.';
