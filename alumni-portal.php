@@ -409,14 +409,15 @@ body {
 .brand .logo-badge {
     width: 36px;
     height: 36px;
-    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, var(--gold), var(--gold-d));
-    color: #fff;
-    font-size: 1rem;
-    box-shadow: 0 4px 12px rgba(212, 161, 58, 0.3);
+}
+
+.brand .logo-badge img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
 }
 
 .brand small {
@@ -1274,7 +1275,7 @@ body {
 <body>
 <div class="topbar">
     <div class="brand">
-        <span class="logo-badge"><i class="fas fa-graduation-cap"></i></span>
+        <span class="logo-badge"><img src="assets/img/pepp-logo-icon.png" alt="PEPP Logo"></span>
         <span>pepp<small>LEARNING · ALUMNI</small></span>
     </div>
     <div class="topbar-right">

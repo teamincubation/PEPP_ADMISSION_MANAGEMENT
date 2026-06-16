@@ -18,7 +18,7 @@ function renderHeader($page_title = "PEPP Learning Admin", $current_page = "") {
         <nav class="sidebar">
             <div class="sidebar-header">
                 <div class="logo">
-                    <i class="fas fa-graduation-cap"></i>
+                    <img src="assets/img/pepp-logo-icon.png" alt="PEPP Logo" class="logo-img">
                     <span>PEPP Learning</span>
                 </div>
             </div>

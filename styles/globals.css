@@ -176,6 +176,12 @@ body {
   font-size: 1.2rem;
 }
 
+.logo img, .logo-img {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+
 .logo span {
   font-family: var(--font-heading);
   font-weight: 700;

@@ -108,7 +108,7 @@ $admin_username = $_SESSION['admin_username'] ?? 'Admin';
     <div class="sidebar-header">
         <div class="logo">
             <div class="logo-icon">
-                <i class="fas fa-graduation-cap"></i>
+                <img src="assets/img/pepp-logo-icon.png" alt="PEPP Logo">
             </div>
             <h2>PEPP Learning</h2>
         </div>
