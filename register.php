@@ -1151,6 +1151,82 @@ $country_codes = [
         .btn-apply-code:disabled { opacity:.6; cursor:not-allowed; }
         .code-msg { font-size:.85rem; font-weight:600; margin-top:8px; }
         .code-msg.ok { color:#16a34a; } .code-msg.err { color:#ef4444; }
+
+        /* ── WHATSAPP FLOATING CHAT WIDGET ── */
+        .wa-support-widget {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .wa-btn {
+            width: 60px;
+            height: 60px;
+            background-color: #25d366;
+            color: #ffffff !important;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.85rem;
+            box-shadow: 0 4px 16px rgba(37,211,102,0.4), 0 8px 32px rgba(0,0,0,0.15);
+            position: relative;
+            transition: transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275), background-color 0.2s;
+            text-decoration: none;
+        }
+        .wa-btn:hover {
+            transform: scale(1.08);
+            background-color: #20ba5a;
+        }
+        .wa-pulse {
+            position: absolute;
+            inset: -4px;
+            border: 2px solid #25d366;
+            border-radius: 50%;
+            opacity: 0;
+            animation: wa-ripple 2s infinite;
+            pointer-events: none;
+        }
+        .wa-tooltip {
+            background: #181003;
+            color: #ffffff;
+            padding: 8px 16px;
+            border-radius: 12px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+            border: 1px solid rgba(255,255,255,0.08);
+            white-space: nowrap;
+            opacity: 0;
+            transform: translateX(10px);
+            transition: opacity 0.25s, transform 0.25s;
+            pointer-events: none;
+        }
+        .wa-support-widget:hover .wa-tooltip {
+            opacity: 1;
+            transform: translateX(0);
+        }
+        @keyframes wa-ripple {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            100% { transform: scale(1.25); opacity: 0; }
+        }
+        @media (max-width: 768px) {
+            .wa-support-widget {
+                bottom: 1.5rem;
+                right: 1.5rem;
+            }
+            .wa-tooltip {
+                display: none;
+            }
+            .wa-btn {
+                width: 52px;
+                height: 52px;
+                font-size: 1.6rem;
+            }
+        }
 </style>
 </head>
 <body>
@@ -2040,5 +2116,15 @@ $country_codes = [
     if (codeInput && codeInput.value.trim() && courseSel && courseSel.value && yearSel && yearSel.value) applyCode();
 })();
 </script>
+
+<!-- WhatsApp Floating Chat Widget -->
+<div class="wa-support-widget">
+    <div class="wa-tooltip">Need Help? Chat with Us</div>
+    <a href="https://wa.me/919567276458?text=Hi%20PEPP%20Support%20Desk,%20I%20need%20help%20with%20the%20admissions%20registration%20process." target="_blank" rel="noopener" class="wa-btn" title="Chat with support">
+        <i class="fab fa-whatsapp"></i>
+        <span class="wa-pulse"></span>
+    </a>
+</div>
+
 </body>
 </html>
