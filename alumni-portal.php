@@ -31,6 +31,11 @@ function pep_norm_phone($p) {
     return $d;
 }
 
+$DEFAULT_HOW_TO_EARN = "1. Share your unique referral link or coupon card with prospective learners who want to join PEPP.\n"
+    . "2. Ensure they apply your referral code during their registration on PEPP.\n"
+    . "3. Once their registration is approved by the admin and onboarding checklist is completed, your referral earning is credited to your wallet.\n"
+    . "4. Request a payout from your wallet balance to receive the money directly into your bank account or UPI ID.";
+
 $portal_ready = pepp_tables_exist($pdo, ['peppians', 'alumni']);
 $msg = ''; $err = '';
 if (isset($_GET['err']) && $_GET['err'] === 'google') $err = 'Google sign-in failed. Please try again.';
@@ -257,7 +262,7 @@ if ($step === 'dashboard') {
     try {
         $today = date('Y-m-d');
         $active_programs = $pdo->query("SELECT * FROM referral_programs WHERE status='active' AND (end_date IS NULL OR end_date >= '$today')")->fetchAll();
-        $stmt = $pdo->prepare("SELECT r.*, p.academic_year, p.user_discount, p.alumni_earning, p.end_date, p.terms
+        $stmt = $pdo->prepare("SELECT r.*, p.academic_year, p.user_discount, p.alumni_earning, p.end_date, p.terms, p.how_to_earn
                                FROM referees r JOIN referral_programs p ON p.id = r.program_id WHERE r.peppian_id = ? ORDER BY r.id DESC");
         $stmt->execute([$me['id']]);
         foreach ($stmt->fetchAll() as $r) { $r['wallet'] = referee_wallet($pdo, $r['id']); $my_referees[] = $r; }
@@ -844,129 +849,198 @@ body {
     font-size: 0.8rem;
 }
 
-/* Premium Credit Card Coupon Design */
-.coupon-card {
-    position: relative;
-    overflow: hidden;
+/* Premium Credit Card Coupon Design - Scale-based Responsive */
+.coupon-card-container {
+    container-type: inline-size;
     width: 100%;
-    max-width: 400px;
+    max-width: 480px;
     margin: 0 auto;
-    aspect-ratio: 1.75/1;
-    border-radius: 16px;
-    padding: 20px 24px;
-    color: #fcd34d;
-    background: linear-gradient(135deg, #1c1917 0%, #0c0a09 100%);
-    border: 1px solid rgba(212, 161, 58, 0.45);
-    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
-    box-sizing: border-box;
 }
 
-.coupon-card::before {
-    content: '';
+.coupon-card-wrapper {
+    width: 100%;
+    position: relative;
+    height: 0;
+    padding-bottom: 56.25%; /* Aspect ratio 800:450 = 56.25% */
+}
+
+.coupon-card {
     position: absolute;
-    inset: 0;
-    background: 
-        radial-gradient(circle 200px at 90% 10%, rgba(212, 161, 58, 0.14) 0%, transparent 60%),
-        repeating-linear-gradient(45deg, rgba(212, 161, 58, 0.02) 0px, rgba(212, 161, 58, 0.02) 1px, transparent 1px, transparent 6px);
-    pointer-events: none;
+    top: 0;
+    left: 0;
+    width: 800px;
+    height: 450px;
+    border-radius: 28px; /* scaled proportionally */
+    background-image: url('assets/img/pepp-referral-coupon-template.jpg');
+    background-size: cover;
+    background-position: center;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+    box-sizing: border-box;
+    transform-origin: top left;
+    transform: scale(calc(100cqw / 800));
 }
 
 .coupon-card .cc-exp {
-    font-size: 0.65rem;
+    position: absolute;
+    top: 45px;
+    left: 64px;
+    font-size: 28px;
     font-weight: 700;
-    color: var(--muted);
+    color: #1c1917;
     letter-spacing: 0.5px;
-    position: relative;
-    z-index: 1;
-}
-
-.coupon-card .cc-brand {
-    position: absolute;
-    top: 16px;
-    right: 20px;
-    z-index: 1;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.coupon-card .cc-brand-logo {
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: linear-gradient(135deg, #fef08a 0%, #d4a13a 50%, #b8861f 100%);
-    color: #0c0a09;
-    font-size: 0.7rem;
-    box-shadow: 0 2px 6px rgba(212, 161, 58, 0.4);
-}
-
-.coupon-card .cc-brand-text {
-    font-size: 0.95rem;
-    font-weight: 800;
-    letter-spacing: -0.5px;
-    color: #fff;
-    text-transform: lowercase;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.5);
-}
-
-.coupon-card .cc-tag {
-    position: absolute;
-    top: 44px;
-    right: 20px;
-    font-size: 0.55rem;
-    font-weight: 800;
-    letter-spacing: 1.5px;
-    color: var(--gold);
-    z-index: 1;
-}
-
-.coupon-card .cc-chip {
-    position: absolute;
-    left: 24px;
-    top: 44px;
-    font-size: 1.8rem;
-    background: linear-gradient(135deg, #fef08a, #d4a13a);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    filter: drop-shadow(0 2px 3px rgba(0,0,0,0.5));
-    z-index: 1;
 }
 
 .coupon-card .cc-name {
-    font-size: 1.15rem;
-    font-weight: 700;
-    margin-top: 48px;
-    color: #fff;
-    letter-spacing: -0.3px;
-    position: relative;
-    z-index: 1;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    position: absolute;
+    top: 190px;
+    left: 64px;
+    font-size: 42px;
+    font-weight: 800;
+    color: #0c0a09;
+    letter-spacing: -0.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 640px;
 }
 
-.coupon-card .cc-phone {
-    font-size: 0.72rem;
-    font-weight: 600;
-    color: var(--muted);
-    position: relative;
-    z-index: 1;
+.coupon-card .cc-role {
+    position: absolute;
+    top: 248px;
+    left: 64px;
+    font-size: 26px;
+    font-weight: 700;
+    color: #44403c;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.coupon-card .cc-qr-wrap {
+    position: absolute;
+    bottom: 36px;
+    left: 64px;
+    width: 144px;
+    height: 144px;
+    background: #fff;
+    padding: 10px;
+    border-radius: 8px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.coupon-card .cc-qr-wrap canvas, .coupon-card .cc-qr-wrap img {
+    width: 100% !important;
+    height: 100% !important;
+    display: block;
+}
+
+.coupon-card .cc-code-wrap {
+    position: absolute;
+    bottom: 36px;
+    right: 56px;
+    width: 384px;
+    height: 144px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
 }
 
 .coupon-card .cc-code {
-    position: absolute;
-    right: 20px;
-    bottom: 18px;
-    font-size: 1.05rem;
-    font-weight: 800;
-    letter-spacing: 1px;
-    border: 1.5px dashed rgba(212, 161, 58, 0.55);
-    padding: 4px 10px;
-    border-radius: 8px;
+    font-size: 58px;
+    font-weight: 900;
+    color: #0c0a09;
+    letter-spacing: 2px;
+    text-align: center;
+}
+
+/* Tutorial Section (How to Earn) */
+.tutorial-card {
+    background: rgba(20, 13, 18, 0.65);
+    border: 1px solid var(--border-gold);
+    border-radius: var(--radius);
+    padding: 22px;
+    margin-bottom: 20px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    transition: all 0.3s ease;
+}
+
+.tutorial-toggle {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    background: none;
+    border: none;
+    padding: 0;
     color: #fff;
-    background: rgba(255, 255, 255, 0.03);
-    z-index: 1;
+    cursor: pointer;
+    font-family: inherit;
+    outline: none;
+}
+
+.tutorial-toggle h2 {
+    font-size: 1.15rem;
+    font-weight: 800;
+    margin: 0;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.tutorial-chevron {
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    color: var(--gold);
+    font-size: 1.15rem;
+}
+
+.tutorial-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tutorial-steps {
+    padding-top: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.tutorial-step {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.35s ease, transform 0.35s ease;
+}
+
+.step-number {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--gold), var(--gold-d));
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 0.8rem;
+    flex-shrink: 0;
+    box-shadow: 0 3px 8px rgba(212, 161, 58, 0.25);
+}
+
+.step-text {
+    font-size: 0.88rem;
+    color: var(--ink);
+    line-height: 1.55;
+    padding-top: 2px;
 }
 
 /* Section elements */
@@ -1313,6 +1387,41 @@ body {
 
     <!-- Tab 1: Referral Content -->
     <div id="db-content-referral">
+        <?php
+        $how_to_earn_text = '';
+        if (!empty($my_referees)) {
+            $how_to_earn_text = $my_referees[0]['how_to_earn'];
+        } elseif (!empty($active_programs)) {
+            $how_to_earn_text = $active_programs[0]['how_to_earn'];
+        } else {
+            $how_to_earn_text = $DEFAULT_HOW_TO_EARN ?? '';
+        }
+        if (!empty($how_to_earn_text)):
+        ?>
+        <div class="tutorial-card">
+            <button class="tutorial-toggle" onclick="toggleTutorial()">
+                <h2><i class="fas fa-circle-question" style="color: var(--gold);"></i> How to earn using this referral?</h2>
+                <i class="fas fa-chevron-down tutorial-chevron"></i>
+            </button>
+            <div class="tutorial-content">
+                <div class="tutorial-steps">
+                    <?php
+                    $steps = array_filter(array_map('trim', explode("\n", $how_to_earn_text)));
+                    $step_num = 1;
+                    foreach ($steps as $step_line):
+                        $cleaned_step = preg_replace('/^\d+[\.\-\s)]+\s*/', '', $step_line);
+                        if ($cleaned_step === '') continue;
+                    ?>
+                    <div class="tutorial-step">
+                        <div class="step-number"><?php echo $step_num++; ?></div>
+                        <div class="step-text"><?php echo pep_e($cleaned_step); ?></div>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
+
         <!-- Apply for joinable programs -->
         <?php foreach ($joinable as $p): ?>
         <div class="card">
@@ -1366,17 +1475,24 @@ body {
             <!-- Downloadable referral coupon -->
             <div style="margin-top:18px;">
                 <label style="font-size:.82rem;font-weight:600;display:block;margin-bottom:8px;">Your referral coupon</label>
-                <div class="coupon-card" id="coupon-<?php echo (int)$r['id']; ?>">
-                    <div class="cc-exp">VALID UNTIL: <?php echo !empty($r['end_date']) ? date('M d, Y', strtotime($r['end_date'])) : 'PERMANENT'; ?></div>
-                    <div class="cc-brand">
-                        <span class="cc-brand-logo"><i class="fas fa-graduation-cap"></i></span>
-                        <span class="cc-brand-text">pepp</span>
+                <?php
+                $display_name = $me['full_name'];
+                if (mb_strlen($display_name) > 25) {
+                    $display_name = mb_substr($display_name, 0, 22) . '...';
+                }
+                ?>
+                <div class="coupon-card-container">
+                    <div class="coupon-card-wrapper">
+                        <div class="coupon-card" id="coupon-<?php echo (int)$r['id']; ?>">
+                            <div class="cc-exp">VALID UNTIL: <?php echo !empty($r['end_date']) ? date('M d, Y', strtotime($r['end_date'])) : 'PERMANENT'; ?></div>
+                            <div class="cc-name"><?php echo pep_e($display_name); ?></div>
+                            <div class="cc-role">ALUMNI REFERRAL</div>
+                            <div class="cc-qr-wrap" data-link="<?php echo pep_e($link); ?>"></div>
+                            <div class="cc-code-wrap">
+                                <div class="cc-code"><?php echo pep_e($r['referral_code']); ?></div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="cc-tag">PREMIUM MEMBERSHIP</div>
-                    <div class="cc-chip"><i class="fas fa-microchip"></i></div>
-                    <div class="cc-name"><?php echo pep_e($me['full_name']); ?></div>
-                    <div class="cc-phone">ALUMNI PARTICIPANT</div>
-                    <div class="cc-code"><?php echo pep_e($r['referral_code']); ?></div>
                 </div>
                 <button class="btn btn-ghost" type="button" style="margin-top:10px; width: 100%; max-width: 400px; display: block; margin-left: auto; margin-right: auto;" onclick="downloadCoupon(<?php echo (int)$r['id']; ?>)"><i class="fas fa-download"></i> Download Coupon</button>
             </div>
@@ -1449,6 +1565,7 @@ body {
 <div class="loading-overlay" id="loading"><div class="spinner"></div><div class="lt">Setting up your referral account</div><div class="ls">Generating your unique referral code…</div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 function swTab(t) {
     document.getElementById('t-signin').classList.toggle('on', t==='signin');
@@ -1484,7 +1601,32 @@ function addTrack() {
     w.appendChild(d);
 }
 function toggleProf(show) { var el = document.getElementById('prof-fields'); if (el) el.style.display = show ? 'block' : 'none'; }
-// Animate the completion meter on load and restore active dashboard tab
+
+function toggleTutorial() {
+    var content = document.querySelector('.tutorial-content');
+    var chevron = document.querySelector('.tutorial-chevron');
+    var steps = document.querySelectorAll('.tutorial-step');
+    
+    if (content.style.maxHeight && content.style.maxHeight !== '0px') {
+        content.style.maxHeight = '0px';
+        chevron.style.transform = 'rotate(0deg)';
+        steps.forEach(function(step) {
+            step.style.opacity = '0';
+            step.style.transform = 'translateY(8px)';
+        });
+    } else {
+        content.style.maxHeight = content.scrollHeight + 'px';
+        chevron.style.transform = 'rotate(180deg)';
+        steps.forEach(function(step, index) {
+            setTimeout(function() {
+                step.style.opacity = '1';
+                step.style.transform = 'translateY(0)';
+            }, index * 100);
+        });
+    }
+}
+
+// Animate completion meter, load active tab, and generate QR codes
 window.addEventListener('load', function () {
     var fill = document.querySelector('.pc-fill');
     if (fill) { var w = fill.style.width; fill.style.width = '0%'; setTimeout(function(){ fill.style.width = w; }, 200); }
@@ -1493,10 +1635,34 @@ window.addEventListener('load', function () {
     if (activeTab === 'profile') {
         switchDashboardTab('profile');
     }
+    
+    // Generate QR codes for all coupons
+    document.querySelectorAll('.cc-qr-wrap').forEach(function(el) {
+        var link = el.getAttribute('data-link');
+        new QRCode(el, {
+            text: link,
+            width: 128,
+            height: 128,
+            colorDark : "#000000",
+            colorLight : "#ffffff",
+            correctLevel : QRCode.CorrectLevel.M
+        });
+    });
 });
+
 function downloadCoupon(id) {
     var node = document.getElementById('coupon-'+id);
-    html2canvas(node, {scale:2, backgroundColor:null, useCORS:true, allowTaint:true, logging:false}).then(function(canvas){
+    var oldTransform = node.style.transform;
+    node.style.transform = 'none'; // Temporarily disable scale transform for rendering
+    
+    html2canvas(node, {
+        scale: 2, 
+        backgroundColor: null, 
+        useCORS: true, 
+        allowTaint: true, 
+        logging: false
+    }).then(function(canvas){
+        node.style.transform = oldTransform; // Restore original scale
         var a = document.createElement('a');
         a.href = canvas.toDataURL('image/png');
         a.download = 'pepp-referral-coupon.png';

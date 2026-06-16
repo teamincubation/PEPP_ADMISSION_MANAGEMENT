@@ -23,6 +23,11 @@ $DEFAULT_TERMS = "1. The referral code is valid only for the academic year for w
     . "6. Referral earnings will be paid to the bank/UPI details provided by the referee. PEPP Learning is not responsible for incorrect payout details.\n"
     . "7. Any misuse or fraudulent activity will result in disqualification from the program.";
 
+$DEFAULT_HOW_TO_EARN = "1. Share your unique referral link or coupon card with prospective learners who want to join PEPP.\n"
+    . "2. Ensure they apply your referral code during their registration on PEPP.\n"
+    . "3. Once their registration is approved by the admin and onboarding checklist is completed, your referral earning is credited to your wallet.\n"
+    . "4. Request a payout from your wallet balance to receive the money directly into your bank account or UPI ID.";
+
 function marketing_ready($pdo) { return pepp_tables_exist($pdo, ['referral_programs', 'coupons']); }
 if (!marketing_ready($pdo)) {
     $active_page = 'marketing'; $page_title = 'Marketing'; $page_sub = '';
@@ -50,6 +55,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         (float)($_POST['user_discount'] ?? 0), (float)($_POST['alumni_earning'] ?? 0),
                         isset($_POST['once_per_user']) ? 1 : 0, isset($_POST['partial_credit']) ? 1 : 0,
                         trim($_POST['terms'] ?? '') ?: $GLOBALS['DEFAULT_TERMS'],
+                        trim($_POST['how_to_earn'] ?? '') ?: $GLOBALS['DEFAULT_HOW_TO_EARN'],
                         trim($_POST['id_prefix'] ?? 'PEPPREF') ?: 'PEPPREF', (int)($_POST['id_start'] ?? 1001),
                         $_POST['start_date'] ?: null, $_POST['end_date'] ?: null,
                         in_array($_POST['status'] ?? '', ['active', 'inactive'], true) ? $_POST['status'] : 'active',
@@ -58,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $stmt = $pdo->prepare("SELECT id FROM referral_programs WHERE academic_year = ?");
                     $stmt->execute([$year]);
                     $pid = $stmt->fetchColumn();
-                    $newStatus = $data[9];
+                    $newStatus = $data[10]; // Now index 10 since how_to_earn shifted the indices
 
                     // Only ONE program may be active at a time. If this save would make a
                     // program active while a DIFFERENT year's program is already active,
@@ -80,10 +86,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         // users already received are frozen in referral_earnings /
                         // coupon_redemptions and are never rewritten.
                         if ($pid) {
-                            $pdo->prepare("UPDATE referral_programs SET user_discount=?, alumni_earning=?, once_per_user=?, partial_credit=?, terms=?, id_prefix=?, id_start=?, start_date=?, end_date=?, status=? WHERE id=?")
+                            $pdo->prepare("UPDATE referral_programs SET user_discount=?, alumni_earning=?, once_per_user=?, partial_credit=?, terms=?, how_to_earn=?, id_prefix=?, id_start=?, start_date=?, end_date=?, status=? WHERE id=?")
                                 ->execute(array_merge($data, [$pid]));
                         } else {
-                            $pdo->prepare("INSERT INTO referral_programs (academic_year, user_discount, alumni_earning, once_per_user, partial_credit, terms, id_prefix, id_start, start_date, end_date, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+                            $pdo->prepare("INSERT INTO referral_programs (academic_year, user_discount, alumni_earning, once_per_user, partial_credit, terms, how_to_earn, id_prefix, id_start, start_date, end_date, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
                                 ->execute(array_merge([$year], $data, [$admin_username]));
                         }
                         log_admin_activity($pdo, $admin_username, 'referral_program_saved', "Referral program for {$year} saved ({$newStatus})");
@@ -275,6 +281,9 @@ include 'includes/admin_nav.php';
             <div class="field full"><label>Referee Terms &amp; Conditions <button type="button" class="btn btn-sm btn-outline" onclick="openModal('terms-modal')" style="margin-left:8px;">Edit</button></label>
                 <textarea name="terms" id="prog-terms" rows="3" placeholder="Terms shown to referees"><?php echo e($DEFAULT_TERMS); ?></textarea>
             </div>
+            <div class="field full"><label>How to Earn Instructions (Shown to PEPPians step-by-step)</label>
+                <textarea name="how_to_earn" id="prog-how-to-earn" rows="4" placeholder="Instructions, one per line (e.g. 1. Share your link...)"><?php echo e($DEFAULT_HOW_TO_EARN); ?></textarea>
+            </div>
             <div class="alert alert-info" style="margin-top:8px;"><i class="fas fa-circle-info"></i><span>Activating a program automatically lets <strong>past alumni</strong> (PEPPians not in this active year) apply for it in their portal and share their referral link for this batch.</span></div>
             <div style="display:flex; justify-content:flex-end;"><button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save Program</button></div>
         </form>
@@ -368,6 +377,7 @@ $prog_json = [];
 foreach ($programs as $p) $prog_json[$p['academic_year']] = $p;
 $extra_scripts = "<script>
 var PROGRAMS = " . json_encode($prog_json, JSON_HEX_APOS | JSON_HEX_QUOT) . ";
+var DEFAULT_HOW_TO_EARN = " . json_encode($DEFAULT_HOW_TO_EARN, JSON_HEX_APOS | JSON_HEX_QUOT) . ";
 function loadProgram() {
     var y = document.getElementById('prog-year').value;
     var p = PROGRAMS[y];
@@ -382,6 +392,7 @@ function loadProgram() {
     document.getElementById('prog-once').checked = (p.once_per_user == 1);
     document.getElementById('prog-partial').checked = (p.partial_credit == 1);
     if (p.terms) { document.getElementById('prog-terms').value = p.terms; document.getElementById('terms-editor').value = p.terms; }
+    document.getElementById('prog-how-to-earn').value = p.how_to_earn || DEFAULT_HOW_TO_EARN;
 }
 function openPay(r) {
     document.getElementById('pay-id').value = r.id;
