@@ -1,0 +1,16 @@
+# Logs
+php_errors.log
+*.log
+
+# User Uploads
+uploads/installment_payments/*
+uploads/payments/*
+uploads/payouts/*
+uploads/peppians/*
+uploads/photos/*
+
+# Node dependencies (just in case)
+node_modules/
+.next/
+dist/
+out/

@@ -1,0 +1,32 @@
+UPDATE 10 - Alumni profile, logo coupon, em-dash cleanup, PEPPian emails,
+            Marketing badges, lead dropdown, account balance, security,
+            alumni edit/filters.
+
+DEPLOY ORDER
+1. Run database-update-10.sql ONCE in phpMyAdmin (adds profile columns +
+   marketing_updates table).
+2. Upload everything in this zip to /admissions/, keeping folder structure.
+   IMPORTANT new assets:
+     assets/img/pepp-logo-text.png   (coupon logo)
+     uploads/.htaccess               (blocks script execution in uploads)
+     config/.htaccess                (protects config files)
+   Make writable: uploads/peppians/  and  uploads/payouts/
+3. Confirm noreply@pepplearning.in exists in Hostinger (for PEPPian emails;
+   adnanmongam@gmail.com is CC'd on each).
+
+NOTE: this update also removed em dashes from every PHP file, so the full set
+of .php files is included. Uploading all is safe (they are the current build).
+
+WHAT'S NEW / FIXED
+1  Coupon shows the PEPP text logo image.
+2  Verified PEPPians get an animated "Alumni Profile" completion card.
+3  Em dashes removed sitewide.
+4  PEPPians emailed on verify / joinee / credit / payout (+ admin CC), with
+   wallet balance.
+5  Marketing tab shows green (referral) + red (coupon) unread badges.
+6  Lead "Interested PEPP Course" is a proper dropdown.
+7  Account balance subtracts referral payouts; new column + stat card.
+8  All sections grantable to admins from Admin Management.
+9  Security: parameterised queries, CSRF, session regeneration, upload
+   validation, .htaccess hardening.
+10 Alumni Database: edit any alumnus + filter by year / course / email / search.
