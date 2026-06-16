@@ -4,10 +4,15 @@ php_errors.log
 
 # User Uploads
 uploads/installment_payments/*
+!uploads/installment_payments/.gitkeep
 uploads/payments/*
+!uploads/payments/.gitkeep
 uploads/payouts/*
+!uploads/payouts/.gitkeep
 uploads/peppians/*
+!uploads/peppians/.gitkeep
 uploads/photos/*
+!uploads/photos/.gitkeep
 
 # Node dependencies (just in case)
 node_modules/
