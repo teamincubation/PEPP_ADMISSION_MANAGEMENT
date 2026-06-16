@@ -37,6 +37,17 @@ $DEFAULT_HOW_TO_EARN = "1. Share your unique referral link or coupon card with p
     . "4. Request a payout from your wallet balance to receive the money directly into your bank account or UPI ID.";
 
 $portal_ready = pepp_tables_exist($pdo, ['peppians', 'alumni']);
+
+// Self-healing migration for how_to_earn column
+if ($portal_ready) {
+    try {
+        $stmt = $pdo->query("SHOW COLUMNS FROM referral_programs LIKE 'how_to_earn'");
+        if (!$stmt->fetch()) {
+            $pdo->exec("ALTER TABLE referral_programs ADD COLUMN how_to_earn TEXT DEFAULT NULL");
+        }
+    } catch (Exception $e) {}
+}
+
 $msg = ''; $err = '';
 if (isset($_GET['err']) && $_GET['err'] === 'google') $err = 'Google sign-in failed. Please try again.';
 
