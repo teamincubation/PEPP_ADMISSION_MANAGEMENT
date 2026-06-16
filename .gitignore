@@ -2,7 +2,7 @@
 php_errors.log
 *.log
 
-# User Uploads
+# User Uploads (Ignore files, keep folder structure)
 uploads/installment_payments/*
 !uploads/installment_payments/.gitkeep
 uploads/payments/*
@@ -14,7 +14,7 @@ uploads/peppians/*
 uploads/photos/*
 !uploads/photos/.gitkeep
 
-# Node dependencies (just in case)
+# Node dependencies
 node_modules/
 .next/
 dist/
