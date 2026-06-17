@@ -73,7 +73,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } elseif (!in_array($status, $CLOSED, true) && $followup === '') {
                     $error_message = 'A next follow-up date is required until the lead is converted or rejected.';
                 } else {
-                    $assigned = is_super_admin() ? (trim($_POST['assigned_to'] ?? '') ?: $admin_username) : $admin_username;
+                    $assigned = is_super_admin() ? (trim($_POST['assigned_to'] ?? '') ?: '__ALL__') : '__ALL__';
                     $stmt = $pdo->prepare("
                         INSERT INTO leads (whatsapp_number, name, interested_course, last_institute, last_course,
                             is_fyugp, year_of_study, status, next_followup_date, assigned_to, source, created_by, created_at, last_activity_at)
@@ -101,7 +101,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $error_message = 'Could not read the file. Please upload a .csv file (Excel: Save As → CSV).';
                     } else {
                         $added = 0; $skipped = 0;
-                        $assigned_default = is_super_admin() ? (trim($_POST['bulk_assigned_to'] ?? '') ?: $admin_username) : $admin_username;
+                        $assigned_default = is_super_admin() ? (trim($_POST['bulk_assigned_to'] ?? '') ?: '__ALL__') : '__ALL__';
                         foreach ($rows as $r) {
                             $wa = clean_wa($r['whatsapp_number'] ?? '');
                             if (strlen($wa) < 11) { $skipped++; continue; }
@@ -458,8 +458,8 @@ include 'includes/admin_nav.php';
                     <?php if (is_super_admin() && $assignable): ?>
                     <div class="field"><label>Assign To</label>
                         <select name="assigned_to">
-                            <option value="__ALL__">All Admins</option>
-                            <?php foreach ($assignable as $a): ?><option value="<?php echo e($a); ?>" <?php echo $a === $admin_username ? 'selected' : ''; ?>><?php echo e($a); ?></option><?php endforeach; ?>
+                            <option value="__ALL__" selected>All Admins</option>
+                            <?php foreach ($assignable as $a): ?><option value="<?php echo e($a); ?>"><?php echo e($a); ?></option><?php endforeach; ?>
                         </select></div>
                     <?php endif; ?>
                     <div class="field full"><label>Remarks</label><textarea name="remarks" rows="2" placeholder="First note about this lead"></textarea></div>
@@ -490,8 +490,8 @@ include 'includes/admin_nav.php';
                 <?php if (is_super_admin() && $assignable): ?>
                 <div class="field"><label>Assign all imported leads to</label>
                     <select name="bulk_assigned_to">
-                        <option value="__ALL__">All Admins</option>
-                        <?php foreach ($assignable as $a): ?><option value="<?php echo e($a); ?>" <?php echo $a === $admin_username ? 'selected' : ''; ?>><?php echo e($a); ?></option><?php endforeach; ?>
+                        <option value="__ALL__" selected>All Admins</option>
+                        <?php foreach ($assignable as $a): ?><option value="<?php echo e($a); ?>"><?php echo e($a); ?></option><?php endforeach; ?>
                     </select></div>
                 <?php endif; ?>
                 <a href="lead-sample.csv" download style="font-size:.78rem;font-weight:600;color:var(--accent);"><i class="fas fa-download"></i> Download a sample CSV</a>
