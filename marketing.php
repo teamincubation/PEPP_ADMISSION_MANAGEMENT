@@ -201,8 +201,25 @@ try { $programs = $pdo->query("SELECT * FROM referral_programs ORDER BY status='
 // Referees with wallets
 $referees = [];
 try {
-    $stmt = $pdo->query("SELECT r.*, p.full_name, p.email, p.whatsapp, rp.academic_year, rp.alumni_earning
-                         FROM referees r JOIN peppians p ON p.id = r.peppian_id JOIN referral_programs rp ON rp.id = r.program_id
+    $has_alumni_wa_col = false;
+    try {
+        $check_stmt = $pdo->query("DESCRIBE alumni");
+        if ($check_stmt) {
+            $alumni_cols = $check_stmt->fetchAll(PDO::FETCH_COLUMN);
+            $alumni_cols = array_map('strtolower', $alumni_cols);
+            $has_alumni_wa_col = in_array('whatsapp_number', $alumni_cols);
+        }
+    } catch (Exception $e) {}
+
+    $alumni_wa_select = $has_alumni_wa_col ? "a.whatsapp_number AS alumni_whatsapp," : "'' AS alumni_whatsapp,";
+
+    $stmt = $pdo->query("SELECT r.*, p.full_name, p.email, p.whatsapp, p.linked_alumni_id,
+                                $alumni_wa_select a.mobile AS alumni_mobile, a.secondary_mobile AS alumni_sec_mobile,
+                                rp.academic_year, rp.alumni_earning
+                         FROM referees r 
+                         JOIN peppians p ON p.id = r.peppian_id 
+                         JOIN referral_programs rp ON rp.id = r.program_id
+                         LEFT JOIN alumni a ON a.id = p.linked_alumni_id
                          ORDER BY r.id DESC");
     foreach ($stmt->fetchAll() as $r) { $r['wallet'] = referee_wallet($pdo, $r['id']); $referees[] = $r; }
 } catch (Exception $e) { error_log('referees: ' . $e->getMessage()); }
@@ -321,7 +338,34 @@ include 'includes/admin_nav.php';
             <tbody>
             <?php foreach ($referees as $r): $w = $r['wallet']; ?>
                 <tr>
-                    <td><div class="cell-main"><?php echo e($r['full_name']); ?></div><div class="cell-sub"><?php echo e($r['email']); ?><?php echo $r['payout_method'] ? '<br>' . e($r['payout_method']) . ': ' . e($r['payout_details']) : ''; ?></div></td>
+                    <td>
+                        <div class="cell-main"><?php echo e($r['full_name']); ?></div>
+                        <div class="cell-sub"><?php echo e($r['email']); ?><?php echo $r['payout_method'] ? '<br>' . e($r['payout_method']) . ': ' . e($r['payout_details']) : ''; ?></div>
+                        <?php
+                        $ref_phone = '';
+                        if (!empty($r['whatsapp'])) {
+                            $ref_phone = $r['whatsapp'];
+                        } elseif (!empty($r['alumni_whatsapp'])) {
+                            $ref_phone = $r['alumni_whatsapp'];
+                        } elseif (!empty($r['alumni_mobile'])) {
+                            $ref_phone = $r['alumni_mobile'];
+                        } elseif (!empty($r['alumni_sec_mobile'])) {
+                            $ref_phone = $r['alumni_sec_mobile'];
+                        }
+                        $ref_phone = trim($ref_phone);
+                        if ($ref_phone !== ''):
+                            $clean_digits = preg_replace('/\D/', '', $ref_phone);
+                            if (strpos($clean_digits, '0') === 0 && strlen($clean_digits) === 11) {
+                                $clean_digits = substr($clean_digits, 1);
+                            }
+                            $wa_num = (strlen($clean_digits) === 10) ? '91' . $clean_digits : $clean_digits;
+                        ?>
+                            <div style="margin-top: 6px; display: flex; gap: 6px;">
+                                <a class="btn btn-sm btn-whatsapp" href="https://wa.me/<?php echo e($wa_num); ?>" target="_blank" title="WhatsApp: <?php echo e($ref_phone); ?>" style="text-decoration: none;"><i class="fab fa-whatsapp"></i> Chat</a>
+                                <a class="btn btn-sm btn-outline" href="tel:<?php echo e($clean_digits); ?>" title="Call: <?php echo e($ref_phone); ?>" style="text-decoration: none;"><i class="fas fa-phone"></i> Call</a>
+                            </div>
+                        <?php endif; ?>
+                    </td>
                     <td><span class="badge violet"><?php echo e($r['referral_code']); ?></span></td>
                     <td class="cell-sub"><?php echo e($r['academic_year']); ?></td>
                     <td><?php echo (int)$w['joined']; ?></td>
