@@ -271,6 +271,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $action = $_POST['action'] ?? '';
         try {
+            if ($action === 'toggle_alumni_visibility') {
+                header('Content-Type: application/json');
+                $val = ($_POST['value'] ?? '') === 'ON' ? 'ON' : 'OFF';
+                try {
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM admin_settings WHERE setting_name = 'alumni_public_visibility'");
+                    $stmt->execute();
+                    if ($stmt->fetchColumn() > 0) {
+                        $stmt = $pdo->prepare("UPDATE admin_settings SET setting_value = ?, updated_at = NOW() WHERE setting_name = 'alumni_public_visibility'");
+                        $stmt->execute([$val]);
+                    } else {
+                        $stmt = $pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, created_at, updated_at) VALUES ('alumni_public_visibility', ?, NOW(), NOW())");
+                        $stmt->execute([$val]);
+                    }
+                    echo json_encode(['success' => true]);
+                } catch (Exception $e) {
+                    echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+                }
+                exit;
+            }
+
             if ($action === 'add_alumni') {
                 if (trim($_POST['mobile'] ?? '') === '') {
                     $error_message = 'Mobile number is required.';
@@ -603,13 +623,70 @@ try {
 } catch (Exception $e) { error_log('Alumni list: ' . $e->getMessage()); }
 $total_pages = max(1, (int)ceil($total / $per));
 
+$alumni_public_visibility = 'ON';
+try {
+    $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'alumni_public_visibility'");
+    $stmt->execute();
+    $alumni_public_visibility = $stmt->fetchColumn() ?: 'ON';
+} catch (Exception $e) {}
+
 $active_page = 'alumni';
 $page_title  = 'Alumni Database';
 $page_sub    = 'Past students - used to verify PEPPians';
 include 'includes/admin_nav.php';
 ?>
 
-<div style="margin-bottom:16px;"><a href="dashboard.php" class="btn btn-sm btn-outline"><i class="fas fa-arrow-left"></i> Back to Dashboard</a></div>
+<style>
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 50px;
+  height: 24px;
+}
+.switch input { 
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: #cbd5e1;
+  transition: .3s;
+  border-radius: 34px;
+}
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  transition: .3s;
+  border-radius: 50%;
+}
+input:checked + .slider {
+  background-color: #16a34a;
+}
+input:checked + .slider:before {
+  transform: translateX(26px);
+}
+</style>
+
+<div style="margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+    <a href="dashboard.php" class="btn btn-sm btn-outline"><i class="fas fa-arrow-left"></i> Back to Dashboard</a>
+    
+    <!-- Public Alumni Visibility Toggle -->
+    <div style="display:flex; align-items:center; gap:8px; background:#fafaf9; border:1px solid #e7e5e4; padding:6px 14px; border-radius:10px;">
+        <span style="font-size:0.85rem; font-weight:600; color:#374151;"><i class="fas fa-eye" style="color:var(--accent);"></i> Public Alumni Showcase</span>
+        <label class="switch" style="position:relative; display:inline-block; width:50px; height:24px; margin:0;">
+            <input type="checkbox" id="toggle-alumni-visibility" <?php echo $alumni_public_visibility === 'ON' ? 'checked' : ''; ?> onchange="toggleAlumniVisibility(this.checked)" style="opacity:0; width:0; height:0;">
+            <span class="slider"></span>
+        </label>
+    </div>
+</div>
 
 <?php if ($success_message): ?><div class="alert alert-success"><i class="fas fa-circle-check"></i><span><?php echo e($success_message); ?></span></div><?php endif; ?>
 <?php if ($error_message):   ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($error_message); ?></span></div><?php endif; ?>
@@ -1290,6 +1367,31 @@ function confirmBatchUpdate() {
         : `Are you sure you want to update the course for ALL matching alumni?`;
         
     return confirm(msg);
+}
+
+function toggleAlumniVisibility(checked) {
+    var val = checked ? 'ON' : 'OFF';
+    var formData = new FormData();
+    formData.append('action', 'toggle_alumni_visibility');
+    formData.append('value', val);
+    formData.append('csrf_token', '<?php echo csrf_token(); ?>');
+    
+    fetch('alumni-database.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.success) {
+            alert('Error: ' + data.message);
+            document.getElementById('toggle-alumni-visibility').checked = !checked;
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Server connection error.');
+        document.getElementById('toggle-alumni-visibility').checked = !checked;
+    });
 }
 </script>
 
