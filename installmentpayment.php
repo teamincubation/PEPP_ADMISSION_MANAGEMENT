@@ -143,6 +143,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $step = 'success';
             $success_message = "Your installment payment has been recorded successfully! Your payment screenshot has been uploaded and is pending admin review.";
             
+            // Send automatic receipt submission confirmation email
+            if (file_exists('includes/peppian_notify.php')) {
+                require_once 'includes/peppian_notify.php';
+                try {
+                    $stmt_std = $pdo->prepare("SELECT name, email, pepp_course FROM users WHERE user_id = ?");
+                    $stmt_std->execute([$user_id]);
+                    $std_info = $stmt_std->fetch();
+                    if ($std_info) {
+                        $stmt_inst = $pdo->prepare("SELECT instalment_number, amount FROM instalment_details WHERE id = ?");
+                        $stmt_inst->execute([$installment_id]);
+                        $inst_info = $stmt_inst->fetch();
+                        if ($inst_info) {
+                            $amt_f = number_format((float)$inst_info['amount'], 2);
+                            $subj = "Payment Receipt Received - Installment #{$inst_info['instalment_number']}";
+                            $head = "Installment #{$inst_info['instalment_number']} Submitted";
+                            $body = "<p>Dear {$std_info['name']},</p>
+                                     <p>We have successfully received your payment receipt submission for installment <strong>#{$inst_info['instalment_number']}</strong> (Amount: <strong>₹{$amt_f}</strong>) for your course <strong>{$std_info['pepp_course']}</strong>.</p>
+                                     <p>Our accounts desk is currently reviewing your payment reference and document. Once verified and approved, you will receive a confirmation email along with your generated invoice.</p>
+                                     <p>Thank you for choosing PEPP Learning!</p>";
+                            peppian_send_email_general($std_info['email'], $subj, $head, $body);
+                        }
+                    }
+                } catch (Exception $mailEx) {
+                    error_log("Failed to send installment upload receipt email: " . $mailEx->getMessage());
+                }
+            }
+            
         } catch (Exception $e) {
             $pdo->rollBack();
             // Clean up uploaded file if there was an error

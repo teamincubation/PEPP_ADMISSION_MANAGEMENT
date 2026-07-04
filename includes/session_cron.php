@@ -55,3 +55,171 @@ function sessions_dispatch_due($pdo) {
         }
     } catch (Exception $e) { error_log('sessions_dispatch_due: ' . $e->getMessage()); }
 }
+
+/** Automatic installment payment reminder dispatcher */
+function installments_dispatch_reminders($pdo) {
+    static $ran = false;
+    if ($ran) return; $ran = true;
+
+    try {
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `installment_reminders_sent` (
+                `installment_id` INT NOT NULL,
+                `window_key` VARCHAR(15) NOT NULL,
+                `sent_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`installment_id`, `window_key`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+    } catch (Exception $e) { return; }
+
+    try {
+        // Fetch pending installments whose due date falls in our reminder windows:
+        // 10 days, 3 days, today (0 days), or overdue by 1 day (-1 days).
+        $stmt = $pdo->query("
+            SELECT i.id, i.user_id, i.instalment_number, i.amount, i.due_date,
+                   u.name AS student_name, u.email AS student_email, u.pepp_course
+            FROM instalment_details i
+            INNER JOIN users u ON u.user_id = i.user_id
+            WHERE i.status NOT IN ('approved', 'paid')
+              AND i.paid_date IS NULL
+              AND u.status = 'approved'
+              AND i.due_date BETWEEN DATE_SUB(CURDATE(), INTERVAL 2 DAY) AND DATE_ADD(CURDATE(), INTERVAL 11 DAY)
+        ");
+        $installments = $stmt->fetchAll();
+        if (!$installments) return;
+
+        $sent = [];
+        $stmt = $pdo->query("SELECT installment_id, window_key FROM installment_reminders_sent");
+        foreach ($stmt->fetchAll() as $s) {
+            $sent[$s['installment_id'] . ':' . $s['window_key']] = true;
+        }
+
+        foreach ($installments as $inst) {
+            $due_time = strtotime($inst['due_date']);
+            $today_time = strtotime(date('Y-m-d'));
+            $days_diff = (int)round(($due_time - $today_time) / 86400);
+
+            $window = '';
+            if ($days_diff === 10) {
+                $window = '10d';
+            } elseif ($days_diff === 3) {
+                $window = '3d';
+            } elseif ($days_diff === 0) {
+                $window = '0d';
+            } elseif ($days_diff === -1) {
+                $window = 'overdue';
+            }
+
+            if ($window !== '' && !isset($sent[$inst['id'] . ':' . $window])) {
+                $ok = send_installment_reminder_email($pdo, $inst, $window);
+                if ($ok) {
+                    $stmt = $pdo->prepare("INSERT INTO installment_reminders_sent (installment_id, window_key, sent_at) VALUES (?, ?, NOW())");
+                    $stmt->execute([$inst['id'], $window]);
+                }
+            }
+        }
+    } catch (Exception $e) {
+        error_log('installments_dispatch_reminders error: ' . $e->getMessage());
+    }
+}
+
+function send_installment_reminder_email($pdo, $inst, $window) {
+    if (!file_exists(__DIR__ . '/peppian_notify.php')) return false;
+    require_once __DIR__ . '/peppian_notify.php';
+
+    $to_email = $inst['student_email'];
+    if (!$to_email || !filter_var($to_email, FILTER_VALIDATE_EMAIL)) return false;
+
+    $student_name = $inst['student_name'];
+    $course = $inst['pepp_course'];
+    $inst_num = $inst['instalment_number'];
+    $amount = number_format((float)$inst['amount'], 2);
+    $due_date = date('d M Y', strtotime($inst['due_date']));
+    $pay_link = "https://pepplearning.in/admissions/installmentpayment.php?user_id=" . urlencode($inst['user_id']);
+
+    $subject = '';
+    $heading = '';
+    $message_html = '';
+
+    switch ($window) {
+        case '10d':
+            $subject = "Upcoming Installment Payment Reminder - 10 Days Left";
+            $heading = "Installment #{$inst_num} Due in 10 Days";
+            $message_html = "<p>Dear {$student_name},</p>
+                             <p>This is a friendly reminder that your upcoming installment <strong>#{$inst_num}</strong> for the course <strong>{$course}</strong> is due on <strong>{$due_date}</strong>.</p>
+                             <div style='background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:16px; margin:20px 0;'>
+                                 <table style='width:100%; border-collapse:collapse; font-size:14px;'>
+                                     <tr><td style='padding:6px 0; color:#64748b;'>Installment Number:</td><td style='padding:6px 0; font-weight:700;'>#{$inst_num}</td></tr>
+                                     <tr><td style='padding:6px 0; color:#64748b;'>Amount Due:</td><td style='padding:6px 0; font-weight:700; color:#0f172a;'>₹{$amount}</td></tr>
+                                     <tr><td style='padding:6px 0; color:#64748b;'>Due Date:</td><td style='padding:6px 0; font-weight:700; color:#0f172a;'>{$due_date}</td></tr>
+                                 </table>
+                             </div>
+                             <p>Please click the button below to update your payment details and upload your receipt on the portal:</p>
+                             <div style='margin:24px 0; text-align:center;'>
+                                 <a href='{$pay_link}' target='_blank' style='background:#E8980C; color:#fff; padding:12px 24px; border-radius:50px; text-decoration:none; font-weight:700; display:inline-block; box-shadow:0 4px 12px rgba(232,152,12,0.2);'>Update Payment Details</a>
+                             </div>";
+            break;
+
+        case '3d':
+            $subject = "Action Required: Installment Payment Due in 3 Days";
+            $heading = "Installment #{$inst_num} Due in 3 Days";
+            $message_html = "<p>Dear {$student_name},</p>
+                             <p>This is an important reminder that your installment <strong>#{$inst_num}</strong> for the course <strong>{$course}</strong> is due in 3 days, on <strong>{$due_date}</strong>.</p>
+                             <div style='background:#fef3c7; border:1px solid #fde68a; border-radius:12px; padding:16px; margin:20px 0;'>
+                                 <table style='width:100%; border-collapse:collapse; font-size:14px;'>
+                                     <tr><td style='padding:6px 0; color:#78350f;'>Installment Number:</td><td style='padding:6px 0; font-weight:700;'>#{$inst_num}</td></tr>
+                                     <tr><td style='padding:6px 0; color:#78350f;'>Amount Due:</td><td style='padding:6px 0; font-weight:700; color:#78350f;'>₹{$amount}</td></tr>
+                                     <tr><td style='padding:6px 0; color:#78350f;'>Due Date:</td><td style='padding:6px 0; font-weight:700; color:#78350f;'>{$due_date}</td></tr>
+                                 </table>
+                             </div>
+                             <p>To avoid any disruption to your course access, please pay the installment and upload your payment proof on the portal immediately:</p>
+                             <div style='margin:24px 0; text-align:center;'>
+                                 <a href='{$pay_link}' target='_blank' style='background:#e11d48; color:#fff; padding:12px 24px; border-radius:50px; text-decoration:none; font-weight:700; display:inline-block; box-shadow:0 4px 12px rgba(225,29,72,0.2);'>Pay &amp; Upload Receipt</a>
+                             </div>";
+            break;
+
+        case '0d':
+            $subject = "Urgent: Installment Payment Due Today";
+            $heading = "Installment #{$inst_num} is Due Today!";
+            $message_html = "<p>Dear {$student_name},</p>
+                             <p>Your installment <strong>#{$inst_num}</strong> for the course <strong>{$course}</strong> is due <strong>TODAY ({$due_date})</strong>.</p>
+                             <div style='background:#fee2e2; border:1px solid #fca5a5; border-radius:12px; padding:16px; margin:20px 0;'>
+                                 <table style='width:100%; border-collapse:collapse; font-size:14px;'>
+                                     <tr><td style='padding:6px 0; color:#991b1b;'>Installment Number:</td><td style='padding:6px 0; font-weight:700;'>#{$inst_num}</td></tr>
+                                     <tr><td style='padding:6px 0; color:#991b1b;'>Amount Due:</td><td style='padding:6px 0; font-weight:700; color:#991b1b;'>₹{$amount}</td></tr>
+                                     <tr><td style='padding:6px 0; color:#991b1b;'>Due Date:</td><td style='padding:6px 0; font-weight:700; color:#991b1b;'>Today ({$due_date})</td></tr>
+                                 </table>
+                             </div>
+                             <p>Please settle the payment immediately and submit the receipt to ensure your study materials and session access remain active:</p>
+                             <div style='margin:24px 0; text-align:center;'>
+                                 <a href='{$pay_link}' target='_blank' style='background:#dc2626; color:#fff; padding:12px 24px; border-radius:50px; text-decoration:none; font-weight:700; display:inline-block; box-shadow:0 4px 12px rgba(220,38,38,0.25);'>Pay Now &amp; Submit Proof</a>
+                             </div>";
+            break;
+
+        case 'overdue':
+            $subject = "Urgent: Course Access Suspended (Overdue Installment)";
+            $heading = "Your Course Access Has Been Suspended";
+            $message_html = "<p>Dear {$student_name},</p>
+                             <p>We regret to inform you that your course access for <strong>{$course}</strong> has been suspended because installment <strong>#{$inst_num}</strong> (₹{$amount}) is overdue.</p>
+                             <div style='background:#fef2f2; border:1px solid #fee2e2; border-radius:12px; padding:16px; margin:20px 0;'>
+                                 <p style='margin:0; color:#b91c1c; font-weight:700;'>Course Access Status: Suspended</p>
+                                 <p style='margin:6px 0 0 0; font-size:0.82rem; color:#7f1d1d;'>Access will be restored automatically once the payment proof is verified by our accounts desk.</p>
+                             </div>
+                             <p>To renew your access and resume your classes, please complete the pending payment and upload the transaction screenshot here:</p>
+                             <div style='margin:24px 0; text-align:center;'>
+                                 <a href='{$pay_link}' target='_blank' style='background:#0f172a; color:#fff; padding:12px 24px; border-radius:50px; text-decoration:none; font-weight:700; display:inline-block; box-shadow:0 4px 12px rgba(15,23,42,0.3);'>Renew Course Access</a>
+                             </div>";
+            
+            // Suspend course access in database
+            try {
+                $stmt = $pdo->prepare("UPDATE users SET student_status = 'suspended', course_status = 'suspended' WHERE user_id = ?");
+                $stmt->execute([$inst['user_id']]);
+            } catch (Exception $ex) {}
+            break;
+    }
+
+    if ($subject && $heading && $message_html) {
+        return peppian_send_email_general($to_email, $subject, $heading, $message_html, false);
+    }
+    return false;
+}

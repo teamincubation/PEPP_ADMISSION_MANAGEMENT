@@ -51,7 +51,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($action === 'add_session') {
                         $stmt = $pdo->prepare("INSERT INTO sessions (topic, faculty_id, session_datetime, duration_hours, session_type, meet_link, venue, course_csv, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,NOW())");
                         $stmt->execute(array_merge($vals, [$admin_username]));
+                        $session_id = $pdo->lastInsertId();
                         log_admin_activity($pdo, $admin_username, 'session_added', "Session: {$topic} @ {$dt}");
+                        
+                        // Send automatic session scheduled email to enrolled learners
+                        if (file_exists('includes/session_mailer.php') && file_exists('includes/peppian_notify.php')) {
+                            require_once 'includes/session_mailer.php';
+                            require_once 'includes/peppian_notify.php';
+                            try {
+                                $learners = session_learner_emails($pdo, implode(',', $courses));
+                                $when = date('d M Y, h:i A', strtotime($dt));
+                                $isLive = $type === 'live';
+                                $join = $isLive && !empty($_POST['meet_link']) ? $_POST['meet_link'] : '';
+                                $venue = !$isLive ? (trim($_POST['venue'] ?? '')) : '';
+                                $faculty_name = '';
+                                if (!empty($_POST['faculty_id'])) {
+                                    $stmt_f = $pdo->prepare("SELECT name FROM faculties WHERE id = ?");
+                                    $stmt_f->execute([$_POST['faculty_id']]);
+                                    $faculty_name = $stmt_f->fetchColumn() ?: '';
+                                }
+                                
+                                $subj = "New Session Scheduled: " . $topic;
+                                $head = "New Session Scheduled";
+                                
+                                $btn = $join
+                                    ? '<div style="margin:20px 0; text-align:center;"><a href="' . htmlspecialchars($join) . '" style="display:inline-block;background:#E8980C;color:#fff;text-decoration:none;font-weight:700;font-size:15px;border-radius:50px;padding:12px 30px;box-shadow:0 4px 12px rgba(232,152,12,0.2);">Join Live Session</a></div>'
+                                    : '';
+                                
+                                $venue_row = $venue ? "<tr><td style='padding:6px 0; color:#64748b;'>Venue:</td><td style='padding:6px 0; font-weight:700;'>{$venue}</td></tr>" : "";
+                                $faculty_row = $faculty_name ? "<tr><td style='padding:6px 0; color:#64748b;'>Faculty:</td><td style='padding:6px 0; font-weight:700;'>{$faculty_name}</td></tr>" : "";
+                                
+                                foreach ($learners as $email => $name) {
+                                    $body = "<p>Dear {$name},</p>
+                                             <p>A new learning session has been scheduled for your course.</p>
+                                             <div style='background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:16px; margin:20px 0; font-size:14px;'>
+                                                 <table style='width:100%; border-collapse:collapse;'>
+                                                     <tr><td style='padding:6px 0; color:#64748b; width:120px;'>Topic:</td><td style='padding:6px 0; font-weight:700; color:#0f172a;'>{$topic}</td></tr>
+                                                     <tr><td style='padding:6px 0; color:#64748b;'>Type:</td><td style='padding:6px 0; font-weight:700;'>" . ($isLive ? '🔴 Live Session' : '🏢 Offline Session') . "</td></tr>
+                                                     <tr><td style='padding:6px 0; color:#64748b;'>Date &amp; Time:</td><td style='padding:6px 0; font-weight:700; color:#0f172a;'>{$when}</td></tr>
+                                                     {$faculty_row}
+                                                     {$venue_row}
+                                                 </table>
+                                             </div>
+                                             {$btn}
+                                             <p>Please log in to your student dashboard or click the link above at the scheduled time to attend.</p>
+                                             <p>Best regards,<br>PEPP Learning Support Team</p>";
+                                    peppian_send_email_general($email, $subj, $head, $body);
+                                }
+                            } catch (Exception $mailEx) {
+                                error_log("Failed to send session scheduled email notifications: " . $mailEx->getMessage());
+                            }
+                        }
+                        
                         $success_message = 'Session created.';
                     } else {
                         $sid = (int)($_POST['session_id'] ?? 0);

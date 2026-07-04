@@ -48,8 +48,11 @@ if (file_exists(__DIR__ . '/reminders_helper.php')) {
 // Automatic session reminders (12h / 4h / 10m / start) - runs lazily on page loads.
 if (file_exists(__DIR__ . '/session_cron.php')) {
     require_once __DIR__ . '/session_cron.php';
-    try { if (function_exists('sessions_dispatch_due')) sessions_dispatch_due($pdo); }
-    catch (Exception $e) { error_log('nav session cron: ' . $e->getMessage()); }
+    try {
+        if (function_exists('sessions_dispatch_due')) sessions_dispatch_due($pdo);
+        if (function_exists('installments_dispatch_reminders')) installments_dispatch_reminders($pdo);
+    }
+    catch (Exception $e) { error_log('nav session/installment cron: ' . $e->getMessage()); }
 }
 $nav_pending_payments  = 0;
 $nav_pending_onboarding = 0;
@@ -164,6 +167,11 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
             <?php if (can_access('students') || can_access('onboarding')): ?>
             <a class="nav-item <?php echo nav_active('peppkit', $active_page); ?>" href="peppkit-report.php">
                 <i class="fas fa-box-open"></i> PEPPKIT Report
+            </a>
+            <?php endif; ?>
+            <?php if (can_access('cards')): ?>
+            <a class="nav-item <?php echo nav_active('cards', $active_page); ?>" href="cards.php">
+                <i class="fas fa-id-card"></i> Generate Custom Cards
             </a>
             <?php endif; ?>
             <?php if (can_access('accounts')): ?>

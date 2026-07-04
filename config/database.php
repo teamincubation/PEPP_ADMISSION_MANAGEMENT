@@ -59,6 +59,34 @@ try {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `card_templates` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `title` VARCHAR(255) NOT NULL,
+                `category` VARCHAR(100) NOT NULL,
+                `description` TEXT NULL,
+                `bg_image` VARCHAR(255) NOT NULL,
+                `canvas_width` INT NOT NULL,
+                `canvas_height` INT NOT NULL,
+                `resolution_dpi` INT NOT NULL DEFAULT 72,
+                `aspect_ratio` VARCHAR(50) NOT NULL,
+                `status` ENUM('active','inactive') NOT NULL DEFAULT 'active',
+                `elements_json` LONGTEXT NOT NULL,
+                `created_by` VARCHAR(100) NOT NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `custom_fonts` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `font_name` VARCHAR(100) NOT NULL,
+                `font_file` VARCHAR(255) NOT NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
         $cols = $pdo->query("SHOW COLUMNS FROM reminders LIKE 'student_id'")->fetch();
         if (!$cols) {
             $pdo->exec("ALTER TABLE reminders ADD COLUMN student_id VARCHAR(50) NULL");

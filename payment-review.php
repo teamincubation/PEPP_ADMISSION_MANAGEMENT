@@ -154,6 +154,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } catch (Exception $ex) { error_log('wa log: ' . $ex->getMessage()); }
                 $whatsapp_url = 'https://wa.me/' . $wa_phone . '?text=' . rawurlencode($msg);
 
+                // Send approval email
+                if (file_exists('includes/peppian_notify.php')) {
+                    require_once 'includes/peppian_notify.php';
+                    try {
+                        $amt_f = number_format($received_amount, 2);
+                        $access_f = date('d M Y', strtotime($new_access_end));
+                        $subj = "Payment Approved - Installment #{$req['instalment_number']}";
+                        $head = "Installment Payment Confirmed";
+                        $body = "<p>Dear {$req['student_name']},</p>
+                                 <p>We are pleased to inform you that your installment payment for installment <strong>#{$req['instalment_number']}</strong> has been approved by our accounts desk.</p>
+                                 <div style='background:#f0fdf4; border:1px solid #bbf7d0; border-radius:12px; padding:16px; margin:20px 0; font-size:14px;'>
+                                     <table style='width:100%; border-collapse:collapse;'>
+                                         <tr><td style='padding:6px 0; color:#166534;'>Amount Paid:</td><td style='padding:6px 0; font-weight:700; color:#166534;'>₹{$amt_f}</td></tr>
+                                         <tr><td style='padding:6px 0; color:#166534;'>Payment Mode:</td><td style='padding:6px 0; font-weight:700; color:#166534;'>{$payment_mode}</td></tr>
+                                         <tr><td style='padding:6px 0; color:#166534;'>Course Access Extended Until:</td><td style='padding:6px 0; font-weight:700; color:#166534;'>{$access_f}</td></tr>
+                                     </table>
+                                 </div>
+                                 <p>Your updated invoice has been generated and emailed. You can access all your learning resources and study modules as usual.</p>
+                                 <p>Keep up the good work and keep learning!</p>";
+                        peppian_send_email_general($req['student_email'], $subj, $head, $body);
+                    } catch (Exception $mailEx) {
+                        error_log("Failed to send installment approval email: " . $mailEx->getMessage());
+                    }
+                }
+
                 // ── Automatic invoice for this installment ────────
                 [$inv_ok, $inv_msg, $inv_id, $inv_no] = generate_payment_invoice($pdo, [
                     'source' => 'installment', 'source_ref' => $request_id, 'user_id' => $req['user_id'],

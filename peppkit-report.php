@@ -28,6 +28,17 @@ try {
 function send_peppkit_email($student_name, $to_email, $status, $address_combined, $tracking_id = '') {
     if (!$to_email || !filter_var($to_email, FILTER_VALIDATE_EMAIL)) return;
     
+    // Check if auto email toggle is OFF
+    global $pdo;
+    try {
+        $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'peppkit_auto_email'");
+        $stmt->execute();
+        $auto_email_setting = $stmt->fetchColumn();
+        if ($auto_email_setting === 'OFF') {
+            return; // Do not send email
+        }
+    } catch (Exception $ex) {}
+    
     $subject = '';
     $heading = '';
     $body = '';
@@ -124,6 +135,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $action = $_POST['action'] ?? '';
     $user_id = trim($_POST['user_id'] ?? '');
+
+    if ($action === 'toggle_auto_email') {
+        header('Content-Type: application/json');
+        $val = ($_POST['value'] ?? '') === 'ON' ? 'ON' : 'OFF';
+        try {
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM admin_settings WHERE setting_name = 'peppkit_auto_email'");
+            $stmt->execute();
+            if ($stmt->fetchColumn() > 0) {
+                $stmt = $pdo->prepare("UPDATE admin_settings SET setting_value = ?, updated_at = NOW() WHERE setting_name = 'peppkit_auto_email'");
+                $stmt->execute([$val]);
+            } else {
+                $stmt = $pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, created_at, updated_at) VALUES ('peppkit_auto_email', ?, NOW(), NOW())");
+                $stmt->execute([$val]);
+            }
+            echo json_encode(['success' => true]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
 
     if ($action === 'update_address') {
         header('Content-Type: application/json');
@@ -293,9 +324,13 @@ if (isset($_GET['print']) && $_GET['print'] === '1') {
                             <div class="pincode">PIN: <?php echo htmlspecialchars($stk['postal_pincode']); ?></div>
                         </div>
                         <div class="phones">
-                            <strong>Ph:</strong> +<?php echo htmlspecialchars($stk['whatsapp_country_code'] . $stk['whatsapp_number']); ?>
+                            <strong>Ph:</strong> <?php 
+                            $cc = $stk['whatsapp_country_code'];
+                            if (strpos($cc, '+') !== 0) { $cc = '+' . $cc; }
+                            echo htmlspecialchars($cc . $stk['whatsapp_number']); 
+                            ?>
                             <?php if ($stk['mobile_number'] && $stk['mobile_number'] !== $stk['whatsapp_number']): ?>
-                                 / +<?php echo htmlspecialchars($stk['mobile_number']); ?>
+                                 / +<?php echo htmlspecialchars(ltrim($stk['mobile_number'], '+')); ?>
                             <?php endif; ?>
                             <?php if ($stk['emergency_contact']): ?>
                                 <br><strong>Emergency:</strong> +<?php echo htmlspecialchars($stk['emergency_contact']); ?>
@@ -392,11 +427,57 @@ function get_peppkit_wa_text($student_name, $status, $address_combined, $trackin
     return rawurlencode($msg);
 }
 
+$auto_email_setting = 'ON';
+try {
+    $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'peppkit_auto_email'");
+    $stmt->execute();
+    $auto_email_setting = $stmt->fetchColumn() ?: 'ON';
+} catch (Exception $e) {}
+
 $active_page = 'peppkit';
 $page_title  = 'PEPPKIT Shipping Report';
 $page_sub    = 'Track and update shipping status for student PEPPKITs';
 include 'includes/admin_nav.php';
 ?>
+
+<style>
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 50px;
+  height: 24px;
+}
+.switch input { 
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: #cbd5e1;
+  transition: .3s;
+  border-radius: 34px;
+}
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  transition: .3s;
+  border-radius: 50%;
+}
+input:checked + .slider {
+  background-color: #16a34a;
+}
+input:checked + .slider:before {
+  transform: translateX(26px);
+}
+</style>
 
 <div class="filter-bar" style="margin-bottom:16px;">
     <form method="GET" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; width:100%;">
@@ -415,7 +496,17 @@ include 'includes/admin_nav.php';
         </div>
         <button type="submit" class="btn btn-primary"><i class="fas fa-search"></i> Search</button>
         <a href="peppkit-report.php" class="btn btn-outline">Reset</a>
-        <a href="peppkit-report.php?print=1" target="_blank" class="btn btn-soft-violet" style="margin-left:auto;"><i class="fas fa-print"></i> Print Address Stickers</a>
+        
+        <!-- Auto Email Toggle -->
+        <div style="display:flex; align-items:center; gap:8px; margin-left:auto; background:#fafaf9; border:1px solid #e7e5e4; padding:6px 14px; border-radius:10px;">
+            <span style="font-size:0.85rem; font-weight:600; color:#374151;"><i class="fas fa-envelope-open-text" style="color:var(--accent);"></i> Auto Email</span>
+            <label class="switch" style="position:relative; display:inline-block; width:50px; height:24px; margin:0;">
+                <input type="checkbox" id="toggle-auto-email" <?php echo $auto_email_setting === 'ON' ? 'checked' : ''; ?> onchange="toggleAutoEmail(this.checked)" style="opacity:0; width:0; height:0;">
+                <span class="slider"></span>
+            </label>
+        </div>
+        
+        <a href="peppkit-report.php?print=1" target="_blank" class="btn btn-soft-violet"><i class="fas fa-print"></i> Print Address Stickers</a>
     </form>
 </div>
 
@@ -456,7 +547,13 @@ include 'includes/admin_nav.php';
                                 <?php echo htmlspecialchars($k['name']); ?>
                             </a>
                         </div>
-                        <div class="cell-sub"><?php echo htmlspecialchars($k['user_id']); ?> · Ph: +<?php echo htmlspecialchars($k['whatsapp_country_code'] . $k['whatsapp_number']); ?></div>
+                        <div class="cell-sub">
+                            <?php 
+                            $cc = $k['whatsapp_country_code'];
+                            if (strpos($cc, '+') !== 0) { $cc = '+' . $cc; }
+                            echo htmlspecialchars($k['user_id']); 
+                            ?> · Ph: <?php echo htmlspecialchars($cc . $k['whatsapp_number']); ?>
+                        </div>
                     </td>
                     <td>
                         <div style="font-size:0.8rem; font-weight:600;"><?php echo htmlspecialchars($k['pepp_course']); ?></div>
@@ -641,6 +738,31 @@ function submitAddressEdit(e) {
     .catch(err => {
         console.error(err);
         alert('Server connection error.');
+    });
+}
+
+function toggleAutoEmail(checked) {
+    var val = checked ? 'ON' : 'OFF';
+    var formData = new FormData();
+    formData.append('action', 'toggle_auto_email');
+    formData.append('value', val);
+    formData.append('csrf_token', '<?php echo csrf_token(); ?>');
+    
+    fetch('peppkit-report.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.success) {
+            alert('Error: ' + data.message);
+            document.getElementById('toggle-auto-email').checked = !checked;
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Server connection error.');
+        document.getElementById('toggle-auto-email').checked = !checked;
     });
 }
 </script>
