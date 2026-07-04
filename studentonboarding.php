@@ -136,7 +136,7 @@ $load_error = '';
 try {
     $students = $pdo->query("
         SELECT u.user_id, u.name, u.email, u.whatsapp_country_code, u.whatsapp_number,
-               u.pepp_course, u.pepp_academic_year, u.approval_date, u.course_duration_date,
+               u.pepp_course, u.pepp_academic_year, u.approval_date, u.course_duration_date, u.paid_amount,
                so.app_access_provided, so.saved_to_contacts, so.added_whatsapp_groups, so.semester_guide_provided
         FROM users u
         LEFT JOIN student_onboarding so ON so.user_id = u.user_id
@@ -197,11 +197,11 @@ include 'includes/admin_nav.php';
                 <tr>
                     <td>
                         <div class="cell-main"><?php echo e($s['name']); ?></div>
-                        <div class="cell-sub"><?php echo e($s['user_id']); ?> &middot; <?php echo e($s['whatsapp_country_code'] . ' ' . $s['whatsapp_number']); ?></div>
+                        <div class="cell-sub"><?php echo e($s['email']); ?> &middot; <?php echo e($s['whatsapp_country_code'] . ' ' . $s['whatsapp_number']); ?></div>
                     </td>
                     <td>
                         <div style="font-size:.82rem;font-weight:600;"><?php echo e($s['pepp_course']); ?></div>
-                        <div class="cell-sub"><?php echo e($s['pepp_academic_year']); ?><?php echo $s['course_duration_date'] ? ' · access until ' . date('d M Y', strtotime($s['course_duration_date'])) : ''; ?></div>
+                        <div class="cell-sub"><?php echo e($s['pepp_academic_year']); ?> &middot; Access End: <?php echo $s['course_duration_date'] ? date('d M Y', strtotime($s['course_duration_date'])) : 'Not Set'; ?> &middot; Reg: ₹<?php echo number_format((float)$s['paid_amount'], 2); ?></div>
                     </td>
                     <td class="cell-sub"><?php echo $s['approval_date'] ? date('d M Y', strtotime($s['approval_date'])) : '-'; ?></td>
                     <td style="white-space:nowrap;">

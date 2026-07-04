@@ -18,6 +18,30 @@ function pepp_tables_exist($pdo, $tables) {
     return true;
 }
 
+// Self-healing database check for coupons table new columns
+if (isset($pdo) && pepp_tables_exist($pdo, ['coupons'])) {
+    try {
+        $stmt = $pdo->query("SHOW COLUMNS FROM coupons LIKE 'restrict_alumni'");
+        if (!$stmt->fetch()) {
+            $pdo->exec("ALTER TABLE coupons ADD COLUMN restrict_alumni TINYINT(1) NOT NULL DEFAULT 0");
+        }
+        $stmt = $pdo->query("SHOW COLUMNS FROM coupons LIKE 'restrict_non_alumni'");
+        if (!$stmt->fetch()) {
+            $pdo->exec("ALTER TABLE coupons ADD COLUMN restrict_non_alumni TINYINT(1) NOT NULL DEFAULT 0");
+        }
+        $stmt = $pdo->query("SHOW COLUMNS FROM coupons LIKE 'assigned_emails'");
+        if (!$stmt->fetch()) {
+            $pdo->exec("ALTER TABLE coupons ADD COLUMN assigned_emails TEXT DEFAULT NULL");
+        }
+        $stmt = $pdo->query("SHOW COLUMNS FROM coupons LIKE 'visibility'");
+        if (!$stmt->fetch()) {
+            $pdo->exec("ALTER TABLE coupons ADD COLUMN visibility VARCHAR(20) NOT NULL DEFAULT 'public'");
+        }
+    } catch (Exception $e) {
+        error_log("Coupons schema update failed: " . $e->getMessage());
+    }
+}
+
 /** Net fee for a course in a given academic year (falls back to any year). */
 function course_fee($pdo, $course_name, $year = '') {
     try {
@@ -95,6 +119,44 @@ function validate_code($pdo, $code, $course_name, $year, $fee, $email = '', $wha
                     $stmt->execute([$c['code'], $email, $whatsapp]);
                     if ((int)$stmt->fetchColumn() > 0) { $res['message'] = 'You have already used this coupon.'; return $res; }
                 }
+                
+                // Restrict for Alumni check
+                if (isset($c['restrict_alumni']) && $c['restrict_alumni'] == 1) {
+                    $is_alumnus = false;
+                    if ($email !== '' || $whatsapp !== '') {
+                        $chk = $pdo->prepare("SELECT COUNT(*) FROM alumni WHERE (email = ? AND email <> '') OR (secondary_email = ? AND secondary_email <> '') OR (mobile = ? AND mobile <> '') OR (secondary_mobile = ? AND secondary_mobile <> '')");
+                        $chk->execute([$email, $email, $whatsapp, $whatsapp]);
+                        $is_alumnus = ((int)$chk->fetchColumn() > 0);
+                    }
+                    if (!$is_alumnus) {
+                        $res['message'] = 'This coupon is restricted to Alumni students only.';
+                        return $res;
+                    }
+                }
+                
+                // Restrict for other than Alumni check
+                if (isset($c['restrict_non_alumni']) && $c['restrict_non_alumni'] == 1) {
+                    $is_alumnus = false;
+                    if ($email !== '' || $whatsapp !== '') {
+                        $chk = $pdo->prepare("SELECT COUNT(*) FROM alumni WHERE (email = ? AND email <> '') OR (secondary_email = ? AND secondary_email <> '') OR (mobile = ? AND mobile <> '') OR (secondary_mobile = ? AND secondary_mobile <> '')");
+                        $chk->execute([$email, $email, $whatsapp, $whatsapp]);
+                        $is_alumnus = ((int)$chk->fetchColumn() > 0);
+                    }
+                    if ($is_alumnus) {
+                        $res['message'] = 'This coupon is restricted to non-alumni students only.';
+                        return $res;
+                    }
+                }
+                
+                // Assign to email id/s check
+                if (!empty($c['assigned_emails'])) {
+                    $allowed_emails = preg_split('/[\s,]+/', strtolower(trim($c['assigned_emails'])));
+                    if (!in_array(strtolower(trim($email)), $allowed_emails)) {
+                        $res['message'] = 'This coupon is restricted to specific email IDs.';
+                        return $res;
+                    }
+                }
+
                 if ($c['discount_type'] === 'percent') {
                     $disc = $fee * (float)$c['discount_value'] / 100.0;
                     if ($c['max_discount'] !== null) $disc = min($disc, (float)$c['max_discount']);

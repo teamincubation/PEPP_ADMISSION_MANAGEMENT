@@ -558,6 +558,7 @@ $f_course_q = trim($_GET['f_course_q'] ?? '');
 $f_year = trim($_GET['fyear'] ?? '');
 $f_course = trim($_GET['fcourse'] ?? '');
 $f_email = $_GET['femail'] ?? '';   // '', 'yes', 'no'
+$sort_by = $_GET['sort_by'] ?? '';
 
 // Distinct years & courses present in the alumni table (for filter dropdowns)
 $alumni_years = []; $alumni_courses = [];
@@ -585,10 +586,19 @@ if ($f_email === 'yes') { $where[] = "(email IS NOT NULL AND email <> '')"; }
 elseif ($f_email === 'no') { $where[] = "(email IS NULL OR email = '')"; }
 $wsql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
 
+$order_by = "ORDER BY id DESC";
+if ($sort_by === 'verified_desc') {
+    $order_by = "ORDER BY is_verified DESC, id DESC";
+} elseif ($sort_by === 'verified_asc') {
+    $order_by = "ORDER BY is_verified ASC, id DESC";
+} elseif ($sort_by === 'tracks_pending') {
+    $order_by = "ORDER BY (academic_track_after_pepp IS NULL OR academic_track_after_pepp = '' OR academic_track_after_pepp = '[]') DESC, id DESC";
+}
+
 try {
     $cstmt = $pdo->prepare("SELECT COUNT(*) FROM alumni $wsql");
     $cstmt->execute($params); $total = (int)$cstmt->fetchColumn();
-    $lstmt = $pdo->prepare("SELECT * FROM alumni $wsql ORDER BY id DESC LIMIT $per OFFSET " . (($page-1)*$per));
+    $lstmt = $pdo->prepare("SELECT * FROM alumni $wsql $order_by LIMIT $per OFFSET " . (($page-1)*$per));
     $lstmt->execute($params); $rows = $lstmt->fetchAll();
 } catch (Exception $e) { error_log('Alumni list: ' . $e->getMessage()); }
 $total_pages = max(1, (int)ceil($total / $per));
@@ -643,8 +653,16 @@ include 'includes/admin_nav.php';
             <div class="field" style="margin:0;"><label>Academic Year</label><select name="fyear"><option value="">All</option><?php foreach ($alumni_years as $y): ?><option value="<?php echo e($y); ?>" <?php echo $f_year===$y?'selected':''; ?>><?php echo e($y); ?></option><?php endforeach; ?></select></div>
             <div class="field" style="margin:0;"><label>Course Dropdown</label><select name="fcourse"><option value="">All</option><?php foreach ($alumni_courses as $c): ?><option value="<?php echo e($c); ?>" <?php echo $f_course===$c?'selected':''; ?>><?php echo e($c); ?></option><?php endforeach; ?></select></div>
             <div class="field" style="margin:0;"><label>Email</label><select name="femail"><option value="">Any</option><option value="yes" <?php echo $f_email==='yes'?'selected':''; ?>>Has email</option><option value="no" <?php echo $f_email==='no'?'selected':''; ?>>No email</option></select></div>
+            <div class="field" style="margin:0;"><label>Sort By</label>
+                <select name="sort_by">
+                    <option value="">Default (Latest)</option>
+                    <option value="verified_desc" <?php echo $sort_by==='verified_desc'?'selected':''; ?>>Verified First</option>
+                    <option value="verified_asc" <?php echo $sort_by==='verified_asc'?'selected':''; ?>>Unverified First</option>
+                    <option value="tracks_pending" <?php echo $sort_by==='tracks_pending'?'selected':''; ?>>Tracks Pending First</option>
+                </select>
+            </div>
             <button class="btn btn-sm btn-primary"><i class="fas fa-filter"></i> Filter</button>
-            <?php if ($f_q!==''||$f_course_q!==''||$f_year!==''||$f_course!==''||$f_email!==''): ?><a class="btn btn-sm btn-outline" href="alumni-database.php">Clear</a><?php endif; ?>
+            <?php if ($f_q!==''||$f_course_q!==''||$f_year!==''||$f_course!==''||$f_email!==''||$sort_by!==''): ?><a class="btn btn-sm btn-outline" href="alumni-database.php">Clear</a><?php endif; ?>
         </form>
     </div>
     
@@ -697,6 +715,7 @@ include 'includes/admin_nav.php';
                     <th>Year / Course</th>
                     <th>Mobile(s)</th>
                     <th>Email(s)</th>
+                    <th>Tracks Updated?</th>
                     <th style="text-align:right;">Actions</th>
                 </tr>
             </thead>
@@ -731,6 +750,13 @@ include 'includes/admin_nav.php';
                     <td class="cell-sub"><?php echo e($a['academic_year'] ?: '-'); ?><?php echo $a['course_name'] ? '<br>' . e($a['course_name']) : ''; ?></td>
                     <td class="cell-sub"><?php echo e($a['mobile']); ?><?php echo $a['secondary_mobile'] ? '<br>' . e($a['secondary_mobile']) : ''; ?></td>
                     <td class="cell-sub"><?php echo e($a['email'] ?: '-'); ?><?php echo $a['secondary_email'] ? '<br>' . e($a['secondary_email']) : ''; ?></td>
+                    <td>
+                        <?php if (!empty($a['academic_track_after_pepp']) && $a['academic_track_after_pepp'] !== '[]'): ?>
+                            <span class="badge green" style="font-size:0.7rem; padding: 2.5px 7px;"><i class="fas fa-circle-check"></i> Updated</span>
+                        <?php else: ?>
+                            <span class="badge red" style="font-size:0.7rem; padding: 2.5px 7px;"><i class="fas fa-triangle-exclamation"></i> Pending</span>
+                        <?php endif; ?>
+                    </td>
                     <td style="text-align:right; white-space:nowrap;">
                         <button class="btn btn-sm btn-soft-blue" onclick='showDetails(<?php echo json_encode($a, JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-eye"></i> Details</button>
                         <button class="btn btn-sm btn-outline" onclick='editAlum(<?php echo json_encode($a, JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
@@ -829,6 +855,32 @@ include 'includes/admin_nav.php';
                     <div class="field"><label>Instagram ID</label><input type="text" name="instagram_id" id="e-instagram"></div>
                 </div>
 
+                <h3 style="margin-top:20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; color: var(--accent-dark);">Community Career Sync Info</h3>
+                <div style="margin-bottom: 15px; padding: 0 10px;">
+                    <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 6px; display: block;">Academic Tracks After PEPP</label>
+                    <div id="academic-tracks-container" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px;"></div>
+                    <button type="button" class="btn btn-sm btn-outline" onclick="addAcademicTrackRow()"><i class="fas fa-plus"></i> Add Academic Track</button>
+                    <input type="hidden" name="academic_track_after_pepp" id="e-tracks">
+                </div>
+                <div class="form-grid" style="margin-top:10px; border-top:1px dashed var(--border); padding-top:12px;">
+                    <div class="field"><label>Profession Status</label>
+                        <select id="e-prof-status" onchange="serializeProfession()">
+                            <option value="">Select Status</option>
+                            <option value="student">Student</option>
+                            <option value="professional">Professional</option>
+                            <option value="unemployed">Unemployed</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+                    <div class="field"><label>Profession / Job Title</label>
+                        <input type="text" id="e-prof-title" placeholder="e.g. Software Engineer" oninput="serializeProfession()">
+                    </div>
+                    <div class="field full"><label>Working Institute / Company</label>
+                        <input type="text" id="e-prof-institute" placeholder="e.g. Google / ABC University" oninput="serializeProfession()">
+                    </div>
+                    <input type="hidden" name="current_profession_details" id="e-prof">
+                </div>
+
                 <h3 style="margin-top:20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; color: var(--accent-dark);">Address &amp; Education</h3>
                 <div class="form-grid">
                     <div class="field full"><label>Postal Address</label><input type="text" name="postal_address" id="e-address"></div>
@@ -884,14 +936,6 @@ include 'includes/admin_nav.php';
                             <option value="Eligible">Eligible</option>
                             <option value="Not Eligible">Not Eligible</option>
                         </select></div>
-                </div>
-
-                <h3 style="margin-top:20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; color: var(--accent-dark);">Community Career Sync Info</h3>
-                <div class="form-grid">
-                    <div class="field full"><label>Academic Tracks After PEPP (JSON string e.g. [{"course":"BSc","institute":"LPU"}])</label>
-                        <textarea name="academic_track_after_pepp" id="e-tracks" rows="2" placeholder='[{"course":"MSc","institute":"University of Kerala"}]'></textarea></div>
-                    <div class="field full"><label>Profession details (JSON string e.g. {"status":"professional","profession":"Software Engineer","working_institute":"Google"})</label>
-                        <textarea name="current_profession_details" id="e-prof" rows="2" placeholder='{"status":"professional","profession":"Manager","working_institute":"TCS"}'></textarea></div>
                 </div>
             </div>
             
@@ -1076,8 +1120,8 @@ function editAlum(a) {
     document.getElementById('e-pay-mode').value = a.payment_mode || '';
     document.getElementById('e-peppkit-elig').value = a.peppkit_eligibility || 'Not Eligible';
     
-    document.getElementById('e-tracks').value = a.academic_track_after_pepp || '';
-    document.getElementById('e-prof').value = a.current_profession_details || '';
+    renderAcademicTracks(a.academic_track_after_pepp || '');
+    renderProfession(a.current_profession_details || '');
     
     document.getElementById('e-existing-photo').value = a.profile_photo || '';
     let pSrc = a.profile_photo || a.user_photo || 'assets/img/default-avatar.svg';
@@ -1087,6 +1131,108 @@ function editAlum(a) {
     document.getElementById('e-photo-preview').src = pSrc;
     
     openModal('edit-modal');
+}
+
+function renderAcademicTracks(tracksJson) {
+    const container = document.getElementById('academic-tracks-container');
+    container.innerHTML = '';
+    let tracks = [];
+    if (tracksJson) {
+        try {
+            tracks = JSON.parse(tracksJson);
+        } catch(e) {
+            console.error("Invalid tracks JSON", e);
+        }
+    }
+    if (!Array.isArray(tracks) || tracks.length === 0) {
+        tracks = [{course: '', institute: ''}];
+    }
+    tracks.forEach(t => {
+        createTrackRow(t.course || '', t.institute || '');
+    });
+    serializeAcademicTracks();
+}
+
+function createTrackRow(course = '', institute = '') {
+    const container = document.getElementById('academic-tracks-container');
+    const row = document.createElement('div');
+    row.className = 'track-row';
+    row.style.display = 'flex';
+    row.style.gap = '10px';
+    row.style.alignItems = 'center';
+    row.style.marginTop = '6px';
+    row.innerHTML = `
+        <input type="text" placeholder="Course (e.g. MSc Computer Science)" class="track-course" value="${escapeHtml(course)}" style="flex:1; padding: 6px 12px; border-radius: 4px; border: 1px solid var(--border);" oninput="serializeAcademicTracks()">
+        <input type="text" placeholder="Institute (e.g. University of Kerala)" class="track-institute" value="${escapeHtml(institute)}" style="flex:1; padding: 6px 12px; border-radius: 4px; border: 1px solid var(--border);" oninput="serializeAcademicTracks()">
+        <button type="button" class="btn btn-sm btn-soft-red" style="padding: 6px 10px;" onclick="removeTrackRow(this)"><i class="fas fa-trash"></i></button>
+    `;
+    container.appendChild(row);
+}
+
+function addAcademicTrackRow() {
+    createTrackRow();
+    serializeAcademicTracks();
+}
+
+function removeTrackRow(btn) {
+    const container = document.getElementById('academic-tracks-container');
+    btn.closest('.track-row').remove();
+    if (container.children.length === 0) {
+        createTrackRow();
+    }
+    serializeAcademicTracks();
+}
+
+function serializeAcademicTracks() {
+    const container = document.getElementById('academic-tracks-container');
+    const rows = container.getElementsByClassName('track-row');
+    const tracks = [];
+    for (let i = 0; i < rows.length; i++) {
+        const course = rows[i].querySelector('.track-course').value.trim();
+        const institute = rows[i].querySelector('.track-institute').value.trim();
+        if (course !== '' || institute !== '') {
+            tracks.push({ course: course, institute: institute });
+        }
+    }
+    document.getElementById('e-tracks').value = tracks.length > 0 ? JSON.stringify(tracks) : '';
+}
+
+function renderProfession(profJson) {
+    document.getElementById('e-prof-status').value = '';
+    document.getElementById('e-prof-title').value = '';
+    document.getElementById('e-prof-institute').value = '';
+    document.getElementById('e-prof').value = '';
+    
+    if (profJson) {
+        try {
+            const prof = JSON.parse(profJson);
+            if (prof && typeof prof === 'object') {
+                document.getElementById('e-prof-status').value = prof.status || '';
+                document.getElementById('e-prof-title').value = prof.profession || '';
+                document.getElementById('e-prof-institute').value = prof.working_institute || '';
+            }
+        } catch(e) {
+            console.error("Invalid profession JSON", e);
+        }
+    }
+    serializeProfession();
+}
+
+function serializeProfession() {
+    const status = document.getElementById('e-prof-status').value;
+    const profession = document.getElementById('e-prof-title').value.trim();
+    const institute = document.getElementById('e-prof-institute').value.trim();
+    
+    if (status !== '' || profession !== '' || institute !== '') {
+        const obj = {
+            status: status,
+            profession: profession,
+            working_institute: institute
+        };
+        document.getElementById('e-prof').value = JSON.stringify(obj);
+    } else {
+        document.getElementById('e-prof').value = '';
+    }
 }
 
 function toggleSelectAll(master) {

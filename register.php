@@ -22,6 +22,31 @@ if (isset($_GET['check_code'])) {
     exit;
 }
 
+// ── AJAX: fetch active public coupons matching course and year ──
+if (isset($_GET['get_public_coupons'])) {
+    header('Content-Type: application/json');
+    $course = trim($_GET['course'] ?? '');
+    $year   = trim($_GET['year'] ?? '');
+    $coupons = [];
+    try {
+        $stmt = $pdo->prepare("
+            SELECT code, description, discount_type, discount_value, max_discount 
+            FROM coupons 
+            WHERE status = 'active' 
+              AND (scope_year IS NULL OR scope_year = '' OR scope_year = ?)
+              AND (scope_course IS NULL OR scope_course = '' OR scope_course = ?)
+              AND visibility = 'public'
+            ORDER BY id DESC
+        ");
+        $stmt->execute([$year, $course]);
+        $coupons = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        error_log('get_public_coupons: ' . $e->getMessage());
+    }
+    echo json_encode($coupons);
+    exit;
+}
+
 // ── AJAX: just the fee for a course/year (no code) ──
 if (isset($_GET['fee_only'])) {
     header('Content-Type: application/json');
@@ -1757,11 +1782,40 @@ $country_codes = [
                                 <button type="button" class="btn-apply-code" id="apply-code-btn">Apply</button>
                             </div>
                             <div id="code-msg" class="code-msg"></div>
+                            
+                            <!-- Suggested Offers Badges -->
+                            <div id="suggested-offers" style="margin-top: 10px; display: none;">
+                                <span style="font-size: 0.78rem; font-weight: 700; color: #7c5e2a; margin-right: 6px; display: inline-block; vertical-align: middle;">Suggested Offers:</span>
+                                <span id="offers-list" style="display: inline-flex; gap: 6px; flex-wrap: wrap; vertical-align: middle;"></span>
+                            </div>
+
                             <?php if (isset($validation_errors['coupon_code'])): ?>
                                 <div class="error-message"><i class="fas fa-exclamation-circle"></i><?php echo $validation_errors['coupon_code']; ?></div>
                             <?php endif; ?>
                         </div>
                     </div>
+
+                    <!-- Direct Banking Payment Details -->
+                    <?php
+                    try {
+                        $public_payment_accounts = $pdo->query("SELECT * FROM payment_accounts WHERE is_public = 1 AND status = 'active' LIMIT 2")->fetchAll();
+                    } catch (Exception $e) {
+                        $public_payment_accounts = [];
+                    }
+                    if (!empty($public_payment_accounts)):
+                    ?>
+                    <div style="background:#fef3c7; border:1px solid #f59e0b; border-radius:12px; padding:12px 16px; margin: 15px 0;">
+                        <p style="margin:0 0 6px 0; font-size:0.88rem; font-weight:700; color:#b45309;"><i class="fas fa-building-columns"></i> Direct Payment Details</p>
+                        <div style="display:flex; flex-direction:column; gap:8px;">
+                            <?php foreach ($public_payment_accounts as $pa): ?>
+                                <div style="font-size:0.82rem; color:#78350f;">
+                                    <strong style="color:#b45309;"><?php echo htmlspecialchars($pa['account_name']); ?>:</strong>
+                                    <span style="word-break:break-all; font-family:monospace;"><?php echo htmlspecialchars($pa['banking_details']); ?></span>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                    <?php endif; ?>
 
                     <div class="row g-3">
                         <!-- Paid Amount -->
@@ -2091,8 +2145,71 @@ $country_codes = [
     if (yearSel) {
         yearSel.addEventListener('change', function() {
             filterCourses();
+            loadSuggestedOffers();
         });
     }
+    
+    var offersContainer = document.getElementById('suggested-offers');
+    var offersList = document.getElementById('offers-list');
+
+    function loadSuggestedOffers() {
+        if (!offersContainer || !offersList) return;
+        var c = courseSel ? courseSel.value : '', y = yearSel ? yearSel.value : '';
+        if (!c || !y) {
+            offersContainer.style.display = 'none';
+            return;
+        }
+        
+        fetch('register.php?get_public_coupons=1&course=' + encodeURIComponent(c) + '&year=' + encodeURIComponent(y))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                offersList.innerHTML = '';
+                if (data && data.length > 0) {
+                    offersContainer.style.display = 'block';
+                    data.forEach(function(coupon) {
+                        var badge = document.createElement('span');
+                        badge.style.cursor = 'pointer';
+                        badge.style.background = '#f59e0b';
+                        badge.style.color = '#fff';
+                        badge.style.padding = '4px 10px';
+                        badge.style.borderRadius = '20px';
+                        badge.style.fontSize = '0.72rem';
+                        badge.style.fontWeight = '700';
+                        badge.style.display = 'inline-block';
+                        badge.style.transition = 'background 0.2s';
+                        badge.style.margin = '2px';
+                        
+                        var label = coupon.code;
+                        if (coupon.discount_type === 'percent') {
+                            label += ' (' + parseFloat(coupon.discount_value) + '% off)';
+                        } else {
+                            label += ' (₹' + parseInt(coupon.discount_value) + ' off)';
+                        }
+                        badge.textContent = label;
+                        badge.title = coupon.description || 'Click to apply';
+                        
+                        badge.addEventListener('click', function() {
+                            if (codeInput) {
+                                codeInput.value = coupon.code;
+                                applyCode();
+                            }
+                        });
+                        
+                        badge.addEventListener('mouseover', function() { badge.style.background = '#d97706'; });
+                        badge.addEventListener('mouseout', function() { badge.style.background = '#f59e0b'; });
+                        
+                        offersList.appendChild(badge);
+                    });
+                } else {
+                    offersContainer.style.display = 'none';
+                }
+            })
+            .catch(function(err) {
+                console.error(err);
+                offersContainer.style.display = 'none';
+            });
+    }
+
     function renderFee() {
         currentFee = lookupFee();
         if (currentFee <= 0) { box.style.display = 'none'; return; }
@@ -2108,10 +2225,14 @@ $country_codes = [
     }
     function resetDiscount() { currentDiscount = 0; if (msg) { msg.textContent = ''; msg.className = 'code-msg'; } renderFee(); }
 
-    if (courseSel) courseSel.addEventListener('change', resetDiscount);
+    if (courseSel) courseSel.addEventListener('change', function() {
+        resetDiscount();
+        loadSuggestedOffers();
+    });
     if (yearSel) yearSel.addEventListener('change', function () {
         // Re-validate an already-entered code against the new year
         resetDiscount();
+        loadSuggestedOffers();
         if (codeInput && codeInput.value.trim()) applyCode();
     });
 
@@ -2147,6 +2268,7 @@ $country_codes = [
     if (pre && codeInput) { codeInput.value = pre.toUpperCase(); }
 
     filterCourses();
+    loadSuggestedOffers();
     renderFee();
     // If a code is prefilled and course/year already chosen (e.g. form repost), validate
     if (codeInput && codeInput.value.trim() && courseSel && courseSel.value && yearSel && yearSel.value) applyCode();

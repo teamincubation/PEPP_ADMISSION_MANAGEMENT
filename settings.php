@@ -3,6 +3,33 @@ require_once 'includes/auth.php';
 require_once 'config/database.php';
 require_permission('settings');
 
+// Self-healing database check for payment_accounts new columns
+try {
+    $stmt = $pdo->query("SHOW COLUMNS FROM payment_accounts LIKE 'banking_details'");
+    if (!$stmt->fetch()) {
+        $pdo->exec("ALTER TABLE payment_accounts ADD COLUMN banking_details TEXT DEFAULT NULL");
+    }
+    $stmt = $pdo->query("SHOW COLUMNS FROM payment_accounts LIKE 'is_public'");
+    if (!$stmt->fetch()) {
+        $pdo->exec("ALTER TABLE payment_accounts ADD COLUMN is_public TINYINT(1) NOT NULL DEFAULT 0");
+    }
+} catch (Exception $e) {
+    error_log("payment_accounts schema update failed: " . $e->getMessage());
+}
+
+// Self-healing check and seed for default installment reminder message template
+try {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM admin_settings WHERE setting_name = 'installment_reminder_message'");
+    $stmt->execute();
+    if ($stmt->fetchColumn() == 0) {
+        $default_tpl = "Dear {name}, this is a friendly reminder that your {installment_count} installment of ₹{amount} for the {course} course is due on {due_date}. Please pay to beneficiary {beneficiary} using banking details: {banking_details}. Thank you!";
+        $stmt = $pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, created_at, updated_at) VALUES ('installment_reminder_message', ?, NOW(), NOW())");
+        $stmt->execute([$default_tpl]);
+    }
+} catch (Exception $e) {
+    error_log("Seeding installment reminder message failed: " . $e->getMessage());
+}
+
 /* System settings:
    - academic years (add + activate/deactivate) - feeds register.php,
      add-student.php, course-management.php
@@ -49,7 +76,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($action === 'save_messages') {
                 $keys = [
                     'onboarding_wp_message', 'approval_confirmation_message', 'approval_app_access_message',
-                    'user_rejection_wp_message', 'reg_entry_cancelling_message'
+                    'user_rejection_wp_message', 'reg_entry_cancelling_message', 'installment_reminder_message'
                 ];
                 $stmt = $pdo->prepare("
                     INSERT INTO admin_settings (setting_name, setting_value, created_at, updated_at)
@@ -64,15 +91,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $name = trim($_POST['account_name'] ?? '');
                 $type = in_array($_POST['account_type'] ?? '', ['Bank','UPI','Digital Wallet','Other'], true) ? $_POST['account_type'] : 'Bank';
                 $details = trim($_POST['account_details'] ?? '');
+                $banking_details = trim($_POST['banking_details'] ?? '');
+                $is_public = isset($_POST['is_public']) ? 1 : 0;
                 if ($name === '') {
                     $error_message = 'Account name is required.';
                 } else {
-                    $stmt = $pdo->prepare("INSERT INTO payment_accounts (account_name, account_type, account_details, status, created_at) VALUES (?, ?, ?, 'active', NOW())");
-                    $stmt->execute([$name, $type, $details]);
+                    if ($is_public) {
+                        $cnt = (int)$pdo->query("SELECT COUNT(*) FROM payment_accounts WHERE is_public = 1 AND status = 'active'")->fetchColumn();
+                        if ($cnt >= 2) {
+                            throw new Exception("Maximum of 2 active public payment accounts is allowed.");
+                        }
+                    }
+                    $stmt = $pdo->prepare("INSERT INTO payment_accounts (account_name, account_type, account_details, banking_details, is_public, status, created_at) VALUES (?, ?, ?, ?, ?, 'active', NOW())");
+                    $stmt->execute([$name, $type, $details, $banking_details, $is_public]);
                     $success_message = "Payment account \"{$name}\" added.";
+                }
+            } elseif ($action === 'edit_payment_account') {
+                $id = (int)($_POST['account_id'] ?? 0);
+                $name = trim($_POST['account_name'] ?? '');
+                $type = in_array($_POST['account_type'] ?? '', ['Bank','UPI','Digital Wallet','Other'], true) ? $_POST['account_type'] : 'Bank';
+                $details = trim($_POST['account_details'] ?? '');
+                $banking_details = trim($_POST['banking_details'] ?? '');
+                $is_public = isset($_POST['is_public']) ? 1 : 0;
+                $status = in_array($_POST['status'] ?? '', ['active', 'inactive'], true) ? $_POST['status'] : 'active';
+                if ($name === '') {
+                    $error_message = 'Account name is required.';
+                } else {
+                    if ($is_public && $status === 'active') {
+                        $stmt = $pdo->prepare("SELECT COUNT(*) FROM payment_accounts WHERE is_public = 1 AND status = 'active' AND id <> ?");
+                        $stmt->execute([$id]);
+                        if ((int)$stmt->fetchColumn() >= 2) {
+                            throw new Exception("Maximum of 2 active public payment accounts is allowed.");
+                        }
+                    }
+                    $stmt = $pdo->prepare("UPDATE payment_accounts SET account_name = ?, account_type = ?, account_details = ?, banking_details = ?, is_public = ?, status = ? WHERE id = ?");
+                    $stmt->execute([$name, $type, $details, $banking_details, $is_public, $status, $id]);
+                    $success_message = "Payment account \"{$name}\" updated.";
                 }
             } elseif ($action === 'toggle_account') {
                 $id = (int)($_POST['account_id'] ?? 0);
+                $acc = $pdo->prepare("SELECT is_public, status FROM payment_accounts WHERE id = ?");
+                $acc->execute([$id]);
+                $a = $acc->fetch();
+                if ($a && $a['status'] === 'inactive' && $a['is_public'] == 1) {
+                    $cnt = (int)$pdo->query("SELECT COUNT(*) FROM payment_accounts WHERE is_public = 1 AND status = 'active'")->fetchColumn();
+                    if ($cnt >= 2) {
+                        throw new Exception("Maximum of 2 active public payment accounts is allowed. Please deactivate/unmark another public account first.");
+                    }
+                }
                 $pdo->prepare("UPDATE payment_accounts SET status = IF(status = 'active', 'inactive', 'active') WHERE id = ?")->execute([$id]);
                 $success_message = 'Payment account status updated.';
             } elseif ($action === 'add_expense_type') {
@@ -206,6 +272,7 @@ $message_fields = [
     'approval_app_access_message'  => ['App access message', 'Sent when app access is provided'],
     'user_rejection_wp_message'    => ['Rejection message', 'Sent when an application is rejected'],
     'reg_entry_cancelling_message' => ['Registration cancelled', 'Sent when an entry is removed'],
+    'installment_reminder_message' => ['Installment Payment Reminder', 'Sent to remind learners of upcoming installments'],
 ];
 
 $active_page = 'settings';
@@ -301,46 +368,69 @@ include 'includes/admin_nav.php';
 <div class="panel">
     <div class="panel-head"><span class="head-icon" style="background:var(--amber-soft);color:var(--amber-ink);"><i class="fas fa-building-columns"></i></span><h2>Payment Accounts</h2></div>
     <div class="panel-body">
-        <form method="POST" class="filter-bar" style="margin-bottom:18px;">
+        <form method="POST" class="filter-bar" style="margin-bottom:18px; display:flex; flex-direction:column; gap:12px; align-items:stretch;">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="add_payment_account">
-            <div class="field grow-2"><label>Account name</label><input type="text" name="account_name" placeholder="e.g. PEPP HDFC Current A/c" required></div>
-            <div class="field"><label>Type</label>
-                <select name="account_type"><?php foreach (['Bank','UPI','Digital Wallet','Other'] as $t) echo "<option>$t</option>"; ?></select></div>
-            <div class="field grow-2"><label>Details (optional)</label><input type="text" name="account_details" placeholder="UPI ID / account no."></div>
-            <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Add</button>
+            <div style="display:flex; gap:12px; flex-wrap:wrap;">
+                <div class="field grow-2" style="margin:0; flex:2;"><label>Account name</label><input type="text" name="account_name" placeholder="e.g. PEPP HDFC Current A/c" required></div>
+                <div class="field" style="margin:0; flex:1;"><label>Type</label>
+                    <select name="account_type"><?php foreach (['Bank','UPI','Digital Wallet','Other'] as $t) echo "<option>$t</option>"; ?></select></div>
+                <div class="field grow-2" style="margin:0; flex:2;"><label>Details (internal info)</label><input type="text" name="account_details" placeholder="UPI ID / account no."></div>
+            </div>
+            <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
+                <div class="field grow-2" style="margin:0; flex:2;"><label>UPI / Banking details for students (Public)</label><input type="text" name="banking_details" placeholder="e.g. GPay/UPI ID: pepp@hdfcbank or Bank details"></div>
+                <div style="display:flex; align-items:center; gap:8px; height:38px; padding-bottom:6px;">
+                    <label class="switch-row" style="margin:0; font-weight:normal;"><input type="checkbox" name="is_public" value="1"> Public (Show on register.php)</label>
+                </div>
+                <button type="submit" class="btn btn-primary" style="height:38px; margin-left:auto;"><i class="fas fa-plus"></i> Add Account</button>
+            </div>
         </form>
         <div class="table-wrap">
             <table class="data-table">
-                <thead><tr><th>Account</th><th>Type</th><th>Details</th><th>Status</th><th style="text-align:right;"></th></tr></thead>
+                <thead><tr><th>Account</th><th>Type</th><th>Details</th><th>UPI/Banking (Public)</th><th>Status</th><th style="text-align:right;">Actions</th></tr></thead>
                 <tbody>
                 <?php foreach ($payment_accounts as $a): ?>
                     <tr>
-                        <td class="cell-main"><?php echo e($a['account_name']); ?></td>
+                        <td class="cell-main">
+                            <?php echo e($a['account_name']); ?>
+                            <?php if ($a['is_public'] == 1): ?>
+                                <span class="badge violet" style="font-size:0.7rem; padding: 2px 6px;">[Public]</span>
+                            <?php endif; ?>
+                        </td>
                         <td><span class="badge blue"><?php echo e($a['account_type']); ?></span></td>
                         <td class="cell-sub"><?php echo e($a['account_details'] ?: '-'); ?></td>
+                        <td><span class="cell-sub"><?php echo e($a['banking_details'] ?: '-'); ?></span></td>
                         <td><span class="badge <?php echo $a['status'] === 'active' ? 'green' : 'gray'; ?>"><?php echo ucfirst($a['status']); ?></span></td>
-                        <td style="text-align:right;">
+                        <td style="text-align:right; white-space:nowrap;">
+                            <button type="button" class="btn btn-sm btn-outline" onclick='openEditAccount(<?php echo json_encode([
+                                "id" => (int)$a["id"],
+                                "account_name" => $a["account_name"],
+                                "account_type" => $a["account_type"],
+                                "account_details" => $a["account_details"],
+                                "banking_details" => $a["banking_details"],
+                                "is_public" => (int)$a["is_public"],
+                                "status" => $a["status"]
+                            ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
                             <form method="POST" style="display:inline;">
                                 <?php echo csrf_field(); ?>
                                 <input type="hidden" name="action" value="toggle_account">
                                 <input type="hidden" name="account_id" value="<?php echo (int)$a['id']; ?>">
                                 <button type="submit" class="btn btn-sm <?php echo $a['status'] === 'active' ? 'btn-soft-amber' : 'btn-soft-green'; ?>">
-                                    <i class="fas fa-power-off"></i> <?php echo $a['status'] === 'active' ? 'Deactivate' : 'Activate'; ?>
+                                    <i class="fas fa-power-off"></i>
                                 </button>
                             </form>
                         </td>
                     </tr>
                 <?php endforeach; ?>
                 <?php if (empty($payment_accounts)): ?>
-                    <tr><td colspan="5"><div class="empty-state" style="padding:24px;"><p>No payment accounts yet.</p></div></td></tr>
+                    <tr><td colspan="6"><div class="empty-state" style="padding:24px;"><p>No payment accounts yet.</p></div></td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>
         </div>
         <div class="alert alert-info" style="margin-top:14px; margin-bottom:0;">
             <i class="fas fa-circle-info"></i>
-            <span>Active accounts appear in the approval modal and payment review dropdowns.</span>
+            <span>Active accounts appear in the approval modal and payment review dropdowns. Marked Public accounts (maximum 2) will be displayed on the student registration page.</span>
         </div>
     </div>
 </div>
@@ -469,5 +559,58 @@ $nongst_preview = ($current_settings['inv_nongst_prefix'] ?? 'INV') . '/' . date
         </form>
     </div>
 </div>
+
+<!-- Edit payment account modal -->
+<div class="modal-backdrop" id="edit-account-modal">
+    <div class="modal" style="max-width:540px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-building-columns" style="color:var(--accent);"></i> Edit Payment Account</h3>
+            <button class="modal-close" onclick="closeModal('edit-account-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="edit_payment_account">
+            <input type="hidden" name="account_id" id="edit-acc-id">
+            <div class="modal-body">
+                <div class="form-grid">
+                    <div class="field"><label>Account Name <span class="req">*</span></label><input type="text" name="account_name" id="edit-acc-name" required></div>
+                    <div class="field"><label>Type</label>
+                        <select name="account_type" id="edit-acc-type">
+                            <?php foreach (['Bank','UPI','Digital Wallet','Other'] as $t) echo "<option>$t</option>"; ?>
+                        </select>
+                    </div>
+                    <div class="field full"><label>Details (internal info)</label><input type="text" name="account_details" id="edit-acc-details"></div>
+                    <div class="field full"><label>UPI / Banking details for students (Public)</label><input type="text" name="banking_details" id="edit-acc-banking-details"></div>
+                    <div class="field"><label>Status</label>
+                        <select name="status" id="edit-acc-status">
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="margin-top:12px;">
+                    <label class="switch-row" style="font-weight:normal; margin:0;"><input type="checkbox" name="is_public" id="edit-acc-is-public" value="1"> Public (Show on register.php)</label>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('edit-account-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openEditAccount(acc) {
+    document.getElementById('edit-acc-id').value = acc.id;
+    document.getElementById('edit-acc-name').value = acc.account_name;
+    document.getElementById('edit-acc-type').value = acc.account_type;
+    document.getElementById('edit-acc-details').value = acc.account_details || '';
+    document.getElementById('edit-acc-banking-details').value = acc.banking_details || '';
+    document.getElementById('edit-acc-status').value = acc.status;
+    document.getElementById('edit-acc-is-public').checked = (acc.is_public == 1);
+    openModal('edit-account-modal');
+}
+</script>
 
 <?php include 'includes/admin_footer.php'; ?>

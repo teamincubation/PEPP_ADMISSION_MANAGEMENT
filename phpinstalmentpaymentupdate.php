@@ -57,6 +57,21 @@ try {
     $load_error = 'Could not load installment data.';
 }
 
+// Fetch WhatsApp reminder template and public payment accounts for the compose link
+$reminder_template = '';
+$public_banking_details = '';
+try {
+    $reminder_template = $pdo->query("SELECT setting_value FROM admin_settings WHERE setting_name = 'installment_reminder_message'")->fetchColumn() ?: '';
+    
+    // Fetch public payment accounts
+    $public_accs = $pdo->query("SELECT account_name, banking_details FROM payment_accounts WHERE is_public = 1 AND status = 'active' LIMIT 2")->fetchAll();
+    $details_arr = [];
+    foreach ($public_accs as $pa) {
+        $details_arr[] = $pa['account_name'] . ($pa['banking_details'] ? " (" . $pa['banking_details'] . ")" : "");
+    }
+    $public_banking_details = implode(" or ", $details_arr);
+} catch (Exception $e) {}
+
 $active_page = 'installments';
 $page_title  = 'Installment Payments';
 $page_sub    = 'Submissions arriving from installmentpayment.php';
@@ -143,6 +158,17 @@ include 'includes/admin_nav.php';
                         <?php if ($r['approved_by'] || $r['rejected_by']): ?><div class="cell-sub">by <?php echo e($r['approved_by'] ?: $r['rejected_by']); ?></div><?php endif; ?>
                     </td>
                     <td style="text-align:right; white-space:nowrap;">
+                        <?php if ($tab === 'upcoming'): ?>
+                            <button class="btn btn-sm btn-whatsapp" onclick='sendReminder(<?php echo json_encode([
+                                "name" => $r["student_name"],
+                                "whatsapp_country_code" => $r["whatsapp_country_code"],
+                                "whatsapp_number" => $r["whatsapp_number"],
+                                "pepp_course" => $r["pepp_course"],
+                                "instalment_number" => (int)$r["instalment_number"],
+                                "amount" => (float)$r["amount"],
+                                "due_date" => date("d M Y", strtotime($r["due_date"]))
+                            ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)' title="Send WhatsApp Reminder"><i class="fab fa-whatsapp"></i> Reminder</button>
+                        <?php endif; ?>
                         <?php if ($st === 'pending' && $r['paid_date']): ?>
                             <a class="btn btn-sm btn-primary" href="payment-review.php?id=<?php echo (int)$r['id']; ?>"><i class="fas fa-magnifying-glass"></i> Review</a>
                         <?php else: ?>
@@ -157,6 +183,43 @@ include 'includes/admin_nav.php';
         <?php endif; ?>
     </div>
 </div>
+
+<script>
+var REMINDER_TEMPLATE = <?php echo json_encode($reminder_template); ?>;
+var PUBLIC_BANKING = <?php echo json_encode($public_banking_details); ?>;
+
+function sendReminder(r) {
+    let tpl = REMINDER_TEMPLATE;
+    if (!tpl) {
+        tpl = "Dear {name}, this is a friendly reminder that your {installment_count} installment of ₹{amount} for the {course} course is due on {due_date}. Please pay to beneficiary {beneficiary} using banking details: {banking_details}. Thank you!";
+    }
+    
+    // Parse ordinal prefix for instalment number
+    let ord = r.instalment_number;
+    if (ord === 1) ord = "1st";
+    else if (ord === 2) ord = "2nd";
+    else if (ord === 3) ord = "3rd";
+    else ord = ord + "th";
+    
+    // Replace placeholders
+    let msg = tpl
+        .replace(/{name}/g, r.name)
+        .replace(/{installment_count}/g, ord)
+        .replace(/{amount}/g, Number(r.amount).toLocaleString('en-IN'))
+        .replace(/{course}/g, r.pepp_course)
+        .replace(/{due_date}/g, r.due_date)
+        .replace(/{beneficiary}/g, PUBLIC_BANKING ? PUBLIC_BANKING.split(' (')[0] : 'PEPP Learning')
+        .replace(/{banking_details}/g, PUBLIC_BANKING || '-');
+        
+    let cleanPhone = (r.whatsapp_country_code + r.whatsapp_number).replace(/\D/g, '');
+    if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
+    
+    // Redirect to whatsapp-notification.php compose page
+    window.location.href = 'whatsapp-notification.php?phone=' + encodeURIComponent(cleanPhone) + 
+                           '&name=' + encodeURIComponent(r.name) + 
+                           '&message=' + encodeURIComponent(msg);
+}
+</script>
 
 <div class="alert alert-info">
     <i class="fas fa-circle-info"></i>

@@ -110,6 +110,7 @@ $template_labels = [
     'approval_app_access_message'   => 'App access',
     'user_rejection_wp_message'     => 'Application rejected',
     'reg_entry_cancelling_message'  => 'Registration cancelled',
+    'installment_reminder_message'  => 'Installment Payment Reminder',
 ];
 
 $active_page = 'whatsapp';

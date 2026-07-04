@@ -5,6 +5,58 @@ require_once 'includes/referral_helper.php';
 require_once 'includes/peppian_notify.php';
 require_once 'includes/file_helper.php';
 
+// AJAX: Fetch joinees for a referee
+if (isset($_GET['get_joinees'])) {
+    header('Content-Type: application/json');
+    $referee_id = (int)$_GET['get_joinees'];
+    $joinees = [];
+    try {
+        $stmt = $pdo->prepare("
+            SELECT 
+                re.student_name, 
+                u.user_id, 
+                u.pepp_course, 
+                u.payment_plan, 
+                COALESCE(u.paid_amount, 0) AS reg_paid, 
+                COALESCE(u.total_fee, 0) AS total_fee,
+                pc.total_fee AS course_fee,
+                COALESCE(u.discount_amount, 0) AS discount_amount,
+                COALESCE(inst.paid_sum, 0) AS inst_paid
+            FROM referral_earnings re
+            LEFT JOIN users u ON u.user_id = re.user_id
+            LEFT JOIN pepp_courses pc ON pc.course_name = u.pepp_course
+            LEFT JOIN (
+                SELECT user_id, SUM(COALESCE(paid_amount, amount)) AS paid_sum 
+                FROM instalment_details 
+                WHERE status IN ('approved', 'paid') 
+                GROUP BY user_id
+            ) inst ON inst.user_id = u.user_id
+            WHERE re.referee_id = ?
+        ");
+        $stmt->execute([$referee_id]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $row) {
+            $net_payable = (float)$row['total_fee'] > 0
+                ? (float)$row['total_fee']
+                : max(0, (float)($row['course_fee'] ?? 0) - (float)$row['discount_amount']);
+            $paid = (float)$row['reg_paid'] + (float)$row['inst_paid'];
+            $due = max(0, $net_payable - $paid);
+            
+            $joinees[] = [
+                'student_name' => $row['student_name'] ?: 'N/A',
+                'course' => $row['pepp_course'] ?: 'N/A',
+                'payment_plan' => ucfirst($row['payment_plan'] ?: 'N/A'),
+                'paid_amount' => $paid,
+                'due_amount' => $due
+            ];
+        }
+    } catch (Exception $e) {
+        error_log($e->getMessage());
+    }
+    echo json_encode($joinees);
+    exit();
+}
+
 /* Marketing (CRM) - two sections:
    1. Alumni Referral Earning Program: configure per active academic year,
       view referees + wallets, record manual payouts with proof, analytics.
@@ -122,6 +174,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $code = strtoupper(trim($_POST['code'] ?? ''));
                 if ($code === '') { $error_message = 'Coupon code is required.'; }
                 else {
+                    $restrict_alumni = isset($_POST['restrict_alumni']) ? 1 : 0;
+                    $restrict_non_alumni = isset($_POST['restrict_non_alumni']) ? 1 : 0;
+                    $assigned_emails = trim($_POST['assigned_emails'] ?? '') ?: null;
+                    $visibility = in_array($_POST['visibility'] ?? '', ['public', 'private'], true) ? $_POST['visibility'] : 'public';
+
                     $data = [
                         $code, trim($_POST['description'] ?? '') ?: null,
                         in_array($_POST['discount_type'] ?? '', ['flat', 'percent'], true) ? $_POST['discount_type'] : 'flat',
@@ -132,15 +189,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         isset($_POST['per_user_once']) ? 1 : 0,
                         $_POST['start_date'] ?: null, $_POST['end_date'] ?: null,
                         in_array($_POST['status'] ?? '', ['active', 'inactive'], true) ? $_POST['status'] : 'active',
+                        $restrict_alumni, $restrict_non_alumni, $assigned_emails, $visibility
                     ];
                     $cid = (int)($_POST['coupon_id'] ?? 0);
                     if ($cid) {
-                        $pdo->prepare("UPDATE coupons SET code=?, description=?, discount_type=?, discount_value=?, max_discount=?, scope_year=?, scope_course=?, usage_limit=?, per_user_once=?, start_date=?, end_date=?, status=? WHERE id=?")
+                        $pdo->prepare("UPDATE coupons SET code=?, description=?, discount_type=?, discount_value=?, max_discount=?, scope_year=?, scope_course=?, usage_limit=?, per_user_once=?, start_date=?, end_date=?, status=?, restrict_alumni=?, restrict_non_alumni=?, assigned_emails=?, visibility=? WHERE id=?")
                             ->execute(array_merge($data, [$cid]));
                         $success_message = 'Coupon updated.';
                     } else {
                         try {
-                            $pdo->prepare("INSERT INTO coupons (code, description, discount_type, discount_value, max_discount, scope_year, scope_course, usage_limit, per_user_once, start_date, end_date, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+                            $pdo->prepare("INSERT INTO coupons (code, description, discount_type, discount_value, max_discount, scope_year, scope_course, usage_limit, per_user_once, start_date, end_date, status, restrict_alumni, restrict_non_alumni, assigned_emails, visibility, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
                                 ->execute(array_merge($data, [$admin_username]));
                             $success_message = 'Coupon created.';
                         } catch (Exception $e) { $error_message = 'That coupon code already exists.'; }
@@ -213,14 +271,34 @@ try {
 
     $alumni_wa_select = $has_alumni_wa_col ? "a.whatsapp_number AS alumni_whatsapp," : "'' AS alumni_whatsapp,";
 
-    $stmt = $pdo->query("SELECT r.*, p.full_name, p.email, p.whatsapp, p.linked_alumni_id,
+    $search_referee = trim($_GET['search_referee'] ?? '');
+    $sort_joined = $_GET['sort_joined'] ?? '';
+
+    $where_clause = "";
+    $params = [];
+    if ($search_referee !== '') {
+        $where_clause = " WHERE (p.full_name LIKE ? OR p.email LIKE ? OR r.referral_code LIKE ?) ";
+        $params = ["%$search_referee%", "%$search_referee%", "%$search_referee%"];
+    }
+
+    $order_by = "ORDER BY r.id DESC";
+    if ($sort_joined === 'asc') {
+        $order_by = "ORDER BY joinees_count ASC, r.id DESC";
+    } elseif ($sort_joined === 'desc') {
+        $order_by = "ORDER BY joinees_count DESC, r.id DESC";
+    }
+
+    $stmt = $pdo->prepare("SELECT r.*, p.full_name, p.email, p.whatsapp, p.linked_alumni_id,
                                 $alumni_wa_select a.mobile AS alumni_mobile, a.secondary_mobile AS alumni_sec_mobile,
-                                rp.academic_year, rp.alumni_earning
+                                rp.academic_year, rp.alumni_earning,
+                                (SELECT COUNT(*) FROM referral_earnings re WHERE re.referee_id = r.id) AS joinees_count
                          FROM referees r 
                          JOIN peppians p ON p.id = r.peppian_id 
                          JOIN referral_programs rp ON rp.id = r.program_id
                          LEFT JOIN alumni a ON a.id = p.linked_alumni_id
-                         ORDER BY r.id DESC");
+                         $where_clause
+                         $order_by");
+    $stmt->execute($params);
     foreach ($stmt->fetchAll() as $r) { $r['wallet'] = referee_wallet($pdo, $r['id']); $referees[] = $r; }
 } catch (Exception $e) { error_log('referees: ' . $e->getMessage()); }
 
@@ -329,12 +407,49 @@ include 'includes/admin_nav.php';
 
 <div class="panel">
     <div class="panel-head"><span class="head-icon" style="background:var(--green-soft);color:var(--green-ink);"><i class="fas fa-wallet"></i></span><h2>Referees &amp; Earning Wallets (<?php echo count($referees); ?>)</h2></div>
+    
+    <!-- Referee Search Form -->
+    <div class="panel-body" style="border-bottom: 1px solid var(--border); padding: 14px 20px;">
+        <form method="GET" class="filter-bar" style="display:flex; gap:10px; align-items:end; margin:0; flex-wrap:wrap;">
+            <input type="hidden" name="tab" value="referral">
+            <?php if ($sort_joined): ?><input type="hidden" name="sort_joined" value="<?php echo e($sort_joined); ?>"><?php endif; ?>
+            <div class="field" style="margin:0; flex:1; min-width:240px;">
+                <label style="font-weight:600; font-size:0.75rem; color:var(--text-muted); margin-bottom:4px; display:block;">Search Referee</label>
+                <input type="text" name="search_referee" value="<?php echo e($search_referee); ?>" placeholder="Alumnus name, email, or referral code" style="width:100%; padding:8px 12px; border-radius:6px; border:1px solid var(--border); font-size:0.85rem;">
+            </div>
+            <div style="display:flex; gap:8px;">
+                <button type="submit" class="btn btn-primary" style="height:38px;"><i class="fas fa-search"></i> Search</button>
+                <?php if ($search_referee !== '' || $sort_joined !== ''): ?>
+                    <a href="?tab=referral" class="btn btn-outline" style="height:38px; display:inline-flex; align-items:center; justify-content:center; text-decoration:none;">Reset</a>
+                <?php endif; ?>
+            </div>
+        </form>
+    </div>
+
     <div class="panel-body flush table-wrap">
         <?php if (empty($referees)): ?>
             <div class="empty-state"><i class="fas fa-wallet"></i><p>No referees have joined yet. Alumni apply from their portal once a program is active.</p></div>
         <?php else: ?>
         <table class="data-table">
-            <thead><tr><th>Alumnus</th><th>Referral Code</th><th>Year</th><th>Joined</th><th>Credited</th><th>Pending</th><th>Paid</th><th>Balance</th><th style="text-align:right;">Pay</th></tr></thead>
+            <thead>
+                <tr>
+                    <th>Alumnus</th>
+                    <th>Referral Code</th>
+                    <th>Year</th>
+                    <th>
+                        Joined
+                        <div style="display:inline-flex; flex-direction:column; vertical-align:middle; margin-left:4px; font-size:9px; line-height:1;">
+                            <a href="?tab=referral&sort_joined=asc&search_referee=<?php echo urlencode($search_referee); ?>" style="color: <?php echo $sort_joined === 'asc' ? 'var(--accent)' : '#94a3b8'; ?>;"><i class="fas fa-chevron-up"></i></a>
+                            <a href="?tab=referral&sort_joined=desc&search_referee=<?php echo urlencode($search_referee); ?>" style="color: <?php echo $sort_joined === 'desc' ? 'var(--accent)' : '#94a3b8'; ?>;"><i class="fas fa-chevron-down"></i></a>
+                        </div>
+                    </th>
+                    <th>Credited</th>
+                    <th>Pending</th>
+                    <th>Paid</th>
+                    <th>Balance</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
             <tbody>
             <?php foreach ($referees as $r): $w = $r['wallet']; ?>
                 <tr>
@@ -373,7 +488,8 @@ include 'includes/admin_nav.php';
                     <td><?php echo $w['pending'] > 0 ? '<span class="badge amber">₹' . number_format($w['pending'], 0) . '</span>' : '-'; ?></td>
                     <td>₹<?php echo number_format($w['paid'], 0); ?></td>
                     <td><?php echo $w['balance'] > 0 ? '<span class="badge green">₹' . number_format($w['balance'], 0) . '</span>' : '<span class="cell-sub">Clear</span>'; ?></td>
-                    <td style="text-align:right;">
+                    <td style="text-align:right; white-space:nowrap;">
+                        <button class="btn btn-sm btn-soft-blue" onclick="viewJoinees(<?php echo (int)$r['id']; ?>, '<?php echo e($r['full_name']); ?>')" title="View Joinees"><i class="fas fa-users"></i></button>
                         <button class="btn btn-sm btn-primary" onclick='openPay(<?php echo json_encode(["id"=>(int)$r["id"],"name"=>$r["full_name"],"balance"=>round($w["balance"],2)], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-money-bill"></i></button>
                     </td>
                 </tr>
@@ -416,6 +532,38 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- View joinees modal -->
+<div class="modal-backdrop" id="joinees-modal">
+    <div class="modal" style="max-width:760px; width:90%;">
+        <div class="modal-head">
+            <h3><i class="fas fa-users" style="color:var(--accent);"></i> Referred Learners</h3>
+            <button class="modal-close" onclick="closeModal('joinees-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div class="modal-body" style="max-height: 400px; overflow-y: auto;">
+            <div class="alert alert-info" style="margin-bottom:12px;"><i class="fas fa-user-graduate"></i> Alumnus: <strong id="joinees-alumnus-name"></strong></div>
+            <div class="table-wrap">
+                <table class="data-table" id="joinees-table">
+                    <thead>
+                        <tr>
+                            <th>Learner Name</th>
+                            <th>Selected Course</th>
+                            <th>Payment Plan</th>
+                            <th>Paid Amount</th>
+                            <th>Due Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody id="joinees-table-body">
+                        <!-- Loaded via AJAX -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="modal-foot">
+            <button type="button" class="btn btn-outline" onclick="closeModal('joinees-modal')">Close</button>
+        </div>
+    </div>
+</div>
+
 <?php
 $prog_json = [];
 foreach ($programs as $p) $prog_json[$p['academic_year']] = $p;
@@ -443,6 +591,44 @@ function openPay(r) {
     document.getElementById('pay-name').textContent = r.name + ' - balance ₹' + Number(r.balance).toLocaleString('en-IN');
     document.getElementById('pay-amount').value = r.balance > 0 ? r.balance : '';
     openModal('pay-modal');
+}
+function viewJoinees(refereeId, name) {
+    document.getElementById('joinees-alumnus-name').textContent = name;
+    const tbody = document.getElementById('joinees-table-body');
+    tbody.innerHTML = '<tr><td colspan=\\\"5\\\" style=\\\"text-align:center; padding:20px;\\\"><i class=\\\"fas fa-spinner fa-spin\\\"></i> Loading...</td></tr>';
+    openModal('joinees-modal');
+    
+    fetch('marketing.php?get_joinees=' + refereeId)
+        .then(r => r.json())
+        .then(data => {
+            tbody.innerHTML = '';
+            if (data && data.length > 0) {
+                data.forEach(j => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = '<td><div class=\\\"cell-main\\\">' + escapeHtml(j.student_name) + '</div></td>' +
+                                   '<td>' + escapeHtml(j.course) + '</td>' +
+                                   '<td><span class=\\\"badge ' + (j.payment_plan.toLowerCase() === 'installment' ? 'amber' : 'green') + '\\\">' + escapeHtml(j.payment_plan) + '</span></td>' +
+                                   '<td>₹' + Number(j.paid_amount).toLocaleString(\\'en-IN\\', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '</td>' +
+                                   '<td>₹' + Number(j.due_amount).toLocaleString(\\'en-IN\\', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '</td>';
+                    tbody.appendChild(tr);
+                });
+            } else {
+                tbody.innerHTML = '<tr><td colspan=\\\"5\\\" style=\\\"text-align:center; padding:20px; color:#666;\\\">No learners have joined using this referral code yet.</td></tr>';
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            tbody.innerHTML = '<tr><td colspan=\\\"5\\\" style=\\\"text-align:center; padding:20px; color:red;\\\"><i class=\\\"fas fa-triangle-exclamation\\\"></i> Error loading joinees.</td></tr>';
+        });
+}
+function escapeHtml(text) {
+    if (!text) return '';
+    return text.toString()
+        .replace(/&/g, \\\"&amp;\\\")
+        .replace(/</g, \\\"&lt;\\\")
+        .replace(/>/g, \\\"&gt;\\\")
+        .replace(/\\\"/g, \\\"&quot;\\\")
+        .replace(/'/g, \\\"&#039;\\\");
 }
 </script>";
 include 'includes/admin_footer.php';
@@ -474,6 +660,8 @@ include 'includes/admin_footer.php';
                             "discount_value"=>$c["discount_value"],"max_discount"=>$c["max_discount"],"scope_year"=>(string)$c["scope_year"],
                             "scope_course"=>(string)$c["scope_course"],"usage_limit"=>$c["usage_limit"],"per_user_once"=>(int)$c["per_user_once"],
                             "start_date"=>(string)$c["start_date"],"end_date"=>(string)$c["end_date"],"status"=>$c["status"],
+                            "restrict_alumni"=>(int)($c["restrict_alumni"] ?? 0),"restrict_non_alumni"=>(int)($c["restrict_non_alumni"] ?? 0),
+                            "assigned_emails"=>(string)($c["assigned_emails"] ?? ""),"visibility"=>(string)($c["visibility"] ?? "public")
                         ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
                         <form method="POST" style="display:inline;"><?php echo csrf_field(); ?><input type="hidden" name="action" value="toggle_coupon"><input type="hidden" name="coupon_id" value="<?php echo (int)$c['id']; ?>"><button class="btn btn-sm btn-soft-amber"><i class="fas fa-power-off"></i></button></form>
                         <?php if (can_delete()): ?>
@@ -508,8 +696,14 @@ include 'includes/admin_footer.php';
                     <div class="field"><label>Start Date</label><input type="date" name="start_date" id="c-start"></div>
                     <div class="field"><label>End Date</label><input type="date" name="end_date" id="c-end"></div>
                     <div class="field"><label>Status</label><select name="status" id="c-status"><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
+                    <div class="field"><label>Coupon Visibility</label><select name="visibility" id="c-visibility"><option value="public">Public</option><option value="private">Private</option></select></div>
+                    <div class="field full"><label>Assign to Email ID/s (comma/tab separated)</label><textarea name="assigned_emails" id="c-assigned-emails" rows="2" placeholder="e.g. user1@gmail.com, user2@gmail.com"></textarea></div>
                 </div>
-                <label class="switch-row" style="margin-top:10px;"><input type="checkbox" name="per_user_once" id="c-once" checked> Each user can use this coupon only once</label>
+                <div style="display:flex; flex-direction:column; gap:8px; margin-top:12px; margin-bottom:12px;">
+                    <label class="switch-row" style="font-weight: normal; margin:0;"><input type="checkbox" name="restrict_alumni" id="c-restrict-alumni"> Restrict for Alumni students</label>
+                    <label class="switch-row" style="font-weight: normal; margin:0;"><input type="checkbox" name="restrict_non_alumni" id="c-restrict-non-alumni"> Restrict for other than alumni</label>
+                    <label class="switch-row" style="font-weight: normal; margin:0;"><input type="checkbox" name="per_user_once" id="c-once" checked> Each user can use this coupon only once</label>
+                </div>
             </div>
             <div class="modal-foot"><button type="button" class="btn btn-outline" onclick="closeModal('coupon-modal')">Cancel</button><button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save Coupon</button></div>
         </form>
@@ -527,6 +721,10 @@ function openCoupon() {
     document.getElementById('c-limit').value=''; document.getElementById('c-start').value='';
     document.getElementById('c-end').value=''; document.getElementById('c-status').value='active';
     document.getElementById('c-once').checked=true;
+    document.getElementById('c-restrict-alumni').checked=false;
+    document.getElementById('c-restrict-non-alumni').checked=false;
+    document.getElementById('c-assigned-emails').value='';
+    document.getElementById('c-visibility').value='public';
     openModal('coupon-modal');
 }
 function editCoupon(c) {
@@ -538,6 +736,10 @@ function editCoupon(c) {
     document.getElementById('c-limit').value=(c.usage_limit==null?'':c.usage_limit); document.getElementById('c-start').value=c.start_date||'';
     document.getElementById('c-end').value=c.end_date||''; document.getElementById('c-status').value=c.status;
     document.getElementById('c-once').checked=(c.per_user_once==1);
+    document.getElementById('c-restrict-alumni').checked=(c.restrict_alumni==1);
+    document.getElementById('c-restrict-non-alumni').checked=(c.restrict_non_alumni==1);
+    document.getElementById('c-assigned-emails').value=c.assigned_emails||'';
+    document.getElementById('c-visibility').value=c.visibility||'public';
     openModal('coupon-modal');
 }
 </script>";
