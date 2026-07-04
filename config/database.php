@@ -32,6 +32,40 @@ try {
 
     // Some legacy files reference $conn
     $conn = $pdo;
+
+    // Self-healing database structure setup
+    try {
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `student_remarks` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `user_id` VARCHAR(50) NOT NULL,
+                `remark` TEXT NOT NULL,
+                `created_by` VARCHAR(100) NOT NULL,
+                `reminder_id` INT NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+                KEY `idx_stud_rem_uid` (`user_id`),
+                KEY `idx_stud_rem_reminder` (`reminder_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+        
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `student_peppkit` (
+                `user_id` VARCHAR(50) PRIMARY KEY,
+                `status` VARCHAR(30) NOT NULL DEFAULT 'Pending',
+                `tracking_id` VARCHAR(100) NULL,
+                `updated_by` VARCHAR(100) NULL,
+                `updated_at` DATETIME NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $cols = $pdo->query("SHOW COLUMNS FROM reminders LIKE 'student_id'")->fetch();
+        if (!$cols) {
+            $pdo->exec("ALTER TABLE reminders ADD COLUMN student_id VARCHAR(50) NULL");
+        }
+    } catch (Exception $dbEx) {
+        error_log("PEPP self-healing DB check failed: " . $dbEx->getMessage());
+    }
 } catch (PDOException $e) {
     error_log("Database connection failed: " . $e->getMessage());
     // Don't leak credentials or internals to the browser
