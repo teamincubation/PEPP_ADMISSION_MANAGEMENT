@@ -394,11 +394,11 @@ if ($alumni_public_visibility === 'ON') {
                         $photo_url = '';
                         $photo_candidate = $row['profile_photo'] ?: $row['user_photo'];
                         if ($photo_candidate) {
-                            $real_photo_path = dirname(__DIR__) . '/../' . ltrim($photo_candidate, '/');
+                            $real_photo_path = __DIR__ . '/../' . ltrim($photo_candidate, '/');
                             if (file_exists($real_photo_path) || strpos($photo_candidate, 'http') === 0) {
                                 $photo_url = $photo_candidate;
                                 if (strpos($photo_url, 'http') !== 0 && strpos($photo_url, 'uploads/') === 0) {
-                                    $photo_url = '' . $photo_url;
+                                    $photo_url = '../' . $photo_url;
                                 }
                             }
                         }
