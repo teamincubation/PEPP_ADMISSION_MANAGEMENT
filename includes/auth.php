@@ -34,6 +34,7 @@ $GLOBALS['ADMIN_PAGES'] = [
     'leads'        => ['Lead Management',         'fa-user-tag'],
     'marketing'    => ['Marketing',               'fa-bullhorn'],
     'alumni'       => ['Alumni Database',         'fa-user-graduate'],
+    'peppkit'      => ['PEPPKIT Report',          'fa-box-open'],
     'settings'     => ['Settings',                'fa-gear'],
     // Future pages: add 'key' => ['Label', 'fa-icon'] and grant in Admin Management.
 ];

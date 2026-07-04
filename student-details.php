@@ -6,6 +6,34 @@ if (file_exists(__DIR__ . '/includes/referral_helper.php')) {
     require_once __DIR__ . '/includes/referral_helper.php';
 }
 
+/* Self-healing database structure setup */
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `student_remarks` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` VARCHAR(50) NOT NULL,
+            `remark` TEXT NOT NULL,
+            `created_by` VARCHAR(100) NOT NULL,
+            `reminder_id` INT NULL,
+            `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+            KEY `idx_stud_rem_uid` (`user_id`),
+            KEY `idx_stud_rem_reminder` (`reminder_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ");
+} catch (Exception $e) {
+    error_log("Failed to create student_remarks table: " . $e->getMessage());
+}
+
+try {
+    $cols = $pdo->query("SHOW COLUMNS FROM reminders LIKE 'student_id'")->fetch();
+    if (!$cols) {
+        $pdo->exec("ALTER TABLE reminders ADD COLUMN student_id VARCHAR(50) NULL");
+    }
+} catch (Exception $e) {
+    error_log("Failed to alter reminders table: " . $e->getMessage());
+}
+
 /* Full profile of an approved/registered student.
    Linked from: studentpage.php, dashboard.php, phpinstalmentpaymentupdate.php. */
 
@@ -152,8 +180,300 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
     }
 }
 
+/* ── POST: edit_installments ── */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_installments') {
+    if (!csrf_verify()) {
+        $error = 'Security token mismatch. Please retry.';
+    } else {
+        try {
+            $new_discount = max(0, floatval($_POST['discount_amount'] ?? 0));
+            $new_plan = $_POST['payment_plan'] ?? 'One Time';
+            
+            // Recalculate fees
+            $course_fee = (float)($student['course_fee'] ?? 0);
+            $new_total_fee = max(0, $course_fee - $new_discount);
+            $reg_paid = (float)$student['paid_amount'];
+            
+            // Calculate how many installments are paid/approved
+            $paid_count = 1; // 1 for registration payment
+            $stmt = $pdo->prepare("SELECT * FROM instalment_details WHERE user_id = ? ORDER BY instalment_number ASC");
+            $stmt->execute([$user_id]);
+            $current_installments = $stmt->fetchAll();
+            
+            $already_paid = [];
+            foreach ($current_installments as $inst) {
+                if (in_array($inst['status'], ['approved', 'paid'], true) || !empty($inst['paid_date'])) {
+                    $paid_count++;
+                    $already_paid[$inst['instalment_number']] = $inst;
+                }
+            }
+            
+            // Parse new plan count
+            $new_count = 1;
+            if ($new_plan !== 'One Time') {
+                $new_count = (int)explode(' ', $new_plan)[0];
+            }
+            
+            // Validations
+            if ($new_count < $paid_count) {
+                throw new Exception("New plan term cannot be less than currently paid/approved installments count ($paid_count).");
+            }
+            
+            // Read input installment amounts and due dates from POST
+            $new_installments_data = [];
+            $sum_installments = 0.0;
+            for ($i = 2; $i <= $new_count; $i++) {
+                if (isset($already_paid[$i])) {
+                    // For already paid installments, keep existing values
+                    $amt = (float)$already_paid[$i]['amount'];
+                    $due = $already_paid[$i]['due_date'];
+                    $status = $already_paid[$i]['status'];
+                    $paid_d = $already_paid[$i]['paid_date'];
+                    $ref = $already_paid[$i]['payment_reference'];
+                } else {
+                    // For upcoming/pending installments
+                    $amt = max(0.0, floatval($_POST["inst_{$i}_amount"] ?? 0));
+                    $due = $_POST["inst_{$i}_due_date"] ?? '';
+                    if ($amt < 1) {
+                        throw new Exception("Installment #$i amount must be at least ₹1.");
+                    }
+                    if (empty($due)) {
+                        throw new Exception("Due date for installment #$i is required.");
+                    }
+                    $status = 'pending';
+                    $paid_d = null;
+                    $ref = null;
+                }
+                $new_installments_data[$i] = [
+                    'amount' => $amt,
+                    'due_date' => $due,
+                    'status' => $status,
+                    'paid_date' => $paid_d,
+                    'payment_reference' => $ref
+                ];
+                $sum_installments += $amt;
+            }
+            
+            // Total installment amounts assigned shouldn't overtake the total payable amount
+            $max_installments_allowed = max(0.0, $new_total_fee - $reg_paid);
+            if (round($sum_installments, 2) > round($max_installments_allowed, 2)) {
+                throw new Exception("Total scheduled installments (₹" . number_format($sum_installments) . ") cannot exceed the total payable balance (₹" . number_format($max_installments_allowed) . ").");
+            }
+            
+            // Proceed with updates
+            $pdo->beginTransaction();
+            
+            // 1. Update user columns: discount_amount, total_fee, payment_plan
+            $stmt = $pdo->prepare("UPDATE users SET discount_amount = ?, total_fee = ?, payment_plan = ? WHERE user_id = ?");
+            $stmt->execute([$new_discount, $new_total_fee, $new_plan, $user_id]);
+            
+            // 2. Clear old installments except already paid/approved ones
+            $pdo->prepare("DELETE FROM instalment_details WHERE user_id = ? AND status NOT IN ('approved', 'paid') AND paid_date IS NULL")->execute([$user_id]);
+            
+            // 3. Insert or update the new installments
+            $ins = $pdo->prepare("
+                INSERT INTO instalment_details (user_id, instalment_number, amount, due_date, status, paid_date, payment_reference, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                ON DUPLICATE KEY UPDATE amount = VALUES(amount), due_date = VALUES(due_date), status = VALUES(status), paid_date = VALUES(paid_date), payment_reference = VALUES(payment_reference), updated_at = NOW()
+            ");
+            foreach ($new_installments_data as $num => $data) {
+                $ins->execute([
+                    $user_id, $num, $data['amount'], $data['due_date'],
+                    $data['status'], $data['paid_date'], $data['payment_reference']
+                ]);
+            }
+            
+            $pdo->commit();
+            
+            track_record($pdo, $user_id, 'installments_edited', 
+                "Updated plan to $new_plan, discount to ₹$new_discount. Total fee: ₹$new_total_fee", $admin_username);
+            log_admin_activity($pdo, $admin_username, 'installments_edited',
+                "Edited installments configuration for student $user_id");
+            
+            $message = 'Installment configuration updated successfully.';
+            
+            // Reload page data
+            $student = load_student($pdo, $user_id);
+            
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            error_log('Edit installments: ' . $e->getMessage());
+            $error = 'Error saving installments: ' . $e->getMessage();
+        }
+    }
+}
+
+/* ── POST: update_onboarding ── */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_onboarding') {
+    if (!csrf_verify()) {
+        $error = 'Security token mismatch. Please retry.';
+    } else {
+        try {
+            $app  = isset($_POST['app_access_provided']) ? 'Yes' : 'No';
+            $sav  = isset($_POST['saved_to_contacts']) ? 'Yes' : 'No';
+            $wa   = isset($_POST['added_whatsapp_groups']) ? 'Yes' : 'No';
+            $sem  = isset($_POST['semester_guide_provided']) ? 'Yes' : 'No';
+            
+            $all_checked = ($app === 'Yes' && $sav === 'Yes' && $wa === 'Yes' && $sem === 'Yes');
+            
+            $pdo->beginTransaction();
+            
+            // Check if onboarding row exists
+            $stmt = $pdo->prepare("SELECT id FROM student_onboarding WHERE user_id = ?");
+            $stmt->execute([$user_id]);
+            $exists = $stmt->fetch();
+            
+            if ($exists) {
+                $stmt = $pdo->prepare("
+                    UPDATE student_onboarding SET
+                        app_access_provided = ?,
+                        saved_to_contacts = ?,
+                        added_whatsapp_groups = ?,
+                        semester_guide_provided = ?,
+                        onboarded_by = ?,
+                        onboarded_at = COALESCE(onboarded_at, NOW()),
+                        updated_at = NOW()
+                    WHERE user_id = ?
+                ");
+                $stmt->execute([$app, $sav, $wa, $sem, $admin_username, $user_id]);
+            } else {
+                $stmt = $pdo->prepare("
+                    INSERT INTO student_onboarding
+                        (user_id, app_access_provided, saved_to_contacts, added_whatsapp_groups, semester_guide_provided, onboarded_by, onboarded_at, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
+                ");
+                $stmt->execute([$user_id, $app, $sav, $wa, $sem, $admin_username]);
+            }
+            
+            $onb_status = $all_checked ? 'completed' : 'pending';
+            
+            $stmt = $pdo->prepare("UPDATE users SET onboarding_status = ?, course_access_provided = ? WHERE user_id = ?");
+            $stmt->execute([$onb_status, $app === 'Yes' ? 'yes' : 'no', $user_id]);
+            
+            $pdo->commit();
+            
+            track_record($pdo, $user_id, 'onboarding_updated',
+                "Onboarding checklist updated. App: $app, Contacts: $sav, WhatsApp: $wa, Sem Guide: $sem. Status: $onb_status", $admin_username);
+            log_admin_activity($pdo, $admin_username, 'onboarding_updated',
+                "Updated onboarding checklist for student $user_id. Status: $onb_status");
+            
+            $message = 'Onboarding checklist updated successfully.';
+            $student = load_student($pdo, $user_id);
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            error_log('Onboarding edit: ' . $e->getMessage());
+            $error = 'Error updating onboarding checklist.';
+        }
+    }
+}
+
+/* ── POST: add_remark ── */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_remark') {
+    if (!csrf_verify()) {
+        $error = 'Security token mismatch. Please retry.';
+    } else {
+        $remark = trim($_POST['remark'] ?? '');
+        $set_reminder = isset($_POST['set_reminder']);
+        $rem_title = trim($_POST['reminder_title'] ?? '');
+        $rem_time = $_POST['reminder_time'] ?? '';
+        
+        if ($remark === '') {
+            $error = 'Remark cannot be empty.';
+        } else {
+            try {
+                $pdo->beginTransaction();
+                $reminder_id = null;
+                if ($set_reminder && $rem_title !== '' && $rem_time !== '') {
+                    $ts = strtotime(str_replace('T', ' ', $rem_time));
+                    if ($ts) {
+                        $stmt = $pdo->prepare("
+                            INSERT INTO reminders (title, notes, remind_at, assigned_to, status, created_by, student_id, created_at)
+                            VALUES (?, ?, ?, ?, 'pending', ?, ?, NOW())
+                        ");
+                        $stmt->execute([$rem_title, $remark, date('Y-m-d H:i:s', $ts), $admin_username, $admin_username, $user_id]);
+                        $reminder_id = $pdo->lastInsertId();
+                    }
+                }
+                
+                $stmt = $pdo->prepare("
+                    INSERT INTO student_remarks (user_id, remark, created_by, reminder_id, created_at)
+                    VALUES (?, ?, ?, ?, NOW())
+                ");
+                $stmt->execute([$user_id, $remark, $admin_username, $reminder_id]);
+                
+                $pdo->commit();
+                
+                track_record($pdo, $user_id, 'remark_added', "Remark: $remark" . ($reminder_id ? " (Reminder scheduled)" : ""), $admin_username);
+                log_admin_activity($pdo, $admin_username, 'remark_added', "Added remark/note for student $user_id");
+                $message = 'Remark/note saved successfully.';
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                error_log('Add remark error: ' . $e->getMessage());
+                $error = 'Error saving remark/note.';
+            }
+        }
+    }
+}
+
+/* ── POST: edit_remark ── */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_remark') {
+    if (!csrf_verify()) {
+        $error = 'Security token mismatch. Please retry.';
+    } else {
+        $remark_id = (int)$_POST['remark_id'];
+        $remark = trim($_POST['remark'] ?? '');
+        if ($remark === '') {
+            $error = 'Remark cannot be empty.';
+        } else {
+            try {
+                $stmt = $pdo->prepare("SELECT * FROM student_remarks WHERE id = ? AND user_id = ?");
+                $stmt->execute([$remark_id, $user_id]);
+                $old = $stmt->fetch();
+                if ($old) {
+                    $pdo->prepare("UPDATE student_remarks SET remark = ? WHERE id = ?")->execute([$remark, $remark_id]);
+                    if ($old['reminder_id']) {
+                        $pdo->prepare("UPDATE reminders SET notes = ? WHERE id = ? AND status = 'pending'")->execute([$remark, $old['reminder_id']]);
+                    }
+                    track_record($pdo, $user_id, 'remark_edited', "Old: {$old['remark']} -> New: $remark", $admin_username);
+                    log_admin_activity($pdo, $admin_username, 'remark_edited', "Edited remark $remark_id for student $user_id");
+                    $message = 'Remark/note updated successfully.';
+                }
+            } catch (Exception $e) {
+                error_log('Edit remark error: ' . $e->getMessage());
+                $error = 'Error editing remark/note.';
+            }
+        }
+    }
+}
+
+/* ── POST: delete_remark ── */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_remark') {
+    if (!csrf_verify()) {
+        $error = 'Security token mismatch. Please retry.';
+    } else {
+        $remark_id = (int)$_POST['remark_id'];
+        try {
+            $stmt = $pdo->prepare("SELECT * FROM student_remarks WHERE id = ? AND user_id = ?");
+            $stmt->execute([$remark_id, $user_id]);
+            $rem = $stmt->fetch();
+            if ($rem) {
+                $pdo->beginTransaction();
+                $pdo->prepare("DELETE FROM student_remarks WHERE id = ?")->execute([$remark_id]);
+                $pdo->commit();
+                track_record($pdo, $user_id, 'remark_deleted', "Deleted remark: {$rem['remark']}", $admin_username);
+                log_admin_activity($pdo, $admin_username, 'remark_deleted', "Deleted remark $remark_id for student $user_id");
+                $message = 'Remark/note deleted successfully.';
+            }
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            error_log('Delete remark error: ' . $e->getMessage());
+            $error = 'Error deleting remark/note.';
+        }
+    }
+}
+
 /* ── POST: edit core details (whitelist, CSRF, audit) ──────────── */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !in_array(($_POST['action'] ?? ''), ['delete_student', 'revert_to_pending'], true)) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !in_array(($_POST['action'] ?? ''), ['delete_student', 'revert_to_pending', 'edit_installments', 'update_onboarding', 'add_remark', 'edit_remark', 'delete_remark'], true)) {
     if (!csrf_verify()) {
         $error = 'Security token mismatch. Please retry.';
     } else {
@@ -345,7 +665,12 @@ include 'includes/admin_nav.php';
     <div class="panel-head">
         <span class="head-icon" style="background:var(--pink-soft);color:var(--pink-ink);"><i class="fas fa-money-bill-wave"></i></span>
         <h2>Installments</h2>
-        <div class="head-right"><a class="btn btn-sm btn-outline" href="phpinstalmentpaymentupdate.php">All payments <i class="fas fa-arrow-right"></i></a></div>
+        <div class="head-right" style="display:flex; gap:8px; align-items:center;">
+            <?php if ($student['status'] === 'approved'): ?>
+                <button class="btn btn-sm btn-primary" onclick="openEditInstallmentsModal()"><i class="fas fa-edit"></i> Edit Installments</button>
+            <?php endif; ?>
+            <a class="btn btn-sm btn-outline" href="phpinstalmentpaymentupdate.php">All payments <i class="fas fa-arrow-right"></i></a>
+        </div>
     </div>
     <div class="panel-body flush table-wrap">
         <?php if (empty($installments)): ?>
@@ -423,21 +748,40 @@ include 'includes/admin_nav.php';
 
 <!-- ── ONBOARDING RECORD ── -->
 <div class="panel">
-    <div class="panel-head"><span class="head-icon" style="background:var(--teal-soft);color:var(--teal-ink);"><i class="fas fa-handshake"></i></span><h2>Onboarding</h2>
+    <div class="panel-head">
+        <span class="head-icon" style="background:var(--teal-soft);color:var(--teal-ink);"><i class="fas fa-handshake"></i></span>
+        <h2>Onboarding Checklist</h2>
         <div class="head-right"><a class="btn btn-sm btn-outline" href="studentonboarding.php">Onboarding queue <i class="fas fa-arrow-right"></i></a></div>
     </div>
     <div class="panel-body">
-        <?php if ($onboarding): ?>
-            <div class="detail-list">
-                <div class="detail-row"><div class="dl">App access</div><div class="dv"><span class="badge <?php echo $onboarding['app_access_provided'] === 'Yes' ? 'green' : 'gray'; ?>"><?php echo e($onboarding['app_access_provided']); ?></span></div></div>
-                <div class="detail-row"><div class="dl">Saved to contacts</div><div class="dv"><span class="badge <?php echo $onboarding['saved_to_contacts'] === 'Yes' ? 'green' : 'gray'; ?>"><?php echo e($onboarding['saved_to_contacts']); ?></span></div></div>
-                <div class="detail-row"><div class="dl">WhatsApp groups</div><div class="dv"><span class="badge <?php echo $onboarding['added_whatsapp_groups'] === 'Yes' ? 'green' : 'gray'; ?>"><?php echo e($onboarding['added_whatsapp_groups']); ?></span></div></div>
-                <div class="detail-row"><div class="dl">Semester guide</div><div class="dv"><span class="badge <?php echo $onboarding['semester_guide_provided'] === 'Yes' ? 'green' : 'gray'; ?>"><?php echo e($onboarding['semester_guide_provided']); ?></span></div></div>
-                <div class="detail-row"><div class="dl">Onboarded by</div><div class="dv"><?php echo e($onboarding['onboarded_by']); ?> · <?php echo date('d M Y', strtotime($onboarding['onboarded_at'])); ?></div></div>
+        <form method="POST">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="update_onboarding">
+            <div style="display:flex; flex-direction:column; gap:12px; margin-bottom:15px;">
+                <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin:0; cursor:pointer;">
+                    <input type="checkbox" name="app_access_provided" value="Yes" <?php echo ($onboarding && $onboarding['app_access_provided'] === 'Yes') ? 'checked' : ''; ?>>
+                    App access provided
+                </label>
+                <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin:0; cursor:pointer;">
+                    <input type="checkbox" name="saved_to_contacts" value="Yes" <?php echo ($onboarding && $onboarding['saved_to_contacts'] === 'Yes') ? 'checked' : ''; ?>>
+                    Saved to contacts
+                </label>
+                <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin:0; cursor:pointer;">
+                    <input type="checkbox" name="added_whatsapp_groups" value="Yes" <?php echo ($onboarding && $onboarding['added_whatsapp_groups'] === 'Yes') ? 'checked' : ''; ?>>
+                    Added to WhatsApp groups
+                </label>
+                <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin:0; cursor:pointer;">
+                    <input type="checkbox" name="semester_guide_provided" value="Yes" <?php echo ($onboarding && $onboarding['semester_guide_provided'] === 'Yes') ? 'checked' : ''; ?>>
+                    Semester guide provided
+                </label>
             </div>
-        <?php else: ?>
-            <div class="cell-sub">Onboarding checklist not completed yet.</div>
-        <?php endif; ?>
+            <?php if ($onboarding): ?>
+                <div class="cell-sub" style="margin-bottom:12px;">
+                    Last updated by: <strong><?php echo e($onboarding['onboarded_by']); ?></strong> on <?php echo date('d M Y, h:i A', strtotime($onboarding['updated_at'] ?: $onboarding['onboarded_at'])); ?>
+                </div>
+            <?php endif; ?>
+            <button type="submit" class="btn btn-sm btn-primary"><i class="fas fa-save"></i> Save Onboarding Checklist</button>
+        </form>
     </div>
 </div>
 
@@ -460,6 +804,78 @@ include 'includes/admin_nav.php';
                     <td class="cell-sub">₹<?php echo number_format((float)$h['discount_amount'], 0); ?></td>
                     <td class="cell-sub"><?php echo date('d M Y, h:i A', strtotime($h['approval_date'])); ?></td>
                     <td class="cell-sub"><?php echo e($h['notes'] ?: $h['discount_remark'] ?: '-'); ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+    </div>
+</div>
+
+<!-- ── REMARKS & REMINDERS ── -->
+<div class="panel">
+    <div class="panel-head">
+        <span class="head-icon" style="background:var(--accent-soft);color:var(--accent-ink);"><i class="fas fa-clipboard"></i></span>
+        <h2>Remarks &amp; Reminders</h2>
+        <div class="head-right">
+            <button class="btn btn-sm btn-primary" onclick="openAddRemarkModal()"><i class="fas fa-plus"></i> Add Remark / Note</button>
+        </div>
+    </div>
+    <div class="panel-body flush table-wrap">
+        <?php
+        $remarks = [];
+        try {
+            $stmt = $pdo->prepare("
+                SELECT sr.*, r.title AS reminder_title, r.remind_at, r.status AS reminder_status 
+                FROM student_remarks sr
+                LEFT JOIN reminders r ON r.id = sr.reminder_id
+                WHERE sr.user_id = ?
+                ORDER BY sr.created_at DESC
+            ");
+            $stmt->execute([$user_id]);
+            $remarks = $stmt->fetchAll();
+        } catch (Exception $e) {}
+        
+        if (empty($remarks)):
+        ?>
+            <div class="empty-state" style="padding:20px;"><i class="fas fa-clipboard"></i><p>No remarks or notes added yet.</p></div>
+        <?php else: ?>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>By</th>
+                    <th>Remark / Note</th>
+                    <th>Linked Reminder</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($remarks as $rem): ?>
+                <tr>
+                    <td class="cell-sub" style="white-space:nowrap;"><?php echo date('d M Y, h:i A', strtotime($rem['created_at'])); ?></td>
+                    <td class="cell-sub"><?php echo e($rem['created_by']); ?></td>
+                    <td style="word-break:break-word; max-width:300px;"><?php echo nl2br(e($rem['remark'])); ?></td>
+                    <td class="cell-sub">
+                        <?php if ($rem['reminder_id']): ?>
+                            <strong><?php echo e($rem['reminder_title']); ?></strong><br>
+                            <i class="fas fa-clock"></i> <?php echo date('d M Y, h:i A', strtotime($rem['remind_at'])); ?><br>
+                            <span class="badge <?php echo $rem['reminder_status'] === 'completed' ? 'green' : ($rem['reminder_status'] === 'dismissed' ? 'gray' : 'amber'); ?>">
+                                <?php echo ucfirst($rem['reminder_status']); ?>
+                            </span>
+                        <?php else: ?>
+                            -
+                        <?php endif; ?>
+                    </td>
+                    <td style="text-align:right; white-space:nowrap;">
+                        <button class="btn btn-sm btn-soft-blue" onclick='openEditRemarkModal(<?php echo json_encode($rem, JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this remark?');">
+                            <?php echo csrf_field(); ?>
+                            <input type="hidden" name="action" value="delete_remark">
+                            <input type="hidden" name="remark_id" value="<?php echo (int)$rem['id']; ?>">
+                            <button class="btn btn-sm btn-soft-red"><i class="fas fa-trash"></i></button>
+                        </form>
+                    </td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
@@ -542,5 +958,203 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 <?php endif; ?>
+
+<!-- ── EDIT INSTALLMENTS MODAL ── -->
+<div class="modal-backdrop" id="edit-installments-modal">
+    <div class="modal" style="max-width:560px; width:90%;">
+        <div class="modal-head">
+            <h3><i class="fas fa-money-bill-wave" style="color:var(--accent);"></i> Edit Installment Schedule</h3>
+            <button class="modal-close" onclick="closeModal('edit-installments-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST" id="edit-installments-form">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="edit_installments">
+            <div class="modal-body">
+                <div class="alert alert-info" style="margin-bottom:12px; font-size:0.82rem; line-height:1.4;">
+                    Course Base Fee: <strong>₹<?php echo number_format($student['course_fee'] ?? 0, 2); ?></strong><br>
+                    Registration Fee Paid: <strong>₹<?php echo number_format($student['paid_amount'] ?? 0, 2); ?></strong>
+                </div>
+                
+                <div class="form-grid">
+                    <div class="field">
+                        <label>Discount Amount (₹)</label>
+                        <input type="number" name="discount_amount" id="ei-discount" min="0" step="0.01" value="<?php echo e($student['discount_amount']); ?>" oninput="recalcEI()">
+                    </div>
+                    <div class="field">
+                        <label>Net Payable Amount (₹)</label>
+                        <input type="text" id="ei-net-payable" readonly style="background:var(--gray-100); font-weight:700;">
+                    </div>
+                    <div class="field full">
+                        <label>Payment Plan</label>
+                        <select name="payment_plan" id="ei-plan" onchange="generateEIFields()">
+                            <?php foreach (['One Time','2 Installments','3 Installments','4 Installments','5 Installments'] as $pl): ?>
+                                <option value="<?php echo $pl; ?>"><?php echo $pl; ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                </div>
+
+                <div style="margin-top:15px; border-top:1px dashed var(--border); padding-top:12px;">
+                    <div style="font-weight:700; font-size:0.85rem; margin-bottom:8px;">Installment Breakdown</div>
+                    <div id="ei-fields-container"></div>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('edit-installments-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Schedule</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── ADD REMARK MODAL ── -->
+<div class="modal-backdrop" id="add-remark-modal">
+    <div class="modal" style="max-width:460px; width:90%;">
+        <div class="modal-head">
+            <h3><i class="fas fa-clipboard" style="color:var(--accent);"></i> Add Remark / Note</h3>
+            <button class="modal-close" onclick="closeModal('add-remark-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="add_remark">
+            <div class="modal-body">
+                <div class="field full" style="margin-bottom:12px;">
+                    <label>Remark / Note <span class="req">*</span></label>
+                    <textarea name="remark" rows="3" required placeholder="Enter note details here..."></textarea>
+                </div>
+                <div style="margin-bottom:12px;">
+                    <label style="display:inline-flex; align-items:center; gap:8px; font-weight:normal; margin:0; cursor:pointer;">
+                        <input type="checkbox" id="add-set-reminder" name="set_reminder" onchange="toggleAddReminderFields()">
+                        Schedule a reminder with this note
+                    </label>
+                </div>
+                <div id="add-reminder-fields" style="display:none; border-top:1px dashed var(--border); padding-top:12px; margin-top:8px;">
+                    <div class="field full" style="margin-bottom:10px;">
+                        <label>Reminder Title <span class="req">*</span></label>
+                        <input type="text" id="add-rem-title" name="reminder_title" placeholder="e.g. Call student for follow up">
+                    </div>
+                    <div class="field full">
+                        <label>Date &amp; Time <span class="req">*</span></label>
+                        <input type="datetime-local" id="add-rem-time" name="reminder_time" value="<?php echo date('Y-m-d\TH:i', strtotime('+1 hour')); ?>">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('add-remark-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Remark</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── EDIT REMARK MODAL ── -->
+<div class="modal-backdrop" id="edit-remark-modal">
+    <div class="modal" style="max-width:460px; width:90%;">
+        <div class="modal-head">
+            <h3><i class="fas fa-clipboard" style="color:var(--accent);"></i> Edit Remark / Note</h3>
+            <button class="modal-close" onclick="closeModal('edit-remark-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="edit_remark">
+            <input type="hidden" name="remark_id" id="er-remark-id">
+            <div class="modal-body">
+                <div class="field full">
+                    <label>Remark / Note <span class="req">*</span></label>
+                    <textarea name="remark" id="er-remark-text" rows="4" required></textarea>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('edit-remark-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Update Remark</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+var COURSE_FEE = <?php echo (float)($student['course_fee'] ?? 0); ?>;
+var REG_PAID = <?php echo (float)($student['paid_amount'] ?? 0); ?>;
+var EXISTING_INSTALLMENTS = <?php echo json_encode($installments, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
+var CURRENT_PLAN = <?php echo json_encode($student['payment_plan'] ?: 'One Time'); ?>;
+
+function openEditInstallmentsModal() {
+    document.getElementById('ei-discount').value = <?php echo (float)$student['discount_amount']; ?>;
+    document.getElementById('ei-plan').value = CURRENT_PLAN;
+    recalcEI();
+    generateEIFields();
+    openModal('edit-installments-modal');
+}
+
+function recalcEI() {
+    var disc = parseFloat(document.getElementById('ei-discount').value) || 0;
+    var net = Math.max(0, COURSE_FEE - disc);
+    document.getElementById('ei-net-payable').value = '₹' + net.toLocaleString('en-IN', {minimumFractionDigits: 2});
+}
+
+function generateEIFields() {
+    var plan = document.getElementById('ei-plan').value;
+    var count = 1;
+    if (plan !== 'One Time') {
+        count = parseInt(plan) || 1;
+    }
+    
+    var container = document.getElementById('ei-fields-container');
+    container.innerHTML = '';
+    
+    if (count <= 1) {
+        container.innerHTML = '<div style="font-size:0.8rem; color:var(--text-muted);">One-time payment plan. No future installments scheduled.</div>';
+        return;
+    }
+    
+    for (var i = 2; i <= count; i++) {
+        var existing = EXISTING_INSTALLMENTS.find(inst => parseInt(inst.instalment_number) === i);
+        var amt = existing ? parseFloat(existing.amount) : '';
+        var due = existing ? existing.due_date : '';
+        var status = existing ? existing.status : 'pending';
+        var isLocked = existing && (status === 'approved' || status === 'paid' || existing.paid_date);
+        
+        var row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.gap = '10px';
+        row.style.alignItems = 'center';
+        row.style.marginBottom = '8px';
+        row.innerHTML = `
+            <div style="font-weight:700; font-size:0.8rem; width:100px;">Installment #${i}:</div>
+            <div style="flex:1;">
+                <input type="number" name="inst_${i}_amount" value="${amt}" placeholder="Amount" min="1" step="0.01" required class="form-input" style="padding:6px 10px;" ${isLocked ? 'readonly style="background:var(--gray-100); color:var(--text-muted);"' : ''}>
+            </div>
+            <div style="flex:1.2;">
+                <input type="date" name="inst_${i}_due_date" value="${due}" required class="form-input" style="padding:6px 10px;" ${isLocked ? 'readonly style="background:var(--gray-100); color:var(--text-muted);"' : ''}>
+            </div>
+            <div style="width:80px; font-size:0.75rem; text-align:right; font-weight:700;">
+                \${isLocked ? '<span class="badge green">Paid</span>' : '<span class="badge gray">Pending</span>'}
+            </div>
+        `;
+        container.appendChild(row);
+    }
+}
+
+function openAddRemarkModal() {
+    document.getElementById('add-set-reminder').checked = false;
+    document.getElementById('add-rem-title').required = false;
+    document.getElementById('add-rem-time').required = false;
+    document.getElementById('add-reminder-fields').style.display = 'none';
+    openModal('add-remark-modal');
+}
+
+function toggleAddReminderFields() {
+    var checked = document.getElementById('add-set-reminder').checked;
+    document.getElementById('add-reminder-fields').style.display = checked ? 'block' : 'none';
+    document.getElementById('add-rem-title').required = checked;
+    document.getElementById('add-rem-time').required = checked;
+}
+
+function openEditRemarkModal(rem) {
+    document.getElementById('er-remark-id').value = rem.id;
+    document.getElementById('er-remark-text').value = rem.remark;
+    openModal('edit-remark-modal');
+}
+</script>
 
 <?php include 'includes/admin_footer.php'; ?>

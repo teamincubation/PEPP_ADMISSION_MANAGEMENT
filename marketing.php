@@ -595,7 +595,7 @@ function openPay(r) {
 function viewJoinees(refereeId, name) {
     document.getElementById('joinees-alumnus-name').textContent = name;
     const tbody = document.getElementById('joinees-table-body');
-    tbody.innerHTML = '<tr><td colspan=\\\"5\\\" style=\\\"text-align:center; padding:20px;\\\"><i class=\\\"fas fa-spinner fa-spin\\\"></i> Loading...</td></tr>';
+    tbody.innerHTML = \"<tr><td colspan='5' style='text-align:center; padding:20px;'><i class='fas fa-spinner fa-spin'></i> Loading...</td></tr>\";
     openModal('joinees-modal');
     
     fetch('marketing.php?get_joinees=' + refereeId)
@@ -605,30 +605,30 @@ function viewJoinees(refereeId, name) {
             if (data && data.length > 0) {
                 data.forEach(j => {
                     const tr = document.createElement('tr');
-                    tr.innerHTML = '<td><div class=\\\"cell-main\\\">' + escapeHtml(j.student_name) + '</div></td>' +
-                                   '<td>' + escapeHtml(j.course) + '</td>' +
-                                   '<td><span class=\\\"badge ' + (j.payment_plan.toLowerCase() === 'installment' ? 'amber' : 'green') + '\\\">' + escapeHtml(j.payment_plan) + '</span></td>' +
-                                   '<td>₹' + Number(j.paid_amount).toLocaleString(\\'en-IN\\', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '</td>' +
-                                   '<td>₹' + Number(j.due_amount).toLocaleString(\\'en-IN\\', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + '</td>';
+                    tr.innerHTML = \"<td><div class='cell-main'>\" + escapeHtml(j.student_name) + \"</div></td>\" +
+                                   \"<td>\" + escapeHtml(j.course) + \"</td>\" +
+                                   \"<td><span class='badge \" + (j.payment_plan.toLowerCase() === 'installment' ? 'amber' : 'green') + \"'>\" + escapeHtml(j.payment_plan) + \"</span></td>\" +
+                                   \"<td>₹\" + Number(j.paid_amount).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + \"</td>\" +
+                                   \"<td>₹\" + Number(j.due_amount).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + \"</td>\";
                     tbody.appendChild(tr);
                 });
             } else {
-                tbody.innerHTML = '<tr><td colspan=\\\"5\\\" style=\\\"text-align:center; padding:20px; color:#666;\\\">No learners have joined using this referral code yet.</td></tr>';
+                tbody.innerHTML = \"<tr><td colspan='5' style='text-align:center; padding:20px; color:#666;'>No learners have joined using this referral code yet.</td></tr>\";
             }
         })
         .catch(err => {
             console.error(err);
-            tbody.innerHTML = '<tr><td colspan=\\\"5\\\" style=\\\"text-align:center; padding:20px; color:red;\\\"><i class=\\\"fas fa-triangle-exclamation\\\"></i> Error loading joinees.</td></tr>';
+            tbody.innerHTML = \"<tr><td colspan='5' style='text-align:center; padding:20px; color:red;'><i class='fas fa-triangle-exclamation'></i> Error loading joinees.</td></tr>\";
         });
 }
 function escapeHtml(text) {
     if (!text) return '';
     return text.toString()
-        .replace(/&/g, \\\"&amp;\\\")
-        .replace(/</g, \\\"&lt;\\\")
-        .replace(/>/g, \\\"&gt;\\\")
-        .replace(/\\\"/g, \\\"&quot;\\\")
-        .replace(/'/g, \\\"&#039;\\\");
+        .replace(/&/g, \"&amp;\")
+        .replace(/</g, \"&lt;\")
+        .replace(/>/g, \"&gt;\")
+        .replace(/\"/g, \"&quot;\")
+        .replace(/'/g, \"&#039;\");
 }
 </script>";
 include 'includes/admin_footer.php';

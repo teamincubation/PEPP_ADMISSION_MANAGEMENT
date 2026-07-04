@@ -69,6 +69,9 @@ if (isset($__rem_msgs[$__rem_msg])): [$__t, $__m] = $__rem_msgs[$__rem_msg]; ?>
                             </div>
                         </div>
                         <div style="display:flex; gap:5px; flex-wrap:wrap; align-items:flex-start;">
+                            <?php if (!empty($rm['student_id'])): ?>
+                                <a href="student-details.php?user_id=<?php echo urlencode($rm['student_id']); ?>" class="btn btn-sm btn-soft-violet" title="Student Profile"><i class="fas fa-user"></i></a>
+                            <?php endif; ?>
                             <form method="POST" action="reminders-action.php" style="display:inline;">
                                 <?php echo csrf_field(); ?><input type="hidden" name="action" value="complete"><input type="hidden" name="id" value="<?php echo (int)$rm['id']; ?>"><input type="hidden" name="return" value="<?php echo e($_SERVER['REQUEST_URI'] ?? ''); ?>">
                                 <button type="submit" class="btn btn-sm btn-soft-green" title="Mark completed"><i class="fas fa-check"></i></button>
@@ -127,6 +130,7 @@ if (isset($__rem_msgs[$__rem_msg])): [$__t, $__m] = $__rem_msgs[$__rem_msg]; ?>
                 'notes' => $rm['notes'] ?? '',
                 'when' => date('d M Y, h:i A', strtotime($rm['remind_at'])),
                 'all' => $rm['assigned_to'] === '__ALL__',
+                'student_id' => $rm['student_id'] ?: null,
             ];
         }
         echo json_encode($out, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
@@ -167,6 +171,13 @@ if (isset($__rem_msgs[$__rem_msg])): [$__t, $__m] = $__rem_msgs[$__rem_msg]; ?>
         b.addEventListener('click', function () { window.urgentAct(action); });
         return b;
     }
+    function mkLinkBtn(cls, icon, label, url) {
+        var a = document.createElement('a');
+        a.className = 'btn ' + cls;
+        a.href = url;
+        a.innerHTML = '<i class="fas ' + icon + '"></i> ' + label;
+        return a;
+    }
     function render() {
         var r = queue[idx];
         prog.textContent = queue.length > 1 ? ('Task ' + (idx + 1) + ' of ' + queue.length) : '';
@@ -177,6 +188,9 @@ if (isset($__rem_msgs[$__rem_msg])): [$__t, $__m] = $__rem_msgs[$__rem_msg]; ?>
         if (r.notes) { var n = document.createElement('div'); n.className = 'urgent-item-notes'; n.innerHTML = esc(r.notes).replace(/\n/g, '<br>'); slot.appendChild(n); }
         var acts = document.createElement('div'); acts.className = 'urgent-item-actions';
         acts.appendChild(mkBtn('btn-success', 'fa-check', 'Completed', 'complete'));
+        if (r.student_id) {
+            acts.appendChild(mkLinkBtn('btn-soft-violet', 'fa-user', 'Student Profile', 'student-details.php?user_id=' + encodeURIComponent(r.student_id)));
+        }
         acts.appendChild(mkBtn('btn-soft-amber', 'fa-clock-rotate-left', 'Skip 5 min', 'skip5'));
         acts.appendChild(mkBtn('btn-soft-blue', 'fa-calendar', 'Postpone', 'postpone'));
         acts.appendChild(mkBtn('btn-soft-red', 'fa-xmark', 'Dismiss', 'dismiss'));

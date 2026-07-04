@@ -161,6 +161,11 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
                 <i class="fas fa-user-graduate"></i> Alumni Database
             </a>
             <?php endif; ?>
+            <?php if (can_access('students') || can_access('onboarding')): ?>
+            <a class="nav-item <?php echo nav_active('peppkit', $active_page); ?>" href="peppkit-report.php">
+                <i class="fas fa-box-open"></i> PEPPKIT Report
+            </a>
+            <?php endif; ?>
             <?php if (can_access('accounts')): ?>
             <a class="nav-item <?php echo nav_active('accounts', $active_page); ?>" href="accounts.php">
                 <i class="fas fa-wallet"></i> Accounts &amp; Expenses

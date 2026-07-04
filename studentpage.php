@@ -66,6 +66,7 @@ $search        = trim($_GET['search'] ?? '');
 $filter_course = trim($_GET['course'] ?? '');
 $filter_year   = trim($_GET['year'] ?? '');
 $filter_status = trim($_GET['status'] ?? '');
+$sort_by       = trim($_GET['sort_by'] ?? '');
 
 $where  = ["u.status = 'approved'"];
 $params = [];
@@ -80,6 +81,11 @@ if ($filter_year   !== '') { $where[] = "u.pepp_academic_year = ?"; $params[] = 
 if ($filter_status !== '') { $where[] = "u.student_status = ?";     $params[] = $filter_status; }
 
 $where_clause = implode(' AND ', $where);
+
+$order_by = "ORDER BY u.created_at DESC";
+if ($sort_by === 'remarks_desc') {
+    $order_by = "ORDER BY remarks_count DESC, u.created_at DESC";
+}
 
 $page     = max(1, (int)($_GET['page'] ?? 1));
 $per_page = 20;
@@ -99,10 +105,11 @@ try {
                u.pepp_course, u.pepp_academic_year, u.student_status, u.onboarding_status,
                u.paid_amount, u.payment_plan, u.course_duration_date, u.joined_date, u.created_at,
                DATEDIFF(u.course_duration_date, CURDATE()) AS days_remaining,
-               (SELECT COUNT(*) FROM instalment_details i WHERE i.user_id = u.user_id AND i.status = 'pending') AS open_installments
+               (SELECT COUNT(*) FROM instalment_details i WHERE i.user_id = u.user_id AND i.status = 'pending') AS open_installments,
+               (SELECT COUNT(*) FROM student_remarks sr WHERE sr.user_id = u.user_id) AS remarks_count
         FROM users u
         WHERE $where_clause
-        ORDER BY u.created_at DESC
+        $order_by
         LIMIT $per_page OFFSET $offset
     ");
     $stmt->execute($params);
@@ -168,6 +175,13 @@ include 'includes/admin_nav.php';
                     <?php endforeach; ?>
                 </select>
             </div>
+            <div class="field">
+                <label>Sort By</label>
+                <select name="sort_by">
+                    <option value="">Default (Newest)</option>
+                    <option value="remarks_desc" <?php echo $sort_by === 'remarks_desc' ? 'selected' : ''; ?>>Remarks Added First</option>
+                </select>
+            </div>
             <button type="submit" class="btn btn-primary"><i class="fas fa-filter"></i> Filter</button>
             <a href="studentpage.php" class="btn btn-outline">Reset</a>
         </form>
@@ -200,7 +214,12 @@ include 'includes/admin_nav.php';
             ?>
                 <tr>
                     <td>
-                        <div class="cell-main"><?php echo e($s['name']); ?></div>
+                        <div class="cell-main" style="display:inline-flex; align-items:center; gap:6px;">
+                            <?php echo e($s['name']); ?>
+                            <?php if ((int)$s['remarks_count'] > 0): ?>
+                                <span class="badge amber" title="Has Remarks/Notes (<?php echo (int)$s['remarks_count']; ?>)" style="font-size:0.62rem; padding:1px 4px; display:inline-flex; align-items:center; gap:2px;"><i class="fas fa-clipboard"></i> Remark</span>
+                            <?php endif; ?>
+                        </div>
                         <div class="cell-sub"><?php echo e($s['user_id']); ?> &middot; <?php echo e($s['email']); ?></div>
                     </td>
                     <td>

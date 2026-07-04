@@ -900,6 +900,28 @@ if ($step === 'payment' && isset($_GET['user_id'])) {
                         <?php endif; ?>
                     </div>
 
+                    <!-- Direct Banking Payment Details -->
+                    <?php
+                    try {
+                        $public_payment_accounts = $pdo->query("SELECT * FROM payment_accounts WHERE is_public = 1 AND status = 'active' LIMIT 2")->fetchAll();
+                    } catch (Exception $e) {
+                        $public_payment_accounts = [];
+                    }
+                    if (!empty($public_payment_accounts)):
+                    ?>
+                    <div style="background:#fef3c7; border:1px solid #f59e0b; border-radius:12px; padding:12px 16px; margin: 15px 0;">
+                        <p style="margin:0 0 6px 0; font-size:0.88rem; font-weight:700; color:#b45309;"><i class="fas fa-building-columns"></i> Direct Payment Details</p>
+                        <div style="display:flex; flex-direction:column; gap:8px;">
+                            <?php foreach ($public_payment_accounts as $pa): ?>
+                                <div style="font-size:0.82rem; color:#78350f;">
+                                    <strong style="color:#b45309;"><?php echo htmlspecialchars($pa['account_name']); ?>:</strong>
+                                    <span style="word-break:break-all; font-family:monospace;"><?php echo htmlspecialchars($pa['banking_details']); ?></span>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+
                     <!-- Payment Update Form -->
                     <form method="POST" action="" enctype="multipart/form-data">
                         <input type="hidden" name="action" value="update_payment">
