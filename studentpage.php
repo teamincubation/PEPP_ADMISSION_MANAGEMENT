@@ -3,6 +3,148 @@ require_once 'includes/auth.php';
 require_once 'config/database.php';
 require_permission('students');
 
+
+// AJAX API for remarks management
+if (isset($_GET['ajax_remarks'])) {
+    header('Content-Type: application/json');
+    $user_id = trim($_GET['user_id'] ?? '');
+    
+    // Check if user exists
+    $stmt = $pdo->prepare("SELECT name FROM users WHERE user_id = ? LIMIT 1");
+    $stmt->execute([$user_id]);
+    $student_name = $stmt->fetchColumn();
+    
+    if (!$student_name) {
+        echo json_encode(['error' => 'Student not found.']);
+        exit();
+    }
+    
+    // Fetch remarks
+    $stmt = $pdo->prepare("
+        SELECT sr.*, r.remind_at, r.status AS reminder_status
+        FROM student_remarks sr
+        LEFT JOIN reminders r ON r.id = sr.reminder_id
+        WHERE sr.user_id = ?
+        ORDER BY sr.created_at DESC
+    ");
+    $stmt->execute([$user_id]);
+    $remarks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    echo json_encode([
+        'student_name' => $student_name,
+        'remarks' => $remarks
+    ]);
+    exit();
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
+    header('Content-Type: application/json');
+    if (!csrf_verify()) {
+        echo json_encode(['error' => 'Security token mismatch. Please reload and retry.']);
+        exit();
+    }
+    
+    $action = $_POST['ajax_action'];
+    $user_id = trim($_POST['user_id'] ?? '');
+    
+    if ($action === 'add') {
+        $remark = trim($_POST['remark'] ?? '');
+        if ($remark === '') {
+            echo json_encode(['error' => 'Remark cannot be empty.']);
+            exit();
+        }
+        
+        try {
+            $pdo->beginTransaction();
+            
+            $reminder_id = null;
+            if (!empty($_POST['set_reminder'])) {
+                $rem_title = trim($_POST['reminder_title'] ?? '');
+                $rem_time = trim($_POST['reminder_time'] ?? '');
+                if ($rem_title !== '' && $rem_time !== '') {
+                    $ts = strtotime($rem_time);
+                    if ($ts > 0) {
+                        $stmt = $pdo->prepare("
+                            INSERT INTO reminders (title, notes, remind_at, assigned_to, status, created_by, student_id, created_at)
+                            VALUES (?, ?, ?, ?, 'pending', ?, ?, NOW())
+                        ");
+                        $stmt->execute([$rem_title, $remark, date('Y-m-d H:i:s', $ts), $admin_username, $admin_username, $user_id]);
+                        $reminder_id = $pdo->lastInsertId();
+                    }
+                }
+            }
+            
+            $stmt = $pdo->prepare("
+                INSERT INTO student_remarks (user_id, remark, created_by, reminder_id, created_at)
+                VALUES (?, ?, ?, ?, NOW())
+            ");
+            $stmt->execute([$user_id, $remark, $admin_username, $reminder_id]);
+            
+            $pdo->commit();
+            track_record($pdo, $user_id, 'remark_added', "Remark: $remark" . ($reminder_id ? " (Reminder scheduled)" : ""), $admin_username);
+            log_admin_activity($pdo, $admin_username, 'remark_added', "Added remark/note for student $user_id");
+            echo json_encode(['success' => true]);
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            echo json_encode(['error' => 'Failed to save remark: ' . $e->getMessage()]);
+        }
+        exit();
+        
+    } elseif ($action === 'edit') {
+        $remark_id = (int)($_POST['remark_id'] ?? 0);
+        $remark = trim($_POST['remark'] ?? '');
+        if ($remark === '') {
+            echo json_encode(['error' => 'Remark cannot be empty.']);
+            exit();
+        }
+        
+        try {
+            $stmt = $pdo->prepare("SELECT * FROM student_remarks WHERE id = ? AND user_id = ?");
+            $stmt->execute([$remark_id, $user_id]);
+            $old = $stmt->fetch();
+            if ($old) {
+                $pdo->prepare("UPDATE student_remarks SET remark = ? WHERE id = ?")->execute([$remark, $remark_id]);
+                if ($old['reminder_id']) {
+                    $pdo->prepare("UPDATE reminders SET notes = ? WHERE id = ? AND status = 'pending'")->execute([$remark, $old['reminder_id']]);
+                }
+                track_record($pdo, $user_id, 'remark_edited', "Old: {$old['remark']} -> New: $remark", $admin_username);
+                log_admin_activity($pdo, $admin_username, 'remark_edited', "Edited remark $remark_id for student $user_id");
+                echo json_encode(['success' => true]);
+            } else {
+                echo json_encode(['error' => 'Remark not found.']);
+            }
+        } catch (Exception $e) {
+            echo json_encode(['error' => 'Failed to update remark: ' . $e->getMessage()]);
+        }
+        exit();
+        
+    } elseif ($action === 'delete') {
+        $remark_id = (int)($_POST['remark_id'] ?? 0);
+        try {
+            $stmt = $pdo->prepare("SELECT * FROM student_remarks WHERE id = ? AND user_id = ?");
+            $stmt->execute([$remark_id, $user_id]);
+            $rem = $stmt->fetch();
+            if ($rem) {
+                $pdo->beginTransaction();
+                $pdo->prepare("DELETE FROM student_remarks WHERE id = ?")->execute([$remark_id]);
+                if ($rem['reminder_id']) {
+                    $pdo->prepare("DELETE FROM reminders WHERE id = ? AND status = 'pending'")->execute([$rem['reminder_id']]);
+                }
+                $pdo->commit();
+                track_record($pdo, $user_id, 'remark_deleted', "Deleted remark: {$rem['remark']}", $admin_username);
+                log_admin_activity($pdo, $admin_username, 'remark_deleted', "Deleted remark $remark_id for student $user_id");
+                echo json_encode(['success' => true]);
+            } else {
+                echo json_encode(['error' => 'Remark not found.']);
+            }
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            echo json_encode(['error' => 'Failed to delete remark: ' . $e->getMessage()]);
+        }
+        exit();
+    }
+}
+
 $success_message = '';
 $error_message   = '';
 
@@ -234,7 +376,7 @@ include 'includes/admin_nav.php';
                         <div class="cell-main" style="display:inline-flex; align-items:center; gap:6px;">
                             <?php echo e($s['name']); ?>
                             <?php if ((int)$s['remarks_count'] > 0): ?>
-                                <span class="badge amber" title="Has Remarks/Notes (<?php echo (int)$s['remarks_count']; ?>)" style="font-size:0.62rem; padding:1px 4px; display:inline-flex; align-items:center; gap:2px;"><i class="fas fa-clipboard"></i> Remark</span>
+                                <span class="badge amber" title="Has Remarks/Notes (<?php echo (int)$s['remarks_count']; ?>)" style="font-size:0.62rem; padding:1px 4px; display:inline-flex; align-items:center; gap:2px; cursor:pointer;" onclick="openRemarksModal('<?php echo e($s['user_id']); ?>')"><i class="fas fa-clipboard"></i> Remark</span>
                             <?php endif; ?>
                         </div>
                         <div class="cell-sub"><?php echo e($s['user_id']); ?> &middot; <?php echo e($s['email']); ?></div>
@@ -261,6 +403,7 @@ include 'includes/admin_nav.php';
                     <td><span class="badge <?php echo $stBadge; ?>"><?php echo ucfirst($st); ?></span></td>
                     <td style="text-align:right; white-space:nowrap;">
                         <a class="btn btn-sm btn-outline" href="student-details.php?user_id=<?php echo urlencode($s['user_id']); ?>" title="Full profile"><i class="fas fa-eye"></i></a>
+                        <button class="btn btn-sm btn-soft-violet" title="Remarks/Notes" onclick="openRemarksModal('<?php echo e($s['user_id']); ?>')"><i class="fas fa-clipboard"></i></button>
                         <button class="btn btn-sm btn-soft-blue" title="Extend access" onclick="openExtend('<?php echo e($s['user_id']); ?>', '<?php echo e(addslashes($s['name'])); ?>', '<?php echo e($s['course_duration_date']); ?>')"><i class="fas fa-calendar-plus"></i></button>
                         <button class="btn btn-sm btn-soft-amber" title="Change status" onclick="openStatus('<?php echo e($s['user_id']); ?>', '<?php echo e(addslashes($s['name'])); ?>', '<?php echo e($st); ?>')"><i class="fas fa-user-gear"></i></button>
                     </td>
@@ -344,8 +487,245 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- ── REMARKS MODAL ── -->
+<div class="modal-backdrop" id="remarks-modal">
+    <div class="modal" style="max-width:680px; width:90%;">
+        <div class="modal-head">
+            <h3><i class="fas fa-clipboard" style="color:var(--accent);"></i> Remarks &amp; Notes</h3>
+            <button class="modal-close" onclick="closeRemarksModal()"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div class="modal-body" style="max-height: 480px; overflow-y: auto;">
+            <div class="alert alert-info" style="margin-bottom:12px;"><i class="fas fa-user-graduate"></i> Student: <strong id="rem-student-name"></strong> <span id="rem-student-id" class="cell-sub" style="font-size:0.8rem; font-weight:normal; margin-left:6px;"></span></div>
+            
+            <div id="remarks-list-container" style="display:flex; flex-direction:column; gap:10px; margin-bottom:20px;">
+                <!-- Remarks list loaded dynamically -->
+            </div>
+
+            <!-- Form to add/edit a remark -->
+            <div style="background:var(--gray-50); border:1px solid var(--border); padding:16px; border-radius:8px;">
+                <h4 style="margin:0 0 12px 0; font-size:0.9rem; color:var(--text-main);" id="rem-form-title">Add New Remark / Note</h4>
+                <input type="hidden" id="rem-edit-id" value="">
+                
+                <div class="field" style="margin-bottom:10px;">
+                    <label style="font-size:0.75rem;">Remark Text <span class="req">*</span></label>
+                    <textarea id="rem-text" rows="3" class="form-input" style="width:100%; border:1px solid var(--border); border-radius:6px; padding:8px;" placeholder="Type your remark or note here..."></textarea>
+                </div>
+                
+                <div id="rem-add-only-reminder">
+                    <label style="display:inline-flex; align-items:center; gap:8px; font-weight:600; font-size:0.8rem; cursor:pointer; margin-bottom:10px;">
+                        <input type="checkbox" id="rem-set-reminder" style="width:16px; height:16px; accent-color:var(--accent);" onchange="toggleModalReminderFields(this.checked)"> Set a reminder for this note
+                    </label>
+                    
+                    <div id="rem-reminder-fields" style="display:none; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px;">
+                        <div class="field">
+                            <label style="font-size:0.75rem;">Reminder Title <span class="req">*</span></label>
+                            <input type="text" id="rem-reminder-title" class="form-input" placeholder="e.g. Call student back">
+                        </div>
+                        <div class="field">
+                            <label style="font-size:0.75rem;">Reminder Time <span class="req">*</span></label>
+                            <input type="datetime-local" id="rem-reminder-time" class="form-input">
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="display:flex; justify-content:flex-end; gap:8px;">
+                    <button type="button" id="rem-cancel-edit-btn" class="btn btn-sm btn-outline" style="display:none;" onclick="cancelRemarkEdit()">Cancel Edit</button>
+                    <button type="button" class="btn btn-sm btn-primary" onclick="saveRemarksModalRemark()"><i class="fas fa-floppy-disk"></i> Save Remark</button>
+                </div>
+            </div>
+        </div>
+        <div class="modal-foot">
+            <button type="button" class="btn btn-outline" onclick="closeRemarksModal()">Close</button>
+        </div>
+    </div>
+</div>
+
 <?php
 $extra_scripts = "<script>
+var activeRemarkStudentId = '';
+var remarkMutated = false;
+
+function toggleModalReminderFields(checked) {
+    document.getElementById('rem-reminder-fields').style.display = checked ? 'grid' : 'none';
+    document.getElementById('rem-reminder-title').required = checked;
+    document.getElementById('rem-reminder-time').required = checked;
+}
+
+function openRemarksModal(userId) {
+    activeRemarkStudentId = userId;
+    remarkMutated = false;
+    cancelRemarkEdit();
+    loadRemarksForModal(userId);
+    openModal('remarks-modal');
+}
+
+function closeRemarksModal() {
+    closeModal('remarks-modal');
+    if (remarkMutated) {
+        window.location.reload();
+    }
+}
+
+function loadRemarksForModal(userId) {
+    const listContainer = document.getElementById('remarks-list-container');
+    listContainer.innerHTML = \"<div style='text-align:center; padding:20px; color:var(--text-muted);'><i class='fas fa-spinner fa-spin'></i> Loading remarks...</div>\";
+    
+    fetch('studentpage.php?ajax_remarks=1&user_id=' + encodeURIComponent(userId))
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) {
+                alert(data.error);
+                closeModal('remarks-modal');
+                return;
+            }
+            document.getElementById('rem-student-name').textContent = data.student_name;
+            document.getElementById('rem-student-id').textContent = '(' + userId + ')';
+            
+            listContainer.innerHTML = '';
+            if (data.remarks.length === 0) {
+                listContainer.innerHTML = \"<div style='text-align:center; padding:20px; color:var(--text-muted); border:1px dashed var(--border); border-radius:6px; background:var(--gray-50);'><p style='margin:0;'>No remarks or notes added yet.</p></div>\";
+                return;
+            }
+            
+            data.remarks.forEach(rem => {
+                const card = document.createElement('div');
+                card.style.background = 'var(--card)';
+                card.style.border = '1px solid var(--border)';
+                card.style.borderRadius = '6px';
+                card.style.padding = '12px';
+                card.style.position = 'relative';
+                
+                let reminderHtml = '';
+                if (rem.remind_at) {
+                    const statusClass = rem.reminder_status === 'completed' ? 'green' : 'amber';
+                    reminderHtml = `
+                        <div style=\"margin-top:6px; display:inline-flex; align-items:center; gap:4px; font-size:0.7rem;\" class=\"cell-sub\">
+                            <span class=\"badge \${statusClass}\" style=\"font-size:0.6rem; padding:1px 4px;\"><i class=\"fas fa-clock\"></i> Reminder: \${rem.remind_at} (\${rem.reminder_status})</span>
+                        </div>
+                    `;
+                }
+                
+                const timeStr = new Date(rem.created_at).toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'});
+                
+                card.innerHTML = `
+                    <div style=\"font-size:0.85rem; color:var(--text-main); white-space:pre-wrap; line-height:1.4; padding-right:60px;\">\${escapeHtml(rem.remark)}</div>
+                    <div style=\"font-size:0.7rem; color:var(--text-muted); margin-top:6px; display:flex; justify-content:space-between; align-items:center;\">
+                        <span>By <strong>\${escapeHtml(rem.created_by)}</strong> on \${timeStr}</span>
+                        <div style=\"display:flex; gap:8px;\">
+                            <a href=\"javascript:void(0)\" onclick=\"editRemarkFromModal(\${rem.id}, \${JSON.stringify(rem.remark).replace(/\"/g, '&quot;')})\" style=\"color:var(--accent); font-weight:600; text-decoration:none;\"><i class=\"fas fa-pen\"></i> Edit</a>
+                            <a href=\"javascript:void(0)\" onclick=\"deleteRemarkFromModal(\${rem.id})\" style=\"color:#ef4444; font-weight:600; text-decoration:none;\"><i class=\"fas fa-trash\"></i> Delete</a>
+                        </div>
+                    </div>
+                    \${reminderHtml}
+                `;
+                listContainer.appendChild(card);
+            });
+        })
+        .catch(err => {
+            listContainer.innerHTML = \"<div class='alert alert-error'><i class='fas fa-triangle-exclamation'></i><span>Error loading remarks.</span></div>\";
+        });
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function editRemarkFromModal(id, text) {
+    document.getElementById('rem-edit-id').value = id;
+    document.getElementById('rem-text').value = text;
+    document.getElementById('rem-form-title').innerHTML = \"<i class='fas fa-pen' style='color:var(--accent);'></i> Edit Remark / Note\";
+    document.getElementById('rem-cancel-edit-btn').style.display = 'inline-block';
+    document.getElementById('rem-add-only-reminder').style.display = 'none';
+}
+
+function cancelRemarkEdit() {
+    document.getElementById('rem-edit-id').value = '';
+    document.getElementById('rem-text').value = '';
+    document.getElementById('rem-form-title').textContent = 'Add New Remark / Note';
+    document.getElementById('rem-cancel-edit-btn').style.display = 'none';
+    document.getElementById('rem-add-only-reminder').style.display = 'block';
+    document.getElementById('rem-set-reminder').checked = false;
+    toggleModalReminderFields(false);
+}
+
+function saveRemarksModalRemark() {
+    const text = document.getElementById('rem-text').value.trim();
+    if (text === '') {
+        alert('Remark text cannot be empty.');
+        return;
+    }
+    
+    const editId = document.getElementById('rem-edit-id').value;
+    const isEdit = editId !== '';
+    
+    const fd = new FormData();
+    fd.append('ajax_action', isEdit ? 'edit' : 'add');
+    fd.append('user_id', activeRemarkStudentId);
+    fd.append('remark', text);
+    fd.append('csrf_token', '\" . csrf_token() . \"');
+    
+    if (isEdit) {
+        fd.append('remark_id', editId);
+    } else {
+        if (document.getElementById('rem-set-reminder').checked) {
+            fd.append('set_reminder', '1');
+            fd.append('reminder_title', document.getElementById('rem-reminder-title').value.trim());
+            fd.append('reminder_time', document.getElementById('rem-reminder-time').value);
+        }
+    }
+    
+    fetch('studentpage.php', {
+        method: 'POST',
+        body: fd
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.error) {
+            alert(data.error);
+        } else {
+            remarkMutated = true;
+            cancelRemarkEdit();
+            loadRemarksForModal(activeRemarkStudentId);
+        }
+    })
+    .catch(err => {
+        alert('Failed to save remark.');
+    });
+}
+
+function deleteRemarkFromModal(remarkId) {
+    if (!confirm('Are you sure you want to delete this remark?')) return;
+    
+    const fd = new FormData();
+    fd.append('ajax_action', 'delete');
+    fd.append('user_id', activeRemarkStudentId);
+    fd.append('remark_id', remarkId);
+    fd.append('csrf_token', '\" . csrf_token() . \"');
+    
+    fetch('studentpage.php', {
+        method: 'POST',
+        body: fd
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.error) {
+            alert(data.error);
+        } else {
+            remarkMutated = true;
+            loadRemarksForModal(activeRemarkStudentId);
+        }
+    })
+    .catch(err => {
+        alert('Failed to delete remark.');
+    });
+}
+
 function openExtend(id, name, current) {
     document.getElementById('ext-user-id').value = id;
     document.getElementById('ext-name').textContent = name + ' (' + id + ')';

@@ -346,7 +346,7 @@ if ($tab === 'students') {
     $chart_type = 'bar';
     foreach ($data as $row) {
         $chart_labels[] = $row['account_name'];
-        $chart_values[] = (float)$row['collected'];
+        $chart_values[] = (float)$row['gross'];
     }
     $chart_label_text = 'Collected Amount (₹)';
 } else {
@@ -560,12 +560,36 @@ document.addEventListener("DOMContentLoaded", function() {
 
         <?php elseif ($tab === 'accounts'):
             $tot_gross = 0.0; $tot_ours = 0.0; $tot_cgst = 0.0; $tot_sgst = 0.0; $tot_pay = 0;
+            $non_gst_gross = 0.0;
+            $tot_gst_saved = 0.0;
             foreach ($data as $r) {
                 $tot_gross += (float)$r['gross'];  $tot_ours += (float)$r['net_ours'];
                 $tot_cgst  += (float)$r['cgst'];   $tot_sgst += (float)$r['sgst'];
                 $tot_pay   += (int)$r['payments'];
+                if (!$r['is_gst']) {
+                    $non_gst_gross += (float)$r['gross'];
+                    $tot_gst_saved += (float)$r['gross'] * 18 / 118;
+                }
             }
         ?>
+            <div style="padding: 10px 18px; background:var(--card); border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                <span class="cell-sub" style="font-weight:600; color:var(--text-muted);">GST calculations for tax planning</span>
+                <button type="button" class="btn btn-sm btn-outline" style="height:32px; font-size:0.75rem;" onclick="toggleGstSaved()"><i class="fas fa-calculator"></i> Show/Hide GST Saved</button>
+            </div>
+            
+            <div id="gst-saved-panel" class="alert alert-success" style="display:none; margin:14px 16px;"><i class="fas fa-percent"></i><span>Total GST saved on non-GST accounts: <strong>₹<?php echo number_format($tot_gst_saved, 2); ?></strong> (calculated at 18% inclusive tax rate on total non-GST collections of ₹<?php echo number_format($non_gst_gross, 2); ?>).</span></div>
+            
+            <script>
+            function toggleGstSaved() {
+                var p = document.getElementById('gst-saved-panel');
+                if (p.style.display === 'none') {
+                    p.style.display = 'flex';
+                } else {
+                    p.style.display = 'none';
+                }
+            }
+            </script>
+
             <table class="data-table">
                 <thead><tr><th>Payment Account</th><th>Payments</th><th>Gross Collected</th><th>Our Amount</th><th>CGST 9%</th><th>SGST 9%</th><th>Total GST</th></tr></thead>
                 <tbody>

@@ -257,7 +257,7 @@ function render_invoice_pdf(array $inv, $account = '') {
     $pdf->text($L, $y, 10, 'Labinc Education Pvt. Ltd.', true, 'R', $W); $y += 24;
     $pdf->line($L - 10, $y, $R + 10, $y); $y += 9;
     $pdf->text($L, $y, 8.5, 'www.pepplearning.com', false, 'C', $W); $y += 11;
-    $pdf->text($L, $y, 8.5, 'PEPP Learning, Mail: office@pepplearning.com  Call: 7025000444, 8089252540', false, 'C', $W);
+    $pdf->text($L, $y, 8.5, 'PEPP Learning, Mail: office@pepplearning.com  Call: 7025000444', false, 'C', $W);
     $y += 11;
     $pdf->text($L, $y, 7.5, 'This is a computer-generated invoice and does not require a signature.', false, 'C', $W);
 

@@ -51,6 +51,7 @@ function fill_student_template($pdo, $template, $student) {
     $collected = (float)($student['paid_amount'] ?? 0) + $inst_paid;
     $payable   = (float)($student['total_fee'] ?? 0);
     $balance   = max(0, $payable - $collected);
+    $course_fee = $payable + (float)($student['discount_amount'] ?? 0);
 
     $map = [];
     foreach ($student as $col => $val) {
@@ -70,6 +71,7 @@ function fill_student_template($pdo, $template, $student) {
     $map['{joined}']        = $dmy($student['joined_date'] ?? '');
     $map['{collected}']     = $money($collected);
     $map['{balance}']       = $money($balance);
+    $map['{course_fee}']    = $money($course_fee);
 
     return strtr($template, $map);
 }

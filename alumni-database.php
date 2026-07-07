@@ -576,7 +576,11 @@ try {
 $f_q = trim($_GET['q'] ?? '');
 $f_course_q = trim($_GET['f_course_q'] ?? '');
 $f_year = trim($_GET['fyear'] ?? '');
-$f_course = trim($_GET['fcourse'] ?? '');
+$f_courses = $_GET['fcourse'] ?? [];
+if (!is_array($f_courses)) {
+    $f_courses = $f_courses !== '' ? [$f_courses] : [];
+}
+$f_courses = array_filter(array_map('strval', $f_courses));
 $f_email = $_GET['femail'] ?? '';   // '', 'yes', 'no'
 $sort_by = $_GET['sort_by'] ?? '';
 
@@ -585,6 +589,11 @@ $alumni_years = []; $alumni_courses = [];
 try {
     $alumni_years = $pdo->query("SELECT DISTINCT academic_year FROM alumni WHERE academic_year IS NOT NULL AND academic_year<>'' ORDER BY academic_year DESC")->fetchAll(PDO::FETCH_COLUMN);
     $alumni_courses = $pdo->query("SELECT DISTINCT course_name FROM alumni WHERE course_name IS NOT NULL AND course_name<>'' ORDER BY course_name")->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {}
+
+$total_all_alumni = 0;
+try {
+    $total_all_alumni = (int)$pdo->query("SELECT COUNT(*) FROM alumni")->fetchColumn();
 } catch (Exception $e) {}
 
 $page = max(1, (int)($_GET['page'] ?? 1)); $per = 30;
@@ -601,7 +610,13 @@ if ($f_course_q !== '') {
     $params[] = "%$f_course_q%";
 }
 if ($f_year !== '')   { $where[] = "academic_year = ?"; $params[] = $f_year; }
-if ($f_course !== '') { $where[] = "course_name = ?"; $params[] = $f_course; }
+if (!empty($f_courses)) {
+    $placeholders = implode(',', array_fill(0, count($f_courses), '?'));
+    $where[] = "course_name IN ($placeholders)";
+    foreach ($f_courses as $c) {
+        $params[] = $c;
+    }
+}
 if ($f_email === 'yes') { $where[] = "(email IS NOT NULL AND email <> '')"; }
 elseif ($f_email === 'no') { $where[] = "(email IS NULL OR email = '')"; }
 $wsql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
@@ -613,6 +628,12 @@ if ($sort_by === 'verified_desc') {
     $order_by = "ORDER BY is_verified ASC, id DESC";
 } elseif ($sort_by === 'tracks_pending') {
     $order_by = "ORDER BY (academic_track_after_pepp IS NULL OR academic_track_after_pepp = '' OR academic_track_after_pepp = '[]') DESC, id DESC";
+} elseif ($sort_by === 'tracks_updated') {
+    $order_by = "ORDER BY (
+        (academic_track_after_pepp IS NOT NULL AND academic_track_after_pepp <> '' AND academic_track_after_pepp <> '[]') 
+        OR 
+        (current_profession_details IS NOT NULL AND current_profession_details <> '' AND current_profession_details <> '[]')
+    ) DESC, id DESC";
 }
 
 try {
@@ -676,7 +697,10 @@ input:checked + .slider:before {
 </style>
 
 <div style="margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-    <a href="dashboard.php" class="btn btn-sm btn-outline"><i class="fas fa-arrow-left"></i> Back to Dashboard</a>
+    <div style="display:flex; gap:10px;">
+        <a href="dashboard.php" class="btn btn-sm btn-outline"><i class="fas fa-arrow-left"></i> Back to Dashboard</a>
+        <button class="btn btn-sm btn-primary" onclick="openModal('add-alumnus-modal')"><i class="fas fa-user-plus"></i> Add Alumnus</button>
+    </div>
     
     <!-- Public Alumni Visibility Toggle -->
     <div style="display:flex; align-items:center; gap:8px; background:#fafaf9; border:1px solid #e7e5e4; padding:6px 14px; border-radius:10px;">
@@ -691,44 +715,78 @@ input:checked + .slider:before {
 <?php if ($success_message): ?><div class="alert alert-success"><i class="fas fa-circle-check"></i><span><?php echo e($success_message); ?></span></div><?php endif; ?>
 <?php if ($error_message):   ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($error_message); ?></span></div><?php endif; ?>
 
-<div class="panel">
-    <div class="panel-head"><span class="head-icon"><i class="fas fa-user-graduate"></i></span><h2>Add Alumnus</h2>
-        <div class="head-right"><button class="btn btn-sm btn-outline" onclick="openModal('import-modal')"><i class="fas fa-file-import"></i> Bulk Import</button>
-        <a class="btn btn-sm btn-soft-blue" href="alumni-sample.csv" download><i class="fas fa-download"></i> Sample CSV</a></div>
-    </div>
-    <div class="panel-body">
+<!-- ── ADD ALUMNUS MODAL ── -->
+<div class="modal-backdrop" id="add-alumnus-modal">
+    <div class="modal" style="max-width:720px; width:90%;">
+        <div class="modal-head">
+            <h3><i class="fas fa-user-plus" style="color:var(--accent);"></i> Add Alumnus</h3>
+            <button class="modal-close" onclick="closeModal('add-alumnus-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
         <form method="POST">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="add_alumni">
-            <div class="form-grid">
-                <div class="field"><label>Name</label><input type="text" name="name"></div>
-                <div class="field"><label>PEPP Academic Year</label>
-                    <select name="academic_year"><option value="">-</option><option value="All years">All years</option><?php foreach ($all_years as $y): ?><option value="<?php echo e($y); ?>"><?php echo e($y); ?></option><?php endforeach; ?></select></div>
-                <div class="field"><label>Course Name</label>
-                    <select name="course_name">
-                        <option value="">- Select active course -</option>
-                        <?php foreach ($active_courses_list as $cname): ?>
-                            <option value="<?php echo e($cname); ?>"><?php echo e($cname); ?></option>
-                        <?php endforeach; ?>
-                    </select></div>
-                <div class="field"><label>Mobile Number <span class="req">*</span></label><input type="text" name="mobile" required></div>
-                <div class="field"><label>Secondary Mobile</label><input type="text" name="secondary_mobile"></div>
-                <div class="field"><label>Email ID</label><input type="email" name="email"></div>
-                <div class="field"><label>Secondary Email</label><input type="email" name="secondary_email"></div>
+            <div class="modal-body">
+                <div class="form-grid">
+                    <div class="field"><label>Name</label><input type="text" name="name"></div>
+                    <div class="field"><label>PEPP Academic Year</label>
+                        <select name="academic_year"><option value="">-</option><option value="All years">All years</option><?php foreach ($all_years as $y): ?><option value="<?php echo e($y); ?>"><?php echo e($y); ?></option><?php endforeach; ?></select></div>
+                    <div class="field"><label>Course Name</label>
+                        <select name="course_name">
+                            <option value="">- Select active course -</option>
+                            <?php foreach ($active_courses_list as $cname): ?>
+                                <option value="<?php echo e($cname); ?>"><?php echo e($cname); ?></option>
+                            <?php endforeach; ?>
+                        </select></div>
+                    <div class="field"><label>Mobile Number <span class="req">*</span></label><input type="text" name="mobile" required></div>
+                    <div class="field"><label>Secondary Mobile</label><input type="text" name="secondary_mobile"></div>
+                    <div class="field"><label>Email ID</label><input type="email" name="email"></div>
+                    <div class="field"><label>Secondary Email</label><input type="email" name="secondary_email"></div>
+                </div>
+                <div style="margin-top:14px; padding:12px; background:var(--gray-50); border:1px solid var(--border); border-radius:6px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                    <span class="cell-sub" style="font-weight:600;"><i class="fas fa-file-import"></i> Need to add in bulk?</span>
+                    <div style="display:flex; gap:8px;">
+                        <a class="btn btn-sm btn-outline" href="alumni-sample.csv" download><i class="fas fa-download"></i> Sample CSV</a>
+                        <button type="button" class="btn btn-sm btn-soft-blue" onclick="closeModal('add-alumnus-modal'); openModal('import-modal');"><i class="fas fa-file-import"></i> Bulk Import CSV</button>
+                    </div>
+                </div>
             </div>
-            <div style="display:flex; justify-content:flex-end; margin-top:12px;"><button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Add Alumnus</button></div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('add-alumnus-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Add Alumnus</button>
+            </div>
         </form>
     </div>
 </div>
 
 <div class="panel">
-    <div class="panel-head"><span class="head-icon" style="background:var(--accent-soft);color:var(--accent-dark);"><i class="fas fa-list"></i></span><h2>Alumni (<?php echo number_format($total); ?>)</h2></div>
+    <div class="panel-head"><span class="head-icon" style="background:var(--accent-soft);color:var(--accent-dark);"><i class="fas fa-list"></i></span>
+        <?php 
+        $is_filter_active = ($f_q!==''||$f_course_q!==''||$f_year!==''||!empty($f_courses)||$f_email!==''||$sort_by!=='');
+        ?>
+        <h2>Alumni (<?php echo $is_filter_active ? 'Filtered: ' . number_format($total) . ' of ' . number_format($total_all_alumni) . ' total' : number_format($total); ?>)</h2>
+    </div>
     <div class="panel-body" style="border-bottom:1px solid var(--border);">
         <form method="GET" class="filter-bar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;">
             <div class="field grow-2" style="margin:0;flex:1;min-width:180px;"><label>Search Student</label><input type="text" name="q" value="<?php echo e($f_q); ?>" placeholder="Name, mobile, email"></div>
             <div class="field grow-2" style="margin:0;flex:1;min-width:180px;"><label>Course Keyword</label><input type="text" name="f_course_q" value="<?php echo e($f_course_q); ?>" placeholder="Search course keyword..."></div>
             <div class="field" style="margin:0;"><label>Academic Year</label><select name="fyear"><option value="">All</option><?php foreach ($alumni_years as $y): ?><option value="<?php echo e($y); ?>" <?php echo $f_year===$y?'selected':''; ?>><?php echo e($y); ?></option><?php endforeach; ?></select></div>
-            <div class="field" style="margin:0;"><label>Course Dropdown</label><select name="fcourse"><option value="">All</option><?php foreach ($alumni_courses as $c): ?><option value="<?php echo e($c); ?>" <?php echo $f_course===$c?'selected':''; ?>><?php echo e($c); ?></option><?php endforeach; ?></select></div>
+            
+            <div class="field" style="margin:0; position:relative; min-width:180px;"><label>Course Dropdown</label>
+                <button type="button" class="btn btn-outline" style="width:100%; text-align:left; justify-content:space-between; height:38px; display:inline-flex; align-items:center; font-size:0.85rem; padding:6px 12px; background:white; border:1px solid var(--border);" onclick="toggleCourseDropdown(event)">
+                    <span id="course-sel-label" style="text-overflow:ellipsis; overflow:hidden; white-space:nowrap; max-width:130px;">All Courses</span>
+                    <i class="fas fa-chevron-down" style="font-size:0.8rem; color:var(--text-muted);"></i>
+                </button>
+                <div id="course-multiselect-dropdown" style="display:none; position:absolute; top:100%; left:0; width:100%; min-width:240px; background:white; border:1px solid var(--border); border-radius:6px; box-shadow:0 10px 15px -3px rgba(0,0,0,0.1); z-index:1000; padding:10px; max-height:220px; overflow-y:auto; margin-top:4px;">
+                    <?php foreach ($alumni_courses as $c): 
+                        $checked = in_array($c, $f_courses, true);
+                    ?>
+                        <label style="display:flex; align-items:center; gap:8px; font-weight:normal; margin-bottom:8px; cursor:pointer; font-size:0.85rem; user-select:none; color:var(--text-main);">
+                            <input type="checkbox" name="fcourse[]" value="<?php echo e($c); ?>" <?php echo $checked ? 'checked' : ''; ?> onchange="updateCourseLabel()" class="course-filter-chk" style="width:15px; height:15px; accent-color:var(--accent);"> <?php echo e($c); ?>
+                        </label>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            
             <div class="field" style="margin:0;"><label>Email</label><select name="femail"><option value="">Any</option><option value="yes" <?php echo $f_email==='yes'?'selected':''; ?>>Has email</option><option value="no" <?php echo $f_email==='no'?'selected':''; ?>>No email</option></select></div>
             <div class="field" style="margin:0;"><label>Sort By</label>
                 <select name="sort_by">
@@ -736,10 +794,11 @@ input:checked + .slider:before {
                     <option value="verified_desc" <?php echo $sort_by==='verified_desc'?'selected':''; ?>>Verified First</option>
                     <option value="verified_asc" <?php echo $sort_by==='verified_asc'?'selected':''; ?>>Unverified First</option>
                     <option value="tracks_pending" <?php echo $sort_by==='tracks_pending'?'selected':''; ?>>Tracks Pending First</option>
+                    <option value="tracks_updated" <?php echo $sort_by==='tracks_updated'?'selected':''; ?>>Track Updated First</option>
                 </select>
             </div>
             <button class="btn btn-sm btn-primary"><i class="fas fa-filter"></i> Filter</button>
-            <?php if ($f_q!==''||$f_course_q!==''||$f_year!==''||$f_course!==''||$f_email!==''||$sort_by!==''): ?><a class="btn btn-sm btn-outline" href="alumni-database.php">Clear</a><?php endif; ?>
+            <?php if ($f_q!==''||$f_course_q!==''||$f_year!==''||!empty($f_courses)||$f_email!==''||$sort_by!==''): ?><a class="btn btn-sm btn-outline" href="alumni-database.php">Clear</a><?php endif; ?>
         </form>
     </div>
     
@@ -1025,6 +1084,37 @@ input:checked + .slider:before {
 </div>
 
 <script>
+function toggleCourseDropdown(e) {
+    if (e) e.stopPropagation();
+    var d = document.getElementById('course-multiselect-dropdown');
+    d.style.display = d.style.display === 'none' ? 'block' : 'none';
+}
+
+function updateCourseLabel() {
+    var chks = document.querySelectorAll('.course-filter-chk:checked');
+    var label = document.getElementById('course-sel-label');
+    if (!label) return;
+    if (chks.length === 0) {
+        label.textContent = 'All Courses';
+    } else if (chks.length === 1) {
+        label.textContent = chks[0].parentElement.textContent.trim();
+    } else {
+        label.textContent = chks.length + ' Courses selected';
+    }
+}
+
+document.addEventListener('click', function(e) {
+    var d = document.getElementById('course-multiselect-dropdown');
+    var btn = document.querySelector('[onclick=\"toggleCourseDropdown(event)\"]');
+    if (d && btn && !d.contains(e.target) && !btn.contains(e.target)) {
+        d.style.display = 'none';
+    }
+});
+
+window.addEventListener('DOMContentLoaded', function() {
+    updateCourseLabel();
+});
+
 function escapeHtml(text) {
     if (!text) return '';
     return text.toString()

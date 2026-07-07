@@ -340,10 +340,15 @@ include 'includes/admin_nav.php';
 </div>
 
 <div class="panel">
-    <div class="panel-head"><span class="head-icon"><i class="fas fa-gift"></i></span><h2>Alumni Referral Earning Program</h2>
-        <div class="head-right"><a href="?tab=referral&export=referral" class="btn btn-sm btn-soft-green"><i class="fas fa-file-excel"></i> Export Analytics</a></div>
+    <div class="panel-head" style="cursor:pointer;" onclick="toggleCollapse('ref-earning-body', 'ref-earning-arrow')">
+        <span class="head-icon"><i class="fas fa-gift"></i></span>
+        <h2>Alumni Referral Earning Program</h2>
+        <div style="margin-left:auto; display:flex; align-items:center; gap:10px;">
+            <a href="?tab=referral&export=referral" class="btn btn-sm btn-soft-green" onclick="event.stopPropagation()"><i class="fas fa-file-excel"></i> Export Analytics</a>
+            <i class="fas fa-chevron-down" id="ref-earning-arrow" style="transition: transform 0.2s;"></i>
+        </div>
     </div>
-    <div class="panel-body">
+    <div class="panel-body" id="ref-earning-body" style="display:none;">
         <?php
             $__activeProg = null;
             foreach ($programs as $__p) { if ($__p['status'] === 'active') { $__activeProg = $__p; break; } }
@@ -387,8 +392,12 @@ include 'includes/admin_nav.php';
 
 <?php if (!empty($programs)): ?>
 <div class="panel">
-    <div class="panel-head"><span class="head-icon" style="background:var(--accent-soft);color:var(--accent-dark);"><i class="fas fa-layer-group"></i></span><h2>Programs</h2></div>
-    <div class="panel-body flush table-wrap">
+    <div class="panel-head" style="cursor:pointer;" onclick="toggleCollapse('programs-body', 'programs-arrow')">
+        <span class="head-icon" style="background:var(--accent-soft);color:var(--accent-dark);"><i class="fas fa-layer-group"></i></span>
+        <h2>Programs</h2>
+        <i class="fas fa-chevron-down" id="programs-arrow" style="margin-left:auto; transition: transform 0.2s;"></i>
+    </div>
+    <div class="panel-body flush table-wrap" id="programs-body" style="display:none;">
         <table class="data-table"><thead><tr><th>Year</th><th>User Discount</th><th>Alumni Earning</th><th>Window</th><th>Rules</th><th>Status</th></tr></thead><tbody>
         <?php foreach ($programs as $p): ?>
             <tr>
@@ -568,6 +577,17 @@ include 'includes/admin_nav.php';
 $prog_json = [];
 foreach ($programs as $p) $prog_json[$p['academic_year']] = $p;
 $extra_scripts = "<script>
+function toggleCollapse(bodyId, arrowId) {
+    var body = document.getElementById(bodyId);
+    var arrow = document.getElementById(arrowId);
+    if (body.style.display === 'none') {
+        body.style.display = 'block';
+        arrow.style.transform = 'rotate(180deg)';
+    } else {
+        body.style.display = 'none';
+        arrow.style.transform = 'rotate(0deg)';
+    }
+}
 var PROGRAMS = " . json_encode($prog_json, JSON_HEX_APOS | JSON_HEX_QUOT) . ";
 var DEFAULT_HOW_TO_EARN = " . json_encode($DEFAULT_HOW_TO_EARN, JSON_HEX_APOS | JSON_HEX_QUOT) . ";
 function loadProgram() {

@@ -318,6 +318,7 @@ include 'includes/admin_nav.php';
                     <td><span class="badge <?php echo $LEAD_STATUSES[$l['status']][1]; ?>"><?php echo $LEAD_STATUSES[$l['status']][0]; ?></span></td>
                     <td><span class="badge <?php echo $overdue ? 'red' : 'amber'; ?>"><?php echo date('d M', strtotime($l['next_followup_date'])); ?><?php echo $overdue ? ' · overdue' : ' · today'; ?></span></td>
                     <td style="text-align:right; white-space:nowrap;">
+                        <a class="btn btn-sm btn-outline" href="tel:<?php echo preg_replace('/\D/', '', $l['whatsapp_number']); ?>" title="Call"><i class="fas fa-phone"></i></a>
                         <a class="btn btn-sm btn-whatsapp" href="<?php echo e(wa_link($l['whatsapp_number'])); ?>" target="_blank" title="WhatsApp"><i class="fab fa-whatsapp"></i></a>
                         <a class="btn btn-sm btn-primary" href="lead-details.php?id=<?php echo (int)$l['id']; ?>"><i class="fas fa-pen"></i> Update</a>
                     </td>
@@ -407,6 +408,7 @@ include 'includes/admin_nav.php';
                     </td>
                     <td class="cell-sub"><?php echo $l['assigned_to'] === '__ALL__' ? '<span class="badge violet">All Admins</span>' : e($l['assigned_to'] ?: '-'); ?></td>
                     <td style="text-align:right; white-space:nowrap;">
+                        <a class="btn btn-sm btn-outline" href="tel:<?php echo preg_replace('/\D/', '', $l['whatsapp_number']); ?>" title="Call"><i class="fas fa-phone"></i></a>
                         <a class="btn btn-sm btn-whatsapp" href="<?php echo e(wa_link($l['whatsapp_number'])); ?>" target="_blank" title="WhatsApp"><i class="fab fa-whatsapp"></i></a>
                         <a class="btn btn-sm btn-primary" href="lead-details.php?id=<?php echo (int)$l['id']; ?>" title="Open lead"><i class="fas fa-arrow-right"></i></a>
                     </td>

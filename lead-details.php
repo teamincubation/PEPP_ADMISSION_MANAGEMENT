@@ -177,6 +177,7 @@ include 'includes/admin_nav.php';
                 <h2>Lead Details</h2>
                 <div class="head-right">
                     <span class="badge <?php echo $LEAD_STATUSES[$st][1]; ?>"><?php echo $LEAD_STATUSES[$st][0]; ?></span>
+                    <a class="btn btn-sm btn-outline" href="tel:<?php echo preg_replace('/\D/', '', $lead['whatsapp_number']); ?>"><i class="fas fa-phone"></i> Call</a>
                     <a class="btn btn-sm btn-whatsapp" href="<?php echo e(wa_link($lead['whatsapp_number'])); ?>" target="_blank"><i class="fab fa-whatsapp"></i> Chat</a>
                 </div>
             </div>

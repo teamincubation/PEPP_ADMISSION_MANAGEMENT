@@ -341,7 +341,7 @@ include 'includes/admin_nav.php';
             <code>{name}</code> <code>{user_id}</code> <code>{email}</code> <code>{whatsapp_number}</code>
             <code>{PEPP course}</code> <code>{academic_year}</code> <code>{payment_plan}</code> <code>{payment_mode}</code>
             <code>{joined_date}</code> <code>{access_end}</code> (course access end date)
-            <code>{paid_amount}</code> (registration payment) <code>{total_fee}</code> (net payable)
+            <code>{paid_amount}</code> (registration payment) <code>{total_fee}</code> (net payable) <code>{course_fee}</code> (actual course fee before discount)
             <code>{discount_amount}</code> <code>{collected}</code> (total received) <code>{balance}</code> (remaining).
             Any other users-table column also works as <code>{column_name}</code>.</span>
         </div>

@@ -25,6 +25,7 @@ try {
     $stats['rejected'] = (int)$pdo->query("SELECT COUNT(*) FROM instalment_details WHERE status = 'rejected' OR (status = 'pending' AND paid_date IS NULL AND rejected_at IS NOT NULL)")->fetchColumn();
     $stats['upcoming'] = (int)$pdo->query("SELECT COUNT(*) FROM instalment_details WHERE status = 'pending' AND paid_date IS NULL AND rejected_at IS NULL")->fetchColumn();
     $stats['collected'] = (float)$pdo->query("SELECT COALESCE(SUM(COALESCE(paid_amount, amount)), 0) FROM instalment_details WHERE status IN ('approved','paid')")->fetchColumn();
+    $upcoming_warning_count = (int)$pdo->query("SELECT COUNT(*) FROM instalment_details WHERE status = 'pending' AND paid_date IS NULL AND rejected_at IS NULL AND due_date <= DATE_ADD(CURDATE(), INTERVAL 10 DAY)")->fetchColumn();
 
     switch ($tab) {
         case 'pending':  $cond = "i.status = 'pending' AND i.paid_date IS NOT NULL"; break;
@@ -36,7 +37,7 @@ try {
 
     $order = "CASE WHEN i.status = 'pending' AND i.paid_date IS NOT NULL THEN 0 ELSE 1 END, i.updated_at DESC, i.due_date ASC";
     if ($tab === 'upcoming') {
-        $order = "i.due_date ASC";
+        $order = "CASE WHEN i.due_date < CURDATE() THEN 0 ELSE 1 END, i.due_date ASC";
     }
 
     /* NOTE: u.whatsapp_number is used for contact (the old page read u.phone,
@@ -116,9 +117,9 @@ include 'includes/admin_nav.php';
         <h2>Installments</h2>
         <div class="head-right tabs">
             <a class="tab <?php echo $tab === 'pending' ? 'active' : ''; ?>" href="?page=pending">Pending review <span class="count"><?php echo $stats['pending']; ?></span></a>
+            <a class="tab <?php echo $tab === 'upcoming' ? 'active' : ''; ?>" href="?page=upcoming" style="<?php echo $upcoming_warning_count > 0 ? 'border-bottom: 2px solid #ef4444; color: #ef4444; font-weight: 700;' : ''; ?>">Upcoming <span class="count" style="<?php echo $upcoming_warning_count > 0 ? 'background:#ef4444;' : ''; ?>"><?php echo $stats['upcoming']; ?></span></a>
             <a class="tab <?php echo $tab === 'approved' ? 'active' : ''; ?>" href="?page=approved">Approved</a>
             <a class="tab <?php echo $tab === 'rejected' ? 'active' : ''; ?>" href="?page=rejected">Rejected</a>
-            <a class="tab <?php echo $tab === 'upcoming' ? 'active' : ''; ?>" href="?page=upcoming">Upcoming</a>
             <a class="tab <?php echo $tab === 'all' ? 'active' : ''; ?>" href="?page=all">All</a>
         </div>
     </div>
@@ -138,7 +139,7 @@ include 'includes/admin_nav.php';
                 $badge = in_array($st, ['approved','paid']) ? 'green' : ($st === 'rejected' || $wasRejected ? 'red' : ($r['paid_date'] ? 'amber' : ($isOverdue ? 'red' : 'blue')));
                 $label = in_array($st, ['approved','paid']) ? 'Approved' : ($st === 'rejected' ? 'Rejected' : ($wasRejected ? 'Awaiting re-payment' : ($r['paid_date'] ? 'Pending review' : ($isOverdue ? 'Overdue ' . (int)$r['days_overdue'] . 'd' : 'Upcoming'))));
             ?>
-                <tr>
+                <tr<?php echo ($tab === 'upcoming' && $isOverdue) ? ' style="background:#fef2f2; border-left: 4px solid #ef4444;"' : ''; ?>>
                     <td>
                         <div class="cell-main"><?php echo e($r['student_name']); ?></div>
                         <div class="cell-sub"><?php echo e($r['user_id']); ?> · <?php echo e($r['whatsapp_country_code'] . ' ' . $r['whatsapp_number']); ?></div>
@@ -181,7 +182,12 @@ include 'includes/admin_nav.php';
                     </td>
                     <td class="cell-sub"><?php echo $r['paid_date'] ? date('d M Y', strtotime($r['paid_date'])) : '-'; ?></td>
                     <td><?php if ($r['payment_reference']): ?><a class="proof-link" href="<?php echo e($r['payment_reference']); ?>" target="_blank"><i class="fas fa-receipt"></i> View</a><?php else: ?><span class="cell-sub">-</span><?php endif; ?></td>
-                    <td><span class="badge <?php echo $badge; ?>"><?php echo $label; ?></span>
+                    <td>
+                        <?php if ($tab === 'upcoming' && $isOverdue): ?>
+                            <span class="badge red" style="display: inline-flex; align-items: center; gap: 4px;"><i class="fas fa-triangle-exclamation"></i> Overdue <?php echo (int)$r['days_overdue']; ?>d</span>
+                        <?php else: ?>
+                            <span class="badge <?php echo $badge; ?>"><?php echo $label; ?></span>
+                        <?php endif; ?>
                         <?php if ($r['approved_by'] || $r['rejected_by']): ?><div class="cell-sub">by <?php echo e($r['approved_by'] ?: $r['rejected_by']); ?></div><?php endif; ?>
                     </td>
                     <td style="text-align:right; white-space:nowrap;">

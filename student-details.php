@@ -1163,7 +1163,7 @@ function generateEIFields() {
                 <input type="date" name="inst_${i}_due_date" value="${due}" required class="form-input" style="padding:6px 10px;" ${isLocked ? 'readonly style="background:var(--gray-100); color:var(--text-muted);"' : ''}>
             </div>
             <div style="width:80px; font-size:0.75rem; text-align:right; font-weight:700;">
-                \${isLocked ? '<span class="badge green">Paid</span>' : '<span class="badge gray">Pending</span>'}
+                ${isLocked ? '<span class="badge green">Paid</span>' : '<span class="badge gray">Pending</span>'}
             </div>
         `;
         container.appendChild(row);

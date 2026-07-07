@@ -68,7 +68,7 @@ function send_invoice_email(array $inv, $pdfBytes) {
   <tr><td style="padding:6px 32px 28px;">
       <p style="font-size:12.5px;color:#9ca3af;line-height:1.6;margin:0;">
         Need help with this payment? Write to <a href="mailto:office@pepplearning.com" style="color:#b45309;font-weight:600;">office@pepplearning.com</a>
-        or call 7025000444 / 8089252540.<br>
+        or call 7025000444.<br>
         This mailbox is not monitored — please do not reply to this email.
       </p>
   </td></tr>
