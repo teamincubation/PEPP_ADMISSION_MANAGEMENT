@@ -22,16 +22,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error_message = 'Student not found.';
             } elseif ($action === 'update_status') {
                 $new_status = $_POST['student_status'] ?? '';
-                $allowed = ['active', 'inactive', 'suspended', 'completed'];
+                $allowed = ['active', 'inactive', 'suspended', 'completed', 'dropout'];
                 if (!in_array($new_status, $allowed, true)) {
                     $error_message = 'Invalid status.';
                 } else {
-                    $stmt = $pdo->prepare("UPDATE users SET student_status = ?, course_status = ? WHERE user_id = ?");
-                    $course_status = $new_status === 'inactive' ? 'suspended' : ($new_status === 'completed' ? 'completed' : ($new_status === 'suspended' ? 'suspended' : 'active'));
-                    $stmt->execute([$new_status, $course_status, $user_id]);
-                    status_log($pdo, $user_id, $target['student_status'], $new_status, trim($_POST['reason'] ?? 'Status updated by admin'), $admin_username);
-                    track_record($pdo, $user_id, 'status_changed', "Student status: {$target['student_status']} → {$new_status}", $admin_username);
-                    $success_message = "Status updated for {$target['name']}.";
+                    try {
+                        $pdo->beginTransaction();
+                        $stmt = $pdo->prepare("UPDATE users SET student_status = ?, course_status = ? WHERE user_id = ?");
+                        $course_status = $new_status === 'inactive' ? 'suspended' : ($new_status === 'completed' ? 'completed' : (($new_status === 'suspended' || $new_status === 'dropout') ? 'suspended' : 'active'));
+                        $stmt->execute([$new_status, $course_status, $user_id]);
+                        
+                        if ($new_status === 'dropout') {
+                            $pdo->prepare("DELETE FROM instalment_details WHERE user_id = ? AND status = 'pending' AND paid_date IS NULL")->execute([$user_id]);
+                        }
+                        
+                        status_log($pdo, $user_id, $target['student_status'], $new_status, trim($_POST['reason'] ?? 'Status updated by admin'), $admin_username);
+                        track_record($pdo, $user_id, 'status_changed', "Student status: {$target['student_status']} → {$new_status}", $admin_username);
+                        $pdo->commit();
+                        $success_message = "Status updated for {$target['name']}.";
+                    } catch (Exception $ex) {
+                        $pdo->rollBack();
+                        throw $ex;
+                    }
                 }
             } elseif ($action === 'extend_access') {
                 $new_date = $_POST['course_duration_date'] ?? '';
@@ -78,7 +90,12 @@ if ($search !== '') {
 }
 if ($filter_course !== '') { $where[] = "u.pepp_course = ?";        $params[] = $filter_course; }
 if ($filter_year   !== '') { $where[] = "u.pepp_academic_year = ?"; $params[] = $filter_year; }
-if ($filter_status !== '') { $where[] = "u.student_status = ?";     $params[] = $filter_status; }
+if ($filter_status !== '') { 
+    $where[] = "u.student_status = ?";     
+    $params[] = $filter_status; 
+} else {
+    $where[] = "(u.student_status <> 'dropout' OR u.student_status IS NULL)";
+}
 
 $where_clause = implode(' AND ', $where);
 
@@ -170,7 +187,7 @@ include 'includes/admin_nav.php';
                 <label>Status</label>
                 <select name="status">
                     <option value="">All statuses</option>
-                    <?php foreach (['active','inactive','suspended','completed'] as $st): ?>
+                    <?php foreach (['active','inactive','suspended','completed','dropout'] as $st): ?>
                         <option value="<?php echo $st; ?>" <?php echo $filter_status === $st ? 'selected' : ''; ?>><?php echo ucfirst($st); ?></option>
                     <?php endforeach; ?>
                 </select>
@@ -311,6 +328,7 @@ include 'includes/admin_nav.php';
                         <option value="inactive">Inactive</option>
                         <option value="suspended">Suspended</option>
                         <option value="completed">Completed</option>
+                        <option value="dropout">Dropout</option>
                     </select>
                 </div>
                 <div class="field">

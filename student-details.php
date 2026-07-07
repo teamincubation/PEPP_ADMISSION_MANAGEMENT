@@ -180,6 +180,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
     }
 }
 
+/* ── POST: update_status ── */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_status') {
+    if (!csrf_verify()) {
+        $error = 'Security token mismatch. Please retry.';
+    } else {
+        try {
+            $new_status = $_POST['student_status'] ?? '';
+            $allowed = ['active', 'inactive', 'suspended', 'completed', 'dropout'];
+            if (!in_array($new_status, $allowed, true)) {
+                $error = 'Invalid status.';
+            } else {
+                $pdo->beginTransaction();
+                $stmt = $pdo->prepare("UPDATE users SET student_status = ?, course_status = ? WHERE user_id = ?");
+                $course_status = $new_status === 'inactive' ? 'suspended' : ($new_status === 'completed' ? 'completed' : (($new_status === 'suspended' || $new_status === 'dropout') ? 'suspended' : 'active'));
+                $stmt->execute([$new_status, $course_status, $user_id]);
+                
+                if ($new_status === 'dropout') {
+                    $pdo->prepare("DELETE FROM instalment_details WHERE user_id = ? AND status = 'pending' AND paid_date IS NULL")->execute([$user_id]);
+                }
+                
+                status_log($pdo, $user_id, $student['student_status'] ?: 'active', $new_status, trim($_POST['reason'] ?? 'Status updated by admin'), $admin_username);
+                track_record($pdo, $user_id, 'status_changed', "Student status: " . ($student['student_status'] ?: 'active') . " → {$new_status}", $admin_username);
+                $pdo->commit();
+                
+                $message = "Student status updated successfully.";
+                $student = load_student($pdo, $user_id);
+            }
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            error_log('Update student status: ' . $e->getMessage());
+            $error = 'Error updating student status: ' . $e->getMessage();
+        }
+    }
+}
+
 /* ── POST: edit_installments ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_installments') {
     if (!csrf_verify()) {
@@ -566,7 +601,7 @@ $net_payable = (float)$student['total_fee'] > 0
 $balance = max(0, $net_payable - $total_collected);
 
 $st = $student['student_status'] ?: 'active';
-$stBadge = $st === 'active' ? 'green' : ($st === 'completed' ? 'blue' : ($st === 'suspended' ? 'red' : 'gray'));
+$stBadge = $st === 'active' ? 'green' : ($st === 'completed' ? 'blue' : (($st === 'suspended' || $st === 'dropout') ? 'red' : 'gray'));
 $days = $student['course_duration_date'] ? (int)floor((strtotime($student['course_duration_date']) - strtotime(date('Y-m-d'))) / 86400) : null;
 
 $active_page = 'students';
@@ -577,7 +612,7 @@ include 'includes/admin_nav.php';
 
 <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px; align-items:center;">
     <a class="btn btn-outline" href="studentpage.php"><i class="fas fa-arrow-left"></i> All Students</a>
-    <span class="badge <?php echo $stBadge; ?>">Status: <?php echo ucfirst($st); ?></span>
+    <span class="badge <?php echo $stBadge; ?>" style="cursor:pointer; display:inline-flex; align-items:center; gap:6px;" onclick="openStatusChangeModal('<?php echo htmlspecialchars($student['user_id']); ?>', '<?php echo htmlspecialchars(addslashes($student['name'])); ?>', '<?php echo $st; ?>')" title="Change Status">Status: <?php echo ucfirst($st); ?> <i class="fas fa-pen" style="font-size:0.7rem; opacity:0.8;"></i></span>
     <span class="badge <?php echo $student['onboarding_status'] === 'completed' ? 'green' : 'amber'; ?>">
         Onboarding: <?php echo ucfirst($student['onboarding_status'] ?: 'pending'); ?>
     </span>
@@ -1155,6 +1190,49 @@ function openEditRemarkModal(rem) {
     document.getElementById('er-remark-text').value = rem.remark;
     openModal('edit-remark-modal');
 }
+
+function openStatusChangeModal(userId, name, status) {
+    document.getElementById('st-user-id').value = userId;
+    document.getElementById('st-name').innerText = name;
+    document.getElementById('st-status').value = status;
+    openModal('status-modal');
+}
 </script>
+
+<!-- ── STATUS MODAL ── -->
+<div class="modal-backdrop" id="status-modal">
+    <div class="modal" style="max-width:440px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-user-gear" style="color:var(--amber);"></i> Change Student Status</h3>
+            <button class="modal-close" onclick="closeModal('status-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="update_status">
+            <input type="hidden" name="user_id" id="st-user-id">
+            <div class="modal-body">
+                <p id="st-name" style="font-weight:700; margin-bottom:12px;"></p>
+                <div class="field" style="margin-bottom:12px;">
+                    <label>New status</label>
+                    <select name="student_status" id="st-status">
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                        <option value="suspended">Suspended</option>
+                        <option value="completed">Completed</option>
+                        <option value="dropout">Dropout</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>Reason</label>
+                    <input type="text" name="reason" placeholder="Why is this changing?">
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('status-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Update Status</button>
+            </div>
+        </form>
+    </div>
+</div>
 
 <?php include 'includes/admin_footer.php'; ?>

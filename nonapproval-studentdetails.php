@@ -103,6 +103,13 @@ include 'includes/admin_nav.php';
     <?php if ($student['status'] === 'approved'): ?>
         <a class="btn btn-soft-violet" href="student-details.php?user_id=<?php echo urlencode($student['user_id']); ?>"><i class="fas fa-user"></i> Open Student Profile</a>
     <?php endif; ?>
+    <?php 
+    $cleanPhone = preg_replace('/\D/', '', $student['whatsapp_country_code'] . $student['whatsapp_number']);
+    if (strlen($cleanPhone) === 10) { $cleanPhone = '91' . $cleanPhone; }
+    if ($cleanPhone): 
+    ?>
+        <a class="btn btn-soft-green" href="https://wa.me/<?php echo $cleanPhone; ?>" target="_blank"><i class="fab fa-whatsapp"></i> View Chat</a>
+    <?php endif; ?>
     <span class="badge <?php echo $status_badge; ?>" style="align-self:center;">Status: <?php echo ucfirst($student['status']); ?></span>
 </div>
 

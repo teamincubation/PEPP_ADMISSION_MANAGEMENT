@@ -91,6 +91,10 @@ try {
         if (!$cols) {
             $pdo->exec("ALTER TABLE reminders ADD COLUMN student_id VARCHAR(50) NULL");
         }
+        
+        try {
+            $pdo->exec("ALTER TABLE users MODIFY COLUMN student_status ENUM('active','inactive','suspended','completed','dropout') DEFAULT 'active'");
+        } catch (Exception $alterEx) {}
     } catch (Exception $dbEx) {
         error_log("PEPP self-healing DB check failed: " . $dbEx->getMessage());
     }

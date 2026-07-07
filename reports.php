@@ -36,7 +36,12 @@ function q_students($pdo, $course = '', $year = '', $status = '') {
     $where = ["u.status = 'approved'"]; $p = [];
     if ($course !== '') { $where[] = "u.pepp_course = ?"; $p[] = $course; }
     if ($year   !== '') { $where[] = "u.pepp_academic_year = ?"; $p[] = $year; }
-    if ($status !== '') { $where[] = "u.student_status = ?"; $p[] = $status; }
+    if ($status !== '') {
+        $where[] = "u.student_status = ?";
+        $p[] = $status;
+    } else {
+        $where[] = "(u.student_status <> 'dropout' OR u.student_status IS NULL)";
+    }
     $sql = "
         SELECT u.user_id, u.name, u.email, CONCAT(u.whatsapp_country_code, ' ', u.whatsapp_number) AS whatsapp,
                u.pepp_course, u.pepp_academic_year, u.payment_plan, u.student_status,
@@ -64,7 +69,7 @@ function q_courses($pdo) {
                COALESCE(SUM(x.inst_paid), 0) AS installments_collected,
                COALESCE(SUM(GREATEST(0, u.total_fee - (u.paid_amount + COALESCE(x.inst_paid, 0)))), 0) AS outstanding
         FROM pepp_courses pc
-        LEFT JOIN users u ON u.pepp_course = pc.course_name AND u.status = 'approved'
+        LEFT JOIN users u ON u.pepp_course = pc.course_name AND u.status = 'approved' AND (u.student_status <> 'dropout' OR u.student_status IS NULL)
         LEFT JOIN (SELECT user_id, SUM(COALESCE(paid_amount, amount)) AS inst_paid
                    FROM instalment_details WHERE status IN ('approved','paid') GROUP BY user_id) x
                ON x.user_id = u.user_id
@@ -290,8 +295,144 @@ function rqs($overrides = []) {
 $active_page = 'reports';
 $page_title  = 'Reports & Export';
 $page_sub    = 'Detailed reports with Excel export - Super Admin only';
+$extra_head  = '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>';
 include 'includes/admin_nav.php';
+
+// Compile graphical data summaries
+$chart_type = 'bar';
+$chart_labels = [];
+$chart_values = [];
+$chart_label_text = 'Count';
+$show_chart = true;
+
+if ($tab === 'students') {
+    $total_collected = 0;
+    $total_balance = 0;
+    foreach ($data as $row) {
+        $total_collected += (float)$row['total_collected'];
+        $total_balance += (float)$row['balance'];
+    }
+    $chart_type = 'doughnut';
+    $chart_labels = ['Collected Fee (₹)', 'Outstanding Balance (₹)'];
+    $chart_values = [$total_collected, $total_balance];
+    $chart_label_text = 'Amount (₹)';
+} elseif ($tab === 'courses') {
+    $chart_type = 'bar';
+    foreach ($data as $row) {
+        $chart_labels[] = $row['course_name'] . ' (' . $row['academic_year'] . ')';
+        $chart_values[] = (int)$row['students'];
+    }
+    $chart_label_text = 'Students Enrolled';
+} elseif ($tab === 'revenue') {
+    $chart_type = 'line';
+    $rev_data = array_reverse($data);
+    foreach ($rev_data as $row) {
+        $chart_labels[] = date('M Y', strtotime($row['month'] . '-01'));
+        $chart_values[] = (float)$row['total'];
+    }
+    $chart_label_text = 'Monthly Revenue (₹)';
+} elseif ($tab === 'payments') {
+    $chart_type = 'doughnut';
+    $status_counts = ['Approved' => 0, 'Pending review' => 0, 'Rejected' => 0];
+    foreach ($data as $row) {
+        $st = $row['status'];
+        $label = ($st === 'approved' || $st === 'paid') ? 'Approved' : (($st === 'rejected') ? 'Rejected' : 'Pending review');
+        $status_counts[$label]++;
+    }
+    $chart_labels = array_keys($status_counts);
+    $chart_values = array_values($status_counts);
+    $chart_label_text = 'Submissions';
+} elseif ($tab === 'accounts') {
+    $chart_type = 'bar';
+    foreach ($data as $row) {
+        $chart_labels[] = $row['account_name'];
+        $chart_values[] = (float)$row['collected'];
+    }
+    $chart_label_text = 'Collected Amount (₹)';
+} else {
+    $show_chart = false;
+}
 ?>
+
+<?php if ($show_chart && !empty($chart_values)): ?>
+<div class="panel" style="margin-bottom: 20px;">
+    <div class="panel-head">
+        <span class="head-icon" style="background:var(--pink-soft);color:var(--pink-ink);"><i class="fas fa-chart-line"></i></span>
+        <h2>Graphical Analytics</h2>
+    </div>
+    <div class="panel-body" style="display:flex; justify-content:center; align-items:center; min-height:220px; max-height:350px; padding: 20px 0;">
+        <canvas id="reportChart" style="max-width:100%; max-height:280px;"></canvas>
+    </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    var ctx = document.getElementById('reportChart');
+    if (!ctx) return;
+    
+    var chartType = <?php echo json_encode($chart_type); ?>;
+    var labels = <?php echo json_encode($chart_labels); ?>;
+    var values = <?php echo json_encode($chart_values); ?>;
+    var labelText = <?php echo json_encode($chart_label_text); ?>;
+    
+    var colors = [
+        '#d4a13a', // gold
+        '#7a2b4f', // dark violet/pink
+        '#10b981', // green
+        '#3b82f6', // blue
+        '#f59e0b', // amber
+        '#ec4899', // pink
+        '#8b5cf6'  // purple
+    ];
+    
+    var datasetColors = chartType === 'doughnut' || chartType === 'pie' 
+        ? colors.slice(0, values.length) 
+        : '#d4a13a';
+        
+    var data = {
+        labels: labels,
+        datasets: [{
+            label: labelText,
+            data: values,
+            backgroundColor: datasetColors,
+            borderColor: chartType === 'line' ? '#7a2b4f' : 'transparent',
+            borderWidth: chartType === 'line' ? 3 : 0,
+            tension: 0.3,
+            fill: chartType === 'line',
+            backgroundColorFill: 'rgba(122, 43, 79, 0.1)'
+        }]
+    };
+    
+    new Chart(ctx, {
+        type: chartType,
+        data: data,
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: (chartType === 'doughnut' || chartType === 'pie'),
+                    position: 'bottom',
+                    labels: {
+                        color: '#475569',
+                        font: { weight: 'bold' }
+                    }
+                }
+            },
+            scales: chartType === 'doughnut' || chartType === 'pie' ? {} : {
+                y: {
+                    beginAtZero: true,
+                    ticks: { color: '#475569' }
+                },
+                x: {
+                    ticks: { color: '#475569' }
+                }
+            }
+        }
+    });
+});
+</script>
+<?php endif; ?>
 
 <?php if ($load_error): ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($load_error); ?></span></div><?php endif; ?>
 
@@ -323,7 +464,7 @@ include 'includes/admin_nav.php';
                     </select></div>
                 <div class="field"><label>Status</label>
                     <select name="status"><option value="">All</option>
-                        <?php foreach (['active','inactive','suspended','completed'] as $s): ?><option value="<?php echo $s; ?>" <?php echo $f_status === $s ? 'selected' : ''; ?>><?php echo ucfirst($s); ?></option><?php endforeach; ?>
+                        <?php foreach (['active','inactive','suspended','completed','dropout'] as $s): ?><option value="<?php echo $s; ?>" <?php echo $f_status === $s ? 'selected' : ''; ?>><?php echo ucfirst($s); ?></option><?php endforeach; ?>
                     </select></div>
             <?php elseif ($tab === 'payments'): ?>
                 <div class="field"><label>Status</label>

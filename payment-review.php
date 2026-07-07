@@ -145,9 +145,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     "Installment #{$req['instalment_number']} (₹" . number_format($received_amount, 2) . ") approved; course access extended to {$new_access_end}", $admin_username);
 
                 // 4. Direct WhatsApp message (logged + one-tap wa.me link)
-                $msg = "Installment Payment Approved! Your installment #{$req['instalment_number']} of ₹" . number_format($received_amount, 0)
-                     . " has been approved. Your course access is extended until " . date('d M Y', strtotime($new_access_end))
-                     . ". Refresh your app to get continued access. Thank you! - PEPP Learning";
+                $formatted_amount = '₹' . number_format($received_amount, 0);
+                $formatted_date = date('d M Y', strtotime($new_access_end));
+                $msg = "*Installment Payment Approved!*\n"
+                     . "Your installment #{$req['instalment_number']} of *{$formatted_amount}* has been approved.\n"
+                     . "Your course access is extended until *{$formatted_date}*. Refresh your app to get continued access.\n\n"
+                     . "Thank you!\n"
+                     . "`PEPP Learning`";
                 try {
                     $stmt = $pdo->prepare("INSERT INTO whatsapp_notifications (phone, message, student_name, sent_by, status) VALUES (?, ?, ?, ?, 'sent')");
                     $stmt->execute([substr($wa_phone, -15), $msg, $req['student_name'], $admin_username]);

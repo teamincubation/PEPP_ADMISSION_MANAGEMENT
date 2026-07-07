@@ -224,7 +224,7 @@ if (isset($_GET['print']) && $_GET['print'] === '1') {
             SELECT u.name, u.postal_address, u.place_post_office, u.district, u.state, u.postal_pincode, u.whatsapp_country_code, u.whatsapp_number, u.mobile_number, u.emergency_contact
             FROM users u
             INNER JOIN student_peppkit pk ON pk.user_id = u.user_id
-            WHERE u.status = 'approved' AND u.peppkit_eligible = 'Eligible' AND pk.status = 'Addr. Verified'
+            WHERE u.status = 'approved' AND u.peppkit_eligible = 'Eligible' AND pk.status = 'Addr. Verified' AND (u.student_status <> 'dropout' OR u.student_status IS NULL)
             ORDER BY u.joined_date DESC
         ");
         $stickers = $stmt->fetchAll();
@@ -350,7 +350,7 @@ if (isset($_GET['print']) && $_GET['print'] === '1') {
 $search = trim($_GET['search'] ?? '');
 $status_filter = trim($_GET['status'] ?? '');
 
-$where = ["u.status = 'approved'", "u.peppkit_eligible = 'Eligible'"];
+$where = ["u.status = 'approved'", "u.peppkit_eligible = 'Eligible'", "(u.student_status <> 'dropout' OR u.student_status IS NULL)"];
 $params = [];
 
 if ($search !== '') {

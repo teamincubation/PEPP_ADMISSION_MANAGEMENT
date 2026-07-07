@@ -82,7 +82,7 @@ try {
             SELECT user_id, SUM(COALESCE(paid_amount, amount)) AS inst_paid
             FROM instalment_details WHERE status IN ('approved','paid') GROUP BY user_id
         ) x ON x.user_id = u.user_id
-        WHERE u.status = 'approved'
+        WHERE u.status = 'approved' AND (u.student_status <> 'dropout' OR u.student_status IS NULL)
         GROUP BY u.pepp_course
         ORDER BY (SUM(u.paid_amount) + SUM(COALESCE(x.inst_paid, 0))) DESC
     ");
