@@ -34,6 +34,11 @@ try {
         default:         $cond = "1=1";
     }
 
+    $order = "CASE WHEN i.status = 'pending' AND i.paid_date IS NOT NULL THEN 0 ELSE 1 END, i.updated_at DESC, i.due_date ASC";
+    if ($tab === 'upcoming') {
+        $order = "i.due_date ASC";
+    }
+
     /* NOTE: u.whatsapp_number is used for contact (the old page read u.phone,
        which register.php never filled, so it was always empty). */
     $stmt = $pdo->query("
@@ -45,10 +50,7 @@ try {
         FROM instalment_details i
         JOIN users u ON u.user_id = i.user_id
         WHERE $cond
-        ORDER BY
-            CASE WHEN i.status = 'pending' AND i.paid_date IS NOT NULL THEN 0 ELSE 1 END,
-            i.updated_at DESC,
-            i.due_date ASC
+        ORDER BY $order
         LIMIT 100
     ");
     $rows = $stmt->fetchAll();
@@ -151,7 +153,32 @@ include 'includes/admin_nav.php';
                             <div class="cell-sub">paid ₹<?php echo number_format((float)$r['paid_amount'], 0); ?></div>
                         <?php endif; ?>
                     </td>
-                    <td class="cell-sub"><?php echo date('d M Y', strtotime($r['due_date'])); ?></td>
+                    <td>
+                        <div class="cell-main" style="font-size:0.85rem; font-weight:600;"><?php echo date('d M Y', strtotime($r['due_date'])); ?></div>
+                        <?php
+                        $due_time = strtotime($r['due_date']);
+                        $today_time = strtotime(date('Y-m-d'));
+                        $diff_days = (int)round(($due_time - $today_time) / 86400);
+                        
+                        if ($r['status'] === 'pending' && !$r['paid_date']) {
+                            if ($diff_days > 0) {
+                                echo '<div class="cell-sub" style="font-size:0.75rem; color:#475569;">' . $diff_days . ' days pending</div>';
+                            } elseif ($diff_days === 0) {
+                                echo '<div class="cell-sub" style="font-size:0.75rem; color:#ea580c; font-weight:700;">Due today</div>';
+                            } else {
+                                echo '<div class="cell-sub" style="font-size:0.75rem; color:#dc2626; font-weight:700;">Overdue ' . abs($diff_days) . ' days</div>';
+                            }
+                            
+                            if ($diff_days <= 10) {
+                                $label_bg = $diff_days < 0 ? '#fee2e2' : '#fef3c7';
+                                $label_color = $diff_days < 0 ? '#991b1b' : '#92400e';
+                                $label_text = $diff_days < 0 ? 'Overdue' : 'Due in ' . $diff_days . 'd';
+                                if ($diff_days === 0) { $label_bg = '#ffedd5'; $label_color = '#c2410c'; $label_text = 'Due Today'; }
+                                echo '<span class="badge" style="background:' . $label_bg . '; color:' . $label_color . '; font-size:0.7rem; font-weight:bold; padding:2px 6px; border-radius:4px; margin-top:4px; display:inline-block;">' . $label_text . '</span>';
+                            }
+                        }
+                        ?>
+                    </td>
                     <td class="cell-sub"><?php echo $r['paid_date'] ? date('d M Y', strtotime($r['paid_date'])) : '-'; ?></td>
                     <td><?php if ($r['payment_reference']): ?><a class="proof-link" href="<?php echo e($r['payment_reference']); ?>" target="_blank"><i class="fas fa-receipt"></i> View</a><?php else: ?><span class="cell-sub">-</span><?php endif; ?></td>
                     <td><span class="badge <?php echo $badge; ?>"><?php echo $label; ?></span>
@@ -214,10 +241,10 @@ function sendReminder(r) {
     let cleanPhone = (r.whatsapp_country_code + r.whatsapp_number).replace(/\D/g, '');
     if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
     
-    // Redirect to whatsapp-notification.php compose page
-    window.location.href = 'whatsapp-notification.php?phone=' + encodeURIComponent(cleanPhone) + 
-                           '&name=' + encodeURIComponent(r.name) + 
-                           '&message=' + encodeURIComponent(msg);
+    // Open whatsapp-notification.php compose page in a new tab
+    window.open('whatsapp-notification.php?phone=' + encodeURIComponent(cleanPhone) + 
+                '&name=' + encodeURIComponent(r.name) + 
+                '&message=' + encodeURIComponent(msg), '_blank');
 }
 </script>
 

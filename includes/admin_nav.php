@@ -56,10 +56,12 @@ if (file_exists(__DIR__ . '/session_cron.php')) {
 }
 $nav_pending_payments  = 0;
 $nav_pending_onboarding = 0;
+$nav_due_within_10_days = 0;
 try {
     $nav_pending_approvals  = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE status = 'pending'")->fetchColumn();
     $nav_pending_payments   = (int)$pdo->query("SELECT COUNT(*) FROM instalment_details WHERE status = 'pending' AND paid_date IS NOT NULL")->fetchColumn();
     $nav_pending_onboarding = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE status = 'approved' AND (onboarding_status IS NULL OR onboarding_status <> 'completed')")->fetchColumn();
+    $nav_due_within_10_days = (int)$pdo->query("SELECT COUNT(*) FROM instalment_details WHERE status = 'pending' AND paid_date IS NULL AND rejected_at IS NULL AND due_date <= DATE_ADD(CURDATE(), INTERVAL 10 DAY)")->fetchColumn();
 } catch (Exception $navEx) { /* sidebar still renders */ }
 
 function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
@@ -188,7 +190,14 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
             <?php if (can_access('installments')): ?>
             <a class="nav-item <?php echo nav_active('installments', $active_page); ?>" href="phpinstalmentpaymentupdate.php">
                 <i class="fas fa-money-bill-wave"></i> Installments
-                <?php if ($nav_pending_payments > 0): ?><span class="nav-badge"><?php echo $nav_pending_payments; ?></span><?php endif; ?>
+                <span style="margin-left:auto; display:inline-flex; gap:4px; align-items:center;">
+                    <?php if ($nav_pending_payments > 0): ?>
+                        <span class="nav-badge" style="background:#f59e0b;" title="Pending review"><?php echo $nav_pending_payments; ?></span>
+                    <?php endif; ?>
+                    <?php if ($nav_due_within_10_days > 0): ?>
+                        <span class="nav-badge" style="background:#ef4444;" title="Due within 10 days"><?php echo $nav_due_within_10_days; ?></span>
+                    <?php endif; ?>
+                </span>
             </a>
             <?php endif; ?>
             <?php if (can_access('invoices')): ?>
