@@ -254,6 +254,46 @@ function postponeReminder(id) {
     document.getElementById('pp-when').value = iso;
     document.getElementById('postpone-form').submit();
 }
+
+// Light/Dark/Sepia mode switcher
+(function() {
+    var btn = document.getElementById('theme-toggle-btn');
+    var icon = document.getElementById('theme-toggle-icon');
+    if (!btn || !icon) return;
+    
+    function updateThemeUI(theme) {
+        document.documentElement.classList.remove('theme-dark', 'theme-sepia');
+        if (theme === 'dark') {
+            document.documentElement.classList.add('theme-dark');
+            icon.className = 'fas fa-moon';
+            btn.title = 'Current: Dark Mode. Click to switch to Light Mode.';
+        } else if (theme === 'sepia') {
+            document.documentElement.classList.add('theme-sepia');
+            icon.className = 'fas fa-palette';
+            btn.title = 'Current: Sepia Mode. Click to switch to Dark Mode.';
+        } else {
+            icon.className = 'fas fa-sun';
+            btn.title = 'Current: Light Mode. Click to switch to Sepia Mode.';
+        }
+    }
+    
+    var currentTheme = localStorage.getItem('admin-theme') || 'light';
+    updateThemeUI(currentTheme);
+    
+    btn.addEventListener('click', function() {
+        var theme = localStorage.getItem('admin-theme') || 'light';
+        var nextTheme = 'light';
+        if (theme === 'light') {
+            nextTheme = 'sepia';
+        } else if (theme === 'sepia') {
+            nextTheme = 'dark';
+        } else {
+            nextTheme = 'light';
+        }
+        localStorage.setItem('admin-theme', nextTheme);
+        updateThemeUI(nextTheme);
+    });
+})();
 </script>
 <?php if (!empty($extra_scripts)) echo $extra_scripts; ?>
 </body>

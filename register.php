@@ -560,6 +560,58 @@ $country_codes = [
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
+        /* ── HELP TOOLTIPS ────────────────────────────────────────── */
+        .help-tooltip-icon {
+            position: relative;
+            display: inline-block;
+            margin-left: 6px;
+            color: #6b7280;
+            cursor: help;
+        }
+        .help-tooltip-icon .tooltip-text {
+            visibility: hidden;
+            width: 260px;
+            background-color: #1e293b;
+            color: #fff;
+            text-align: center;
+            border-radius: 8px;
+            padding: 8px 12px;
+            position: absolute;
+            z-index: 100;
+            bottom: 125%;
+            left: 50%;
+            transform: translateX(-50%);
+            opacity: 0;
+            transition: opacity 0.2s;
+            font-size: 0.75rem;
+            font-weight: 500;
+            line-height: 1.4;
+            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);
+            text-transform: none; /* keep original case */
+        }
+        .help-tooltip-icon:hover .tooltip-text,
+        .help-tooltip-icon.active .tooltip-text {
+            visibility: visible;
+            opacity: 1;
+        }
+        .help-tooltip-icon .tooltip-text::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -5px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: #1e293b transparent transparent transparent;
+        }
+        .upload-area.upload-success {
+            border-color: #10b981 !important;
+            background: #ecfdf5 !important;
+        }
+        .upload-area.upload-success .upload-icon {
+            color: #10b981 !important;
+        }
+
         /* ── RESET & BASE ─────────────────────────────────────────── */
         *, *::before, *::after { box-sizing: border-box; }
         html { scroll-behavior: smooth; }
@@ -1320,9 +1372,22 @@ $country_codes = [
         <?php endif; ?>
 
         <?php if (!empty($validation_errors)): ?>
-        <div class="alert-error">
-            <i class="fas fa-list-ul"></i>
-            <span>Please fix the highlighted errors below before submitting.</span>
+        <div class="alert-error" style="background:#fee2e2; border:1px solid #fca5a5; border-radius:12px; padding:16px; color:#991b1b; display:block; margin-bottom:20px;">
+            <h4 style="margin-top:0; margin-bottom:10px; font-weight:700; display:flex; align-items:center; gap:8px; font-size:1rem; color:#dc2626;">
+                <i class="fas fa-triangle-exclamation"></i> Registration Form Incomplete
+            </h4>
+            <p style="margin:0 0 10px 0; font-size:0.88rem; font-weight:600;">Please address the following missed or incorrect fields:</p>
+            <ul style="margin:0; padding-left:20px; font-size:0.85rem; line-height:1.6;">
+                <?php foreach ($validation_errors as $field => $err_msg): 
+                    $field_name = ucwords(str_replace(['_', '-'], ' ', $field));
+                    if ($field === 'photo_upload') $field_name = 'Student Photo';
+                    if ($field === 'payment_screenshot') $field_name = 'Payment Receipt/Screenshot';
+                    if ($field === 'pepp_course') $field_name = 'PEPP Course Selection';
+                    if ($field === 'pepp_academic_year') $field_name = 'PEPP Academic Year';
+                ?>
+                    <li><strong><?php echo e($field_name); ?></strong>: <?php echo e($err_msg); ?></li>
+                <?php endforeach; ?>
+            </ul>
         </div>
         <?php endif; ?>
 
@@ -1674,7 +1739,12 @@ $country_codes = [
 
                         <!-- Remaining Semesters -->
                         <div class="col-12">
-                            <label class="form-label">Remaining Semesters</label>
+                            <label class="form-label">Remaining Semesters
+                                <span class="help-tooltip-icon" onclick="this.classList.toggle('active')">
+                                    <i class="far fa-question-circle"></i>
+                                    <span class="tooltip-text">If you are a UG or PG student, select all the remaining semester examinations in your current course.</span>
+                                </span>
+                            </label>
                             <?php
                             $semesters = ['1st Semester','2nd Semester','3rd Semester','4th Semester','5th Semester','6th Semester','7th Semester','8th Semester','Already Completed','Higher Secondary Student'];
                             ?>
@@ -1775,7 +1845,12 @@ $country_codes = [
 
                     <div class="row g-3" style="margin-bottom:4px;">
                         <div class="col-md-8">
-                            <label class="form-label">Add Coupon / Referral Code</label>
+                            <label class="form-label">Add Coupon / Referral Code
+                                <span class="help-tooltip-icon" onclick="this.classList.toggle('active')">
+                                    <i class="far fa-question-circle"></i>
+                                    <span class="tooltip-text">Enter your coupon code or referral code, if available. If not, simply leave this field empty.</span>
+                                </span>
+                            </label>
                             <div style="display:flex; gap:8px;">
                                 <input type="text" name="coupon_code" id="coupon_code" class="form-control <?php echo isset($validation_errors['coupon_code']) ? 'error-field' : ''; ?>"
                                        value="<?php echo htmlspecialchars($form_data['coupon_code'] ?? ''); ?>" placeholder="Enter coupon or referral code" style="text-transform:uppercase;">
@@ -1862,7 +1937,7 @@ $country_codes = [
                                 <input type="file" name="photo_upload" accept="image/*" required>
                                 <i class="fas fa-user-circle upload-icon" style="color:#f59e0b;font-size:1.6rem;display:block;margin-bottom:6px;"></i>
                                 <div class="upload-title">Upload Your Photo</div>
-                                <div class="upload-hint">JPG, PNG - clear passport-style photo</div>
+                                <div class="upload-hint">JPG, PNG - your best quality photo</div>
                             </div>
                             <?php if (isset($validation_errors['photo_upload'])): ?>
                                 <div class="error-message"><i class="fas fa-exclamation-circle"></i><?php echo $validation_errors['photo_upload']; ?></div>
@@ -1922,11 +1997,119 @@ $country_codes = [
     document.addEventListener('DOMContentLoaded', function() {
         let emailTimeout, whatsappTimeout;
 
-        // ── Submit button loading state ──────────────────────────────
+        // ── Submit button loading state + Client Validation ──────────
         const submitBtn = document.getElementById('submit-btn');
-        document.getElementById('registration-form').addEventListener('submit', function() {
-            submitBtn.classList.add('loading');
-            submitBtn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Submitting…';
+        const form = document.getElementById('registration-form');
+        form.addEventListener('submit', function(e) {
+            // Clear any existing client-side summary
+            const existingSummary = document.getElementById('client-validation-summary');
+            if (existingSummary) {
+                existingSummary.remove();
+            }
+            
+            const invalidFields = [];
+            const requiredElements = form.querySelectorAll('[required]');
+            
+            requiredElements.forEach(function(el) {
+                let isInvalid = false;
+                let labelText = '';
+                
+                // Get nearest label text
+                let parentField = el.closest('.field') || el.closest('[class*="col-"]') || el.closest('.terms-check') || el.closest('.upload-area');
+                if (parentField) {
+                    const label = parentField.querySelector('label, .form-label');
+                    if (label) {
+                        labelText = label.textContent.replace('*', '').trim();
+                        // Strip internal tooltip elements from text
+                        const tooltipTextNode = label.querySelector('.tooltip-text');
+                        if (tooltipTextNode) {
+                            labelText = labelText.replace(tooltipTextNode.textContent.trim(), '').trim();
+                        }
+                    }
+                }
+                
+                if (!labelText) {
+                    labelText = el.getAttribute('placeholder') || el.name || 'Required Field';
+                }
+                
+                // Remove trailing question mark icon text if any
+                labelText = labelText.replace(/\s*[?？]\s*$/, '').trim();
+                
+                if (el.type === 'checkbox') {
+                    if (!el.checked) {
+                        isInvalid = true;
+                        labelText = 'Terms & Conditions Agreement';
+                    }
+                } else if (el.type === 'file') {
+                    if (!el.files || el.files.length === 0) {
+                        isInvalid = true;
+                        labelText = el.name === 'photo_upload' ? 'Student Photo' : 'Payment Receipt/Screenshot';
+                    }
+                } else {
+                    if (!el.value || el.value.trim() === '') {
+                        isInvalid = true;
+                    }
+                }
+                
+                if (isInvalid) {
+                    invalidFields.push(labelText);
+                    el.classList.add('error-field');
+                    // Style border directly for visibility
+                    el.style.borderColor = '#ef4444';
+                    
+                    const uploadArea = el.closest('.upload-area');
+                    if (uploadArea) {
+                        uploadArea.classList.add('upload-error');
+                    }
+                } else {
+                    el.classList.remove('error-field');
+                    el.style.borderColor = '';
+                    const uploadArea = el.closest('.upload-area');
+                    if (uploadArea) {
+                        uploadArea.classList.remove('upload-error');
+                    }
+                }
+            });
+            
+            if (invalidFields.length > 0) {
+                e.preventDefault(); // Block Form Submission!
+                
+                submitBtn.classList.remove('loading');
+                submitBtn.innerHTML = 'Submit Registration <i class="fas fa-arrow-right" style="margin-left:6px;"></i>';
+                
+                const summaryDiv = document.createElement('div');
+                summaryDiv.id = 'client-validation-summary';
+                summaryDiv.style.background = '#fef2f2';
+                summaryDiv.style.border = '2px solid #fca5a5';
+                summaryDiv.style.borderRadius = '16px';
+                summaryDiv.style.padding = '20px';
+                summaryDiv.style.marginBottom = '24px';
+                summaryDiv.style.color = '#991b1b';
+                summaryDiv.style.boxShadow = '0 10px 15px -3px rgba(0,0,0,0.1)';
+                
+                let listHtml = '';
+                // Deduplicate invalid field names
+                const uniqueFields = Array.from(new Set(invalidFields));
+                uniqueFields.forEach(function(item) {
+                    listHtml += '<li style="margin-bottom:4px;"><strong>' + item + '</strong> is missing or incomplete</li>';
+                });
+                
+                summaryDiv.innerHTML = `
+                    <h4 style="margin-top:0; margin-bottom:12px; font-size:1.1rem; font-weight:700; display:flex; align-items:center; gap:8px; color:#dc2626;">
+                        <i class="fas fa-triangle-exclamation"></i> Registration Form Incomplete
+                    </h4>
+                    <p style="margin:0 0 10px 0; font-size:0.9rem; font-weight:600;">Please fill out the following required areas before submitting:</p>
+                    <ul style="margin:12px 0 0 0; padding-left:20px; font-size:0.88rem; line-height:1.6;">
+                        ${listHtml}
+                    </ul>
+                `;
+                
+                form.insertBefore(summaryDiv, form.firstChild);
+                summaryDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } else {
+                submitBtn.classList.add('loading');
+                submitBtn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Submitting…';
+            }
         });
 
         // ── File upload label feedback ───────────────────────────────
@@ -1936,8 +2119,11 @@ $country_codes = [
                 const title = area.querySelector('.upload-title');
                 if (this.files && this.files[0]) {
                     title.textContent = this.files[0].name;
-                    area.style.borderColor = '#f59e0b';
-                    area.style.background  = '#fffbeb';
+                    area.classList.add('upload-success');
+                    area.classList.remove('upload-error');
+                } else {
+                    title.textContent = this.name === 'photo_upload' ? 'Upload Your Photo' : 'Upload Payment Receipt';
+                    area.classList.remove('upload-success');
                 }
             });
         });

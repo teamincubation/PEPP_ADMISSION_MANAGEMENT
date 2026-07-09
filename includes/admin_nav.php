@@ -78,6 +78,14 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="assets/css/admin-theme.css" rel="stylesheet">
+    <script>
+        (function() {
+            var theme = localStorage.getItem('admin-theme') || 'light';
+            if (theme !== 'light') {
+                document.documentElement.classList.add('theme-' + theme);
+            }
+        })();
+    </script>
     <?php if (!empty($extra_head)) echo $extra_head; ?>
 </head>
 <body>
@@ -269,6 +277,9 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
                 <?php if ($page_sub): ?><div class="page-sub"><?php echo e($page_sub); ?></div><?php endif; ?>
             </div>
             <div class="topbar-right">
+                <button type="button" class="reminder-bell" id="theme-toggle-btn" style="margin-right:4px;" title="Switch Theme" aria-label="Switch Theme">
+                    <i class="fas fa-sun" id="theme-toggle-icon"></i>
+                </button>
                 <button type="button" class="reminder-bell <?php echo !empty($nav_reminders_due) ? 'has-due' : ''; ?>" onclick="openModal('reminders-modal')" title="Reminders" aria-label="Reminders">
                     <i class="fas fa-bell"></i>
                     <?php if (!empty($nav_reminders_pending)): ?><span class="reminder-count"><?php echo count($nav_reminders_pending); ?></span><?php endif; ?>

@@ -659,3 +659,40 @@ table.data-table { width: 100%; border-collapse: collapse; }
 /* Toggle/switch rows in forms */
 .switch-row { display:inline-flex; align-items:center; gap:8px; font-size:.85rem; color:var(--foreground); cursor:pointer; }
 .switch-row input[type=checkbox] { width:16px; height:16px; accent-color:var(--accent); }
+
+/* ============================================================
+   Dark & Sepia Theme Custom Variables
+   ============================================================ */
+html.theme-dark {
+    --background: #0b0f19;
+    --surface: #111827;
+    --card: #1f2937;
+    --foreground: #f3f4f6;
+    --secondary: #9ca3af;
+    --muted-foreground: #6b7280;
+    --border: #374151;
+    --accent: #a78bfa;
+    --accent-soft: #1e1b4b;
+    --accent-dark: #c084fc;
+}
+html.theme-dark .alert-success { border-color: #065f46; }
+html.theme-dark .alert-error   { border-color: #991b1b; }
+html.theme-dark .alert-info    { border-color: #1e3a8a; }
+html.theme-dark .alert-warn    { border-color: #78350f; }
+
+html.theme-sepia {
+    --background: #fbf6eb;
+    --surface: #ffffff;
+    --card: #f5edd6;
+    --foreground: #433422;
+    --secondary: #7b6650;
+    --muted-foreground: #a28e79;
+    --border: #e6dcce;
+    --accent: #d97706;
+    --accent-soft: #fef3c7;
+    --accent-dark: #b45309;
+}
+html.theme-sepia .alert-success { border-color: #d1fae5; }
+html.theme-sepia .alert-error   { border-color: #fee2e2; }
+html.theme-sepia .alert-info    { border-color: #dbeafe; }
+html.theme-sepia .alert-warn    { border-color: #fef3c7; }
