@@ -76,6 +76,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error_message = "Failed to delete template: " . $e->getMessage();
             }
         }
+    } elseif ($action === 'delete_font') {
+        if (!csrf_verify()) {
+            $error_message = 'Security token mismatch.';
+        } else {
+            $fid = (int)($_POST['font_id'] ?? 0);
+            try {
+                $stmt = $pdo->prepare("SELECT font_file FROM custom_fonts WHERE id = ?");
+                $stmt->execute([$fid]);
+                $file = $stmt->fetchColumn();
+                
+                $stmt = $pdo->prepare("DELETE FROM custom_fonts WHERE id = ?");
+                $stmt->execute([$fid]);
+                
+                if ($file) {
+                    $real_file = __DIR__ . '/../' . $file;
+                    if (file_exists($real_file)) {
+                        @unlink($real_file);
+                    }
+                }
+                $success_message = "Font deleted successfully.";
+            } catch (Exception $e) {
+                $error_message = "Failed to delete font: " . $e->getMessage();
+            }
+        }
     }
 }
 
@@ -380,7 +404,15 @@ include 'includes/admin_nav.php';
                 <?php else: foreach ($fonts as $f): ?>
                     <div class="font-list-item">
                         <span><strong><?php echo htmlspecialchars($f['font_name']); ?></strong></span>
-                        <span style="font-size:0.7rem; color:#94a3b8;"><?php echo strtoupper(pathinfo($f['font_file'], PATHINFO_EXTENSION)); ?></span>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-size:0.7rem; color:#94a3b8;"><?php echo strtoupper(pathinfo($f['font_file'], PATHINFO_EXTENSION)); ?></span>
+                            <form method="POST" onsubmit="return confirm('Are you sure you want to delete this font?');" style="margin:0;">
+                                <?php echo csrf_field(); ?>
+                                <input type="hidden" name="action" value="delete_font">
+                                <input type="hidden" name="font_id" value="<?php echo (int)$f['id']; ?>">
+                                <button type="submit" style="background:none; border:none; color:#ef4444; cursor:pointer; padding:0; font-size:0.85rem; line-height:1;" title="Delete Font"><i class="fas fa-trash"></i></button>
+                            </form>
+                        </div>
                     </div>
                 <?php endforeach; endif; ?>
             </div>

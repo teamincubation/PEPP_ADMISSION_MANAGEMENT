@@ -494,7 +494,7 @@ include 'includes/admin_nav.php';
 
     var customFontNames = <?php echo json_encode(array_column($fonts, 'font_name')); ?>;
     // Load popular Google Fonts in select
-    var popularGFonts = ['Inter', 'Roboto', 'Outfit', 'Montserrat', 'Playfair Display', 'Oswald', 'Poppins', 'Lato', 'Open Sans', 'Lora'];
+    var popularGFonts = ['Bricolage Grotesque', 'Inter', 'Roboto', 'Outfit', 'Montserrat', 'Playfair Display', 'Oswald', 'Poppins', 'Lato', 'Open Sans', 'Lora'];
     var gGroup = document.getElementById('google-fonts-group');
     if (gGroup) {
         popularGFonts.forEach(function(f) {
@@ -514,7 +514,11 @@ include 'includes/admin_nav.php';
         var link = document.createElement('link');
         link.id = id;
         link.rel = 'stylesheet';
-        link.href = 'https://fonts.googleapis.com/css2?family=' + encodeURIComponent(fontFamily) + '&display=swap';
+        var href = 'https://fonts.googleapis.com/css2?family=' + encodeURIComponent(fontFamily) + '&display=swap';
+        if (fontFamily === 'Bricolage Grotesque') {
+            href = 'https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@24,85,700&display=swap';
+        }
+        link.href = href;
         document.head.appendChild(link);
     }
 

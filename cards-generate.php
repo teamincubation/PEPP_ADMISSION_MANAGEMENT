@@ -194,10 +194,28 @@ var bgW = <?php echo $canvas_w; ?>;
 var bgH = <?php echo $canvas_h; ?>;
 var bgUrl = '../<?php echo htmlspecialchars($tpl['bg_image']); ?>';
 var elements = <?php echo json_encode($elements); ?>;
+var customFonts = <?php echo json_encode($fonts); ?>;
+var customFontNames = customFonts.map(f => f.font_name);
 var photos = {}; // Cache for base64 uploaded photo blobs
 var activeId = null;
 
-var customFontNames = <?php echo json_encode(array_column($fonts, 'font_name')); ?>;
+// Programmatically load custom fonts used in elements before generating
+var fontLoadPromises = [];
+elements.forEach(function(el) {
+    if (el.type === 'text' && el.fontFamily) {
+        var customFont = customFonts.find(f => f.font_name === el.fontFamily);
+        if (customFont) {
+            var fontUrl = '../' + customFont.font_file;
+            var fontFace = new FontFace(el.fontFamily, 'url("' + fontUrl + '")');
+            var promise = fontFace.load().then(function(loadedFace) {
+                document.fonts.add(loadedFace);
+            }).catch(function(err) {
+                console.error("Failed to load custom font:", el.fontFamily, err);
+            });
+            fontLoadPromises.push(promise);
+        }
+    }
+});
 
 // Initialize Google Fonts used in the template
 elements.forEach(function(el) {
@@ -214,7 +232,11 @@ function loadFont(fontFamily) {
     var link = document.createElement('link');
     link.id = id;
     link.rel = 'stylesheet';
-    link.href = 'https://fonts.googleapis.com/css2?family=' + encodeURIComponent(fontFamily) + '&display=swap';
+    var href = 'https://fonts.googleapis.com/css2?family=' + encodeURIComponent(fontFamily) + '&display=swap';
+    if (fontFamily === 'Bricolage Grotesque') {
+        href = 'https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@24,85,700&display=swap';
+    }
+    link.href = href;
     document.head.appendChild(link);
 }
 
@@ -368,10 +390,11 @@ function triggerGeneration(e) {
     bgImg.src = bgUrl;
     
     bgImg.onload = function() {
-        // Wait for all fonts to be loaded before rendering to canvas
-        document.fonts.ready.then(function() {
-            var canvas = document.getElementById('native-resolution-canvas');
-            var ctx = canvas.getContext('2d');
+        // Wait for both custom loaded FontFace API fonts and general document fonts to be ready
+        Promise.all(fontLoadPromises).then(function() {
+            document.fonts.ready.then(function() {
+                var canvas = document.getElementById('native-resolution-canvas');
+                var ctx = canvas.getContext('2d');
             
             // Set canvas bounds to native template dimensions
             canvas.width = bgW;
@@ -533,7 +556,8 @@ function triggerGeneration(e) {
                 }
             });
         });
-    };
+    });
+};
 }
 
 function generatePDF(dataUrl) {
