@@ -197,6 +197,8 @@ var elements = <?php echo json_encode($elements); ?>;
 var photos = {}; // Cache for base64 uploaded photo blobs
 var activeId = null;
 
+var customFontNames = <?php echo json_encode(array_column($fonts, 'font_name')); ?>;
+
 // Initialize Google Fonts used in the template
 elements.forEach(function(el) {
     if (el.type === 'text' && el.fontFamily) {
@@ -206,6 +208,7 @@ elements.forEach(function(el) {
 
 function loadFont(fontFamily) {
     if (!fontFamily) return;
+    if (customFontNames.includes(fontFamily)) return; // Skip custom fonts
     var id = 'font-' + fontFamily.replace(/\s+/g, '-').toLowerCase();
     if (document.getElementById(id)) return;
     var link = document.createElement('link');
@@ -556,8 +559,46 @@ function generatePDF(dataUrl) {
     });
 }
 
-window.addEventListener('resize', initCanvas);
-window.addEventListener('DOMContentLoaded', initCanvas);
+    window.addEventListener('keydown', function(e) {
+        if (!activeId) return;
+        
+        // Skip handling keyboard movement when typing in inputs/selects/textareas
+        var activeTag = document.activeElement.tagName.toLowerCase();
+        if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
+            return;
+        }
+        
+        var el = elements.find(item => item.id === activeId);
+        if (!el) return;
+        
+        var step = 0.1;
+        if (e.shiftKey) {
+            step = 1.0;
+        }
+        
+        var moved = false;
+        if (e.key === 'ArrowUp') {
+            el.top = parseFloat(Math.max(0, el.top - step).toFixed(1));
+            moved = true;
+        } else if (e.key === 'ArrowDown') {
+            el.top = parseFloat(Math.min(100, el.top + step).toFixed(1));
+            moved = true;
+        } else if (e.key === 'ArrowLeft') {
+            el.left = parseFloat(Math.max(0, el.left - step).toFixed(1));
+            moved = true;
+        } else if (e.key === 'ArrowRight') {
+            el.left = parseFloat(Math.min(100, el.left + step).toFixed(1));
+            moved = true;
+        }
+        
+        if (moved) {
+            e.preventDefault();
+            drawElements();
+        }
+    });
+
+    window.addEventListener('resize', initCanvas);
+    window.addEventListener('DOMContentLoaded', initCanvas);
 </script>
 
 <?php include 'includes/admin_footer.php'; ?>

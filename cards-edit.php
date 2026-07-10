@@ -45,7 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $error_message = 'Please select a valid high-quality background image.';
         } else {
             // Read image dimensions
-            $real_path = dirname(__DIR__) . '/../' . $bg_path;
+            $real_path = __DIR__ . '/../' . $bg_path;
             $dims = @getimagesize($real_path);
             $width = $dims ? $dims[0] : 800;
             $height = $dims ? $dims[1] : 600;
@@ -492,6 +492,7 @@ include 'includes/admin_nav.php';
     var elements = <?php echo $tpl['elements_json'] ?: '[]'; ?>;
     var activeId = null;
 
+    var customFontNames = <?php echo json_encode(array_column($fonts, 'font_name')); ?>;
     // Load popular Google Fonts in select
     var popularGFonts = ['Inter', 'Roboto', 'Outfit', 'Montserrat', 'Playfair Display', 'Oswald', 'Poppins', 'Lato', 'Open Sans', 'Lora'];
     var gGroup = document.getElementById('google-fonts-group');
@@ -507,6 +508,7 @@ include 'includes/admin_nav.php';
 
     function loadFont(fontFamily) {
         if (!fontFamily) return;
+        if (customFontNames.includes(fontFamily)) return; // Skip custom fonts
         var id = 'font-' + fontFamily.replace(/\s+/g, '-').toLowerCase();
         if (document.getElementById(id)) return;
         var link = document.createElement('link');
@@ -854,6 +856,51 @@ include 'includes/admin_nav.php';
             alert('Failed to connect to the server.');
         });
     }
+
+    window.addEventListener('keydown', function(e) {
+        if (!activeId) return;
+        
+        // Skip handling keyboard movement when typing in inputs/selects/textareas
+        var activeTag = document.activeElement.tagName.toLowerCase();
+        if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
+            return;
+        }
+        
+        var el = elements.find(item => item.id === activeId);
+        if (!el) return;
+        
+        var step = 0.1;
+        if (e.shiftKey) {
+            step = 1.0;
+        }
+        
+        var moved = false;
+        if (e.key === 'ArrowUp') {
+            el.top = parseFloat(Math.max(0, el.top - step).toFixed(1));
+            moved = true;
+        } else if (e.key === 'ArrowDown') {
+            el.top = parseFloat(Math.min(100, el.top + step).toFixed(1));
+            moved = true;
+        } else if (e.key === 'ArrowLeft') {
+            el.left = parseFloat(Math.max(0, el.left - step).toFixed(1));
+            moved = true;
+        } else if (e.key === 'ArrowRight') {
+            el.left = parseFloat(Math.min(100, el.left + step).toFixed(1));
+            moved = true;
+        }
+        
+        if (moved) {
+            e.preventDefault();
+            drawElements();
+            selectElement(activeId);
+            
+            // Update input elements in inspector panel
+            var propLeft = document.getElementById('prop-left');
+            var propTop = document.getElementById('prop-top');
+            if (propLeft) propLeft.value = el.left;
+            if (propTop) propTop.value = el.top;
+        }
+    });
 
     window.addEventListener('resize', initCanvas);
     window.addEventListener('DOMContentLoaded', initCanvas);

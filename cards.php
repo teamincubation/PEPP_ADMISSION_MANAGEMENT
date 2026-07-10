@@ -24,7 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'uploa
             if (!in_array($ext, ['ttf', 'otf', 'woff', 'woff2'], true)) {
                 $error_message = 'Only TTF, OTF, WOFF, and WOFF2 font formats are supported.';
             } else {
-                $base_dir = dirname(__DIR__) . '/../uploads/custom_fonts';
+                $base_dir = __DIR__ . '/../uploads/custom_fonts';
                 if (!is_dir($base_dir)) {
                     @mkdir($base_dir, 0755, true);
                 }
@@ -66,7 +66,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$tid]);
                 
                 if ($bg) {
-                    $real_bg = dirname(__DIR__) . '/../' . $bg;
+                    $real_bg = __DIR__ . '/../' . $bg;
                     if (file_exists($real_bg)) {
                         @unlink($real_bg);
                     }
