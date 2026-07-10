@@ -173,7 +173,7 @@ include 'includes/admin_nav.php';
 .canvas-container {
     position: relative;
     box-shadow: 0 10px 25px rgba(0,0,0,0.15);
-    background-size: contain;
+    background-size: 100% 100%;
     background-repeat: no-repeat;
     background-position: center;
     background-color: #fff;
@@ -555,7 +555,15 @@ include 'includes/admin_nav.php';
                 div.style.fontSize = el.fontSize + 'px';
                 div.style.fontWeight = el.fontWeight || 'normal';
                 div.style.color = el.color || '#000000';
-                div.style.textAlign = el.textAlign || 'center';
+                var align = el.textAlign || 'center';
+                div.style.textAlign = align;
+                if (align === 'left') {
+                    div.style.justifyContent = 'flex-start';
+                } else if (align === 'right') {
+                    div.style.justifyContent = 'flex-end';
+                } else {
+                    div.style.justifyContent = 'center';
+                }
             } else if (el.type === 'photo') {
                 div.style.border = (el.borderWidth || 0) + 'px solid ' + (el.borderColor || '#000');
                 div.style.background = '#e2e8f0 url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' width=\'24\' height=\'24\'%3E%3Cpath fill=\'%2364748b\' d=\'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z\'/%3E%3C/svg%3E") no-repeat center';

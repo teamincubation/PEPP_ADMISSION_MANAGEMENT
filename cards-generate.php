@@ -103,7 +103,7 @@ include 'includes/admin_nav.php';
 .canvas-container {
     position: relative;
     box-shadow: 0 10px 25px rgba(0,0,0,0.15);
-    background-size: contain;
+    background-size: 100% 100%;
     background-repeat: no-repeat;
     background-position: center;
     background-color: #fff;
@@ -253,7 +253,15 @@ function drawElements() {
             div.style.fontSize = el.fontSize + 'px';
             div.style.fontWeight = el.fontWeight || 'normal';
             div.style.color = el.color || '#000000';
-            div.style.textAlign = el.textAlign || 'center';
+            var align = el.textAlign || 'center';
+            div.style.textAlign = align;
+            if (align === 'left') {
+                div.style.justifyContent = 'flex-start';
+            } else if (align === 'right') {
+                div.style.justifyContent = 'flex-end';
+            } else {
+                div.style.justifyContent = 'center';
+            }
         } else if (el.type === 'photo') {
             div.style.border = (el.borderWidth || 0) + 'px solid ' + (el.borderColor || '#000');
             if (photos[el.id]) {
@@ -357,146 +365,170 @@ function triggerGeneration(e) {
     bgImg.src = bgUrl;
     
     bgImg.onload = function() {
-        var canvas = document.getElementById('native-resolution-canvas');
-        var ctx = canvas.getContext('2d');
-        
-        // Set canvas bounds to native template dimensions
-        canvas.width = bgW;
-        canvas.height = bgH;
-        
-        // Draw background
-        ctx.drawImage(bgImg, 0, 0, bgW, bgH);
-        
-        // Render elements sequentially
-        var promises = elements.map(function(el) {
-            return new Promise(function(resolve) {
-                ctx.save();
-                ctx.globalAlpha = el.opacity ?? 1;
-                
-                var x = (el.left / 100) * bgW;
-                var y = (el.top / 100) * bgH;
-                var w = (el.width / 100) * bgW;
-                var h = (el.height / 100) * bgH;
-                
-                // Rotation helper
-                if (el.rotate) {
-                    ctx.translate(x + w/2, y + h/2);
-                    ctx.rotate((el.rotate * Math.PI) / 180);
-                    ctx.translate(-(x + w/2), -(y + h/2));
-                }
-                
-                if (el.type === 'text') {
-                    // Set typography properties
-                    ctx.fillStyle = el.color || '#000000';
-                    var weight = el.fontWeight || 'normal';
-                    ctx.font = weight + ' ' + el.fontSize + 'px ' + (el.fontFamily || 'Arial');
-                    ctx.textBaseline = 'middle';
+        // Wait for all fonts to be loaded before rendering to canvas
+        document.fonts.ready.then(function() {
+            var canvas = document.getElementById('native-resolution-canvas');
+            var ctx = canvas.getContext('2d');
+            
+            // Set canvas bounds to native template dimensions
+            canvas.width = bgW;
+            canvas.height = bgH;
+            
+            // Draw background
+            ctx.drawImage(bgImg, 0, 0, bgW, bgH);
+            
+            // Render elements sequentially
+            var promises = elements.map(function(el) {
+                return new Promise(function(resolve) {
+                    ctx.save();
+                    ctx.globalAlpha = el.opacity ?? 1;
                     
-                    var textX = x;
-                    if (el.textAlign === 'center') {
-                        ctx.textAlign = 'center';
-                        textX = x + w / 2;
-                    } else if (el.textAlign === 'right') {
-                        ctx.textAlign = 'right';
-                        textX = x + w;
-                    } else {
-                        ctx.textAlign = 'left';
+                    var x = (el.left / 100) * bgW;
+                    var y = (el.top / 100) * bgH;
+                    var w = (el.width / 100) * bgW;
+                    var h = (el.height / 100) * bgH;
+                    
+                    // Rotation helper
+                    if (el.rotate) {
+                        ctx.translate(x + w/2, y + h/2);
+                        ctx.rotate((el.rotate * Math.PI) / 180);
+                        ctx.translate(-(x + w/2), -(y + h/2));
                     }
                     
-                    ctx.fillText(el.textContent || '', textX, y + h / 2);
-                    ctx.restore();
-                    resolve();
-                } else if (el.type === 'photo') {
-                    if (photos[el.id]) {
-                        var studentImg = new Image();
-                        studentImg.src = photos[el.id];
-                        studentImg.onload = function() {
-                            // Apply clipping paths
-                            if (el.mask === 'circle') {
-                                ctx.beginPath();
-                                ctx.arc(x + w/2, y + h/2, Math.min(w, h)/2, 0, Math.PI * 2);
-                                ctx.clip();
-                            } else if (el.mask === 'oval') {
-                                ctx.beginPath();
-                                ctx.ellipse(x + w/2, y + h/2, w/2, h/2, 0, 0, Math.PI * 2);
-                                ctx.clip();
-                            } else if (el.mask === 'hexagon') {
-                                ctx.beginPath();
-                                ctx.moveTo(x + w*0.25, y);
-                                ctx.lineTo(x + w*0.75, y);
-                                ctx.lineTo(x + w, y + h*0.5);
-                                ctx.lineTo(x + w*0.75, y + h);
-                                ctx.lineTo(x + w*0.25, y + h);
-                                ctx.lineTo(x, y + h*0.5);
-                                ctx.closePath();
-                                ctx.clip();
-                            } else if (el.mask === 'diamond') {
-                                ctx.beginPath();
-                                ctx.moveTo(x + w*0.5, y);
-                                ctx.lineTo(x + w, y + h*0.5);
-                                ctx.lineTo(x + w*0.5, y + h);
-                                ctx.lineTo(x, y + h*0.5);
-                                ctx.closePath();
-                                ctx.clip();
-                            } else if (el.mask === 'rounded') {
-                                var radius = 12;
-                                ctx.beginPath();
-                                ctx.moveTo(x + radius, y);
-                                ctx.lineTo(x + w - radius, y);
-                                ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
-                                ctx.lineTo(x + w, y + h - radius);
-                                ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
-                                ctx.lineTo(x + radius, y + h);
-                                ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
-                                ctx.lineTo(x, y + radius);
-                                ctx.quadraticCurveTo(x, y, x + radius, y);
-                                ctx.closePath();
-                                ctx.clip();
-                            }
-                            
-                            // Draw image
-                            ctx.drawImage(studentImg, x, y, w, h);
-                            
-                            // Draw border if set
-                            if (el.borderWidth > 0) {
-                                ctx.strokeStyle = el.borderColor || '#000';
-                                ctx.lineWidth = el.borderWidth;
-                                ctx.stroke();
-                            }
-                            ctx.restore();
-                            resolve();
-                        };
-                    } else {
-                        // Background placeholder
-                        ctx.fillStyle = '#e2e8f0';
-                        ctx.fillRect(x, y, w, h);
+                    if (el.type === 'text') {
+                        // Set typography properties
+                        ctx.fillStyle = el.color || '#000000';
+                        var weight = el.fontWeight || 'normal';
+                        ctx.font = weight + ' ' + el.fontSize + 'px "' + (el.fontFamily || 'Arial') + '"';
+                        ctx.textBaseline = 'middle';
+                        
+                        var textX = x;
+                        if (el.textAlign === 'center') {
+                            ctx.textAlign = 'center';
+                            textX = x + w / 2;
+                        } else if (el.textAlign === 'right') {
+                            ctx.textAlign = 'right';
+                            textX = x + w;
+                        } else {
+                            ctx.textAlign = 'left';
+                        }
+                        
+                        ctx.fillText(el.textContent || '', textX, y + h / 2);
                         ctx.restore();
                         resolve();
+                    } else if (el.type === 'photo') {
+                        if (photos[el.id]) {
+                            var studentImg = new Image();
+                            studentImg.src = photos[el.id];
+                            studentImg.onload = function() {
+                                // Helper to define the mask/border path
+                                function definePath() {
+                                    ctx.beginPath();
+                                    if (el.mask === 'circle') {
+                                        ctx.arc(x + w/2, y + h/2, Math.min(w, h)/2, 0, Math.PI * 2);
+                                    } else if (el.mask === 'oval') {
+                                        ctx.ellipse(x + w/2, y + h/2, w/2, h/2, 0, 0, Math.PI * 2);
+                                    } else if (el.mask === 'hexagon') {
+                                        ctx.moveTo(x + w*0.25, y);
+                                        ctx.lineTo(x + w*0.75, y);
+                                        ctx.lineTo(x + w, y + h*0.5);
+                                        ctx.lineTo(x + w*0.75, y + h);
+                                        ctx.lineTo(x + w*0.25, y + h);
+                                        ctx.lineTo(x, y + h*0.5);
+                                        ctx.closePath();
+                                    } else if (el.mask === 'diamond') {
+                                        ctx.moveTo(x + w*0.5, y);
+                                        ctx.lineTo(x + w, y + h*0.5);
+                                        ctx.lineTo(x + w*0.5, y + h);
+                                        ctx.lineTo(x, y + h*0.5);
+                                        ctx.closePath();
+                                    } else if (el.mask === 'rounded') {
+                                        var radius = 12;
+                                        ctx.moveTo(x + radius, y);
+                                        ctx.lineTo(x + w - radius, y);
+                                        ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+                                        ctx.lineTo(x + w, y + h - radius);
+                                        ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+                                        ctx.lineTo(x + radius, y + h);
+                                        ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+                                        ctx.lineTo(x, y + radius);
+                                        ctx.quadraticCurveTo(x, y, x + radius, y);
+                                        ctx.closePath();
+                                    } else {
+                                        // Rectangle (none)
+                                        ctx.rect(x, y, w, h);
+                                    }
+                                }
+                                
+                                // 1. Clip and draw image using CSS cover/center logic
+                                ctx.save();
+                                if (el.mask && el.mask !== 'none') {
+                                    definePath();
+                                    ctx.clip();
+                                }
+                                
+                                var imgW = studentImg.width;
+                                var imgH = studentImg.height;
+                                var imgRatio = imgW / imgH;
+                                var boxRatio = w / h;
+                                
+                                var sx = 0, sy = 0, sw = imgW, sh = imgH;
+                                if (imgRatio > boxRatio) {
+                                    sw = imgH * boxRatio;
+                                    sx = (imgW - sw) / 2;
+                                } else if (imgRatio < boxRatio) {
+                                    sh = imgW / boxRatio;
+                                    sy = (imgH - sh) / 2;
+                                }
+                                
+                                ctx.drawImage(studentImg, sx, sy, sw, sh, x, y, w, h);
+                                ctx.restore(); // Restore context to remove clipping mask
+                                
+                                // 2. Draw border outside of clipping mask
+                                if (el.borderWidth > 0) {
+                                    ctx.save();
+                                    definePath();
+                                    ctx.strokeStyle = el.borderColor || '#000';
+                                    ctx.lineWidth = el.borderWidth;
+                                    ctx.stroke();
+                                    ctx.restore();
+                                }
+                                
+                                ctx.restore(); // Restore the outer save()
+                                resolve();
+                            };
+                        } else {
+                            // Background placeholder
+                            ctx.fillStyle = '#e2e8f0';
+                            ctx.fillRect(x, y, w, h);
+                            ctx.restore();
+                            resolve();
+                        }
                     }
+                });
+            });
+            
+            Promise.all(promises).then(function() {
+                var format = document.getElementById('download-format').value;
+                var dataUrl = canvas.toDataURL('image/' + (format === 'pdf' ? 'jpeg' : format), 1.0);
+                
+                if (format === 'pdf') {
+                    if (typeof window.jspdf === 'undefined') {
+                        var script = document.createElement('script');
+                        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+                        script.onload = function() {
+                            generatePDF(dataUrl);
+                        };
+                        document.head.appendChild(script);
+                    } else {
+                        generatePDF(dataUrl);
+                    }
+                } else {
+                    document.getElementById('df-image-data').value = dataUrl;
+                    document.getElementById('df-format').value = format;
+                    document.getElementById('download-form').submit();
                 }
             });
-        });
-        
-        Promise.all(promises).then(function() {
-            var format = document.getElementById('download-format').value;
-            var dataUrl = canvas.toDataURL('image/' + (format === 'pdf' ? 'jpeg' : format), 1.0);
-            
-            if (format === 'pdf') {
-                if (typeof window.jspdf === 'undefined') {
-                    var script = document.createElement('script');
-                    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-                    script.onload = function() {
-                        generatePDF(dataUrl);
-                    };
-                    document.head.appendChild(script);
-                } else {
-                    generatePDF(dataUrl);
-                }
-            } else {
-                document.getElementById('df-image-data').value = dataUrl;
-                document.getElementById('df-format').value = format;
-                document.getElementById('download-form').submit();
-            }
         });
     };
 }
