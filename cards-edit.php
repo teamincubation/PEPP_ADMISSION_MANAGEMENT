@@ -327,6 +327,7 @@ include 'includes/admin_nav.php';
             <button class="btn btn-sm btn-outline" style="text-align:left;" onclick="addElement('text', 'Date')"><i class="fas fa-calendar"></i> Current Date</button>
             <button class="btn btn-sm btn-outline" style="text-align:left;" onclick="addElement('text', 'Your Custom Text')"><i class="fas fa-font"></i> Free Text field</button>
             <button class="btn btn-sm btn-soft-violet" style="text-align:left;" onclick="addElement('photo', 'Student Photo')"><i class="fas fa-image"></i> Photo Placeholder</button>
+            <button class="btn btn-sm btn-soft-violet" style="text-align:left;" onclick="addElement('photo', 'University Logo')"><i class="fas fa-university"></i> University Logo</button>
             
             <h4 style="font-weight:700; border-bottom:1px solid #eee; padding-bottom:6px; margin:15px 0 6px 0;">Layers Management</h4>
             <div id="layers-list" style="display:flex; flex-direction:column; gap:6px;">

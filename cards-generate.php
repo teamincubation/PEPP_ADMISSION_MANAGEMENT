@@ -52,6 +52,11 @@ try {
     $fonts = $pdo->query("SELECT * FROM custom_fonts ORDER BY font_name ASC")->fetchAll();
 } catch (Exception $e) {}
 
+$logos = [];
+try {
+    $logos = $pdo->query("SELECT * FROM university_logos ORDER BY name ASC")->fetchAll();
+} catch (Exception $e) {}
+
 $active_page = 'cards';
 $page_title  = 'Generate Card from Template';
 $page_sub    = 'Fill in personalization details and preview card before generating';
@@ -151,7 +156,26 @@ include 'includes/admin_nav.php';
                     <?php if ($el['type'] === 'text'): ?>
                         <textarea data-id="<?php echo $el['id']; ?>" oninput="updateFieldText(<?php echo $el['id']; ?>, this.value)" class="field-input" style="width:100%; resize:vertical;" rows="2" required><?php echo htmlspecialchars($el['textContent'] ?? ''); ?></textarea>
                     <?php elseif ($el['type'] === 'photo'): ?>
-                        <input type="file" data-id="<?php echo $el['id']; ?>" accept="image/*" onchange="loadPhotoPlaceholder(<?php echo $el['id']; ?>, this)" class="field-file-input" style="width:100%;" required>
+                        <?php 
+                        $is_logo = false;
+                        if (stripos($el['name'], 'logo') !== false) {
+                            $is_logo = true;
+                        }
+                        ?>
+                        <?php if ($is_logo && !empty($logos)): ?>
+                            <div style="margin-bottom: 6px;">
+                                <label style="font-size: 0.75rem; font-weight: 700; color: #475569; display: block; margin-bottom: 2px;">Select Preset Logo</label>
+                                <select class="field-input" onchange="selectPresetLogo(<?php echo $el['id']; ?>, this.value)" style="width:100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 6px;">
+                                    <option value="">-- Or Upload Custom Logo Below --</option>
+                                    <?php foreach ($logos as $lg): ?>
+                                        <option value="<?php echo htmlspecialchars($lg['logo_file']); ?>"><?php echo htmlspecialchars($lg['name']); ?> (<?php echo $lg['width'] . 'x' . $lg['height']; ?> px)</option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                        <?php endif; ?>
+                        
+                        <input type="file" data-id="<?php echo $el['id']; ?>" accept="image/*" onchange="loadPhotoPlaceholder(<?php echo $el['id']; ?>, this)" class="field-file-input" style="width:100%;" <?php echo $is_logo ? '' : 'required'; ?>>
+                        
                         <div class="photo-controls" id="controls-<?php echo $el['id']; ?>" style="margin-top: 8px; display:none; flex-direction:column; gap:6px; background:#f8fafc; border:1px solid #e2e8f0; padding:8px; border-radius:6px;">
                             <div style="display:flex; justify-content:space-between; font-size:0.7rem; font-weight:700; color:#475569;">
                                 <span>Photo Zoom</span>
@@ -429,7 +453,51 @@ function updateFieldText(id, val) {
 
 var photoSettings = {};
 
+function selectPresetLogo(id, logoFile) {
+    // Clear file input
+    var fileInput = document.querySelector('input[type="file"][data-id="' + id + '"]');
+    if (fileInput) fileInput.value = '';
+    
+    if (!logoFile) {
+        photos[id] = null;
+        document.getElementById('controls-' + id).style.display = 'none';
+        drawElements();
+        return;
+    }
+    
+    photos[id] = '../' + logoFile;
+    photoSettings[id] = { zoom: 100, panX: 0, panY: 0 };
+    
+    // Reset controls input values
+    var controls = document.getElementById('controls-' + id);
+    if (controls) {
+        controls.style.display = 'flex';
+        var inputs = controls.querySelectorAll('input[type="range"]');
+        inputs.forEach(input => {
+            if (input.oninput.toString().includes('Zoom')) {
+                input.value = 100;
+                var zv = document.getElementById('zoom-val-' + id);
+                if (zv) zv.textContent = '100%';
+            } else {
+                input.value = 0;
+                if (input.oninput.toString().includes('x')) {
+                    var pxv = document.getElementById('panx-val-' + id);
+                    if (pxv) pxv.textContent = '0%';
+                } else {
+                    var pyv = document.getElementById('pany-val-' + id);
+                    if (pyv) pyv.textContent = '0%';
+                }
+            }
+        });
+    }
+    drawElements();
+}
+
 function loadPhotoPlaceholder(id, input) {
+    // Reset preset select dropdown if any exists
+    var selectPreset = document.querySelector('select[onchange*="selectPresetLogo(' + id + '"]');
+    if (selectPreset) selectPreset.value = '';
+    
     if (input.files && input.files[0]) {
         var reader = new FileReader();
         reader.onload = function(e) {
@@ -617,6 +685,17 @@ function renderElementOnCanvas(ctx, el) {
 
 function triggerGeneration(e) {
     e.preventDefault();
+    
+    // Check if all photo placeholders have an image (either preset or uploaded)
+    for (var i = 0; i < elements.length; i++) {
+        var el = elements[i];
+        if (el.type === 'photo') {
+            if (!photos[el.id]) {
+                alert('Please upload an image or select a preset logo/photo for: ' + el.name);
+                return;
+            }
+        }
+    }
     
     // Check if background image is loaded
     var bgImg = new Image();

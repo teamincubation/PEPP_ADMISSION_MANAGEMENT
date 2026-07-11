@@ -87,6 +87,18 @@ try {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `university_logos` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `name` VARCHAR(150) NOT NULL,
+                `logo_file` VARCHAR(255) NOT NULL,
+                `width` INT NOT NULL DEFAULT 100,
+                `height` INT NOT NULL DEFAULT 100,
+                `dpi` INT NOT NULL DEFAULT 72,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
         $cols = $pdo->query("SHOW COLUMNS FROM reminders LIKE 'student_id'")->fetch();
         if (!$cols) {
             $pdo->exec("ALTER TABLE reminders ADD COLUMN student_id VARCHAR(50) NULL");
