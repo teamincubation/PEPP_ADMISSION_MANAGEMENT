@@ -352,7 +352,7 @@ include 'includes/admin_nav.php';
             </div>
             <div class="field full">
                 <label>Label / Static Content</label>
-                <input type="text" id="prop-text" oninput="updateActiveElement('textContent', this.value)">
+                <textarea id="prop-text" rows="3" oninput="updateActiveElement('textContent', this.value)" style="resize:vertical;"></textarea>
             </div>
             <div class="field full" style="margin-top: 4px;">
                 <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:normal;">
@@ -409,6 +409,10 @@ include 'includes/admin_nav.php';
                             <option value="right">Right</option>
                         </select>
                     </div>
+                </div>
+                <div class="field full">
+                    <label>Line Height / Leading</label>
+                    <input type="number" step="0.1" min="0.5" max="3" id="prop-line-height" oninput="updateActiveElement('lineHeight', this.value)">
                 </div>
             </div>
 
@@ -639,6 +643,8 @@ include 'includes/admin_nav.php';
                 div.style.fontSize = el.fontSize + 'px';
                 div.style.fontWeight = el.fontWeight || 'normal';
                 div.style.color = el.color || '#000000';
+                div.style.whiteSpace = 'pre-wrap';
+                div.style.lineHeight = el.lineHeight || 1.2;
                 var align = el.textAlign || 'center';
                 div.style.textAlign = align;
                 if (align === 'left') {
@@ -729,6 +735,7 @@ include 'includes/admin_nav.php';
             document.getElementById('prop-font-weight').value = el.fontWeight || 'normal';
             document.getElementById('prop-color').value = el.color || '#000000';
             document.getElementById('prop-align').value = el.textAlign || 'center';
+            document.getElementById('prop-line-height').value = el.lineHeight || 1.2;
             document.getElementById('prop-width').value = el.width;
             document.getElementById('prop-height').value = el.height;
             document.getElementById('prop-left').value = el.left;
@@ -777,6 +784,7 @@ include 'includes/admin_nav.php';
             newEl.fontWeight = 'normal';
             newEl.color = '#000000';
             newEl.textAlign = 'center';
+            newEl.lineHeight = 1.2;
         } else if (type === 'photo') {
             newEl.mask = 'none';
             newEl.borderWidth = 0;
@@ -795,7 +803,7 @@ include 'includes/admin_nav.php';
         
         if (['fontSize', 'borderWidth', 'rotate'].includes(prop)) {
             el[prop] = parseInt(val) || 0;
-        } else if (['left', 'top', 'width', 'height', 'opacity'].includes(prop)) {
+        } else if (['left', 'top', 'width', 'height', 'opacity', 'lineHeight'].includes(prop)) {
             el[prop] = parseFloat(val) || 0;
         } else {
             el[prop] = val;

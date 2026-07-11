@@ -149,7 +149,7 @@ include 'includes/admin_nav.php';
                 <div class="form-field-group">
                     <div class="form-field-title"><?php echo htmlspecialchars($el['name']); ?></div>
                     <?php if ($el['type'] === 'text'): ?>
-                        <input type="text" data-id="<?php echo $el['id']; ?>" value="<?php echo htmlspecialchars($el['textContent'] ?? ''); ?>" oninput="updateFieldText(<?php echo $el['id']; ?>, this.value)" class="field-input" style="width:100%;" required>
+                        <textarea data-id="<?php echo $el['id']; ?>" oninput="updateFieldText(<?php echo $el['id']; ?>, this.value)" class="field-input" style="width:100%; resize:vertical;" rows="2" required><?php echo htmlspecialchars($el['textContent'] ?? ''); ?></textarea>
                     <?php elseif ($el['type'] === 'photo'): ?>
                         <input type="file" data-id="<?php echo $el['id']; ?>" accept="image/*" onchange="loadPhotoPlaceholder(<?php echo $el['id']; ?>, this)" class="field-file-input" style="width:100%;" required>
                         <div class="photo-controls" id="controls-<?php echo $el['id']; ?>" style="margin-top: 8px; display:none; flex-direction:column; gap:6px; background:#f8fafc; border:1px solid #e2e8f0; padding:8px; border-radius:6px;">
@@ -315,6 +315,8 @@ function drawElements() {
             div.style.fontSize = el.fontSize + 'px';
             div.style.fontWeight = el.fontWeight || 'normal';
             div.style.color = el.color || '#000000';
+            div.style.whiteSpace = 'pre-wrap';
+            div.style.lineHeight = el.lineHeight || 1.2;
             var align = el.textAlign || 'center';
             div.style.textAlign = align;
             if (align === 'left') {
@@ -473,7 +475,8 @@ function renderElementOnCanvas(ctx, el) {
             // Set typography properties
             ctx.fillStyle = el.color || '#000000';
             var weight = el.fontWeight || 'normal';
-            ctx.font = weight + ' ' + el.fontSize + 'px "' + (el.fontFamily || 'Arial') + '"';
+            var size = el.fontSize || 24;
+            ctx.font = weight + ' ' + size + 'px "' + (el.fontFamily || 'Arial') + '"';
             ctx.textBaseline = 'middle';
             
             var textX = x;
@@ -487,7 +490,18 @@ function renderElementOnCanvas(ctx, el) {
                 ctx.textAlign = 'left';
             }
             
-            ctx.fillText(el.textContent || '', textX, y + h / 2);
+            var lines = (el.textContent || '').split('\n');
+            var lh = el.lineHeight || 1.2;
+            var lineOffset = size * lh;
+            
+            // Calculate total height of all lines to center them vertically in the element bounding box
+            var totalLinesHeight = (lines.length - 1) * lineOffset;
+            var startY = (y + h / 2) - (totalLinesHeight / 2);
+            
+            lines.forEach(function(line, lineIdx) {
+                ctx.fillText(line, textX, startY + (lineIdx * lineOffset));
+            });
+            
             ctx.restore();
             resolve();
         } else if (el.type === 'photo') {
