@@ -195,8 +195,10 @@ include 'includes/admin_nav.php';
 
     <!-- Right Area: Design workspace / preview -->
     <div class="preview-workspace">
-        <div class="canvas-container" id="generator-canvas" style="background-color: #fff;">
-            <!-- Rendered layers -->
+        <div id="canvas-viewport" style="position:relative; box-shadow: 0 10px 25px rgba(0,0,0,0.15); background-color:#fff;">
+            <div class="canvas-container" id="generator-canvas" style="position:absolute; top:0; left:0; transform-origin: top left; box-shadow: none; background-color: #fff;">
+                <!-- Rendered layers -->
+            </div>
         </div>
     </div>
 </div>
@@ -267,15 +269,21 @@ function initCanvas() {
     var container = document.getElementById('generator-canvas');
     if (!container) return;
     
-    var parent = container.parentElement;
+    var viewport = document.getElementById('canvas-viewport');
+    var parent = viewport ? viewport.parentElement : container.parentElement;
     var maxW = parent.clientWidth - 40;
     var maxH = parent.clientHeight - 40;
     var scale = Math.min(maxW / bgW, maxH / bgH, 1);
     
+    if (viewport) {
+        viewport.style.width = (bgW * scale) + 'px';
+        viewport.style.height = (bgH * scale) + 'px';
+    }
+    
     container.style.width = bgW + 'px';
     container.style.height = bgH + 'px';
     container.style.transform = 'scale(' + scale + ')';
-    container.style.transformOrigin = 'center center';
+    container.style.transformOrigin = 'top left';
     
     drawElements();
 }
