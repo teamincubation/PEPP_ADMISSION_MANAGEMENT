@@ -95,6 +95,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $elements_json = $_POST['elements_json'] ?? '[]';
     $manual_w = (int)($_POST['canvas_width'] ?? 0);
     $manual_h = (int)($_POST['canvas_height'] ?? 0);
+    $resolution_dpi = (int)($_POST['resolution_dpi'] ?? 72);
     
     if (!$title) {
         echo json_encode(['success' => false, 'message' => 'Template title is required.']);
@@ -102,12 +103,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     try {
-        if ($manual_w > 0 && $manual_h > 0) {
-            $stmt = $pdo->prepare("UPDATE card_templates SET title = ?, category = ?, description = ?, status = ?, elements_json = ?, canvas_width = ?, canvas_height = ?, updated_at = NOW() WHERE id = ?");
-            $stmt->execute([$title, $category, $description, $status, $elements_json, $manual_w, $manual_h, $template_id]);
+        // Optional background file upload
+        $bg_path = null;
+        if (!empty($_FILES['bg_file']['name']) && $_FILES['bg_file']['error'] === UPLOAD_ERR_OK) {
+            // Retrieve old background image to replace
+            $stmt = $pdo->prepare("SELECT bg_image FROM card_templates WHERE id = ?");
+            $stmt->execute([$template_id]);
+            $old_bg = $stmt->fetchColumn();
+            
+            $bg_path = handle_file_upload_with_replace('bg_file', 'card_templates', $old_bg, ['jpg', 'jpeg', 'png', 'webp']);
+            if ($bg_path) {
+                // If a new background was uploaded, set default canvas width/height to the new background's dimensions
+                $real_path = __DIR__ . '/../' . $bg_path;
+                $dims = @getimagesize($real_path);
+                if ($dims) {
+                    $manual_w = $dims[0];
+                    $manual_h = $dims[1];
+                }
+            }
+        }
+        
+        if ($bg_path) {
+            $stmt = $pdo->prepare("UPDATE card_templates SET title = ?, category = ?, description = ?, status = ?, bg_image = ?, canvas_width = ?, canvas_height = ?, resolution_dpi = ?, elements_json = ?, updated_at = NOW() WHERE id = ?");
+            $stmt->execute([$title, $category, $description, $status, $bg_path, $manual_w, $manual_h, $resolution_dpi, $elements_json, $template_id]);
         } else {
-            $stmt = $pdo->prepare("UPDATE card_templates SET title = ?, category = ?, description = ?, status = ?, elements_json = ?, updated_at = NOW() WHERE id = ?");
-            $stmt->execute([$title, $category, $description, $status, $elements_json, $template_id]);
+            if ($manual_w > 0 && $manual_h > 0) {
+                $stmt = $pdo->prepare("UPDATE card_templates SET title = ?, category = ?, description = ?, status = ?, elements_json = ?, canvas_width = ?, canvas_height = ?, resolution_dpi = ?, updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$title, $category, $description, $status, $elements_json, $manual_w, $manual_h, $resolution_dpi, $template_id]);
+            } else {
+                $stmt = $pdo->prepare("UPDATE card_templates SET title = ?, category = ?, description = ?, status = ?, elements_json = ?, resolution_dpi = ?, updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$title, $category, $description, $status, $elements_json, $resolution_dpi, $template_id]);
+            }
         }
         echo json_encode(['success' => true]);
     } catch (Exception $e) {
@@ -310,7 +336,7 @@ include 'includes/admin_nav.php';
 
         <!-- Panel 2: Design Workspace -->
         <div class="workspace">
-            <div class="canvas-container" id="editor-canvas" style="background-image: url('../<?php echo htmlspecialchars($bg_image_path); ?>');">
+            <div class="canvas-container" id="editor-canvas" style="background-color: #fff;">
                 <!-- Layers drawn here -->
             </div>
         </div>
@@ -321,8 +347,18 @@ include 'includes/admin_nav.php';
             
             <!-- Shared Properties -->
             <div class="field full">
+                <label>Placeholder Name / Label</label>
+                <input type="text" id="prop-name" oninput="updateActiveElement('name', this.value)">
+            </div>
+            <div class="field full">
                 <label>Label / Static Content</label>
                 <input type="text" id="prop-text" oninput="updateActiveElement('textContent', this.value)">
+            </div>
+            <div class="field full" style="margin-top: 4px;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:normal;">
+                    <input type="checkbox" id="prop-behind-bg" onchange="updateActiveElement('behindBg', this.checked)">
+                    Render Behind Background
+                </label>
             </div>
             
             <!-- Typography block -->
@@ -448,7 +484,7 @@ include 'includes/admin_nav.php';
                 <h3>Canvas Properties</h3>
                 <button class="modal-close" onclick="closeModal('canvas-resize-modal')"><i class="fas fa-xmark"></i></button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body" style="display:flex; flex-direction:column; gap:12px;">
                 <div class="field">
                     <label>Title</label>
                     <input type="text" id="resize-title" value="<?php echo htmlspecialchars($tpl['title']); ?>">
@@ -478,6 +514,19 @@ include 'includes/admin_nav.php';
                         <input type="number" id="resize-h" value="<?php echo $canvas_h; ?>">
                     </div>
                 </div>
+                <div class="prop-group">
+                    <div class="field">
+                        <label>Resolution (DPI)</label>
+                        <input type="number" id="resize-dpi" value="<?php echo (int)($tpl['resolution_dpi'] ?? 72); ?>">
+                    </div>
+                    <div class="field" style="display:flex; align-items:flex-end;">
+                        <button type="button" class="btn btn-outline btn-sm" onclick="fitToOriginalSize()" style="width:100%; height:40px; font-size:0.8rem;"><i class="fas fa-expand"></i> Fit to Original</button>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>Change Background Image (Optional)</label>
+                    <input type="file" id="resize-bg-file" accept=".jpg,.jpeg,.png,.webp">
+                </div>
             </div>
             <div class="modal-foot">
                 <button class="btn btn-outline" onclick="closeModal('canvas-resize-modal')">Cancel</button>
@@ -489,8 +538,23 @@ include 'includes/admin_nav.php';
     <script>
     var bgW = <?php echo (int)$canvas_w; ?>;
     var bgH = <?php echo (int)$canvas_h; ?>;
+    var bgUrl = '../<?php echo htmlspecialchars($bg_image_path); ?>';
     var elements = <?php echo $tpl['elements_json'] ?: '[]'; ?>;
     var activeId = null;
+
+    var originalW = bgW;
+    var originalH = bgH;
+    var tempBg = new Image();
+    tempBg.src = bgUrl;
+    tempBg.onload = function() {
+        originalW = tempBg.naturalWidth;
+        originalH = tempBg.naturalHeight;
+    };
+
+    function fitToOriginalSize() {
+        document.getElementById('resize-w').value = originalW;
+        document.getElementById('resize-h').value = originalH;
+    }
 
     var customFontNames = <?php echo json_encode(array_column($fonts, 'font_name')); ?>;
     // Load popular Google Fonts in select
@@ -544,6 +608,20 @@ include 'includes/admin_nav.php';
         var container = document.getElementById('editor-canvas');
         container.innerHTML = '';
         
+        // Draw the background overlay layer (zIndex = 2)
+        var bgOverlay = document.createElement('div');
+        bgOverlay.className = 'canvas-background-overlay';
+        bgOverlay.style.position = 'absolute';
+        bgOverlay.style.top = '0';
+        bgOverlay.style.left = '0';
+        bgOverlay.style.width = '100%';
+        bgOverlay.style.height = '100%';
+        bgOverlay.style.backgroundImage = 'url("' + bgUrl + '")';
+        bgOverlay.style.backgroundSize = '100% 100%';
+        bgOverlay.style.zIndex = 2;
+        bgOverlay.style.pointerEvents = 'none';
+        container.appendChild(bgOverlay);
+        
         elements.forEach(function(el, idx) {
             var div = document.createElement('div');
             div.className = 'canvas-element' + (activeId === el.id ? ' selected' : '');
@@ -553,7 +631,7 @@ include 'includes/admin_nav.php';
             div.style.height = el.height + '%';
             div.style.opacity = el.opacity ?? 1;
             div.style.transform = 'rotate(' + (el.rotate ?? 0) + 'deg)';
-            div.style.zIndex = idx + 1;
+            div.style.zIndex = el.behindBg ? 1 : (idx + 3);
             
             if (el.type === 'text') {
                 div.textContent = el.textContent || '';
@@ -576,11 +654,11 @@ include 'includes/admin_nav.php';
                 div.style.backgroundSize = '40px';
                 
                 // Mask shapes
-                if (el.mask === 'circle') div.style.borderRadius = '50%';
-                else if (el.mask === 'oval') div.style.borderRadius = '50% / 30%';
-                else if (el.mask === 'hexagon') div.style.clipPath = 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)';
-                else if (el.mask === 'diamond') div.style.clipPath = 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)';
-                else if (el.mask === 'rounded') div.style.borderRadius = '12px';
+                if (el.mask === 'circle') { div.style.clipPath = 'circle(50%)'; div.style.borderRadius = '0'; }
+                else if (el.mask === 'oval') { div.style.clipPath = 'ellipse(50% 50%)'; div.style.borderRadius = '0'; }
+                else if (el.mask === 'hexagon') { div.style.clipPath = 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)'; div.style.borderRadius = '0'; }
+                else if (el.mask === 'diamond') { div.style.clipPath = 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)'; div.style.borderRadius = '0'; }
+                else if (el.mask === 'rounded') { div.style.clipPath = 'none'; div.style.borderRadius = '10%'; }
                 else { div.style.borderRadius = '0'; div.style.clipPath = 'none'; }
             }
             
@@ -643,6 +721,8 @@ include 'includes/admin_nav.php';
         var panel = document.getElementById('inspector-panel');
         if (el) {
             panel.style.display = 'flex';
+            document.getElementById('prop-name').value = el.name || '';
+            document.getElementById('prop-behind-bg').checked = !!el.behindBg;
             document.getElementById('prop-text').value = el.textContent || '';
             document.getElementById('prop-font-size').value = el.fontSize || 24;
             document.getElementById('prop-font-family').value = el.fontFamily || 'Arial';
@@ -813,9 +893,6 @@ include 'includes/admin_nav.php';
     }
 
     function applyCanvasResize() {
-        var title = document.getElementById('resize-title').value;
-        var category = document.getElementById('resize-category').value;
-        var status = document.getElementById('resize-status').value;
         var w = parseInt(document.getElementById('resize-w').value) || 800;
         var h = parseInt(document.getElementById('resize-h').value) || 600;
         
@@ -830,6 +907,7 @@ include 'includes/admin_nav.php';
         var title = document.getElementById('resize-title').value;
         var category = document.getElementById('resize-category').value;
         var status = document.getElementById('resize-status').value;
+        var dpiVal = document.getElementById('resize-dpi') ? parseInt(document.getElementById('resize-dpi').value) || 72 : 72;
         
         var formData = new FormData();
         formData.append('action', 'save_template');
@@ -839,8 +917,14 @@ include 'includes/admin_nav.php';
         formData.append('status', status);
         formData.append('canvas_width', bgW);
         formData.append('canvas_height', bgH);
+        formData.append('resolution_dpi', dpiVal);
         formData.append('elements_json', JSON.stringify(elements));
         formData.append('csrf_token', '<?php echo csrf_token(); ?>');
+        
+        var bgFileInput = document.getElementById('resize-bg-file');
+        if (bgFileInput && bgFileInput.files.length > 0) {
+            formData.append('bg_file', bgFileInput.files[0]);
+        }
         
         fetch('cards-edit.php?id=<?php echo $template_id; ?>', {
             method: 'POST',
