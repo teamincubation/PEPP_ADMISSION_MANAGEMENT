@@ -164,8 +164,8 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
             <a class="nav-item <?php echo nav_active('marketing', $active_page); ?>" href="marketing.php">
                 <i class="fas fa-bullhorn"></i> Marketing
                 <span style="margin-left:auto; display:inline-flex; gap:4px;">
-                    <?php if (!empty($nav_mkt['referral'])): ?><span class="nav-badge" style="background:#16a34a;" title="New referral updates"><?php echo (int)$nav_mkt['referral']; ?></span><?php endif; ?>
-                    <?php if (!empty($nav_mkt['coupon'])): ?><span class="nav-badge" style="background:#dc2626;" title="New coupon updates"><?php echo (int)$nav_mkt['coupon']; ?></span><?php endif; ?>
+                    <?php if (!empty($nav_mkt['referral'])): ?><span class="nav-badge" style="background:#16a34a; color:#fff;" title="New referral updates"><?php echo (int)$nav_mkt['referral']; ?></span><?php endif; ?>
+                    <?php if (!empty($nav_mkt['coupon'])): ?><span class="nav-badge" style="background:#dc2626; color:#fff;" title="New coupon updates"><?php echo (int)$nav_mkt['coupon']; ?></span><?php endif; ?>
                 </span>
             </a>
             <?php endif; ?>
@@ -200,10 +200,10 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
                 <i class="fas fa-money-bill-wave"></i> Installments
                 <span style="margin-left:auto; display:inline-flex; gap:4px; align-items:center;">
                     <?php if ($nav_pending_payments > 0): ?>
-                        <span class="nav-badge" style="background:#f59e0b;" title="Pending review"><?php echo $nav_pending_payments; ?></span>
+                        <span class="nav-badge" style="background:#f59e0b; color:#fff;" title="Pending review"><?php echo $nav_pending_payments; ?></span>
                     <?php endif; ?>
                     <?php if ($nav_due_within_10_days > 0): ?>
-                        <span class="nav-badge" style="background:#ef4444;" title="Due within 10 days"><?php echo $nav_due_within_10_days; ?></span>
+                        <span class="nav-badge" style="background:#ef4444; color:#fff;" title="Due within 10 days"><?php echo $nav_due_within_10_days; ?></span>
                     <?php endif; ?>
                 </span>
             </a>

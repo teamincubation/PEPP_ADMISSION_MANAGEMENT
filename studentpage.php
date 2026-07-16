@@ -262,7 +262,7 @@ try {
     $stmt = $pdo->prepare("
         SELECT u.user_id, u.name, u.email, u.whatsapp_country_code, u.whatsapp_number,
                u.pepp_course, u.pepp_academic_year, u.student_status, u.onboarding_status,
-               u.paid_amount, u.payment_plan, u.course_duration_date, u.joined_date, u.created_at,
+               u.paid_amount, u.payment_plan, u.course_duration_date, u.joined_date, u.created_at, u.user_photo,
                DATEDIFF(u.course_duration_date, CURDATE()) AS days_remaining,
                (SELECT COUNT(*) FROM instalment_details i WHERE i.user_id = u.user_id AND i.status = 'pending') AS open_installments,
                (SELECT COUNT(*) FROM student_remarks sr WHERE sr.user_id = u.user_id) AS remarks_count
@@ -373,13 +373,21 @@ include 'includes/admin_nav.php';
             ?>
                 <tr>
                     <td>
-                        <div class="cell-main" style="display:inline-flex; align-items:center; gap:6px;">
-                            <?php echo e($s['name']); ?>
-                            <?php if ((int)$s['remarks_count'] > 0): ?>
-                                <span class="badge amber" title="Has Remarks/Notes (<?php echo (int)$s['remarks_count']; ?>)" style="font-size:0.62rem; padding:1px 4px; display:inline-flex; align-items:center; gap:2px; cursor:pointer;" onclick="openRemarksModal('<?php echo e($s['user_id']); ?>')"><i class="fas fa-clipboard"></i> Remark</span>
-                            <?php endif; ?>
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <?php
+                            $photo = $s['user_photo'] ?: 'assets/img/default-avatar.svg';
+                            ?>
+                            <img src="<?php echo e($photo); ?>" onerror="this.src='assets/img/default-avatar.svg'; this.onerror=null;" style="width:38px;height:38px;border-radius:50%;object-fit:cover;border:1px solid var(--border);" alt="Avatar">
+                            <div>
+                                <div class="cell-main" style="display:inline-flex; align-items:center; gap:6px;">
+                                    <?php echo e($s['name']); ?>
+                                    <?php if ((int)$s['remarks_count'] > 0): ?>
+                                        <span class="badge amber" title="Has Remarks/Notes (<?php echo (int)$s['remarks_count']; ?>)" style="font-size:0.62rem; padding:1px 4px; display:inline-flex; align-items:center; gap:2px; cursor:pointer;" onclick="openRemarksModal('<?php echo e($s['user_id']); ?>')"><i class="fas fa-clipboard"></i> Remark</span>
+                                    <?php endif; ?>
+                                </div>
+                                <div class="cell-sub"><?php echo e($s['user_id']); ?> &middot; <?php echo e($s['email']); ?></div>
+                            </div>
                         </div>
-                        <div class="cell-sub"><?php echo e($s['user_id']); ?> &middot; <?php echo e($s['email']); ?></div>
                     </td>
                     <td>
                         <div style="font-size:.82rem;font-weight:600;"><?php echo e($s['pepp_course']); ?></div>

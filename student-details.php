@@ -77,6 +77,61 @@ if (!$student) {
     exit();
 }
 
+/* ── POST: update attachments (photo / screenshot) ── */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_attachments') {
+    if (!csrf_verify()) {
+        $error = 'Security token mismatch. Please retry.';
+    } else {
+        try {
+            require_once 'includes/file_helper.php';
+            $photo_updated = false;
+            $screenshot_updated = false;
+            
+            $pdo->beginTransaction();
+            
+            // Handle Photo Upload
+            if (!empty($_FILES['user_photo']['name']) && $_FILES['user_photo']['error'] === UPLOAD_ERR_OK) {
+                $new_photo = handle_file_upload_with_replace('user_photo', 'photos', $student['user_photo'], ['jpg', 'jpeg', 'png', 'gif', 'webp']);
+                if ($new_photo) {
+                    $stmt = $pdo->prepare("UPDATE users SET user_photo = ? WHERE user_id = ?");
+                    $stmt->execute([$new_photo, $user_id]);
+                    track_record($pdo, $user_id, 'photo_updated', "Updated profile photo", $admin_username);
+                    $photo_updated = true;
+                } else {
+                    throw new Exception("Failed to upload student photo. Only image formats (jpg, png, gif, webp) are allowed.");
+                }
+            }
+            
+            // Handle Screenshot Upload
+            if (!empty($_FILES['payment_screenshot']['name']) && $_FILES['payment_screenshot']['error'] === UPLOAD_ERR_OK) {
+                $new_screenshot = handle_file_upload_with_replace('payment_screenshot', 'screenshots', $student['payment_screenshot'], ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf']);
+                if ($new_screenshot) {
+                    $stmt = $pdo->prepare("UPDATE users SET payment_screenshot = ? WHERE user_id = ?");
+                    $stmt->execute([$new_screenshot, $user_id]);
+                    track_record($pdo, $user_id, 'receipt_updated', "Updated registration payment receipt", $admin_username);
+                    $screenshot_updated = true;
+                } else {
+                    throw new Exception("Failed to upload receipt screenshot. Formats allowed: image or pdf.");
+                }
+            }
+            
+            $pdo->commit();
+            
+            if ($photo_updated || $screenshot_updated) {
+                $message = "Attachments updated successfully.";
+                log_admin_activity($pdo, $admin_username, 'attachments_updated', "Updated attachments for student {$user_id}");
+                $student = load_student($pdo, $user_id);
+            } else {
+                $error = "No files selected or uploaded.";
+            }
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            error_log('Update attachments: ' . $e->getMessage());
+            $error = 'Error updating attachments: ' . $e->getMessage();
+        }
+    }
+}
+
 /* ── POST: delete student (Super Admin only) / edit details ────── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'revert_to_pending') {
     if (!csrf_verify()) {
@@ -659,10 +714,15 @@ include 'includes/admin_nav.php';
 <div class="panel">
     <div class="panel-head"><span class="head-icon"><i class="fas fa-id-card"></i></span><h2>Overview</h2></div>
     <div class="panel-body" style="display:flex; gap:24px; flex-wrap:wrap;">
-        <div style="flex-shrink:0;">
-            <?php echo render_photo_box($student['user_photo'] ?? '', 110); ?>
+        <div style="flex-shrink:0; display:flex; flex-direction:column; align-items:center; gap:8px;">
+            <div style="position:relative;">
+                <?php echo render_photo_box($student['user_photo'] ?? '', 110); ?>
+                <button class="btn btn-sm btn-soft-violet" onclick="openModal('update-attachments-modal')" style="margin-top:8px; display:flex; align-items:center; gap:6px; font-size:0.75rem; width:100%; justify-content:center;">
+                    <i class="fas fa-edit"></i> Edit Attachments
+                </button>
+            </div>
             <?php if (!empty($student['payment_screenshot'])): ?>
-                <div style="margin-top:8px;">
+                <div style="margin-top:2px;">
                     <?php if (upload_is_image($student['payment_screenshot'])): ?>
                         <a class="proof-link" href="<?php echo e($student['payment_screenshot']); ?>" target="_blank"><i class="fas fa-receipt"></i> Reg. receipt</a>
                     <?php elseif (upload_is_pdf($student['payment_screenshot'])): ?>
@@ -1230,6 +1290,36 @@ function openStatusChangeModal(userId, name, status) {
             <div class="modal-foot">
                 <button type="button" class="btn btn-outline" onclick="closeModal('status-modal')">Cancel</button>
                 <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Update Status</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── UPDATE ATTACHMENTS MODAL ── -->
+<div class="modal-backdrop" id="update-attachments-modal">
+    <div class="modal" style="max-width:440px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-file-arrow-up" style="color:var(--accent);"></i> Update Attachments</h3>
+            <button class="modal-close" onclick="closeModal('update-attachments-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST" enctype="multipart/form-data">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="update_attachments">
+            <div class="modal-body">
+                <div class="field" style="margin-bottom:12px;">
+                    <label>Student Photo</label>
+                    <input type="file" name="user_photo" accept="image/*">
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Leave empty to keep existing photo.</p>
+                </div>
+                <div class="field">
+                    <label>Payment Receipt Screenshot</label>
+                    <input type="file" name="payment_screenshot" accept="image/*,application/pdf">
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Leave empty to keep existing screenshot.</p>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('update-attachments-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save Changes</button>
             </div>
         </form>
     </div>

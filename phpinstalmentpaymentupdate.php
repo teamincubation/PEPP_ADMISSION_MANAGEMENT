@@ -117,7 +117,7 @@ include 'includes/admin_nav.php';
         <h2>Installments</h2>
         <div class="head-right tabs">
             <a class="tab <?php echo $tab === 'pending' ? 'active' : ''; ?>" href="?page=pending">Pending review <span class="count"><?php echo $stats['pending']; ?></span></a>
-            <a class="tab <?php echo $tab === 'upcoming' ? 'active' : ''; ?>" href="?page=upcoming" style="<?php echo $upcoming_warning_count > 0 ? 'border-bottom: 2px solid #ef4444; color: #ef4444; font-weight: 700;' : ''; ?>">Upcoming <span class="count" style="<?php echo $upcoming_warning_count > 0 ? 'background:#ef4444;' : ''; ?>"><?php echo $stats['upcoming']; ?></span></a>
+            <a class="tab <?php echo $tab === 'upcoming' ? 'active' : ''; ?>" href="?page=upcoming" style="<?php echo $upcoming_warning_count > 0 ? 'border-bottom: 2px solid #ef4444; color: #ef4444; font-weight: 700;' : ''; ?>">Upcoming <span class="count" style="<?php echo $upcoming_warning_count > 0 ? 'background:#ef4444; color:#fff;' : ''; ?>"><?php echo $stats['upcoming']; ?></span></a>
             <a class="tab <?php echo $tab === 'approved' ? 'active' : ''; ?>" href="?page=approved">Approved</a>
             <a class="tab <?php echo $tab === 'rejected' ? 'active' : ''; ?>" href="?page=rejected">Rejected</a>
             <a class="tab <?php echo $tab === 'all' ? 'active' : ''; ?>" href="?page=all">All</a>

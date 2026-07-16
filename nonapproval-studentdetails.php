@@ -59,6 +59,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $vals[] = $value;
                 if ((string)$student[$field] !== (string)$value) $changed[] = $field;
             }
+
+            require_once 'includes/file_helper.php';
+            // Handle Photo Upload
+            if (!empty($_FILES['user_photo']['name']) && $_FILES['user_photo']['error'] === UPLOAD_ERR_OK) {
+                $new_photo = handle_file_upload_with_replace('user_photo', 'photos', $student['user_photo'], ['jpg', 'jpeg', 'png', 'gif', 'webp']);
+                if ($new_photo) {
+                    $set[] = "user_photo = ?";
+                    $vals[] = $new_photo;
+                    $changed[] = 'user_photo';
+                }
+            }
+            
+            // Handle Screenshot Upload
+            if (!empty($_FILES['payment_screenshot']['name']) && $_FILES['payment_screenshot']['error'] === UPLOAD_ERR_OK) {
+                $new_screenshot = handle_file_upload_with_replace('payment_screenshot', 'screenshots', $student['payment_screenshot'], ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf']);
+                if ($new_screenshot) {
+                    $set[] = "payment_screenshot = ?";
+                    $vals[] = $new_screenshot;
+                    $changed[] = 'payment_screenshot';
+                }
+            }
+
             if ($set) {
                 $vals[] = $student_id;
                 $stmt = $pdo->prepare("UPDATE users SET " . implode(', ', $set) . " WHERE user_id = ?");
@@ -75,7 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         } catch (Exception $e) {
             error_log('Registration edit: ' . $e->getMessage());
-            $error = 'Error updating student details.';
+            $error = 'Error updating student details: ' . $e->getMessage();
         }
     }
 }
@@ -116,46 +138,67 @@ include 'includes/admin_nav.php';
 <?php if ($message): ?><div class="alert alert-success"><i class="fas fa-circle-check"></i><span><?php echo e($message); ?></span></div><?php endif; ?>
 <?php if ($error):   ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($error); ?></span></div><?php endif; ?>
 
-<!-- ── PROOFS ── -->
-<div class="panel">
-    <div class="panel-head">
-        <span class="head-icon"><i class="fas fa-images"></i></span>
-        <h2>Uploaded Documents</h2>
-    </div>
-    <div class="panel-body" style="display:flex; gap:28px; flex-wrap:wrap;">
-        <div>
-            <div class="cell-sub" style="margin-bottom:6px; font-weight:700;">STUDENT PHOTO</div>
-            <?php if (!empty($student['user_photo'])): ?>
-                <a href="<?php echo e($student['user_photo']); ?>" target="_blank">
-                    <img class="student-photo" src="<?php echo e($student['user_photo']); ?>" alt="Student photo">
-                </a>
-            <?php else: ?><span class="badge gray">Not uploaded</span><?php endif; ?>
-        </div>
-        <div>
-            <div class="cell-sub" style="margin-bottom:6px; font-weight:700;">PAYMENT SCREENSHOT</div>
-            <?php if (!empty($student['payment_screenshot'])): ?>
-                <a href="<?php echo e($student['payment_screenshot']); ?>" target="_blank">
-                    <img class="student-photo" src="<?php echo e($student['payment_screenshot']); ?>" alt="Payment screenshot">
-                </a>
-            <?php else: ?><span class="badge gray">Not uploaded</span><?php endif; ?>
-        </div>
-        <div>
-            <div class="cell-sub" style="margin-bottom:6px; font-weight:700;">REGISTRATION META</div>
-            <div class="cell-sub">IP: <?php echo e($student['ip_address'] ?: '-'); ?></div>
-            <div class="cell-sub">Submitted: <?php echo $student['submit_datetime'] ? date('d M Y, h:i A', strtotime($student['submit_datetime'])) : '-'; ?></div>
-            <div class="cell-sub">Terms agreed: <?php echo e($student['terms_agreed']); ?></div>
-            <?php if (!empty($student['referral_code'])): ?>
-                <div class="cell-sub" style="margin-top:6px;">Referral Applied: <span class="badge violet" style="font-size:0.75rem; padding: 2px 6px; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-gift"></i> <?php echo e($student['referral_code']); ?></span> (₹<?php echo number_format((float)$student['coupon_discount'], 0); ?> discount)</div>
-            <?php elseif (!empty($student['applied_coupon'])): ?>
-                <div class="cell-sub" style="margin-top:6px;">Coupon Applied: <span class="badge green" style="font-size:0.75rem; padding: 2px 6px; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-ticket"></i> <?php echo e($student['applied_coupon']); ?></span> (₹<?php echo number_format((float)$student['coupon_discount'], 0); ?> discount)</div>
-            <?php endif; ?>
-        </div>
-    </div>
-</div>
-
 <!-- ── EDIT FORM ── -->
-<form method="POST">
+<form method="POST" enctype="multipart/form-data">
     <?php echo csrf_field(); ?>
+
+    <!-- ── REGISTRATION PAYMENT (brought to top) ── -->
+    <div class="panel">
+        <div class="panel-head"><span class="head-icon" style="background:var(--amber-soft);color:var(--amber-ink);"><i class="fas fa-wallet"></i></span><h2>Registration Payment</h2></div>
+        <div class="panel-body">
+            <div class="form-grid">
+                <div class="field"><label>Paid Amount (₹)</label>
+                    <input type="number" name="paid_amount" min="0" step="0.01" value="<?php echo e($student['paid_amount']); ?>"></div>
+                <div class="field"><label>Paid Date</label>
+                    <input type="date" name="paid_date" value="<?php echo e($student['paid_date']); ?>"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── PROOFS (moved inside form and updateable) ── -->
+    <div class="panel">
+        <div class="panel-head">
+            <span class="head-icon"><i class="fas fa-images"></i></span>
+            <h2>Uploaded Documents</h2>
+        </div>
+        <div class="panel-body" style="display:flex; gap:28px; flex-wrap:wrap;">
+            <div>
+                <div class="cell-sub" style="margin-bottom:6px; font-weight:700;">STUDENT PHOTO</div>
+                <?php if (!empty($student['user_photo'])): ?>
+                    <a href="<?php echo e($student['user_photo']); ?>" target="_blank">
+                        <img class="student-photo" src="<?php echo e($student['user_photo']); ?>" alt="Student photo">
+                    </a>
+                <?php else: ?><span class="badge gray">Not uploaded</span><?php endif; ?>
+                <div class="field" style="margin-top: 10px;">
+                    <label style="font-size:0.8rem; font-weight:600;">Update Photo</label>
+                    <input type="file" name="user_photo" accept="image/*">
+                </div>
+            </div>
+            <div>
+                <div class="cell-sub" style="margin-bottom:6px; font-weight:700;">PAYMENT SCREENSHOT</div>
+                <?php if (!empty($student['payment_screenshot'])): ?>
+                    <a href="<?php echo e($student['payment_screenshot']); ?>" target="_blank">
+                        <img class="student-photo" src="<?php echo e($student['payment_screenshot']); ?>" alt="Payment screenshot">
+                    </a>
+                <?php else: ?><span class="badge gray">Not uploaded</span><?php endif; ?>
+                <div class="field" style="margin-top: 10px;">
+                    <label style="font-size:0.8rem; font-weight:600;">Update Screenshot</label>
+                    <input type="file" name="payment_screenshot" accept="image/*,application/pdf">
+                </div>
+            </div>
+            <div>
+                <div class="cell-sub" style="margin-bottom:6px; font-weight:700;">REGISTRATION META</div>
+                <div class="cell-sub">IP: <?php echo e($student['ip_address'] ?: '-'); ?></div>
+                <div class="cell-sub">Submitted: <?php echo $student['submit_datetime'] ? date('d M Y, h:i A', strtotime($student['submit_datetime'])) : '-'; ?></div>
+                <div class="cell-sub">Terms agreed: <?php echo e($student['terms_agreed']); ?></div>
+                <?php if (!empty($student['referral_code'])): ?>
+                    <div class="cell-sub" style="margin-top:6px;">Referral Applied: <span class="badge violet" style="font-size:0.75rem; padding: 2px 6px; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-gift"></i> <?php echo e($student['referral_code']); ?></span> (₹<?php echo number_format((float)$student['coupon_discount'], 0); ?> discount)</div>
+                <?php elseif (!empty($student['applied_coupon'])): ?>
+                    <div class="cell-sub" style="margin-top:6px;">Coupon Applied: <span class="badge green" style="font-size:0.75rem; padding: 2px 6px; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-ticket"></i> <?php echo e($student['applied_coupon']); ?></span> (₹<?php echo number_format((float)$student['coupon_discount'], 0); ?> discount)</div>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
 
     <div class="panel">
         <div class="panel-head"><span class="head-icon"><i class="fas fa-id-card"></i></span><h2>Personal Information</h2></div>
@@ -269,18 +312,6 @@ include 'includes/admin_nav.php';
                         <?php endforeach; ?>
                     </div>
                 </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="panel">
-        <div class="panel-head"><span class="head-icon" style="background:var(--amber-soft);color:var(--amber-ink);"><i class="fas fa-wallet"></i></span><h2>Registration Payment</h2></div>
-        <div class="panel-body">
-            <div class="form-grid">
-                <div class="field"><label>Paid Amount (₹)</label>
-                    <input type="number" name="paid_amount" min="0" step="0.01" value="<?php echo e($student['paid_amount']); ?>"></div>
-                <div class="field"><label>Paid Date</label>
-                    <input type="date" name="paid_date" value="<?php echo e($student['paid_date']); ?>"></div>
             </div>
         </div>
     </div>
