@@ -179,12 +179,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $assigned_emails = trim($_POST['assigned_emails'] ?? '') ?: null;
                     $visibility = in_array($_POST['visibility'] ?? '', ['public', 'private'], true) ? $_POST['visibility'] : 'public';
 
+                    $scope_courses = $_POST['scope_course'] ?? [];
+                    if (is_array($scope_courses)) {
+                        $scope_courses = array_filter(array_map('trim', $scope_courses), function($val) {
+                            return $val !== '';
+                        });
+                        $scope_course_str = !empty($scope_courses) ? implode(',', $scope_courses) : null;
+                    } else {
+                        $scope_course_str = trim($scope_courses) ?: null;
+                    }
+
                     $data = [
                         $code, trim($_POST['description'] ?? '') ?: null,
                         in_array($_POST['discount_type'] ?? '', ['flat', 'percent'], true) ? $_POST['discount_type'] : 'flat',
                         (float)($_POST['discount_value'] ?? 0),
                         ($_POST['max_discount'] !== '' ? (float)$_POST['max_discount'] : null),
-                        trim($_POST['scope_year'] ?? '') ?: null, trim($_POST['scope_course'] ?? '') ?: null,
+                        trim($_POST['scope_year'] ?? '') ?: null, $scope_course_str,
                         ($_POST['usage_limit'] !== '' ? (int)$_POST['usage_limit'] : null),
                         isset($_POST['per_user_once']) ? 1 : 0,
                         $_POST['start_date'] ?: null, $_POST['end_date'] ?: null,
@@ -711,7 +721,7 @@ include 'includes/admin_footer.php';
                     <div class="field"><label>Discount Value</label><input type="number" step="0.01" min="0" name="discount_value" id="c-value"></div>
                     <div class="field"><label>Max Discount (₹, for %)</label><input type="number" step="0.01" min="0" name="max_discount" id="c-max" placeholder="Optional"></div>
                     <div class="field"><label>Scope: Academic Year</label><select name="scope_year" id="c-year"><option value="">Any</option><?php foreach ($all_years as $y): ?><option value="<?php echo e($y); ?>"><?php echo e($y); ?></option><?php endforeach; ?></select></div>
-                    <div class="field"><label>Scope: Course</label><select name="scope_course" id="c-course"><option value="">Any</option><?php foreach ($courses as $c): ?><option value="<?php echo e($c); ?>"><?php echo e($c); ?></option><?php endforeach; ?></select></div>
+                    <div class="field"><label>Scope: Course</label><select name="scope_course[]" id="c-course" multiple style="height: 100px; padding: 6px;"><option value="">Any</option><?php foreach ($courses as $c): ?><option value="<?php echo e($c); ?>"><?php echo e($c); ?></option><?php endforeach; ?></select><p style="font-size: 0.72rem; color: var(--text-muted); margin-top: 2px;">Hold Ctrl/Cmd to select multiple courses.</p></div>
                     <div class="field"><label>Usage Limit (total)</label><input type="number" min="0" name="usage_limit" id="c-limit" placeholder="Unlimited"></div>
                     <div class="field"><label>Start Date</label><input type="date" name="start_date" id="c-start"></div>
                     <div class="field"><label>End Date</label><input type="date" name="end_date" id="c-end"></div>
@@ -732,12 +742,27 @@ include 'includes/admin_footer.php';
 
 <?php
 $extra_scripts = "<script>
+function setMultiSelectValues(selectId, commaString) {
+    var selectEl = document.getElementById(selectId);
+    if (!selectEl) return;
+    for (var i = 0; i < selectEl.options.length; i++) {
+        selectEl.options[i].selected = false;
+    }
+    if (!commaString) return;
+    var values = commaString.split(',').map(function(s) { return s.trim(); });
+    for (var i = 0; i < selectEl.options.length; i++) {
+        if (values.indexOf(selectEl.options[i].value) !== -1) {
+            selectEl.options[i].selected = true;
+        }
+    }
+}
 function openCoupon() {
     document.getElementById('coupon-title').innerHTML = '<i class=\\\"fas fa-ticket\\\" style=\\\"color:var(--accent)\\\"></i> New Coupon';
     document.getElementById('c-id').value=''; document.getElementById('c-code').value='';
     document.getElementById('c-desc').value=''; document.getElementById('c-type').value='flat';
     document.getElementById('c-value').value=''; document.getElementById('c-max').value='';
-    document.getElementById('c-year').value=''; document.getElementById('c-course').value='';
+    document.getElementById('c-year').value='';
+    setMultiSelectValues('c-course', '');
     document.getElementById('c-limit').value=''; document.getElementById('c-start').value='';
     document.getElementById('c-end').value=''; document.getElementById('c-status').value='active';
     document.getElementById('c-once').checked=true;
@@ -752,7 +777,8 @@ function editCoupon(c) {
     document.getElementById('c-id').value=c.id; document.getElementById('c-code').value=c.code;
     document.getElementById('c-desc').value=c.description||''; document.getElementById('c-type').value=c.discount_type;
     document.getElementById('c-value').value=c.discount_value; document.getElementById('c-max').value=c.max_discount||'';
-    document.getElementById('c-year').value=c.scope_year||''; document.getElementById('c-course').value=c.scope_course||'';
+    document.getElementById('c-year').value=c.scope_year||'';
+    setMultiSelectValues('c-course', c.scope_course || '');
     document.getElementById('c-limit').value=(c.usage_limit==null?'':c.usage_limit); document.getElementById('c-start').value=c.start_date||'';
     document.getElementById('c-end').value=c.end_date||''; document.getElementById('c-status').value=c.status;
     document.getElementById('c-once').checked=(c.per_user_once==1);

@@ -34,7 +34,7 @@ if (isset($_GET['get_public_coupons'])) {
             FROM coupons 
             WHERE status = 'active' 
               AND (scope_year IS NULL OR scope_year = '' OR scope_year = ?)
-              AND (scope_course IS NULL OR scope_course = '' OR scope_course = ?)
+              AND (scope_course IS NULL OR scope_course = '' OR FIND_IN_SET(?, scope_course) > 0)
               AND visibility = 'public'
             ORDER BY id DESC
         ");

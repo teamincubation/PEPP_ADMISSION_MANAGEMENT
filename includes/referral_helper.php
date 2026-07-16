@@ -112,7 +112,13 @@ function validate_code($pdo, $code, $course_name, $year, $fee, $email = '', $wha
                 if ($c['start_date'] && $today < $c['start_date']) { $res['message'] = 'This coupon is not active yet.'; return $res; }
                 if ($c['end_date'] && $today > $c['end_date']) { $res['message'] = 'This coupon has expired.'; return $res; }
                 if ($c['scope_year'] && $year !== '' && $c['scope_year'] !== $year) { $res['message'] = 'This coupon is for the ' . $c['scope_year'] . ' batch.'; return $res; }
-                if ($c['scope_course'] && $course_name !== '' && $c['scope_course'] !== $course_name) { $res['message'] = 'This coupon is for a different course.'; return $res; }
+                if ($c['scope_course'] && $course_name !== '') {
+                     $courses_array = array_map('trim', explode(',', $c['scope_course']));
+                     if (!in_array($course_name, $courses_array, true)) {
+                         $res['message'] = 'This coupon is for a different course.';
+                         return $res;
+                     }
+                 }
                 if ($c['usage_limit'] !== null && (int)$c['used_count'] >= (int)$c['usage_limit']) { $res['message'] = 'This coupon has reached its usage limit.'; return $res; }
                 if ($c['per_user_once'] && $email !== '') {
                     $stmt = $pdo->prepare("SELECT COUNT(*) FROM coupon_redemptions WHERE coupon_code = ? AND (email = ? OR whatsapp = ?)");
