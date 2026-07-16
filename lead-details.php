@@ -66,6 +66,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } else {
                     // Editable profile fields
                     $name = trim($_POST['name'] ?? $lead['name']);
+                    $whatsapp_number = trim($_POST['whatsapp_number'] ?? $lead['whatsapp_number']);
                     $course = trim($_POST['interested_course'] ?? $lead['interested_course']);
                     $inst = trim($_POST['last_institute'] ?? $lead['last_institute']);
                     $lcourse = trim($_POST['last_course'] ?? $lead['last_course']);
@@ -73,16 +74,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $yr = in_array($_POST['year_of_study'] ?? '', $YEARS, true) ? $_POST['year_of_study'] : null;
                     $assigned = (is_super_admin() && !empty($_POST['assigned_to'])) ? $_POST['assigned_to'] : $lead['assigned_to'];
 
+                    if ($whatsapp_number === '') {
+                        throw new Exception("WhatsApp number is required.");
+                    }
+
                     $inc = $is_followup ? 1 : 0;
                     $stmt = $pdo->prepare("
-                        UPDATE leads SET name=?, interested_course=?, last_institute=?, last_course=?, is_fyugp=?, year_of_study=?,
+                        UPDATE leads SET name=?, whatsapp_number=?, interested_course=?, last_institute=?, last_course=?, is_fyugp=?, year_of_study=?,
                             status=?, next_followup_date=?, assigned_to=?, followup_count = followup_count + ?, updated_at = NOW()
                         WHERE id = ?
                     ");
-                    $stmt->execute([$name, $course, $inst, $lcourse, $fy, $yr, $new_status,
+                    $stmt->execute([$name, $whatsapp_number, $course, $inst, $lcourse, $fy, $yr, $new_status,
                         $closed ? ($followup ?: null) : $followup, $assigned, $inc, $lead_id]);
 
                     // Timeline entries
+                    if ($whatsapp_number !== $lead['whatsapp_number']) {
+                        lead_log($pdo, $lead_id, 'details_change', "WhatsApp number updated: {$lead['whatsapp_number']} → {$whatsapp_number}", null, null, null, $admin_username);
+                    }
                     if ($new_status !== $lead['status']) {
                         lead_log($pdo, $lead_id, 'status_change', $remark ?: null, $lead['status'], $new_status, $followup, $admin_username);
                     }
@@ -204,6 +212,7 @@ include 'includes/admin_nav.php';
                     <input type="hidden" name="action" value="update_lead">
                     <div class="form-grid">
                         <div class="field"><label>Name</label><input type="text" name="name" value="<?php echo e($lead['name']); ?>"></div>
+                        <div class="field"><label>WhatsApp Number <span class="req">*</span></label><input type="text" name="whatsapp_number" value="<?php echo e($lead['whatsapp_number']); ?>" required></div>
                         <div class="field"><label>Interested PEPP Course</label>
                             <select name="interested_course">
                                 <option value="">Select a course...</option>
