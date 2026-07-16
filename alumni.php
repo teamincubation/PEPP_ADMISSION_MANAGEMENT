@@ -22,16 +22,11 @@ function getInitials($name) {
 $alumni = [];
 if ($alumni_public_visibility === 'ON') {
     try {
-        // Retrieve approved or verified alumni with track information
+        // Retrieve approved or verified alumni with track status Updated
         $stmt = $pdo->prepare("
-            SELECT name, profile_photo, user_photo, academic_track_after_pepp, current_profession_details
+            SELECT name, profile_photo, user_photo, academic_track_after_pepp, current_profession_details, qualified_exam_course, qualified_exam_institute
             FROM alumni
-            WHERE (status = 'approved' OR is_verified = 1)
-              AND (
-                (academic_track_after_pepp IS NOT NULL AND academic_track_after_pepp <> '' AND academic_track_after_pepp <> '[]')
-                OR
-                (current_profession_details IS NOT NULL AND current_profession_details <> '' AND current_profession_details <> '{}')
-              )
+            WHERE track_update_status = 'Updated'
             ORDER BY RAND()
         ");
         $stmt->execute();
@@ -423,16 +418,18 @@ if ($alumni_public_visibility === 'ON') {
                                         <div>
                                             <div class="track-title">Academic Track</div>
                                             <?php foreach ($tracks as $t): ?>
-                                                <div class="track-detail">
+                                                <div class="track-detail" style="margin-bottom: 6px;">
                                                     <strong><?php echo htmlspecialchars($t['course'] ?? ''); ?></strong><br>
                                                     <span style="font-size:0.8rem;"><?php echo htmlspecialchars($t['institute'] ?? ''); ?></span>
                                                 </div>
                                             <?php endforeach; ?>
                                         </div>
                                     </div>
-                                <?php elseif ($prof): ?>
+                                <?php endif; ?>
+
+                                <?php if ($prof): ?>
                                     <!-- Display Career Track -->
-                                    <div class="track-item">
+                                    <div class="track-item" style="margin-top: <?php echo !empty($tracks) ? '12px' : '0'; ?>;">
                                         <i class="fas fa-briefcase"></i>
                                         <div>
                                             <div class="track-title">Career Track</div>
@@ -441,6 +438,22 @@ if ($alumni_public_visibility === 'ON') {
                                                 <span style="font-size:0.8rem;"><?php echo htmlspecialchars($prof['working_institute'] ?? ''); ?></span>
                                                 <?php if (!empty($prof['status'])): ?>
                                                     <br><span class="badge" style="font-size: 0.72rem; text-transform: capitalize; color: var(--gold);"><?php echo htmlspecialchars($prof['status']); ?></span>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+                                    </div>
+                                <?php endif; ?>
+
+                                <?php if (!empty($row['qualified_exam_course'])): ?>
+                                    <!-- Display Qualified Exam -->
+                                    <div class="track-item" style="margin-top: <?php echo (!empty($tracks) || $prof) ? '12px' : '0'; ?>;">
+                                        <i class="fas fa-award"></i>
+                                        <div>
+                                            <div class="track-title">Qualified Exam</div>
+                                            <div class="track-detail">
+                                                <strong><?php echo htmlspecialchars($row['qualified_exam_course']); ?></strong>
+                                                <?php if (!empty($row['qualified_exam_institute'])): ?>
+                                                    <br><span style="font-size:0.8rem;"><?php echo htmlspecialchars($row['qualified_exam_institute']); ?></span>
                                                 <?php endif; ?>
                                             </div>
                                         </div>

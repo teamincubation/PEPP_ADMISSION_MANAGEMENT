@@ -93,7 +93,10 @@ function check_and_update_alumni_schema($pdo) {
             'current_profession_details' => "TEXT DEFAULT NULL",
             'profile_photo' => "VARCHAR(255) DEFAULT NULL",
             'is_verified' => "TINYINT(1) NOT NULL DEFAULT 0",
-            'synced_at' => "DATETIME DEFAULT NULL"
+            'synced_at' => "DATETIME DEFAULT NULL",
+            'qualified_exam_course' => "VARCHAR(255) DEFAULT NULL",
+            'qualified_exam_institute' => "VARCHAR(255) DEFAULT NULL",
+            'track_update_status' => "ENUM('Pending','Updated') NOT NULL DEFAULT 'Pending'"
         ];
         
         $to_add = [];
@@ -256,11 +259,20 @@ function alumni_upsert($pdo, $d, $by) {
         return 'skip';
     }
 
-    $stmt = $pdo->prepare("INSERT INTO alumni (name, academic_year, course_name, email, secondary_email, mobile, secondary_mobile, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,NOW())");
+    $track_update_status = trim($d['track_update_status'] ?? 'Pending');
+    if (!in_array($track_update_status, ['Pending', 'Updated'])) {
+        $track_update_status = 'Pending';
+    }
+
+    $stmt = $pdo->prepare("INSERT INTO alumni (name, academic_year, course_name, email, secondary_email, mobile, secondary_mobile, qualified_exam_course, qualified_exam_institute, track_update_status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())");
     $stmt->execute([
         trim($d['name'] ?? ''), trim($d['academic_year'] ?? '') ?: null, trim($d['course_name'] ?? '') ?: null,
         $email ?: null, strtolower(trim($d['secondary_email'] ?? '')) ?: null,
-        $mobile, trim($d['secondary_mobile'] ?? '') ?: null, $by
+        $mobile, trim($d['secondary_mobile'] ?? '') ?: null,
+        trim($d['qualified_exam_course'] ?? '') ?: null,
+        trim($d['qualified_exam_institute'] ?? '') ?: null,
+        $track_update_status,
+        $by
     ]);
     return 'added';
 }
@@ -484,7 +496,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         
                         'academic_track_after_pepp' => $_POST['academic_track_after_pepp'] ?: null,
                         'current_profession_details' => $_POST['current_profession_details'] ?: null,
-                        'profile_photo' => $profile_photo
+                        'profile_photo' => $profile_photo,
+                        'qualified_exam_course' => $_POST['qualified_exam_course'] ?: null,
+                        'qualified_exam_institute' => $_POST['qualified_exam_institute'] ?: null,
+                        'track_update_status' => in_array($_POST['track_update_status'] ?? '', ['Pending', 'Updated'], true) ? $_POST['track_update_status'] : 'Pending'
                     ];
 
                     $set_sql = []; $vals = [];
@@ -717,17 +732,20 @@ input:checked + .slider:before {
 
 <!-- ── ADD ALUMNUS MODAL ── -->
 <div class="modal-backdrop" id="add-alumnus-modal">
-    <div class="modal" style="max-width:720px; width:90%;">
-        <div class="modal-head">
-            <h3><i class="fas fa-user-plus" style="color:var(--accent);"></i> Add Alumnus</h3>
-            <button class="modal-close" onclick="closeModal('add-alumnus-modal')"><i class="fas fa-xmark"></i></button>
-        </div>
-        <form method="POST">
+    <div class="modal" style="max-width:720px; width:90%; padding:0; max-height:90vh; overflow:hidden;">
+        <form method="POST" style="display:flex; flex-direction:column; max-height:90vh;">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="add_alumni">
-            <div class="modal-body">
+            <div class="modal-head" style="position: sticky; top: 0; background: white; z-index: 100; display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--border); box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                <h3 style="margin:0; display:flex; align-items:center; gap:8px;"><i class="fas fa-user-plus" style="color:var(--accent);"></i> Add Alumnus</h3>
+                <div style="display:flex; gap:10px;">
+                    <button type="button" class="btn btn-outline" onclick="closeModal('add-alumnus-modal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Add Alumnus</button>
+                </div>
+            </div>
+            <div class="modal-body" style="overflow-y:auto; padding:20px; max-height:calc(90vh - 70px);">
                 <div class="form-grid">
-                    <div class="field"><label>Name</label><input type="text" name="name"></div>
+                    <div class="field"><label style="color:#ef4444; font-weight:700;">NAME</label><input type="text" name="name"></div>
                     <div class="field"><label>PEPP Academic Year</label>
                         <select name="academic_year"><option value="">-</option><option value="All years">All years</option><?php foreach ($all_years as $y): ?><option value="<?php echo e($y); ?>"><?php echo e($y); ?></option><?php endforeach; ?></select></div>
                     <div class="field"><label>Course Name</label>
@@ -737,11 +755,23 @@ input:checked + .slider:before {
                                 <option value="<?php echo e($cname); ?>"><?php echo e($cname); ?></option>
                             <?php endforeach; ?>
                         </select></div>
-                    <div class="field"><label>Mobile Number <span class="req">*</span></label><input type="text" name="mobile" required></div>
+                    <div class="field"><label style="color:#ef4444; font-weight:700;">MOBILE (PRIMARY) <span class="req">*</span></label><input type="text" name="mobile" required></div>
                     <div class="field"><label>Secondary Mobile</label><input type="text" name="secondary_mobile"></div>
-                    <div class="field"><label>Email ID</label><input type="email" name="email"></div>
+                    <div class="field"><label style="color:#ef4444; font-weight:700;">EMAIL</label><input type="email" name="email"></div>
                     <div class="field"><label>Secondary Email</label><input type="email" name="secondary_email"></div>
+                    <div class="field"><label style="color:#ef4444; font-weight:700;">Track Update Status</label>
+                        <select name="track_update_status">
+                            <option value="Pending">Pending</option>
+                            <option value="Updated">Updated</option>
+                        </select></div>
                 </div>
+
+                <h3 style="margin-top:20px; border-bottom:1px solid var(--border); padding-bottom:6px; color:#ef4444; font-weight:800;">Qualified Exams</h3>
+                <div class="form-grid">
+                    <div class="field"><label style="color:#ef4444; font-weight:700;">Exam/Course</label><input type="text" name="qualified_exam_course"></div>
+                    <div class="field"><label style="color:#ef4444; font-weight:700;">Institute/Other</label><input type="text" name="qualified_exam_institute"></div>
+                </div>
+
                 <div style="margin-top:14px; padding:12px; background:var(--gray-50); border:1px solid var(--border); border-radius:6px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
                     <span class="cell-sub" style="font-weight:600;"><i class="fas fa-file-import"></i> Need to add in bulk?</span>
                     <div style="display:flex; gap:8px;">
@@ -749,10 +779,6 @@ input:checked + .slider:before {
                         <button type="button" class="btn btn-sm btn-soft-blue" onclick="closeModal('add-alumnus-modal'); openModal('import-modal');"><i class="fas fa-file-import"></i> Bulk Import CSV</button>
                     </div>
                 </div>
-            </div>
-            <div class="modal-foot">
-                <button type="button" class="btn btn-outline" onclick="closeModal('add-alumnus-modal')">Cancel</button>
-                <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Add Alumnus</button>
             </div>
         </form>
     </div>
@@ -887,7 +913,7 @@ input:checked + .slider:before {
                     <td class="cell-sub"><?php echo e($a['mobile']); ?><?php echo $a['secondary_mobile'] ? '<br>' . e($a['secondary_mobile']) : ''; ?></td>
                     <td class="cell-sub"><?php echo e($a['email'] ?: '-'); ?><?php echo $a['secondary_email'] ? '<br>' . e($a['secondary_email']) : ''; ?></td>
                     <td>
-                        <?php if (!empty($a['academic_track_after_pepp']) && $a['academic_track_after_pepp'] !== '[]'): ?>
+                        <?php if (($a['track_update_status'] ?? 'Pending') === 'Updated'): ?>
                             <span class="badge green" style="font-size:0.7rem; padding: 2.5px 7px;"><i class="fas fa-circle-check"></i> Updated</span>
                         <?php else: ?>
                             <span class="badge red" style="font-size:0.7rem; padding: 2.5px 7px;"><i class="fas fa-triangle-exclamation"></i> Pending</span>
@@ -948,27 +974,37 @@ input:checked + .slider:before {
 </div>
 
 <div class="modal-backdrop" id="edit-modal">
-    <div class="modal" style="max-width:750px; width:95%; max-height: 90vh; overflow-y: auto;">
-        <div class="modal-head">
-            <h3><i class="fas fa-pen" style="color:var(--accent);"></i> Edit Alumnus Record</h3>
-            <button class="modal-close" onclick="closeModal('edit-modal')"><i class="fas fa-xmark"></i></button>
-        </div>
-        <form method="POST" enctype="multipart/form-data">
+    <div class="modal" style="max-width:750px; width:95%; padding:0; max-height:90vh; overflow:hidden;">
+        <form method="POST" enctype="multipart/form-data" style="display:flex; flex-direction:column; max-height:90vh;">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="edit_alumni">
             <input type="hidden" name="alumni_id" id="e-id">
             <input type="hidden" name="existing_profile_photo" id="e-existing-photo">
             
-            <div class="modal-body">
-                <div style="display:flex; gap:16px; align-items:center; margin-bottom:16px;">
+            <div class="modal-head" style="position: sticky; top: 0; background: white; z-index: 100; display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--border); box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                <h3 style="margin: 0; display: flex; align-items: center; gap: 8px;"><i class="fas fa-pen" style="color:var(--accent);"></i> Edit Alumnus Record</h3>
+                <div style="display: flex; gap: 10px;">
+                    <button type="button" class="btn btn-outline" onclick="closeModal('edit-modal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save Changes</button>
+                </div>
+            </div>
+
+            <div class="modal-body" style="overflow-y:auto; padding:20px; max-height:calc(90vh - 70px);">
+                <div style="display:flex; gap:16px; align-items:center; margin-bottom:16px; flex-wrap:wrap;">
                     <img id="e-photo-preview" src="assets/img/default-avatar.svg" onerror="this.src='assets/img/default-avatar.svg'; this.onerror=null;" style="width:60px; height:60px; border-radius:50%; object-fit:cover; border:2px solid var(--border);">
-                    <div class="field" style="margin:0;"><label>Update Profile Photo</label><input type="file" name="profile_photo" accept="image/*"></div>
+                    <div class="field" style="margin:0;"><label style="color:#ef4444; font-weight:700;">Update Profile Photo</label><input type="file" name="profile_photo" accept="image/*"></div>
+                    <div class="field" style="margin:0;"><label style="color:#ef4444; font-weight:700;">Track Update Status</label>
+                        <select name="track_update_status" id="e-track-update-status">
+                            <option value="Pending">Pending</option>
+                            <option value="Updated">Updated</option>
+                        </select>
+                    </div>
                 </div>
 
                 <h3 style="margin-top: 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; color: var(--accent-dark);">Personal &amp; Contact Info</h3>
                 <div class="form-grid">
-                    <div class="field"><label>Name</label><input type="text" name="name" id="e-name" required></div>
-                    <div class="field"><label>Gender</label>
+                    <div class="field"><label style="color:#ef4444; font-weight:700;">NAME</label><input type="text" name="name" id="e-name" required></div>
+                    <div class="field"><label style="color:#ef4444; font-weight:700;">GENDER</label>
                         <select name="gender" id="e-gender">
                             <option value="">Select</option>
                             <option value="Male">Male</option>
@@ -976,9 +1012,9 @@ input:checked + .slider:before {
                             <option value="Other">Other</option>
                         </select></div>
                     <div class="field"><label>Date of Birth</label><input type="date" name="date_of_birth" id="e-dob"></div>
-                    <div class="field"><label>Email</label><input type="email" name="email" id="e-email"></div>
+                    <div class="field"><label style="color:#ef4444; font-weight:700;">EMAIL</label><input type="email" name="email" id="e-email"></div>
                     <div class="field"><label>Secondary Email</label><input type="email" name="secondary_email" id="e-email2"></div>
-                    <div class="field"><label>Mobile (Primary) <span class="req">*</span></label><input type="text" name="mobile" id="e-mobile" required></div>
+                    <div class="field"><label style="color:#ef4444; font-weight:700;">MOBILE (PRIMARY) <span class="req">*</span></label><input type="text" name="mobile" id="e-mobile" required></div>
                     <div class="field"><label>Secondary Mobile</label><input type="text" name="secondary_mobile" id="e-mobile2"></div>
                     <div class="field"><label>WhatsApp Country Code</label><input type="text" name="whatsapp_country_code" id="e-wa-cc"></div>
                     <div class="field"><label>WhatsApp Number</label><input type="text" name="whatsapp_number" id="e-wa-num"></div>
@@ -993,13 +1029,13 @@ input:checked + .slider:before {
 
                 <h3 style="margin-top:20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; color: var(--accent-dark);">Community Career Sync Info</h3>
                 <div style="margin-bottom: 15px; padding: 0 10px;">
-                    <label style="font-weight: 600; font-size: 0.85rem; margin-bottom: 6px; display: block;">Academic Tracks After PEPP</label>
+                    <label style="color:#ef4444; font-weight:700; font-size:0.85rem; margin-bottom:6px; display:block;">Academic Tracks After PEPP</label>
                     <div id="academic-tracks-container" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px;"></div>
                     <button type="button" class="btn btn-sm btn-outline" onclick="addAcademicTrackRow()"><i class="fas fa-plus"></i> Add Academic Track</button>
                     <input type="hidden" name="academic_track_after_pepp" id="e-tracks">
                 </div>
                 <div class="form-grid" style="margin-top:10px; border-top:1px dashed var(--border); padding-top:12px;">
-                    <div class="field"><label>Profession Status</label>
+                    <div class="field"><label style="color:#16a34a; font-weight:700;">Profession Status</label>
                         <select id="e-prof-status" onchange="serializeProfession()">
                             <option value="">Select Status</option>
                             <option value="student">Student</option>
@@ -1008,13 +1044,19 @@ input:checked + .slider:before {
                             <option value="other">Other</option>
                         </select>
                     </div>
-                    <div class="field"><label>Profession / Job Title</label>
+                    <div class="field"><label style="color:#16a34a; font-weight:700;">Profession / Job Title</label>
                         <input type="text" id="e-prof-title" placeholder="e.g. Software Engineer" oninput="serializeProfession()">
                     </div>
-                    <div class="field full"><label>Working Institute / Company</label>
+                    <div class="field full"><label style="color:#16a34a; font-weight:700;">Working Institute / Company</label>
                         <input type="text" id="e-prof-institute" placeholder="e.g. Google / ABC University" oninput="serializeProfession()">
                     </div>
                     <input type="hidden" name="current_profession_details" id="e-prof">
+                </div>
+
+                <h3 style="margin-top:20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; color: #ef4444; font-weight: 800;">Qualified Exams</h3>
+                <div class="form-grid">
+                    <div class="field"><label style="color:#ef4444; font-weight:700;">Exam/Course</label><input type="text" name="qualified_exam_course" id="e-qualified-exam-course" oninput="autoMarkUpdated()"></div>
+                    <div class="field"><label style="color:#ef4444; font-weight:700;">Institute/Other</label><input type="text" name="qualified_exam_institute" id="e-qualified-exam-institute" oninput="autoMarkUpdated()"></div>
                 </div>
 
                 <h3 style="margin-top:20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; color: var(--accent-dark);">Address &amp; Education</h3>
@@ -1044,7 +1086,7 @@ input:checked + .slider:before {
                             <?php foreach ($active_courses_list as $cname): ?><option value="<?php echo e($cname); ?>"><?php echo e($cname); ?></option><?php endforeach; ?>
                         </select></div>
                     <div class="field"><label>Joined Date</label><input type="date" name="joined_date" id="e-joined"></div>
-                    <div class="field"><label>Student Status</label>
+                    <div class="field"><label style="color:#ef4444; font-weight:700;">Student Status</label>
                         <select name="student_status" id="e-stud-status">
                             <option value="active">Active</option>
                             <option value="inactive">Inactive</option>
@@ -1073,11 +1115,6 @@ input:checked + .slider:before {
                             <option value="Not Eligible">Not Eligible</option>
                         </select></div>
                 </div>
-            </div>
-            
-            <div class="modal-foot">
-                <button type="button" class="btn btn-outline" onclick="closeModal('edit-modal')">Cancel</button>
-                <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save Changes</button>
             </div>
         </form>
     </div>
@@ -1178,6 +1215,7 @@ function showDetails(a) {
                     ${a.is_verified == 1 ? '<span class="badge green"><i class="fas fa-circle-check"></i> Verified PEPPian</span>' : '<span class="badge gray">Unverified</span>'}
                     ${a.synced_at ? `<span class="badge blue">Synced: ${a.synced_at}</span>` : ''}
                     ${a.student_status ? `<span class="badge blue">Status: ${escapeHtml(a.student_status)}</span>` : ''}
+                    <span class="badge ${a.track_update_status === 'Updated' ? 'green' : 'amber'}">Track Status: ${escapeHtml(a.track_update_status || 'Pending')}</span>
                 </div>
             </div>
         </div>
@@ -1227,9 +1265,16 @@ function showDetails(a) {
         <div class="panel">
             <div class="panel-head"><h2>Community Career &amp; Post-PEPP Info</h2></div>
             <div class="panel-body">
-                <h4 style="margin: 0 0 8px 0; color: var(--accent-dark);">Academic Track After PEPP</h4>
+                <h4 style="margin: 0 0 8px 0; color: var(--accent-dark); font-weight:700;">Academic Track After PEPP</h4>
                 <div style="margin-bottom:15px; margin-top:5px;">${tracksHtml}</div>
-                <h4 style="margin: 0 0 8px 0; color: var(--accent-dark);">Current Profession details</h4>
+                <h4 style="margin: 15px 0 8px 0; color: var(--accent-dark); font-weight:700;">Qualified Exams</h4>
+                <div style="margin-bottom:15px; margin-top:5px;">
+                    <div class="detail-list">
+                        <div class="detail-row"><div class="dl">Exam / Course</div><div class="dv">${escapeHtml(a.qualified_exam_course || '-')}</div></div>
+                        <div class="detail-row"><div class="dl">Institute / Other</div><div class="dv">${escapeHtml(a.qualified_exam_institute || '-')}</div></div>
+                    </div>
+                </div>
+                <h4 style="margin: 15px 0 8px 0; color: var(--accent-dark); font-weight:700;">Current Profession details</h4>
                 <div>${profHtml}</div>
             </div>
         </div>
@@ -1237,7 +1282,16 @@ function showDetails(a) {
     openModal('detail-modal');
 }
 
+var isModalLoading = false;
+function autoMarkUpdated() {
+    if (isModalLoading) return;
+    var statusSelect = document.getElementById('e-track-update-status');
+    if (statusSelect) {
+        statusSelect.value = 'Updated';
+    }
+}
 function editAlum(a) {
+    isModalLoading = true;
     document.getElementById('e-id').value = a.id;
     document.getElementById('e-name').value = a.name || '';
     document.getElementById('e-gender').value = a.gender || '';
@@ -1290,6 +1344,10 @@ function editAlum(a) {
     renderAcademicTracks(a.academic_track_after_pepp || '');
     renderProfession(a.current_profession_details || '');
     
+    document.getElementById('e-qualified-exam-course').value = a.qualified_exam_course || '';
+    document.getElementById('e-qualified-exam-institute').value = a.qualified_exam_institute || '';
+    document.getElementById('e-track-update-status').value = a.track_update_status || 'Pending';
+
     document.getElementById('e-existing-photo').value = a.profile_photo || '';
     let pSrc = a.profile_photo || a.user_photo || 'assets/img/default-avatar.svg';
     if (pSrc.startsWith('uploads/')) {
@@ -1297,6 +1355,7 @@ function editAlum(a) {
     }
     document.getElementById('e-photo-preview').src = pSrc;
     
+    isModalLoading = false;
     openModal('edit-modal');
 }
 
@@ -1362,6 +1421,9 @@ function serializeAcademicTracks() {
         }
     }
     document.getElementById('e-tracks').value = tracks.length > 0 ? JSON.stringify(tracks) : '';
+    if (tracks.length > 0) {
+        autoMarkUpdated();
+    }
 }
 
 function renderProfession(profJson) {
@@ -1397,6 +1459,7 @@ function serializeProfession() {
             working_institute: institute
         };
         document.getElementById('e-prof').value = JSON.stringify(obj);
+        autoMarkUpdated();
     } else {
         document.getElementById('e-prof').value = '';
     }
