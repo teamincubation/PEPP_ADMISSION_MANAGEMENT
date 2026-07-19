@@ -54,6 +54,16 @@ if (file_exists(__DIR__ . '/session_cron.php')) {
     }
     catch (Exception $e) { error_log('nav session/installment cron: ' . $e->getMessage()); }
 }
+
+// Email Campaigns: run due email campaigns and batch delivery queue.
+if (file_exists(__DIR__ . '/email_campaigns_helper.php')) {
+    require_once __DIR__ . '/email_campaigns_helper.php';
+    try {
+        email_campaigns_send_due($pdo);
+    } catch (Exception $e) {
+        error_log('nav email campaigns cron: ' . $e->getMessage());
+    }
+}
 $nav_pending_payments  = 0;
 $nav_pending_onboarding = 0;
 $nav_due_within_10_days = 0;
@@ -167,6 +177,11 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
                     <?php if (!empty($nav_mkt['referral'])): ?><span class="nav-badge" style="background:#16a34a; color:#fff;" title="New referral updates"><?php echo (int)$nav_mkt['referral']; ?></span><?php endif; ?>
                     <?php if (!empty($nav_mkt['coupon'])): ?><span class="nav-badge" style="background:#dc2626; color:#fff;" title="New coupon updates"><?php echo (int)$nav_mkt['coupon']; ?></span><?php endif; ?>
                 </span>
+            </a>
+            <?php endif; ?>
+            <?php if (can_access('marketing')): ?>
+            <a class="nav-item <?php echo nav_active('email-campaigns', $active_page); ?>" href="email-campaigns.php">
+                <i class="fas fa-envelope"></i> Email Campaigns
             </a>
             <?php endif; ?>
             <?php if (can_access('alumni')): ?>
