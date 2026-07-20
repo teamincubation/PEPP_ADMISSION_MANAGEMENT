@@ -212,12 +212,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if ($stmt->fetchColumn() > 0) {
                             $error_message = "Username \"{$new_user}\" is already taken.";
                         } else {
-                            $pdo->prepare("UPDATE admins SET username = ?, password_hash = ? WHERE id = ?")
-                                ->execute([$new_user, password_hash($new_pass, PASSWORD_DEFAULT), $me['id']]);
-                            log_admin_activity($pdo, $new_user, 'password_changed', 'Changed own credentials' . ($new_user !== $admin_username ? " (username was {$admin_username})" : ''));
-                            $_SESSION['admin_username'] = $new_user;
-                            $admin_username = $new_user;
-                            $success_message = 'Your credentials were updated. Use them on your next sign-in.';
+                            if (is_super_admin()) {
+                                $gemail = trim($_POST['google_email'] ?? '');
+                                if ($gemail !== '' && !filter_var($gemail, FILTER_VALIDATE_EMAIL)) {
+                                    $error_message = 'Please enter a valid Google email address.';
+                                } else {
+                                    $pdo->prepare("UPDATE admins SET username = ?, password_hash = ?, google_email = ? WHERE id = ?")
+                                        ->execute([$new_user, password_hash($new_pass, PASSWORD_DEFAULT), $gemail ?: null, $me['id']]);
+                                    log_admin_activity($pdo, $new_user, 'password_changed', 'Changed own credentials and Google sign-in email' . ($new_user !== $admin_username ? " (username was {$admin_username})" : ''));
+                                    $_SESSION['admin_username'] = $new_user;
+                                    $admin_username = $new_user;
+                                    $success_message = 'Your credentials and Google Auth email were updated. Use them on your next sign-in.';
+                                }
+                            } else {
+                                $pdo->prepare("UPDATE admins SET username = ?, password_hash = ? WHERE id = ?")
+                                    ->execute([$new_user, password_hash($new_pass, PASSWORD_DEFAULT), $me['id']]);
+                                log_admin_activity($pdo, $new_user, 'password_changed', 'Changed own credentials' . ($new_user !== $admin_username ? " (username was {$admin_username})" : ''));
+                                $_SESSION['admin_username'] = $new_user;
+                                $admin_username = $new_user;
+                                $success_message = 'Your credentials were updated. Use them on your next sign-in.';
+                            }
                         }
                     }
                 } else {
@@ -545,6 +559,11 @@ $nongst_preview = ($current_settings['inv_nongst_prefix'] ?? 'INV') . '/' . date
                 <div class="field"><label>Username</label>
                     <input type="text" name="admin_username" value="<?php echo e($admin_username); ?>" required>
                     <div class="help">Changes apply to YOUR account (<?php echo is_super_admin() ? 'Super Admin' : 'Admin'; ?>)</div></div>
+                <?php if (is_super_admin()): ?>
+                <div class="field"><label>Google sign-in email</label>
+                    <input type="email" name="google_email" value="<?php echo e($admin_row['google_email'] ?? ''); ?>" placeholder="superadmin@example.com">
+                    <div class="help">Google account allowed to sign in as Super Admin</div></div>
+                <?php endif; ?>
                 <div class="field"><label>Current password <span class="req">*</span></label>
                     <input type="password" name="current_password" required autocomplete="current-password"></div>
                 <div class="field"><label>New password <span class="req">*</span></label>
