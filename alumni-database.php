@@ -432,6 +432,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             } elseif ($action === 'edit_alumni') {
                 $id = (int)($_POST['alumni_id'] ?? 0);
+                if ($id) {
+                    $stmt = $pdo->prepare("SELECT * FROM alumni WHERE id = ?");
+                    $stmt->execute([$id]);
+                    $orig = $stmt->fetch();
+                    if ($orig && is_credential_restricted('alumni')) {
+                        $sensitive_fields = ['email', 'secondary_email', 'mobile', 'secondary_mobile', 'whatsapp_number', 'mobile_number', 'postal_address'];
+                        foreach ($sensitive_fields as $fld) {
+                            if (isset($_POST[$fld])) {
+                                $val = trim($_POST[$fld]);
+                                if (strpos($val, '*') !== false || preg_match('/^[x\s@.]+$/i', $val) || strpos($val, '<span') !== false) {
+                                    $_POST[$fld] = $orig[$fld];
+                                }
+                            }
+                        }
+                    }
+                }
                 if ($id && trim($_POST['mobile'] ?? '') !== '') {
                     $profile_photo = $_POST['existing_profile_photo'] ?? null;
                     $uploaded_photo = handle_file_upload_with_replace('profile_photo', 'alumni', $profile_photo, ['jpg', 'jpeg', 'png', 'webp']);
@@ -910,8 +926,8 @@ input:checked + .slider:before {
                         </div>
                     </td>
                     <td class="cell-sub"><?php echo e($a['academic_year'] ?: '-'); ?><?php echo $a['course_name'] ? '<br>' . e($a['course_name']) : ''; ?></td>
-                    <td class="cell-sub"><?php echo e($a['mobile']); ?><?php echo $a['secondary_mobile'] ? '<br>' . e($a['secondary_mobile']) : ''; ?></td>
-                    <td class="cell-sub"><?php echo e($a['email'] ?: '-'); ?><?php echo $a['secondary_email'] ? '<br>' . e($a['secondary_email']) : ''; ?></td>
+                    <td class="cell-sub"><?php echo format_credential($a['mobile'], 'phone', 'alumni'); ?><?php echo $a['secondary_mobile'] ? '<br>' . format_credential($a['secondary_mobile'], 'phone', 'alumni') : ''; ?></td>
+                    <td class="cell-sub"><?php echo $a['email'] ? format_credential($a['email'], 'email', 'alumni') : '-'; ?><?php echo $a['secondary_email'] ? '<br>' . format_credential($a['secondary_email'], 'email', 'alumni') : ''; ?></td>
                     <td>
                         <?php if (($a['track_update_status'] ?? 'Pending') === 'Updated'): ?>
                             <span class="badge green" style="font-size:0.7rem; padding: 2.5px 7px;"><i class="fas fa-circle-check"></i> Updated</span>
@@ -920,8 +936,18 @@ input:checked + .slider:before {
                         <?php endif; ?>
                     </td>
                     <td style="text-align:right; white-space:nowrap;">
-                        <button class="btn btn-sm btn-soft-blue" onclick='showDetails(<?php echo json_encode($a, JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-eye"></i> Details</button>
-                        <button class="btn btn-sm btn-outline" onclick='editAlum(<?php echo json_encode($a, JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
+                        <?php
+                        $a_js = $a;
+                        $a_js['mobile'] = format_credential_text($a['mobile'], 'phone', 'alumni');
+                        $a_js['secondary_mobile'] = format_credential_text($a['secondary_mobile'], 'phone', 'alumni');
+                        $a_js['email'] = format_credential_text($a['email'], 'email', 'alumni');
+                        $a_js['secondary_email'] = format_credential_text($a['secondary_email'], 'email', 'alumni');
+                        $a_js['whatsapp_number'] = format_credential_text($a['whatsapp_number'], 'phone', 'alumni');
+                        $a_js['mobile_number'] = format_credential_text($a['mobile_number'], 'phone', 'alumni');
+                        $a_js['postal_address'] = format_credential_text($a['postal_address'], 'address', 'alumni');
+                        ?>
+                        <button class="btn btn-sm btn-soft-blue" onclick='showDetails(<?php echo json_encode($a_js, JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-eye"></i> Details</button>
+                        <button class="btn btn-sm btn-outline" onclick='editAlum(<?php echo json_encode($a_js, JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
                         <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this alumnus?');">
                             <?php echo csrf_field(); ?>
                             <input type="hidden" name="action" value="delete_alumni">

@@ -155,12 +155,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Content-Type: application/json');
         $addr = trim($_POST['postal_address'] ?? '');
         $pin = trim($_POST['postal_pincode'] ?? '');
-        if (!is_super_admin() && ($admin_credential_visibility === 'hide' || $admin_credential_visibility === 'mask')) {
-            if (strpos($addr, '*') !== false || preg_match('/^[x\s@.]+$/i', $addr) || strpos($addr, '<span') !== false) {
-                echo json_encode(['success' => true]);
-                exit;
-            }
-        }
+
         try {
             $stmt = $pdo->prepare("UPDATE users SET postal_address = ?, postal_pincode = ? WHERE user_id = ?");
             $stmt->execute([$addr, $pin, $user_id]);
@@ -315,8 +310,7 @@ if (isset($_GET['print']) && $_GET['print'] === '1') {
         <?php else: ?>
             <div class="grid">
                 <?php foreach ($stickers as $stk):
-                    $formatted_addr = format_credential_text($stk['postal_address'], 'address');
-                    $combined = $formatted_addr . "\n" . $stk['place_post_office'] . ", " . $stk['district'] . ", " . $stk['state'];
+                    $combined = $stk['postal_address'] . "\n" . $stk['place_post_office'] . ", " . $stk['district'] . ", " . $stk['state'];
                 ?>
                     <div class="sticker">
                         <div>
@@ -531,7 +525,7 @@ input:checked + .slider:before {
             <tbody>
                 <?php foreach ($kits as $k):
                     $combined = $k['postal_address'] . ', ' . $k['place_post_office'] . ', ' . $k['district'] . ', ' . $k['state'];
-                    $combined_display = format_credential_text($k['postal_address'], 'address') . ', ' . $k['place_post_office'] . ', ' . $k['district'] . ', ' . $k['state'];
+                    $combined_display = $combined;
                     $phone = preg_replace('/\D/', '', $k['whatsapp_country_code'] . $k['whatsapp_number']);
                     $wa_text = get_peppkit_wa_text($k['name'], $k['item_status'], $combined . ' - ' . $k['postal_pincode'], $k['tracking_id']);
                     
@@ -563,7 +557,7 @@ input:checked + .slider:before {
                         <div class="cell-sub">Joined: <?php echo date('d M Y', strtotime($k['joined_date'])); ?></div>
                     </td>
                     <td>
-                        <div id="addr-display-<?php echo htmlspecialchars($k['user_id']); ?>" class="cell-sub" style="max-width:280px; word-break:break-word; cursor:pointer;" onclick="openAddressEdit('<?php echo htmlspecialchars($k['user_id']); ?>', <?php echo htmlspecialchars(json_encode(format_credential_text($k['postal_address'], 'address'))); ?>, <?php echo htmlspecialchars(json_encode($k['postal_pincode'])); ?>)">
+                        <div id="addr-display-<?php echo htmlspecialchars($k['user_id']); ?>" class="cell-sub" style="max-width:280px; word-break:break-word; cursor:pointer;" onclick="openAddressEdit('<?php echo htmlspecialchars($k['user_id']); ?>', <?php echo htmlspecialchars(json_encode($k['postal_address'])); ?>, <?php echo htmlspecialchars(json_encode($k['postal_pincode'])); ?>)">
                             <?php echo htmlspecialchars($combined_display); ?> <i class="fas fa-edit" style="color:var(--accent); font-size:0.75rem; margin-left:4px;"></i>
                         </div>
                     </td>

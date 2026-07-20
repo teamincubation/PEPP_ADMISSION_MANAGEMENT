@@ -312,7 +312,7 @@ include 'includes/admin_nav.php';
                 <tr<?php echo $overdue ? ' style="background:#fff7f7;"' : ''; ?>>
                     <td>
                         <div class="cell-main"><?php echo e($l['name'] ?: 'Unknown'); ?></div>
-                        <div class="cell-sub"><?php echo e($l['whatsapp_number']); ?> · <?php echo (int)$l['followup_count']; ?> follow-up(s)</div>
+                        <div class="cell-sub"><?php echo format_credential($l['whatsapp_number'], 'phone', 'leads'); ?> · <?php echo (int)$l['followup_count']; ?> follow-up(s)</div>
                     </td>
                     <td class="cell-sub"><?php echo e($l['interested_course'] ?: '-'); ?></td>
                     <td><span class="badge <?php echo $LEAD_STATUSES[$l['status']][1]; ?>"><?php echo $LEAD_STATUSES[$l['status']][0]; ?></span></td>
@@ -391,7 +391,7 @@ include 'includes/admin_nav.php';
                 <tr>
                     <td>
                         <div class="cell-main"><?php echo e($l['name'] ?: 'Unknown'); ?></div>
-                        <div class="cell-sub"><?php echo e($l['whatsapp_number']); ?> · <?php echo (int)$l['followup_count']; ?> follow-up(s)</div>
+                        <div class="cell-sub"><?php echo format_credential($l['whatsapp_number'], 'phone', 'leads'); ?> · <?php echo (int)$l['followup_count']; ?> follow-up(s)</div>
                     </td>
                     <td class="cell-sub"><?php echo e($l['interested_course'] ?: '-'); ?></td>
                     <td class="cell-sub">

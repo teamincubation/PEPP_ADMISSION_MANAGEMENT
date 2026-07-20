@@ -67,6 +67,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // Editable profile fields
                     $name = trim($_POST['name'] ?? $lead['name']);
                     $whatsapp_number = trim($_POST['whatsapp_number'] ?? $lead['whatsapp_number']);
+                    if (is_credential_restricted('leads')) {
+                        if (strpos($whatsapp_number, '*') !== false || preg_match('/^[x\s@.]+$/i', $whatsapp_number) || strpos($whatsapp_number, '<span') !== false) {
+                            $whatsapp_number = $lead['whatsapp_number'];
+                        }
+                    }
                     $course = trim($_POST['interested_course'] ?? $lead['interested_course']);
                     $inst = trim($_POST['last_institute'] ?? $lead['last_institute']);
                     $lcourse = trim($_POST['last_course'] ?? $lead['last_course']);
@@ -166,7 +171,7 @@ $overdue = $lead['next_followup_date'] && $lead['next_followup_date'] < date('Y-
 
 $active_page = 'leads';
 $page_title  = $lead['name'] ?: 'Lead';
-$page_sub    = $lead['whatsapp_number'];
+$page_sub    = format_credential_text($lead['whatsapp_number'], 'phone', 'leads');
 include 'includes/admin_nav.php';
 ?>
 
@@ -191,7 +196,7 @@ include 'includes/admin_nav.php';
             </div>
             <div class="panel-body">
                 <div class="detail-list" style="margin-bottom:14px;">
-                    <div class="detail-row"><div class="dl">WhatsApp</div><div class="dv"><?php echo e($lead['whatsapp_number']); ?></div></div>
+                    <div class="detail-row"><div class="dl">WhatsApp</div><div class="dv"><?php echo format_credential($lead['whatsapp_number'], 'phone', 'leads'); ?></div></div>
                     <div class="detail-row"><div class="dl">Follow-ups done</div><div class="dv"><?php echo (int)$lead['followup_count']; ?></div></div>
                     <div class="detail-row"><div class="dl">Next follow-up</div><div class="dv">
                         <?php if ($is_closed): ?>-
@@ -212,7 +217,7 @@ include 'includes/admin_nav.php';
                     <input type="hidden" name="action" value="update_lead">
                     <div class="form-grid">
                         <div class="field"><label>Name</label><input type="text" name="name" value="<?php echo e($lead['name']); ?>"></div>
-                        <div class="field"><label>WhatsApp Number <span class="req">*</span></label><input type="text" name="whatsapp_number" value="<?php echo e($lead['whatsapp_number']); ?>" required></div>
+                        <div class="field"><label>WhatsApp Number <span class="req">*</span></label><input type="text" name="whatsapp_number" value="<?php echo htmlspecialchars(format_credential_text($lead['whatsapp_number'], 'phone', 'leads'), ENT_QUOTES, 'UTF-8'); ?>" required></div>
                         <div class="field"><label>Interested PEPP Course</label>
                             <select name="interested_course">
                                 <option value="">Select a course...</option>

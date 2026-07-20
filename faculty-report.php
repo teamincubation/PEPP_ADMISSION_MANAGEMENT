@@ -45,8 +45,8 @@ $y = 120;
 $pdf->text($L, $y, 10, 'PEPP Learning - Labinc Education Pvt. Ltd.', false, 'C', $W); $y += 18;
 $pdf->line($L, $y, $R, $y); $y += 12;
 $pdf->text($L, $y, 10, 'Faculty: ' . $f['name'], true); $y += 14;
-if ($f['email'])  { $pdf->text($L, $y, 9, 'Email: ' . $f['email']); $y += 12; }
-if ($f['mobile']) { $pdf->text($L, $y, 9, 'Mobile: ' . $f['mobile']); $y += 12; }
+if ($f['email'])  { $pdf->text($L, $y, 9, 'Email: ' . format_credential_text($f['email'], 'email', 'faculties')); $y += 12; }
+if ($f['mobile']) { $pdf->text($L, $y, 9, 'Mobile: ' . format_credential_text($f['mobile'], 'phone', 'faculties')); $y += 12; }
 $y += 6;
 $pdf->line($L, $y, $R, $y); $y += 10;
 

@@ -52,12 +52,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
                         $error_message = 'Please enter a valid email address (or leave it blank).';
                     } else {
+                        $scopes = implode(',', (array)($_POST['credential_visibility_scopes'] ?? []));
                         $cred_vis = in_array($_POST['credential_visibility'] ?? 'visible', ['visible', 'hide', 'mask'], true) ? $_POST['credential_visibility'] : 'visible';
                         $stmt = $pdo->prepare("
-                            INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, permissions, status, credential_visibility, created_by, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, 'active', ?, ?, NOW())
+                            INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, permissions, status, credential_visibility, credential_visibility_scopes, created_by, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, 'active', ?, ?, ?, NOW())
                         ");
-                        $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $perms, $cred_vis, $admin_username]);
+                        $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $perms, $cred_vis, $scopes, $admin_username]);
                         log_admin_activity($pdo, $admin_username, 'admin_created', "Created admin \"{$username}\" with access: {$perms}");
                         $success_message = "Admin \"{$username}\" created.";
                     }
@@ -83,10 +84,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
                         $error_message = 'Please enter a valid email address (or leave it blank).';
                     } else {
+                        $scopes = implode(',', (array)($_POST['credential_visibility_scopes'] ?? []));
                         $cred_vis = in_array($_POST['credential_visibility'] ?? 'visible', ['visible', 'hide', 'mask'], true) ? $_POST['credential_visibility'] : 'visible';
                         $gemail = trim($_POST['google_email'] ?? '');
-                        $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ?, credential_visibility = ? WHERE id = ?")
-                            ->execute([$perms, $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $cred_vis, $id]);
+                        $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ?, credential_visibility = ?, credential_visibility_scopes = ? WHERE id = ?")
+                            ->execute([$perms, $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $cred_vis, $scopes, $id]);
                         log_admin_activity($pdo, $admin_username, 'permissions_changed', "Access and visibility for \"{$target['username']}\" updated.");
                         $success_message = "Access and visibility updated for {$target['username']}.";
                     }
@@ -211,6 +213,11 @@ include 'includes/admin_nav.php';
                                     <?php echo ucfirst($a['credential_visibility'] ?? 'visible'); ?>
                                 </span>
                             </div>
+                            <?php if (($a['credential_visibility'] ?? 'visible') !== 'visible'): ?>
+                            <div style="margin-top:2px; font-size:0.65rem; color:var(--text-muted);">
+                                Scopes: <?php echo !empty($a['credential_visibility_scopes']) ? htmlspecialchars(str_replace(',', ', ', $a['credential_visibility_scopes'])) : 'None'; ?>
+                            </div>
+                            <?php endif; ?>
                         <?php endif; ?>
                     </td>
                     <td style="max-width:280px;">
@@ -237,6 +244,7 @@ include 'includes/admin_nav.php';
                                 "email" => (string)($a["email"] ?? ""), "phone" => (string)($a["phone"] ?? ""), "gemail" => (string)($a["google_email"] ?? ""),
                                 "perms" => trim((string)$a["permissions"]),
                                 "credential_visibility" => (string)($a["credential_visibility"] ?? "visible"),
+                                "credential_visibility_scopes" => (string)($a["credential_visibility_scopes"] ?? ""),
                             ], JSON_HEX_APOS | JSON_HEX_QUOT); ?>)'><i class="fas fa-key"></i></button>
                             <button class="btn btn-sm btn-soft-blue" title="Reset password" onclick="resetPassword(<?php echo (int)$a['id']; ?>, '<?php echo e(addslashes($a['username'])); ?>')"><i class="fas fa-lock-open"></i></button>
                             <form method="POST" style="display:inline;">
@@ -289,6 +297,23 @@ include 'includes/admin_nav.php';
                         <option value="mask">Mask</option>
                     </select>
                 </div>
+                <div class="field" style="grid-column: span 2; margin-top:-8px; margin-bottom:12px;">
+                    <label style="margin-bottom:6px; display:block;">Credential Visibility Scopes</label>
+                    <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                            <input type="checkbox" name="credential_visibility_scopes[]" value="students" style="width:16px; height:16px; accent-color:var(--accent);" checked> Students
+                        </label>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                            <input type="checkbox" name="credential_visibility_scopes[]" value="alumni" style="width:16px; height:16px; accent-color:var(--accent);"> Alumni Data
+                        </label>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                            <input type="checkbox" name="credential_visibility_scopes[]" value="faculties" style="width:16px; height:16px; accent-color:var(--accent);"> Faculties
+                        </label>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                            <input type="checkbox" name="credential_visibility_scopes[]" value="leads" style="width:16px; height:16px; accent-color:var(--accent);"> Leads
+                        </label>
+                    </div>
+                </div>
                 <div class="field"><label>Password <span class="req">*</span></label>
                     <input type="password" name="password" required minlength="8" autocomplete="new-password">
                     <div class="help">Minimum 8 characters - share it securely</div></div>
@@ -340,6 +365,23 @@ include 'includes/admin_nav.php';
                             <option value="mask">Mask</option>
                         </select>
                     </div>
+                    <div class="field" style="grid-column: span 2; margin-top:-4px; margin-bottom:6px;">
+                        <label style="margin-bottom:6px; display:block;">Credential Visibility Scopes</label>
+                        <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="students" class="pm-scope" data-scope="students" style="width:16px; height:16px; accent-color:var(--accent);"> Students
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="alumni" class="pm-scope" data-scope="alumni" style="width:16px; height:16px; accent-color:var(--accent);"> Alumni Data
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="faculties" class="pm-scope" data-scope="faculties" style="width:16px; height:16px; accent-color:var(--accent);"> Faculties
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="leads" class="pm-scope" data-scope="leads" style="width:16px; height:16px; accent-color:var(--accent);"> Leads
+                            </label>
+                        </div>
+                    </div>
                 </div>
                 <label style="display:inline-flex;align-items:center;gap:8px;font-size:.84rem;font-weight:700;background:var(--green-soft);color:var(--green-ink);border-radius:50px;padding:7px 16px;cursor:pointer;margin-bottom:10px;">
                     <input type="checkbox" name="perm_all" value="1" id="pm-all" onchange="toggleAll(this, 'pm-perms')" style="width:16px;height:16px;accent-color:var(--green-ink);">
@@ -382,6 +424,10 @@ function openPerms(a) {
     document.getElementById('pm-phone').value = a.phone || '';
     document.getElementById('pm-gemail').value = a.gemail || '';
     document.getElementById('pm-cred-visibility').value = a.credential_visibility || 'visible';
+    const scopes = a.credential_visibility_scopes ? a.credential_visibility_scopes.split(',').map(s => s.trim()) : [];
+    document.querySelectorAll('.pm-scope').forEach(c => {
+        c.checked = scopes.includes(c.dataset.scope);
+    });
     document.getElementById('pm-username').textContent = a.username;
     const isAll = (a.perms === 'ALL');
     document.getElementById('pm-all').checked = isAll;

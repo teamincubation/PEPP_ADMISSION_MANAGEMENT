@@ -58,9 +58,13 @@ function ensure_credential_visibility_column($pdo) {
         if (!$cols) {
             $pdo->exec("ALTER TABLE admins ADD COLUMN `credential_visibility` ENUM('visible', 'hide', 'mask') NOT NULL DEFAULT 'visible'");
         }
+        $cols_scopes = $pdo->query("SHOW COLUMNS FROM admins LIKE 'credential_visibility_scopes'")->fetch();
+        if (!$cols_scopes) {
+            $pdo->exec("ALTER TABLE admins ADD COLUMN `credential_visibility_scopes` VARCHAR(255) NOT NULL DEFAULT ''");
+        }
         $ensured = true;
     } catch (Exception $e) {
-        error_log("Failed to ensure admins.credential_visibility: " . $e->getMessage());
+        error_log("Failed to ensure admins schema updates: " . $e->getMessage());
     }
 }
 
@@ -108,6 +112,7 @@ $admin_username = $_SESSION['admin_username'] ?? 'Admin';
 $admin_role  = 'super_admin';   // legacy single-admin mode default
 $admin_perms = 'ALL';
 $admin_credential_visibility = 'visible';
+$admin_credential_visibility_scopes = '';
 if (admins_table_exists($pdo)) {
     ensure_credential_visibility_column($pdo);
     try {
@@ -124,6 +129,7 @@ if (admins_table_exists($pdo)) {
         $admin_role  = $admin_row['role'];
         $admin_perms = (string)($admin_row['permissions'] ?? '');
         $admin_credential_visibility = $admin_row['credential_visibility'] ?? 'visible';
+        $admin_credential_visibility_scopes = $admin_row['credential_visibility_scopes'] ?? '';
     } catch (Exception $e) { error_log('auth admin load: ' . $e->getMessage()); }
 }
 $_SESSION['admin_role'] = $admin_role;
@@ -285,17 +291,30 @@ function status_log($pdo, $user_id, $old, $new, $reason, $admin) {
     } catch (Exception $ex) { error_log('status_log: ' . $ex->getMessage()); }
 }
 
-function format_credential($value, $type) {
+function is_credential_restricted($scope) {
+    global $admin_credential_visibility, $admin_credential_visibility_scopes;
+    if (is_super_admin()) return false;
+    
+    $vis = $admin_credential_visibility ?? 'visible';
+    if ($vis === 'visible') return false;
+    
+    $scopes_str = $admin_credential_visibility_scopes ?? '';
+    if (trim($scopes_str) === '') return false;
+    
+    $scopes = array_map('trim', explode(',', strtolower($scopes_str)));
+    return in_array(strtolower($scope), $scopes, true);
+}
+
+function format_credential($value, $type, $scope = 'students') {
     global $admin_credential_visibility;
     $value = trim((string)$value);
     if ($value === '') return '';
     
-    // Default visibility is 'visible' for super admins
-    $vis = is_super_admin() ? 'visible' : ($admin_credential_visibility ?? 'visible');
-    
-    if ($vis === 'visible') {
+    if (!is_credential_restricted($scope)) {
         return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
     }
+    
+    $vis = $admin_credential_visibility ?? 'visible';
     
     if ($vis === 'hide') {
         $len = strlen($value);
@@ -341,16 +360,16 @@ function format_credential($value, $type) {
     return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
 }
 
-function format_credential_text($value, $type) {
+function format_credential_text($value, $type, $scope = 'students') {
     global $admin_credential_visibility;
     $value = trim((string)$value);
     if ($value === '') return '';
     
-    $vis = is_super_admin() ? 'visible' : ($admin_credential_visibility ?? 'visible');
-    
-    if ($vis === 'visible') {
+    if (!is_credential_restricted($scope)) {
         return $value;
     }
+    
+    $vis = $admin_credential_visibility ?? 'visible';
     
     if ($vis === 'hide') {
         $len = strlen($value);

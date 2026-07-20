@@ -37,13 +37,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($action === 'add_faculty' || $action === 'edit_faculty') {
                 $name = trim($_POST['name'] ?? '');
                 $email = trim($_POST['email'] ?? '');
+                $mobile = trim($_POST['mobile'] ?? '');
+                
+                if ($action === 'edit_faculty' && is_credential_restricted('faculties')) {
+                    $fid = (int)($_POST['faculty_id'] ?? 0);
+                    $stmt = $pdo->prepare("SELECT mobile, email FROM faculties WHERE id = ?");
+                    $stmt->execute([$fid]);
+                    $orig = $stmt->fetch();
+                    if ($orig) {
+                        if (strpos($mobile, '*') !== false || preg_match('/^[x\s@.]+$/i', $mobile) || strpos($mobile, '<span') !== false) {
+                            $mobile = $orig['mobile'];
+                        }
+                        if (strpos($email, '*') !== false || preg_match('/^[x\s@.]+$/i', $email) || strpos($email, '<span') !== false) {
+                            $email = $orig['email'];
+                        }
+                    }
+                }
+                
                 if ($name === '') {
                     $error_message = 'Faculty name is required.';
                 } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
                     $error_message = 'Please enter a valid email address (or leave blank).';
                 } else {
                     $vals = [
-                        $name, trim($_POST['mobile'] ?? ''), $email ?: null,
+                        $name, $mobile, $email ?: null,
                         (float)($_POST['rate_live'] ?? 0), (float)($_POST['rate_qpd'] ?? 0),
                         (float)($_POST['rate_recorded'] ?? 0), (float)($_POST['rate_offline'] ?? 0),
                         trim($_POST['academic_year'] ?? '') ?: null,
@@ -242,7 +259,7 @@ include 'includes/admin_nav.php';
                 $due = max(0, $calc['earned'] - $paid);
             ?>
                 <tr>
-                    <td><div class="cell-main"><?php echo e($f['name']); ?></div><div class="cell-sub"><?php echo e($f['mobile'] ?: '-'); ?><?php echo $f['email'] ? ' · ' . e($f['email']) : ''; ?></div></td>
+                    <td><div class="cell-main"><?php echo e($f['name']); ?></div><div class="cell-sub"><?php echo format_credential($f['mobile'], 'phone', 'faculties') ?: '-'; ?><?php echo $f['email'] ? ' · ' . format_credential($f['email'], 'email', 'faculties') : ''; ?></div></td>
                     <td class="cell-sub">₹<?php echo (int)$f['rate_live']; ?> / ₹<?php echo (int)$f['rate_qpd']; ?> / ₹<?php echo (int)$f['rate_recorded']; ?> / ₹<?php echo (int)$f['rate_offline']; ?></td>
                     <td class="cell-sub"><?php echo e($f['academic_year'] ?: '-'); ?></td>
                     <td>₹<?php echo number_format($calc['earned'], 0); ?></td>
@@ -252,7 +269,9 @@ include 'includes/admin_nav.php';
                     <td style="text-align:right; white-space:nowrap;">
                         <a class="btn btn-sm btn-primary" href="faculties.php?view=<?php echo (int)$f['id']; ?>" title="Schedules & payments"><i class="fas fa-arrow-right"></i></a>
                         <button class="btn btn-sm btn-outline" title="Edit" onclick='editFac(<?php echo json_encode([
-                            "id"=>(int)$f["id"],"name"=>$f["name"],"mobile"=>(string)$f["mobile"],"email"=>(string)$f["email"],
+                            "id"=>(int)$f["id"],"name"=>$f["name"],
+                            "mobile"=>(string)format_credential_text($f["mobile"], "phone", "faculties"),
+                            "email"=>(string)format_credential_text($f["email"], "email", "faculties"),
                             "rate_live"=>$f["rate_live"],"rate_qpd"=>$f["rate_qpd"],"rate_recorded"=>$f["rate_recorded"],"rate_offline"=>$f["rate_offline"],
                             "academic_year"=>(string)$f["academic_year"],"status"=>$f["status"],
                         ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
