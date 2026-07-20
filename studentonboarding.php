@@ -203,7 +203,7 @@ include 'includes/admin_nav.php';
                             <img src="<?php echo e($photo); ?>" onerror="this.src='assets/img/default-avatar.svg'; this.onerror=null;" style="width:38px;height:38px;border-radius:50%;object-fit:cover;border:1px solid var(--border);" alt="Avatar">
                             <div>
                                 <div class="cell-main"><?php echo e($s['name']); ?></div>
-                                <div class="cell-sub"><?php echo e($s['email']); ?> &middot; <?php echo e($s['whatsapp_country_code'] . ' ' . $s['whatsapp_number']); ?></div>
+                                <div class="cell-sub"><?php echo format_credential($s['email'], 'email'); ?> &middot; <?php echo e($s['whatsapp_country_code']); ?> <?php echo format_credential($s['whatsapp_number'], 'phone'); ?></div>
                             </div>
                         </div>
                     </td>

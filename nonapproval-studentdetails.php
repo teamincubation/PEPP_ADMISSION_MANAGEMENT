@@ -1,7 +1,9 @@
 <?php
 require_once 'includes/auth.php';
 require_once 'config/database.php';
-require_permission('approvals');
+if (!can_access('approvals') && !can_access('students') && !can_access('onboarding') && !can_access('installments')) {
+    require_permission('approvals');
+}
 
 /* View + edit a registration before approval.
    Linked from: student-approval.php (and dashboard recent registrations). */
@@ -55,6 +57,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             foreach ($updateFields as $field) {
                 if (!isset($_POST[$field])) continue;
                 $value = is_array($_POST[$field]) ? implode(',', $_POST[$field]) : trim($_POST[$field]);
+                if (!is_super_admin() && ($admin_credential_visibility === 'hide' || $admin_credential_visibility === 'mask')) {
+                    if (in_array($field, ['email', 'whatsapp_number', 'mobile_number', 'postal_address'], true)) {
+                        if (strpos($value, '*') !== false || preg_match('/^[x\s@.]+$/i', $value) || strpos($value, '<span') !== false) {
+                            continue;
+                        }
+                    }
+                }
                 $set[]  = "$field = ?";
                 $vals[] = $value;
                 if ((string)$student[$field] !== (string)$value) $changed[] = $field;
@@ -215,7 +224,7 @@ include 'includes/admin_nav.php';
                 <div class="field"><label>Date of Birth</label>
                     <input type="date" name="date_of_birth" value="<?php echo e($student['date_of_birth']); ?>"></div>
                 <div class="field"><label>Email <span class="req">*</span></label>
-                    <input type="email" name="email" value="<?php echo e($student['email']); ?>" required></div>
+                    <input type="text" name="email" value="<?php echo htmlspecialchars(format_credential_text($student['email'], 'email'), ENT_QUOTES, 'UTF-8'); ?>" required></div>
                 <div class="field"><label>Instagram ID</label>
                     <input type="text" name="instagram_id" value="<?php echo e($student['instagram_id']); ?>"></div>
                 <div class="field"><label>How they heard about PEPP</label>
@@ -231,14 +240,14 @@ include 'includes/admin_nav.php';
                 <div class="field"><label>WhatsApp Country Code</label>
                     <input type="text" name="whatsapp_country_code" value="<?php echo e($student['whatsapp_country_code']); ?>"></div>
                 <div class="field"><label>WhatsApp Number <span class="req">*</span></label>
-                    <input type="text" name="whatsapp_number" value="<?php echo e($student['whatsapp_number']); ?>" required></div>
+                    <input type="text" name="whatsapp_number" value="<?php echo htmlspecialchars(format_credential_text($student['whatsapp_number'], 'phone'), ENT_QUOTES, 'UTF-8'); ?>" required></div>
                 <div class="field"><label>Mobile same as WhatsApp</label>
                     <select name="mobile_same_as_whatsapp">
                         <option value="yes" <?php echo $student['mobile_same_as_whatsapp'] === 'yes' ? 'selected' : ''; ?>>Yes</option>
                         <option value="no"  <?php echo $student['mobile_same_as_whatsapp'] === 'no'  ? 'selected' : ''; ?>>No</option>
                     </select></div>
                 <div class="field"><label>Mobile Number</label>
-                    <input type="text" name="mobile_number" value="<?php echo e($student['mobile_number']); ?>"></div>
+                    <input type="text" name="mobile_number" value="<?php echo htmlspecialchars(format_credential_text($student['mobile_number'], 'phone'), ENT_QUOTES, 'UTF-8'); ?>"></div>
                 <div class="field"><label>Emergency Contact</label>
                     <input type="text" name="emergency_contact" value="<?php echo e($student['emergency_contact']); ?>"></div>
             </div>
@@ -250,7 +259,7 @@ include 'includes/admin_nav.php';
         <div class="panel-body">
             <div class="form-grid">
                 <div class="field full"><label>Postal Address</label>
-                    <textarea name="postal_address"><?php echo e($student['postal_address']); ?></textarea></div>
+                    <textarea name="postal_address"><?php echo htmlspecialchars(format_credential_text($student['postal_address'], 'address'), ENT_QUOTES, 'UTF-8'); ?></textarea></div>
                 <div class="field"><label>PIN Code</label>
                     <input type="text" name="postal_pincode" value="<?php echo e($student['postal_pincode']); ?>" maxlength="6"></div>
                 <div class="field"><label>State</label>

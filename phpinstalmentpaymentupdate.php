@@ -142,7 +142,7 @@ include 'includes/admin_nav.php';
                 <tr<?php echo ($tab === 'upcoming' && $isOverdue) ? ' style="background:#fef2f2; border-left: 4px solid #ef4444;"' : ''; ?>>
                     <td>
                         <div class="cell-main"><?php echo e($r['student_name']); ?></div>
-                        <div class="cell-sub"><?php echo e($r['user_id']); ?> · <?php echo e($r['whatsapp_country_code'] . ' ' . $r['whatsapp_number']); ?></div>
+                        <div class="cell-sub"><?php echo e($r['user_id']); ?> · <?php echo e($r['whatsapp_country_code']); ?> <?php echo format_credential($r['whatsapp_number'], 'phone'); ?></div>
                     </td>
                     <td>
                         <div style="font-size:.8rem;font-weight:600;"><?php echo e($r['pepp_course']); ?></div>

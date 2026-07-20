@@ -49,6 +49,20 @@ function admins_table_exists($pdo) {
     }
     return $exists;
 }
+function ensure_credential_visibility_column($pdo) {
+    if (!admins_table_exists($pdo)) return;
+    static $ensured = false;
+    if ($ensured) return;
+    try {
+        $cols = $pdo->query("SHOW COLUMNS FROM admins LIKE 'credential_visibility'")->fetch();
+        if (!$cols) {
+            $pdo->exec("ALTER TABLE admins ADD COLUMN `credential_visibility` ENUM('visible', 'hide', 'mask') NOT NULL DEFAULT 'visible'");
+        }
+        $ensured = true;
+    } catch (Exception $e) {
+        error_log("Failed to ensure admins.credential_visibility: " . $e->getMessage());
+    }
+}
 
 /* ── Activity logging (logins, logouts, exports, admin events) ──────────── */
 function log_admin_activity($pdo, $admin, $type, $details = '', $ip = null, $location = null) {
@@ -93,7 +107,9 @@ $admin_username = $_SESSION['admin_username'] ?? 'Admin';
 /* ── Load the live admin record (role / permissions / status) ───────────── */
 $admin_role  = 'super_admin';   // legacy single-admin mode default
 $admin_perms = 'ALL';
+$admin_credential_visibility = 'visible';
 if (admins_table_exists($pdo)) {
+    ensure_credential_visibility_column($pdo);
     try {
         $stmt = $pdo->prepare("SELECT * FROM admins WHERE username = ? LIMIT 1");
         $stmt->execute([$admin_username]);
@@ -107,6 +123,7 @@ if (admins_table_exists($pdo)) {
         }
         $admin_role  = $admin_row['role'];
         $admin_perms = (string)($admin_row['permissions'] ?? '');
+        $admin_credential_visibility = $admin_row['credential_visibility'] ?? 'visible';
     } catch (Exception $e) { error_log('auth admin load: ' . $e->getMessage()); }
 }
 $_SESSION['admin_role'] = $admin_role;
@@ -266,4 +283,114 @@ function status_log($pdo, $user_id, $old, $new, $reason, $admin) {
         $stmt = $pdo->prepare("INSERT INTO student_status_log (user_id, old_status, new_status, reason, changed_by, changed_at) VALUES (?, ?, ?, ?, ?, NOW())");
         $stmt->execute([$user_id, $old, $new, $reason, $admin]);
     } catch (Exception $ex) { error_log('status_log: ' . $ex->getMessage()); }
+}
+
+function format_credential($value, $type) {
+    global $admin_credential_visibility;
+    $value = trim((string)$value);
+    if ($value === '') return '';
+    
+    // Default visibility is 'visible' for super admins
+    $vis = is_super_admin() ? 'visible' : ($admin_credential_visibility ?? 'visible');
+    
+    if ($vis === 'visible') {
+        return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+    }
+    
+    if ($vis === 'hide') {
+        $len = strlen($value);
+        if ($type === 'email') {
+            $obfuscated = str_repeat('x', min(6, $len)) . '@' . str_repeat('x', min(8, $len));
+        } elseif ($type === 'phone') {
+            $obfuscated = str_repeat('x', min(10, $len));
+        } else {
+            $obfuscated = str_repeat('x', min(15, $len));
+        }
+        return '<span style="filter: blur(4.5px); -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none; pointer-events: none; display: inline-block;">' . $obfuscated . '</span>';
+    }
+    
+    if ($vis === 'mask') {
+        if ($type === 'email') {
+            $parts = explode('@', $value);
+            if (count($parts) === 2) {
+                $name = $parts[0];
+                $domain = $parts[1];
+                $len = strlen($name);
+                if ($len <= 2) {
+                    $masked = str_repeat('*', $len);
+                } else {
+                    $masked = substr($name, 0, 2) . str_repeat('*', max(3, $len - 4)) . ($len > 4 ? substr($name, -2) : substr($name, -1));
+                }
+                return htmlspecialchars($masked . '@' . $domain, ENT_QUOTES, 'UTF-8');
+            }
+        } elseif ($type === 'phone') {
+            $len = strlen($value);
+            if ($len <= 5) {
+                return str_repeat('*', $len);
+            }
+            return htmlspecialchars(substr($value, 0, 3) . str_repeat('*', $len - 5) . substr($value, -2), ENT_QUOTES, 'UTF-8');
+        } elseif ($type === 'address') {
+            $len = strlen($value);
+            if ($len <= 10) {
+                return str_repeat('*', $len);
+            }
+            return htmlspecialchars(substr($value, 0, 5) . str_repeat('*', $len - 10) . substr($value, -5), ENT_QUOTES, 'UTF-8');
+        }
+    }
+    
+    return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+}
+
+function format_credential_text($value, $type) {
+    global $admin_credential_visibility;
+    $value = trim((string)$value);
+    if ($value === '') return '';
+    
+    $vis = is_super_admin() ? 'visible' : ($admin_credential_visibility ?? 'visible');
+    
+    if ($vis === 'visible') {
+        return $value;
+    }
+    
+    if ($vis === 'hide') {
+        $len = strlen($value);
+        if ($type === 'email') {
+            return str_repeat('x', min(6, $len)) . '@' . str_repeat('x', min(8, $len));
+        } elseif ($type === 'phone') {
+            return str_repeat('x', min(10, $len));
+        } else {
+            return str_repeat('x', min(15, $len));
+        }
+    }
+    
+    if ($vis === 'mask') {
+        if ($type === 'email') {
+            $parts = explode('@', $value);
+            if (count($parts) === 2) {
+                $name = $parts[0];
+                $domain = $parts[1];
+                $len = strlen($name);
+                if ($len <= 2) {
+                    $masked = str_repeat('*', $len);
+                } else {
+                    $masked = substr($name, 0, 2) . str_repeat('*', max(3, $len - 4)) . ($len > 4 ? substr($name, -2) : substr($name, -1));
+                }
+                return $masked . '@' . $domain;
+            }
+        } elseif ($type === 'phone') {
+            $len = strlen($value);
+            if ($len <= 5) {
+                return str_repeat('*', $len);
+            }
+            return substr($value, 0, 3) . str_repeat('*', $len - 5) . substr($value, -2);
+        } elseif ($type === 'address') {
+            $len = strlen($value);
+            if ($len <= 10) {
+                return str_repeat('*', $len);
+            }
+            return substr($value, 0, 5) . str_repeat('*', $len - 10) . substr($value, -5);
+        }
+    }
+    
+    return $value;
 }

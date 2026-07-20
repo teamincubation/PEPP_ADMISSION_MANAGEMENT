@@ -9,8 +9,8 @@ header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
 
-// Start session
-session_start();
+// Load authentication and session
+require_once '../includes/auth.php';
 
 try {
     require_once '../config/database.php';
@@ -85,10 +85,10 @@ try {
             'user_id' => $student['user_id'] ?? '',
             'name' => $student['name'] ?? '',
             'full_name' => $student['name'] ?? '',
-            'email' => $student['email'] ?? '',
-            'phone' => $student['phone'] ?? $student['mobile_number'] ?? $student['whatsapp_number'] ?? '',
-            'mobile_number' => $student['mobile_number'] ?? $student['phone'] ?? '',
-            'whatsapp_number' => $student['whatsapp_number'] ?? '',
+            'email' => format_credential_text($student['email'] ?? '', 'email'),
+            'phone' => format_credential_text($student['phone'] ?? $student['mobile_number'] ?? $student['whatsapp_number'] ?? '', 'phone'),
+            'mobile_number' => format_credential_text($student['mobile_number'] ?? $student['phone'] ?? '', 'phone'),
+            'whatsapp_number' => format_credential_text($student['whatsapp_number'] ?? '', 'phone'),
             'whatsapp_country_code' => $student['whatsapp_country_code'] ?? '+91',
             'mobile_same_as_whatsapp' => $student['mobile_same_as_whatsapp'] ?? 'yes',
             'date_of_birth' => $student['date_of_birth'] ?? '',
@@ -97,7 +97,7 @@ try {
             'emergency_contact' => $student['emergency_contact'] ?? '',
             
             // Address Details
-            'address' => $student['postal_address'] ?? '',
+            'address' => format_credential_text($student['postal_address'] ?? '', 'address'),
             'city' => $student['place_post_office'] ?? '',
             'state' => $student['state'] ?? '',
             'pincode' => $student['postal_pincode'] ?? '',

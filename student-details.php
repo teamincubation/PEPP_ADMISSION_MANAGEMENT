@@ -1,7 +1,9 @@
 <?php
 require_once 'includes/auth.php';
 require_once 'config/database.php';
-require_permission('students');
+if (!can_access('students') && !can_access('peppkit') && !can_access('onboarding') && !can_access('installments') && !can_access('approvals') && !can_access('cards')) {
+    require_permission('students');
+}
 if (file_exists(__DIR__ . '/includes/referral_helper.php')) {
     require_once __DIR__ . '/includes/referral_helper.php';
 }
@@ -578,6 +580,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !in_array(($_POST['action'] ?? ''),
             foreach ($editable as $f) {
                 if (!isset($_POST[$f])) continue;
                 $v = trim((string)$_POST[$f]);
+                if (!is_super_admin() && ($admin_credential_visibility === 'hide' || $admin_credential_visibility === 'mask')) {
+                    if (in_array($f, ['email', 'whatsapp_number', 'mobile_number', 'postal_address'], true)) {
+                        if (strpos($v, '*') !== false || preg_match('/^[x\s@.]+$/i', $v) || strpos($v, '<span') !== false) {
+                            continue;
+                        }
+                    }
+                }
                 $set[] = "$f = ?";
                 $vals[] = $v;
                 if ((string)$student[$f] !== $v) $changed[] = $f;
@@ -679,7 +688,11 @@ include 'includes/admin_nav.php';
     <div style="margin-left:auto; display:flex; gap:8px;">
         <?php $wa = preg_replace('/\D/', '', $student['whatsapp_country_code'] . $student['whatsapp_number']); ?>
         <a class="btn btn-sm btn-whatsapp" href="https://wa.me/<?php echo e($wa); ?>" target="_blank"><i class="fab fa-whatsapp"></i> WhatsApp</a>
-        <a class="btn btn-sm btn-outline" href="mailto:<?php echo e($student['email']); ?>"><i class="fas fa-envelope"></i> Email</a>
+        <?php if ($admin_credential_visibility === 'visible' || is_super_admin()): ?>
+            <a class="btn btn-sm btn-outline" href="mailto:<?php echo e($student['email']); ?>"><i class="fas fa-envelope"></i> Email</a>
+        <?php else: ?>
+            <a class="btn btn-sm btn-outline" href="javascript:void(0)" onclick="alert('Access to student email is restricted.')" style="opacity:0.6;"><i class="fas fa-envelope"></i> Email</a>
+        <?php endif; ?>
     </div>
 </div>
 
@@ -743,7 +756,7 @@ include 'includes/admin_nav.php';
             <div class="detail-row"><div class="dl">College / School</div><div class="dv"><?php echo e($student['college_school']); ?></div></div>
             <div class="detail-row"><div class="dl">Current course</div><div class="dv"><?php echo e($student['course']); ?> - <?php echo e($student['university_board']); ?></div></div>
             <div class="detail-row"><div class="dl">Remaining semesters</div><div class="dv"><?php echo e($student['remaining_semesters'] ?: '-'); ?></div></div>
-            <div class="detail-row"><div class="dl">Address</div><div class="dv"><?php echo e($student['postal_address']); ?>, <?php echo e($student['place_post_office']); ?>, <?php echo e($student['district']); ?>, <?php echo e($student['state']); ?> - <?php echo e($student['postal_pincode']); ?></div></div>
+            <div class="detail-row"><div class="dl">Address</div><div class="dv"><?php echo format_credential($student['postal_address'], 'address'); ?>, <?php echo e($student['place_post_office']); ?>, <?php echo e($student['district']); ?>, <?php echo e($student['state']); ?> - <?php echo e($student['postal_pincode']); ?></div></div>
             <div class="detail-row"><div class="dl">Registered</div><div class="dv"><?php echo date('d M Y, h:i A', strtotime($student['created_at'])); ?><?php echo $student['ip_address'] ? ' · IP ' . e($student['ip_address']) : ''; ?></div></div>
             <div class="detail-row"><div class="dl">Source</div><div class="dv"><?php echo e($student['how_know_pepp'] ?: '-'); ?></div></div>
             <?php if (!empty($student['referral_code'])): ?>
@@ -806,12 +819,12 @@ include 'includes/admin_nav.php';
             <?php echo csrf_field(); ?>
             <div class="form-grid">
                 <div class="field"><label>Name</label><input type="text" name="name" value="<?php echo e($student['name']); ?>"></div>
-                <div class="field"><label>Email</label><input type="email" name="email" value="<?php echo e($student['email']); ?>"></div>
+                <div class="field"><label>Email</label><input type="text" name="email" value="<?php echo htmlspecialchars(format_credential_text($student['email'], 'email'), ENT_QUOTES, 'UTF-8'); ?>"></div>
                 <div class="field"><label>WhatsApp Code</label><input type="text" name="whatsapp_country_code" value="<?php echo e($student['whatsapp_country_code']); ?>"></div>
-                <div class="field"><label>WhatsApp Number</label><input type="text" name="whatsapp_number" value="<?php echo e($student['whatsapp_number']); ?>"></div>
-                <div class="field"><label>Mobile Number</label><input type="text" name="mobile_number" value="<?php echo e($student['mobile_number']); ?>"></div>
+                <div class="field"><label>WhatsApp Number</label><input type="text" name="whatsapp_number" value="<?php echo htmlspecialchars(format_credential_text($student['whatsapp_number'], 'phone'), ENT_QUOTES, 'UTF-8'); ?>"></div>
+                <div class="field"><label>Mobile Number</label><input type="text" name="mobile_number" value="<?php echo htmlspecialchars(format_credential_text($student['mobile_number'], 'phone'), ENT_QUOTES, 'UTF-8'); ?>"></div>
                 <div class="field"><label>Emergency Contact</label><input type="text" name="emergency_contact" value="<?php echo e($student['emergency_contact']); ?>"></div>
-                <div class="field full"><label>Postal Address</label><textarea name="postal_address"><?php echo e($student['postal_address']); ?></textarea></div>
+                <div class="field full"><label>Postal Address</label><textarea name="postal_address"><?php echo htmlspecialchars(format_credential_text($student['postal_address'], 'address'), ENT_QUOTES, 'UTF-8'); ?></textarea></div>
                 <div class="field"><label>PIN Code</label><input type="text" name="postal_pincode" value="<?php echo e($student['postal_pincode']); ?>"></div>
                 <div class="field"><label>State</label><input type="text" name="state" value="<?php echo e($student['state']); ?>"></div>
                 <div class="field"><label>District</label><input type="text" name="district" value="<?php echo e($student['district']); ?>"></div>

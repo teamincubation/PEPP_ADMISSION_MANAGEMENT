@@ -326,8 +326,8 @@ include 'includes/admin_nav.php';
                         </div>
                     </td>
                     <td>
-                        <div class="cell-sub"><?php echo e($s['email']); ?></div>
-                        <div class="cell-sub"><?php echo e($s['whatsapp_country_code'] . ' ' . $s['whatsapp_number']); ?></div>
+                        <div class="cell-sub"><?php echo format_credential($s['email'], 'email'); ?></div>
+                        <div class="cell-sub"><?php echo e($s['whatsapp_country_code']); ?> <?php echo format_credential($s['whatsapp_number'], 'phone'); ?></div>
                     </td>
                     <td>
                         <div class="cell-main" style="font-size:.82rem;"><?php echo e($s['pepp_course']); ?></div>

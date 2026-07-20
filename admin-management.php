@@ -52,11 +52,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
                         $error_message = 'Please enter a valid email address (or leave it blank).';
                     } else {
+                        $cred_vis = in_array($_POST['credential_visibility'] ?? 'visible', ['visible', 'hide', 'mask'], true) ? $_POST['credential_visibility'] : 'visible';
                         $stmt = $pdo->prepare("
-                            INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, permissions, status, created_by, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, 'active', ?, NOW())
+                            INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, permissions, status, credential_visibility, created_by, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, 'active', ?, ?, NOW())
                         ");
-                        $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $perms, $admin_username]);
+                        $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $perms, $cred_vis, $admin_username]);
                         log_admin_activity($pdo, $admin_username, 'admin_created', "Created admin \"{$username}\" with access: {$perms}");
                         $success_message = "Admin \"{$username}\" created.";
                     }
@@ -82,11 +83,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
                         $error_message = 'Please enter a valid email address (or leave it blank).';
                     } else {
+                        $cred_vis = in_array($_POST['credential_visibility'] ?? 'visible', ['visible', 'hide', 'mask'], true) ? $_POST['credential_visibility'] : 'visible';
                         $gemail = trim($_POST['google_email'] ?? '');
-                        $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ? WHERE id = ?")
-                            ->execute([$perms, $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $id]);
-                        log_admin_activity($pdo, $admin_username, 'permissions_changed', "Access for \"{$target['username']}\" set to: {$perms}");
-                        $success_message = "Access updated for {$target['username']}.";
+                        $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ?, credential_visibility = ? WHERE id = ?")
+                            ->execute([$perms, $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $cred_vis, $id]);
+                        log_admin_activity($pdo, $admin_username, 'permissions_changed', "Access and visibility for \"{$target['username']}\" updated.");
+                        $success_message = "Access and visibility updated for {$target['username']}.";
                     }
                 }
             } elseif ($action === 'toggle_status') {
@@ -201,7 +203,16 @@ include 'includes/admin_nav.php';
                         <div class="cell-sub"><?php echo $a['email'] ? '<i class="fas fa-envelope"></i> ' . e($a['email']) : ''; ?><?php echo (!empty($a['email']) && !empty($a['phone'])) ? ' · ' : ''; ?><?php echo $a['phone'] ? '<i class="fas fa-phone"></i> ' . e($a['phone']) : ''; ?></div>
                         <?php endif; ?>
                     </td>
-                    <td><span class="badge <?php echo $isSuper ? 'red' : 'blue'; ?>"><?php echo $isSuper ? 'Super Admin' : 'Admin'; ?></span></td>
+                    <td>
+                        <span class="badge <?php echo $isSuper ? 'red' : 'blue'; ?>"><?php echo $isSuper ? 'Super Admin' : 'Admin'; ?></span>
+                        <?php if (!$isSuper): ?>
+                            <div style="margin-top:4px;">
+                                <span class="badge <?php echo ($a['credential_visibility'] ?? 'visible') === 'visible' ? 'green' : (($a['credential_visibility'] ?? 'visible') === 'hide' ? 'red' : 'amber'); ?>" style="font-size:0.65rem;">
+                                    <?php echo ucfirst($a['credential_visibility'] ?? 'visible'); ?>
+                                </span>
+                            </div>
+                        <?php endif; ?>
+                    </td>
                     <td style="max-width:280px;">
                         <?php if ($permList === null): ?>
                             <span class="badge green">Full access</span>
@@ -225,6 +236,7 @@ include 'includes/admin_nav.php';
                                 "id" => (int)$a["id"], "username" => $a["username"], "name" => (string)$a["full_name"],
                                 "email" => (string)($a["email"] ?? ""), "phone" => (string)($a["phone"] ?? ""), "gemail" => (string)($a["google_email"] ?? ""),
                                 "perms" => trim((string)$a["permissions"]),
+                                "credential_visibility" => (string)($a["credential_visibility"] ?? "visible"),
                             ], JSON_HEX_APOS | JSON_HEX_QUOT); ?>)'><i class="fas fa-key"></i></button>
                             <button class="btn btn-sm btn-soft-blue" title="Reset password" onclick="resetPassword(<?php echo (int)$a['id']; ?>, '<?php echo e(addslashes($a['username'])); ?>')"><i class="fas fa-lock-open"></i></button>
                             <form method="POST" style="display:inline;">
@@ -270,6 +282,13 @@ include 'includes/admin_nav.php';
                     <div class="help">The Google account allowed to sign in as this admin</div></div>
                 <div class="field"><label>Phone</label>
                     <input type="text" name="phone" placeholder="Mobile number"></div>
+                <div class="field"><label>Credential Visibility</label>
+                    <select name="credential_visibility" required>
+                        <option value="visible">Visible</option>
+                        <option value="hide">Hide</option>
+                        <option value="mask">Mask</option>
+                    </select>
+                </div>
                 <div class="field"><label>Password <span class="req">*</span></label>
                     <input type="password" name="password" required minlength="8" autocomplete="new-password">
                     <div class="help">Minimum 8 characters - share it securely</div></div>
@@ -314,6 +333,13 @@ include 'includes/admin_nav.php';
                     <div class="field"><label>Email</label><input type="email" name="email" id="pm-email" placeholder="admin@example.com"></div>
                     <div class="field"><label>Phone</label><input type="text" name="phone" id="pm-phone" placeholder="Mobile number"></div>
                     <div class="field"><label>Google sign-in email</label><input type="email" name="google_email" id="pm-gemail" placeholder="(defaults to email)"></div>
+                    <div class="field"><label>Credential Visibility</label>
+                        <select name="credential_visibility" id="pm-cred-visibility">
+                            <option value="visible">Visible</option>
+                            <option value="hide">Hide</option>
+                            <option value="mask">Mask</option>
+                        </select>
+                    </div>
                 </div>
                 <label style="display:inline-flex;align-items:center;gap:8px;font-size:.84rem;font-weight:700;background:var(--green-soft);color:var(--green-ink);border-radius:50px;padding:7px 16px;cursor:pointer;margin-bottom:10px;">
                     <input type="checkbox" name="perm_all" value="1" id="pm-all" onchange="toggleAll(this, 'pm-perms')" style="width:16px;height:16px;accent-color:var(--green-ink);">
@@ -355,6 +381,7 @@ function openPerms(a) {
     document.getElementById('pm-email').value = a.email || '';
     document.getElementById('pm-phone').value = a.phone || '';
     document.getElementById('pm-gemail').value = a.gemail || '';
+    document.getElementById('pm-cred-visibility').value = a.credential_visibility || 'visible';
     document.getElementById('pm-username').textContent = a.username;
     const isAll = (a.perms === 'ALL');
     document.getElementById('pm-all').checked = isAll;

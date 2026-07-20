@@ -385,7 +385,7 @@ include 'includes/admin_nav.php';
                                         <span class="badge amber" title="Has Remarks/Notes (<?php echo (int)$s['remarks_count']; ?>)" style="font-size:0.62rem; padding:1px 4px; display:inline-flex; align-items:center; gap:2px; cursor:pointer;" onclick="openRemarksModal('<?php echo e($s['user_id']); ?>')"><i class="fas fa-clipboard"></i> Remark</span>
                                     <?php endif; ?>
                                 </div>
-                                <div class="cell-sub"><?php echo e($s['user_id']); ?> &middot; <?php echo e($s['email']); ?></div>
+                                <div class="cell-sub"><?php echo e($s['user_id']); ?> &middot; <?php echo format_credential($s['email'], 'email'); ?></div>
                             </div>
                         </div>
                     </td>
