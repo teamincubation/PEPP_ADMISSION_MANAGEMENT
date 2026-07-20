@@ -1,6 +1,13 @@
 <?php
 require_once 'includes/auth.php';
 require_once 'config/database.php';
+if (!can_access('dashboard')) {
+    $first_page = get_first_accessible_page_url();
+    if ($first_page !== 'dashboard.php') {
+        header('Location: ' . $first_page);
+        exit();
+    }
+}
 require_permission('dashboard');
 
 /* ── Real-time statistics - clean revenue model ──────────────────

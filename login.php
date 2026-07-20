@@ -1,9 +1,51 @@
 <?php
 session_start();
 
-// Already logged in → dashboard
+// Already logged in → redirect to first accessible page
 if (isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true) {
-    header('Location: dashboard.php');
+    require_once 'config/database.php';
+    $redirect = 'dashboard.php';
+    try {
+        $has_admins = false;
+        try { $has_admins = (bool)$pdo->query("SHOW TABLES LIKE 'admins'")->fetchColumn(); } catch (Exception $e) {}
+        if ($has_admins) {
+            $stmt = $pdo->prepare("SELECT role, permissions FROM admins WHERE username = ? AND status = 'active' LIMIT 1");
+            $stmt->execute([$_SESSION['admin_username']]);
+            $row = $stmt->fetch();
+            if ($row && $row['role'] !== 'super_admin' && !empty($row['permissions'])) {
+                $perms = array_map('trim', explode(',', $row['permissions']));
+                if (!in_array('dashboard', $perms, true)) {
+                    $page_urls = [
+                        'dashboard'    => 'dashboard.php',
+                        'approvals'    => 'student-approval.php',
+                        'add-student'  => 'add-student.php',
+                        'students'     => 'studentpage.php',
+                        'onboarding'   => 'studentonboarding.php',
+                        'sessions'     => 'sessions.php',
+                        'leads'        => 'lead-management.php',
+                        'marketing'    => 'marketing.php',
+                        'alumni'       => 'alumni-database.php',
+                        'peppkit'      => 'peppkit-report.php',
+                        'cards'        => 'cards.php',
+                        'accounts'     => 'accounts.php',
+                        'installments' => 'phpinstalmentpaymentupdate.php',
+                        'invoices'     => 'invoices.php',
+                        'whatsapp'     => 'whatsapp-notification.php',
+                        'courses'      => 'course-management.php',
+                        'faculties'    => 'faculties.php',
+                        'settings'     => 'settings.php',
+                    ];
+                    foreach ($page_urls as $k => $u) {
+                        if (in_array($k, $perms, true)) {
+                            $redirect = $u;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    } catch (Exception $e) {}
+    header('Location: ' . $redirect);
     exit();
 }
 
@@ -112,7 +154,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$locked) {
             }
         } catch (Exception $e) { error_log('login activity: ' . $e->getMessage()); }
 
-        header('Location: dashboard.php');
+        $redirect = 'dashboard.php';
+        if ($role !== 'super_admin' && isset($row) && !empty($row['permissions'])) {
+            $perms = array_map('trim', explode(',', $row['permissions']));
+            if (!in_array('dashboard', $perms, true)) {
+                $page_urls = [
+                    'dashboard'    => 'dashboard.php',
+                    'approvals'    => 'student-approval.php',
+                    'add-student'  => 'add-student.php',
+                    'students'     => 'studentpage.php',
+                    'onboarding'   => 'studentonboarding.php',
+                    'sessions'     => 'sessions.php',
+                    'leads'        => 'lead-management.php',
+                    'marketing'    => 'marketing.php',
+                    'alumni'       => 'alumni-database.php',
+                    'peppkit'      => 'peppkit-report.php',
+                    'cards'        => 'cards.php',
+                    'accounts'     => 'accounts.php',
+                    'installments' => 'phpinstalmentpaymentupdate.php',
+                    'invoices'     => 'invoices.php',
+                    'whatsapp'     => 'whatsapp-notification.php',
+                    'courses'      => 'course-management.php',
+                    'faculties'    => 'faculties.php',
+                    'settings'     => 'settings.php',
+                ];
+                foreach ($page_urls as $k => $u) {
+                    if (in_array($k, $perms, true)) {
+                        $redirect = $u;
+                        break;
+                    }
+                }
+            }
+        }
+        header('Location: ' . $redirect);
         exit();
     }
 

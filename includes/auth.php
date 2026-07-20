@@ -133,6 +133,39 @@ function can_access($page_key) {
     if (trim($admin_perms) === 'ALL') return true;
     return in_array($page_key, array_map('trim', explode(',', $admin_perms)), true);
 }
+function get_first_accessible_page_url() {
+    global $admin_perms;
+    if (is_super_admin() || trim($admin_perms) === 'ALL') {
+        return 'dashboard.php';
+    }
+    $page_urls = [
+        'dashboard'    => 'dashboard.php',
+        'approvals'    => 'student-approval.php',
+        'add-student'  => 'add-student.php',
+        'students'     => 'studentpage.php',
+        'onboarding'   => 'studentonboarding.php',
+        'sessions'     => 'sessions.php',
+        'leads'        => 'lead-management.php',
+        'marketing'    => 'marketing.php',
+        'alumni'       => 'alumni-database.php',
+        'peppkit'      => 'peppkit-report.php',
+        'cards'        => 'cards.php',
+        'accounts'     => 'accounts.php',
+        'installments' => 'phpinstalmentpaymentupdate.php',
+        'invoices'     => 'invoices.php',
+        'whatsapp'     => 'whatsapp-notification.php',
+        'courses'      => 'course-management.php',
+        'faculties'    => 'faculties.php',
+        'settings'     => 'settings.php',
+    ];
+    $perms = array_map('trim', explode(',', $admin_perms));
+    foreach ($page_urls as $key => $url) {
+        if (in_array($key, $perms, true)) {
+            return $url;
+        }
+    }
+    return 'dashboard.php';
+}
 function require_permission($page_key) {
     if (can_access($page_key)) return;
     http_response_code(403);
