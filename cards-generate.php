@@ -151,10 +151,18 @@ include 'includes/admin_nav.php';
         <form id="card-generator-form" onsubmit="triggerGeneration(event)" style="display:flex; flex-direction:column; gap:12px;">
             <!-- Dynamic Fields -->
             <?php foreach ($elements as $el): ?>
-                <div class="form-field-group">
-                    <div class="form-field-title"><?php echo htmlspecialchars($el['name']); ?></div>
+                <div class="form-field-group" id="field-group-<?php echo $el['id']; ?>">
+                    <div class="form-field-title" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <span><?php echo htmlspecialchars($el['name']); ?></span>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <button type="button" class="btn btn-xs btn-outline" style="font-size:0.65rem; padding:1px 6px; color:#ef4444; border-color:#fca5a5;" onclick="clearElementField(<?php echo $el['id']; ?>)" title="Clear &amp; Omit Field"><i class="fas fa-trash-can"></i> Clear</button>
+                            <label style="font-size:0.7rem; font-weight:600; color:#64748b; margin:0; cursor:pointer; display:inline-flex; align-items:center; gap:3px;">
+                                <input type="checkbox" id="chk-include-<?php echo $el['id']; ?>" onchange="toggleElementInclude(<?php echo $el['id']; ?>, this.checked)" checked> Include
+                            </label>
+                        </div>
+                    </div>
                     <?php if ($el['type'] === 'text'): ?>
-                        <textarea data-id="<?php echo $el['id']; ?>" oninput="updateFieldText(<?php echo $el['id']; ?>, this.value)" class="field-input" style="width:100%; resize:vertical;" rows="2" required><?php echo htmlspecialchars($el['textContent'] ?? ''); ?></textarea>
+                        <textarea data-id="<?php echo $el['id']; ?>" id="input-text-<?php echo $el['id']; ?>" oninput="updateFieldText(<?php echo $el['id']; ?>, this.value)" class="field-input" style="width:100%; resize:vertical;" rows="2" placeholder="Leave blank to omit from output..."><?php echo htmlspecialchars($el['textContent'] ?? ''); ?></textarea>
                     <?php elseif ($el['type'] === 'photo'): ?>
                         <?php 
                         $is_logo = false;
@@ -165,7 +173,7 @@ include 'includes/admin_nav.php';
                         <?php if ($is_logo && !empty($logos)): ?>
                             <div style="margin-bottom: 6px;">
                                 <label style="font-size: 0.75rem; font-weight: 700; color: #475569; display: block; margin-bottom: 2px;">Select Preset Logo</label>
-                                <select class="field-input" onchange="selectPresetLogo(<?php echo $el['id']; ?>, this.value)" style="width:100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 6px;">
+                                <select class="field-input" id="select-preset-<?php echo $el['id']; ?>" onchange="selectPresetLogo(<?php echo $el['id']; ?>, this.value)" style="width:100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 6px;">
                                     <option value="">-- Or Upload Custom Logo Below --</option>
                                     <?php foreach ($logos as $lg): ?>
                                         <option value="<?php echo htmlspecialchars($lg['logo_file']); ?>"><?php echo htmlspecialchars($lg['name']); ?> (<?php echo $lg['width'] . 'x' . $lg['height']; ?> px)</option>
@@ -174,7 +182,7 @@ include 'includes/admin_nav.php';
                             </div>
                         <?php endif; ?>
                         
-                        <input type="file" data-id="<?php echo $el['id']; ?>" accept="image/*" onchange="loadPhotoPlaceholder(<?php echo $el['id']; ?>, this)" class="field-file-input" style="width:100%;" <?php echo $is_logo ? '' : 'required'; ?>>
+                        <input type="file" data-id="<?php echo $el['id']; ?>" id="input-file-<?php echo $el['id']; ?>" accept="image/*" onchange="loadPhotoPlaceholder(<?php echo $el['id']; ?>, this)" class="field-file-input" style="width:100%;">
                         
                         <div class="photo-controls" id="controls-<?php echo $el['id']; ?>" style="margin-top: 8px; display:none; flex-direction:column; gap:6px; background:#f8fafc; border:1px solid #e2e8f0; padding:8px; border-radius:6px;">
                             <div style="display:flex; justify-content:space-between; font-size:0.7rem; font-weight:700; color:#475569;">
@@ -244,9 +252,36 @@ var bgH = <?php echo $canvas_h; ?>;
 var bgUrl = '../<?php echo htmlspecialchars($tpl['bg_image']); ?>';
 var elements = <?php echo json_encode($elements); ?>;
 var customFonts = <?php echo json_encode($fonts); ?>;
-var customFontNames = customFonts.map(f => f.font_name);
 var photos = {}; // Cache for base64 uploaded photo blobs
 var activeId = null;
+var excludedElements = {}; // Track user-excluded elements
+
+function toggleElementInclude(id, isIncluded) {
+    excludedElements[id] = !isIncluded;
+    drawElements();
+}
+
+function clearElementField(id) {
+    var el = elements.find(item => item.id === id);
+    if (!el) return;
+    
+    if (el.type === 'text') {
+        el.textContent = '';
+        var input = document.getElementById('input-text-' + id);
+        if (input) input.value = '';
+    } else if (el.type === 'photo') {
+        delete photos[id];
+        delete photoSettings[id];
+        var fileInput = document.getElementById('input-file-' + id);
+        if (fileInput) fileInput.value = '';
+        var presetSelect = document.getElementById('select-preset-' + id);
+        if (presetSelect) presetSelect.value = '';
+        var controls = document.getElementById('controls-' + id);
+        if (controls) controls.style.display = 'none';
+    }
+    
+    drawElements();
+}
 
 // Programmatically load custom fonts used in elements before generating
 var fontLoadPromises = [];
@@ -340,6 +375,10 @@ function drawElements() {
     container.appendChild(bgOverlay);
     
     elements.forEach(function(el, idx) {
+        if (excludedElements[el.id]) return;
+        if (el.type === 'text' && (!el.textContent || !el.textContent.trim())) return;
+        if (el.type === 'photo' && !photos[el.id]) return;
+
         var div = document.createElement('div');
         div.className = 'canvas-element' + (activeId === el.id ? ' selected' : '');
         div.style.left = el.left + '%';
@@ -541,6 +580,19 @@ function updatePhotoPan(id, axis, val) {
 // ── native Canvas Rendering ────────────
 function renderElementOnCanvas(ctx, el) {
     return new Promise(function(resolve) {
+        if (excludedElements[el.id]) {
+            resolve();
+            return;
+        }
+        if (el.type === 'text' && (!el.textContent || !el.textContent.trim())) {
+            resolve();
+            return;
+        }
+        if (el.type === 'photo' && !photos[el.id]) {
+            resolve();
+            return;
+        }
+        
         ctx.save();
         ctx.globalAlpha = el.opacity ?? 1;
         
@@ -682,9 +734,7 @@ function renderElementOnCanvas(ctx, el) {
                     resolve();
                 };
             } else {
-                // Background placeholder
-                ctx.fillStyle = '#e2e8f0';
-                ctx.fillRect(x, y, w, h);
+                // If no photo uploaded/selected, resolve without drawing placeholder
                 ctx.restore();
                 resolve();
             }
@@ -732,17 +782,6 @@ function drawBackgroundOnCanvasCtx(ctx, bgStr, w, h) {
 
 function triggerGeneration(e) {
     e.preventDefault();
-    
-    // Check if all photo placeholders have an image (either preset or uploaded)
-    for (var i = 0; i < elements.length; i++) {
-        var el = elements[i];
-        if (el.type === 'photo') {
-            if (!photos[el.id]) {
-                alert('Please upload an image or select a preset logo/photo for: ' + el.name);
-                return;
-            }
-        }
-    }
     
     function startCanvasRender(bgDrawFn) {
         Promise.all(fontLoadPromises).then(function() {
