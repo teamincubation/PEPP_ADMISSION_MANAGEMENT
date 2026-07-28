@@ -381,19 +381,9 @@ include 'includes/admin_nav.php';
 
             <h4 style="font-weight:700; border-bottom:1px solid #eee; padding-bottom:6px; margin:15px 0 6px 0;"><i class="fas fa-palette" style="color:var(--accent);"></i> Canvas Background</h4>
             <div style="display:flex; gap:4px; margin-bottom:6px;">
-                <button type="button" class="btn btn-xs btn-outline bg-tab-btn" id="bg-tab-btn-image" style="flex:1; font-size:0.7rem; padding:3px;" onclick="showBgTab('image')">Image</button>
                 <button type="button" class="btn btn-xs btn-outline bg-tab-btn" id="bg-tab-btn-pastel" style="flex:1; font-size:0.7rem; padding:3px;" onclick="showBgTab('pastel')">Pastels</button>
                 <button type="button" class="btn btn-xs btn-outline bg-tab-btn" id="bg-tab-btn-custom" style="flex:1; font-size:0.7rem; padding:3px;" onclick="showBgTab('custom')">Custom</button>
                 <button type="button" class="btn btn-xs btn-outline bg-tab-btn" id="bg-tab-btn-solid" style="flex:1; font-size:0.7rem; padding:3px;" onclick="showBgTab('solid')">Solid</button>
-            </div>
-
-            <!-- Upload / Change Image File Tab -->
-            <div id="bg-tab-image" style="display:none; background:#f8fafc; padding:8px; border-radius:8px; border:1px solid #e2e8f0;">
-                <div class="field" style="margin-bottom:4px;">
-                    <label style="font-size:0.72rem; margin-bottom:4px;">Upload / Replace Background Image</label>
-                    <input type="file" id="sidebar-bg-file" accept=".jpg,.jpeg,.png,.webp" onchange="previewSidebarBgFile(this)" style="font-size:0.75rem; width:100%;">
-                    <small style="font-size:0.68rem; color:#64748b; display:block; margin-top:4px;">Select any image to update canvas background instantly.</small>
-                </div>
             </div>
 
             <!-- Pastel Presets Grid -->
@@ -591,12 +581,12 @@ include 'includes/admin_nav.php';
         </div>
     </div>
 
-    <!-- Canvas Resize Modal -->
+    <!-- Canvas Resize & Background Properties Modal -->
     <div class="modal-backdrop" id="canvas-resize-modal">
-        <div class="modal" style="max-width:380px;">
+        <div class="modal" style="max-width:440px;">
             <div class="modal-head">
-                <h3>Canvas Properties</h3>
-                <button class="modal-close" onclick="closeModal('canvas-resize-modal')"><i class="fas fa-xmark"></i></button>
+                <h3><i class="fas fa-sliders" style="color:var(--accent);"></i> Canvas &amp; Background Properties</h3>
+                <button type="button" class="modal-close" onclick="closeModal('canvas-resize-modal')"><i class="fas fa-xmark"></i></button>
             </div>
             <div class="modal-body" style="display:flex; flex-direction:column; gap:12px;">
                 <div class="field">
@@ -637,14 +627,43 @@ include 'includes/admin_nav.php';
                         <button type="button" class="btn btn-outline btn-sm" onclick="fitToOriginalSize()" style="width:100%; height:40px; font-size:0.8rem;"><i class="fas fa-expand"></i> Fit to Original</button>
                     </div>
                 </div>
+                
+                <hr style="border:0; border-top:1px dashed #cbd5e1; margin:4px 0;">
+                
                 <div class="field">
-                    <label>Change Background Image (Optional)</label>
+                    <label style="font-weight:700; color:#1e293b;"><i class="fas fa-image" style="color:var(--accent);"></i> Replace Canvas Background</label>
+                    <select id="modal-bg-source-type" onchange="toggleModalBgSource(this.value)">
+                        <option value="keep" selected>Keep Current Background</option>
+                        <option value="image">Upload New Image File</option>
+                        <option value="gradient">Select Pastel / Custom Gradient</option>
+                        <option value="solid">Select Solid Color</option>
+                    </select>
+                </div>
+
+                <!-- Image Upload Option -->
+                <div id="modal-bg-image-block" style="display:none;" class="field">
+                    <label>New Background Image (.png, .jpg, .webp)</label>
                     <input type="file" id="resize-bg-file" accept=".jpg,.jpeg,.png,.webp">
+                </div>
+
+                <!-- Gradient Selection Option -->
+                <div id="modal-bg-gradient-block" style="display:none;" class="field">
+                    <label>Pastel Gradient Presets</label>
+                    <input type="hidden" id="modal-selected-gradient" value="">
+                    <div id="modal-gradient-swatches" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; max-height:130px; overflow-y:auto; padding:2px;">
+                        <!-- JS populated -->
+                    </div>
+                </div>
+
+                <!-- Solid Color Option -->
+                <div id="modal-bg-solid-block" style="display:none;" class="field">
+                    <label>Solid Background Color</label>
+                    <input type="color" id="modal-solid-picker" value="#ffffff" style="height:36px; width:100%; cursor:pointer;">
                 </div>
             </div>
             <div class="modal-foot">
-                <button class="btn btn-outline" onclick="closeModal('canvas-resize-modal')">Cancel</button>
-                <button class="btn btn-primary" onclick="applyCanvasResize()"><i class="fas fa-check"></i> Apply</button>
+                <button type="button" class="btn btn-outline" onclick="closeModal('canvas-resize-modal')">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="applyCanvasResize()"><i class="fas fa-check"></i> Apply Changes</button>
             </div>
         </div>
     </div>
@@ -794,18 +813,6 @@ include 'includes/admin_nav.php';
         if (btnRedo) btnRedo.disabled = redoStack.length === 0;
     }
 
-    function previewSidebarBgFile(input) {
-        if (input.files && input.files[0]) {
-            pushState();
-            var reader = new FileReader();
-            reader.onload = function(e) {
-                bgUrl = e.target.result;
-                drawElements();
-            };
-            reader.readAsDataURL(input.files[0]);
-        }
-    }
-
     function showBgTab(tab) {
         document.querySelectorAll('.bg-tab-btn').forEach(b => {
             b.classList.remove('btn-primary');
@@ -817,7 +824,7 @@ include 'includes/admin_nav.php';
             activeBtn.classList.add('btn-primary');
         }
         
-        ['image', 'pastel', 'custom', 'solid'].forEach(t => {
+        ['pastel', 'custom', 'solid'].forEach(t => {
             var block = document.getElementById('bg-tab-' + t);
             if (block) block.style.display = (t === tab) ? 'block' : 'none';
         });
@@ -1289,7 +1296,55 @@ include 'includes/admin_nav.php';
     }
 
     function openCanvasResize() {
+        renderModalGradientSwatches();
+        var selectEl = document.getElementById('modal-bg-source-type');
+        if (selectEl) {
+            selectEl.value = 'keep';
+            toggleModalBgSource('keep');
+        }
         openModal('canvas-resize-modal');
+    }
+
+    function toggleModalBgSource(val) {
+        var imgBlock = document.getElementById('modal-bg-image-block');
+        var gradBlock = document.getElementById('modal-bg-gradient-block');
+        var solidBlock = document.getElementById('modal-bg-solid-block');
+        if (imgBlock) imgBlock.style.display = (val === 'image') ? 'block' : 'none';
+        if (gradBlock) gradBlock.style.display = (val === 'gradient') ? 'block' : 'none';
+        if (solidBlock) solidBlock.style.display = (val === 'solid') ? 'block' : 'none';
+    }
+
+    function renderModalGradientSwatches() {
+        var container = document.getElementById('modal-gradient-swatches');
+        if (!container) return;
+        container.innerHTML = '';
+        
+        var allGradients = defaultPastelGradients.map(g => g.val);
+        var savedCustom = getSavedCustomGradients();
+        savedCustom.forEach(gVal => {
+            if (!allGradients.includes(gVal)) {
+                allGradients.push(gVal);
+            }
+        });
+        
+        var hiddenVal = document.getElementById('modal-selected-gradient');
+        allGradients.forEach(function(gVal, idx) {
+            if (idx === 0 && hiddenVal && !hiddenVal.value) {
+                hiddenVal.value = gVal;
+            }
+            var div = document.createElement('div');
+            div.style.height = '28px';
+            div.style.borderRadius = '6px';
+            div.style.cursor = 'pointer';
+            div.style.background = gVal;
+            div.style.border = (hiddenVal && hiddenVal.value === gVal) ? '2px solid var(--accent)' : '1px solid #cbd5e1';
+            div.onclick = function() {
+                Array.from(container.children).forEach(c => c.style.border = '1px solid #cbd5e1');
+                div.style.border = '2px solid var(--accent)';
+                if (hiddenVal) hiddenVal.value = gVal;
+            };
+            container.appendChild(div);
+        });
     }
 
     function applyCanvasResize() {
@@ -1299,6 +1354,30 @@ include 'includes/admin_nav.php';
         pushState();
         bgW = w;
         bgH = h;
+        
+        var bgType = document.getElementById('modal-bg-source-type') ? document.getElementById('modal-bg-source-type').value : 'keep';
+        
+        if (bgType === 'image') {
+            var fileInput = document.getElementById('resize-bg-file');
+            if (fileInput && fileInput.files && fileInput.files[0]) {
+                var reader = new FileReader();
+                reader.onload = function(e) {
+                    bgUrl = e.target.result;
+                    drawElements();
+                };
+                reader.readAsDataURL(fileInput.files[0]);
+            }
+        } else if (bgType === 'gradient') {
+            var gradVal = document.getElementById('modal-selected-gradient').value;
+            if (gradVal) {
+                bgUrl = gradVal;
+            }
+        } else if (bgType === 'solid') {
+            var colorVal = document.getElementById('modal-solid-picker').value;
+            if (colorVal) {
+                bgUrl = colorVal;
+            }
+        }
         
         closeModal('canvas-resize-modal');
         initCanvas();
@@ -1332,14 +1411,11 @@ include 'includes/admin_nav.php';
         formData.append('elements_json', JSON.stringify(elements));
         formData.append('csrf_token', '<?php echo csrf_token(); ?>');
         
-        var sidebarBgFile = document.getElementById('sidebar-bg-file');
-        var resizeBgFile = document.getElementById('resize-bg-file');
-        if (sidebarBgFile && sidebarBgFile.files.length > 0) {
-            formData.append('bg_file', sidebarBgFile.files[0]);
-        } else if (resizeBgFile && resizeBgFile.files.length > 0) {
-            formData.append('bg_file', resizeBgFile.files[0]);
+        var bgFileInput = document.getElementById('resize-bg-file');
+        if (bgFileInput && bgFileInput.files.length > 0) {
+            formData.append('bg_file', bgFileInput.files[0]);
         } else {
-            // Save gradient, solid background, or existing image path in bg_image parameter
+            // Save gradient or solid background path in bg_image parameter
             formData.append('bg_path_style', saveBgPath);
         }
         
