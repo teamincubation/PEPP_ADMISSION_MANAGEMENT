@@ -324,8 +324,17 @@ function drawElements() {
     bgOverlay.style.left = '0';
     bgOverlay.style.width = '100%';
     bgOverlay.style.height = '100%';
-    bgOverlay.style.backgroundImage = 'url("' + bgUrl + '")';
-    bgOverlay.style.backgroundSize = '100% 100%';
+    
+    if (bgUrl && (bgUrl.indexOf('linear-gradient') !== -1 || bgUrl.indexOf('radial-gradient') !== -1)) {
+        bgOverlay.style.background = bgUrl;
+    } else if (bgUrl && (bgUrl.startsWith('#') || bgUrl.startsWith('rgb'))) {
+        bgOverlay.style.backgroundColor = bgUrl;
+        bgOverlay.style.backgroundImage = 'none';
+    } else {
+        var rawBg = bgUrl.startsWith('../') ? bgUrl : '../' + bgUrl;
+        bgOverlay.style.backgroundImage = 'url("' + rawBg + '")';
+        bgOverlay.style.backgroundSize = '100% 100%';
+    }
     bgOverlay.style.zIndex = 2;
     bgOverlay.style.pointerEvents = 'none';
     container.appendChild(bgOverlay);
@@ -683,6 +692,44 @@ function renderElementOnCanvas(ctx, el) {
     });
 }
 
+function drawBackgroundOnCanvasCtx(ctx, bgStr, w, h) {
+    if (!bgStr) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+        return;
+    }
+    if (bgStr.startsWith('#') || bgStr.startsWith('rgb')) {
+        ctx.fillStyle = bgStr;
+        ctx.fillRect(0, 0, w, h);
+    } else if (bgStr.includes('gradient')) {
+        var isRadial = bgStr.includes('radial-gradient');
+        var colors = bgStr.match(/(#[0-9a-fA-F]{3,8}|rgba?\([^)]+\))/g) || ['#ffffff', '#f1f5f9'];
+        var grad;
+        if (isRadial) {
+            grad = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, Math.max(w, h)/2);
+        } else {
+            var angleMatch = bgStr.match(/(\d+)deg/);
+            var angle = angleMatch ? parseInt(angleMatch[1]) : 135;
+            var rad = (angle - 90) * Math.PI / 180;
+            var x0 = w/2 - Math.cos(rad) * w/2;
+            var y0 = h/2 - Math.sin(rad) * h/2;
+            var x1 = w/2 + Math.cos(rad) * w/2;
+            var y1 = h/2 + Math.sin(rad) * h/2;
+            grad = ctx.createLinearGradient(x0, y0, x1, y1);
+        }
+        if (colors.length === 1) {
+            grad.addColorStop(0, colors[0]);
+            grad.addColorStop(1, colors[0]);
+        } else {
+            for (var i = 0; i < colors.length; i++) {
+                grad.addColorStop(i / (colors.length - 1), colors[i]);
+            }
+        }
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, w, h);
+    }
+}
+
 function triggerGeneration(e) {
     e.preventDefault();
     
@@ -697,13 +744,7 @@ function triggerGeneration(e) {
         }
     }
     
-    // Check if background image is loaded
-    var bgImg = new Image();
-    bgImg.crossOrigin = "anonymous";
-    bgImg.src = bgUrl;
-    
-    bgImg.onload = function() {
-        // Wait for both custom loaded FontFace API fonts and general document fonts to be ready
+    function startCanvasRender(bgDrawFn) {
         Promise.all(fontLoadPromises).then(function() {
             document.fonts.ready.then(function() {
                 var canvas = document.getElementById('native-resolution-canvas');
@@ -722,8 +763,8 @@ function triggerGeneration(e) {
                 });
                 
                 Promise.all(behindPromises).then(function() {
-                    // 2. Draw the background image on top of behind-bg elements
-                    ctx.drawImage(bgImg, 0, 0, bgW, bgH);
+                    // 2. Draw background
+                    if (bgDrawFn) bgDrawFn(ctx);
                     
                     // 3. Render elements that are in front of the background
                     var frontPromises = elements.filter(el => el.behindBg !== true).map(function(el) {
@@ -754,7 +795,28 @@ function triggerGeneration(e) {
                 });
             });
         });
-    };
+    }
+
+    if (bgUrl && (bgUrl.includes('gradient') || bgUrl.startsWith('#') || bgUrl.startsWith('rgb'))) {
+        startCanvasRender(function(ctx) {
+            drawBackgroundOnCanvasCtx(ctx, bgUrl, bgW, bgH);
+        });
+    } else {
+        var bgImg = new Image();
+        bgImg.crossOrigin = "anonymous";
+        bgImg.src = bgUrl.startsWith('../') ? bgUrl : '../' + bgUrl;
+        bgImg.onload = function() {
+            startCanvasRender(function(ctx) {
+                ctx.drawImage(bgImg, 0, 0, bgW, bgH);
+            });
+        };
+        bgImg.onerror = function() {
+            startCanvasRender(function(ctx) {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, bgW, bgH);
+            });
+        };
+    }
 }
 
 function generatePDF(dataUrl) {

@@ -448,9 +448,18 @@ include 'includes/admin_nav.php';
                 </div>
             <?php else: ?>
                 <div class="templates-grid">
-                    <?php foreach ($active_templates as $tpl): ?>
+                    <?php foreach ($active_templates as $tpl): 
+                        $bg_style = $tpl['bg_image'];
+                        if (strpos($bg_style, 'gradient') !== false) {
+                            $bg_css = "background: " . $bg_style . ";";
+                        } elseif (strpos($bg_style, '#') === 0 || strpos($bg_style, 'rgb') === 0) {
+                            $bg_css = "background-color: " . $bg_style . ";";
+                        } else {
+                            $bg_css = "background-image: url('../" . htmlspecialchars($bg_style) . "');";
+                        }
+                    ?>
                         <div class="tpl-card">
-                            <div class="tpl-preview" style="background-image: url('../<?php echo htmlspecialchars($tpl['bg_image']); ?>');">
+                            <div class="tpl-preview" style="<?php echo $bg_css; ?>">
                                 <span class="tpl-badge"><?php echo htmlspecialchars($categories[$tpl['category']] ?? $tpl['category']); ?></span>
                             </div>
                             <div class="tpl-details">
@@ -478,9 +487,18 @@ include 'includes/admin_nav.php';
                 </div>
             <?php else: ?>
                 <div class="templates-grid">
-                    <?php foreach ($all_templates as $tpl): ?>
+                    <?php foreach ($all_templates as $tpl): 
+                        $bg_style = $tpl['bg_image'];
+                        if (strpos($bg_style, 'gradient') !== false) {
+                            $bg_css = "background: " . $bg_style . ";";
+                        } elseif (strpos($bg_style, '#') === 0 || strpos($bg_style, 'rgb') === 0) {
+                            $bg_css = "background-color: " . $bg_style . ";";
+                        } else {
+                            $bg_css = "background-image: url('../" . htmlspecialchars($bg_style) . "');";
+                        }
+                    ?>
                         <div class="tpl-card">
-                            <div class="tpl-preview" style="background-image: url('../<?php echo htmlspecialchars($tpl['bg_image']); ?>');">
+                            <div class="tpl-preview" style="<?php echo $bg_css; ?>">
                                 <span class="tpl-badge"><?php echo htmlspecialchars($categories[$tpl['category']] ?? $tpl['category']); ?></span>
                                 <span style="position:absolute; bottom:10px; right:10px;" class="badge <?php echo $tpl['status'] === 'active' ? 'green' : 'gray'; ?>">
                                     <?php echo ucfirst($tpl['status']); ?>

@@ -31,7 +31,7 @@ if ($template_id) {
     }
 }
 
-// ── Action: Upload Background Image (Step 1) ────────────
+// ── Action: Upload Background Image or Create Color/Gradient (Step 1) ────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'upload_bg') {
     if (!csrf_verify()) {
         $error_message = 'Security token mismatch.';
@@ -39,17 +39,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $title = trim($_POST['title'] ?? 'Untitled Template');
         $category = trim($_POST['category'] ?? 'Other');
         $description = trim($_POST['description'] ?? '');
+        $bg_source_type = $_POST['bg_source_type'] ?? 'file';
         
-        $bg_path = handle_file_upload_with_replace('bg_file', 'card_templates', null, ['jpg', 'jpeg', 'png', 'webp']);
-        if (!$bg_path) {
-            $error_message = 'Please select a valid high-quality background image.';
+        $bg_path = null;
+        $width = 800;
+        $height = 600;
+        
+        if ($bg_source_type === 'file') {
+            $bg_path = handle_file_upload_with_replace('bg_file', 'card_templates', null, ['jpg', 'jpeg', 'png', 'webp']);
+            if (!$bg_path) {
+                $error_message = 'Please select a valid high-quality background image.';
+            } else {
+                $real_path = __DIR__ . '/../' . $bg_path;
+                $dims = @getimagesize($real_path);
+                $width = $dims ? $dims[0] : 800;
+                $height = $dims ? $dims[1] : 600;
+            }
         } else {
-            // Read image dimensions
-            $real_path = __DIR__ . '/../' . $bg_path;
-            $dims = @getimagesize($real_path);
-            $width = $dims ? $dims[0] : 800;
-            $height = $dims ? $dims[1] : 600;
-            
+            // Gradient or Solid color background
+            $bg_path = trim($_POST['bg_gradient_val'] ?? $_POST['bg_color_val'] ?? 'linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%)');
+            $width = max(100, (int)($_POST['preset_width'] ?? 800));
+            $height = max(100, (int)($_POST['preset_height'] ?? 600));
+        }
+        
+        if ($bg_path) {
             // Calculate aspect ratio
             $gcd = function($a, $b) use (&$gcd) {
                 return ($a % $b) ? $gcd($b, $a % $b) : $b;
@@ -73,7 +86,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 header("Location: cards-edit.php?id=" . $template_id);
                 exit;
             } catch (Exception $e) {
-                @unlink($real_path);
                 $error_message = "Failed to save template: " . $e->getMessage();
             }
         }
@@ -123,9 +135,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
         
+        $bg_path_style = trim($_POST['bg_path_style'] ?? '');
         if ($bg_path) {
             $stmt = $pdo->prepare("UPDATE card_templates SET title = ?, category = ?, description = ?, status = ?, bg_image = ?, canvas_width = ?, canvas_height = ?, resolution_dpi = ?, elements_json = ?, updated_at = NOW() WHERE id = ?");
             $stmt->execute([$title, $category, $description, $status, $bg_path, $manual_w, $manual_h, $resolution_dpi, $elements_json, $template_id]);
+        } elseif ($bg_path_style !== '') {
+            $stmt = $pdo->prepare("UPDATE card_templates SET title = ?, category = ?, description = ?, status = ?, bg_image = ?, canvas_width = ?, canvas_height = ?, resolution_dpi = ?, elements_json = ?, updated_at = NOW() WHERE id = ?");
+            $stmt->execute([$title, $category, $description, $status, $bg_path_style, $manual_w, $manual_h, $resolution_dpi, $elements_json, $template_id]);
         } else {
             if ($manual_w > 0 && $manual_h > 0) {
                 $stmt = $pdo->prepare("UPDATE card_templates SET title = ?, category = ?, description = ?, status = ?, elements_json = ?, canvas_width = ?, canvas_height = ?, resolution_dpi = ?, updated_at = NOW() WHERE id = ?");
@@ -259,10 +275,10 @@ include 'includes/admin_nav.php';
 </style>
 
 <?php if (!$bg_image_path): ?>
-    <!-- STEP 1: Upload Template Properties & Background -->
+    <!-- STEP 1: Template Properties & Background Selection -->
     <div class="panel" style="max-width: 600px; margin: 40px auto;">
         <div class="panel-head">
-            <h3><i class="fas fa-file-image" style="color:var(--accent);"></i> New Card Template details</h3>
+            <h3><i class="fas fa-layer-group" style="color:var(--accent);"></i> New Card Template details</h3>
         </div>
         <form method="POST" enctype="multipart/form-data" class="panel-body">
             <?php echo csrf_field(); ?>
@@ -290,10 +306,37 @@ include 'includes/admin_nav.php';
                 <textarea name="description" rows="2" placeholder="Describe the template use case..."></textarea>
             </div>
             <div class="field full">
-                <label>Upload Background Image (High Resolution PNG, JPG, WEBP) <span class="req">*</span></label>
-                <input type="file" name="bg_file" accept=".jpg,.jpeg,.png,.webp" required>
+                <label>Background Layer Source <span class="req">*</span></label>
+                <select name="bg_source_type" id="bg-source-type-select" onchange="toggleStep1BgFields(this.value)">
+                    <option value="file">Upload Custom Background Image File</option>
+                    <option value="gradient" selected>Pastel Gradient / Color Background</option>
+                </select>
+            </div>
+
+            <div id="step1-bg-file-block" style="display:none;" class="field full">
+                <label>Upload Background Image (PNG, JPG, WEBP)</label>
+                <input type="file" name="bg_file" id="step1-bg-file-input" accept=".jpg,.jpeg,.png,.webp">
                 <p class="cell-sub" style="margin-top: 4px;">This image acts as the template canvas background.</p>
             </div>
+
+            <div id="step1-bg-gradient-block" class="field full">
+                <label>Select Preset Pastel Gradient / Background</label>
+                <input type="hidden" name="bg_gradient_val" id="step1-bg-gradient-val" value="linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%)">
+                <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(42px, 1fr)); gap:8px; margin:8px 0 14px 0;" id="step1-gradient-swatches">
+                    <!-- JavaScript dynamically populates pastel swatches -->
+                </div>
+                <div class="prop-group">
+                    <div class="field">
+                        <label>Canvas Width (px)</label>
+                        <input type="number" name="preset_width" value="800" required>
+                    </div>
+                    <div class="field">
+                        <label>Canvas Height (px)</label>
+                        <input type="number" name="preset_height" value="600" required>
+                    </div>
+                </div>
+            </div>
+
             <div style="margin-top:20px; display:flex; gap:12px;">
                 <a href="cards.php" class="btn btn-outline">Cancel</a>
                 <button type="submit" class="btn btn-primary"><i class="fas fa-arrow-right"></i> Next: Design Canvas</button>
@@ -308,9 +351,11 @@ include 'includes/admin_nav.php';
             <h2 style="margin:0; font-size:1.2rem; font-weight:800;"><?php echo htmlspecialchars($tpl['title']); ?></h2>
             <span class="badge soft-green"><?php echo htmlspecialchars($tpl['category']); ?></span>
         </div>
-        <div style="display:flex; gap:8px;">
-            <button class="btn btn-outline btn-sm" onclick="openCanvasResize()"><i class="fas fa-maximize"></i> Canvas Properties</button>
-            <button class="btn btn-primary btn-sm" onclick="saveTemplate()"><i class="fas fa-save"></i> Save Template Configuration</button>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <button type="button" id="btn-undo" class="btn btn-outline btn-sm" onclick="undo()" disabled title="Undo (Ctrl+Z)"><i class="fas fa-rotate-left"></i> Undo</button>
+            <button type="button" id="btn-redo" class="btn btn-outline btn-sm" onclick="redo()" disabled title="Redo (Ctrl+Y)"><i class="fas fa-rotate-right"></i> Redo</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="openCanvasResize()"><i class="fas fa-maximize"></i> Canvas Properties</button>
+            <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate()"><i class="fas fa-save"></i> Save Template Configuration</button>
         </div>
     </div>
 
@@ -332,6 +377,58 @@ include 'includes/admin_nav.php';
             <h4 style="font-weight:700; border-bottom:1px solid #eee; padding-bottom:6px; margin:15px 0 6px 0;">Layers Management</h4>
             <div id="layers-list" style="display:flex; flex-direction:column; gap:6px;">
                 <!-- Dynamically filled -->
+            </div>
+
+            <h4 style="font-weight:700; border-bottom:1px solid #eee; padding-bottom:6px; margin:15px 0 6px 0;"><i class="fas fa-palette" style="color:var(--accent);"></i> Canvas Background</h4>
+            <div style="display:flex; gap:4px; margin-bottom:6px;">
+                <button type="button" class="btn btn-xs btn-outline bg-tab-btn" id="bg-tab-btn-pastel" style="flex:1; font-size:0.7rem; padding:3px;" onclick="showBgTab('pastel')">Pastels</button>
+                <button type="button" class="btn btn-xs btn-outline bg-tab-btn" id="bg-tab-btn-custom" style="flex:1; font-size:0.7rem; padding:3px;" onclick="showBgTab('custom')">Custom</button>
+                <button type="button" class="btn btn-xs btn-outline bg-tab-btn" id="bg-tab-btn-solid" style="flex:1; font-size:0.7rem; padding:3px;" onclick="showBgTab('solid')">Solid</button>
+            </div>
+
+            <!-- Pastel Presets Grid -->
+            <div id="bg-tab-pastel" style="display:block;">
+                <div id="pastel-presets-grid" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; max-height:160px; overflow-y:auto; padding:2px;">
+                    <!-- Filled dynamically -->
+                </div>
+            </div>
+
+            <!-- Custom Gradient Builder -->
+            <div id="bg-tab-custom" style="display:none; background:#f8fafc; padding:8px; border-radius:8px; border:1px solid #e2e8f0;">
+                <div class="field" style="margin-bottom:6px;">
+                    <label style="font-size:0.72rem; margin-bottom:2px;">Type</label>
+                    <select id="cust-grad-type" onchange="updateCustomGradient()" style="font-size:0.75rem; padding:3px 6px;">
+                        <option value="linear">Linear Gradient</option>
+                        <option value="radial">Radial Gradient</option>
+                    </select>
+                </div>
+                <div class="prop-group" style="margin-bottom:6px;">
+                    <div class="field">
+                        <label style="font-size:0.72rem; margin-bottom:2px;">Start Color</label>
+                        <input type="color" id="cust-grad-c1" value="#a1c4fd" oninput="updateCustomGradient()" style="height:28px; width:100%; cursor:pointer;">
+                    </div>
+                    <div class="field">
+                        <label style="font-size:0.72rem; margin-bottom:2px;">End Color</label>
+                        <input type="color" id="cust-grad-c2" value="#c2e9fb" oninput="updateCustomGradient()" style="height:28px; width:100%; cursor:pointer;">
+                    </div>
+                </div>
+                <div class="field" style="margin-bottom:6px;" id="cust-grad-angle-block">
+                    <label style="font-size:0.72rem; margin-bottom:2px;">Angle: <span id="cust-angle-val">135</span>&deg;</label>
+                    <input type="range" id="cust-grad-angle" min="0" max="360" value="135" oninput="updateCustomGradient()" style="width:100%;">
+                </div>
+                <div id="cust-grad-preview" style="height:28px; border-radius:6px; border:1px solid #cbd5e1; margin-bottom:6px; background:linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%);"></div>
+                <div style="display:flex; gap:4px;">
+                    <button type="button" class="btn btn-xs btn-primary" style="flex:1; font-size:0.7rem;" onclick="applyCustomGradient()"><i class="fas fa-check"></i> Apply</button>
+                    <button type="button" class="btn btn-xs btn-soft-violet" style="flex:1; font-size:0.7rem;" onclick="presetNewGradient()"><i class="fas fa-bookmark"></i> Preset New</button>
+                </div>
+            </div>
+
+            <!-- Solid Color Picker -->
+            <div id="bg-tab-solid" style="display:none; background:#f8fafc; padding:8px; border-radius:8px; border:1px solid #e2e8f0;">
+                <div class="field" style="margin-bottom:6px;">
+                    <label style="font-size:0.72rem; margin-bottom:2px;">Solid Background Color</label>
+                    <input type="color" id="solid-bg-picker" value="#ffffff" onchange="applySolidColor(this.value)" style="height:32px; width:100%; cursor:pointer;">
+                </div>
             </div>
         </div>
 
@@ -545,18 +642,260 @@ include 'includes/admin_nav.php';
     <script>
     var bgW = <?php echo (int)$canvas_w; ?>;
     var bgH = <?php echo (int)$canvas_h; ?>;
-    var bgUrl = '../<?php echo htmlspecialchars($bg_image_path); ?>';
+    var bgUrl = '<?php echo addslashes($bg_image_path); ?>';
+    if (bgUrl && !bgUrl.startsWith('linear-gradient') && !bgUrl.startsWith('radial-gradient') && !bgUrl.startsWith('#') && !bgUrl.startsWith('http') && !bgUrl.startsWith('../')) {
+        bgUrl = '../' + bgUrl;
+    }
     var elements = <?php echo $tpl['elements_json'] ?: '[]'; ?>;
     var activeId = null;
 
+    var undoStack = [];
+    var redoStack = [];
+    var isUndoRedoAction = false;
+
+    var defaultPastelGradients = [
+        { name: 'Sunset Pastel', val: 'linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%)' },
+        { name: 'Soft Peach', val: 'linear-gradient(135deg, #ffedd5 0%, #fed7aa 100%)' },
+        { name: 'Ocean Breeze', val: 'linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%)' },
+        { name: 'Lavender Mist', val: 'linear-gradient(135deg, #e0c3fc 0%, #8ec5fc 100%)' },
+        { name: 'Mint Fresh', val: 'linear-gradient(135deg, #d4fc79 0%, #96e6a1 100%)' },
+        { name: 'Cotton Candy', val: 'linear-gradient(135deg, #fbc2eb 0%, #a6c1ee 100%)' },
+        { name: 'Creamy Sunshine', val: 'linear-gradient(135deg, #fff1eb 0%, #ace0f9 100%)' },
+        { name: 'Morning Sky', val: 'linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%)' },
+        { name: 'Rose Quartz', val: 'linear-gradient(135deg, #ffdde1 0%, #ee9ca7 100%)' },
+        { name: 'Soft Emerald', val: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)' },
+        { name: 'Warm Dusk', val: 'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)' },
+        { name: 'Soft Lilac', val: 'linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%)' },
+        { name: 'Powder Blue', val: 'linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%)' },
+        { name: 'Lemon Sorbet', val: 'linear-gradient(135deg, #fef9c3 0%, #fef08a 100%)' },
+        { name: 'Velvet Berry', val: 'linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%)' },
+        { name: 'Minimalist Fog', val: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)' }
+    ];
+
+    function toggleStep1BgFields(val) {
+        var fileBlock = document.getElementById('step1-bg-file-block');
+        var fileInput = document.getElementById('step1-bg-file-input');
+        var gradBlock = document.getElementById('step1-bg-gradient-block');
+        if (val === 'file') {
+            if (fileBlock) fileBlock.style.display = 'block';
+            if (fileInput) fileInput.required = true;
+            if (gradBlock) gradBlock.style.display = 'none';
+        } else {
+            if (fileBlock) fileBlock.style.display = 'none';
+            if (fileInput) fileInput.required = false;
+            if (gradBlock) gradBlock.style.display = 'block';
+        }
+    }
+
+    function renderStep1GradientSwatches() {
+        var container = document.getElementById('step1-gradient-swatches');
+        if (!container) return;
+        container.innerHTML = '';
+        var inputVal = document.getElementById('step1-bg-gradient-val');
+        
+        defaultPastelGradients.forEach(function(g, idx) {
+            var div = document.createElement('div');
+            div.style.height = '36px';
+            div.style.borderRadius = '8px';
+            div.style.cursor = 'pointer';
+            div.style.background = g.val;
+            div.style.border = (idx === 0) ? '2px solid var(--accent)' : '1px solid #cbd5e1';
+            div.title = g.name;
+            div.onclick = function() {
+                Array.from(container.children).forEach(c => c.style.border = '1px solid #cbd5e1');
+                div.style.border = '2px solid var(--accent)';
+                if (inputVal) inputVal.value = g.val;
+            };
+            container.appendChild(div);
+        });
+    }
+
+    function pushState() {
+        if (isUndoRedoAction) return;
+        var state = JSON.stringify({
+            elements: JSON.parse(JSON.stringify(elements)),
+            bgUrl: bgUrl,
+            bgW: bgW,
+            bgH: bgH
+        });
+        if (undoStack.length > 0 && undoStack[undoStack.length - 1] === state) {
+            return;
+        }
+        undoStack.push(state);
+        if (undoStack.length > 50) {
+            undoStack.shift();
+        }
+        redoStack = [];
+        updateUndoRedoButtons();
+    }
+
+    function undo() {
+        if (undoStack.length === 0) return;
+        isUndoRedoAction = true;
+        var currentState = JSON.stringify({
+            elements: JSON.parse(JSON.stringify(elements)),
+            bgUrl: bgUrl,
+            bgW: bgW,
+            bgH: bgH
+        });
+        redoStack.push(currentState);
+        
+        var state = JSON.parse(undoStack.pop());
+        elements = state.elements || [];
+        bgUrl = state.bgUrl || bgUrl;
+        bgW = state.bgW || bgW;
+        bgH = state.bgH || bgH;
+        
+        activeId = null;
+        drawElements();
+        selectElement(null);
+        updateUndoRedoButtons();
+        isUndoRedoAction = false;
+    }
+
+    function redo() {
+        if (redoStack.length === 0) return;
+        isUndoRedoAction = true;
+        var currentState = JSON.stringify({
+            elements: JSON.parse(JSON.stringify(elements)),
+            bgUrl: bgUrl,
+            bgW: bgW,
+            bgH: bgH
+        });
+        undoStack.push(currentState);
+        
+        var state = JSON.parse(redoStack.pop());
+        elements = state.elements || [];
+        bgUrl = state.bgUrl || bgUrl;
+        bgW = state.bgW || bgW;
+        bgH = state.bgH || bgH;
+        
+        activeId = null;
+        drawElements();
+        selectElement(null);
+        updateUndoRedoButtons();
+        isUndoRedoAction = false;
+    }
+
+    function updateUndoRedoButtons() {
+        var btnUndo = document.getElementById('btn-undo');
+        var btnRedo = document.getElementById('btn-redo');
+        if (btnUndo) btnUndo.disabled = undoStack.length === 0;
+        if (btnRedo) btnRedo.disabled = redoStack.length === 0;
+    }
+
+    function showBgTab(tab) {
+        document.querySelectorAll('.bg-tab-btn').forEach(b => {
+            b.classList.remove('btn-primary');
+            b.classList.add('btn-outline');
+        });
+        var activeBtn = document.getElementById('bg-tab-btn-' + tab);
+        if (activeBtn) {
+            activeBtn.classList.remove('btn-outline');
+            activeBtn.classList.add('btn-primary');
+        }
+        
+        ['pastel', 'custom', 'solid'].forEach(t => {
+            var block = document.getElementById('bg-tab-' + t);
+            if (block) block.style.display = (t === tab) ? 'block' : 'none';
+        });
+    }
+
+    function getSavedCustomGradients() {
+        try {
+            return JSON.parse(localStorage.getItem('pepp_custom_gradients')) || [];
+        } catch(e) {
+            return [];
+        }
+    }
+
+    function renderBackgroundPresetGrid() {
+        var container = document.getElementById('pastel-presets-grid');
+        if (!container) return;
+        container.innerHTML = '';
+        
+        var allGradients = defaultPastelGradients.map(g => g.val);
+        var savedCustom = getSavedCustomGradients();
+        savedCustom.forEach(gVal => {
+            if (!allGradients.includes(gVal)) {
+                allGradients.push(gVal);
+            }
+        });
+        
+        allGradients.forEach(function(gVal) {
+            var div = document.createElement('div');
+            div.style.height = '30px';
+            div.style.borderRadius = '6px';
+            div.style.cursor = 'pointer';
+            div.style.background = gVal;
+            div.style.border = (bgUrl === gVal) ? '2px solid var(--accent)' : '1px solid #cbd5e1';
+            div.onclick = function() {
+                applyBackgroundStyle(gVal);
+            };
+            container.appendChild(div);
+        });
+    }
+
+    function applyBackgroundStyle(styleVal) {
+        pushState();
+        bgUrl = styleVal;
+        drawElements();
+        renderBackgroundPresetGrid();
+    }
+
+    function updateCustomGradient() {
+        var type = document.getElementById('cust-grad-type').value;
+        var c1 = document.getElementById('cust-grad-c1').value;
+        var c2 = document.getElementById('cust-grad-c2').value;
+        var angleBlock = document.getElementById('cust-grad-angle-block');
+        var gradStr = '';
+        
+        if (type === 'radial') {
+            if (angleBlock) angleBlock.style.display = 'none';
+            gradStr = 'radial-gradient(circle, ' + c1 + ' 0%, ' + c2 + ' 100%)';
+        } else {
+            if (angleBlock) angleBlock.style.display = 'block';
+            var angle = document.getElementById('cust-grad-angle').value || 135;
+            document.getElementById('cust-angle-val').textContent = angle;
+            gradStr = 'linear-gradient(' + angle + 'deg, ' + c1 + ' 0%, ' + c2 + ' 100%)';
+        }
+        
+        var preview = document.getElementById('cust-grad-preview');
+        if (preview) preview.style.background = gradStr;
+        return gradStr;
+    }
+
+    function applyCustomGradient() {
+        var gradStr = updateCustomGradient();
+        applyBackgroundStyle(gradStr);
+    }
+
+    function presetNewGradient() {
+        var gradVal = updateCustomGradient();
+        var saved = getSavedCustomGradients();
+        if (!saved.includes(gradVal)) {
+            saved.push(gradVal);
+            localStorage.setItem('pepp_custom_gradients', JSON.stringify(saved));
+        }
+        renderBackgroundPresetGrid();
+        applyBackgroundStyle(gradVal);
+        alert('Gradient added to your saved presets!');
+    }
+
+    function applySolidColor(colorHex) {
+        applyBackgroundStyle(colorHex);
+    }
+
     var originalW = bgW;
     var originalH = bgH;
-    var tempBg = new Image();
-    tempBg.src = bgUrl;
-    tempBg.onload = function() {
-        originalW = tempBg.naturalWidth;
-        originalH = tempBg.naturalHeight;
-    };
+    if (bgUrl && !bgUrl.includes('gradient') && !bgUrl.startsWith('#')) {
+        var tempBg = new Image();
+        tempBg.src = bgUrl;
+        tempBg.onload = function() {
+            originalW = tempBg.naturalWidth;
+            originalH = tempBg.naturalHeight;
+        };
+    }
 
     function fitToOriginalSize() {
         document.getElementById('resize-w').value = originalW;
@@ -613,11 +952,13 @@ include 'includes/admin_nav.php';
         container.style.transform = 'scale(' + scale + ')';
         container.style.transformOrigin = 'top left';
         
+        renderBackgroundPresetGrid();
         drawElements();
     }
 
     function drawElements() {
         var container = document.getElementById('editor-canvas');
+        if (!container) return;
         container.innerHTML = '';
         
         // Draw the background overlay layer (zIndex = 2)
@@ -628,8 +969,16 @@ include 'includes/admin_nav.php';
         bgOverlay.style.left = '0';
         bgOverlay.style.width = '100%';
         bgOverlay.style.height = '100%';
-        bgOverlay.style.backgroundImage = 'url("' + bgUrl + '")';
-        bgOverlay.style.backgroundSize = '100% 100%';
+        
+        if (bgUrl && (bgUrl.indexOf('linear-gradient') !== -1 || bgUrl.indexOf('radial-gradient') !== -1)) {
+            bgOverlay.style.background = bgUrl;
+        } else if (bgUrl && (bgUrl.startsWith('#') || bgUrl.startsWith('rgb'))) {
+            bgOverlay.style.backgroundColor = bgUrl;
+            bgOverlay.style.backgroundImage = 'none';
+        } else {
+            bgOverlay.style.backgroundImage = 'url("' + bgUrl + '")';
+            bgOverlay.style.backgroundSize = '100% 100%';
+        }
         bgOverlay.style.zIndex = 2;
         bgOverlay.style.pointerEvents = 'none';
         container.appendChild(bgOverlay);
@@ -701,6 +1050,7 @@ include 'includes/admin_nav.php';
 
     function drawLayersList() {
         var container = document.getElementById('layers-list');
+        if (!container) return;
         container.innerHTML = '';
         
         // Reverse array for layer visualization: topmost first
@@ -723,17 +1073,20 @@ include 'includes/admin_nav.php';
         var el = elements.find(e => e.id === id);
         
         // Refresh selection styles on canvas
-        var children = document.getElementById('editor-canvas').children;
-        elements.forEach(function(e, i) {
-            if (children[i]) {
-                if (e.id === id) children[i].classList.add('selected');
-                else children[i].classList.remove('selected');
-            }
-        });
+        var canvas = document.getElementById('editor-canvas');
+        if (canvas) {
+            var children = canvas.children;
+            elements.forEach(function(e, i) {
+                if (children[i + 1]) { // +1 offset for background overlay
+                    if (e.id === id) children[i + 1].classList.add('selected');
+                    else children[i + 1].classList.remove('selected');
+                }
+            });
+        }
         
         // Refresh properties panel
         var panel = document.getElementById('inspector-panel');
-        if (el) {
+        if (el && panel) {
             panel.style.display = 'flex';
             document.getElementById('prop-name').value = el.name || '';
             document.getElementById('prop-behind-bg').checked = !!el.behindBg;
@@ -764,7 +1117,7 @@ include 'includes/admin_nav.php';
             }
             
             loadFont(el.fontFamily);
-        } else {
+        } else if (panel) {
             panel.style.display = 'none';
         }
         
@@ -772,6 +1125,7 @@ include 'includes/admin_nav.php';
     }
 
     function addElement(type, name) {
+        pushState();
         var id = Date.now();
         var newEl = {
             id: id,
@@ -809,6 +1163,7 @@ include 'includes/admin_nav.php';
         var el = elements.find(e => e.id === activeId);
         if (!el) return;
         
+        pushState();
         if (['fontSize', 'borderWidth', 'rotate'].includes(prop)) {
             el[prop] = parseInt(val) || 0;
         } else if (['left', 'top', 'width', 'height', 'opacity', 'lineHeight'].includes(prop)) {
@@ -821,15 +1176,17 @@ include 'includes/admin_nav.php';
         
         // Retain focus
         var panel = document.getElementById('inspector-panel');
-        panel.style.display = 'flex';
+        if (panel) panel.style.display = 'flex';
     }
 
     function deleteActiveElement() {
         if (!activeId) return;
+        pushState();
         elements = elements.filter(e => e.id !== activeId);
         activeId = null;
         drawElements();
-        document.getElementById('inspector-panel').style.display = 'none';
+        var panel = document.getElementById('inspector-panel');
+        if (panel) panel.style.display = 'none';
     }
 
     function duplicateActiveElement() {
@@ -837,6 +1194,7 @@ include 'includes/admin_nav.php';
         var el = elements.find(e => e.id === activeId);
         if (!el) return;
         
+        pushState();
         var clone = Object.assign({}, el);
         clone.id = Date.now();
         clone.left = Math.min(el.left + 5, 80);
@@ -855,6 +1213,7 @@ include 'includes/admin_nav.php';
         var targetIdx = idx + delta;
         if (targetIdx < 0 || targetIdx >= elements.length) return;
         
+        pushState();
         var temp = elements[idx];
         elements[idx] = elements[targetIdx];
         elements[targetIdx] = temp;
@@ -865,6 +1224,7 @@ include 'includes/admin_nav.php';
 
     // Draggable Workspace element positioning
     function dragStart(e, div, el) {
+        pushState();
         var startX = e.clientX;
         var startY = e.clientY;
         
@@ -889,8 +1249,10 @@ include 'includes/admin_nav.php';
             div.style.left = el.left + '%';
             div.style.top = el.top + '%';
             
-            document.getElementById('prop-left').value = el.left;
-            document.getElementById('prop-top').value = el.top;
+            var propLeft = document.getElementById('prop-left');
+            var propTop = document.getElementById('prop-top');
+            if (propLeft) propLeft.value = el.left;
+            if (propTop) propTop.value = el.top;
         }
         
         function dragEnd() {
@@ -912,6 +1274,7 @@ include 'includes/admin_nav.php';
         var w = parseInt(document.getElementById('resize-w').value) || 800;
         var h = parseInt(document.getElementById('resize-h').value) || 600;
         
+        pushState();
         bgW = w;
         bgH = h;
         
@@ -920,10 +1283,20 @@ include 'includes/admin_nav.php';
     }
 
     function saveTemplate() {
-        var title = document.getElementById('resize-title').value;
-        var category = document.getElementById('resize-category').value;
-        var status = document.getElementById('resize-status').value;
+        var titleInput = document.getElementById('resize-title');
+        var categoryInput = document.getElementById('resize-category');
+        var statusInput = document.getElementById('resize-status');
+        
+        var title = titleInput ? titleInput.value : '<?php echo addslashes($tpl['title'] ?? ''); ?>';
+        var category = categoryInput ? categoryInput.value : '<?php echo addslashes($tpl['category'] ?? ''); ?>';
+        var status = statusInput ? statusInput.value : 'active';
         var dpiVal = document.getElementById('resize-dpi') ? parseInt(document.getElementById('resize-dpi').value) || 72 : 72;
+        
+        // Strip ../ prefix if saving a background image or gradient style to database
+        var saveBgPath = bgUrl;
+        if (saveBgPath.startsWith('../')) {
+            saveBgPath = saveBgPath.replace(/^\.\.\//, '');
+        }
         
         var formData = new FormData();
         formData.append('action', 'save_template');
@@ -940,6 +1313,9 @@ include 'includes/admin_nav.php';
         var bgFileInput = document.getElementById('resize-bg-file');
         if (bgFileInput && bgFileInput.files.length > 0) {
             formData.append('bg_file', bgFileInput.files[0]);
+        } else {
+            // Save gradient or solid background path in bg_image parameter
+            formData.append('bg_path_style', saveBgPath);
         }
         
         fetch('cards-edit.php?id=<?php echo $template_id; ?>', {
@@ -961,22 +1337,44 @@ include 'includes/admin_nav.php';
         });
     }
 
+    // Keyboard Shortcuts: Ctrl+Z (Undo), Ctrl+Y (Redo), Delete/Backspace (Delete Active)
     window.addEventListener('keydown', function(e) {
-        if (!activeId) return;
+        var activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+        var isEditable = activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select' || (document.activeElement && document.activeElement.isContentEditable);
         
-        // Skip handling keyboard movement when typing in inputs/selects/textareas
-        var activeTag = document.activeElement.tagName.toLowerCase();
-        if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
+        if (isEditable) return;
+        
+        // Undo: Ctrl+Z or Cmd+Z (without Shift)
+        if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+            e.preventDefault();
+            undo();
             return;
         }
+        
+        // Redo: Ctrl+Y / Cmd+Y OR Ctrl+Shift+Z / Cmd+Shift+Z
+        if (((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) ||
+            ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'z' || e.key === 'Z'))) {
+            e.preventDefault();
+            redo();
+            return;
+        }
+        
+        // Delete: Delete or Backspace key when an element is active
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            if (activeId) {
+                e.preventDefault();
+                deleteActiveElement();
+                return;
+            }
+        }
+        
+        if (!activeId) return;
         
         var el = elements.find(item => item.id === activeId);
         if (!el) return;
         
         var step = 0.1;
-        if (e.shiftKey) {
-            step = 1.0;
-        }
+        if (e.shiftKey) step = 1.0;
         
         var moved = false;
         if (e.key === 'ArrowUp') {
@@ -998,7 +1396,6 @@ include 'includes/admin_nav.php';
             drawElements();
             selectElement(activeId);
             
-            // Update input elements in inspector panel
             var propLeft = document.getElementById('prop-left');
             var propTop = document.getElementById('prop-top');
             if (propLeft) propLeft.value = el.left;
@@ -1007,7 +1404,10 @@ include 'includes/admin_nav.php';
     });
 
     window.addEventListener('resize', initCanvas);
-    window.addEventListener('DOMContentLoaded', initCanvas);
+    window.addEventListener('DOMContentLoaded', function() {
+        renderStep1GradientSwatches();
+        initCanvas();
+    });
     </script>
 <?php endif; ?>
 
