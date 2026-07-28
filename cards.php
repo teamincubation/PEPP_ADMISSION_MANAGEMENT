@@ -91,10 +91,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'uploa
     }
 }
 
-// ── Action: Toggle / Delete Template ────────────
+// ── Action: Toggle / Delete / Clone Template ────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
-    if ($action === 'delete_template') {
+    if ($action === 'clone_template') {
+        if (!csrf_verify()) {
+            $error_message = 'Security token mismatch.';
+        } else {
+            $tid = (int)($_POST['template_id'] ?? 0);
+            $new_title = trim($_POST['new_title'] ?? '');
+            if (!$tid) {
+                $error_message = 'Invalid template specified for cloning.';
+            } elseif (empty($new_title)) {
+                $error_message = 'Please specify a title for the cloned template.';
+            } else {
+                try {
+                    $stmt = $pdo->prepare("SELECT * FROM card_templates WHERE id = ?");
+                    $stmt->execute([$tid]);
+                    $orig = $stmt->fetch();
+                    if (!$orig) {
+                        $error_message = 'Source template not found.';
+                    } else {
+                        // Duplicate background image if exists
+                        $new_bg_db_path = $orig['bg_image'];
+                        if (!empty($orig['bg_image'])) {
+                            $orig_file_path = __DIR__ . '/../' . ltrim($orig['bg_image'], '/');
+                            if (file_exists($orig_file_path)) {
+                                $target_dir = __DIR__ . '/../uploads/card_templates';
+                                if (!is_dir($target_dir)) {
+                                    @mkdir($target_dir, 0755, true);
+                                }
+                                $new_filename = uniqid('clone_') . '_' . preg_replace('/[^A-Za-z0-9._-]/', '_', basename($orig['bg_image']));
+                                $new_file_path = $target_dir . '/' . $new_filename;
+                                if (@copy($orig_file_path, $new_file_path)) {
+                                    $new_bg_db_path = 'uploads/card_templates/' . $new_filename;
+                                }
+                            }
+                        }
+
+                        $insert_stmt = $pdo->prepare("
+                            INSERT INTO card_templates 
+                            (title, category, description, bg_image, canvas_width, canvas_height, resolution_dpi, aspect_ratio, status, elements_json, created_by)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ");
+                        $insert_stmt->execute([
+                            $new_title,
+                            $orig['category'],
+                            $orig['description'],
+                            $new_bg_db_path,
+                            $orig['canvas_width'],
+                            $orig['canvas_height'],
+                            $orig['resolution_dpi'] ?? 72,
+                            $orig['aspect_ratio'],
+                            $orig['status'] ?? 'active',
+                            $orig['elements_json'],
+                            $admin_username
+                        ]);
+                        $success_message = "Template cloned successfully as '" . htmlspecialchars($new_title) . "'.";
+                    }
+                } catch (Exception $e) {
+                    $error_message = "Failed to clone template: " . $e->getMessage();
+                }
+            }
+        }
+    } elseif ($action === 'delete_template') {
         if (!csrf_verify()) {
             $error_message = 'Security token mismatch.';
         } else {
@@ -433,6 +493,7 @@ include 'includes/admin_nav.php';
                                 </div>
                                 <div style="display:flex; gap:6px; align-items:center; font-size:0.75rem;">
                                     <a href="cards-edit.php?id=<?php echo (int)$tpl['id']; ?>" class="btn btn-sm btn-outline" style="padding:4px 8px; font-size:0.72rem; flex:1; text-align:center;"><i class="fas fa-edit"></i> Edit</a>
+                                    <button type="button" class="btn btn-sm btn-soft-violet" style="padding:4px 8px; font-size:0.72rem; flex:1; text-align:center;" onclick="openCloneModal(<?php echo (int)$tpl['id']; ?>, <?php echo htmlspecialchars(json_encode($tpl['title']), ENT_QUOTES, 'UTF-8'); ?>)"><i class="fas fa-copy"></i> Clone</button>
                                     <form method="POST" onsubmit="return confirm('Are you sure you want to delete this template?');" style="flex:1;">
                                         <?php echo csrf_field(); ?>
                                         <input type="hidden" name="action" value="delete_template">
@@ -542,6 +603,48 @@ include 'includes/admin_nav.php';
             </div>
         </div>
     </div>
+<!-- ── CLONE TEMPLATE MODAL ── -->
+<div class="modal-backdrop" id="clone-modal">
+    <div class="modal" style="max-width:440px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-copy" style="color:var(--accent);"></i> Clone Card Template</h3>
+            <button type="button" class="modal-close" onclick="closeModal('clone-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="clone_template">
+            <input type="hidden" name="template_id" id="clone-template-id" value="">
+            <div class="modal-body">
+                <div class="field full" style="margin-bottom:0;">
+                    <label>New Template Title <span style="color:#ef4444;">*</span></label>
+                    <input type="text" name="new_title" id="clone-template-title" placeholder="Enter new template title..." required>
+                    <small style="color:#64748b; font-size:0.75rem; display:block; margin-top:6px;">
+                        This will create a new copy of the template design and duplicate its background image file.
+                    </small>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('clone-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-copy"></i> Clone Template</button>
+            </div>
+        </form>
+    </div>
 </div>
 
+<script>
+function openCloneModal(id, currentTitle) {
+    document.getElementById('clone-template-id').value = id;
+    document.getElementById('clone-template-title').value = currentTitle + ' (Copy)';
+    openModal('clone-modal');
+    setTimeout(function() {
+        var input = document.getElementById('clone-template-title');
+        if (input) {
+            input.focus();
+            input.select();
+        }
+    }, 100);
+}
+</script>
+
 <?php include 'includes/admin_footer.php'; ?>
+
