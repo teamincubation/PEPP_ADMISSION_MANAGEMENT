@@ -373,6 +373,8 @@ include 'includes/admin_nav.php';
             <button class="btn btn-sm btn-outline" style="text-align:left;" onclick="addElement('text', 'Your Custom Text')"><i class="fas fa-font"></i> Free Text field</button>
             <button class="btn btn-sm btn-soft-violet" style="text-align:left;" onclick="addElement('photo', 'Student Photo')"><i class="fas fa-image"></i> Photo Placeholder</button>
             <button class="btn btn-sm btn-soft-violet" style="text-align:left;" onclick="addElement('photo', 'University Logo')"><i class="fas fa-university"></i> University Logo</button>
+            <button class="btn btn-sm btn-primary" style="text-align:left;" onclick="triggerAddImageUpload()"><i class="fas fa-file-image"></i> Upload Static Image</button>
+            <input type="file" id="add-static-image-input" accept="image/*" style="display:none;" onchange="handleStaticImageUpload(this)">
             
             <h4 style="font-weight:700; border-bottom:1px solid #eee; padding-bottom:6px; margin:15px 0 6px 0;">Layers Management</h4>
             <div id="layers-list" style="display:flex; flex-direction:column; gap:6px;">
@@ -538,6 +540,10 @@ include 'includes/admin_nav.php';
                         <label>Border Color</label>
                         <input type="color" id="prop-border-color" oninput="updateActiveElement('borderColor', this.value)">
                     </div>
+                </div>
+                <div class="field full" id="image-replace-block" style="display:none; margin-top:6px;">
+                    <label>Replace Image Graphic</label>
+                    <input type="file" accept="image/*" onchange="replaceActiveStaticImage(this)" style="font-size:0.75rem;">
                 </div>
             </div>
 
@@ -1040,10 +1046,23 @@ include 'includes/admin_nav.php';
                 } else {
                     div.style.justifyContent = 'center';
                 }
-            } else if (el.type === 'photo') {
+            } else if (el.type === 'photo' || el.type === 'image') {
                 div.style.border = (el.borderWidth || 0) + 'px solid ' + (el.borderColor || '#000');
-                div.style.background = '#e2e8f0 url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' width=\'24\' height=\'24\'%3E%3Cpath fill=\'%2364748b\' d=\'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z\'/%3E%3C/svg%3E") no-repeat center';
-                div.style.backgroundSize = '40px';
+                div.style.overflow = 'hidden';
+                
+                if (el.type === 'image' && el.imageSrc) {
+                    div.innerHTML = '';
+                    var img = document.createElement('img');
+                    img.src = el.imageSrc;
+                    img.style.width = '100%';
+                    img.style.height = '100%';
+                    img.style.objectFit = 'contain';
+                    img.style.pointerEvents = 'none';
+                    div.appendChild(img);
+                } else {
+                    div.style.background = '#e2e8f0 url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' width=\'24\' height=\'24\'%3E%3Cpath fill=\'%2364748b\' d=\'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z\'/%3E%3C/svg%3E") no-repeat center';
+                    div.style.backgroundSize = '40px';
+                }
                 
                 // Mask shapes
                 if (el.mask === 'circle') { div.style.clipPath = 'circle(50%)'; div.style.borderRadius = '0'; }
@@ -1134,9 +1153,11 @@ include 'includes/admin_nav.php';
             document.getElementById('prop-opacity').value = el.opacity ?? 1;
             
             // Mask options
-            if (el.type === 'photo') {
+            if (el.type === 'photo' || el.type === 'image') {
                 document.getElementById('photo-style-block').style.display = 'block';
                 document.getElementById('text-style-block').style.display = 'none';
+                var replaceBlock = document.getElementById('image-replace-block');
+                if (replaceBlock) replaceBlock.style.display = (el.type === 'image') ? 'block' : 'none';
                 document.getElementById('prop-mask').value = el.mask || 'none';
                 document.getElementById('prop-border-width').value = el.borderWidth || 0;
                 document.getElementById('prop-border-color').value = el.borderColor || '#000000';
@@ -1185,6 +1206,59 @@ include 'includes/admin_nav.php';
         elements.push(newEl);
         drawElements();
         selectElement(id);
+    }
+
+    function triggerAddImageUpload() {
+        var input = document.getElementById('add-static-image-input');
+        if (input) {
+            input.value = '';
+            input.click();
+        }
+    }
+
+    function handleStaticImageUpload(input) {
+        if (!input.files || !input.files[0]) return;
+        var file = input.files[0];
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            var dataUrl = e.target.result;
+            pushState();
+            var id = Date.now();
+            var newEl = {
+                id: id,
+                type: 'image',
+                name: file.name ? file.name.replace(/\.[^/.]+$/, "") : 'Static Image',
+                imageSrc: dataUrl,
+                left: 20,
+                top: 20,
+                width: 25,
+                height: 25,
+                rotate: 0,
+                opacity: 1,
+                mask: 'none',
+                borderWidth: 0,
+                borderColor: '#000000',
+                behindBg: false
+            };
+            elements.push(newEl);
+            drawElements();
+            selectElement(id);
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function replaceActiveStaticImage(input) {
+        if (!activeId || !input.files || !input.files[0]) return;
+        var el = elements.find(e => e.id === activeId);
+        if (!el || el.type !== 'image') return;
+        
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            pushState();
+            el.imageSrc = e.target.result;
+            drawElements();
+        };
+        reader.readAsDataURL(input.files[0]);
     }
 
     function updateActiveElement(prop, val) {
