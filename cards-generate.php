@@ -212,6 +212,62 @@ include 'includes/admin_nav.php';
                 </div>
             <?php endforeach; ?>
 
+            <div class="form-field-group">
+                <div class="form-field-title" style="border-bottom:1px solid #eee; padding-bottom:6px; margin-bottom:10px;">
+                    <i class="fas fa-palette" style="color:var(--accent);"></i> Canvas Background
+                </div>
+                <div style="display:flex; gap:4px; margin-bottom:10px;">
+                    <button type="button" class="btn btn-xs btn-primary bg-tab-btn" id="bg-tab-btn-pastel" style="flex:1; font-size:0.7rem; padding:5px;" onclick="showBgTab('pastel')">Pastels</button>
+                    <button type="button" class="btn btn-xs btn-outline bg-tab-btn" id="bg-tab-btn-custom" style="flex:1; font-size:0.7rem; padding:5px;" onclick="showBgTab('custom')">Custom</button>
+                    <button type="button" class="btn btn-xs btn-outline bg-tab-btn" id="bg-tab-btn-solid" style="flex:1; font-size:0.7rem; padding:5px;" onclick="showBgTab('solid')">Solid</button>
+                </div>
+
+                <!-- Pastel Presets Grid -->
+                <div id="bg-tab-pastel" style="display:block;">
+                    <div id="pastel-presets-grid" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; max-height:160px; overflow-y:auto; padding:2px;">
+                        <!-- Filled dynamically -->
+                    </div>
+                </div>
+
+                <!-- Custom Gradient Builder -->
+                <div id="bg-tab-custom" style="display:none; background:#f8fafc; padding:8px; border-radius:8px; border:1px solid #e2e8f0;">
+                    <div class="field" style="margin-bottom:6px;">
+                        <label style="font-size:0.72rem; margin-bottom:2px; display:block; font-weight:700;">Type</label>
+                        <select id="cust-grad-type" onchange="updateCustomGradient()" style="font-size:0.75rem; padding:3px 6px; width:100%; border:1px solid #cbd5e1; border-radius:4px;">
+                            <option value="linear">Linear Gradient</option>
+                            <option value="radial">Radial Gradient</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; gap:6px; margin-bottom:6px;">
+                        <div class="field" style="flex:1;">
+                            <label style="font-size:0.72rem; margin-bottom:2px; display:block; font-weight:700;">Start Color</label>
+                            <input type="color" id="cust-grad-c1" value="#a1c4fd" oninput="updateCustomGradient()" style="height:28px; width:100%; cursor:pointer; border:1px solid #cbd5e1; border-radius:4px; padding:0;">
+                        </div>
+                        <div class="field" style="flex:1;">
+                            <label style="font-size:0.72rem; margin-bottom:2px; display:block; font-weight:700;">End Color</label>
+                            <input type="color" id="cust-grad-c2" value="#c2e9fb" oninput="updateCustomGradient()" style="height:28px; width:100%; cursor:pointer; border:1px solid #cbd5e1; border-radius:4px; padding:0;">
+                        </div>
+                    </div>
+                    <div class="field" style="margin-bottom:6px;" id="cust-grad-angle-block">
+                        <label style="font-size:0.72rem; margin-bottom:2px; display:block; font-weight:700;">Angle: <span id="cust-angle-val">135</span>&deg;</label>
+                        <input type="range" id="cust-grad-angle" min="0" max="360" value="135" oninput="updateCustomGradient()" style="width:100%;">
+                    </div>
+                    <div id="cust-grad-preview" style="height:28px; border-radius:6px; border:1px solid #cbd5e1; margin-bottom:6px; background:linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%);"></div>
+                    <div style="display:flex; gap:4px;">
+                        <button type="button" class="btn btn-xs btn-primary" style="flex:1; font-size:0.7rem;" onclick="applyCustomGradient()"><i class="fas fa-check"></i> Apply</button>
+                        <button type="button" class="btn btn-xs btn-soft-violet" style="flex:1; font-size:0.7rem;" onclick="presetNewGradient()"><i class="fas fa-bookmark"></i> Preset New</button>
+                    </div>
+                </div>
+
+                <!-- Solid Color Picker -->
+                <div id="bg-tab-solid" style="display:none; background:#f8fafc; padding:8px; border-radius:8px; border:1px solid #e2e8f0;">
+                    <div class="field" style="margin-bottom:6px;">
+                        <label style="font-size:0.72rem; margin-bottom:2px; display:block; font-weight:700;">Solid Background Color</label>
+                        <input type="color" id="solid-bg-picker" value="#ffffff" onchange="applySolidColor(this.value)" style="height:32px; width:100%; cursor:pointer; border:1px solid #cbd5e1; border-radius:4px; padding:0;">
+                    </div>
+                </div>
+            </div>
+
             <div class="field full">
                 <label>Download Format</label>
                 <select id="download-format">
@@ -250,13 +306,135 @@ include 'includes/admin_nav.php';
 <script>
 var bgW = <?php echo $canvas_w; ?>;
 var bgH = <?php echo $canvas_h; ?>;
-var bgUrl = '../<?php echo htmlspecialchars($tpl['bg_image']); ?>';
+var bgUrl = '<?php echo addslashes($tpl['bg_image']); ?>';
+if (bgUrl && !bgUrl.startsWith('linear-gradient') && !bgUrl.startsWith('radial-gradient') && !bgUrl.startsWith('#') && !bgUrl.startsWith('http') && !bgUrl.startsWith('../')) {
+    bgUrl = '../' + bgUrl;
+}
+var defaultPastelGradients = [
+    { name: 'Sunset Pastel', val: 'linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%)' },
+    { name: 'Soft Peach', val: 'linear-gradient(135deg, #ffedd5 0%, #fed7aa 100%)' },
+    { name: 'Ocean Breeze', val: 'linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%)' },
+    { name: 'Lavender Mist', val: 'linear-gradient(135deg, #e0c3fc 0%, #8ec5fc 100%)' },
+    { name: 'Mint Fresh', val: 'linear-gradient(135deg, #d4fc79 0%, #96e6a1 100%)' },
+    { name: 'Cotton Candy', val: 'linear-gradient(135deg, #fbc2eb 0%, #a6c1ee 100%)' },
+    { name: 'Creamy Sunshine', val: 'linear-gradient(135deg, #fff1eb 0%, #ace0f9 100%)' },
+    { name: 'Morning Sky', val: 'linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%)' },
+    { name: 'Rose Quartz', val: 'linear-gradient(135deg, #ffdde1 0%, #ee9ca7 100%)' },
+    { name: 'Soft Emerald', val: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)' },
+    { name: 'Warm Dusk', val: 'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)' },
+    { name: 'Soft Lilac', val: 'linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%)' },
+    { name: 'Powder Blue', val: 'linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%)' },
+    { name: 'Lemon Sorbet', val: 'linear-gradient(135deg, #fef9c3 0%, #fef08a 100%)' },
+    { name: 'Velvet Berry', val: 'linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%)' },
+    { name: 'Minimalist Fog', val: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)' }
+];
 var elements = <?php echo json_encode($elements); ?>;
 var customFonts = <?php echo json_encode($fonts); ?>;
 var customFontNames = customFonts.map(f => f.font_name);
 var photos = {}; // Cache for base64 uploaded photo blobs
 var activeId = null;
 var excludedElements = {}; // Map of excluded element IDs
+
+function showBgTab(tab) {
+    document.querySelectorAll('.bg-tab-btn').forEach(b => {
+        b.classList.remove('btn-primary');
+        b.classList.add('btn-outline');
+    });
+    var activeBtn = document.getElementById('bg-tab-btn-' + tab);
+    if (activeBtn) {
+        activeBtn.classList.remove('btn-outline');
+        activeBtn.classList.add('btn-primary');
+    }
+    
+    ['pastel', 'custom', 'solid'].forEach(t => {
+        var block = document.getElementById('bg-tab-' + t);
+        if (block) block.style.display = (t === tab) ? 'block' : 'none';
+    });
+}
+
+function getSavedCustomGradients() {
+    try {
+        return JSON.parse(localStorage.getItem('pepp_custom_gradients')) || [];
+    } catch(e) {
+        return [];
+    }
+}
+
+function renderBackgroundPresetGrid() {
+    var container = document.getElementById('pastel-presets-grid');
+    if (!container) return;
+    container.innerHTML = '';
+    
+    var allGradients = defaultPastelGradients.map(g => g.val);
+    var savedCustom = getSavedCustomGradients();
+    savedCustom.forEach(gVal => {
+        if (!allGradients.includes(gVal)) {
+            allGradients.push(gVal);
+        }
+    });
+    
+    allGradients.forEach(function(gVal) {
+        var div = document.createElement('div');
+        div.style.height = '30px';
+        div.style.borderRadius = '6px';
+        div.style.cursor = 'pointer';
+        div.style.background = gVal;
+        div.style.border = (bgUrl === gVal) ? '2px solid var(--accent)' : '1px solid #cbd5e1';
+        div.onclick = function() {
+            applyBackgroundStyle(gVal);
+        };
+        container.appendChild(div);
+    });
+}
+
+function applyBackgroundStyle(styleVal) {
+    bgUrl = styleVal;
+    drawElements();
+    renderBackgroundPresetGrid();
+}
+
+function updateCustomGradient() {
+    var type = document.getElementById('cust-grad-type').value;
+    var c1 = document.getElementById('cust-grad-c1').value;
+    var c2 = document.getElementById('cust-grad-c2').value;
+    var angleBlock = document.getElementById('cust-grad-angle-block');
+    var gradStr = '';
+    
+    if (type === 'radial') {
+        if (angleBlock) angleBlock.style.display = 'none';
+        gradStr = 'radial-gradient(circle, ' + c1 + ' 0%, ' + c2 + ' 100%)';
+    } else {
+        if (angleBlock) angleBlock.style.display = 'block';
+        var angle = document.getElementById('cust-grad-angle').value || 135;
+        document.getElementById('cust-angle-val').textContent = angle;
+        gradStr = 'linear-gradient(' + angle + 'deg, ' + c1 + ' 0%, ' + c2 + ' 100%)';
+    }
+    
+    var preview = document.getElementById('cust-grad-preview');
+    if (preview) preview.style.background = gradStr;
+    return gradStr;
+}
+
+function applyCustomGradient() {
+    var gradStr = updateCustomGradient();
+    applyBackgroundStyle(gradStr);
+}
+
+function presetNewGradient() {
+    var gradVal = updateCustomGradient();
+    var saved = getSavedCustomGradients();
+    if (!saved.includes(gradVal)) {
+        saved.push(gradVal);
+        localStorage.setItem('pepp_custom_gradients', JSON.stringify(saved));
+    }
+    renderBackgroundPresetGrid();
+    applyBackgroundStyle(gradVal);
+    alert('Gradient added to your saved presets!');
+}
+
+function applySolidColor(colorHex) {
+    applyBackgroundStyle(colorHex);
+}
 
 function toggleElementInclude(id, isIncluded) {
     excludedElements[id] = !isIncluded;
@@ -356,6 +534,7 @@ function initCanvas() {
     container.style.transform = 'scale(' + scale + ')';
     container.style.transformOrigin = 'top left';
     
+    renderBackgroundPresetGrid();
     drawElements();
 }
 
