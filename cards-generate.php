@@ -152,64 +152,143 @@ include 'includes/admin_nav.php';
             <!-- Dynamic Fields -->
             <?php foreach ($elements as $el): ?>
                 <?php if ($el['type'] === 'image') continue; ?>
-                <div class="form-field-group" id="field-group-<?php echo $el['id']; ?>">
-                    <div class="form-field-title" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                        <span><?php echo htmlspecialchars($el['name']); ?></span>
-                        <div style="display:flex; align-items:center; gap:8px;">
-                            <button type="button" class="btn btn-xs btn-outline" style="font-size:0.65rem; padding:1px 6px; color:#ef4444; border-color:#fca5a5;" onclick="clearElementField(<?php echo $el['id']; ?>)" title="Clear &amp; Omit Field"><i class="fas fa-trash-can"></i> Omit</button>
-                            <label style="font-size:0.7rem; font-weight:600; color:#64748b; margin:0; cursor:pointer; display:inline-flex; align-items:center; gap:3px;">
-                                <input type="checkbox" id="chk-include-<?php echo $el['id']; ?>" onchange="toggleElementInclude(<?php echo $el['id']; ?>, this.checked)" checked> Include
-                            </label>
+                <?php if ($el['type'] === 'dynamic_bg'): ?>
+                    <?php
+                    $allow_pastel = $el['allowPastel'] ?? true;
+                    $allow_solid = $el['allowSolid'] ?? true;
+                    $allow_custom = $el['allowCustom'] ?? true;
+                    if (!$allow_pastel && !$allow_solid && !$allow_custom) {
+                        $allow_pastel = $allow_solid = $allow_custom = true;
+                    }
+                    $active_tab = 'pastel';
+                    if (!$allow_pastel) {
+                        $active_tab = $allow_solid ? 'solid' : 'custom';
+                    }
+                    ?>
+                    <div class="form-field-group" id="field-group-<?php echo $el['id']; ?>">
+                        <div class="form-field-title" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                            <span><i class="fas fa-palette" style="color:var(--accent);"></i> <?php echo htmlspecialchars($el['name']); ?></span>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <label style="font-size:0.7rem; font-weight:600; color:#64748b; margin:0; cursor:pointer; display:inline-flex; align-items:center; gap:3px;">
+                                    <input type="checkbox" id="chk-include-<?php echo $el['id']; ?>" onchange="toggleElementInclude(<?php echo $el['id']; ?>, this.checked)" checked> Include
+                                </label>
+                            </div>
                         </div>
-                    </div>
-                    <?php if ($el['type'] === 'text'): ?>
-                        <textarea data-id="<?php echo $el['id']; ?>" id="input-text-<?php echo $el['id']; ?>" oninput="updateFieldText(<?php echo $el['id']; ?>, this.value)" class="field-input" style="width:100%; resize:vertical;" rows="2" placeholder="Leave blank to omit from output..."><?php echo htmlspecialchars($el['textContent'] ?? ''); ?></textarea>
-                    <?php elseif ($el['type'] === 'photo'): ?>
-                        <?php 
-                        $is_logo = false;
-                        if (stripos($el['name'], 'logo') !== false) {
-                            $is_logo = true;
-                        }
-                        ?>
-                        <?php if ($is_logo && !empty($logos)): ?>
-                            <div style="margin-bottom: 6px;">
-                                <label style="font-size: 0.75rem; font-weight: 700; color: #475569; display: block; margin-bottom: 2px;">Select Preset Logo</label>
-                                <select class="field-input" id="select-preset-<?php echo $el['id']; ?>" onchange="selectPresetLogo(<?php echo $el['id']; ?>, this.value)" style="width:100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 6px;">
-                                    <option value="">-- Or Upload Custom Logo Below --</option>
-                                    <?php foreach ($logos as $lg): ?>
-                                        <option value="<?php echo htmlspecialchars($lg['logo_file']); ?>"><?php echo htmlspecialchars($lg['name']); ?> (<?php echo $lg['width'] . 'x' . $lg['height']; ?> px)</option>
-                                    <?php endforeach; ?>
-                                </select>
+                        
+                        <div style="display:flex; gap:4px; margin-bottom:8px;">
+                            <?php if ($allow_pastel): ?>
+                                <button type="button" class="btn btn-xs <?php echo $active_tab === 'pastel' ? 'btn-primary' : 'btn-outline'; ?> lyr-bg-tab-btn-<?php echo $el['id']; ?>" id="lyr-bg-tab-btn-pastel-<?php echo $el['id']; ?>" style="flex:1; font-size:0.65rem; padding:3px;" onclick="showLyrBgTabForGen(<?php echo $el['id']; ?>, 'pastel')">Pastels</button>
+                            <?php endif; ?>
+                            <?php if ($allow_custom): ?>
+                                <button type="button" class="btn btn-xs <?php echo $active_tab === 'custom' ? 'btn-primary' : 'btn-outline'; ?> lyr-bg-tab-btn-<?php echo $el['id']; ?>" id="lyr-bg-tab-btn-custom-<?php echo $el['id']; ?>" style="flex:1; font-size:0.65rem; padding:3px;" onclick="showLyrBgTabForGen(<?php echo $el['id']; ?>, 'custom')">Custom</button>
+                            <?php endif; ?>
+                            <?php if ($allow_solid): ?>
+                                <button type="button" class="btn btn-xs <?php echo $active_tab === 'solid' ? 'btn-primary' : 'btn-outline'; ?> lyr-bg-tab-btn-<?php echo $el['id']; ?>" id="lyr-bg-tab-btn-solid-<?php echo $el['id']; ?>" style="flex:1; font-size:0.65rem; padding:3px;" onclick="showLyrBgTabForGen(<?php echo $el['id']; ?>, 'solid')">Solid</button>
+                            <?php endif; ?>
+                        </div>
+
+                        <?php if ($allow_pastel): ?>
+                            <div id="lyr-bg-tab-pastel-<?php echo $el['id']; ?>" style="display:<?php echo $active_tab === 'pastel' ? 'block' : 'none'; ?>;">
+                                <div class="lyr-pastel-presets-grid-gen" data-el-id="<?php echo $el['id']; ?>" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:4px; max-height:100px; overflow-y:auto; padding:2px;">
+                                    <!-- Filled dynamically -->
+                                </div>
                             </div>
                         <?php endif; ?>
-                        
-                        <input type="file" data-id="<?php echo $el['id']; ?>" id="input-file-<?php echo $el['id']; ?>" accept="image/*" onchange="loadPhotoPlaceholder(<?php echo $el['id']; ?>, this)" class="field-file-input" style="width:100%;">
-                        
-                        <div class="photo-controls" id="controls-<?php echo $el['id']; ?>" style="margin-top: 8px; display:none; flex-direction:column; gap:6px; background:#f8fafc; border:1px solid #e2e8f0; padding:8px; border-radius:6px;">
-                            <div style="display:flex; justify-content:space-between; font-size:0.7rem; font-weight:700; color:#475569;">
-                                <span>Photo Zoom</span>
-                                <span id="zoom-val-<?php echo $el['id']; ?>">100%</span>
+
+                        <?php if ($allow_custom): ?>
+                            <div id="lyr-bg-tab-custom-<?php echo $el['id']; ?>" style="display:<?php echo $active_tab === 'custom' ? 'block' : 'none'; ?>; background:#f8fafc; padding:6px; border-radius:6px; border:1px solid #e2e8f0;">
+                                <div style="margin-bottom:4px;">
+                                    <label style="font-size:0.65rem; display:block; font-weight:700; margin-bottom:2px;">Type</label>
+                                    <select id="lyr-cust-grad-type-<?php echo $el['id']; ?>" onchange="updateLyrCustomGradientForGen(<?php echo $el['id']; ?>)" style="font-size:0.7rem; padding:2px 4px; width:100%; border:1px solid #cbd5e1; border-radius:4px;">
+                                        <option value="linear">Linear</option>
+                                        <option value="radial">Radial</option>
+                                    </select>
+                                </div>
+                                <div style="display:flex; gap:4px; margin-bottom:4px;">
+                                    <div style="flex:1;">
+                                        <label style="font-size:0.65rem; display:block; font-weight:700; margin-bottom:2px;">Start</label>
+                                        <input type="color" id="lyr-cust-grad-c1-<?php echo $el['id']; ?>" value="#a1c4fd" oninput="updateLyrCustomGradientForGen(<?php echo $el['id']; ?>)" style="height:24px; width:100%; cursor:pointer; border:1px solid #cbd5e1; border-radius:4px; padding:0;">
+                                    </div>
+                                    <div style="flex:1;">
+                                        <label style="font-size:0.65rem; display:block; font-weight:700; margin-bottom:2px;">End</label>
+                                        <input type="color" id="lyr-cust-grad-c2-<?php echo $el['id']; ?>" value="#c2e9fb" oninput="updateLyrCustomGradientForGen(<?php echo $el['id']; ?>)" style="height:24px; width:100%; cursor:pointer; border:1px solid #cbd5e1; border-radius:4px; padding:0;">
+                                    </div>
+                                </div>
+                                <div id="lyr-cust-grad-angle-block-<?php echo $el['id']; ?>" style="margin-bottom:4px;">
+                                    <label style="font-size:0.65rem; display:block; font-weight:700; margin-bottom:2px;">Angle: <span id="lyr-cust-angle-val-<?php echo $el['id']; ?>">135</span>&deg;</label>
+                                    <input type="range" id="lyr-cust-grad-angle-<?php echo $el['id']; ?>" min="0" max="360" value="135" oninput="updateLyrCustomGradientForGen(<?php echo $el['id']; ?>)" style="width:100%;">
+                                </div>
+                                <button type="button" class="btn btn-xs btn-primary" style="width:100%; font-size:0.65rem;" onclick="applyLyrCustomGradientForGen(<?php echo $el['id']; ?>)">Apply Gradient</button>
                             </div>
-                            <input type="range" min="100" max="300" value="100" oninput="updatePhotoZoom(<?php echo $el['id']; ?>, this.value)" style="width:100%;">
-                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:4px;">
-                                <div>
-                                    <div style="font-size:0.65rem; font-weight:700; color:#475569; display:flex; justify-content:space-between;">
-                                        <span>Pan X</span>
-                                        <span id="panx-val-<?php echo $el['id']; ?>">0%</span>
-                                    </div>
-                                    <input type="range" min="-100" max="100" value="0" oninput="updatePhotoPan(<?php echo $el['id']; ?>, 'x', this.value)" style="width:100%;">
-                                </div>
-                                <div>
-                                    <div style="font-size:0.65rem; font-weight:700; color:#475569; display:flex; justify-content:space-between;">
-                                        <span>Pan Y</span>
-                                        <span id="pany-val-<?php echo $el['id']; ?>">0%</span>
-                                    </div>
-                                    <input type="range" min="-100" max="100" value="0" oninput="updatePhotoPan(<?php echo $el['id']; ?>, 'y', this.value)" style="width:100%;">
-                                </div>
+                        <?php endif; ?>
+
+                        <?php if ($allow_solid): ?>
+                            <div id="lyr-bg-tab-solid-<?php echo $el['id']; ?>" style="display:<?php echo $active_tab === 'solid' ? 'block' : 'none'; ?>; background:#f8fafc; padding:6px; border-radius:6px; border:1px solid #e2e8f0;">
+                                <label style="font-size:0.65rem; display:block; font-weight:700; margin-bottom:2px;">Solid Color</label>
+                                <input type="color" id="lyr-solid-bg-picker-<?php echo $el['id']; ?>" value="#ffffff" onchange="applyLyrSolidColorForGen(<?php echo $el['id']; ?>, this.value)" style="height:28px; width:100%; cursor:pointer; border:1px solid #cbd5e1; border-radius:4px; padding:0;">
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                <?php else: ?>
+                    <div class="form-field-group" id="field-group-<?php echo $el['id']; ?>">
+                        <div class="form-field-title" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <span><?php echo htmlspecialchars($el['name']); ?></span>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <button type="button" class="btn btn-xs btn-outline" style="font-size:0.65rem; padding:1px 6px; color:#ef4444; border-color:#fca5a5;" onclick="clearElementField(<?php echo $el['id']; ?>)" title="Clear &amp; Omit Field"><i class="fas fa-trash-can"></i> Omit</button>
+                                <label style="font-size:0.7rem; font-weight:600; color:#64748b; margin:0; cursor:pointer; display:inline-flex; align-items:center; gap:3px;">
+                                    <input type="checkbox" id="chk-include-<?php echo $el['id']; ?>" onchange="toggleElementInclude(<?php echo $el['id']; ?>, this.checked)" checked> Include
+                                </label>
                             </div>
                         </div>
-                    <?php endif; ?>
-                </div>
+                        <?php if ($el['type'] === 'text'): ?>
+                            <textarea data-id="<?php echo $el['id']; ?>" id="input-text-<?php echo $el['id']; ?>" oninput="updateFieldText(<?php echo $el['id']; ?>, this.value)" class="field-input" style="width:100%; resize:vertical;" rows="2" placeholder="Leave blank to omit from output..."><?php echo htmlspecialchars($el['textContent'] ?? ''); ?></textarea>
+                        <?php elseif ($el['type'] === 'photo'): ?>
+                            <?php 
+                            $is_logo = false;
+                            if (stripos($el['name'], 'logo') !== false) {
+                                $is_logo = true;
+                            }
+                            ?>
+                            <?php if ($is_logo && !empty($logos)): ?>
+                                <div style="margin-bottom: 6px;">
+                                    <label style="font-size: 0.75rem; font-weight: 700; color: #475569; display: block; margin-bottom: 2px;">Select Preset Logo</label>
+                                    <select class="field-input" id="select-preset-<?php echo $el['id']; ?>" onchange="selectPresetLogo(<?php echo $el['id']; ?>, this.value)" style="width:100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 6px;">
+                                        <option value="">-- Or Upload Custom Logo Below --</option>
+                                        <?php foreach ($logos as $lg): ?>
+                                            <option value="<?php echo htmlspecialchars($lg['logo_file']); ?>"><?php echo htmlspecialchars($lg['name']); ?> (<?php echo $lg['width'] . 'x' . $lg['height']; ?> px)</option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                            <?php endif; ?>
+                            
+                            <input type="file" data-id="<?php echo $el['id']; ?>" id="input-file-<?php echo $el['id']; ?>" accept="image/*" onchange="loadPhotoPlaceholder(<?php echo $el['id']; ?>, this)" class="field-file-input" style="width:100%;">
+                            
+                            <div class="photo-controls" id="controls-<?php echo $el['id']; ?>" style="margin-top: 8px; display:none; flex-direction:column; gap:6px; background:#f8fafc; border:1px solid #e2e8f0; padding:8px; border-radius:6px;">
+                                <div style="display:flex; justify-content:space-between; font-size:0.7rem; font-weight:700; color:#475569;">
+                                    <span>Photo Zoom</span>
+                                    <span id="zoom-val-<?php echo $el['id']; ?>">100%</span>
+                                </div>
+                                <input type="range" min="100" max="300" value="100" oninput="updatePhotoZoom(<?php echo $el['id']; ?>, this.value)" style="width:100%;">
+                                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:4px;">
+                                    <div>
+                                        <div style="font-size:0.65rem; font-weight:700; color:#475569; display:flex; justify-content:space-between;">
+                                            <span>Pan X</span>
+                                            <span id="panx-val-<?php echo $el['id']; ?>">0%</span>
+                                        </div>
+                                        <input type="range" min="-100" max="100" value="0" oninput="updatePhotoPan(<?php echo $el['id']; ?>, 'x', this.value)" style="width:100%;">
+                                    </div>
+                                    <div>
+                                        <div style="font-size:0.65rem; font-weight:700; color:#475569; display:flex; justify-content:space-between;">
+                                            <span>Pan Y</span>
+                                            <span id="pany-val-<?php echo $el['id']; ?>">0%</span>
+                                        </div>
+                                        <input type="range" min="-100" max="100" value="0" oninput="updatePhotoPan(<?php echo $el['id']; ?>, 'y', this.value)" style="width:100%;">
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
             <?php endforeach; ?>
 
             <div class="form-field-group">
@@ -436,6 +515,90 @@ function applySolidColor(colorHex) {
     applyBackgroundStyle(colorHex);
 }
 
+function showLyrBgTabForGen(elId, tab) {
+    document.querySelectorAll('.lyr-bg-tab-btn-' + elId).forEach(b => {
+        b.classList.remove('btn-primary');
+        b.classList.add('btn-outline');
+    });
+    var activeBtn = document.getElementById('lyr-bg-tab-btn-' + tab + '-' + elId);
+    if (activeBtn) {
+        activeBtn.classList.remove('btn-outline');
+        activeBtn.classList.add('btn-primary');
+    }
+    
+    ['pastel', 'custom', 'solid'].forEach(t => {
+        var block = document.getElementById('lyr-bg-tab-' + t + '-' + elId);
+        if (block) block.style.display = (t === tab) ? 'block' : 'none';
+    });
+}
+
+function renderLyrBackgroundPresetsForGen(elId) {
+    var container = document.querySelector('.lyr-pastel-presets-grid-gen[data-el-id="' + elId + '"]');
+    if (!container) return;
+    container.innerHTML = '';
+    
+    var el = elements.find(item => item.id === elId);
+    if (!el) return;
+    
+    var allGradients = defaultPastelGradients.map(g => g.val);
+    var savedCustom = getSavedCustomGradients();
+    savedCustom.forEach(gVal => {
+        if (!allGradients.includes(gVal)) {
+            allGradients.push(gVal);
+        }
+    });
+    
+    allGradients.forEach(function(gVal) {
+        var div = document.createElement('div');
+        div.style.height = '20px';
+        div.style.borderRadius = '4px';
+        div.style.cursor = 'pointer';
+        div.style.background = gVal;
+        div.style.border = (el.bgValue === gVal) ? '2px solid var(--accent)' : '1px solid #cbd5e1';
+        div.onclick = function() {
+            applyLyrBackgroundStyleForGen(elId, gVal);
+        };
+        container.appendChild(div);
+    });
+}
+
+function applyLyrBackgroundStyleForGen(elId, styleVal) {
+    var el = elements.find(item => item.id === elId);
+    if (el) {
+        el.bgValue = styleVal;
+        drawElements();
+        renderLyrBackgroundPresetsForGen(elId);
+    }
+}
+
+function updateLyrCustomGradientForGen(elId) {
+    var type = document.getElementById('lyr-cust-grad-type-' + elId).value;
+    var c1 = document.getElementById('lyr-cust-grad-c1-' + elId).value;
+    var c2 = document.getElementById('lyr-cust-grad-c2-' + elId).value;
+    var angleBlock = document.getElementById('lyr-cust-grad-angle-block-' + elId);
+    var gradStr = '';
+    
+    if (type === 'radial') {
+        if (angleBlock) angleBlock.style.display = 'none';
+        gradStr = 'radial-gradient(circle, ' + c1 + ' 0%, ' + c2 + ' 100%)';
+    } else {
+        if (angleBlock) angleBlock.style.display = 'block';
+        var angle = document.getElementById('lyr-cust-grad-angle-' + elId).value || 135;
+        document.getElementById('lyr-cust-angle-val-' + elId).textContent = angle;
+        gradStr = 'linear-gradient(' + angle + 'deg, ' + c1 + ' 0%, ' + c2 + ' 100%)';
+    }
+    return gradStr;
+}
+
+function applyLyrCustomGradientForGen(elId) {
+    var gradStr = updateLyrCustomGradientForGen(elId);
+    applyLyrBackgroundStyleForGen(elId, gradStr);
+}
+
+function applyLyrSolidColorForGen(elId, colorHex) {
+    applyLyrBackgroundStyleForGen(elId, colorHex);
+}
+
 function toggleElementInclude(id, isIncluded) {
     excludedElements[id] = !isIncluded;
     var group = document.getElementById('field-group-' + id);
@@ -535,6 +698,11 @@ function initCanvas() {
     container.style.transformOrigin = 'top left';
     
     renderBackgroundPresetGrid();
+    elements.forEach(function(el) {
+        if (el.type === 'dynamic_bg') {
+            renderLyrBackgroundPresetsForGen(el.id);
+        }
+    });
     drawElements();
 }
 
@@ -636,6 +804,14 @@ function drawElements() {
             else if (el.mask === 'diamond') { div.style.clipPath = 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)'; div.style.borderRadius = '0'; }
             else if (el.mask === 'rounded') { div.style.clipPath = 'none'; div.style.borderRadius = '10%'; }
             else { div.style.borderRadius = '0'; div.style.clipPath = 'none'; }
+        } else if (el.type === 'dynamic_bg') {
+            var bgVal = el.bgValue || 'linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%)';
+            if (bgVal.includes('gradient')) {
+                div.style.background = bgVal;
+            } else if (bgVal.startsWith('#') || bgVal.startsWith('rgb')) {
+                div.style.backgroundColor = bgVal;
+                div.style.backgroundImage = 'none';
+            }
         }
         
         // Let user select and slide coordinates on preview temporarily
@@ -965,6 +1141,40 @@ function renderElementOnCanvas(ctx, el) {
                 ctx.restore();
                 resolve();
             }
+        } else if (el.type === 'dynamic_bg') {
+            var bgVal = el.bgValue || 'linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%)';
+            if (bgVal.startsWith('#') || bgVal.startsWith('rgb')) {
+                ctx.fillStyle = bgVal;
+                ctx.fillRect(x, y, w, h);
+            } else if (bgVal.includes('gradient')) {
+                var isRadial = bgVal.includes('radial-gradient');
+                var colors = bgVal.match(/(#[0-9a-fA-F]{3,8}|rgba?\([^)]+\))/g) || ['#ffffff', '#f1f5f9'];
+                var grad;
+                if (isRadial) {
+                    grad = ctx.createRadialGradient(x + w/2, y + h/2, 0, x + w/2, y + h/2, Math.max(w, h)/2);
+                } else {
+                    var angleMatch = bgVal.match(/(\d+)deg/);
+                    var angle = angleMatch ? parseInt(angleMatch[1]) : 135;
+                    var rad = (angle - 90) * Math.PI / 180;
+                    var x0 = (x + w/2) - Math.cos(rad) * w/2;
+                    var y0 = (y + h/2) - Math.sin(rad) * h/2;
+                    var x1 = (x + w/2) + Math.cos(rad) * w/2;
+                    var y1 = (y + h/2) + Math.sin(rad) * h/2;
+                    grad = ctx.createLinearGradient(x0, y0, x1, y1);
+                }
+                if (colors.length === 1) {
+                    grad.addColorStop(0, colors[0]);
+                    grad.addColorStop(1, colors[0]);
+                } else {
+                    for (var i = 0; i < colors.length; i++) {
+                        grad.addColorStop(i / (colors.length - 1), colors[i]);
+                    }
+                }
+                ctx.fillStyle = grad;
+                ctx.fillRect(x, y, w, h);
+            }
+            ctx.restore();
+            resolve();
         }
     });
 }

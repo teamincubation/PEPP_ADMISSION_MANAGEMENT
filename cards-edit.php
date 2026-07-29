@@ -373,6 +373,7 @@ include 'includes/admin_nav.php';
             <button class="btn btn-sm btn-outline" style="text-align:left;" onclick="addElement('text', 'Your Custom Text')"><i class="fas fa-font"></i> Free Text field</button>
             <button class="btn btn-sm btn-soft-violet" style="text-align:left;" onclick="addElement('photo', 'Student Photo')"><i class="fas fa-image"></i> Photo Placeholder</button>
             <button class="btn btn-sm btn-soft-violet" style="text-align:left;" onclick="addElement('photo', 'University Logo')"><i class="fas fa-university"></i> University Logo</button>
+            <button class="btn btn-sm btn-soft-violet" style="text-align:left;" onclick="addElement('dynamic_bg', 'Dynamic Background Layer')"><i class="fas fa-palette"></i> Dynamic Background Layer</button>
             <button class="btn btn-sm btn-primary" style="text-align:left;" onclick="triggerAddImageUpload()"><i class="fas fa-file-image"></i> Upload Static Image</button>
             <input type="file" id="add-static-image-input" accept="image/*" style="display:none;" onchange="handleStaticImageUpload(this)">
             
@@ -544,6 +545,70 @@ include 'includes/admin_nav.php';
                 <div class="field full" id="image-replace-block" style="display:none; margin-top:6px;">
                     <label>Replace Image Graphic</label>
                     <input type="file" accept="image/*" onchange="replaceActiveStaticImage(this)" style="font-size:0.75rem;">
+                </div>
+            </div>
+
+            <!-- Dynamic Background Style Block -->
+            <div id="dynamic-bg-block" style="display:none; background:#f8fafc; padding:10px; border-radius:8px; border:1px solid #cbd5e1; margin-bottom:10px;">
+                <label style="font-weight:700; color:#1e293b; display:block; margin-bottom:6px;">Allowed Choices for Generator</label>
+                <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:10px;">
+                    <label style="font-size:0.75rem; font-weight:normal; display:flex; align-items:center; gap:6px; margin:0; cursor:pointer;">
+                        <input type="checkbox" id="prop-allow-pastel" onchange="updateActiveElement('allowPastel', this.checked)"> Pastels
+                    </label>
+                    <label style="font-size:0.75rem; font-weight:normal; display:flex; align-items:center; gap:6px; margin:0; cursor:pointer;">
+                        <input type="checkbox" id="prop-allow-solid" onchange="updateActiveElement('allowSolid', this.checked)"> Solid Colors
+                    </label>
+                    <label style="font-size:0.75rem; font-weight:normal; display:flex; align-items:center; gap:6px; margin:0; cursor:pointer;">
+                        <input type="checkbox" id="prop-allow-custom" onchange="updateActiveElement('allowCustom', this.checked)"> Custom Gradients
+                    </label>
+                </div>
+                
+                <hr style="border:0; border-top:1px dashed #cbd5e1; margin:8px 0;">
+                
+                <label style="font-weight:700; color:#1e293b; display:block; margin-bottom:6px;">Preset Layer Background</label>
+                <div style="display:flex; gap:4px; margin-bottom:6px;">
+                    <button type="button" class="btn btn-xs btn-outline lyr-bg-tab-btn" id="lyr-bg-tab-btn-pastel" style="flex:1; font-size:0.65rem; padding:3px;" onclick="showLyrBgTab('pastel')">Pastels</button>
+                    <button type="button" class="btn btn-xs btn-outline lyr-bg-tab-btn" id="lyr-bg-tab-btn-custom" style="flex:1; font-size:0.65rem; padding:3px;" onclick="showLyrBgTab('custom')">Custom</button>
+                    <button type="button" class="btn btn-xs btn-outline lyr-bg-tab-btn" id="lyr-bg-tab-btn-solid" style="flex:1; font-size:0.65rem; padding:3px;" onclick="showLyrBgTab('solid')">Solid</button>
+                </div>
+                
+                <!-- Layer Pastel Grid -->
+                <div id="lyr-bg-tab-pastel" style="display:block;">
+                    <div id="lyr-pastel-grid" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:4px; max-height:100px; overflow-y:auto; padding:2px;">
+                        <!-- JS populated -->
+                    </div>
+                </div>
+                
+                <!-- Layer Custom Gradient Builder -->
+                <div id="lyr-bg-tab-custom" style="display:none;">
+                    <div class="field" style="margin-bottom:4px;">
+                        <label style="font-size:0.65rem; margin-bottom:2px; display:block; font-weight:700;">Type</label>
+                        <select id="lyr-cust-grad-type" onchange="updateLyrCustomGradient()" style="font-size:0.7rem; padding:2px 4px; width:100%; border:1px solid #cbd5e1; border-radius:4px;">
+                            <option value="linear">Linear Gradient</option>
+                            <option value="radial">Radial Gradient</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; gap:4px; margin-bottom:4px;">
+                        <div style="flex:1;">
+                            <label style="font-size:0.65rem; display:block; font-weight:700; margin-bottom:2px;">Color 1</label>
+                            <input type="color" id="lyr-cust-grad-c1" value="#a1c4fd" oninput="updateLyrCustomGradient()" style="height:24px; width:100%; cursor:pointer; padding:0; border:1px solid #cbd5e1; border-radius:4px;">
+                        </div>
+                        <div style="flex:1;">
+                            <label style="font-size:0.65rem; display:block; font-weight:700; margin-bottom:2px;">Color 2</label>
+                            <input type="color" id="lyr-cust-grad-c2" value="#c2e9fb" oninput="updateLyrCustomGradient()" style="height:24px; width:100%; cursor:pointer; padding:0; border:1px solid #cbd5e1; border-radius:4px;">
+                        </div>
+                    </div>
+                    <div class="field" style="margin-bottom:4px;" id="lyr-cust-grad-angle-block">
+                        <label style="font-size:0.65rem; display:block; font-weight:700; margin-bottom:2px;">Angle: <span id="lyr-cust-angle-val">135</span>&deg;</label>
+                        <input type="range" id="lyr-cust-grad-angle" min="0" max="360" value="135" oninput="updateLyrCustomGradient()" style="width:100%;">
+                    </div>
+                    <button type="button" class="btn btn-xs btn-primary" style="width:100%; font-size:0.65rem; padding:2px;" onclick="applyLyrCustomGradient()">Apply Preset</button>
+                </div>
+                
+                <!-- Layer Solid Color Picker -->
+                <div id="lyr-bg-tab-solid" style="display:none;">
+                    <label style="font-size:0.65rem; display:block; font-weight:700; margin-bottom:2px;">Color Hex</label>
+                    <input type="color" id="lyr-solid-bg-picker" value="#ffffff" onchange="applyLyrSolidColor(this.value)" style="height:28px; width:100%; cursor:pointer; padding:0; border:1px solid #cbd5e1; border-radius:4px;">
                 </div>
             </div>
 
@@ -836,6 +901,93 @@ include 'includes/admin_nav.php';
         });
     }
 
+    function showLyrBgTab(tab) {
+        document.querySelectorAll('.lyr-bg-tab-btn').forEach(b => {
+            b.classList.remove('btn-primary');
+            b.classList.add('btn-outline');
+        });
+        var activeBtn = document.getElementById('lyr-bg-tab-btn-' + tab);
+        if (activeBtn) {
+            activeBtn.classList.remove('btn-outline');
+            activeBtn.classList.add('btn-primary');
+        }
+        
+        ['pastel', 'custom', 'solid'].forEach(t => {
+            var block = document.getElementById('lyr-bg-tab-' + t);
+            if (block) block.style.display = (t === tab) ? 'block' : 'none';
+        });
+    }
+
+    function renderLyrBackgroundPresetGrid() {
+        var container = document.getElementById('lyr-pastel-grid');
+        if (!container) return;
+        container.innerHTML = '';
+        
+        if (!activeId) return;
+        var el = elements.find(e => e.id === activeId);
+        if (!el || el.type !== 'dynamic_bg') return;
+        
+        var allGradients = defaultPastelGradients.map(g => g.val);
+        var savedCustom = getSavedCustomGradients();
+        savedCustom.forEach(gVal => {
+            if (!allGradients.includes(gVal)) {
+                allGradients.push(gVal);
+            }
+        });
+        
+        allGradients.forEach(function(gVal) {
+            var div = document.createElement('div');
+            div.style.height = '20px';
+            div.style.borderRadius = '4px';
+            div.style.cursor = 'pointer';
+            div.style.background = gVal;
+            div.style.border = (el.bgValue === gVal) ? '2px solid var(--accent)' : '1px solid #cbd5e1';
+            div.onclick = function() {
+                applyLyrBackgroundStyle(gVal);
+            };
+            container.appendChild(div);
+        });
+    }
+
+    function applyLyrBackgroundStyle(styleVal) {
+        if (!activeId) return;
+        var el = elements.find(e => e.id === activeId);
+        if (!el || el.type !== 'dynamic_bg') return;
+        
+        pushState();
+        el.bgValue = styleVal;
+        drawElements();
+        renderLyrBackgroundPresetGrid();
+    }
+
+    function updateLyrCustomGradient() {
+        var type = document.getElementById('lyr-cust-grad-type').value;
+        var c1 = document.getElementById('lyr-cust-grad-c1').value;
+        var c2 = document.getElementById('lyr-cust-grad-c2').value;
+        var angleBlock = document.getElementById('lyr-cust-grad-angle-block');
+        var gradStr = '';
+        
+        if (type === 'radial') {
+            if (angleBlock) angleBlock.style.display = 'none';
+            gradStr = 'radial-gradient(circle, ' + c1 + ' 0%, ' + c2 + ' 100%)';
+        } else {
+            if (angleBlock) angleBlock.style.display = 'block';
+            var angle = document.getElementById('lyr-cust-grad-angle').value || 135;
+            document.getElementById('lyr-cust-angle-val').textContent = angle;
+            gradStr = 'linear-gradient(' + angle + 'deg, ' + c1 + ' 0%, ' + c2 + ' 100%)';
+        }
+        return gradStr;
+    }
+
+    function applyLyrCustomGradient() {
+        var gradStr = updateLyrCustomGradient();
+        applyLyrBackgroundStyle(gradStr);
+    }
+
+    function applyLyrSolidColor(colorHex) {
+        applyLyrBackgroundStyle(colorHex);
+    }
+
     function getSavedCustomGradients() {
         try {
             return JSON.parse(localStorage.getItem('pepp_custom_gradients')) || [];
@@ -1071,6 +1223,18 @@ include 'includes/admin_nav.php';
                 else if (el.mask === 'diamond') { div.style.clipPath = 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)'; div.style.borderRadius = '0'; }
                 else if (el.mask === 'rounded') { div.style.clipPath = 'none'; div.style.borderRadius = '10%'; }
                 else { div.style.borderRadius = '0'; div.style.clipPath = 'none'; }
+            } else if (el.type === 'dynamic_bg') {
+                var bgVal = el.bgValue || 'linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%)';
+                if (bgVal.includes('gradient')) {
+                    div.style.background = bgVal;
+                } else if (bgVal.startsWith('#') || bgVal.startsWith('rgb')) {
+                    div.style.backgroundColor = bgVal;
+                    div.style.backgroundImage = 'none';
+                }
+                div.style.display = 'flex';
+                div.style.alignItems = 'center';
+                div.style.justifyContent = 'center';
+                div.innerHTML = '<span style="font-size:0.65rem; color:#475569; background:rgba(255,255,255,0.85); padding:2px 6px; border-radius:4px; border:1px solid #cbd5e1; pointer-events:none; font-weight:700;"><i class="fas fa-palette"></i> ' + (el.name || 'Dynamic Bg') + '</span>';
             }
             
             // Delete button handle
@@ -1156,14 +1320,25 @@ include 'includes/admin_nav.php';
             if (el.type === 'photo' || el.type === 'image') {
                 document.getElementById('photo-style-block').style.display = 'block';
                 document.getElementById('text-style-block').style.display = 'none';
+                document.getElementById('dynamic-bg-block').style.display = 'none';
                 var replaceBlock = document.getElementById('image-replace-block');
                 if (replaceBlock) replaceBlock.style.display = (el.type === 'image') ? 'block' : 'none';
                 document.getElementById('prop-mask').value = el.mask || 'none';
                 document.getElementById('prop-border-width').value = el.borderWidth || 0;
                 document.getElementById('prop-border-color').value = el.borderColor || '#000000';
+            } else if (el.type === 'dynamic_bg') {
+                document.getElementById('photo-style-block').style.display = 'none';
+                document.getElementById('text-style-block').style.display = 'none';
+                document.getElementById('dynamic-bg-block').style.display = 'block';
+                document.getElementById('prop-allow-pastel').checked = el.allowPastel !== false;
+                document.getElementById('prop-allow-solid').checked = el.allowSolid !== false;
+                document.getElementById('prop-allow-custom').checked = el.allowCustom !== false;
+                showLyrBgTab('pastel');
+                renderLyrBackgroundPresetGrid();
             } else {
                 document.getElementById('photo-style-block').style.display = 'none';
                 document.getElementById('text-style-block').style.display = 'block';
+                document.getElementById('dynamic-bg-block').style.display = 'none';
             }
             
             loadFont(el.fontFamily);
@@ -1201,6 +1376,12 @@ include 'includes/admin_nav.php';
             newEl.mask = 'none';
             newEl.borderWidth = 0;
             newEl.borderColor = '#000000';
+        } else if (type === 'dynamic_bg') {
+            newEl.allowPastel = true;
+            newEl.allowSolid = true;
+            newEl.allowCustom = true;
+            newEl.bgValue = 'linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%)';
+            newEl.behindBg = false;
         }
         
         elements.push(newEl);
