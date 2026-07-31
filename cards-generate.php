@@ -1543,26 +1543,28 @@ function triggerGeneration(e) {
         });
     }
 
-    if (bgUrl && (bgUrl.includes('gradient') || bgUrl.startsWith('#') || bgUrl.startsWith('rgb'))) {
-        startCanvasRender(function(ctx) {
-            drawBackgroundOnCanvasCtx(ctx, bgUrl, bgW, bgH);
-        });
-    } else {
-        var bgImg = new Image();
-        bgImg.crossOrigin = "anonymous";
-        bgImg.src = bgUrl.startsWith('../') ? bgUrl : '../' + bgUrl;
-        bgImg.onload = function() {
+    setTimeout(function() {
+        if (bgUrl && (bgUrl.includes('gradient') || bgUrl.startsWith('#') || bgUrl.startsWith('rgb'))) {
             startCanvasRender(function(ctx) {
-                ctx.drawImage(bgImg, 0, 0, bgW, bgH);
+                drawBackgroundOnCanvasCtx(ctx, bgUrl, bgW, bgH);
             });
-        };
-        bgImg.onerror = function() {
-            startCanvasRender(function(ctx) {
-                ctx.fillStyle = '#ffffff';
-                ctx.fillRect(0, 0, bgW, bgH);
-            });
-        };
-    }
+        } else {
+            var bgImg = new Image();
+            bgImg.crossOrigin = "anonymous";
+            bgImg.src = bgUrl.startsWith('../') ? bgUrl : '../' + bgUrl;
+            bgImg.onload = function() {
+                startCanvasRender(function(ctx) {
+                    ctx.drawImage(bgImg, 0, 0, bgW, bgH);
+                });
+            };
+            bgImg.onerror = function() {
+                startCanvasRender(function(ctx) {
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, bgW, bgH);
+                });
+            };
+        }
+    }, 50);
 }
 
 function generatePDF(dataUrl) {
