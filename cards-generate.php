@@ -537,7 +537,7 @@ function renderLyrBackgroundPresetsForGen(elId) {
     if (!container) return;
     container.innerHTML = '';
     
-    var el = elements.find(item => item.id === elId);
+    var el = elements.find(item => item.id == elId);
     if (!el) return;
     
     var allGradients = defaultPastelGradients.map(g => g.val);
@@ -563,7 +563,7 @@ function renderLyrBackgroundPresetsForGen(elId) {
 }
 
 function applyLyrBackgroundStyleForGen(elId, styleVal) {
-    var el = elements.find(item => item.id === elId);
+    var el = elements.find(item => item.id == elId);
     if (el) {
         el.bgValue = styleVal;
         drawElements();
@@ -609,7 +609,7 @@ function toggleElementInclude(id, isIncluded) {
 }
 
 function clearElementField(id) {
-    var el = elements.find(item => item.id === id);
+    var el = elements.find(item => item.id == id);
     if (!el) return;
     
     if (el.type === 'text') {
@@ -701,6 +701,14 @@ function initCanvas() {
     elements.forEach(function(el) {
         if (el.type === 'dynamic_bg') {
             renderLyrBackgroundPresetsForGen(el.id);
+        }
+        var chk = document.getElementById('chk-include-' + el.id);
+        if (chk) {
+            excludedElements[el.id] = !chk.checked;
+            if (!chk.checked) {
+                var group = document.getElementById('field-group-' + el.id);
+                if (group) group.style.opacity = '0.5';
+            }
         }
     });
     drawElements();
@@ -868,7 +876,7 @@ function dragStart(e, div, el) {
 }
 
 function updateFieldText(id, val) {
-    var el = elements.find(e => e.id === id);
+    var el = elements.find(e => e.id == id);
     if (el) {
         el.textContent = val;
         drawElements();
