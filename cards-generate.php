@@ -1223,6 +1223,7 @@ function triggerGeneration(e) {
     // Check if all photo placeholders have an image (either preset or uploaded)
     for (var i = 0; i < elements.length; i++) {
         var el = elements[i];
+        if (excludedElements[el.id]) continue;
         if (el.type === 'photo') {
             if (!photos[el.id]) {
                 alert('Please upload an image or select a preset logo/photo for: ' + el.name);
