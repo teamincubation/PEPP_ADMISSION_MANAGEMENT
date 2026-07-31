@@ -373,6 +373,7 @@ include 'includes/admin_nav.php';
             <button class="btn btn-sm btn-outline" style="text-align:left;" onclick="addElement('text', 'Your Custom Text')"><i class="fas fa-font"></i> Free Text field</button>
             <button class="btn btn-sm btn-soft-violet" style="text-align:left;" onclick="addElement('photo', 'Student Photo')"><i class="fas fa-image"></i> Photo Placeholder</button>
             <button class="btn btn-sm btn-soft-violet" style="text-align:left;" onclick="addElement('photo', 'University Logo')"><i class="fas fa-university"></i> University Logo</button>
+            <button class="btn btn-sm btn-soft-violet" style="text-align:left;" onclick="addElement('clipart', 'Clipart Placeholder')"><i class="fas fa-shapes"></i> Clipart Placeholder</button>
             <button class="btn btn-sm btn-soft-violet" style="text-align:left;" onclick="addElement('dynamic_bg', 'Dynamic Background Layer')"><i class="fas fa-palette"></i> Dynamic Background Layer</button>
             <button class="btn btn-sm btn-primary" style="text-align:left;" onclick="triggerAddImageUpload()"><i class="fas fa-file-image"></i> Upload Static Image</button>
             <input type="file" id="add-static-image-input" accept="image/*" style="display:none;" onchange="handleStaticImageUpload(this)">
@@ -1198,7 +1199,7 @@ include 'includes/admin_nav.php';
                 } else {
                     div.style.justifyContent = 'center';
                 }
-            } else if (el.type === 'photo' || el.type === 'image') {
+            } else if (el.type === 'photo' || el.type === 'image' || el.type === 'clipart') {
                 div.style.border = (el.borderWidth || 0) + 'px solid ' + (el.borderColor || '#000');
                 div.style.overflow = 'hidden';
                 
@@ -1212,7 +1213,8 @@ include 'includes/admin_nav.php';
                     img.style.pointerEvents = 'none';
                     div.appendChild(img);
                 } else {
-                    div.style.background = '#e2e8f0 url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' width=\'24\' height=\'24\'%3E%3Cpath fill=\'%2364748b\' d=\'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z\'/%3E%3C/svg%3E") no-repeat center';
+                    var svgIcon = el.type === 'clipart' ? "%3E%3Cpath fill='%2364748b' d='M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.04 4.38.38-3.32 2.88 1 4.28L12 15.4z'/%3E" : "%3E%3Cpath fill='%2364748b' d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z'/%3E";
+                    div.style.background = '#e2e8f0 url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' width=\'24\' height=\'24\'" + svgIcon + "%3C/svg%3E") no-repeat center';
                     div.style.backgroundSize = '40px';
                 }
                 
@@ -1265,12 +1267,16 @@ include 'includes/admin_nav.php';
         if (!container) return;
         container.innerHTML = '';
         
-        // Reverse array for layer visualization: topmost first
         var reversed = elements.slice().reverse();
         reversed.forEach(function(el) {
+            var iconClass = 'fa-font';
+            if (el.type === 'photo' || el.type === 'image') iconClass = 'fa-image';
+            else if (el.type === 'dynamic_bg') iconClass = 'fa-palette';
+            else if (el.type === 'clipart') iconClass = 'fa-shapes';
+            
             var row = document.createElement('div');
             row.className = 'layer-row' + (activeId === el.id ? ' selected' : '');
-            row.innerHTML = '<span style="flex:1;"><i class="fas ' + (el.type === 'text' ? 'fa-font' : 'fa-image') + '"></i> ' + el.name + '</span>' +
+            row.innerHTML = '<span style="flex:1;"><i class="fas ' + iconClass + '"></i> ' + el.name + '</span>' +
                             '<div style="display:flex; gap:6px;">' +
                             '<button type="button" class="btn btn-xs btn-outline" style="padding:2px 4px;" onclick="moveLayer(' + el.id + ', 1)" title="Bring forward"><i class="fas fa-chevron-up"></i></button>' +
                             '<button type="button" class="btn btn-xs btn-outline" style="padding:2px 4px;" onclick="moveLayer(' + el.id + ', -1)" title="Send backward"><i class="fas fa-chevron-down"></i></button>' +
@@ -1317,7 +1323,7 @@ include 'includes/admin_nav.php';
             document.getElementById('prop-opacity').value = el.opacity ?? 1;
             
             // Mask options
-            if (el.type === 'photo' || el.type === 'image') {
+            if (el.type === 'photo' || el.type === 'image' || el.type === 'clipart') {
                 document.getElementById('photo-style-block').style.display = 'block';
                 document.getElementById('text-style-block').style.display = 'none';
                 document.getElementById('dynamic-bg-block').style.display = 'none';
@@ -1372,7 +1378,7 @@ include 'includes/admin_nav.php';
             newEl.color = '#000000';
             newEl.textAlign = 'center';
             newEl.lineHeight = 1.2;
-        } else if (type === 'photo') {
+        } else if (type === 'photo' || type === 'clipart') {
             newEl.mask = 'none';
             newEl.borderWidth = 0;
             newEl.borderColor = '#000000';

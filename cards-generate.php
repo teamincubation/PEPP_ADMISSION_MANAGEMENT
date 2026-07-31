@@ -57,6 +57,11 @@ try {
     $logos = $pdo->query("SELECT * FROM university_logos ORDER BY name ASC")->fetchAll();
 } catch (Exception $e) {}
 
+$cliparts = [];
+try {
+    $cliparts = $pdo->query("SELECT * FROM clipart_images ORDER BY name ASC")->fetchAll();
+} catch (Exception $e) {}
+
 $active_page = 'cards';
 $page_title  = 'Generate Card from Template';
 $page_sub    = 'Fill in personalization details and preview card before generating';
@@ -283,6 +288,37 @@ include 'includes/admin_nav.php';
                                             <span id="pany-val-<?php echo $el['id']; ?>">0%</span>
                                         </div>
                                         <input type="range" min="-100" max="100" value="0" oninput="updatePhotoPan(<?php echo $el['id']; ?>, 'y', this.value)" style="width:100%;">
+                                    </div>
+                                </div>
+                            </div>
+                        <?php elseif ($el['type'] === 'clipart'): ?>
+                            <div style="margin-bottom: 6px;">
+                                <label style="font-size: 0.75rem; font-weight: 700; color: #475569; display: block; margin-bottom: 2px;">Select Clipart Image</label>
+                                <select class="field-input" id="select-clipart-<?php echo $el['id']; ?>" onchange="selectClipart(<?php echo $el['id']; ?>, this.value)" style="width:100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 6px;">
+                                    <option value="">-- Choose Clipart --</option>
+                                    <?php foreach ($cliparts as $c): ?>
+                                        <option value="<?php echo htmlspecialchars($c['file_path']); ?>"><?php echo htmlspecialchars($c['name']); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div style="background:#fff; border:1px solid #cbd5e1; padding:8px; border-radius:6px; margin-top:8px;">
+                                <div style="font-size:0.7rem; font-weight:700; color:#475569; margin-bottom:6px;"><i class="fas fa-arrows-alt"></i> Adjust Position &amp; Size</div>
+                                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                                    <div>
+                                        <label style="font-size:0.65rem; font-weight:600;">Left X (%)</label>
+                                        <input type="number" step="0.1" value="<?php echo $el['left']; ?>" oninput="updateClipartProp(<?php echo $el['id']; ?>, 'left', this.value)" style="width:100%; font-size:0.75rem; padding:4px;">
+                                    </div>
+                                    <div>
+                                        <label style="font-size:0.65rem; font-weight:600;">Top Y (%)</label>
+                                        <input type="number" step="0.1" value="<?php echo $el['top']; ?>" oninput="updateClipartProp(<?php echo $el['id']; ?>, 'top', this.value)" style="width:100%; font-size:0.75rem; padding:4px;">
+                                    </div>
+                                    <div>
+                                        <label style="font-size:0.65rem; font-weight:600;">Width (%)</label>
+                                        <input type="number" step="0.1" value="<?php echo $el['width']; ?>" oninput="updateClipartProp(<?php echo $el['id']; ?>, 'width', this.value)" style="width:100%; font-size:0.75rem; padding:4px;">
+                                    </div>
+                                    <div>
+                                        <label style="font-size:0.65rem; font-weight:600;">Height (%)</label>
+                                        <input type="number" step="0.1" value="<?php echo $el['height']; ?>" oninput="updateClipartProp(<?php echo $el['id']; ?>, 'height', this.value)" style="width:100%; font-size:0.75rem; padding:4px;">
                                     </div>
                                 </div>
                             </div>
@@ -762,7 +798,7 @@ function drawElements() {
     elements.forEach(function(el, idx) {
         if (excludedElements[el.id]) return;
         if (el.type === 'text' && (!el.textContent || !el.textContent.trim())) return;
-        if (el.type === 'photo' && !photos[el.id]) return;
+        if ((el.type === 'photo' || el.type === 'clipart') && !photos[el.id]) return;
 
         var div = document.createElement('div');
         div.className = 'canvas-element' + (activeId === el.id ? ' selected' : '');
@@ -791,7 +827,7 @@ function drawElements() {
             } else {
                 div.style.justifyContent = 'center';
             }
-        } else if (el.type === 'photo' || el.type === 'image') {
+        } else if (el.type === 'photo' || el.type === 'image' || el.type === 'clipart') {
             div.style.border = (el.borderWidth || 0) + 'px solid ' + (el.borderColor || '#000');
             div.style.overflow = 'hidden';
             
@@ -1038,6 +1074,23 @@ function loadPhotoPlaceholder(id, input) {
     }
 }
 
+function selectClipart(id, path) {
+    if (path) {
+        photos[id] = '../' + path;
+    } else {
+        delete photos[id];
+    }
+    drawElements();
+}
+
+function updateClipartProp(id, prop, val) {
+    var el = elements.find(function(e) { return e.id == id; });
+    if (el) {
+        el[prop] = parseFloat(val);
+        drawElements();
+    }
+}
+
 function updatePhotoZoom(id, val) {
     if (!photoSettings[id]) photoSettings[id] = { zoom: 100, panX: 0, panY: 0 };
     photoSettings[id].zoom = parseInt(val) || 100;
@@ -1068,7 +1121,7 @@ function renderElementOnCanvas(ctx, el) {
             resolve();
             return;
         }
-        if (el.type === 'photo' && !photos[el.id]) {
+        if ((el.type === 'photo' || el.type === 'clipart') && !photos[el.id]) {
             resolve();
             return;
         }
@@ -1121,7 +1174,7 @@ function renderElementOnCanvas(ctx, el) {
             
             ctx.restore();
             resolve();
-        } else if (el.type === 'photo' || el.type === 'image') {
+        } else if (el.type === 'photo' || el.type === 'image' || el.type === 'clipart') {
             // Helper to define the mask/border path
             function definePath(inset = 0) {
                 var bx = x + inset;
@@ -1348,9 +1401,9 @@ function triggerGeneration(e) {
     for (var i = 0; i < elements.length; i++) {
         var el = elements[i];
         if (excludedElements[el.id]) continue;
-        if (el.type === 'photo') {
+        if (el.type === 'photo' || el.type === 'clipart') {
             if (!photos[el.id]) {
-                alert('Please upload an image or select a preset logo/photo for: ' + el.name);
+                alert('Please upload an image or select a preset for: ' + el.name);
                 return;
             }
         }

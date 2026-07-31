@@ -5,6 +5,15 @@ require_once 'includes/file_helper.php';
 
 require_permission('cards');
 
+try {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS clipart_images (
+        id INT AUTO_INCREMENT PRIMARY KEY, 
+        name VARCHAR(255) NOT NULL, 
+        file_path VARCHAR(255) NOT NULL, 
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+} catch (Exception $e) {}
+
 $success_message = '';
 $error_message = '';
 
@@ -85,6 +94,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'uploa
                     }
                 } else {
                     $error_message = 'Failed to move uploaded logo file.';
+                }
+            }
+        }
+    }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'upload_clipart') {
+    if (!csrf_verify()) {
+        $error_message = 'Security token mismatch. Please retry.';
+    } else {
+        $clipart_name = trim($_POST['clipart_name'] ?? '');
+        if (!$clipart_name) {
+            $error_message = 'Please specify a clipart name.';
+        } elseif (empty($_FILES['clipart_file']['name']) || $_FILES['clipart_file']['error'] !== UPLOAD_ERR_OK) {
+            $error_message = 'Please select a valid image file.';
+        } else {
+            $filename = basename($_FILES['clipart_file']['name']);
+            $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+            if (!in_array($ext, ['png', 'jpg', 'jpeg'], true)) {
+                $error_message = 'Only PNG, JPG, and JPEG formats are supported.';
+            } else {
+                $base_dir = __DIR__ . '/../uploads/cliparts';
+                if (!is_dir($base_dir)) {
+                    @mkdir($base_dir, 0755, true);
+                }
+                $safe_filename = uniqid() . '_' . preg_replace('/[^A-Za-z0-9._-]/', '_', $filename);
+                $target_path = $base_dir . '/' . $safe_filename;
+                
+                if (@move_uploaded_file($_FILES['clipart_file']['tmp_name'], $target_path)) {
+                    $db_path = 'uploads/cliparts/' . $safe_filename;
+                    try {
+                        $stmt = $pdo->prepare("INSERT INTO clipart_images (name, file_path) VALUES (?, ?)");
+                        $stmt->execute([$clipart_name, $db_path]);
+                        $success_message = "Clipart '{$clipart_name}' uploaded successfully.";
+                    } catch (Exception $e) {
+                        @unlink($target_path);
+                        $error_message = "Database error: " . $e->getMessage();
+                    }
+                } else {
+                    $error_message = 'Failed to move uploaded clipart file.';
                 }
             }
         }
@@ -226,6 +273,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error_message = "Failed to delete logo: " . $e->getMessage();
             }
         }
+    } elseif ($action === 'delete_clipart') {
+        if (!csrf_verify()) {
+            $error_message = 'Security token mismatch.';
+        } else {
+            $cid = (int)($_POST['clipart_id'] ?? 0);
+            try {
+                $stmt = $pdo->prepare("SELECT file_path FROM clipart_images WHERE id = ?");
+                $stmt->execute([$cid]);
+                $file = $stmt->fetchColumn();
+                
+                $stmt = $pdo->prepare("DELETE FROM clipart_images WHERE id = ?");
+                $stmt->execute([$cid]);
+                
+                if ($file) {
+                    $real_file = __DIR__ . '/../' . $file;
+                    if (file_exists($real_file)) {
+                        @unlink($real_file);
+                    }
+                }
+                $success_message = "Clipart deleted successfully.";
+            } catch (Exception $e) {
+                $error_message = "Failed to delete clipart: " . $e->getMessage();
+            }
+        }
     }
 }
 
@@ -287,6 +358,11 @@ try {
 $logos = [];
 try {
     $logos = $pdo->query("SELECT * FROM university_logos ORDER BY name ASC")->fetchAll();
+} catch (Exception $e) {}
+
+$cliparts = [];
+try {
+    $cliparts = $pdo->query("SELECT * FROM clipart_images ORDER BY name ASC")->fetchAll();
 } catch (Exception $e) {}
 
 $active_page = 'cards';
@@ -615,6 +691,43 @@ include 'includes/admin_nav.php';
                             <input type="hidden" name="action" value="delete_logo">
                             <input type="hidden" name="logo_id" value="<?php echo (int)$l['id']; ?>">
                             <button type="submit" style="background:none; border:none; color:#ef4444; cursor:pointer; padding:0; font-size:0.85rem; line-height:1;" title="Delete Logo"><i class="fas fa-trash"></i></button>
+                        </form>
+                    </div>
+                <?php endforeach; endif; ?>
+            </div>
+        </div>
+        <div class="panel" style="margin-top: 15px;">
+            <div class="panel-head">
+                <h3><i class="fas fa-shapes" style="color:var(--accent);"></i> Clipart Images</h3>
+            </div>
+            <div class="panel-body">
+                <form method="POST" enctype="multipart/form-data" style="margin-bottom: 20px;">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="action" value="upload_clipart">
+                    <div class="field full">
+                        <label>Clipart Name</label>
+                        <input type="text" name="clipart_name" placeholder="e.g. Star Logo" required>
+                    </div>
+                    <div class="field full">
+                        <label>Image File (.png, .jpg, .jpeg)</label>
+                        <input type="file" name="clipart_file" accept=".png,.jpg,.jpeg" required>
+                    </div>
+                    <button type="submit" class="btn btn-sm btn-primary" style="width:100%; margin-top:10px;"><i class="fas fa-upload"></i> Upload Clipart</button>
+                </form>
+
+                <h4 style="font-size:0.8rem; font-weight:700; color:#475569; margin:15px 0 8px 0; border-bottom:1px solid #e2e8f0; padding-bottom:4px;">Available Cliparts</h4>
+                <?php if (empty($cliparts)): ?>
+                    <div style="text-align:center; padding:15px 0; font-size:0.8rem; color:#94a3b8;"><p>No cliparts uploaded yet.</p></div>
+                <?php else: foreach ($cliparts as $c): ?>
+                    <div class="font-list-item" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #f1f5f9; padding:6px 0;">
+                        <div>
+                            <span style="font-size:0.8rem; font-weight:700; display:block;"><?php echo htmlspecialchars($c['name']); ?></span>
+                        </div>
+                        <form method="POST" onsubmit="return confirm('Are you sure you want to delete this clipart?');" style="margin:0;">
+                            <?php echo csrf_field(); ?>
+                            <input type="hidden" name="action" value="delete_clipart">
+                            <input type="hidden" name="clipart_id" value="<?php echo (int)$c['id']; ?>">
+                            <button type="submit" style="background:none; border:none; color:#ef4444; cursor:pointer; padding:0; font-size:0.85rem; line-height:1;" title="Delete Clipart"><i class="fas fa-trash"></i></button>
                         </form>
                     </div>
                 <?php endforeach; endif; ?>
