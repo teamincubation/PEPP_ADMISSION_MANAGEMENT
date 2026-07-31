@@ -824,8 +824,8 @@ function drawElements() {
             }
             
             // Mask shapes
-            if (el.mask === 'circle') { div.style.clipPath = 'circle(50%)'; div.style.borderRadius = '0'; }
-            else if (el.mask === 'oval') { div.style.clipPath = 'ellipse(50% 50%)'; div.style.borderRadius = '0'; }
+            if (el.mask === 'circle') { div.style.borderRadius = '50%'; div.style.clipPath = 'none'; }
+            else if (el.mask === 'oval') { div.style.borderRadius = '50%'; div.style.clipPath = 'none'; }
             else if (el.mask === 'hexagon') { div.style.clipPath = 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)'; div.style.borderRadius = '0'; }
             else if (el.mask === 'diamond') { div.style.clipPath = 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)'; div.style.borderRadius = '0'; }
             else if (el.mask === 'rounded') { div.style.clipPath = 'none'; div.style.borderRadius = '10%'; }
@@ -1123,40 +1123,44 @@ function renderElementOnCanvas(ctx, el) {
             resolve();
         } else if (el.type === 'photo' || el.type === 'image') {
             // Helper to define the mask/border path
-            function definePath() {
+            function definePath(inset = 0) {
+                var bx = x + inset;
+                var by = y + inset;
+                var bw = w - (inset * 2);
+                var bh = h - (inset * 2);
                 ctx.beginPath();
                 if (el.mask === 'circle') {
-                    ctx.arc(x + w/2, y + h/2, Math.min(w, h)/2, 0, Math.PI * 2);
+                    ctx.arc(bx + bw/2, by + bh/2, Math.min(bw, bh)/2, 0, Math.PI * 2);
                     ctx.closePath();
                 } else if (el.mask === 'oval') {
-                    ctx.ellipse(x + w/2, y + h/2, w/2, h/2, 0, 0, Math.PI * 2);
+                    ctx.ellipse(bx + bw/2, by + bh/2, bw/2, bh/2, 0, 0, Math.PI * 2);
                     ctx.closePath();
                 } else if (el.mask === 'hexagon') {
-                    ctx.moveTo(x + w*0.25, y);
-                    ctx.lineTo(x + w*0.75, y);
-                    ctx.lineTo(x + w, y + h*0.5);
-                    ctx.lineTo(x + w*0.75, y + h);
-                    ctx.lineTo(x + w*0.25, y + h);
-                    ctx.lineTo(x, y + h*0.5);
+                    ctx.moveTo(bx + bw*0.25, by);
+                    ctx.lineTo(bx + bw*0.75, by);
+                    ctx.lineTo(bx + bw, by + bh*0.5);
+                    ctx.lineTo(bx + bw*0.75, by + bh);
+                    ctx.lineTo(bx + bw*0.25, by + bh);
+                    ctx.lineTo(bx, by + bh*0.5);
                     ctx.closePath();
                 } else if (el.mask === 'diamond') {
-                    ctx.moveTo(x + w*0.5, y);
-                    ctx.lineTo(x + w, y + h*0.5);
-                    ctx.lineTo(x + w*0.5, y + h);
-                    ctx.lineTo(x, y + h*0.5);
+                    ctx.moveTo(bx + bw*0.5, by);
+                    ctx.lineTo(bx + bw, by + bh*0.5);
+                    ctx.lineTo(bx + bw*0.5, by + bh);
+                    ctx.lineTo(bx, by + bh*0.5);
                     ctx.closePath();
                 } else if (el.mask === 'rounded') {
-                    var r = Math.min(w, h) * 0.1;
+                    var r = Math.min(bw, bh) * 0.1;
                     if (r < 5) r = 5;
-                    ctx.moveTo(x + r, y);
-                    ctx.arcTo(x + w, y, x + w, y + h, r);
-                    ctx.arcTo(x + w, y + h, x, y + h, r);
-                    ctx.arcTo(x, y + h, x, y, r);
-                    ctx.arcTo(x, y, x + w, y, r);
+                    ctx.moveTo(bx + r, by);
+                    ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
+                    ctx.arcTo(bx + bw, by + bh, bx, by + bh, r);
+                    ctx.arcTo(bx, by + bh, bx, by, r);
+                    ctx.arcTo(bx, by, bx + bw, by, r);
                     ctx.closePath();
                 } else {
                     // Rectangle (none)
-                    ctx.rect(x, y, w, h);
+                    ctx.rect(bx, by, bw, bh);
                 }
             }
 
@@ -1165,79 +1169,95 @@ function renderElementOnCanvas(ctx, el) {
                 staticImg.src = el.imageSrc;
                 staticImg.onload = function() {
                     ctx.save();
+                    
+                    var bw = el.borderWidth || 0;
                     if (el.mask && el.mask !== 'none') {
-                        definePath();
+                        definePath(bw);
+                        ctx.clip();
+                    } else if (bw > 0) {
+                        definePath(bw);
                         ctx.clip();
                     }
-                    ctx.drawImage(staticImg, x, y, w, h);
+                    
+                    var ix = x + bw;
+                    var iy = y + bw;
+                    var iw = w - 2 * bw;
+                    var ih = h - 2 * bw;
+                    var imgRatio = staticImg.width / staticImg.height;
+                    var boxRatio = iw / ih;
+                    var drawW = iw, drawH = ih;
+                    if (imgRatio > boxRatio) { drawH = iw / imgRatio; }
+                    else { drawW = ih * imgRatio; }
+                    var drawX = ix + (iw - drawW) / 2;
+                    var drawY = iy + (ih - drawH) / 2;
+                    
+                    ctx.drawImage(staticImg, drawX, drawY, drawW, drawH);
                     ctx.restore();
                     
                     if (el.borderWidth > 0) {
                         ctx.save();
-                        definePath();
+                        definePath(el.borderWidth / 2);
                         ctx.strokeStyle = el.borderColor || '#000';
                         ctx.lineWidth = el.borderWidth;
                         ctx.stroke();
                         ctx.restore();
                     }
-                    ctx.restore();
                     resolve();
                 };
                 staticImg.onerror = function() {
-                    ctx.restore();
                     resolve();
                 };
             } else if (photos[el.id]) {
                 var studentImg = new Image();
                 studentImg.src = photos[el.id];
                 studentImg.onload = function() {
-                    // 1. Clip and draw image using CSS cover/center logic + zoom/pan
                     ctx.save();
+                    
+                    var bw = el.borderWidth || 0;
                     if (el.mask && el.mask !== 'none') {
-                        definePath();
+                        definePath(bw);
+                        ctx.clip();
+                    } else if (bw > 0) {
+                        definePath(bw);
                         ctx.clip();
                     }
                     
+                    var ix = x + bw;
+                    var iy = y + bw;
+                    var iw = w - 2 * bw;
+                    var ih = h - 2 * bw;
+                    
                     var imgW = studentImg.width;
                     var imgH = studentImg.height;
-                    var imgRatio = imgW / imgH;
-                    var boxRatio = w / h;
                     
-                    var sx = 0, sy = 0, sw = imgW, sh = imgH;
-                    if (imgRatio > boxRatio) {
-                        sw = imgH * boxRatio;
-                        sx = (imgW - sw) / 2;
-                    } else if (imgRatio < boxRatio) {
-                        sh = imgW / boxRatio;
-                        sy = (imgH - sh) / 2;
-                    }
+                    // object-fit: cover logic
+                    var scaleCover = Math.max(iw / imgW, ih / imgH);
+                    var drawW = imgW * scaleCover;
+                    var drawH = imgH * scaleCover;
                     
-                    // Apply zoom and pan settings
+                    // Apply zoom and pan settings matching CSS transform
                     var settings = photoSettings[el.id] || { zoom: 100, panX: 0, panY: 0 };
                     var zoomFactor = (settings.zoom || 100) / 100;
-                    var newSw = sw / zoomFactor;
-                    var newSh = sh / zoomFactor;
+                    var panXPx = (settings.panX / 100) * iw;
+                    var panYPx = (settings.panY / 100) * ih;
                     
-                    var maxPanX = (imgW - newSw) / 2;
-                    var maxPanY = (imgH - newSh) / 2;
+                    ctx.translate(ix + iw / 2, iy + ih / 2);
+                    ctx.scale(zoomFactor, zoomFactor);
+                    ctx.translate(panXPx, panYPx);
                     
-                    sx = Math.max(0, Math.min(imgW - newSw, (imgW - newSw) / 2 - (settings.panX / 100) * maxPanX));
-                    sy = Math.max(0, Math.min(imgH - newSh, (imgH - newSh) / 2 - (settings.panY / 100) * maxPanY));
-                    
-                    ctx.drawImage(studentImg, sx, sy, newSw, newSh, x, y, w, h);
-                    ctx.restore(); // Restore context to remove clipping mask
+                    ctx.drawImage(studentImg, -drawW / 2, -drawH / 2, drawW, drawH);
+                    ctx.restore(); 
                     
                     // 2. Draw border outside of clipping mask
                     if (el.borderWidth > 0) {
                         ctx.save();
-                        definePath();
+                        definePath(el.borderWidth / 2);
                         ctx.strokeStyle = el.borderColor || '#000';
                         ctx.lineWidth = el.borderWidth;
                         ctx.stroke();
                         ctx.restore();
                     }
                     
-                    ctx.restore(); // Restore the outer save()
                     resolve();
                 };
             } else {
