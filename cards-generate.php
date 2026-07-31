@@ -62,7 +62,7 @@ $page_title  = 'Generate Card from Template';
 $page_sub    = 'Fill in personalization details and preview card before generating';
 include 'includes/admin_nav.php';
 ?>
-
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" />
 <style>
 <?php foreach ($fonts as $f): ?>
 @font-face {
@@ -382,6 +382,24 @@ include 'includes/admin_nav.php';
     <input type="hidden" name="filename" id="df-filename" value="<?php echo htmlspecialchars(preg_replace('/[^A-Za-z0-9]/', '_', $tpl['title'])); ?>">
 </form>
 
+<!-- Cropper Modal -->
+<div id="cropper-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:9999; flex-direction:column; align-items:center; justify-content:center;">
+    <div style="background:#fff; padding:20px; border-radius:12px; width:90%; max-width:700px; max-height:90vh; display:flex; flex-direction:column; box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+            <h3 style="margin:0; font-size:1.2rem; font-weight:800; color:#1e293b;">Crop Image</h3>
+            <button type="button" onclick="closeCropperModal()" style="background:none; border:none; font-size:1.5rem; cursor:pointer; color:#64748b;">&times;</button>
+        </div>
+        <div style="flex:1; overflow:hidden; min-height:350px; max-height:60vh; background:#e2e8f0; border-radius:8px; display:flex; justify-content:center; align-items:center;">
+            <img id="cropper-image" src="" style="max-width:100%; max-height:100%; display:block;">
+        </div>
+        <div style="margin-top:15px; display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn btn-outline" onclick="closeCropperModal()">Cancel</button>
+            <button type="button" class="btn btn-primary" onclick="applyCrop()">Crop &amp; Apply</button>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
 <script>
 var bgW = <?php echo $canvas_w; ?>;
 var bgH = <?php echo $canvas_h; ?>;
@@ -925,6 +943,63 @@ function selectPresetLogo(id, logoFile) {
     drawElements();
 }
 
+var cropperInstance = null;
+var currentCropElId = null;
+
+function closeCropperModal() {
+    document.getElementById('cropper-modal').style.display = 'none';
+    if (cropperInstance) {
+        cropperInstance.destroy();
+        cropperInstance = null;
+    }
+    if (currentCropElId) {
+        var fileInput = document.getElementById('input-file-' + currentCropElId);
+        if (fileInput) fileInput.value = '';
+        currentCropElId = null;
+    }
+}
+
+function applyCrop() {
+    if (!cropperInstance || !currentCropElId) return;
+    var canvas = cropperInstance.getCroppedCanvas();
+    if (!canvas) return;
+    
+    var croppedDataUrl = canvas.toDataURL('image/png', 1.0);
+    photos[currentCropElId] = croppedDataUrl;
+    photoSettings[currentCropElId] = { zoom: 100, panX: 0, panY: 0 };
+    
+    var controls = document.getElementById('controls-' + currentCropElId);
+    if (controls) {
+        controls.style.display = 'flex';
+        var inputs = controls.querySelectorAll('input[type="range"]');
+        inputs.forEach(input => {
+            if (input.oninput && input.oninput.toString().includes('Zoom')) {
+                input.value = 100;
+                var zv = document.getElementById('zoom-val-' + currentCropElId);
+                if (zv) zv.textContent = '100%';
+            } else {
+                input.value = 0;
+                if (input.oninput && input.oninput.toString().includes('x')) {
+                    var pxv = document.getElementById('panx-val-' + currentCropElId);
+                    if (pxv) pxv.textContent = '0%';
+                } else if (input.oninput) {
+                    var pyv = document.getElementById('pany-val-' + currentCropElId);
+                    if (pyv) pyv.textContent = '0%';
+                }
+            }
+        });
+    }
+    
+    drawElements();
+    
+    document.getElementById('cropper-modal').style.display = 'none';
+    if (cropperInstance) {
+        cropperInstance.destroy();
+        cropperInstance = null;
+    }
+    currentCropElId = null;
+}
+
 function loadPhotoPlaceholder(id, input) {
     // Reset preset select dropdown if any exists
     var selectPreset = document.querySelector('select[onchange*="selectPresetLogo(' + id + '"]');
@@ -933,10 +1008,31 @@ function loadPhotoPlaceholder(id, input) {
     if (input.files && input.files[0]) {
         var reader = new FileReader();
         reader.onload = function(e) {
-            photos[id] = e.target.result;
-            photoSettings[id] = { zoom: 100, panX: 0, panY: 0 };
-            document.getElementById('controls-' + id).style.display = 'flex';
-            drawElements();
+            currentCropElId = id;
+            var el = elements.find(item => item.id == id);
+            
+            var modal = document.getElementById('cropper-modal');
+            var img = document.getElementById('cropper-image');
+            
+            // Re-assign src and handle onload for initialization
+            img.onload = function() {
+                var boxRatio = NaN;
+                if (el && el.width && el.height && bgH && bgW) {
+                    boxRatio = (el.width * bgW) / (el.height * bgH);
+                }
+                cropperInstance = new Cropper(img, {
+                    aspectRatio: boxRatio,
+                    viewMode: 1,
+                    autoCropArea: 1
+                });
+            };
+            img.src = e.target.result;
+            modal.style.display = 'flex';
+            
+            if (cropperInstance) {
+                cropperInstance.destroy();
+                cropperInstance = null;
+            }
         };
         reader.readAsDataURL(input.files[0]);
     }
