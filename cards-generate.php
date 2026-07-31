@@ -142,6 +142,63 @@ include 'includes/admin_nav.php';
     font-weight: 700;
     color: #475569;
     margin-bottom: 6px;
+.loader-overlay {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(8px);
+    z-index: 99999;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.3s ease;
+}
+.loader-wrapper {
+    position: relative;
+    width: 80px;
+    height: 80px;
+    margin-bottom: 20px;
+}
+.loader-circle {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    border: 4px solid transparent;
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+}
+.loader-circle:nth-child(2) {
+    border-top-color: var(--accent);
+    animation-delay: -0.3s;
+    width: 80%;
+    height: 80%;
+    top: 10%;
+    left: 10%;
+}
+.loader-circle:nth-child(3) {
+    border-top-color: #6366f1;
+    animation-delay: -0.6s;
+    width: 60%;
+    height: 60%;
+    top: 20%;
+    left: 20%;
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+.loader-text {
+    font-weight: 800;
+    font-size: 1.25rem;
+    color: var(--primary);
+    margin-bottom: 5px;
+}
+.loader-subtext {
+    color: #64748b;
+    font-size: 0.9rem;
+    font-weight: 500;
 }
 </style>
 
@@ -417,6 +474,17 @@ include 'includes/admin_nav.php';
     <input type="hidden" name="format" id="df-format">
     <input type="hidden" name="filename" id="df-filename" value="<?php echo htmlspecialchars(preg_replace('/[^A-Za-z0-9]/', '_', $tpl['title'])); ?>">
 </form>
+
+<!-- Generation Loader Modal -->
+<div id="generation-loader" class="loader-overlay">
+    <div class="loader-wrapper">
+        <div class="loader-circle"></div>
+        <div class="loader-circle"></div>
+        <div class="loader-circle"></div>
+    </div>
+    <div class="loader-text">Generating Your Card...</div>
+    <div class="loader-subtext">Please wait while we render high-quality graphics and typography.</div>
+</div>
 
 <!-- Cropper Modal -->
 <div id="cropper-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:9999; flex-direction:column; align-items:center; justify-content:center;">
@@ -1409,6 +1477,12 @@ function triggerGeneration(e) {
         }
     }
     
+    var loader = document.getElementById('generation-loader');
+    if (loader) {
+        loader.style.display = 'flex';
+        loader.style.opacity = '1';
+    }
+    
     function startCanvasRender(bgDrawFn) {
         Promise.all(fontLoadPromises).then(function() {
             document.fonts.ready.then(function() {
@@ -1440,21 +1514,28 @@ function triggerGeneration(e) {
                         var format = document.getElementById('download-format').value;
                         var dataUrl = canvas.toDataURL('image/' + (format === 'pdf' ? 'jpeg' : format), 1.0);
                         
+                        function finishGeneration() {
+                            if (loader) loader.style.display = 'none';
+                        }
+
                         if (format === 'pdf') {
                             if (typeof window.jspdf === 'undefined') {
                                 var script = document.createElement('script');
                                 script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
                                 script.onload = function() {
                                     generatePDF(dataUrl);
+                                    finishGeneration();
                                 };
                                 document.head.appendChild(script);
                             } else {
                                 generatePDF(dataUrl);
+                                finishGeneration();
                             }
                         } else {
                             document.getElementById('df-image-data').value = dataUrl;
                             document.getElementById('df-format').value = format;
                             document.getElementById('download-form').submit();
+                            setTimeout(finishGeneration, 1000); // Hide after brief delay for non-AJAX download
                         }
                     });
                 });
