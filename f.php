@@ -224,6 +224,11 @@ try {
             $rules = !empty($field['validation_rules']) ? json_decode($field['validation_rules'], true) : [];
             $val = $_POST[$name] ?? '';
 
+            // Combine country code with phone/whatsapp number
+            if (($type === 'phone' || $type === 'whatsapp') && !empty($_POST[$name . '_code']) && !empty($val)) {
+                $val = trim($_POST[$name . '_code']) . ' ' . trim($val);
+            }
+
             // Handle arrays (checkboxes / multi-select)
             if (is_array($val)) {
                 $val = implode(', ', $val);
@@ -888,6 +893,27 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
                 <h1><?php echo htmlspecialchars($form['thank_you_title'] ?: 'Thank You!'); ?></h1>
                 <p><?php echo nl2br(htmlspecialchars($form['thank_you_text'] ?: 'Your response has been recorded.')); ?></p>
                 
+                <?php if (($form['auto_redirect_whatsapp'] ?? 0) == 1 && !empty($form['whatsapp_group_link'])): ?>
+                    <div style="background:rgba(37, 211, 102, 0.12); border:1.5px solid rgba(37, 211, 102, 0.35); border-radius:16px; padding:1.5rem; margin-top:1.5rem; text-align:center;">
+                        <i class="fab fa-whatsapp" style="font-size:3rem; color:#25D366; margin-bottom:0.5rem; display:block;"></i>
+                        <h3 style="font-weight:800; font-size:1.15rem; margin-bottom:0.4rem; color:var(--text-color);">Joining Official WhatsApp Group</h3>
+                        <p style="font-size:0.9rem; color:var(--text-muted); margin-bottom:1.2rem;">You are being automatically redirected to join our WhatsApp group in <strong id="wa-countdown" style="color:#25D366; font-size:1.3rem;">3</strong> seconds.</p>
+                        <a href="<?php echo htmlspecialchars($form['whatsapp_group_link']); ?>" class="btn" style="background:#25D366; color:#ffffff; font-weight:800; border:none; display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:0.8rem 1.8rem; text-decoration:none;"><i class="fab fa-whatsapp"></i> Join WhatsApp Group Now</a>
+                    </div>
+                    <script>
+                        var secondsLeft = 3;
+                        var waInterval = setInterval(function() {
+                            secondsLeft--;
+                            var countEl = document.getElementById('wa-countdown');
+                            if (countEl) countEl.textContent = secondsLeft;
+                            if (secondsLeft <= 0) {
+                                clearInterval(waInterval);
+                                window.location.href = "<?php echo htmlspecialchars($form['whatsapp_group_link']); ?>";
+                            }
+                        }, 1000);
+                    </script>
+                <?php endif; ?>
+                
                 <?php if ($isAdmin): ?>
                     <div style="margin-top:2.5rem; display:flex; gap:10px;">
                         <a href="campaign-form-responses.php?id=<?php echo $form_id; ?>" class="btn btn-secondary"><i class="fas fa-list"></i> View Responses</a>
@@ -1039,8 +1065,48 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
                         <?php elseif ($type === 'email'): ?>
                             <input type="email" name="<?php echo $name; ?>" id="<?php echo $name; ?>" class="input-control" value="<?php echo htmlspecialchars($_POST[$name] ?? $default ?: ($email_verified ?? '')); ?>" <?php echo $req_attr; ?> placeholder="<?php echo htmlspecialchars($placeholder); ?>">
                         
-                        <?php elseif ($type === 'phone'): ?>
-                            <input type="tel" name="<?php echo $name; ?>" id="<?php echo $name; ?>" class="input-control" value="<?php echo htmlspecialchars($_POST[$name] ?? $default); ?>" <?php echo $req_attr; ?> placeholder="<?php echo htmlspecialchars($placeholder); ?>">
+                        <?php elseif ($type === 'phone' || $type === 'whatsapp'): ?>
+                            <div style="display:flex; gap:8px;">
+                                <select name="<?php echo $name; ?>_code" id="<?php echo $name; ?>_code" class="input-control" style="width:115px; flex-shrink:0;">
+                                    <option value="+91" selected>🇮🇳 +91</option>
+                                    <option value="+1">🇺🇸 +1</option>
+                                    <option value="+44">🇬🇧 +44</option>
+                                    <option value="+971">🇦🇪 +971</option>
+                                    <option value="+966">🇸🇦 +966</option>
+                                    <option value="+968">🇴🇲 +968</option>
+                                    <option value="+974">🇶🇦 +974</option>
+                                    <option value="+965">🇰🇼 +965</option>
+                                    <option value="+973">🇧🇭 +973</option>
+                                    <option value="+60">🇲🇾 +60</option>
+                                    <option value="+65">🇸🇬 +65</option>
+                                    <option value="+61">🇦🇺 +61</option>
+                                    <option value="+49">🇩🇪 +49</option>
+                                    <option value="+33">🇫🇷 +33</option>
+                                </select>
+                                <input type="tel" name="<?php echo $name; ?>" id="<?php echo $name; ?>" class="input-control" value="<?php echo htmlspecialchars($_POST[$name] ?? $default); ?>" <?php echo $req_attr; ?> placeholder="<?php echo htmlspecialchars($placeholder ?: 'Enter number'); ?>">
+                            </div>
+
+                        <?php elseif ($type === 'location'): ?>
+                            <div style="display:flex; flex-direction:column; gap:8px;">
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <input type="text" id="pincode_<?php echo $name; ?>" class="input-control" placeholder="Enter 6-digit Pincode" maxlength="6" style="flex:1;" oninput="lookupPincode(this, '<?php echo $name; ?>')">
+                                    <button type="button" class="btn btn-secondary" style="padding:0.65rem 1rem; font-size:0.82rem; flex-shrink:0;" onclick="autoDetectLocation('<?php echo $name; ?>')">
+                                        <i class="fas fa-location-crosshairs" style="color:var(--primary);"></i> Detect Location
+                                    </button>
+                                </div>
+                                
+                                <div id="pincode_status_<?php echo $name; ?>" style="font-size:0.78rem; color:var(--text-muted); display:none;"></div>
+                                
+                                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                                    <select id="place_<?php echo $name; ?>" class="input-control" onchange="syncLocationValue('<?php echo $name; ?>')">
+                                        <option value="">Select Place / Post Office</option>
+                                    </select>
+                                    <input type="text" id="district_<?php echo $name; ?>" class="input-control" placeholder="District" readonly>
+                                </div>
+                                <input type="text" id="state_<?php echo $name; ?>" class="input-control" placeholder="State" readonly>
+
+                                <input type="hidden" name="<?php echo $name; ?>" id="<?php echo $name; ?>" value="<?php echo htmlspecialchars($_POST[$name] ?? $default); ?>" <?php echo $req_attr; ?>>
+                            </div>
                         
                         <?php elseif ($type === 'url'): ?>
                             <input type="url" name="<?php echo $name; ?>" id="<?php echo $name; ?>" class="input-control" value="<?php echo htmlspecialchars($_POST[$name] ?? $default); ?>" <?php echo $req_attr; ?> placeholder="<?php echo htmlspecialchars($placeholder); ?>">
@@ -1335,6 +1401,115 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
                 wrapper.querySelectorAll('[required]').forEach(input => input.removeAttribute('required'));
             }
         });
+    }
+
+    function lookupPincode(input, fieldName) {
+        var pin = input.value.trim();
+        var statusEl = document.getElementById('pincode_status_' + fieldName);
+        var placeSel = document.getElementById('place_' + fieldName);
+        var distEl = document.getElementById('district_' + fieldName);
+        var stateEl = document.getElementById('state_' + fieldName);
+
+        if (pin.length === 6 && /^\d+$/.test(pin)) {
+            statusEl.style.display = 'block';
+            statusEl.style.color = 'var(--text-muted)';
+            statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Fetching location details...';
+
+            fetch('https://api.postalpincode.in/pincode/' + pin)
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                    if (data && data[0] && data[0].Status === 'Success' && data[0].PostOffice) {
+                        statusEl.style.color = '#22c55e';
+                        statusEl.innerHTML = '<i class="fas fa-check-circle"></i> Found ' + data[0].PostOffice.length + ' post office areas';
+                        
+                        placeSel.innerHTML = '<option value="">Select Place / Post Office</option>';
+                        data[0].PostOffice.forEach(function(po) {
+                            var opt = document.createElement('option');
+                            opt.value = po.Name;
+                            opt.textContent = po.Name + ' (' + po.BranchType + ')';
+                            placeSel.appendChild(opt);
+                        });
+
+                        if (data[0].PostOffice.length > 0) {
+                            placeSel.selectedIndex = 1;
+                            distEl.value = data[0].PostOffice[0].District;
+                            stateEl.value = data[0].PostOffice[0].State;
+                        }
+                        syncLocationValue(fieldName);
+                    } else {
+                        statusEl.style.color = '#f87171';
+                        statusEl.innerHTML = '<i class="fas fa-circle-exclamation"></i> Invalid Indian Pincode or no records found';
+                    }
+                })
+                .catch(function(err) {
+                    statusEl.style.color = '#f87171';
+                    statusEl.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Error fetching pincode details';
+                });
+        }
+    }
+
+    function autoDetectLocation(fieldName) {
+        var statusEl = document.getElementById('pincode_status_' + fieldName);
+        statusEl.style.display = 'block';
+        statusEl.style.color = 'var(--text-muted)';
+        statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Requesting location access...';
+
+        if (!navigator.geolocation) {
+            statusEl.style.color = '#f87171';
+            statusEl.innerHTML = 'Geolocation is not supported by your browser';
+            return;
+        }
+
+        navigator.geolocation.getCurrentPosition(function(pos) {
+            var lat = pos.coords.latitude;
+            var lon = pos.coords.longitude;
+            statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Reverse geocoding location...';
+
+            fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + lat + '&lon=' + lon)
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                    if (data && data.address) {
+                        var addr = data.address;
+                        var postcode = addr.postcode || '';
+                        var dist = addr.state_district || addr.county || addr.city || '';
+                        var state = addr.state || '';
+                        var town = addr.suburb || addr.town || addr.village || addr.city || '';
+
+                        if (postcode && /^\d{6}$/.test(postcode)) {
+                            document.getElementById('pincode_' + fieldName).value = postcode;
+                            lookupPincode(document.getElementById('pincode_' + fieldName), fieldName);
+                        } else {
+                            document.getElementById('district_' + fieldName).value = dist;
+                            document.getElementById('state_' + fieldName).value = state;
+                            var placeSel = document.getElementById('place_' + fieldName);
+                            placeSel.innerHTML = '<option value="' + town + '" selected>' + town + '</option>';
+                            syncLocationValue(fieldName);
+                            statusEl.style.color = '#22c55e';
+                            statusEl.innerHTML = '<i class="fas fa-check-circle"></i> Location detected';
+                        }
+                    }
+                })
+                .catch(function() {
+                    statusEl.style.color = '#f87171';
+                    statusEl.innerHTML = 'Reverse geocoding failed';
+                });
+        }, function(err) {
+            statusEl.style.color = '#f87171';
+            statusEl.innerHTML = 'Location permission denied or unavailable';
+        });
+    }
+
+    function syncLocationValue(fieldName) {
+        var pin = document.getElementById('pincode_' + fieldName).value.trim();
+        var place = document.getElementById('place_' + fieldName).value;
+        var dist = document.getElementById('district_' + fieldName).value;
+        var state = document.getElementById('state_' + fieldName).value;
+        
+        var val = '';
+        if (pin || place || dist || state) {
+            val = [place, dist, state, pin ? 'Pincode: ' + pin : ''].filter(Boolean).join(', ');
+        }
+        document.getElementById(fieldName).value = val;
     }
 </script>
 </body>

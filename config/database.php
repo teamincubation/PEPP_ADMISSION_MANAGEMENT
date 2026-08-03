@@ -122,12 +122,26 @@ try {
                 `notify_emails` VARCHAR(255) NULL,
                 `confirmation_email_subject` VARCHAR(255) NULL,
                 `confirmation_email_body` TEXT NULL,
+                `auto_redirect_whatsapp` TINYINT(1) NOT NULL DEFAULT 0,
+                `whatsapp_group_link` VARCHAR(255) NULL,
                 `created_by` VARCHAR(100) NOT NULL,
                 `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
                 KEY `idx_form_slug` (`slug`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
+
+        // Self-healing columns for WhatsApp auto redirect
+        try {
+            $cols = $pdo->query("SHOW COLUMNS FROM campaign_forms LIKE 'auto_redirect_whatsapp'")->fetch();
+            if (!$cols) {
+                $pdo->exec("ALTER TABLE campaign_forms ADD COLUMN `auto_redirect_whatsapp` TINYINT(1) NOT NULL DEFAULT 0");
+            }
+            $cols = $pdo->query("SHOW COLUMNS FROM campaign_forms LIKE 'whatsapp_group_link'")->fetch();
+            if (!$cols) {
+                $pdo->exec("ALTER TABLE campaign_forms ADD COLUMN `whatsapp_group_link` VARCHAR(255) NULL");
+            }
+        } catch (Exception $e) {}
 
         $pdo->exec("
             CREATE TABLE IF NOT EXISTS `campaign_form_fields` (

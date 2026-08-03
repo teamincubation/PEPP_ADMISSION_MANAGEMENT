@@ -86,6 +86,8 @@ try {
         $notify_emails = trim($data['notify_emails'] ?? '');
         $confirmation_email_subject = trim($data['confirmation_email_subject'] ?? '');
         $confirmation_email_body = trim($data['confirmation_email_body'] ?? '');
+        $auto_redirect_whatsapp = isset($data['auto_redirect_whatsapp']) ? (int)$data['auto_redirect_whatsapp'] : 0;
+        $whatsapp_group_link = trim($data['whatsapp_group_link'] ?? '');
         
         $fields = $data['fields'] ?? [];
 
@@ -121,7 +123,8 @@ try {
                     submission_limit = ?, password = ?, theme = ?,
                     thank_you_title = ?, thank_you_text = ?, webhook_url = ?,
                     enable_captcha = ?, notify_emails = ?,
-                    confirmation_email_subject = ?, confirmation_email_body = ?
+                    confirmation_email_subject = ?, confirmation_email_body = ?,
+                    auto_redirect_whatsapp = ?, whatsapp_group_link = ?
                 WHERE id = ?
             ");
             $stmt->execute([
@@ -132,6 +135,7 @@ try {
                 $thank_you_title, $thank_you_text, $webhook_url,
                 $enable_captcha, $notify_emails,
                 $confirmation_email_subject, $confirmation_email_body,
+                $auto_redirect_whatsapp, $whatsapp_group_link,
                 $form_id
             ]);
         } else {
@@ -145,8 +149,9 @@ try {
                     thank_you_title, thank_you_text, webhook_url,
                     enable_captcha, notify_emails,
                     confirmation_email_subject, confirmation_email_body,
+                    auto_redirect_whatsapp, whatsapp_group_link,
                     created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
             $stmt->execute([
                 $title, $description, $slug, $status,
@@ -156,6 +161,7 @@ try {
                 $thank_you_title, $thank_you_text, $webhook_url,
                 $enable_captcha, $notify_emails,
                 $confirmation_email_subject, $confirmation_email_body,
+                $auto_redirect_whatsapp, $whatsapp_group_link,
                 $admin_username
             ]);
             $form_id = $pdo->lastInsertId();
@@ -240,8 +246,9 @@ try {
                 thank_you_title, thank_you_text, webhook_url,
                 enable_captcha, notify_emails,
                 confirmation_email_subject, confirmation_email_body,
+                auto_redirect_whatsapp, whatsapp_group_link,
                 created_by
-            ) VALUES (?, ?, ?, 'draft', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, 'draft', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $stmt->execute([
             $title, $form['description'], $slug,
@@ -250,6 +257,7 @@ try {
             $form['thank_you_title'], $form['thank_you_text'], $form['webhook_url'],
             $form['enable_captcha'], $form['notify_emails'],
             $form['confirmation_email_subject'], $form['confirmation_email_body'],
+            $form['auto_redirect_whatsapp'], $form['whatsapp_group_link'],
             $admin_username
         ]);
         $new_id = $pdo->lastInsertId();

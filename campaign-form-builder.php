@@ -208,6 +208,31 @@ include 'includes/admin_nav.php';
         padding: 1.2rem;
     }
 
+    .panel-scrollable {
+        max-height: 420px;
+        overflow-y: auto;
+        padding-right: 6px;
+    }
+    
+    .panel-scrollable::-webkit-scrollbar,
+    .builder-sidebar::-webkit-scrollbar {
+        width: 5px;
+    }
+    .panel-scrollable::-webkit-scrollbar-track,
+    .builder-sidebar::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.05);
+        border-radius: 10px;
+    }
+    .panel-scrollable::-webkit-scrollbar-thumb,
+    .builder-sidebar::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 10px;
+    }
+    .panel-scrollable::-webkit-scrollbar-thumb:hover,
+    .builder-sidebar::-webkit-scrollbar-thumb:hover {
+        background: var(--accent);
+    }
+
     .builder-sidebar {
         position: sticky;
         top: 20px;
@@ -250,20 +275,28 @@ include 'includes/admin_nav.php';
         color: var(--text-muted);
     }
 
-    .prop-input {
+    /* Enhanced Textbox UI/UX styling */
+    .prop-input, .form-input {
         background: var(--input-bg);
         border: 1.5px solid var(--border);
-        border-radius: 8px;
-        padding: 0.5rem 0.75rem;
+        border-radius: 10px;
+        padding: 0.65rem 0.9rem;
         font-family: inherit;
         font-size: 0.88rem;
         color: var(--text-main);
         width: 100%;
+        transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
-    .prop-input:focus {
+    .prop-input:hover, .form-input:hover {
+        border-color: var(--accent);
+    }
+
+    .prop-input:focus, .form-input:focus {
         outline: none;
         border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(232, 152, 12, 0.15);
+        background: var(--card-bg);
     }
 
     /* Slug input states */
@@ -472,7 +505,21 @@ include 'includes/admin_nav.php';
             
             <div class="form-group">
                 <label>Thank You Page Description / Message</label>
-                <textarea id="form-thankyou-text" class="form-input" rows="5" placeholder="Write instructions or next steps for the respondent."><?php echo htmlspecialchars($form_data['thank_you_text'] ?? 'Your response has been recorded.'); ?></textarea>
+                <textarea id="form-thankyou-text" class="form-input" rows="4" placeholder="Write instructions or next steps for the respondent."><?php echo htmlspecialchars($form_data['thank_you_text'] ?? 'Your response has been recorded.'); ?></textarea>
+            </div>
+
+            <!-- WhatsApp Group Auto-Redirect Toggle -->
+            <div class="form-group" style="margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1.2rem;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:700; text-transform:none;">
+                    <input type="checkbox" id="form-redirect-whatsapp" <?php echo ($form_data['auto_redirect_whatsapp'] ?? 0) == 1 ? 'checked' : ''; ?> onchange="toggleWhatsappRedirect()">
+                    <i class="fab fa-whatsapp" style="color:#25D366; font-size:1.2rem;"></i> Auto Redirect to WhatsApp Group after submission
+                </label>
+            </div>
+
+            <div class="form-group" id="wrap-whatsapp-link" style="display:<?php echo ($form_data['auto_redirect_whatsapp'] ?? 0) == 1 ? 'block' : 'none'; ?>;">
+                <label>WhatsApp Group Link</label>
+                <input type="url" id="form-whatsapp-link" class="form-input" placeholder="https://chat.whatsapp.com/L1234567890abcdef" value="<?php echo htmlspecialchars($form_data['whatsapp_group_link'] ?? ''); ?>">
+                <small style="color:var(--text-muted); font-size:0.75rem; display:block; margin-top:4px;">Respondents will see a 3-second countdown before automatically being redirected to join this WhatsApp Group.</small>
             </div>
         </div>
 
@@ -482,7 +529,7 @@ include 'includes/admin_nav.php';
     <div class="builder-sidebar">
         
         <!-- Add field toolbox -->
-        <div class="panel">
+        <div class="panel panel-scrollable">
             <div class="panel-title"><i class="fas fa-plus" style="color:var(--accent);"></i> Add Fields</div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
                 <button class="btn btn-sm btn-secondary" onclick="addField('short_text')"><i class="fas fa-font"></i> Short Text</button>
@@ -490,6 +537,8 @@ include 'includes/admin_nav.php';
                 <button class="btn btn-sm btn-secondary" onclick="addField('number')"><i class="fas fa-hashtag"></i> Number</button>
                 <button class="btn btn-sm btn-secondary" onclick="addField('email')"><i class="fas fa-envelope"></i> Email</button>
                 <button class="btn btn-sm btn-secondary" onclick="addField('phone')"><i class="fas fa-phone"></i> Phone</button>
+                <button class="btn btn-sm btn-secondary" onclick="addField('whatsapp')"><i class="fab fa-whatsapp" style="color:#25D366;"></i> WhatsApp</button>
+                <button class="btn btn-sm btn-secondary" onclick="addField('location')"><i class="fas fa-location-dot" style="color:#ef4444;"></i> Location</button>
                 <button class="btn btn-sm btn-secondary" onclick="addField('url')"><i class="fas fa-link"></i> URL Link</button>
                 <button class="btn btn-sm btn-secondary" onclick="addField('dropdown')"><i class="fas fa-caret-down"></i> Dropdown</button>
                 <button class="btn btn-sm btn-secondary" onclick="addField('multiselect')"><i class="fas fa-list-ul"></i> Multi Select</button>
@@ -507,7 +556,7 @@ include 'includes/admin_nav.php';
         </div>
 
         <!-- Field Property Inspector Panel -->
-        <div class="panel" id="inspector-panel" style="display:none;">
+        <div class="panel panel-scrollable" id="inspector-panel" style="display:none;">
             <div class="panel-title"><i class="fas fa-gears" style="color:var(--accent);"></i> Field Properties</div>
             
             <div class="properties-form">
@@ -990,6 +1039,12 @@ include 'includes/admin_nav.php';
         renderFields();
     }
 
+    function toggleWhatsappRedirect() {
+        var chk = document.getElementById('form-redirect-whatsapp').checked;
+        document.getElementById('wrap-whatsapp-link').style.display = chk ? 'block' : 'none';
+        hasChanges = true;
+    }
+
     // Submit payload to REST API
     function saveForm(isAutosave) {
         if (isSaving) return;
@@ -1030,6 +1085,8 @@ include 'includes/admin_nav.php';
             theme: document.getElementById('form-theme').value,
             thank_you_title: document.getElementById('form-thankyou-title').value,
             thank_you_text: document.getElementById('form-thankyou-text').value,
+            auto_redirect_whatsapp: document.getElementById('form-redirect-whatsapp').checked ? 1 : 0,
+            whatsapp_group_link: document.getElementById('form-whatsapp-link').value.trim(),
             webhook_url: document.getElementById('form-webhook').value,
             enable_captcha: document.getElementById('form-captcha').value,
             notify_emails: document.getElementById('form-notify-emails').value,

@@ -20,6 +20,110 @@ $page_title  = htmlspecialchars($form['title']) . ' — Responses';
 $page_sub    = 'Review and export user submissions for this campaign';
 $active_page = 'campaigns';
 
+// Handle AJAX Response Detail View BEFORE layout output
+if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
+    $sub_id = (int)($_GET['sub_id'] ?? 0);
+    
+    // Fetch submission
+    $stmt = $pdo->prepare("SELECT * FROM campaign_form_submissions WHERE id = ? AND form_id = ?");
+    $stmt->execute([$sub_id, $form_id]);
+    $sub = $stmt->fetch();
+
+    if (!$sub) {
+        echo "<div class='alert alert-danger'><i class='fas fa-triangle-exclamation'></i> Submission record not found.</div>";
+        exit();
+    }
+
+    // Fetch answers
+    $stmt = $pdo->prepare("
+        SELECT a.answer_text, a.file_path, f.label, f.type 
+        FROM campaign_form_answers a
+        JOIN campaign_form_fields f ON a.field_id = f.id
+        WHERE a.submission_id = ?
+        ORDER BY f.sort_order ASC
+    ");
+    $stmt->execute([$sub_id]);
+    $answers = $stmt->fetchAll();
+
+    // Render Clean Modern UI Modal Content
+    ?>
+    <div style="display:flex; flex-direction:column; gap:1.2rem;">
+        <!-- Respondent Badge Header -->
+        <div style="background:var(--input-bg); border:1.5px solid var(--border); border-radius:16px; padding:1.2rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div style="display:flex; align-items:center; gap:12px;">
+                <div style="width:46px; height:46px; border-radius:50%; background:rgba(232,152,12,0.15); border:1.5px solid var(--accent); color:var(--accent); display:flex; align-items:center; justify-content:center; font-size:1.2rem; font-weight:800;">
+                    <i class="fas fa-user"></i>
+                </div>
+                <div>
+                    <div style="font-size:0.75rem; text-transform:uppercase; font-weight:700; color:var(--text-muted); letter-spacing:0.5px;">Respondent</div>
+                    <div style="font-size:1.1rem; font-weight:800; color:var(--text-main);"><?php echo htmlspecialchars($sub['respondent_identifier'] ?: 'Anonymous Respondent'); ?></div>
+                </div>
+            </div>
+
+            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px; font-size:0.8rem; color:var(--text-muted);">
+                <span><i class="fas fa-clock" style="color:var(--accent);"></i> <?php echo date('d M Y, h:i A', strtotime($sub['submitted_at'])); ?></span>
+                <span><i class="fas fa-network-wired"></i> IP: <?php echo htmlspecialchars($sub['ip_address']); ?></span>
+            </div>
+        </div>
+
+        <!-- Submitted Answers Grid -->
+        <div style="background:var(--card-bg); border:1px solid var(--border); border-radius:16px; padding:1.2rem;">
+            <h4 style="font-size:0.95rem; font-weight:800; color:var(--accent); margin-bottom:1rem; border-bottom:1.5px solid var(--border); padding-bottom:8px; display:flex; align-items:center; gap:8px;">
+                <i class="fas fa-clipboard-check"></i> Form Response Data
+            </h4>
+            
+            <div style="display:grid; grid-template-columns:1fr; gap:12px;">
+                <?php foreach ($answers as $ans): 
+                    $val = $ans['answer_text'];
+                    $file = $ans['file_path'];
+                    $icon = 'fa-pen-to-square';
+                    if ($ans['type'] === 'phone') $icon = 'fa-phone';
+                    elseif ($ans['type'] === 'whatsapp') $icon = 'fa-whatsapp';
+                    elseif ($ans['type'] === 'email') $icon = 'fa-envelope';
+                    elseif ($ans['type'] === 'location') $icon = 'fa-location-dot';
+                    elseif ($ans['type'] === 'file') $icon = 'fa-paperclip';
+                    elseif ($ans['type'] === 'rating') $icon = 'fa-star';
+                ?>
+                    <div style="background:var(--input-bg); border:1px solid var(--border); border-radius:12px; padding:12px 16px;">
+                        <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); letter-spacing:0.5px; margin-bottom:4px; display:flex; align-items:center; gap:6px;">
+                            <i class="fas <?php echo $icon; ?>" style="color:var(--accent);"></i>
+                            <?php echo htmlspecialchars($ans['label']); ?>
+                        </div>
+                        
+                        <?php if ($file): ?>
+                            <div style="margin-top:4px;">
+                                <a href="<?php echo htmlspecialchars($file); ?>" target="_blank" class="btn btn-sm btn-soft-blue" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">
+                                    <i class="fas fa-download"></i> Download Attachment (<?php echo htmlspecialchars($val); ?>)
+                                </a>
+                            </div>
+                        <?php elseif ($ans['type'] === 'whatsapp'): ?>
+                            <div style="font-size:0.95rem; font-weight:700; color:var(--text-main); display:flex; align-items:center; gap:8px;">
+                                <?php echo htmlspecialchars($val ?: '-'); ?>
+                                <?php if (!empty($val)): 
+                                    $num = preg_replace('/[^0-9]/', '', $val);
+                                ?>
+                                    <a href="https://wa.me/<?php echo $num; ?>" target="_blank" class="btn btn-sm btn-soft-green" style="padding:2px 8px; font-size:0.75rem;"><i class="fab fa-whatsapp"></i> Chat</a>
+                                <?php endif; ?>
+                            </div>
+                        <?php else: ?>
+                            <div style="font-size:0.95rem; font-weight:700; color:var(--text-main); white-space:pre-line;">
+                                <?php echo htmlspecialchars($val ?: '-'); ?>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+
+        <!-- Technical Metadata Footer -->
+        <div style="background:var(--input-bg); border:1px solid var(--border); border-radius:12px; padding:10px 16px; font-size:0.78rem; color:var(--text-muted);">
+            <div><strong>User Agent / Device Info:</strong> <?php echo htmlspecialchars($sub['user_agent']); ?></div>
+        </div>
+    </div>
+    <?php
+    exit();
+}
+
 // Fetch fields (excluding section breaks)
 $stmt = $pdo->prepare("SELECT id, label, field_name, type FROM campaign_form_fields WHERE form_id = ? AND type != 'section' ORDER BY sort_order ASC");
 $stmt->execute([$form_id]);
@@ -631,81 +735,5 @@ include 'includes/admin_nav.php';
         });
     }
 </script>
-
-<?php
-// Dynamic detailed response loader
-if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
-    ob_clean();
-    $sub_id = (int)($_GET['sub_id'] ?? 0);
-    
-    // Fetch submission
-    $stmt = $pdo->prepare("SELECT * FROM campaign_form_submissions WHERE id = ? AND form_id = ?");
-    $stmt->execute([$sub_id, $form_id]);
-    $sub = $stmt->fetch();
-
-    if (!$sub) {
-        echo "<div class='alert alert-danger'>Submission not found.</div>";
-        exit();
-    }
-
-    // Fetch answers
-    $stmt = $pdo->prepare("
-        SELECT a.answer_text, a.file_path, f.label, f.type 
-        FROM campaign_form_answers a
-        JOIN campaign_form_fields f ON a.field_id = f.id
-        WHERE a.submission_id = ?
-        ORDER BY f.sort_order ASC
-    ");
-    $stmt->execute([$sub_id]);
-    $answers = $stmt->fetchAll();
-    
-    echo "<div style='display:flex; flex-direction:column; gap:1.2rem;'>";
-    
-    // Respondent/Meta header
-    echo "<div style='background:var(--input-bg); border:1px solid var(--border); border-radius:12px; padding:12px 18px;'>
-            <div style='font-size:0.75rem; text-transform:uppercase; color:var(--text-muted); font-weight:700;'>Respondent</div>
-            <div style='font-size:1.15rem; font-weight:800; color:var(--accent); margin-bottom:5px;'>" . htmlspecialchars($sub['respondent_identifier'] ?: 'Anonymous') . "</div>
-            <div style='font-size:0.8rem; display:flex; gap:15px; color:var(--text-muted);'>
-                <span><i class='fas fa-calendar'></i> " . date('d M Y, h:i A', strtotime($sub['submitted_at'])) . "</span>
-                <span><i class='fas fa-network-wired'></i> " . htmlspecialchars($sub['ip_address']) . "</span>
-            </div>
-          </div>";
-
-    // Answer Listing
-    echo "<div style='display:flex; flex-direction:column; gap:10px;'>";
-    echo "<h4 style='font-size:0.92rem; font-weight:800; border-bottom:1.5px solid var(--border); padding-bottom:5px; margin-bottom:5px;'>Submitted Fields</h4>";
-    
-    foreach ($answers as $ans) {
-        $val = $ans['answer_text'];
-        $file = $ans['file_path'];
-        
-        echo "<div style='border-bottom:1px dashed var(--border); padding-bottom:8px;'>
-                <div style='font-size:0.72rem; text-transform:uppercase; font-weight:700; color:var(--text-muted); margin-bottom:2px;'>" . htmlspecialchars($ans['label']) . "</div>";
-        
-        if ($file) {
-            echo "<div style='font-size:0.9rem; font-weight:700;'>
-                    <a href='{$file}' target='_blank' style='color:var(--accent); text-decoration:none;'>
-                        <i class='fas fa-cloud-arrow-down'></i> " . htmlspecialchars($val) . "
-                    </a>
-                  </div>";
-        } else {
-            echo "<div style='font-size:0.9rem; font-weight:700; white-space:pre-line;'>" . htmlspecialchars($val ?: '-') . "</div>";
-        }
-        echo "</div>";
-    }
-    echo "</div>";
-
-    // Timeline Summary
-    echo "<div style='background:rgba(232,152,12,0.04); border:1px solid var(--border); border-radius:12px; padding:12px 18px; margin-top:5px;'>
-            <h4 style='font-size:0.82rem; font-weight:800; text-transform:uppercase; color:var(--accent); margin-bottom:8px;'>Submission metadata</h4>
-            <div style='font-size:0.82rem; color:var(--text-muted); display:flex; flex-direction:column; gap:4px;'>
-                <div><strong>User Agent:</strong> " . htmlspecialchars($sub['user_agent']) . "</div>
-            </div>
-          </div>";
-
-    echo "</div>";
-    exit();
-}
-?>
 
 <?php include 'includes/admin_footer.php'; ?>
