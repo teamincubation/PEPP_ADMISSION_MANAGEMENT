@@ -733,7 +733,8 @@ include 'includes/admin_nav.php';
         var title = document.getElementById('form-title').value;
         var slugInput = document.getElementById('form-slug');
         if (formId === 0 && !slugInput.value) { // only autogenerate slug for new forms
-            var clean = title.toLowerCase().replace(/[^a-z0-9\s\-]/g, '').replace(/\s+/g, '-');
+            var normalizedTitle = title.replace(/[\u2013\u2014]/g, '-');
+            var clean = normalizedTitle.toLowerCase().replace(/[^a-z0-9\s\-]/g, '').replace(/\s+/g, '-');
             slugInput.value = clean;
             checkSlugAvailability();
         }
@@ -741,7 +742,10 @@ include 'includes/admin_nav.php';
     }
 
     function checkSlugAvailability() {
-        var slug = document.getElementById('form-slug').value.trim();
+        var slugInput = document.getElementById('form-slug');
+        var slug = slugInput.value.replace(/[\u2013\u2014]/g, '-').trim();
+        slugInput.value = slug;
+        
         var indicator = document.getElementById('slug-indicator');
         var preview = document.getElementById('preview-slug');
         

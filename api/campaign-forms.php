@@ -29,6 +29,7 @@ try {
         }
 
         // Clean slug: lowercase, hyphens, alphanumeric
+        $slug = str_replace(['–', '—'], '-', $slug);
         $slug = preg_replace('/[^a-z0-9\-]/', '', strtolower($slug));
 
         $sql = "SELECT COUNT(*) FROM campaign_forms WHERE slug = ?";
@@ -92,8 +93,10 @@ try {
         
         $fields = $data['fields'] ?? [];
 
+        $slug = str_replace(['–', '—'], '-', $slug);
         if (empty($slug)) {
-            $slug = preg_replace('/[^a-z0-9\-]/', '', strtolower(str_replace(' ', '-', $title)));
+            $slug = str_replace(['–', '—'], '-', $title);
+            $slug = preg_replace('/[^a-z0-9\-]/', '', strtolower(str_replace(' ', '-', $slug)));
         } else {
             $slug = preg_replace('/[^a-z0-9\-]/', '', strtolower($slug));
         }
