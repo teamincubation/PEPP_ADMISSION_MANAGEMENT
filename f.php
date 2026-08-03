@@ -669,6 +669,31 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
             transform: translateY(0);
         }
 
+        .btn-detect-loc {
+            background: transparent;
+            border: 1.5px solid var(--primary);
+            color: var(--primary);
+            border-radius: 12px;
+            padding: 0.8rem 1.1rem;
+            font-weight: 700;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+            flex-shrink: 0;
+            width: auto !important;
+        }
+
+        .btn-detect-loc:hover {
+            background: rgba(232, 152, 12, 0.15);
+            color: var(--primary);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(232, 152, 12, 0.2);
+        }
+
         /* Alert and Errors */
         .alert {
             padding: 1rem 1.2rem;
@@ -1087,17 +1112,17 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
                             </div>
 
                         <?php elseif ($type === 'location'): ?>
-                            <div style="display:flex; flex-direction:column; gap:8px;">
-                                <div style="display:flex; gap:8px; align-items:center;">
-                                    <input type="text" id="pincode_<?php echo $name; ?>" class="input-control" placeholder="Enter 6-digit Pincode" maxlength="6" style="flex:1;" oninput="lookupPincode(this, '<?php echo $name; ?>')">
-                                    <button type="button" class="btn btn-secondary" style="padding:0.65rem 1rem; font-size:0.82rem; flex-shrink:0;" onclick="autoDetectLocation('<?php echo $name; ?>')">
-                                        <i class="fas fa-location-crosshairs" style="color:var(--primary);"></i> Detect Location
+                            <div style="display:flex; flex-direction:column; gap:10px;">
+                                <div style="display:flex; gap:10px; align-items:center;">
+                                    <input type="text" id="pincode_<?php echo $name; ?>" class="input-control" placeholder="Enter 6-digit PIN Code" maxlength="6" style="flex:1; min-width:140px; font-weight:600; letter-spacing:0.5px;" oninput="lookupPincode(this, '<?php echo $name; ?>')">
+                                    <button type="button" class="btn-detect-loc" onclick="autoDetectLocation('<?php echo $name; ?>')">
+                                        <i class="fas fa-location-crosshairs"></i> Detect Location
                                     </button>
                                 </div>
                                 
                                 <div id="pincode_status_<?php echo $name; ?>" style="font-size:0.78rem; color:var(--text-muted); display:none;"></div>
                                 
-                                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
                                     <select id="place_<?php echo $name; ?>" class="input-control" onchange="syncLocationValue('<?php echo $name; ?>')">
                                         <option value="">Select Place / Post Office</option>
                                     </select>
