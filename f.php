@@ -622,6 +622,44 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?php echo htmlspecialchars($form['title']); ?> — PEPP Learning</title>
+    
+    <?php
+    $og_protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $og_host = $_SERVER['HTTP_HOST'] ?? 'pepplearning.com';
+    $og_current_url = $og_protocol . '://' . $og_host . $_SERVER['REQUEST_URI'];
+    
+    $og_banner = '';
+    if (!empty($form['banner_image'])) {
+        $og_banner = $form['banner_image'];
+        if (strpos($og_banner, 'http://') !== 0 && strpos($og_banner, 'https://') !== 0) {
+            $og_banner = $og_protocol . '://' . $og_host . '/admissions/' . ltrim($og_banner, '/');
+        }
+    } else {
+        $og_banner = $og_protocol . '://' . $og_host . '/admissions/logo.png';
+    }
+    
+    $og_desc = !empty($form['description']) ? strip_tags($form['description']) : 'Submit your response for ' . $form['title'];
+    if (strlen($og_desc) > 160) {
+        $og_desc = substr($og_desc, 0, 157) . '...';
+    }
+    ?>
+    <!-- Open Graph / Facebook / WhatsApp Meta Tags -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="<?php echo htmlspecialchars($og_current_url); ?>">
+    <meta property="og:title" content="<?php echo htmlspecialchars($form['title']); ?>">
+    <meta property="og:description" content="<?php echo htmlspecialchars($og_desc); ?>">
+    <meta property="og:image" content="<?php echo htmlspecialchars($og_banner); ?>">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:site_name" content="PEPP Learning Campaign Forms">
+
+    <!-- Twitter Card Meta Tags -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" content="<?php echo htmlspecialchars($og_current_url); ?>">
+    <meta name="twitter:title" content="<?php echo htmlspecialchars($form['title']); ?>">
+    <meta name="twitter:description" content="<?php echo htmlspecialchars($og_desc); ?>">
+    <meta name="twitter:image" content="<?php echo htmlspecialchars($og_banner); ?>">
+
     <link rel="icon" type="image/png" href="logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
