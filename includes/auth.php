@@ -36,6 +36,7 @@ $GLOBALS['ADMIN_PAGES'] = [
     'alumni'       => ['Alumni Database',         'fa-user-graduate'],
     'peppkit'      => ['PEPPKIT Report',          'fa-box-open'],
     'cards'        => ['Generate Cards',          'fa-id-card'],
+    'campaigns'    => ['Campaign Forms',          'fa-wpforms'],
     'settings'     => ['Settings',                'fa-gear'],
     // Future pages: add 'key' => ['Label', 'fa-icon'] and grant in Admin Management.
 ];
@@ -173,6 +174,7 @@ function get_first_accessible_page_url() {
         'alumni'       => 'alumni-database.php',
         'peppkit'      => 'peppkit-report.php',
         'cards'        => 'cards.php',
+        'campaigns'    => 'campaign-forms.php',
         'accounts'     => 'accounts.php',
         'installments' => 'phpinstalmentpaymentupdate.php',
         'invoices'     => 'invoices.php',

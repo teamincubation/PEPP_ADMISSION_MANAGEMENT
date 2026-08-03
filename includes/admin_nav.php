@@ -207,6 +207,15 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
         </div>
         <?php endif; ?>
 
+        <?php if (can_access('campaigns')): ?>
+        <div class="nav-section">
+            <div class="nav-section-label">Campaigns</div>
+            <a class="nav-item <?php echo nav_active('campaigns', $active_page); ?>" href="campaign-forms.php">
+                <i class="fab fa-wpforms"></i> Custom Forms
+            </a>
+        </div>
+        <?php endif; ?>
+
         <?php if (can_access('installments') || can_access('whatsapp') || can_access('invoices')): ?>
         <div class="nav-section">
             <div class="nav-section-label">Payments</div>

@@ -99,6 +99,97 @@ try {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 
+        // Campaign Form Builder Tables
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `campaign_forms` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `title` VARCHAR(255) NOT NULL,
+                `description` TEXT NULL,
+                `slug` VARCHAR(100) UNIQUE NOT NULL,
+                `status` ENUM('draft', 'published', 'archived') NOT NULL DEFAULT 'draft',
+                `publish_schedule_start` DATETIME NULL,
+                `publish_schedule_end` DATETIME NULL,
+                `is_public` TINYINT(1) NOT NULL DEFAULT 1,
+                `allowed_emails` TEXT NULL,
+                `limit_per_user` INT NOT NULL DEFAULT 0,
+                `submission_limit` INT NOT NULL DEFAULT 0,
+                `password` VARCHAR(255) NULL,
+                `theme` VARCHAR(50) NOT NULL DEFAULT 'default',
+                `thank_you_title` VARCHAR(255) NULL DEFAULT 'Thank You!',
+                `thank_you_text` TEXT NULL,
+                `webhook_url` VARCHAR(255) NULL,
+                `enable_captcha` TINYINT(1) NOT NULL DEFAULT 0,
+                `notify_emails` VARCHAR(255) NULL,
+                `confirmation_email_subject` VARCHAR(255) NULL,
+                `confirmation_email_body` TEXT NULL,
+                `created_by` VARCHAR(100) NOT NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+                KEY `idx_form_slug` (`slug`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `campaign_form_fields` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `form_id` INT NOT NULL,
+                `type` VARCHAR(50) NOT NULL,
+                `label` VARCHAR(255) NOT NULL,
+                `placeholder` VARCHAR(255) NULL,
+                `default_value` VARCHAR(255) NULL,
+                `field_name` VARCHAR(100) NOT NULL,
+                `is_required` TINYINT(1) NOT NULL DEFAULT 0,
+                `sort_order` INT NOT NULL DEFAULT 0,
+                `validation_rules` TEXT NULL,
+                `choices` TEXT NULL,
+                `conditional_logic` TEXT NULL,
+                `error_message` VARCHAR(255) NULL,
+                KEY `idx_field_form` (`form_id`),
+                CONSTRAINT `fk_field_form` FOREIGN KEY (`form_id`) REFERENCES `campaign_forms` (`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `campaign_form_submissions` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `form_id` INT NOT NULL,
+                `respondent_identifier` VARCHAR(255) NULL,
+                `ip_address` VARCHAR(45) NOT NULL,
+                `user_agent` VARCHAR(255) NOT NULL,
+                `submitted_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                KEY `idx_submission_form` (`form_id`),
+                CONSTRAINT `fk_submission_form` FOREIGN KEY (`form_id`) REFERENCES `campaign_forms` (`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `campaign_form_answers` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `submission_id` INT NOT NULL,
+                `field_id` INT NOT NULL,
+                `answer_text` LONGTEXT NULL,
+                `file_path` VARCHAR(255) NULL,
+                KEY `idx_answer_sub` (`submission_id`),
+                KEY `idx_answer_field` (`field_id`),
+                CONSTRAINT `fk_answer_sub` FOREIGN KEY (`submission_id`) REFERENCES `campaign_form_submissions` (`id`) ON DELETE CASCADE,
+                CONSTRAINT `fk_answer_field` FOREIGN KEY (`field_id`) REFERENCES `campaign_form_fields` (`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `campaign_form_analytics` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `form_id` INT NOT NULL,
+                `ip_address` VARCHAR(45) NOT NULL,
+                `device` VARCHAR(20) NOT NULL,
+                `browser` VARCHAR(50) NOT NULL,
+                `referrer` VARCHAR(255) NULL,
+                `visited_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                KEY `idx_analytic_form` (`form_id`),
+                CONSTRAINT `fk_analytic_form` FOREIGN KEY (`form_id`) REFERENCES `campaign_forms` (`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
         $cols = $pdo->query("SHOW COLUMNS FROM reminders LIKE 'student_id'")->fetch();
         if (!$cols) {
             $pdo->exec("ALTER TABLE reminders ADD COLUMN student_id VARCHAR(50) NULL");
