@@ -370,6 +370,13 @@ try {
                 continue;
             }
 
+            // Check if submission is already converted
+            if (!empty($sub['is_converted_lead'])) {
+                $skipped_count++;
+                $errors[] = "Submission #{$sub_id} ({$name}) skipped: Already converted to Lead previously.";
+                continue;
+            }
+
             // Fetch answers
             $stmt = $pdo->prepare("
                 SELECT a.answer_text, f.label, f.type, f.field_name 
@@ -427,9 +434,12 @@ try {
             // Check if already exists in leads
             $stmt = $pdo->prepare("SELECT id FROM leads WHERE whatsapp_number = ?");
             $stmt->execute([$clean_number]);
-            if ($stmt->fetchColumn()) {
+            $existing_lead_id = $stmt->fetchColumn();
+            if ($existing_lead_id) {
+                // Mark submission as converted pointing to existing lead
+                $pdo->prepare("UPDATE campaign_form_submissions SET is_converted_lead = 1, converted_lead_id = ? WHERE id = ?")->execute([$existing_lead_id, $sub_id]);
                 $skipped_count++;
-                $errors[] = "Submission #{$sub_id} ({$name}) skipped: Lead with number +{$clean_number} already exists.";
+                $errors[] = "Submission #{$sub_id} ({$name}) marked: Lead with number +{$clean_number} already exists in CRM.";
                 continue;
             }
 
@@ -440,6 +450,11 @@ try {
                     VALUES (?, ?, ?, 'new', CURDATE(), '__ALL__', 'campaign_form', ?, NOW(), NOW())
                 ");
                 $stmt->execute([$clean_number, $name, $course_name, $admin_username]);
+                $new_lead_id = $pdo->lastInsertId();
+
+                // Update submission status to converted
+                $pdo->prepare("UPDATE campaign_form_submissions SET is_converted_lead = 1, converted_lead_id = ? WHERE id = ?")->execute([$new_lead_id, $sub_id]);
+
                 $converted_count++;
             } catch (Exception $e) {
                 $skipped_count++;
@@ -453,6 +468,47 @@ try {
             'skipped' => $skipped_count,
             'errors' => $errors
         ]);
+        exit();
+    }
+
+    if ($action === 'upload_banner') {
+        if (!isset($_FILES['banner_file']) || $_FILES['banner_file']['error'] !== UPLOAD_ERR_OK) {
+            echo json_encode(['success' => false, 'message' => 'No image file uploaded or upload error occurred.']);
+            exit();
+        }
+
+        $file = $_FILES['banner_file'];
+        $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+        $allowed = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
+
+        if (!in_array($ext, $allowed, true)) {
+            echo json_encode(['success' => false, 'message' => 'Invalid image format. Allowed: JPG, PNG, WEBP, GIF.']);
+            exit();
+        }
+
+        if ($file['size'] > 5 * 1024 * 1024) {
+            echo json_encode(['success' => false, 'message' => 'Image file size exceeds 5MB limit.']);
+            exit();
+        }
+
+        $dir = '../uploads/banners/';
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+
+        $filename = 'banner_' . uniqid() . '.' . $ext;
+        $target = $dir . $filename;
+
+        if (move_uploaded_file($file['tmp_name'], $target)) {
+            $public_url = 'uploads/banners/' . $filename;
+            echo json_encode([
+                'success' => true,
+                'url' => $public_url,
+                'message' => 'Banner image uploaded successfully!'
+            ]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Failed to save uploaded banner file.']);
+        }
         exit();
     }
 

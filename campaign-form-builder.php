@@ -369,9 +369,26 @@ include 'includes/admin_nav.php';
                     <textarea id="form-description" class="form-input" style="margin-bottom:0;" rows="2" placeholder="Describe the purpose of this form for visitors"><?php echo htmlspecialchars($form_data['description'] ?? ''); ?></textarea>
                 </div>
                 <div class="form-group" style="margin-bottom:0; margin-top:0.8rem;">
-                    <label>Form Header Banner Image URL (Optional)</label>
-                    <input type="url" id="form-banner-image" class="form-input" style="margin-bottom:0;" placeholder="https://example.com/images/campaign-banner.jpg" value="<?php echo htmlspecialchars($form_data['banner_image'] ?? ''); ?>">
-                    <small style="color:var(--text-muted); font-size:0.75rem;">Image banner will display prominently at the top of your public form.</small>
+                    <label style="display:flex; justify-content:space-between; align-items:center;">
+                        <span>Form Header Banner Image (Optional)</span>
+                        <span style="font-size:0.75rem; color:var(--accent); font-weight:700;"><i class="fas fa-ruler-combined"></i> Aspect Ratio: 3:1 or 16:9 (1200×400px / 1200×675px)</span>
+                    </label>
+
+                    <div style="display:flex; gap:10px; align-items:center; margin-bottom:8px;">
+                        <input type="text" id="form-banner-image" class="form-input" style="margin-bottom:0; flex:1;" placeholder="Upload image file or enter URL..." value="<?php echo htmlspecialchars($form_data['banner_image'] ?? ''); ?>" oninput="previewBannerImage(this.value)">
+                        <label class="btn btn-secondary" style="margin-bottom:0; cursor:pointer; padding:0.65rem 1.1rem; border-radius:10px; font-size:0.85rem; font-weight:700; white-space:nowrap;" id="btn-upload-banner-label">
+                            <i class="fas fa-upload"></i> Upload Image
+                            <input type="file" accept="image/*" style="display:none;" onchange="uploadBannerFile(this)">
+                        </label>
+                    </div>
+                    
+                    <div id="banner-aspect-hint" style="font-size:0.75rem; color:var(--text-muted); background:var(--input-bg); padding:8px 12px; border-radius:8px; border:1px dashed var(--border);">
+                        <i class="fas fa-circle-info" style="color:var(--accent);"></i> Recommended Banner Design: <strong>1200px width × 400px height</strong> (3:1 aspect ratio) or <strong>1200px width × 675px height</strong> (16:9 ratio). Max size: 5MB. Supported Formats: PNG, JPG, WEBP.
+                    </div>
+
+                    <div id="banner-preview-box" style="margin-top:10px; display:<?php echo !empty($form_data['banner_image']) ? 'block' : 'none'; ?>;">
+                        <img id="banner-preview-img" src="<?php echo htmlspecialchars($form_data['banner_image'] ?? ''); ?>" style="max-height:140px; width:100%; object-fit:cover; border-radius:10px; border:1px solid var(--border);">
+                    </div>
                 </div>
             </div>
 
@@ -1143,21 +1160,53 @@ include 'includes/admin_nav.php';
         });
     }
 
-    // Helper functions
-    function escapeHtml(text) {
-        if (!text) return '';
-        var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-        return text.toString().replace(/[&<>'"]/g, function(m) { return map[m]; });
+    function uploadBannerFile(input) {
+        if (!input.files || !input.files[0]) return;
+        var file = input.files[0];
+        
+        if (file.size > 5 * 1024 * 1024) {
+            alert('File size exceeds allowed limit of 5MB.');
+            return;
+        }
+
+        var fd = new FormData();
+        fd.append('action', 'upload_banner');
+        fd.append('banner_file', file);
+
+        var lbl = document.getElementById('btn-upload-banner-label');
+        var originalHtml = '<i class="fas fa-upload"></i> Upload Image<input type="file" accept="image/*" style="display:none;" onchange="uploadBannerFile(this)">';
+        lbl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+
+        fetch('api/campaign-forms.php', {
+            method: 'POST',
+            body: fd
+        })
+        .then(r => r.json())
+        .then(res => {
+            lbl.innerHTML = originalHtml;
+            if (res.success) {
+                document.getElementById('form-banner-image').value = res.url;
+                previewBannerImage(res.url);
+                markChanged();
+            } else {
+                alert(res.message || 'Upload failed');
+            }
+        })
+        .catch(err => {
+            lbl.innerHTML = originalHtml;
+            alert('Upload failed due to network error.');
+        });
     }
 
-    // JSON.stringify handles stdClass placeholder for empty rules/logic
-    function jsonStringifyCustom(obj) {
-        return JSON.stringify(obj, function(k, v) {
-            if (v && typeof v === 'object' && Object.keys(v).length === 0 && !Array.isArray(v)) {
-                return {};
-            }
-            return v;
-        });
+    function previewBannerImage(url) {
+        var box = document.getElementById('banner-preview-box');
+        var img = document.getElementById('banner-preview-img');
+        if (url && url.trim().length > 0) {
+            img.src = url.trim();
+            box.style.display = 'block';
+        } else {
+            box.style.display = 'none';
+        }
     }
 </script>
 

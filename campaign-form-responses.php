@@ -34,15 +34,15 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
         exit();
     }
 
-    // Fetch answers
+    // Fetch ALL form fields LEFT JOIN campaign_form_answers to ensure complete response data is ALWAYS rendered
     $stmt = $pdo->prepare("
-        SELECT a.answer_text, a.file_path, f.label, f.type 
-        FROM campaign_form_answers a
-        JOIN campaign_form_fields f ON a.field_id = f.id
-        WHERE a.submission_id = ?
+        SELECT f.label, f.type, f.id as field_id, a.answer_text, a.file_path 
+        FROM campaign_form_fields f 
+        LEFT JOIN campaign_form_answers a ON (a.field_id = f.id AND a.submission_id = ?)
+        WHERE f.form_id = ? AND f.type != 'section'
         ORDER BY f.sort_order ASC
     ");
-    $stmt->execute([$sub_id]);
+    $stmt->execute([$sub_id, $form_id]);
     $answers = $stmt->fetchAll();
 
     // Render Clean Modern UI Modal Content
@@ -61,7 +61,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
             </div>
 
             <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px; font-size:0.8rem; color:var(--text-muted);">
-                <button type="button" class="btn btn-sm" onclick="openConvertLeadsModal(<?php echo $sub_id; ?>)" style="background:#16a34a; color:#fff; border:none; padding:4px 10px; font-size:0.75rem; font-weight:700;"><i class="fas fa-user-plus"></i> Convert to Lead</button>
+                <?php if (!empty($sub['is_converted_lead'])): ?>
+                    <span class="badge green" style="padding:5px 12px; font-size:0.78rem; font-weight:700;"><i class="fas fa-user-check"></i> Converted to Lead</span>
+                <?php else: ?>
+                    <button type="button" class="btn btn-sm" onclick="openConvertLeadsModal(<?php echo $sub_id; ?>)" style="background:#16a34a; color:#fff; border:none; padding:5px 12px; font-size:0.75rem; font-weight:700; border-radius:8px;"><i class="fas fa-user-plus"></i> Convert to Lead</button>
+                <?php endif; ?>
                 <span><i class="fas fa-clock" style="color:var(--accent);"></i> <?php echo date('d M Y, h:i A', strtotime($sub['submitted_at'])); ?></span>
                 <span><i class="fas fa-network-wired"></i> IP: <?php echo htmlspecialchars($sub['ip_address']); ?></span>
             </div>
@@ -75,8 +79,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
             
             <div style="display:grid; grid-template-columns:1fr; gap:12px;">
                 <?php foreach ($answers as $ans): 
-                    $val = $ans['answer_text'];
-                    $file = $ans['file_path'];
+                    $val = trim($ans['answer_text'] ?? '');
+                    $file = $ans['file_path'] ?? null;
                     $icon = 'fa-pen-to-square';
                     if ($ans['type'] === 'phone') $icon = 'fa-phone';
                     elseif ($ans['type'] === 'whatsapp') $icon = 'fa-whatsapp';
@@ -94,21 +98,22 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
                         <?php if ($file): ?>
                             <div style="margin-top:4px;">
                                 <a href="<?php echo htmlspecialchars($file); ?>" target="_blank" class="btn btn-sm btn-soft-blue" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">
-                                    <i class="fas fa-download"></i> Download Attachment (<?php echo htmlspecialchars($val); ?>)
+                                    <i class="fas fa-download"></i> Download Attachment (<?php echo htmlspecialchars($val ?: 'File'); ?>)
                                 </a>
                             </div>
-                        <?php elseif ($ans['type'] === 'whatsapp'): ?>
+                        <?php elseif ($ans['type'] === 'whatsapp' && !empty($val)): ?>
                             <div style="font-size:0.95rem; font-weight:700; color:var(--text-main); display:flex; align-items:center; gap:8px;">
-                                <?php echo htmlspecialchars($val ?: '-'); ?>
-                                <?php if (!empty($val)): 
-                                    $num = preg_replace('/[^0-9]/', '', $val);
-                                ?>
-                                    <a href="https://wa.me/<?php echo $num; ?>" target="_blank" class="btn btn-sm btn-soft-green" style="padding:2px 8px; font-size:0.75rem;"><i class="fab fa-whatsapp"></i> Chat</a>
-                                <?php endif; ?>
+                                <?php echo htmlspecialchars($val); ?>
+                                <?php $num = preg_replace('/[^0-9]/', '', $val); ?>
+                                <a href="https://wa.me/<?php echo $num; ?>" target="_blank" class="btn btn-sm btn-soft-green" style="padding:2px 8px; font-size:0.75rem;"><i class="fab fa-whatsapp"></i> Chat</a>
+                            </div>
+                        <?php elseif (!empty($val)): ?>
+                            <div style="font-size:0.95rem; font-weight:700; color:var(--text-main); white-space:pre-line;">
+                                <?php echo htmlspecialchars($val); ?>
                             </div>
                         <?php else: ?>
-                            <div style="font-size:0.95rem; font-weight:700; color:var(--text-main); white-space:pre-line;">
-                                <?php echo htmlspecialchars($val ?: '-'); ?>
+                            <div style="font-size:0.85rem; font-style:italic; color:var(--text-muted); opacity:0.75;">
+                                Not Provided
                             </div>
                         <?php endif; ?>
                     </div>
@@ -572,20 +577,27 @@ include 'includes/admin_nav.php';
 <div class="responses-control-bar">
     
     <!-- Filter Search Form -->
-    <form method="GET" action="" style="display:flex; flex-wrap:wrap; gap:10px; flex:1; max-width:760px; align-items:center;">
+    <form method="GET" action="" style="display:flex; flex-wrap:wrap; gap:10px; flex:1; max-width:820px; align-items:center;">
         <input type="hidden" name="id" value="<?php echo $form_id; ?>">
         
-        <div style="position:relative; flex:1; min-width:200px;">
-            <i class="fas fa-search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:0.85rem;"></i>
-            <input type="text" name="search" placeholder="Search answers, IPs, name..." class="form-input" style="margin-bottom:0; padding-left:36px; border-radius:12px;" value="<?php echo htmlspecialchars($search); ?>">
+        <div style="position:relative; flex:1; min-width:220px;">
+            <i class="fas fa-magnifying-glass" style="position:absolute; left:14px; top:50%; transform:translateY(-50%); color:var(--accent); font-size:0.9rem;"></i>
+            <input type="text" name="search" placeholder="Search responses by name, email, phone, IP..." class="form-input" style="margin-bottom:0; padding-left:42px; padding-right:12px; border-radius:14px; height:44px; font-weight:500;" value="<?php echo htmlspecialchars($search); ?>">
         </div>
         
-        <input type="date" name="start_date" class="form-input" style="margin-bottom:0; width:145px; border-radius:12px;" value="<?php echo htmlspecialchars($start_date); ?>" title="Start Date">
-        <input type="date" name="end_date" class="form-input" style="margin-bottom:0; width:145px; border-radius:12px;" value="<?php echo htmlspecialchars($end_date); ?>" title="End Date">
+        <div style="display:flex; align-items:center; gap:8px; background:var(--input-bg); border:1.5px solid var(--border); padding:2px 12px; border-radius:14px; height:44px;">
+            <span style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;"><i class="fas fa-calendar-day" style="color:var(--accent);"></i> From</span>
+            <input type="date" name="start_date" class="form-input" style="margin-bottom:0; border:none; background:transparent; padding:4px 0; height:auto; width:130px; font-size:0.85rem; font-weight:600; color:var(--text-main);" value="<?php echo htmlspecialchars($start_date); ?>">
+        </div>
+
+        <div style="display:flex; align-items:center; gap:8px; background:var(--input-bg); border:1.5px solid var(--border); padding:2px 12px; border-radius:14px; height:44px;">
+            <span style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;"><i class="fas fa-calendar-check" style="color:var(--accent);"></i> To</span>
+            <input type="date" name="end_date" class="form-input" style="margin-bottom:0; border:none; background:transparent; padding:4px 0; height:auto; width:130px; font-size:0.85rem; font-weight:600; color:var(--text-main);" value="<?php echo htmlspecialchars($end_date); ?>">
+        </div>
         
-        <button type="submit" class="btn btn-primary" style="padding:0.6rem 1.2rem; border-radius:12px;"><i class="fas fa-filter"></i> Filter</button>
+        <button type="submit" class="btn btn-primary" style="padding:0 1.4rem; height:44px; border-radius:14px; font-weight:700; display:flex; align-items:center; gap:6px;"><i class="fas fa-filter"></i> Filter</button>
         <?php if (!empty($search) || !empty($start_date) || !empty($end_date)): ?>
-            <a href="campaign-form-responses.php?id=<?php echo $form_id; ?>" class="btn btn-secondary" style="padding:0.6rem 1rem; border-radius:12px;" title="Clear Filters"><i class="fas fa-xmark"></i></a>
+            <a href="campaign-form-responses.php?id=<?php echo $form_id; ?>" class="btn btn-secondary" style="padding:0 1rem; height:44px; border-radius:14px; display:flex; align-items:center; justify-content:center;" title="Reset Filter"><i class="fas fa-rotate-left"></i></a>
         <?php endif; ?>
     </form>
 
@@ -698,9 +710,13 @@ include 'includes/admin_nav.php';
 
                     <td style="padding:15px; text-align:center; font-family:monospace; font-size:0.8rem; color:var(--text-muted);"><?php echo htmlspecialchars($s['ip_address']); ?></td>
                     <td style="padding:15px; text-align:right;">
-                        <div style="display:flex; justify-content:flex-end; gap:6px;">
+                        <div style="display:flex; justify-content:flex-end; gap:6px; align-items:center;">
                             <button type="button" class="btn btn-sm btn-soft-blue" onclick="viewResponseDetail(<?php echo $s['id']; ?>)" title="View Details"><i class="fas fa-eye"></i></button>
-                            <button type="button" class="btn btn-sm" onclick="openConvertLeadsModal(<?php echo $s['id']; ?>)" style="background:rgba(22, 163, 74, 0.12); color:#16a34a; border:1px solid rgba(22, 163, 74, 0.25);" title="Convert to Lead"><i class="fas fa-user-plus"></i></button>
+                            <?php if (!empty($s['is_converted_lead'])): ?>
+                                <span class="badge green" style="padding:4px 8px; font-size:0.75rem; font-weight:700;" title="Already Converted to Lead"><i class="fas fa-user-check"></i> Converted</span>
+                            <?php else: ?>
+                                <button type="button" class="btn btn-sm" onclick="openConvertLeadsModal(<?php echo $s['id']; ?>)" style="background:rgba(22, 163, 74, 0.12); color:#16a34a; border:1px solid rgba(22, 163, 74, 0.25);" title="Convert to Lead"><i class="fas fa-user-plus"></i></button>
+                            <?php endif; ?>
                             <button type="button" class="btn btn-sm btn-soft-red" onclick="openDeleteModal(<?php echo $s['id']; ?>)" title="Delete Submission"><i class="fas fa-trash-can"></i></button>
                         </div>
                     </td>

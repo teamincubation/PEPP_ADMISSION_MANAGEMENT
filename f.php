@@ -3,11 +3,146 @@ session_start();
 require_once 'config/database.php';
 require_once 'includes/peppian_notify.php'; // For sending confirmation and notification emails
 
+function render_public_notice($title, $message, $icon = 'fa-clock', $badge_text = 'Notice', $form = null) {
+    $banner = $form['banner_image'] ?? '';
+    ?>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title><?php echo htmlspecialchars($title); ?> - PEPP Learning</title>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+        <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+        <style>
+            :root {
+                --bg: #0f172a;
+                --card-bg: #1e293b;
+                --accent: #e8980c;
+                --text-main: #f8fafc;
+                --text-muted: #94a3b8;
+                --border: rgba(255, 255, 255, 0.1);
+            }
+            * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Outfit', sans-serif; }
+            body {
+                background: var(--bg);
+                color: var(--text-main);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 1.2rem;
+            }
+            .notice-card {
+                background: var(--card-bg);
+                border: 1px solid var(--border);
+                border-radius: 24px;
+                max-width: 500px;
+                width: 100%;
+                overflow: hidden;
+                box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+                text-align: center;
+                animation: fadeIn 0.4s ease-out;
+            }
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(16px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            .notice-banner {
+                width: 100%;
+                max-height: 160px;
+                object-fit: cover;
+                border-bottom: 1px solid var(--border);
+            }
+            .notice-body {
+                padding: 2.2rem 1.6rem;
+            }
+            .notice-icon-wrapper {
+                width: 60px;
+                height: 60px;
+                border-radius: 20px;
+                background: rgba(232, 152, 12, 0.15);
+                border: 1.5px solid var(--accent);
+                color: var(--accent);
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 1.6rem;
+                margin-bottom: 1rem;
+            }
+            .notice-badge {
+                display: inline-block;
+                padding: 4px 12px;
+                border-radius: 20px;
+                background: rgba(232, 152, 12, 0.15);
+                color: var(--accent);
+                font-size: 0.72rem;
+                font-weight: 800;
+                text-transform: uppercase;
+                letter-spacing: 0.8px;
+                margin-bottom: 0.8rem;
+            }
+            .notice-title {
+                font-size: 1.3rem;
+                font-weight: 800;
+                color: var(--text-main);
+                margin-bottom: 0.6rem;
+                line-height: 1.3;
+            }
+            .notice-message {
+                font-size: 0.92rem;
+                color: var(--text-muted);
+                line-height: 1.6;
+                margin-bottom: 1.6rem;
+            }
+            .btn-home {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                background: linear-gradient(135deg, #e8980c 0%, #d97706 100%);
+                color: #fff;
+                padding: 0.8rem 1.6rem;
+                border-radius: 14px;
+                text-decoration: none;
+                font-weight: 700;
+                font-size: 0.9rem;
+                transition: transform 0.2s, box-shadow 0.2s;
+            }
+            .btn-home:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 8px 20px rgba(232, 152, 12, 0.35);
+            }
+        </style>
+    </head>
+    <body>
+        <div class="notice-card">
+            <?php if (!empty($banner)): ?>
+                <img src="<?php echo htmlspecialchars($banner); ?>" alt="Header Banner" class="notice-banner">
+            <?php endif; ?>
+            <div class="notice-body">
+                <div class="notice-icon-wrapper">
+                    <i class="fas <?php echo $icon; ?>"></i>
+                </div>
+                <div>
+                    <span class="notice-badge"><?php echo htmlspecialchars($badge_text); ?></span>
+                </div>
+                <h1 class="notice-title"><?php echo htmlspecialchars($title); ?></h1>
+                <p class="notice-message"><?php echo htmlspecialchars($message); ?></p>
+                <a href="https://pepplearning.in" class="btn-home"><i class="fas fa-globe"></i> Visit Official Website</a>
+            </div>
+        </div>
+    </body>
+    </html>
+    <?php
+    exit();
+}
+
 // Retrieve slug
 $slug = trim($_GET['s'] ?? $_GET['slug'] ?? '');
 if (empty($slug)) {
     http_response_code(404);
-    die("<h3>Form slug not specified.</h3>");
+    render_public_notice("Form Not Specified", "Please provide a valid campaign form link or custom slug URL.", "fa-circle-exclamation", "404 Error");
 }
 
 // Clean slug
@@ -21,7 +156,7 @@ try {
 
     if (!$form) {
         http_response_code(404);
-        die("<h3>Form not found.</h3>");
+        render_public_notice("Form Not Found", "The campaign form you are looking for does not exist or has been removed.", "fa-magnifying-glass-question", "404 Not Found");
     }
 
     $form_id = (int)$form['id'];
@@ -32,16 +167,18 @@ try {
         die("<h3>This form has been archived and is no longer accepting submissions.</h3>");
     }
     if ($form['status'] === 'draft' && !$isAdmin) {
-        die("<h3>This form is currently a draft and can only be viewed by administrators.</h3>");
+        render_public_notice("Form Under Maintenance", "This campaign form is currently in draft mode and can only be accessed by administrators.", "fa-lock", "Draft Mode", $form);
     }
 
     // Check publication schedule
     $now = date('Y-m-d H:i:s');
     if (!empty($form['publish_schedule_start']) && $now < $form['publish_schedule_start'] && !$isAdmin) {
-        die("<h3>This form is not active yet. It will open on " . date('d M Y, h:i A', strtotime($form['publish_schedule_start'])) . ".</h3>");
+        $open_date = date('d M Y, h:i A', strtotime($form['publish_schedule_start']));
+        render_public_notice("Form Opening Soon", "This campaign form is scheduled to launch on {$open_date}. Please check back then!", "fa-clock", "Scheduled Launch", $form);
     }
     if (!empty($form['publish_schedule_end']) && $now > $form['publish_schedule_end'] && !$isAdmin) {
-        die("<h3>This form closed on " . date('d M Y, h:i A', strtotime($form['publish_schedule_end'])) . " and is no longer accepting responses.</h3>");
+        $close_date = date('d M Y, h:i A', strtotime($form['publish_schedule_end']));
+        render_public_notice("Form Submissions Closed", "This campaign form closed on {$close_date} and is no longer accepting new submissions. Thank you for your interest!", "fa-flag-checkered", "Closed Campaign", $form);
     }
 
     // Check total submission limit
@@ -50,7 +187,7 @@ try {
         $stmt->execute([$form_id]);
         $total_subs = (int)$stmt->fetchColumn();
         if ($total_subs >= $form['submission_limit'] && !$isAdmin) {
-            die("<h3>This form has reached its maximum submission limit.</h3>");
+            render_public_notice("Registration Limit Reached", "This campaign form has reached its maximum capacity of allowed registrations.", "fa-users-slash", "Capacity Full", $form);
         }
     }
 
@@ -59,7 +196,7 @@ try {
     if ($form['limit_per_user'] > 0 && isset($_COOKIE[$user_cookie_name]) && !$isAdmin) {
         $times = (int)$_COOKIE[$user_cookie_name];
         if ($times >= $form['limit_per_user']) {
-            die("<h3>You have already submitted this form the maximum number of allowed times.</h3>");
+            render_public_notice("Submission Already Received", "You have already completed and submitted this campaign form the maximum number of allowed times.", "fa-circle-check", "Already Submitted", $form);
         }
     }
 

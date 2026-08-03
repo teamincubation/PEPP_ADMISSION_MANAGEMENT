@@ -178,16 +178,22 @@ try {
                 `submitted_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
                 `deleted_at` DATETIME NULL,
+                `is_converted_lead` TINYINT(1) NOT NULL DEFAULT 0,
+                `converted_lead_id` INT NULL,
                 KEY `idx_submission_form` (`form_id`),
                 CONSTRAINT `fk_submission_form` FOREIGN KEY (`form_id`) REFERENCES `campaign_forms` (`id`) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 
-        // Self-healing columns for soft deletion in submissions
+        // Self-healing columns for soft deletion and lead conversion tracking
         try {
             $cols = $pdo->query("SHOW COLUMNS FROM campaign_form_submissions LIKE 'is_deleted'")->fetch();
             if (!$cols) {
                 $pdo->exec("ALTER TABLE campaign_form_submissions ADD COLUMN `is_deleted` TINYINT(1) NOT NULL DEFAULT 0, ADD COLUMN `deleted_at` DATETIME NULL");
+            }
+            $cols_lead = $pdo->query("SHOW COLUMNS FROM campaign_form_submissions LIKE 'is_converted_lead'")->fetch();
+            if (!$cols_lead) {
+                $pdo->exec("ALTER TABLE campaign_form_submissions ADD COLUMN `is_converted_lead` TINYINT(1) NOT NULL DEFAULT 0, ADD COLUMN `converted_lead_id` INT NULL");
             }
         } catch (Exception $e) {}
 
