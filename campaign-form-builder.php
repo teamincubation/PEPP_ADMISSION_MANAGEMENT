@@ -1208,6 +1208,23 @@ include 'includes/admin_nav.php';
             box.style.display = 'none';
         }
     }
+
+    // Helper functions
+    function escapeHtml(text) {
+        if (!text) return '';
+        var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+        return text.toString().replace(/[&<>'"]/g, function(m) { return map[m]; });
+    }
+
+    // JSON.stringify handles stdClass placeholder for empty rules/logic
+    function jsonStringifyCustom(obj) {
+        return JSON.stringify(obj, function(k, v) {
+            if (v && typeof v === 'object' && Object.keys(v).length === 0 && !Array.isArray(v)) {
+                return {};
+            }
+            return v;
+        });
+    }
 </script>
 
 <?php include 'includes/admin_footer.php'; ?>

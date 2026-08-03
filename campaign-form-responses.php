@@ -813,13 +813,15 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
-<!-- Hidden forms for delete submission execution -->
+<!-- Hidden forms for delete submission execution with CSRF protection -->
 <form method="POST" action="" id="single-delete-form" style="display:none;">
+    <?php echo csrf_field(); ?>
     <input type="hidden" name="action" value="delete_single">
     <input type="hidden" name="sub_id" id="single-delete-sub-id">
 </form>
 
 <form method="POST" action="" id="bulk-delete-form" style="display:none;">
+    <?php echo csrf_field(); ?>
     <input type="hidden" name="action" value="bulk_delete">
     <input type="hidden" name="ids" id="bulk-delete-ids">
 </form>
