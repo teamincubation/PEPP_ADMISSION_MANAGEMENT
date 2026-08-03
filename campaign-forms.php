@@ -107,23 +107,28 @@ include 'includes/admin_nav.php';
 </div>
 
 <!-- ── CONTROL BAR ── -->
-<div class="action-bar" style="background:var(--card-bg); border:1px solid var(--border); padding:1.2rem; border-radius:16px; margin-bottom:1.5rem; display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:12px;">
-    <form method="GET" action="" style="display:flex; gap:10px; flex:1; max-width:550px;">
-        <input type="text" name="search" placeholder="Search forms by title, description or slug..." class="form-input" style="margin-bottom:0; flex:1;" value="<?php echo htmlspecialchars($search); ?>">
+<div class="action-bar" style="background:var(--card-bg); border:1px solid var(--border); padding:1.2rem; border-radius:18px; margin-bottom:1.5rem; display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:12px;">
+    <form method="GET" action="" style="display:flex; gap:10px; flex:1; max-width:600px; align-items:center;">
+        <div style="position:relative; flex:1;">
+            <i class="fas fa-search" style="position:absolute; left:14px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:0.85rem;"></i>
+            <input type="text" name="search" placeholder="Search forms by title, description or slug..." class="form-input" style="margin-bottom:0; padding-left:38px; border-radius:12px;" value="<?php echo htmlspecialchars($search); ?>">
+        </div>
         
-        <select name="status" class="form-input" style="margin-bottom:0; width:150px;" onchange="this.form.submit()">
+        <select name="status" class="form-input" style="margin-bottom:0; width:160px; border-radius:12px; font-weight:600;" onchange="this.form.submit()">
             <option value="">All Statuses</option>
             <option value="draft" <?php echo $status_filter === 'draft' ? 'selected' : ''; ?>>Draft</option>
             <option value="published" <?php echo $status_filter === 'published' ? 'selected' : ''; ?>>Published</option>
             <option value="archived" <?php echo $status_filter === 'archived' ? 'selected' : ''; ?>>Archived</option>
         </select>
         
-        <?php if (!empty($search)): ?>
-            <a href="campaign-forms.php" class="btn btn-secondary" style="padding:0.6rem 1rem;"><i class="fas fa-xmark"></i></a>
+        <button type="submit" class="btn btn-primary" style="padding:0.6rem 1.2rem; border-radius:12px;"><i class="fas fa-filter"></i></button>
+
+        <?php if (!empty($search) || !empty($status_filter)): ?>
+            <a href="campaign-forms.php" class="btn btn-secondary" style="padding:0.6rem 1rem; border-radius:12px;" title="Reset Filter"><i class="fas fa-xmark"></i></a>
         <?php endif; ?>
     </form>
     
-    <a href="campaign-form-builder.php" class="btn btn-primary" style="padding:0.75rem 1.5rem;"><i class="fas fa-plus"></i> Create Custom Form</a>
+    <a href="campaign-form-builder.php" class="btn btn-primary" style="padding:0.75rem 1.5rem; border-radius:12px; font-weight:700;"><i class="fas fa-plus"></i> Create Custom Form</a>
 </div>
 
 <!-- ── FORMS LISTING ── -->

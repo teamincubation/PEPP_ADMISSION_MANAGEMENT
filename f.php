@@ -200,6 +200,15 @@ try {
             $errors[] = "Invalid security token. Please reload and try again.";
         }
 
+        // Rate limiting check per IP address (max 5 submissions per minute)
+        try {
+            $stmt_rate = $pdo->prepare("SELECT COUNT(*) FROM campaign_form_submissions WHERE ip_address = ? AND submitted_at >= (NOW() - INTERVAL 1 MINUTE)");
+            $stmt_rate->execute([$ip]);
+            if ($stmt_rate->fetchColumn() >= 5) {
+                $errors[] = "Rate limit exceeded. Please wait 1 minute before submitting again.";
+            }
+        } catch (Exception $e) {}
+
         // Validate CAPTCHA
         if ($form['enable_captcha']) {
             $captcha_ans = isset($_POST['captcha_answer']) ? (int)$_POST['captcha_answer'] : 0;
@@ -242,7 +251,7 @@ try {
                 continue;
             }
 
-            // File upload validation
+            // File upload validation & Security Sandbox
             if ($type === 'file') {
                 if (isset($_FILES[$name]) && $_FILES[$name]['error'] !== UPLOAD_ERR_NO_FILE) {
                     $file_err = $_FILES[$name]['error'];
@@ -255,6 +264,13 @@ try {
                     $file_name = $_FILES[$name]['name'];
                     $file_tmp = $_FILES[$name]['tmp_name'];
                     $file_ext = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
+
+                    // Block dangerous executable scripts & web shells
+                    $forbidden_exts = ['php', 'phtml', 'php3', 'php4', 'php5', 'phar', 'exe', 'pl', 'py', 'sh', 'html', 'htm', 'js', 'svg', 'htaccess', 'cgi', 'bat', 'cmd'];
+                    if (in_array($file_ext, $forbidden_exts, true)) {
+                        $errors[$name] = "Security Risk: File type .{$file_ext} is strictly prohibited.";
+                        continue;
+                    }
 
                     // Default limits
                     $max_size = isset($rules['max_size']) ? (int)$rules['max_size'] * 1024 * 1024 : 5 * 1024 * 1024; // MB

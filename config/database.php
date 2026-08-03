@@ -176,10 +176,20 @@ try {
                 `ip_address` VARCHAR(45) NOT NULL,
                 `user_agent` VARCHAR(255) NOT NULL,
                 `submitted_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+                `deleted_at` DATETIME NULL,
                 KEY `idx_submission_form` (`form_id`),
                 CONSTRAINT `fk_submission_form` FOREIGN KEY (`form_id`) REFERENCES `campaign_forms` (`id`) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
+
+        // Self-healing columns for soft deletion in submissions
+        try {
+            $cols = $pdo->query("SHOW COLUMNS FROM campaign_form_submissions LIKE 'is_deleted'")->fetch();
+            if (!$cols) {
+                $pdo->exec("ALTER TABLE campaign_form_submissions ADD COLUMN `is_deleted` TINYINT(1) NOT NULL DEFAULT 0, ADD COLUMN `deleted_at` DATETIME NULL");
+            }
+        } catch (Exception $e) {}
 
         $pdo->exec("
             CREATE TABLE IF NOT EXISTS `campaign_form_answers` (

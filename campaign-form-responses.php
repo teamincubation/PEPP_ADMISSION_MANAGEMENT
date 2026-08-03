@@ -253,31 +253,40 @@ if (isset($_GET['export'])) {
     }
 }
 
-// Bulk deletion handler
+// Soft deletion handler for bulk actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'bulk_delete') {
-    $ids = !empty($_POST['ids']) ? array_map('intval', explode(',', $_POST['ids'])) : [];
-    if (!empty($ids)) {
-        try {
-            $in = implode(',', array_fill(0, count($ids), '?'));
-            $stmt = $pdo->prepare("DELETE FROM campaign_form_submissions WHERE id IN ($in)");
-            $stmt->execute($ids);
-            $bulk_message = "Selected submissions deleted successfully.";
-        } catch (Exception $e) {
-            $bulk_error = "Delete failed: " . $e->getMessage();
+    if (!csrf_verify()) {
+        $bulk_error = "Security token mismatch. Please try again.";
+    } else {
+        $ids = !empty($_POST['ids']) ? array_map('intval', explode(',', $_POST['ids'])) : [];
+        if (!empty($ids)) {
+            try {
+                $in = implode(',', array_fill(0, count($ids), '?'));
+                $params_del = array_merge($ids, [$form_id]);
+                $stmt = $pdo->prepare("UPDATE campaign_form_submissions SET is_deleted = 1, deleted_at = NOW() WHERE id IN ($in) AND form_id = ?");
+                $stmt->execute($params_del);
+                $bulk_message = "Selected submissions archived successfully.";
+            } catch (Exception $e) {
+                $bulk_error = "Delete failed: " . $e->getMessage();
+            }
         }
     }
 }
 
-// Single delete handler
+// Soft deletion handler for single item
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_single') {
-    $sub_id = (int)($_POST['sub_id'] ?? 0);
-    if ($sub_id > 0) {
-        try {
-            $stmt = $pdo->prepare("DELETE FROM campaign_form_submissions WHERE id = ?");
-            $stmt->execute([$sub_id]);
-            $bulk_message = "Submission deleted successfully.";
-        } catch (Exception $e) {
-            $bulk_error = "Delete failed: " . $e->getMessage();
+    if (!csrf_verify()) {
+        $bulk_error = "Security token mismatch. Please try again.";
+    } else {
+        $sub_id = (int)($_POST['sub_id'] ?? 0);
+        if ($sub_id > 0) {
+            try {
+                $stmt = $pdo->prepare("UPDATE campaign_form_submissions SET is_deleted = 1, deleted_at = NOW() WHERE id = ? AND form_id = ?");
+                $stmt->execute([$sub_id, $form_id]);
+                $bulk_message = "Submission archived successfully.";
+            } catch (Exception $e) {
+                $bulk_error = "Delete failed: " . $e->getMessage();
+            }
         }
     }
 }
@@ -290,8 +299,8 @@ $page = max(1, (int)($_GET['page'] ?? 1));
 $limit = max(10, (int)($_GET['limit'] ?? 20));
 $offset = ($page - 1) * $limit;
 
-// Base queries for Submissions listing
-$sql_where = " WHERE s.form_id = ?";
+// Base queries for Submissions listing (excl. soft-deleted)
+$sql_where = " WHERE s.form_id = ? AND s.is_deleted = 0";
 $params = [$form_id];
 
 if (!empty($search)) {
@@ -339,15 +348,15 @@ if (!empty($sub_ids)) {
 }
 
 // Calculate metric stats
-$total_submissions_count = (int)$pdo->query("SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = $form_id")->fetchColumn();
-$today_submissions_count = (int)$pdo->query("SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = $form_id AND DATE(submitted_at) = CURDATE()")->fetchColumn();
+$total_submissions_count = (int)$pdo->query("SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = $form_id AND is_deleted = 0")->fetchColumn();
+$today_submissions_count = (int)$pdo->query("SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = $form_id AND is_deleted = 0 AND DATE(submitted_at) = CURDATE()")->fetchColumn();
 
 $total_converted_leads = 0;
 try {
     $total_converted_leads = (int)$pdo->query("SELECT COUNT(*) FROM leads WHERE source = 'campaign_form'")->fetchColumn();
 } catch (Exception $e) {}
 
-$last_sub_at = $pdo->query("SELECT submitted_at FROM campaign_form_submissions WHERE form_id = $form_id ORDER BY submitted_at DESC LIMIT 1")->fetchColumn();
+$last_sub_at = $pdo->query("SELECT submitted_at FROM campaign_form_submissions WHERE form_id = $form_id AND is_deleted = 0 ORDER BY submitted_at DESC LIMIT 1")->fetchColumn();
 $last_sub_formatted = $last_sub_at ? date('d M, h:i A', strtotime($last_sub_at)) : 'No submissions yet';
 
 // Fetch active PEPP courses for Convert to Leads modal
@@ -692,11 +701,7 @@ include 'includes/admin_nav.php';
                         <div style="display:flex; justify-content:flex-end; gap:6px;">
                             <button type="button" class="btn btn-sm btn-soft-blue" onclick="viewResponseDetail(<?php echo $s['id']; ?>)" title="View Details"><i class="fas fa-eye"></i></button>
                             <button type="button" class="btn btn-sm" onclick="openConvertLeadsModal(<?php echo $s['id']; ?>)" style="background:rgba(22, 163, 74, 0.12); color:#16a34a; border:1px solid rgba(22, 163, 74, 0.25);" title="Convert to Lead"><i class="fas fa-user-plus"></i></button>
-                            <form method="POST" action="" onsubmit="return confirm('Are you sure you want to delete this response permanently?');" style="display:inline;">
-                                <input type="hidden" name="action" value="delete_single">
-                                <input type="hidden" name="sub_id" value="<?php echo $s['id']; ?>">
-                                <button type="submit" class="btn btn-sm btn-soft-red" title="Delete Submission"><i class="fas fa-trash-can"></i></button>
-                            </form>
+                            <button type="button" class="btn btn-sm btn-soft-red" onclick="openDeleteModal(<?php echo $s['id']; ?>)" title="Delete Submission"><i class="fas fa-trash-can"></i></button>
                         </div>
                     </td>
                 </tr>
@@ -769,13 +774,44 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
-<!-- Helper bulk form for bulk deletes -->
+<!-- ── SAFE DELETION CONFIRMATION MODAL ── -->
+<div class="modal-backdrop" id="delete-confirm-modal">
+    <div class="modal" style="max-width:460px; width:92%;">
+        <div class="modal-head">
+            <h3 style="color:#ef4444;"><i class="fas fa-triangle-exclamation"></i> Confirm Permanent Deletion</h3>
+            <button type="button" class="modal-close" onclick="closeModal('delete-confirm-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:0.88rem; color:var(--text-muted); margin-bottom:1rem;">
+                You are about to archive <strong id="delete-count-label" style="color:#ef4444;">1</strong> response submission(s). To confirm this action, please type <strong style="color:var(--text-main); font-family:monospace; background:var(--input-bg); padding:2px 6px; border-radius:4px;">DELETE</strong> in the box below:
+            </p>
+
+            <div class="field full" style="margin-bottom:1.2rem;">
+                <input type="text" id="delete-confirm-input" class="form-input" placeholder="Type DELETE to confirm" style="width:100%; text-align:center; font-weight:700; letter-spacing:1px;" oninput="onDeleteConfirmInput(this)">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeModal('delete-confirm-modal')">Cancel</button>
+            <button type="button" class="btn btn-danger" id="btn-execute-delete" disabled onclick="executeConfirmedDelete()"><i class="fas fa-trash-can"></i> Permanently Delete</button>
+        </div>
+    </div>
+</div>
+
+<!-- Hidden forms for delete submission execution -->
+<form method="POST" action="" id="single-delete-form" style="display:none;">
+    <input type="hidden" name="action" value="delete_single">
+    <input type="hidden" name="sub_id" id="single-delete-sub-id">
+</form>
+
 <form method="POST" action="" id="bulk-delete-form" style="display:none;">
     <input type="hidden" name="action" value="bulk_delete">
     <input type="hidden" name="ids" id="bulk-delete-ids">
 </form>
 
 <script>
+    var pendingDeleteSubId = null;
+    var formId = <?php echo $form_id; ?>;
+
     // Handles toggling individual menus
     function toggleDropdown(id) {
         var menu = document.getElementById(id);
@@ -840,15 +876,42 @@ include 'includes/admin_nav.php';
         window.location.href = url;
     }
 
-    function bulkDelete() {
-        var selected = [];
-        document.querySelectorAll('.row-checkbox:checked').forEach(c => selected.push(c.value));
-        if (selected.length === 0) return;
+    function openDeleteModal(subId) {
+        pendingDeleteSubId = subId;
+        var count = subId ? 1 : document.querySelectorAll('.row-checkbox:checked').length;
+        if (count === 0 && !subId) return;
 
-        if (confirm('Are you sure you want to permanently delete these ' + selected.length + ' responses? This cannot be undone.')) {
+        document.getElementById('delete-count-label').textContent = count;
+        var input = document.getElementById('delete-confirm-input');
+        input.value = '';
+        document.getElementById('btn-execute-delete').disabled = true;
+        openModal('delete-confirm-modal');
+    }
+
+    function onDeleteConfirmInput(input) {
+        var btn = document.getElementById('btn-execute-delete');
+        if (input.value.trim() === 'DELETE') {
+            btn.disabled = false;
+        } else {
+            btn.disabled = true;
+        }
+    }
+
+    function executeConfirmedDelete() {
+        if (pendingDeleteSubId) {
+            document.getElementById('single-delete-sub-id').value = pendingDeleteSubId;
+            document.getElementById('single-delete-form').submit();
+        } else {
+            var selected = [];
+            document.querySelectorAll('.row-checkbox:checked').forEach(c => selected.push(c.value));
+            if (selected.length === 0) return;
             document.getElementById('bulk-delete-ids').value = selected.join(',');
             document.getElementById('bulk-delete-form').submit();
         }
+    }
+
+    function bulkDelete() {
+        openDeleteModal(null);
     }
 
     // Dynamic Columns hide/show
@@ -975,11 +1038,11 @@ include 'includes/admin_nav.php';
 </script>
 
 <!-- Convert Registrations to Leads Modal -->
-<div id="convert-leads-modal" class="modal-overlay">
-    <div class="modal-card" style="max-width:460px;">
-        <div class="modal-header">
+<div class="modal-backdrop" id="convert-leads-modal">
+    <div class="modal" style="max-width:460px; width:92%;">
+        <div class="modal-head">
             <h3><i class="fas fa-user-plus" style="color:#16a34a;"></i> Convert to Leads</h3>
-            <button type="button" onclick="closeConvertLeadsModal()" style="background:transparent; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer;"><i class="fas fa-xmark"></i></button>
+            <button type="button" class="modal-close" onclick="closeConvertLeadsModal()"><i class="fas fa-xmark"></i></button>
         </div>
         <div class="modal-body">
             <p style="font-size:0.88rem; color:var(--text-muted); margin-bottom:1.2rem;">
