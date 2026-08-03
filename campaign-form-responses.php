@@ -338,6 +338,18 @@ if (!empty($sub_ids)) {
     }
 }
 
+// Calculate metric stats
+$total_submissions_count = (int)$pdo->query("SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = $form_id")->fetchColumn();
+$today_submissions_count = (int)$pdo->query("SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = $form_id AND DATE(submitted_at) = CURDATE()")->fetchColumn();
+
+$total_converted_leads = 0;
+try {
+    $total_converted_leads = (int)$pdo->query("SELECT COUNT(*) FROM leads WHERE source = 'campaign_form'")->fetchColumn();
+} catch (Exception $e) {}
+
+$last_sub_at = $pdo->query("SELECT submitted_at FROM campaign_form_submissions WHERE form_id = $form_id ORDER BY submitted_at DESC LIMIT 1")->fetchColumn();
+$last_sub_formatted = $last_sub_at ? date('d M, h:i A', strtotime($last_sub_at)) : 'No submissions yet';
+
 // Fetch active PEPP courses for Convert to Leads modal
 $course_list = [];
 try {
@@ -355,6 +367,42 @@ include 'includes/admin_nav.php';
 ?>
 
 <style>
+    .campaign-header-card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+
+    .stat-badge-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .metric-card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 1.25rem 1.4rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .metric-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+    }
+
     .responses-control-bar {
         display: flex;
         flex-wrap: wrap;
@@ -363,7 +411,7 @@ include 'includes/admin_nav.php';
         gap: 12px;
         background: var(--card-bg);
         border: 1px solid var(--border);
-        border-radius: 16px;
+        border-radius: 18px;
         padding: 1.2rem;
         margin-bottom: 1.5rem;
     }
@@ -379,10 +427,10 @@ include 'includes/admin_nav.php';
         top: 100%;
         background: var(--card-bg);
         border: 1px solid var(--border);
-        border-radius: 8px;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+        border-radius: 12px;
+        box-shadow: 0 12px 35px rgba(0,0,0,0.3);
         z-index: 100;
-        min-width: 170px;
+        min-width: 185px;
         overflow: hidden;
     }
     .dropdown-menu.open {
@@ -390,7 +438,7 @@ include 'includes/admin_nav.php';
     }
     .dropdown-item {
         display: block;
-        padding: 8px 15px;
+        padding: 10px 16px;
         font-size: 0.85rem;
         font-weight: 600;
         text-decoration: none;
@@ -408,9 +456,9 @@ include 'includes/admin_nav.php';
     }
 
     .column-picker-modal {
-        max-height: 300px;
+        max-height: 320px;
         overflow-y: auto;
-        padding: 10px;
+        padding: 6px;
         display: flex;
         flex-direction: column;
         gap: 8px;
@@ -418,8 +466,25 @@ include 'includes/admin_nav.php';
     .col-row {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
         font-size: 0.88rem;
+        font-weight: 600;
+        padding: 6px 10px;
+        border-radius: 8px;
+        transition: background 0.2s;
+        cursor: pointer;
+    }
+    .col-row:hover {
+        background: var(--input-bg);
+    }
+
+    /* Table styling tweaks */
+    .table-responsive-card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        overflow: hidden;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
     }
 </style>
 
@@ -430,35 +495,102 @@ include 'includes/admin_nav.php';
     <div class="alert alert-danger"><i class="fas fa-triangle-exclamation"></i> <span><?php echo htmlspecialchars($bulk_error); ?></span></div>
 <?php endif; ?>
 
+<!-- ── CAMPAIGN HEADER & NAVIGATION CARD ── -->
+<div class="campaign-header-card">
+    <div>
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:6px;">
+            <h2 style="font-size:1.4rem; font-weight:800; color:var(--text-main); margin:0;"><?php echo htmlspecialchars($form['title']); ?></h2>
+            <span style="background:rgba(232,152,12,0.12); color:var(--accent); border:1px solid rgba(232,152,12,0.3); font-size:0.75rem; font-weight:700; padding:3px 10px; border-radius:20px; font-family:monospace;">
+                /f/<?php echo htmlspecialchars($form['slug']); ?>
+            </span>
+        </div>
+        <div style="font-size:0.85rem; color:var(--text-muted);">
+            Campaign Form Submissions Management &amp; Analytics
+        </div>
+    </div>
+
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <a href="f.php?slug=<?php echo htmlspecialchars($form['slug']); ?>" target="_blank" class="btn btn-secondary" style="padding:0.55rem 1.1rem; font-size:0.85rem;"><i class="fas fa-arrow-up-right-from-square" style="color:var(--accent);"></i> View Form</a>
+        <a href="campaign-form-builder.php?id=<?php echo $form_id; ?>" class="btn btn-secondary" style="padding:0.55rem 1.1rem; font-size:0.85rem;"><i class="fas fa-pen-to-square"></i> Edit Builder</a>
+        <a href="campaign-forms.php" class="btn btn-secondary" style="padding:0.55rem 1.1rem; font-size:0.85rem;"><i class="fas fa-arrow-left"></i> All Forms</a>
+    </div>
+</div>
+
+<!-- ── METRICS SUMMARY STAT CARDS ── -->
+<div class="stat-badge-grid">
+    <div class="metric-card">
+        <div>
+            <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); letter-spacing:0.5px;">Total Submissions</div>
+            <div style="font-size:1.75rem; font-weight:800; color:var(--text-main); margin-top:4px;"><?php echo number_format($total_submissions_count); ?></div>
+        </div>
+        <div style="width:46px; height:46px; border-radius:14px; background:rgba(232,152,12,0.12); color:var(--accent); display:flex; align-items:center; justify-content:center; font-size:1.3rem;">
+            <i class="fas fa-inbox"></i>
+        </div>
+    </div>
+
+    <div class="metric-card">
+        <div>
+            <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); letter-spacing:0.5px;">Today's Entries</div>
+            <div style="font-size:1.75rem; font-weight:800; color:#3b82f6; margin-top:4px;"><?php echo number_format($today_submissions_count); ?></div>
+        </div>
+        <div style="width:46px; height:46px; border-radius:14px; background:rgba(59,130,246,0.12); color:#3b82f6; display:flex; align-items:center; justify-content:center; font-size:1.3rem;">
+            <i class="fas fa-calendar-day"></i>
+        </div>
+    </div>
+
+    <div class="metric-card">
+        <div>
+            <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); letter-spacing:0.5px;">Converted Leads</div>
+            <div style="font-size:1.75rem; font-weight:800; color:#16a34a; margin-top:4px;"><?php echo number_format($total_converted_leads); ?></div>
+        </div>
+        <div style="width:46px; height:46px; border-radius:14px; background:rgba(22,163,74,0.12); color:#16a34a; display:flex; align-items:center; justify-content:center; font-size:1.3rem;">
+            <i class="fas fa-user-check"></i>
+        </div>
+    </div>
+
+    <div class="metric-card">
+        <div>
+            <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); letter-spacing:0.5px;">Last Submission</div>
+            <div style="font-size:0.95rem; font-weight:700; color:var(--text-main); margin-top:6px;"><?php echo $last_sub_formatted; ?></div>
+        </div>
+        <div style="width:46px; height:46px; border-radius:14px; background:rgba(168,85,247,0.12); color:#a855f7; display:flex; align-items:center; justify-content:center; font-size:1.3rem;">
+            <i class="fas fa-clock-rotate-left"></i>
+        </div>
+    </div>
+</div>
+
 <!-- ── CONTROL & SEARCH BAR ── -->
 <div class="responses-control-bar">
     
     <!-- Filter Search Form -->
-    <form method="GET" action="" style="display:flex; flex-wrap:wrap; gap:10px; flex:1; max-width:750px;">
+    <form method="GET" action="" style="display:flex; flex-wrap:wrap; gap:10px; flex:1; max-width:760px; align-items:center;">
         <input type="hidden" name="id" value="<?php echo $form_id; ?>">
         
-        <input type="text" name="search" placeholder="Search answers, IPs, email..." class="form-input" style="margin-bottom:0; width:220px;" value="<?php echo htmlspecialchars($search); ?>">
+        <div style="position:relative; flex:1; min-width:200px;">
+            <i class="fas fa-search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:0.85rem;"></i>
+            <input type="text" name="search" placeholder="Search answers, IPs, name..." class="form-input" style="margin-bottom:0; padding-left:36px; border-radius:12px;" value="<?php echo htmlspecialchars($search); ?>">
+        </div>
         
-        <input type="date" name="start_date" class="form-input" style="margin-bottom:0; width:140px;" value="<?php echo htmlspecialchars($start_date); ?>" placeholder="Start Date">
-        <input type="date" name="end_date" class="form-input" style="margin-bottom:0; width:140px;" value="<?php echo htmlspecialchars($end_date); ?>" placeholder="End Date">
+        <input type="date" name="start_date" class="form-input" style="margin-bottom:0; width:145px; border-radius:12px;" value="<?php echo htmlspecialchars($start_date); ?>" title="Start Date">
+        <input type="date" name="end_date" class="form-input" style="margin-bottom:0; width:145px; border-radius:12px;" value="<?php echo htmlspecialchars($end_date); ?>" title="End Date">
         
-        <button type="submit" class="btn btn-primary" style="padding:0.5rem 1rem;"><i class="fas fa-search"></i></button>
+        <button type="submit" class="btn btn-primary" style="padding:0.6rem 1.2rem; border-radius:12px;"><i class="fas fa-filter"></i> Filter</button>
         <?php if (!empty($search) || !empty($start_date) || !empty($end_date)): ?>
-            <a href="campaign-form-responses.php?id=<?php echo $form_id; ?>" class="btn btn-secondary" style="padding:0.5rem 1rem;"><i class="fas fa-xmark"></i></a>
+            <a href="campaign-form-responses.php?id=<?php echo $form_id; ?>" class="btn btn-secondary" style="padding:0.6rem 1rem; border-radius:12px;" title="Clear Filters"><i class="fas fa-xmark"></i></a>
         <?php endif; ?>
     </form>
 
     <!-- Toolbar Actions -->
-    <div style="display:flex; gap:10px; align-items:center;">
-        <button class="btn btn-secondary" onclick="openModal('col-picker-modal')" style="padding:0.6rem 1.1rem;"><i class="fas fa-columns"></i> Columns</button>
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <button class="btn btn-secondary" onclick="openModal('col-picker-modal')" style="padding:0.6rem 1.1rem; border-radius:12px;"><i class="fas fa-columns"></i> Columns</button>
         
         <!-- Bulk Action Wrapper -->
         <div id="bulk-actions" style="display:none; gap:10px; align-items:center;">
-            <button class="btn btn-secondary" style="padding:0.6rem 1.1rem; border-color:#16a34a; color:#16a34a; background:rgba(22, 163, 74, 0.08);" onclick="openConvertLeadsModal()"><i class="fas fa-user-plus"></i> Convert to Leads (<span id="bulk-convert-count">0</span>)</button>
-            <button class="btn btn-secondary" style="padding:0.6rem 1.1rem; border-color:#ef4444; color:#ef4444;" onclick="bulkDelete()"><i class="fas fa-trash-can"></i> Delete (<span id="bulk-count">0</span>)</button>
+            <button class="btn btn-secondary" style="padding:0.6rem 1.1rem; border-radius:12px; border-color:#16a34a; color:#16a34a; background:rgba(22, 163, 74, 0.08);" onclick="openConvertLeadsModal()"><i class="fas fa-user-plus"></i> Convert to Leads (<span id="bulk-convert-count">0</span>)</button>
+            <button class="btn btn-secondary" style="padding:0.6rem 1.1rem; border-radius:12px; border-color:#ef4444; color:#ef4444;" onclick="bulkDelete()"><i class="fas fa-trash-can"></i> Delete (<span id="bulk-count">0</span>)</button>
             
             <div class="export-dropdown">
-                <button class="btn btn-secondary" onclick="toggleDropdown('bulk-export-menu')" style="padding:0.6rem 1.1rem;"><i class="fas fa-download"></i> Export Selected</button>
+                <button class="btn btn-secondary" onclick="toggleDropdown('bulk-export-menu')" style="padding:0.6rem 1.1rem; border-radius:12px;"><i class="fas fa-download"></i> Export Selected</button>
                 <div class="dropdown-menu" id="bulk-export-menu">
                     <button class="dropdown-item" onclick="triggerExport('csv', 'selected')"><i class="fas fa-file-csv"></i> CSV Format</button>
                     <button class="dropdown-item" onclick="triggerExport('excel', 'selected')"><i class="fas fa-file-excel"></i> Excel Format</button>
@@ -467,7 +599,7 @@ include 'includes/admin_nav.php';
         </div>
 
         <div class="export-dropdown" id="export-all-wrapper">
-            <button class="btn btn-primary" onclick="toggleDropdown('export-menu')" style="padding:0.6rem 1.2rem;"><i class="fas fa-download"></i> Export Responses</button>
+            <button class="btn btn-primary" onclick="toggleDropdown('export-menu')" style="padding:0.6rem 1.2rem; border-radius:12px;"><i class="fas fa-download"></i> Export Responses</button>
             <div class="dropdown-menu" id="export-menu">
                 <div style="padding: 6px 12px; font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700; border-bottom: 1px solid var(--border);">All Submissions</div>
                 <button class="dropdown-item" onclick="triggerExport('csv', 'all')"><i class="fas fa-file-csv"></i> Export all (CSV)</button>
@@ -483,46 +615,54 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
-<!-- ── DATA TABLE ── -->
-<div class="card" style="padding:0; overflow-x:auto;">
+<!-- ── DATA TABLE CARD ── -->
+<div class="table-responsive-card">
     <table class="data-table" style="width:100%; border-collapse:collapse; min-width:800px;">
         <thead>
-            <tr style="border-bottom:1px solid var(--border); text-align:left;">
-                <th style="padding:15px; width:45px; text-align:center;"><input type="checkbox" id="select-all" onclick="toggleSelectAll(this)"></th>
-                <th style="padding:15px; font-weight:700;">Submission At</th>
-                <th style="padding:15px; font-weight:700;">Respondent</th>
+            <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:var(--input-bg);">
+                <th style="padding:15px; width:45px; text-align:center;"><input type="checkbox" id="select-all" onclick="toggleSelectAll(this)" style="accent-color:var(--accent);"></th>
+                <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted);">Submission At</th>
+                <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted);">Respondent</th>
                 
                 <!-- Dynamic Columns -->
                 <?php foreach ($fields as $f): 
                     $hid = in_array((string)$f['id'], $hidden_cols) ? 'display:none;' : '';
                 ?>
-                    <th style="padding:15px; font-weight:700; <?php echo $hid; ?>" class="dyn-col" data-colid="<?php echo $f['id']; ?>">
+                    <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); <?php echo $hid; ?>" class="dyn-col" data-colid="<?php echo $f['id']; ?>">
                         <?php echo htmlspecialchars($f['label']); ?>
                     </th>
                 <?php endforeach; ?>
                 
-                <th style="padding:15px; font-weight:700; text-align:center;">IP Address</th>
-                <th style="padding:15px; font-weight:700; text-align:right;">Actions</th>
+                <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); text-align:center;">IP Address</th>
+                <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); text-align:right;">Actions</th>
             </tr>
         </thead>
         <tbody>
             <?php if (empty($submissions)): ?>
                 <tr>
-                    <td colspan="<?php echo count($fields) + 5; ?>" style="padding:40px; text-align:center; color:var(--text-muted);">
-                        <i class="fas fa-list-ul" style="font-size:3rem; margin-bottom:12px; display:block;"></i>
-                        <p>No responses found for this form.</p>
+                    <td colspan="<?php echo count($fields) + 5; ?>" style="padding:50px 20px; text-align:center; color:var(--text-muted);">
+                        <div style="width:70px; height:70px; border-radius:50%; background:var(--input-bg); border:1.5px solid var(--border); display:flex; align-items:center; justify-content:center; margin:0 auto 1rem auto; font-size:2rem; color:var(--accent);">
+                            <i class="fas fa-inbox"></i>
+                        </div>
+                        <h4 style="font-weight:800; font-size:1.1rem; color:var(--text-main); margin-bottom:4px;">No Responses Found</h4>
+                        <p style="font-size:0.85rem;">No user responses have been recorded for this form yet.</p>
                     </td>
                 </tr>
             <?php else: foreach ($submissions as $s): ?>
                 <tr style="border-bottom:1px solid var(--border); transition:background 0.2s;" class="table-row">
                     <td style="padding:15px; text-align:center;">
-                        <input type="checkbox" class="row-checkbox" value="<?php echo $s['id']; ?>" onclick="updateRowSelection()">
+                        <input type="checkbox" class="row-checkbox" value="<?php echo $s['id']; ?>" onclick="updateRowSelection()" style="accent-color:var(--accent);">
                     </td>
-                    <td style="padding:15px; white-space:nowrap; font-size:0.88rem; font-weight:600;">
+                    <td style="padding:15px; white-space:nowrap; font-size:0.85rem; font-weight:700; color:var(--text-main);">
                         <?php echo date('d M Y, h:i A', strtotime($s['submitted_at'])); ?>
                     </td>
-                    <td style="padding:15px; font-weight:700; font-size:0.9rem;">
-                        <?php echo htmlspecialchars($s['respondent_identifier'] ?: 'Anonymous'); ?>
+                    <td style="padding:15px; font-weight:700; font-size:0.9rem; color:var(--text-main);">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <div style="width:28px; height:28px; border-radius:50%; background:rgba(232,152,12,0.15); color:var(--accent); display:flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:800;">
+                                <i class="fas fa-user"></i>
+                            </div>
+                            <?php echo htmlspecialchars($s['respondent_identifier'] ?: 'Anonymous'); ?>
+                        </div>
                     </td>
 
                     <!-- Dynamic Answer Columns -->
@@ -533,10 +673,13 @@ include 'includes/admin_nav.php';
                         $val = $ans ? $ans['answer_text'] : '';
                         $file = $ans ? $ans['file_path'] : null;
                         
-                        // Limit displays
-                        $disp_val = htmlspecialchars(strlen($val) > 45 ? substr($val, 0, 45) . '...' : $val);
-                        if ($file) {
-                            $disp_val = "<a href='{$file}' target='_blank' style='color:var(--accent); text-decoration:none;'><i class='fas fa-paperclip'></i> " . htmlspecialchars($val) . "</a>";
+                        // Formatting
+                        if (empty($val) && empty($file)) {
+                            $disp_val = '<span style="color:var(--text-muted); opacity:0.6;">-</span>';
+                        } elseif ($file) {
+                            $disp_val = "<a href='{$file}' target='_blank' class='btn btn-sm btn-soft-blue' style='padding:2px 8px; font-size:0.75rem; text-decoration:none;'><i class='fas fa-paperclip'></i> File</a>";
+                        } else {
+                            $disp_val = htmlspecialchars(strlen($val) > 40 ? substr($val, 0, 40) . '...' : $val);
                         }
                     ?>
                         <td style="padding:15px; <?php echo $hid; ?> font-size:0.85rem;" class="dyn-col" data-colid="<?php echo $f['id']; ?>">
@@ -544,14 +687,15 @@ include 'includes/admin_nav.php';
                         </td>
                     <?php endforeach; ?>
 
-                    <td style="padding:15px; text-align:center; font-family:monospace; font-size:0.8rem;"><?php echo htmlspecialchars($s['ip_address']); ?></td>
+                    <td style="padding:15px; text-align:center; font-family:monospace; font-size:0.8rem; color:var(--text-muted);"><?php echo htmlspecialchars($s['ip_address']); ?></td>
                     <td style="padding:15px; text-align:right;">
                         <div style="display:flex; justify-content:flex-end; gap:6px;">
-                            <button class="btn btn-sm btn-soft-blue" onclick="viewResponseDetail(<?php echo $s['id']; ?>)"><i class="fas fa-eye"></i></button>
+                            <button type="button" class="btn btn-sm btn-soft-blue" onclick="viewResponseDetail(<?php echo $s['id']; ?>)" title="View Details"><i class="fas fa-eye"></i></button>
+                            <button type="button" class="btn btn-sm" onclick="openConvertLeadsModal(<?php echo $s['id']; ?>)" style="background:rgba(22, 163, 74, 0.12); color:#16a34a; border:1px solid rgba(22, 163, 74, 0.25);" title="Convert to Lead"><i class="fas fa-user-plus"></i></button>
                             <form method="POST" action="" onsubmit="return confirm('Are you sure you want to delete this response permanently?');" style="display:inline;">
                                 <input type="hidden" name="action" value="delete_single">
                                 <input type="hidden" name="sub_id" value="<?php echo $s['id']; ?>">
-                                <button type="submit" class="btn btn-sm btn-soft-red"><i class="fas fa-trash-can"></i></button>
+                                <button type="submit" class="btn btn-sm btn-soft-red" title="Delete Submission"><i class="fas fa-trash-can"></i></button>
                             </form>
                         </div>
                     </td>
