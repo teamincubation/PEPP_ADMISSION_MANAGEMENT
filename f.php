@@ -499,10 +499,13 @@ try {
         if (empty($errors)) {
             $pdo->beginTransaction();
 
-            // Insert submission
+            $latitude = !empty($_POST['latitude']) ? trim($_POST['latitude']) : null;
+            $longitude = !empty($_POST['longitude']) ? trim($_POST['longitude']) : null;
+
+            // Insert submission with exact geolocation coordinates
             $ident = $email_verified ?: ($_POST['respondent_email'] ?? null);
-            $stmt = $pdo->prepare("INSERT INTO campaign_form_submissions (form_id, respondent_identifier, ip_address, user_agent) VALUES (?, ?, ?, ?)");
-            $stmt->execute([$form_id, $ident, $ip, $ua]);
+            $stmt = $pdo->prepare("INSERT INTO campaign_form_submissions (form_id, respondent_identifier, ip_address, user_agent, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$form_id, $ident, $ip, $ua, $latitude, $longitude]);
             $submission_id = $pdo->lastInsertId();
 
             // Insert answers
@@ -1220,6 +1223,8 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
             <form method="POST" action="" enctype="multipart/form-data" id="campaign-submit-form" onsubmit="return validateCurrentStep(true);">
                 <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['form_csrf_' . $form_id]; ?>">
                 <input type="hidden" name="submit_form" value="1">
+                <input type="hidden" name="latitude" id="submission-latitude" value="">
+                <input type="hidden" name="longitude" id="submission-longitude" value="">
                 
                 <!-- Multi-page container -->
                 <div class="progress-container" id="prog-wrap" style="display:none;">
@@ -1451,6 +1456,18 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
     var totalSteps = <?php echo $step; ?>;
     
     document.addEventListener('DOMContentLoaded', function() {
+        // Auto fetch exact Google Maps coordinates
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(function(position) {
+                var lat = position.coords.latitude;
+                var lng = position.coords.longitude;
+                document.getElementById('submission-latitude').value = lat;
+                document.getElementById('submission-longitude').value = lng;
+            }, function(err) {
+                console.log("Location access skipped: " + err.message);
+            }, { enableHighAccuracy: true, timeout: 6000 });
+        }
+
         if (totalSteps > 1) {
             document.getElementById('prog-wrap').style.display = 'block';
             updateStepView();

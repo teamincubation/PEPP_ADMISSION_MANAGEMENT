@@ -68,6 +68,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
                 <?php endif; ?>
                 <span><i class="fas fa-clock" style="color:var(--accent);"></i> <?php echo date('d M Y, h:i A', strtotime($sub['submitted_at'])); ?></span>
                 <span><i class="fas fa-network-wired"></i> IP: <?php echo htmlspecialchars($sub['ip_address']); ?></span>
+                <?php if (!empty($sub['latitude']) && !empty($sub['longitude'])): ?>
+                    <span style="margin-top:2px;">
+                        <a href="https://www.google.com/maps/search/?api=1&query=<?php echo $sub['latitude']; ?>,<?php echo $sub['longitude']; ?>" target="_blank" class="btn btn-sm" style="background:rgba(239, 68, 68, 0.12); color:#ef4444; border:1px solid rgba(239, 68, 68, 0.25); padding:2px 8px; font-size:0.72rem; display:inline-flex; align-items:center; gap:4px; border-radius:6px; font-weight:700;">
+                            <i class="fas fa-map-location-dot"></i> View exact Google Map Location
+                        </a>
+                    </span>
+                <?php endif; ?>
             </div>
         </div>
 
@@ -708,7 +715,14 @@ include 'includes/admin_nav.php';
                         </td>
                     <?php endforeach; ?>
 
-                    <td style="padding:15px; text-align:center; font-family:monospace; font-size:0.8rem; color:var(--text-muted);"><?php echo htmlspecialchars($s['ip_address']); ?></td>
+                    <td style="padding:15px; text-align:center; font-family:monospace; font-size:0.8rem; color:var(--text-muted);">
+                        <div style="display:inline-flex; align-items:center; gap:6px; justify-content:center; width:100%;">
+                            <span><?php echo htmlspecialchars($s['ip_address']); ?></span>
+                            <?php if (!empty($s['latitude']) && !empty($s['longitude'])): ?>
+                                <a href="https://www.google.com/maps/search/?api=1&query=<?php echo $s['latitude']; ?>,<?php echo $s['longitude']; ?>" target="_blank" style="color:#ef4444; font-size:0.85rem;" title="View Google Map Location"><i class="fas fa-map-location-dot"></i></a>
+                            <?php endif; ?>
+                        </div>
+                    </td>
                     <td style="padding:15px; text-align:right;">
                         <div style="display:flex; justify-content:flex-end; gap:6px; align-items:center;">
                             <button type="button" class="btn btn-sm btn-soft-blue" onclick="viewResponseDetail(<?php echo $s['id']; ?>)" title="View Details"><i class="fas fa-eye"></i></button>
