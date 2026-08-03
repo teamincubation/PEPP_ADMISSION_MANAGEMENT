@@ -34,6 +34,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
         exit();
     }
 
+    // Mark submission as read
+    $pdo->prepare("UPDATE campaign_form_submissions SET is_read = 1 WHERE id = ?")->execute([$sub_id]);
+
     // Fetch ALL form fields LEFT JOIN campaign_form_answers to ensure complete response data is ALWAYS rendered
     $stmt = $pdo->prepare("
         SELECT f.label, f.type, f.id as field_id, a.answer_text, a.file_path 
@@ -704,8 +707,11 @@ include 'includes/admin_nav.php';
                     <td style="padding:15px; text-align:center;">
                         <input type="checkbox" class="row-checkbox" value="<?php echo $s['id']; ?>" onclick="updateRowSelection()" style="accent-color:var(--accent);">
                     </td>
-                    <td style="padding:15px; white-space:nowrap; font-size:0.85rem; font-weight:700; color:var(--text-main);">
-                        <?php echo date('d M Y, h:i A', strtotime($s['submitted_at'])); ?>
+                    <td style="padding:15px; white-space:nowrap; font-size:0.85rem; font-weight:700; color:var(--text-main); display:flex; align-items:center; gap:6px;">
+                        <span><?php echo date('d M Y, h:i A', strtotime($s['submitted_at'])); ?></span>
+                        <?php if (empty($s['is_read'])): ?>
+                            <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#3b82f6; flex-shrink:0;" title="Unread response"></span>
+                        <?php endif; ?>
                     </td>
                     <td style="padding:15px; font-weight:700; font-size:0.9rem; color:var(--text-main);">
                         <div style="display:flex; align-items:center; gap:8px;">

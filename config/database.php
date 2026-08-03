@@ -191,12 +191,13 @@ try {
                 `converted_lead_id` INT NULL,
                 `latitude` VARCHAR(50) NULL,
                 `longitude` VARCHAR(50) NULL,
+                `is_read` TINYINT(1) NOT NULL DEFAULT 0,
                 KEY `idx_submission_form` (`form_id`),
                 CONSTRAINT `fk_submission_form` FOREIGN KEY (`form_id`) REFERENCES `campaign_forms` (`id`) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 
-        // Self-healing columns for soft deletion, lead conversion tracking, and maps geolocation
+        // Self-healing columns for soft deletion, lead conversion tracking, maps geolocation, and read/unread status
         try {
             $cols = $pdo->query("SHOW COLUMNS FROM campaign_form_submissions LIKE 'is_deleted'")->fetch();
             if (!$cols) {
@@ -209,6 +210,10 @@ try {
             $cols_lat = $pdo->query("SHOW COLUMNS FROM campaign_form_submissions LIKE 'latitude'")->fetch();
             if (!$cols_lat) {
                 $pdo->exec("ALTER TABLE campaign_form_submissions ADD COLUMN `latitude` VARCHAR(50) NULL, ADD COLUMN `longitude` VARCHAR(50) NULL");
+            }
+            $cols_read = $pdo->query("SHOW COLUMNS FROM campaign_form_submissions LIKE 'is_read'")->fetch();
+            if (!$cols_read) {
+                $pdo->exec("ALTER TABLE campaign_form_submissions ADD COLUMN `is_read` TINYINT(1) NOT NULL DEFAULT 0");
             }
         } catch (Exception $e) {}
 

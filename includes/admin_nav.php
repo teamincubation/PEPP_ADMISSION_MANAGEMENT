@@ -67,11 +67,15 @@ if (file_exists(__DIR__ . '/email_campaigns_helper.php')) {
 $nav_pending_payments  = 0;
 $nav_pending_onboarding = 0;
 $nav_due_within_10_days = 0;
+$nav_active_forms_count = 0;
+$nav_unread_submissions_count = 0;
 try {
     $nav_pending_approvals  = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE status = 'pending'")->fetchColumn();
     $nav_pending_payments   = (int)$pdo->query("SELECT COUNT(*) FROM instalment_details WHERE status = 'pending' AND paid_date IS NOT NULL")->fetchColumn();
     $nav_pending_onboarding = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE status = 'approved' AND (onboarding_status IS NULL OR onboarding_status <> 'completed')")->fetchColumn();
     $nav_due_within_10_days = (int)$pdo->query("SELECT COUNT(*) FROM instalment_details WHERE status = 'pending' AND paid_date IS NULL AND rejected_at IS NULL AND due_date <= DATE_ADD(CURDATE(), INTERVAL 10 DAY)")->fetchColumn();
+    $nav_active_forms_count = (int)$pdo->query("SELECT COUNT(*) FROM campaign_forms WHERE status = 'published'")->fetchColumn();
+    $nav_unread_submissions_count = (int)$pdo->query("SELECT COUNT(*) FROM campaign_form_submissions WHERE is_read = 0 AND is_deleted = 0")->fetchColumn();
 } catch (Exception $navEx) { /* sidebar still renders */ }
 
 function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
@@ -212,6 +216,14 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
             <div class="nav-section-label">Campaigns</div>
             <a class="nav-item <?php echo nav_active('campaigns', $active_page); ?>" href="campaign-forms.php">
                 <i class="fab fa-wpforms"></i> Custom Forms
+                <span style="margin-left:auto; display:inline-flex; gap:4px; align-items:center;">
+                    <?php if ($nav_active_forms_count > 0): ?>
+                        <span class="nav-badge" style="background:rgba(34, 197, 94, 0.15); color:#22c55e; border:1px solid rgba(34, 197, 94, 0.3); padding:2px 6px; border-radius:6px; font-size:0.7rem; font-weight:700;" title="Active campaign forms"><?php echo $nav_active_forms_count; ?> Active</span>
+                    <?php endif; ?>
+                    <?php if ($nav_unread_submissions_count > 0): ?>
+                        <span class="nav-badge" style="background:rgba(59, 130, 246, 0.15); color:#3b82f6; border:1px solid rgba(59, 130, 246, 0.3); padding:2px 6px; border-radius:6px; font-size:0.7rem; font-weight:700;" title="New unread registrations"><?php echo $nav_unread_submissions_count; ?> New</span>
+                    <?php endif; ?>
+                </span>
             </a>
         </div>
         <?php endif; ?>
