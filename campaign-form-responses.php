@@ -530,7 +530,7 @@ include 'includes/admin_nav.php';
         background: var(--card-bg);
         border: 1px solid var(--border);
         border-radius: 20px;
-        overflow: hidden;
+        overflow-x: auto;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
     }
 </style>
@@ -676,7 +676,6 @@ include 'includes/admin_nav.php';
             <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:var(--input-bg);">
                 <th style="padding:15px; width:45px; text-align:center;"><input type="checkbox" id="select-all" onclick="toggleSelectAll(this)" style="accent-color:var(--accent);"></th>
                 <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted);">Submission At</th>
-                <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted);">Respondent</th>
                 
                 <!-- Dynamic Columns -->
                 <?php foreach ($fields as $f): 
@@ -694,7 +693,7 @@ include 'includes/admin_nav.php';
         <tbody>
             <?php if (empty($submissions)): ?>
                 <tr>
-                    <td colspan="<?php echo count($fields) + 5; ?>" style="padding:50px 20px; text-align:center; color:var(--text-muted);">
+                    <td colspan="<?php echo count($fields) + 4; ?>" style="padding:50px 20px; text-align:center; color:var(--text-muted);">
                         <div style="width:70px; height:70px; border-radius:50%; background:var(--input-bg); border:1.5px solid var(--border); display:flex; align-items:center; justify-content:center; margin:0 auto 1rem auto; font-size:2rem; color:var(--accent);">
                             <i class="fas fa-inbox"></i>
                         </div>
@@ -713,42 +712,6 @@ include 'includes/admin_nav.php';
                             <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#3b82f6; flex-shrink:0;" title="Unread response"></span>
                         <?php endif; ?>
                     </td>
-                    <td style="padding:15px; font-weight:700; font-size:0.9rem; color:var(--text-main);">
-                        <div style="display:flex; align-items:center; gap:8px;">
-                            <div style="width:28px; height:28px; border-radius:50%; background:rgba(232,152,12,0.15); color:var(--accent); display:flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:800;">
-                                <i class="fas fa-user"></i>
-                            </div>
-                            <?php 
-                            $disp_id = trim($s['respondent_identifier'] ?? '');
-                            if (empty($disp_id) || strtolower($disp_id) === 'anonymous' || strpos(strtolower($disp_id), 'respondent') !== false) {
-                                // Search answers map for Name or Email or Phone
-                                $answers_sub = $answers_map[$s['id']] ?? [];
-                                foreach ($answers_sub as $fid => $ans) {
-                                    $txt = trim($ans['answer_text'] ?? '');
-                                    if (empty($txt)) continue;
-                                    foreach ($fields as $field) {
-                                        if ($field['id'] == $fid) {
-                                            $lbl = strtolower($field['label']);
-                                            if (strpos($lbl, 'name') !== false || $field['type'] === 'short_text') {
-                                                $disp_id = $txt;
-                                                break 2;
-                                            } elseif ($field['type'] === 'email' || strpos($lbl, 'email') !== false) {
-                                                $disp_id = $txt;
-                                            } elseif (empty($disp_id) && ($field['type'] === 'phone' || $field['type'] === 'whatsapp')) {
-                                                $disp_id = $txt;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            if (empty($disp_id)) {
-                                $disp_id = 'Respondent #' . $s['id'];
-                            }
-                            echo htmlspecialchars(strlen($disp_id) > 28 ? substr($disp_id, 0, 25) . '...' : $disp_id); 
-                            ?>
-                        </div>
-                    </td>
-
                     <!-- Dynamic Answer Columns -->
                     <?php foreach ($fields as $f): 
                         $hid = in_array((string)$f['id'], $hidden_cols) ? 'display:none;' : '';

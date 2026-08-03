@@ -277,7 +277,11 @@ include 'includes/admin_nav.php';
     }
 
     function deleteForm(id) {
-        if (!confirm('CRITICAL WARNING: This will permanently delete the form, all configured fields, all responses collected, and views log. This action CANNOT be undone. Are you sure you want to delete?')) return;
+        var verifyText = prompt('CRITICAL WARNING: This will permanently delete the form, all configured fields, all responses collected, and views log. This action CANNOT be undone.\n\nPlease type "DELETE" below to confirm:');
+        if (verifyText !== 'DELETE') {
+            alert('Deletion cancelled. Confirmation text did not match.');
+            return;
+        }
         
         var fd = new FormData();
         fd.append('action', 'delete');
