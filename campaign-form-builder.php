@@ -206,8 +206,17 @@ include 'includes/admin_nav.php';
         border: 1px solid var(--border);
         border-radius: 16px;
         padding: 1.2rem;
+    }
+
+    .builder-sidebar {
         position: sticky;
         top: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 1.2rem;
+        max-height: calc(100vh - 40px);
+        overflow-y: auto;
+        padding-right: 4px;
     }
 
     .panel-title {
@@ -470,7 +479,7 @@ include 'includes/admin_nav.php';
     </div>
 
     <!-- RIGHT PANEL: ADD FIELD DRAWER & FIELD PROPERTIES -->
-    <div style="display:flex; flex-direction:column; gap:1.2rem;">
+    <div class="builder-sidebar">
         
         <!-- Add field toolbox -->
         <div class="panel">
