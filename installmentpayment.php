@@ -882,8 +882,16 @@ if ($step === 'payment' && isset($_GET['user_id'])) {
                                 <span class="info-value"><?php echo htmlspecialchars($student_data['pepp_academic_year']); ?></span>
                             </div>
                             <div class="info-item">
-                                <span class="info-label">Initial Payment</span>
-                                <span class="info-value">₹<?php echo number_format($student_data['paid_amount'], 2); ?></span>
+                                <?php
+                                $total_paid = (float)$student_data['paid_amount'];
+                                try {
+                                    $stmt_paid = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM instalment_details WHERE user_id = ? AND status IN ('approved','paid')");
+                                    $stmt_paid->execute([$student_data['user_id']]);
+                                    $total_paid += (float)$stmt_paid->fetchColumn();
+                                } catch (Exception $e) {}
+                                ?>
+                                <span class="info-label">Total Paid Amount</span>
+                                <span class="info-value">₹<?php echo number_format($total_paid, 2); ?></span>
                             </div>
                         </div>
                     </div>
