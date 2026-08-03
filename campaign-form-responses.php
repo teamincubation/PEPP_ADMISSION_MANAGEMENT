@@ -686,14 +686,13 @@ include 'includes/admin_nav.php';
                     </th>
                 <?php endforeach; ?>
                 
-                <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); text-align:center;">IP Address</th>
                 <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); text-align:right;">Actions</th>
             </tr>
         </thead>
         <tbody>
             <?php if (empty($submissions)): ?>
                 <tr>
-                    <td colspan="<?php echo count($fields) + 4; ?>" style="padding:50px 20px; text-align:center; color:var(--text-muted);">
+                    <td colspan="<?php echo count($fields) + 3; ?>" style="padding:50px 20px; text-align:center; color:var(--text-muted);">
                         <div style="width:70px; height:70px; border-radius:50%; background:var(--input-bg); border:1.5px solid var(--border); display:flex; align-items:center; justify-content:center; margin:0 auto 1rem auto; font-size:2rem; color:var(--accent);">
                             <i class="fas fa-inbox"></i>
                         </div>
@@ -710,6 +709,9 @@ include 'includes/admin_nav.php';
                         <span><?php echo date('d M Y, h:i A', strtotime($s['submitted_at'])); ?></span>
                         <?php if (empty($s['is_read'])): ?>
                             <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#3b82f6; flex-shrink:0;" title="Unread response"></span>
+                        <?php endif; ?>
+                        <?php if (!empty($s['latitude']) && !empty($s['longitude'])): ?>
+                            <a href="https://www.google.com/maps/search/?api=1&query=<?php echo $s['latitude']; ?>,<?php echo $s['longitude']; ?>" target="_blank" style="color:#ef4444; font-size:0.9rem;" title="View Google Map Location"><i class="fas fa-map-location-dot"></i></a>
                         <?php endif; ?>
                     </td>
                     <!-- Dynamic Answer Columns -->
@@ -733,15 +735,6 @@ include 'includes/admin_nav.php';
                             <?php echo $disp_val; ?>
                         </td>
                     <?php endforeach; ?>
-
-                    <td style="padding:15px; text-align:center; font-family:monospace; font-size:0.8rem; color:var(--text-muted);">
-                        <div style="display:inline-flex; align-items:center; gap:6px; justify-content:center; width:100%;">
-                            <span><?php echo htmlspecialchars($s['ip_address']); ?></span>
-                            <?php if (!empty($s['latitude']) && !empty($s['longitude'])): ?>
-                                <a href="https://www.google.com/maps/search/?api=1&query=<?php echo $s['latitude']; ?>,<?php echo $s['longitude']; ?>" target="_blank" style="color:#ef4444; font-size:0.85rem;" title="View Google Map Location"><i class="fas fa-map-location-dot"></i></a>
-                            <?php endif; ?>
-                        </div>
-                    </td>
                     <td style="padding:15px; text-align:right;">
                         <div style="display:flex; justify-content:flex-end; gap:6px; align-items:center;">
                             <button type="button" class="btn btn-sm btn-soft-blue" onclick="viewResponseDetail(<?php echo $s['id']; ?>)" title="View Details"><i class="fas fa-eye"></i></button>
