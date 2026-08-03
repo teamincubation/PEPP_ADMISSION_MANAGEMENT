@@ -163,10 +163,19 @@ try {
                 `choices` TEXT NULL,
                 `conditional_logic` TEXT NULL,
                 `error_message` VARCHAR(255) NULL,
+                `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
                 KEY `idx_field_form` (`form_id`),
                 CONSTRAINT `fk_field_form` FOREIGN KEY (`form_id`) REFERENCES `campaign_forms` (`id`) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
+
+        // Self-healing columns for fields soft deletion
+        try {
+            $cols_f = $pdo->query("SHOW COLUMNS FROM campaign_form_fields LIKE 'is_deleted'")->fetch();
+            if (!$cols_f) {
+                $pdo->exec("ALTER TABLE campaign_form_fields ADD COLUMN `is_deleted` TINYINT(1) NOT NULL DEFAULT 0");
+            }
+        } catch (Exception $e) {}
 
         $pdo->exec("
             CREATE TABLE IF NOT EXISTS `campaign_form_submissions` (

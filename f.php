@@ -129,7 +129,7 @@ function render_public_notice($title, $message, $icon = 'fa-clock', $badge_text 
                 </div>
                 <h1 class="notice-title"><?php echo htmlspecialchars($title); ?></h1>
                 <p class="notice-message"><?php echo htmlspecialchars($message); ?></p>
-                <a href="https://pepplearning.in" class="btn-home"><i class="fas fa-globe"></i> Visit Official Website</a>
+                <a href="https://pepplearning.com" class="btn-home"><i class="fas fa-globe"></i> Visit Official Website</a>
             </div>
         </div>
     </body>
@@ -229,7 +229,7 @@ try {
     }
 
     // Fetch form fields
-    $stmt = $pdo->prepare("SELECT * FROM campaign_form_fields WHERE form_id = ? ORDER BY sort_order ASC");
+    $stmt = $pdo->prepare("SELECT * FROM campaign_form_fields WHERE form_id = ? AND is_deleted = 0 ORDER BY sort_order ASC");
     $stmt->execute([$form_id]);
     $fields = $stmt->fetchAll();
 
@@ -547,7 +547,7 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
                     <tr style='background:#f8fafc;'><th align='left'>Field</th><th align='left'>Answer</th></tr>";
     
     // Fetch labels
-    $stmt = $pdo->prepare("SELECT id, label, type FROM campaign_form_fields WHERE form_id = ? ORDER BY sort_order ASC");
+    $stmt = $pdo->prepare("SELECT id, label, type FROM campaign_form_fields WHERE form_id = ? AND is_deleted = 0 ORDER BY sort_order ASC");
     $stmt->execute([$form['id']]);
     $fields = $stmt->fetchAll();
     

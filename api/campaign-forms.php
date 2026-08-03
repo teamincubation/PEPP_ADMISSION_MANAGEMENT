@@ -172,19 +172,28 @@ try {
             $form_id = $pdo->lastInsertId();
         }
 
-        // Process fields: delete existing ones, then insert new ones (safest way to sync Visual Editor)
-        $stmt = $pdo->prepare("DELETE FROM campaign_form_fields WHERE form_id = ?");
-        $stmt->execute([$form_id]);
+        // Soft delete all fields first, then update or insert active fields
+        $stmt_soft_del = $pdo->prepare("UPDATE campaign_form_fields SET is_deleted = 1 WHERE form_id = ?");
+        $stmt_soft_del->execute([$form_id]);
 
-        $stmt = $pdo->prepare("
+        $stmt_ins = $pdo->prepare("
             INSERT INTO campaign_form_fields (
                 form_id, type, label, placeholder, default_value, field_name,
-                is_required, sort_order, validation_rules, choices, conditional_logic, error_message
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                is_required, sort_order, validation_rules, choices, conditional_logic, error_message, is_deleted
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        ");
+
+        $stmt_upd = $pdo->prepare("
+            UPDATE campaign_form_fields SET
+                type = ?, label = ?, placeholder = ?, default_value = ?,
+                is_required = ?, sort_order = ?, validation_rules = ?, choices = ?,
+                conditional_logic = ?, error_message = ?, is_deleted = 0
+            WHERE id = ? AND form_id = ?
         ");
 
         $index = 0;
         foreach ($fields as $field) {
+            $field_id = isset($field['id']) ? (int)$field['id'] : 0;
             $field_type = $field['type'] ?? 'short_text';
             $field_label = $field['label'] ?? 'Field label';
             $field_placeholder = $field['placeholder'] ?? '';
@@ -202,10 +211,18 @@ try {
             $cond_logic = isset($field['conditional_logic']) ? json_encode($field['conditional_logic']) : null;
             $err_msg = $field['error_message'] ?? '';
 
-            $stmt->execute([
-                $form_id, $field_type, $field_label, $field_placeholder, $field_default,
-                $field_name, $is_required, $index++, $validation, $choices, $cond_logic, $err_msg
-            ]);
+            if ($field_id > 0) {
+                $stmt_upd->execute([
+                    $field_type, $field_label, $field_placeholder, $field_default,
+                    $is_required, $index++, $validation, $choices,
+                    $cond_logic, $err_msg, $field_id, $form_id
+                ]);
+            } else {
+                $stmt_ins->execute([
+                    $form_id, $field_type, $field_label, $field_placeholder, $field_default,
+                    $field_name, $is_required, $index++, $validation, $choices, $cond_logic, $err_msg
+                ]);
+            }
         }
 
         $pdo->commit();
@@ -270,7 +287,7 @@ try {
         $new_id = $pdo->lastInsertId();
 
         // Duplicate fields
-        $stmt = $pdo->prepare("SELECT * FROM campaign_form_fields WHERE form_id = ? ORDER BY sort_order ASC");
+        $stmt = $pdo->prepare("SELECT * FROM campaign_form_fields WHERE form_id = ? AND is_deleted = 0 ORDER BY sort_order ASC");
         $stmt->execute([$id]);
         $fields = $stmt->fetchAll();
 

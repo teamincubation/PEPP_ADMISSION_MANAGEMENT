@@ -39,7 +39,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
         SELECT f.label, f.type, f.id as field_id, a.answer_text, a.file_path 
         FROM campaign_form_fields f 
         LEFT JOIN campaign_form_answers a ON (a.field_id = f.id AND a.submission_id = ?)
-        WHERE f.form_id = ? AND f.type != 'section'
+        WHERE f.form_id = ? AND f.type != 'section' AND (f.is_deleted = 0 OR a.answer_text IS NOT NULL OR a.file_path IS NOT NULL)
         ORDER BY f.sort_order ASC
     ");
     $stmt->execute([$sub_id, $form_id]);
@@ -56,7 +56,30 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
                 </div>
                 <div>
                     <div style="font-size:0.75rem; text-transform:uppercase; font-weight:700; color:var(--text-muted); letter-spacing:0.5px;">Respondent</div>
-                    <div style="font-size:1.1rem; font-weight:800; color:var(--text-main);"><?php echo htmlspecialchars($sub['respondent_identifier'] ?: 'Anonymous Respondent'); ?></div>
+                    <div style="font-size:1.1rem; font-weight:800; color:var(--text-main);">
+                        <?php 
+                        $disp_id = trim($sub['respondent_identifier'] ?? '');
+                        if (empty($disp_id) || strtolower($disp_id) === 'anonymous' || strpos(strtolower($disp_id), 'respondent') !== false) {
+                            foreach ($answers as $ans) {
+                                $txt = trim($ans['answer_text'] ?? '');
+                                if (empty($txt)) continue;
+                                $lbl = strtolower($ans['label']);
+                                if (strpos($lbl, 'name') !== false || $ans['type'] === 'short_text') {
+                                    $disp_id = $txt;
+                                    break;
+                                } elseif ($ans['type'] === 'email' || strpos($lbl, 'email') !== false) {
+                                    $disp_id = $txt;
+                                } elseif (empty($disp_id) && ($ans['type'] === 'phone' || $ans['type'] === 'whatsapp')) {
+                                    $disp_id = $txt;
+                                }
+                            }
+                        }
+                        if (empty($disp_id)) {
+                            $disp_id = 'Respondent #' . $sub['id'];
+                        }
+                        echo htmlspecialchars($disp_id);
+                        ?>
+                    </div>
                 </div>
             </div>
 
@@ -138,7 +161,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
 }
 
 // Fetch fields (excluding section breaks)
-$stmt = $pdo->prepare("SELECT id, label, field_name, type FROM campaign_form_fields WHERE form_id = ? AND type != 'section' ORDER BY sort_order ASC");
+$stmt = $pdo->prepare("SELECT id, label, field_name, type FROM campaign_form_fields WHERE form_id = ? AND type != 'section' AND is_deleted = 0 ORDER BY sort_order ASC");
 $stmt->execute([$form_id]);
 $fields = $stmt->fetchAll();
 
@@ -689,7 +712,34 @@ include 'includes/admin_nav.php';
                             <div style="width:28px; height:28px; border-radius:50%; background:rgba(232,152,12,0.15); color:var(--accent); display:flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:800;">
                                 <i class="fas fa-user"></i>
                             </div>
-                            <?php echo htmlspecialchars($s['respondent_identifier'] ?: 'Anonymous'); ?>
+                            <?php 
+                            $disp_id = trim($s['respondent_identifier'] ?? '');
+                            if (empty($disp_id) || strtolower($disp_id) === 'anonymous' || strpos(strtolower($disp_id), 'respondent') !== false) {
+                                // Search answers map for Name or Email or Phone
+                                $answers_sub = $answers_map[$s['id']] ?? [];
+                                foreach ($answers_sub as $fid => $ans) {
+                                    $txt = trim($ans['answer_text'] ?? '');
+                                    if (empty($txt)) continue;
+                                    foreach ($fields as $field) {
+                                        if ($field['id'] == $fid) {
+                                            $lbl = strtolower($field['label']);
+                                            if (strpos($lbl, 'name') !== false || $field['type'] === 'short_text') {
+                                                $disp_id = $txt;
+                                                break 2;
+                                            } elseif ($field['type'] === 'email' || strpos($lbl, 'email') !== false) {
+                                                $disp_id = $txt;
+                                            } elseif (empty($disp_id) && ($field['type'] === 'phone' || $field['type'] === 'whatsapp')) {
+                                                $disp_id = $txt;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (empty($disp_id)) {
+                                $disp_id = 'Respondent #' . $s['id'];
+                            }
+                            echo htmlspecialchars(strlen($disp_id) > 28 ? substr($disp_id, 0, 25) . '...' : $disp_id); 
+                            ?>
                         </div>
                     </td>
 

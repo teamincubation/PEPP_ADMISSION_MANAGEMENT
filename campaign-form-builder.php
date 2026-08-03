@@ -18,7 +18,7 @@ if ($form_id > 0) {
         $form_data = $stmt->fetch();
 
         if ($form_data) {
-            $stmt = $pdo->prepare("SELECT * FROM campaign_form_fields WHERE form_id = ? ORDER BY sort_order ASC");
+            $stmt = $pdo->prepare("SELECT * FROM campaign_form_fields WHERE form_id = ? AND is_deleted = 0 ORDER BY sort_order ASC");
             $stmt->execute([$form_id]);
             $fields_data = $stmt->fetchAll();
         } else {
