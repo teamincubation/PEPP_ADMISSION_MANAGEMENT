@@ -88,6 +88,7 @@ try {
         $confirmation_email_body = trim($data['confirmation_email_body'] ?? '');
         $auto_redirect_whatsapp = isset($data['auto_redirect_whatsapp']) ? (int)$data['auto_redirect_whatsapp'] : 0;
         $whatsapp_group_link = trim($data['whatsapp_group_link'] ?? '');
+        $banner_image = trim($data['banner_image'] ?? '');
         
         $fields = $data['fields'] ?? [];
 
@@ -124,7 +125,8 @@ try {
                     thank_you_title = ?, thank_you_text = ?, webhook_url = ?,
                     enable_captcha = ?, notify_emails = ?,
                     confirmation_email_subject = ?, confirmation_email_body = ?,
-                    auto_redirect_whatsapp = ?, whatsapp_group_link = ?
+                    auto_redirect_whatsapp = ?, whatsapp_group_link = ?,
+                    banner_image = ?
                 WHERE id = ?
             ");
             $stmt->execute([
@@ -136,6 +138,7 @@ try {
                 $enable_captcha, $notify_emails,
                 $confirmation_email_subject, $confirmation_email_body,
                 $auto_redirect_whatsapp, $whatsapp_group_link,
+                $banner_image,
                 $form_id
             ]);
         } else {
@@ -150,8 +153,9 @@ try {
                     enable_captcha, notify_emails,
                     confirmation_email_subject, confirmation_email_body,
                     auto_redirect_whatsapp, whatsapp_group_link,
+                    banner_image,
                     created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
             $stmt->execute([
                 $title, $description, $slug, $status,
@@ -162,6 +166,7 @@ try {
                 $enable_captcha, $notify_emails,
                 $confirmation_email_subject, $confirmation_email_body,
                 $auto_redirect_whatsapp, $whatsapp_group_link,
+                $banner_image,
                 $admin_username
             ]);
             $form_id = $pdo->lastInsertId();
@@ -247,8 +252,9 @@ try {
                 enable_captcha, notify_emails,
                 confirmation_email_subject, confirmation_email_body,
                 auto_redirect_whatsapp, whatsapp_group_link,
+                banner_image,
                 created_by
-            ) VALUES (?, ?, ?, 'draft', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, 'draft', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $stmt->execute([
             $title, $form['description'], $slug,
@@ -258,6 +264,7 @@ try {
             $form['enable_captcha'], $form['notify_emails'],
             $form['confirmation_email_subject'], $form['confirmation_email_body'],
             $form['auto_redirect_whatsapp'], $form['whatsapp_group_link'],
+            $form['banner_image'],
             $admin_username
         ]);
         $new_id = $pdo->lastInsertId();
@@ -327,6 +334,124 @@ try {
         echo json_encode([
             'success' => true,
             'message' => $archive ? 'Form archived successfully' : 'Form restored as draft'
+        ]);
+        exit();
+    }
+
+    if ($action === 'convert_to_leads') {
+        $course_name = trim($_POST['course_name'] ?? '');
+        $sub_ids_raw = $_POST['sub_ids'] ?? [];
+        if (is_string($sub_ids_raw)) {
+            $sub_ids_raw = explode(',', $sub_ids_raw);
+        }
+        $sub_ids = array_map('intval', array_filter((array)$sub_ids_raw));
+
+        if (empty($course_name)) {
+            echo json_encode(['success' => false, 'message' => 'Please select a course to assign leads to.']);
+            exit();
+        }
+        if (empty($sub_ids)) {
+            echo json_encode(['success' => false, 'message' => 'No registration submissions selected for conversion.']);
+            exit();
+        }
+
+        $converted_count = 0;
+        $skipped_count = 0;
+        $errors = [];
+
+        foreach ($sub_ids as $sub_id) {
+            // Fetch submission
+            $stmt = $pdo->prepare("SELECT * FROM campaign_form_submissions WHERE id = ?");
+            $stmt->execute([$sub_id]);
+            $sub = $stmt->fetch();
+            if (!$sub) {
+                $skipped_count++;
+                $errors[] = "Submission #{$sub_id} not found.";
+                continue;
+            }
+
+            // Fetch answers
+            $stmt = $pdo->prepare("
+                SELECT a.answer_text, f.label, f.type, f.field_name 
+                FROM campaign_form_answers a
+                JOIN campaign_form_fields f ON a.field_id = f.id
+                WHERE a.submission_id = ?
+            ");
+            $stmt->execute([$sub_id]);
+            $answers = $stmt->fetchAll();
+
+            $name = '';
+            $email = '';
+            $phone = '';
+            $whatsapp = '';
+            $location = '';
+
+            foreach ($answers as $ans) {
+                $txt = trim($ans['answer_text']);
+                $lbl = strtolower(trim($ans['label']));
+                $ftype = $ans['type'];
+
+                if ($ftype === 'whatsapp' || strpos($lbl, 'whatsapp') !== false) {
+                    if (empty($whatsapp)) $whatsapp = $txt;
+                } elseif ($ftype === 'phone' || strpos($lbl, 'phone') !== false || strpos($lbl, 'mobile') !== false || strpos($lbl, 'contact') !== false) {
+                    if (empty($phone)) $phone = $txt;
+                } elseif ($ftype === 'email' || strpos($lbl, 'email') !== false) {
+                    if (empty($email)) $email = $txt;
+                } elseif ($ftype === 'location' || strpos($lbl, 'place') !== false || strpos($lbl, 'address') !== false || strpos($lbl, 'city') !== false || strpos($lbl, 'location') !== false) {
+                    if (empty($location)) $location = $txt;
+                } elseif ($ftype === 'short_text' || strpos($lbl, 'name') !== false) {
+                    if (empty($name) && strpos($lbl, 'name') !== false) $name = $txt;
+                }
+            }
+
+            if (empty($name)) {
+                $name = $sub['respondent_identifier'] ?: 'Anonymous Respondent';
+            }
+
+            // Fallback: Use Phone number if WhatsApp number is missing
+            $target_wa = !empty($whatsapp) ? $whatsapp : $phone;
+            
+            // Clean phone digits for WhatsApp
+            $clean_number = preg_replace('/\D/', '', $target_wa);
+            if (strlen($clean_number) === 10) {
+                $clean_number = '91' . $clean_number;
+            }
+
+            // Validation: Prevent conversion if neither phone nor whatsapp number is included
+            if (empty($clean_number) || strlen($clean_number) < 10) {
+                $skipped_count++;
+                $errors[] = "Submission #{$sub_id} ({$name}) skipped: Missing both Phone and WhatsApp number.";
+                continue;
+            }
+
+            // Check if already exists in leads
+            $stmt = $pdo->prepare("SELECT id FROM leads WHERE whatsapp_number = ?");
+            $stmt->execute([$clean_number]);
+            if ($stmt->fetchColumn()) {
+                $skipped_count++;
+                $errors[] = "Submission #{$sub_id} ({$name}) skipped: Lead with number +{$clean_number} already exists.";
+                continue;
+            }
+
+            // Insert into leads
+            try {
+                $stmt = $pdo->prepare("
+                    INSERT INTO leads (whatsapp_number, name, interested_course, status, next_followup_date, assigned_to, source, created_by, created_at, last_activity_at)
+                    VALUES (?, ?, ?, 'new', CURDATE(), '__ALL__', 'campaign_form', ?, NOW(), NOW())
+                ");
+                $stmt->execute([$clean_number, $name, $course_name, $admin_username]);
+                $converted_count++;
+            } catch (Exception $e) {
+                $skipped_count++;
+                $errors[] = "Submission #{$sub_id} ({$name}) error: " . $e->getMessage();
+            }
+        }
+
+        echo json_encode([
+            'success' => true,
+            'converted' => $converted_count,
+            'skipped' => $skipped_count,
+            'errors' => $errors
         ]);
         exit();
     }

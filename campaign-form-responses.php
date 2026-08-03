@@ -60,7 +60,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
                 </div>
             </div>
 
-            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px; font-size:0.8rem; color:var(--text-muted);">
+            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px; font-size:0.8rem; color:var(--text-muted);">
+                <button type="button" class="btn btn-sm" onclick="openConvertLeadsModal(<?php echo $sub_id; ?>)" style="background:#16a34a; color:#fff; border:none; padding:4px 10px; font-size:0.75rem; font-weight:700;"><i class="fas fa-user-plus"></i> Convert to Lead</button>
                 <span><i class="fas fa-clock" style="color:var(--accent);"></i> <?php echo date('d M Y, h:i A', strtotime($sub['submitted_at'])); ?></span>
                 <span><i class="fas fa-network-wired"></i> IP: <?php echo htmlspecialchars($sub['ip_address']); ?></span>
             </div>
@@ -337,6 +338,15 @@ if (!empty($sub_ids)) {
     }
 }
 
+// Fetch active PEPP courses for Convert to Leads modal
+$course_list = [];
+try {
+    $course_list = $pdo->query("SELECT DISTINCT course_name FROM pepp_courses WHERE course_name IS NOT NULL AND course_name != '' ORDER BY course_name")->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {}
+if (empty($course_list)) {
+    $course_list = ['CUET PG', 'CUET UG', 'NET / JRF', 'KSET / SET', 'Civil Services', 'Other Courses'];
+}
+
 // Setup Column visibility (Save in cookie, fallback all active)
 $col_cookie = 'form_cols_hide_' . $form_id;
 $hidden_cols = isset($_COOKIE[$col_cookie]) ? explode(',', $_COOKIE[$col_cookie]) : [];
@@ -443,7 +453,8 @@ include 'includes/admin_nav.php';
         <button class="btn btn-secondary" onclick="openModal('col-picker-modal')" style="padding:0.6rem 1.1rem;"><i class="fas fa-columns"></i> Columns</button>
         
         <!-- Bulk Action Wrapper -->
-        <div id="bulk-actions" style="display:none; gap:10px;">
+        <div id="bulk-actions" style="display:none; gap:10px; align-items:center;">
+            <button class="btn btn-secondary" style="padding:0.6rem 1.1rem; border-color:#16a34a; color:#16a34a; background:rgba(22, 163, 74, 0.08);" onclick="openConvertLeadsModal()"><i class="fas fa-user-plus"></i> Convert to Leads (<span id="bulk-convert-count">0</span>)</button>
             <button class="btn btn-secondary" style="padding:0.6rem 1.1rem; border-color:#ef4444; color:#ef4444;" onclick="bulkDelete()"><i class="fas fa-trash-can"></i> Delete (<span id="bulk-count">0</span>)</button>
             
             <div class="export-dropdown">
@@ -661,6 +672,8 @@ include 'includes/admin_nav.php';
             bulkBar.style.display = 'inline-flex';
             exportAll.style.display = 'none';
             document.getElementById('bulk-count').textContent = selected.length;
+            var convertBadge = document.getElementById('bulk-convert-count');
+            if (convertBadge) convertBadge.textContent = selected.length;
         } else {
             bulkBar.style.display = 'none';
             exportAll.style.display = 'inline-block';
@@ -720,11 +733,6 @@ include 'includes/admin_nav.php';
         body.innerHTML = '<div style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin" style="font-size:2rem; color:var(--accent);"></i><p style="margin-top:8px;">Loading response data...</p></div>';
         openModal('response-detail-modal');
 
-        // We will fetch response details using a dynamic inline lookup
-        // To make it simple, we load via Ajax on current page by triggering action = load_detail
-        var fd = new FormData();
-        fd.append('sub_id', subId);
-
         fetch('?id=<?php echo $form_id; ?>&action=load_detail&sub_id=' + subId)
         .then(r => r.text())
         .then(html => {
@@ -734,6 +742,123 @@ include 'includes/admin_nav.php';
             body.innerHTML = '<div class="alert alert-danger">Failed to load details.</div>';
         });
     }
+
+    // Convert Registrations to Leads Handlers
+    var targetConvertSubIds = [];
+
+    function openConvertLeadsModal(singleSubId) {
+        if (singleSubId) {
+            targetConvertSubIds = [singleSubId];
+        } else {
+            targetConvertSubIds = [];
+            document.querySelectorAll('.row-checkbox:checked').forEach(function(cb) {
+                targetConvertSubIds.push(parseInt(cb.value));
+            });
+        }
+
+        if (targetConvertSubIds.length === 0) {
+            alert('Please select at least one registration response row to convert.');
+            return;
+        }
+
+        document.getElementById('convert-count-label').textContent = targetConvertSubIds.length;
+        document.getElementById('convert-results-box').style.display = 'none';
+        openModal('convert-leads-modal');
+    }
+
+    function closeConvertLeadsModal() {
+        closeModal('convert-leads-modal');
+    }
+
+    function submitConvertLeads() {
+        var course = document.getElementById('convert-course-select').value;
+        if (!course) {
+            alert('Please select a course to assign leads to.');
+            return;
+        }
+
+        var btn = document.getElementById('btn-submit-convert');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Converting...';
+
+        var fd = new FormData();
+        fd.append('action', 'convert_to_leads');
+        fd.append('form_id', formId);
+        fd.append('course_name', course);
+        fd.append('sub_ids', targetConvertSubIds.join(','));
+
+        fetch('api/campaign-forms.php', {
+            method: 'POST',
+            body: fd
+        })
+        .then(r => r.json())
+        .then(res => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-check"></i> Convert Now';
+
+            if (res.success) {
+                var box = document.getElementById('convert-results-box');
+                box.style.display = 'block';
+                
+                var html = '<div style="color:#16a34a; font-weight:700; margin-bottom:4px;"><i class="fas fa-circle-check"></i> ' + res.converted + ' lead(s) created successfully!</div>';
+                if (res.skipped > 0) {
+                    html += '<div style="color:#eab308; font-weight:600;"><i class="fas fa-triangle-exclamation"></i> ' + res.skipped + ' skipped.</div>';
+                }
+                if (res.errors && res.errors.length > 0) {
+                    html += '<ul style="margin-top:6px; padding-left:18px; color:#ef4444;">';
+                    res.errors.forEach(err => {
+                        html += '<li>' + err + '</li>';
+                    });
+                    html += '</ul>';
+                }
+                box.innerHTML = html;
+
+                if (res.converted > 0 && res.skipped === 0) {
+                    setTimeout(function() {
+                        closeConvertLeadsModal();
+                    }, 1800);
+                }
+            } else {
+                alert(res.message || 'Failed to convert registrations.');
+            }
+        })
+        .catch(err => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-check"></i> Convert Now';
+            alert('Network error communicating with server.');
+        });
+    }
 </script>
+
+<!-- Convert Registrations to Leads Modal -->
+<div id="convert-leads-modal" class="modal-overlay">
+    <div class="modal-card" style="max-width:460px;">
+        <div class="modal-header">
+            <h3><i class="fas fa-user-plus" style="color:#16a34a;"></i> Convert to Leads</h3>
+            <button type="button" onclick="closeConvertLeadsModal()" style="background:transparent; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer;"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:0.88rem; color:var(--text-muted); margin-bottom:1.2rem;">
+                Select a target course to assign <strong id="convert-count-label" style="color:var(--accent);">0</strong> registration(s) to. Original entries in this campaign form will remain intact.
+            </p>
+
+            <div class="field full" style="margin-bottom:1.2rem;">
+                <label style="font-size:0.78rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:6px;">Target Course <span style="color:#ef4444;">*</span></label>
+                <select id="convert-course-select" class="form-input" style="width:100%; padding:0.7rem 0.9rem; border-radius:10px; background:var(--input-bg); border:1.5px solid var(--border); color:var(--text-main); font-weight:600;">
+                    <option value="">-- Select Course --</option>
+                    <?php foreach ($course_list as $c): ?>
+                        <option value="<?php echo htmlspecialchars($c); ?>"><?php echo htmlspecialchars($c); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+
+            <div id="convert-results-box" style="display:none; font-size:0.82rem; margin-bottom:1rem; padding:12px; border-radius:10px; background:var(--input-bg); border:1.5px solid var(--border);"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeConvertLeadsModal()">Cancel</button>
+            <button type="button" class="btn btn-primary" id="btn-submit-convert" onclick="submitConvertLeads()" style="background:#16a34a; border-color:#16a34a;"><i class="fas fa-check"></i> Convert Now</button>
+        </div>
+    </div>
+</div>
 
 <?php include 'includes/admin_footer.php'; ?>

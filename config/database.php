@@ -124,6 +124,7 @@ try {
                 `confirmation_email_body` TEXT NULL,
                 `auto_redirect_whatsapp` TINYINT(1) NOT NULL DEFAULT 0,
                 `whatsapp_group_link` VARCHAR(255) NULL,
+                `banner_image` VARCHAR(255) NULL,
                 `created_by` VARCHAR(100) NOT NULL,
                 `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
@@ -131,7 +132,7 @@ try {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 
-        // Self-healing columns for WhatsApp auto redirect
+        // Self-healing columns for WhatsApp auto redirect & Banner Image
         try {
             $cols = $pdo->query("SHOW COLUMNS FROM campaign_forms LIKE 'auto_redirect_whatsapp'")->fetch();
             if (!$cols) {
@@ -140,6 +141,10 @@ try {
             $cols = $pdo->query("SHOW COLUMNS FROM campaign_forms LIKE 'whatsapp_group_link'")->fetch();
             if (!$cols) {
                 $pdo->exec("ALTER TABLE campaign_forms ADD COLUMN `whatsapp_group_link` VARCHAR(255) NULL");
+            }
+            $cols = $pdo->query("SHOW COLUMNS FROM campaign_forms LIKE 'banner_image'")->fetch();
+            if (!$cols) {
+                $pdo->exec("ALTER TABLE campaign_forms ADD COLUMN `banner_image` VARCHAR(255) NULL");
             }
         } catch (Exception $e) {}
 

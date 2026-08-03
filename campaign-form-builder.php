@@ -364,9 +364,14 @@ include 'includes/admin_nav.php';
                     <label>Form Title</label>
                     <input type="text" id="form-title" class="form-input" style="font-size:1.2rem; font-weight:700; margin-bottom:0;" placeholder="Enter Form Title" value="<?php echo htmlspecialchars($form_data['title'] ?? 'Untitled Form'); ?>" oninput="onTitleInput()">
                 </div>
-                <div class="form-group" style="margin-bottom:0;">
+                <div class="form-group" style="margin-bottom:0.8rem;">
                     <label>Form Description / Subtitle</label>
                     <textarea id="form-description" class="form-input" style="margin-bottom:0;" rows="2" placeholder="Describe the purpose of this form for visitors"><?php echo htmlspecialchars($form_data['description'] ?? ''); ?></textarea>
+                </div>
+                <div class="form-group" style="margin-bottom:0; margin-top:0.8rem;">
+                    <label>Form Header Banner Image URL (Optional)</label>
+                    <input type="url" id="form-banner-image" class="form-input" style="margin-bottom:0;" placeholder="https://example.com/images/campaign-banner.jpg" value="<?php echo htmlspecialchars($form_data['banner_image'] ?? ''); ?>">
+                    <small style="color:var(--text-muted); font-size:0.75rem;">Image banner will display prominently at the top of your public form.</small>
                 </div>
             </div>
 
@@ -1087,6 +1092,7 @@ include 'includes/admin_nav.php';
             thank_you_text: document.getElementById('form-thankyou-text').value,
             auto_redirect_whatsapp: document.getElementById('form-redirect-whatsapp').checked ? 1 : 0,
             whatsapp_group_link: document.getElementById('form-whatsapp-link').value.trim(),
+            banner_image: document.getElementById('form-banner-image').value.trim(),
             webhook_url: document.getElementById('form-webhook').value,
             enable_captcha: document.getElementById('form-captcha').value,
             notify_emails: document.getElementById('form-notify-emails').value,

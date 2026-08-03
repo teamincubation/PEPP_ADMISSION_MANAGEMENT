@@ -558,6 +558,47 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
             -webkit-backdrop-filter: blur(14px);
             box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
             animation: cardEntrance 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .form-banner-img {
+            width: calc(100% + 4.4rem);
+            margin: -2.5rem -2.2rem 1.8rem -2.2rem;
+            max-height: 240px;
+            object-fit: cover;
+            display: block;
+        }
+
+        /* Mobile First Responsive View */
+        @media (max-width: 640px) {
+            body {
+                padding: 0.8rem 0.5rem;
+            }
+            .card {
+                padding: 1.4rem 1.1rem;
+                border-radius: 18px;
+            }
+            .form-banner-img {
+                width: calc(100% + 2.2rem);
+                margin: -1.4rem -1.1rem 1.2rem -1.1rem;
+                max-height: 180px;
+            }
+            .form-header h1 {
+                font-size: 1.4rem;
+            }
+            .input-control {
+                padding: 0.75rem 0.85rem;
+                font-size: 16px; /* Prevents auto-zoom on mobile safari/chrome */
+            }
+            .step-footer {
+                flex-direction: column-reverse;
+                gap: 0.6rem;
+            }
+            .captcha-flex {
+                flex-direction: column;
+                align-items: stretch;
+            }
         }
 
         @keyframes cardEntrance {
@@ -908,6 +949,9 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
 
 <div class="container">
     <div class="card">
+        <?php if (!empty($form['banner_image'])): ?>
+            <img src="<?php echo htmlspecialchars($form['banner_image']); ?>" class="form-banner-img" alt="<?php echo htmlspecialchars($form['title']); ?> Banner">
+        <?php endif; ?>
         
         <?php if ($submitted): ?>
             <!-- Thank You Screen -->
