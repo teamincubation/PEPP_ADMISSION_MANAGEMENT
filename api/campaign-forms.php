@@ -230,6 +230,10 @@ try {
 
         $pdo->commit();
 
+        $act_type = ($data['id'] ?? 0) > 0 ? 'campaign_form_updated' : 'campaign_form_created';
+        $act_msg = (($data['id'] ?? 0) > 0 ? 'Updated' : 'Created') . " campaign form #{$form_id} '{$title}' (Status: {$status}, Fields: " . count($fields) . ")";
+        log_admin_activity($pdo, $admin_username, $act_type, $act_msg);
+
         echo json_encode([
             'success' => true,
             'message' => 'Form saved successfully',
@@ -312,6 +316,8 @@ try {
 
         $pdo->commit();
 
+        log_admin_activity($pdo, $admin_username, 'campaign_form_duplicated', "Duplicated campaign form #{$id} into new form #{$new_id} '{$title}'");
+
         echo json_encode([
             'success' => true,
             'message' => 'Form duplicated successfully',
@@ -327,9 +333,15 @@ try {
             exit();
         }
 
+        $stmt_f = $pdo->prepare("SELECT title FROM campaign_forms WHERE id = ?");
+        $stmt_f->execute([$id]);
+        $f_title = $stmt_f->fetchColumn() ?: "Form #{$id}";
+
         // Delete form (will cascade to fields, submissions, answers, analytics via foreign keys)
         $stmt = $pdo->prepare("DELETE FROM campaign_forms WHERE id = ?");
         $stmt->execute([$id]);
+
+        log_admin_activity($pdo, $admin_username, 'campaign_form_deleted', "Permanently deleted campaign form #{$id} '{$f_title}' with all fields and submissions");
 
         echo json_encode([
             'success' => true,
@@ -347,9 +359,15 @@ try {
             exit();
         }
 
+        $stmt_f = $pdo->prepare("SELECT title FROM campaign_forms WHERE id = ?");
+        $stmt_f->execute([$id]);
+        $f_title = $stmt_f->fetchColumn() ?: "Form #{$id}";
+
         $status = $archive ? 'archived' : 'draft';
         $stmt = $pdo->prepare("UPDATE campaign_forms SET status = ? WHERE id = ?");
         $stmt->execute([$status, $id]);
+
+        log_admin_activity($pdo, $admin_username, $archive ? 'campaign_form_archived' : 'campaign_form_restored', ($archive ? "Archived" : "Restored as draft") . " campaign form #{$id} '{$f_title}'");
 
         echo json_encode([
             'success' => true,
@@ -482,6 +500,8 @@ try {
             }
         }
 
+        log_admin_activity($pdo, $admin_username, 'registrations_converted_to_leads', "Converted {$converted_count} registration submission(s) to leads for course '{$course_name}' (Skipped/Duplicate: {$skipped_count})");
+
         echo json_encode([
             'success' => true,
             'converted' => $converted_count,
@@ -521,6 +541,9 @@ try {
 
         if (move_uploaded_file($file['tmp_name'], $target)) {
             $public_url = 'uploads/banners/' . $filename;
+
+            log_admin_activity($pdo, $admin_username, 'campaign_banner_uploaded', "Uploaded new campaign banner image: {$public_url}");
+
             echo json_encode([
                 'success' => true,
                 'url' => $public_url,

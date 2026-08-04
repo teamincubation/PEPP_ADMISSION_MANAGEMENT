@@ -225,6 +225,8 @@ if (isset($_GET['export'])) {
 
     $filename = preg_replace('/[^a-zA-Z0-9\-]/', '_', $form['title']) . "_responses_" . date('Ymd_His');
 
+    log_admin_activity($pdo, $admin_username, 'campaign_responses_exported', "Exported " . count($export_subs) . " campaign response(s) for form #{$form_id} '{$form['title']}' ({$export_type} format, scope: {$export_scope})");
+
     if ($export_type === 'csv') {
         header('Content-Type: text/csv; charset=utf-8');
         header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
@@ -304,6 +306,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'bulk_
                 $stmt = $pdo->prepare("UPDATE campaign_form_submissions SET is_deleted = 1, deleted_at = NOW() WHERE id IN ($in) AND form_id = ?");
                 $stmt->execute($params_del);
                 $bulk_message = "Selected submissions archived successfully.";
+
+                log_admin_activity($pdo, $admin_username, 'campaign_responses_bulk_deleted', "Archived " . count($ids) . " submission(s) for form #{$form_id} '{$form['title']}'");
             } catch (Exception $e) {
                 $bulk_error = "Delete failed: " . $e->getMessage();
             }
@@ -322,6 +326,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
                 $stmt = $pdo->prepare("UPDATE campaign_form_submissions SET is_deleted = 1, deleted_at = NOW() WHERE id = ? AND form_id = ?");
                 $stmt->execute([$sub_id, $form_id]);
                 $bulk_message = "Submission archived successfully.";
+
+                log_admin_activity($pdo, $admin_username, 'campaign_response_deleted', "Archived submission #{$sub_id} for form #{$form_id} '{$form['title']}'");
             } catch (Exception $e) {
                 $bulk_error = "Delete failed: " . $e->getMessage();
             }
