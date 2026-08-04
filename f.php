@@ -677,6 +677,9 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
             --text-muted: #94a3b8;
             --input-bg: rgba(15, 10, 3, 0.6);
             --input-border: rgba(232, 152, 12, 0.2);
+            --input-focus-bg: rgba(26, 17, 5, 0.85);
+            --choice-hover-bg: rgba(232, 152, 12, 0.05);
+            --choice-selected-bg: rgba(232, 152, 12, 0.12);
         }
 
         /* Sunset theme */
@@ -688,12 +691,15 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
             --card-border: rgba(249, 115, 22, 0.15);
             --input-bg: rgba(17, 6, 2, 0.6);
             --input-border: rgba(249, 115, 22, 0.2);
+            --input-focus-bg: rgba(28, 11, 3, 0.85);
+            --choice-hover-bg: rgba(249, 115, 22, 0.05);
+            --choice-selected-bg: rgba(249, 115, 22, 0.12);
         }
 
         /* Minimal clean theme (light) */
-        .theme-minimal {
-            --primary: #1e293b;
-            --primary-dark: #0f172a;
+        .theme-minimal, .theme-light {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
             --bg-color: #f8fafc;
             --card-bg: #ffffff;
             --card-border: #e2e8f0;
@@ -701,6 +707,9 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
             --text-muted: #64748b;
             --input-bg: #f1f5f9;
             --input-border: #cbd5e1;
+            --input-focus-bg: #ffffff;
+            --choice-hover-bg: rgba(37, 99, 235, 0.06);
+            --choice-selected-bg: rgba(37, 99, 235, 0.12);
         }
 
         /* Glassmorphism theme */
@@ -714,6 +723,9 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
             --text-muted: #cbd5e1;
             --input-bg: rgba(255, 255, 255, 0.05);
             --input-border: rgba(255, 255, 255, 0.1);
+            --input-focus-bg: rgba(255, 255, 255, 0.15);
+            --choice-hover-bg: rgba(250, 204, 21, 0.08);
+            --choice-selected-bg: rgba(250, 204, 21, 0.18);
         }
 
         * {
@@ -873,7 +885,14 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
             outline: none;
             border-color: var(--primary);
             box-shadow: 0 0 0 4px rgba(232, 152, 12, 0.15);
-            background: rgba(26, 17, 5, 0.8);
+            background: var(--input-focus-bg, var(--input-bg));
+            color: var(--text-color);
+        }
+
+        select.input-control option {
+            background-color: var(--card-bg, #ffffff);
+            color: var(--text-color, #1e293b);
+            padding: 8px 12px;
         }
 
         /* Buttons */
@@ -1040,7 +1059,13 @@ function dispatch_integrations($pdo, $form, $submission_id, $answers, $responden
 
         .choice-option:hover {
             border-color: var(--primary);
-            background: rgba(232, 152, 12, 0.05);
+            background: var(--choice-hover-bg, rgba(232, 152, 12, 0.05));
+        }
+
+        .choice-option:has(input:checked) {
+            border-color: var(--primary);
+            background: var(--choice-selected-bg, rgba(232, 152, 12, 0.12));
+            box-shadow: 0 0 0 1px var(--primary);
         }
 
         .choice-option input[type="radio"],
