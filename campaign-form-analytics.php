@@ -142,11 +142,47 @@ try {
         ];
     }
 
+    // 6. Location Geolocation Points & Region Breakdown
+    $stmt = $pdo->prepare("
+        SELECT id, respondent_identifier, latitude, longitude, submitted_at 
+        FROM campaign_form_submissions 
+        WHERE form_id = ? AND is_deleted = 0 AND latitude IS NOT NULL AND longitude IS NOT NULL AND latitude != '' AND longitude != ''
+        AND DATE(submitted_at) BETWEEN ? AND ?
+    ");
+    $stmt->execute([$form_id, $start_date, $end_date]);
+    $geo_points = $stmt->fetchAll();
+
+    // Fetch location field answers (from location field types or pincode/place/district fields)
+    $stmt = $pdo->prepare("
+        SELECT a.answer_text, f.label, f.type 
+        FROM campaign_form_answers a
+        JOIN campaign_form_submissions s ON a.submission_id = s.id
+        JOIN campaign_form_fields f ON a.field_id = f.id
+        WHERE f.form_id = ? AND s.is_deleted = 0 AND (f.type = 'location' OR f.label LIKE '%pincode%' OR f.label LIKE '%district%' OR f.label LIKE '%state%' OR f.label LIKE '%place%' OR f.label LIKE '%city%')
+        AND DATE(s.submitted_at) BETWEEN ? AND ?
+    ");
+    $stmt->execute([$form_id, $start_date, $end_date]);
+    $loc_answers = $stmt->fetchAll();
+
+    $location_counts = [];
+    foreach ($loc_answers as $la) {
+        $txt = trim($la['answer_text']);
+        if (!empty($txt) && strlen($txt) > 2) {
+            $location_counts[$txt] = ($location_counts[$txt] ?? 0) + 1;
+        }
+    }
+    arsort($location_counts);
+    $top_locations = array_slice($location_counts, 0, 10, true);
+
 } catch (Exception $e) {
     $error_msg = "Failed to compile analytics: " . $e->getMessage();
 }
 
-$extra_head = '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>';
+$extra_head = '
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+';
 include 'includes/admin_nav.php';
 ?>
 
@@ -311,6 +347,65 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- ── LOCATION BASED GEOGRAPHIC ANALYSIS & INTERACTIVE MAP ── -->
+<div style="margin-top: 2rem;">
+    <h3 style="font-size:1.1rem; font-weight:800; margin-bottom:0.8rem; border-bottom:1.5px solid var(--border); padding-bottom:6px; display:flex; align-items:center; gap:8px;">
+        <i class="fas fa-map-location-dot" style="color:var(--accent);"></i> Location Based Response Analysis
+    </h3>
+
+    <div class="analytics-grid" style="grid-template-columns: 2fr 1fr;">
+        <!-- Leaflet Interactive Map Card -->
+        <div class="analytics-card" style="padding: 1.2rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem;">
+                <h4 style="font-size:0.95rem; font-weight:700; color:var(--text-main); margin:0;">
+                    <i class="fas fa-earth-americas" style="color:#3b82f6;"></i> Submissions Geolocation Map
+                </h4>
+                <span class="badge blue" style="padding:3px 8px; font-size:0.75rem; font-weight:700;"><?php echo count($geo_points); ?> Mapped Locations</span>
+            </div>
+            <div id="analytics-map" style="height: 340px; width:100%; border-radius: 12px; border: 1px solid var(--border); z-index:1;"></div>
+        </div>
+
+        <!-- Top Regions / Districts Stats -->
+        <div class="analytics-card" style="display:flex; flex-direction:column; justify-content:space-between;">
+            <div>
+                <h4 style="font-size:0.95rem; font-weight:700; color:var(--text-main); margin-bottom:1rem;">
+                    <i class="fas fa-city" style="color:#10b981;"></i> Top Respondent Locations
+                </h4>
+                
+                <?php if (empty($top_locations)): ?>
+                    <div style="text-align:center; padding:2rem 1rem; color:var(--text-muted); font-size:0.85rem;">
+                        <i class="fas fa-location-dot" style="font-size:2rem; margin-bottom:8px; display:block; opacity:0.5;"></i>
+                        No specific location response data found for this date range.
+                    </div>
+                <?php else: ?>
+                    <div style="display:flex; flex-direction:column; gap:8px; max-height:260px; overflow-y:auto; padding-right:4px;">
+                        <?php 
+                        $max_loc = max($top_locations);
+                        foreach ($top_locations as $loc_name => $count): 
+                            $pct = round(($count / max(1, $funnel_subs)) * 100, 1);
+                        ?>
+                            <div style="background:var(--input-bg); padding:8px 12px; border-radius:8px; border:1px solid var(--border);">
+                                <div style="display:flex; justify-content:space-between; font-size:0.82rem; font-weight:700; margin-bottom:3px;">
+                                    <span style="color:var(--text-main); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:170px;"><?php echo htmlspecialchars($loc_name); ?></span>
+                                    <span style="color:var(--accent);"><?php echo $count; ?> (<?php echo $pct; ?>%)</span>
+                                </div>
+                                <div style="background:var(--border); height:6px; border-radius:10px; overflow:hidden;">
+                                    <div style="background:var(--accent); width:<?php echo min(100, round(($count / $max_loc) * 100)); ?>%; height:100%;"></div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <div style="margin-top:1rem; padding:10px; background:rgba(59, 130, 246, 0.08); border-radius:10px; border:1px solid rgba(59, 130, 246, 0.2); font-size:0.78rem; color:var(--text-muted); display:flex; align-items:center; gap:8px;">
+                <i class="fas fa-circle-info" style="color:#3b82f6; font-size:1.1rem;"></i>
+                <span>Map markers show exact GPS location coordinates saved automatically upon submission.</span>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- ── QUESTION-WISE CHOICE ANALYSIS ── -->
 <div style="margin-top:2rem;">
     <h3 style="font-size:1.1rem; font-weight:800; margin-bottom:0.8rem; border-bottom:1.5px solid var(--border); padding-bottom:6px;"><i class="fas fa-chart-pie" style="color:var(--accent);"></i> Question Choice Distribution</h3>
@@ -468,6 +563,40 @@ include 'includes/admin_nav.php';
             }
         });
         <?php endforeach; ?>
+
+        // Initialize Leaflet Map
+        var geoPoints = <?php echo json_encode($geo_points); ?>;
+        var mapEl = document.getElementById('analytics-map');
+        if (mapEl && typeof L !== 'undefined') {
+            var map = L.map('analytics-map').setView([10.8505, 76.2711], 6); // Default Kerala / India
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '© OpenStreetMap'
+            }).addTo(map);
+
+            var bounds = [];
+            if (geoPoints && geoPoints.length > 0) {
+                geoPoints.forEach(function(pt) {
+                    var lat = parseFloat(pt.latitude);
+                    var lng = parseFloat(pt.longitude);
+                    if (!isNaN(lat) && !isNaN(lng)) {
+                        bounds.push([lat, lng]);
+                        var respondentName = pt.respondent_identifier || ('Respondent #' + pt.id);
+                        var popupContent = '<div style="font-family:sans-serif; font-size:12px; padding:4px;">' +
+                            '<strong style="font-size:13px; color:#1e293b;">' + respondentName + '</strong><br>' +
+                            '<span style="color:#64748b;">Submitted: ' + pt.submitted_at + '</span><br>' +
+                            '<span style="color:#64748b; font-family:monospace; font-size:11px;">Lat: ' + lat.toFixed(4) + ', Lng: ' + lng.toFixed(4) + '</span><br>' +
+                            '<a href="https://www.google.com/maps/search/?api=1&query=' + lat + ',' + lng + '" target="_blank" style="color:#2563eb; font-weight:bold; text-decoration:none; display:inline-block; margin-top:6px;"><i class="fas fa-arrow-up-right-from-square"></i> Open Google Maps</a>' +
+                            '</div>';
+                        L.marker([lat, lng]).addTo(map).bindPopup(popupContent);
+                    }
+                });
+                if (bounds.length > 0) {
+                    map.fitBounds(bounds, { padding: [35, 35] });
+                }
+            }
+        }
     });
 
     // Export chart as base64 image download
