@@ -394,6 +394,39 @@ try {
     $kits = [];
 }
 
+// ── Major Status Counts Summary Query ────────────
+$status_counts = [
+    'Total' => 0,
+    'Pending' => 0,
+    'Addr. Review' => 0,
+    'Addr. Verified' => 0,
+    'Packed' => 0,
+    'Sent' => 0,
+    'Returned' => 0,
+    'Delivered' => 0,
+];
+
+try {
+    $stmt_summary = $pdo->query("
+        SELECT COALESCE(pk.status, 'Pending') AS st, COUNT(*) as cnt
+        FROM users u
+        LEFT JOIN student_peppkit pk ON pk.user_id = u.user_id
+        WHERE u.status = 'approved' AND u.peppkit_eligible = 'Eligible' AND (u.student_status <> 'dropout' OR u.student_status IS NULL)
+        GROUP BY COALESCE(pk.status, 'Pending')
+    ");
+    $summary_rows = $stmt_summary->fetchAll();
+    foreach ($summary_rows as $sr) {
+        $st_name = $sr['st'];
+        $st_cnt = (int)$sr['cnt'];
+        $status_counts['Total'] += $st_cnt;
+        if (isset($status_counts[$st_name])) {
+            $status_counts[$st_name] = $st_cnt;
+        }
+    }
+} catch (Exception $e) {
+    error_log("PEPPKIT status summary query error: " . $e->getMessage());
+}
+
 // Helper to format WhatsApp compose links
 function get_peppkit_wa_text($student_name, $status, $address_combined, $tracking_id = '') {
     $msg = '';
@@ -473,7 +506,54 @@ input:checked + .slider {
 input:checked + .slider:before {
   transform: translateX(26px);
 }
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+}
 </style>
+
+<!-- ── MAJOR STATUS COUNT CARDS ── -->
+<div class="stats-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 1.2rem;">
+    <a href="peppkit-report.php" class="stat-card" style="text-decoration:none; background:var(--card-bg); border:1.5px solid <?php echo $status_filter === '' ? 'var(--accent)' : 'var(--border)'; ?>; border-radius:12px; padding:12px 14px; transition:all 0.2s;">
+        <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;"><i class="fas fa-boxes-packing" style="color:var(--accent);"></i> Total Kits</div>
+        <div style="font-size:1.4rem; font-weight:800; color:var(--text-main);"><?php echo number_format($status_counts['Total']); ?></div>
+    </a>
+
+    <a href="peppkit-report.php?status=Pending" class="stat-card" style="text-decoration:none; background:var(--card-bg); border:1.5px solid <?php echo $status_filter === 'Pending' ? '#64748b' : 'var(--border)'; ?>; border-radius:12px; padding:12px 14px; transition:all 0.2s;">
+        <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;"><i class="fas fa-clock" style="color:#64748b;"></i> Pending</div>
+        <div style="font-size:1.4rem; font-weight:800; color:#64748b;"><?php echo number_format($status_counts['Pending']); ?></div>
+    </a>
+
+    <a href="peppkit-report.php?status=Addr.+Review" class="stat-card" style="text-decoration:none; background:var(--card-bg); border:1.5px solid <?php echo $status_filter === 'Addr. Review' ? '#f59e0b' : 'var(--border)'; ?>; border-radius:12px; padding:12px 14px; transition:all 0.2s;">
+        <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;"><i class="fas fa-location-dot" style="color:#f59e0b;"></i> Addr. Review</div>
+        <div style="font-size:1.4rem; font-weight:800; color:#f59e0b;"><?php echo number_format($status_counts['Addr. Review']); ?></div>
+    </a>
+
+    <a href="peppkit-report.php?status=Addr.+Verified" class="stat-card" style="text-decoration:none; background:var(--card-bg); border:1.5px solid <?php echo $status_filter === 'Addr. Verified' ? '#10b981' : 'var(--border)'; ?>; border-radius:12px; padding:12px 14px; transition:all 0.2s;">
+        <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;"><i class="fas fa-circle-check" style="color:#10b981;"></i> Addr. Verified</div>
+        <div style="font-size:1.4rem; font-weight:800; color:#10b981;"><?php echo number_format($status_counts['Addr. Verified']); ?></div>
+    </a>
+
+    <a href="peppkit-report.php?status=Packed" class="stat-card" style="text-decoration:none; background:var(--card-bg); border:1.5px solid <?php echo $status_filter === 'Packed' ? '#8b5cf6' : 'var(--border)'; ?>; border-radius:12px; padding:12px 14px; transition:all 0.2s;">
+        <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;"><i class="fas fa-box" style="color:#8b5cf6;"></i> Packed</div>
+        <div style="font-size:1.4rem; font-weight:800; color:#8b5cf6;"><?php echo number_format($status_counts['Packed']); ?></div>
+    </a>
+
+    <a href="peppkit-report.php?status=Sent" class="stat-card" style="text-decoration:none; background:var(--card-bg); border:1.5px solid <?php echo $status_filter === 'Sent' ? '#3b82f6' : 'var(--border)'; ?>; border-radius:12px; padding:12px 14px; transition:all 0.2s;">
+        <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;"><i class="fas fa-truck-fast" style="color:#3b82f6;"></i> Dispatched</div>
+        <div style="font-size:1.4rem; font-weight:800; color:#3b82f6;"><?php echo number_format($status_counts['Sent']); ?></div>
+    </a>
+
+    <a href="peppkit-report.php?status=Returned" class="stat-card" style="text-decoration:none; background:var(--card-bg); border:1.5px solid <?php echo $status_filter === 'Returned' ? '#ef4444' : 'var(--border)'; ?>; border-radius:12px; padding:12px 14px; transition:all 0.2s;">
+        <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;"><i class="fas fa-rotate-left" style="color:#ef4444;"></i> Returned</div>
+        <div style="font-size:1.4rem; font-weight:800; color:#ef4444;"><?php echo number_format($status_counts['Returned']); ?></div>
+    </a>
+
+    <a href="peppkit-report.php?status=Delivered" class="stat-card" style="text-decoration:none; background:var(--card-bg); border:1.5px solid <?php echo $status_filter === 'Delivered' ? '#16a34a' : 'var(--border)'; ?>; border-radius:12px; padding:12px 14px; transition:all 0.2s;">
+        <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;"><i class="fas fa-house-chimney-check" style="color:#16a34a;"></i> Delivered</div>
+        <div style="font-size:1.4rem; font-weight:800; color:#16a34a;"><?php echo number_format($status_counts['Delivered']); ?></div>
+    </a>
+</div>
 
 <div class="filter-bar" style="margin-bottom:16px;">
     <form method="GET" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; width:100%;">
@@ -507,6 +587,14 @@ input:checked + .slider:before {
 </div>
 
 <div class="panel">
+    <div class="panel-head" style="display:flex; justify-content:space-between; align-items:center; padding:12px 20px; border-bottom:1px solid var(--border);">
+        <h3 style="font-size:1rem; font-weight:800; margin:0; display:flex; align-items:center; gap:8px;">
+            <i class="fas fa-list-check" style="color:var(--accent);"></i> PEPPKIT Shipping List
+        </h3>
+        <span class="badge blue" style="font-weight:700; padding:4px 10px; font-size:0.78rem;">
+            Showing <?php echo count($kits); ?> of <?php echo number_format($status_counts['Total']); ?> eligible students
+        </span>
+    </div>
     <div class="panel-body flush table-wrap">
         <?php if (empty($kits)): ?>
             <div class="empty-state" style="padding:40px;"><i class="fas fa-box-open"></i><p>No eligible PEPPKIT shipments found.</p></div>
@@ -514,6 +602,7 @@ input:checked + .slider:before {
         <table class="data-table">
             <thead>
                 <tr>
+                    <th style="width:45px; text-align:center;">Sl. No.</th>
                     <th>Student Details</th>
                     <th>Course</th>
                     <th>Combined Address</th>
@@ -523,7 +612,9 @@ input:checked + .slider:before {
                 </tr>
             </thead>
             <tbody>
-                <?php foreach ($kits as $k):
+                <?php 
+                $sl = 1;
+                foreach ($kits as $k):
                     $combined = $k['postal_address'] . ', ' . $k['place_post_office'] . ', ' . $k['district'] . ', ' . $k['state'];
                     $combined_display = $combined;
                     $phone = preg_replace('/\D/', '', $k['whatsapp_country_code'] . $k['whatsapp_number']);
@@ -538,6 +629,9 @@ input:checked + .slider:before {
                     elseif ($k['item_status'] === 'Delivered') $badge_class = 'green';
                 ?>
                 <tr id="row-<?php echo htmlspecialchars($k['user_id']); ?>">
+                    <td style="text-align:center; font-weight:700; color:var(--text-muted); font-size:0.85rem;">
+                        <?php echo $sl++; ?>
+                    </td>
                     <td>
                         <div class="cell-main">
                             <a href="student-details.php?user_id=<?php echo urlencode($k['user_id']); ?>" style="text-decoration:none; color:inherit; font-weight:700;">
