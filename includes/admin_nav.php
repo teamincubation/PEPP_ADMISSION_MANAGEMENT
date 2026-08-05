@@ -257,7 +257,7 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
         </div>
         <?php endif; ?>
 
-        <?php if (can_access('courses') || can_access('faculties')): ?>
+        <?php if (can_access('courses') || can_access('faculties') || can_access('studyplans')): ?>
         <div class="nav-section">
             <div class="nav-section-label">Academics</div>
             <?php if (can_access('courses')): ?>
@@ -268,6 +268,11 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
             <?php if (can_access('faculties')): ?>
             <a class="nav-item <?php echo nav_active('faculties', $active_page); ?>" href="faculties.php">
                 <i class="fas fa-chalkboard-user"></i> Faculties
+            </a>
+            <?php endif; ?>
+            <?php if (can_access('studyplans')): ?>
+            <a class="nav-item <?php echo nav_active('studyplans', $active_page); ?>" href="studyplans.php">
+                <i class="fas fa-calendar-days"></i> Study Plans
             </a>
             <?php endif; ?>
         </div>

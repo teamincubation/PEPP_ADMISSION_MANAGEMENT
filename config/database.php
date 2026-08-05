@@ -253,6 +253,109 @@ try {
         try {
             $pdo->exec("ALTER TABLE users MODIFY COLUMN student_status ENUM('active','inactive','suspended','completed','dropout') DEFAULT 'active'");
         } catch (Exception $alterEx) {}
+
+        // Study Plans Module Tables Self-Healing
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `study_plans` (
+              `id` INT AUTO_INCREMENT PRIMARY KEY,
+              `title` VARCHAR(255) NOT NULL,
+              `academic_year` VARCHAR(50) NOT NULL,
+              `course_id` INT NULL,
+              `description` TEXT NULL,
+              `cover_image` VARCHAR(255) NULL,
+              `theme` VARCHAR(50) NOT NULL DEFAULT 'default',
+              `layout` VARCHAR(50) NOT NULL DEFAULT 'timeline',
+              `start_date` DATE NOT NULL,
+              `end_date` DATE NOT NULL,
+              `status` ENUM('draft','published','scheduled','archived') NOT NULL DEFAULT 'draft',
+              `publish_start` DATETIME NULL,
+              `publish_end` DATETIME NULL,
+              `version` INT NOT NULL DEFAULT 1,
+              `is_template` TINYINT(1) NOT NULL DEFAULT 0,
+              `custom_settings` LONGTEXT NULL,
+              `created_by` VARCHAR(100) NOT NULL,
+              `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `study_plan_activities` (
+              `id` INT AUTO_INCREMENT PRIMARY KEY,
+              `study_plan_id` INT NOT NULL,
+              `activity_date` DATE NOT NULL,
+              `day_number` INT NOT NULL,
+              `sort_order` INT NOT NULL DEFAULT 0,
+              `chapter` VARCHAR(255) NULL,
+              `subject` VARCHAR(255) NULL,
+              `topic` VARCHAR(255) NULL,
+              `subtopic` VARCHAR(255) NULL,
+              `activity_title` VARCHAR(255) NOT NULL,
+              `activity_description` TEXT NULL,
+              `activity_type` VARCHAR(100) NOT NULL,
+              `faculty` VARCHAR(255) NULL,
+              `mentor` VARCHAR(255) NULL,
+              `estimated_duration` INT NULL,
+              `priority` ENUM('low','medium','high') NOT NULL DEFAULT 'medium',
+              `difficulty_level` ENUM('easy','medium','hard') NOT NULL DEFAULT 'medium',
+              `resource_links` TEXT NULL,
+              `custom_activity_badge` VARCHAR(100) NULL,
+              `custom_activity_color` VARCHAR(50) NULL,
+              `custom_activity_icon` VARCHAR(100) NULL,
+              KEY `idx_spa_plan` (`study_plan_id`),
+              KEY `idx_spa_date` (`activity_date`),
+              CONSTRAINT `fk_spa_plan` FOREIGN KEY (`study_plan_id`) REFERENCES `study_plans` (`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `study_plan_assignments` (
+              `id` INT AUTO_INCREMENT PRIMARY KEY,
+              `study_plan_id` INT NOT NULL,
+              `assignment_type` ENUM('all','course','batch','student') NOT NULL,
+              `assigned_value` VARCHAR(255) NOT NULL,
+              `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              KEY `idx_spa_assign_plan` (`study_plan_id`),
+              CONSTRAINT `fk_spa_assign_plan` FOREIGN KEY (`study_plan_id`) REFERENCES `study_plans` (`id`) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `study_plan_custom_types` (
+              `id` INT AUTO_INCREMENT PRIMARY KEY,
+              `name` VARCHAR(100) NOT NULL UNIQUE,
+              `icon` VARCHAR(100) NOT NULL,
+              `color` VARCHAR(50) NOT NULL,
+              `badge` VARCHAR(100) NULL,
+              `created_by` VARCHAR(100) NOT NULL,
+              `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `study_plan_audit_logs` (
+              `id` INT AUTO_INCREMENT PRIMARY KEY,
+              `study_plan_id` INT NULL,
+              `admin_username` VARCHAR(100) NOT NULL,
+              `action` VARCHAR(100) NOT NULL,
+              `details` TEXT NULL,
+              `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `study_plan_analytics` (
+              `id` INT AUTO_INCREMENT PRIMARY KEY,
+              `study_plan_id` INT NOT NULL,
+              `student_email` VARCHAR(255) NULL,
+              `action_type` ENUM('view','download','complete_activity') NOT NULL,
+              `activity_id` INT NULL,
+              `ip_address` VARCHAR(45) NOT NULL,
+              `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              KEY `idx_sp_anal_plan` (`study_plan_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
     } catch (Exception $dbEx) {
         error_log("PEPP self-healing DB check failed: " . $dbEx->getMessage());
     }

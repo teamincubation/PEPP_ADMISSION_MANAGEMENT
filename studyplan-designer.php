@@ -1,0 +1,836 @@
+<?php
+require_once 'includes/auth.php';
+require_permission('studyplans');
+require_once 'config/database.php';
+
+$plan_id = (int)($_GET['id'] ?? 0);
+$plan = null;
+$assigned = [];
+$activities_json = '[]';
+
+if ($plan_id > 0) {
+    // Fetch existing plan
+    $stmt = $pdo->prepare("SELECT * FROM study_plans WHERE id = ?");
+    $stmt->execute([$plan_id]);
+    $plan = $stmt->fetch();
+    if (!$plan) {
+        die("<h3>Study plan not found</h3>");
+    }
+    
+    // Fetch assignments
+    $stmt_assign = $pdo->prepare("SELECT * FROM study_plan_assignments WHERE study_plan_id = ?");
+    $stmt_assign->execute([$plan_id]);
+    $assigned = $stmt_assign->fetchAll();
+    
+    // Fetch activities
+    $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? ORDER BY activity_date ASC, sort_order ASC");
+    $stmt_act->execute([$plan_id]);
+    $activities = $stmt_act->fetchAll();
+    $activities_json = json_encode($activities);
+}
+
+// Fetch active courses
+$courses = $pdo->query("SELECT * FROM pepp_courses WHERE status = 'active' ORDER BY course_name ASC")->fetchAll();
+// Fetch active academic years
+$years = $pdo->query("SELECT year FROM academic_years WHERE status = 'active' ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN);
+
+// Predefined activity types
+$default_types = [
+    'Read Material' => ['icon' => 'fa-book-open', 'color' => '#3b82f6', 'badge' => 'Read'],
+    'Watch Live Session' => ['icon' => 'fa-video', 'color' => '#ef4444', 'badge' => 'Live'],
+    'Watch Recorded Session' => ['icon' => 'fa-play', 'color' => '#8b5cf6', 'badge' => 'Recorded'],
+    'Attend Mock Test' => ['icon' => 'fa-file-signature', 'color' => '#f59e0b', 'badge' => 'Mock'],
+    'Attend Mega Test' => ['icon' => 'fa-trophy', 'color' => '#ec4899', 'badge' => 'Mega'],
+    'Attend Weekly Test' => ['icon' => 'fa-calendar-check', 'color' => '#06b6d4', 'badge' => 'Weekly'],
+    'Practice Test' => ['icon' => 'fa-dumbbell', 'color' => '#10b981', 'badge' => 'Practice'],
+    'Previous Year Questions' => ['icon' => 'fa-history', 'color' => '#64748b', 'badge' => 'PYQ'],
+    'Daily Quiz' => ['icon' => 'fa-circle-question', 'color' => '#f43f5e', 'badge' => 'Quiz'],
+    'Live WhatsApp Quiz' => ['icon' => 'fa-whatsapp', 'color' => '#22c55e', 'badge' => 'WA Quiz'],
+    'Group Discussion' => ['icon' => 'fa-comments', 'color' => '#0ea5e9', 'badge' => 'GD'],
+    'Meet the Scholar Session' => ['icon' => 'fa-graduation-cap', 'color' => '#d946ef', 'badge' => 'Scholar'],
+    'Offline Session' => ['icon' => 'fa-building-columns', 'color' => '#84cc16', 'badge' => 'Offline'],
+    'Assignment' => ['icon' => 'fa-file-pen', 'color' => '#f97316', 'badge' => 'Assignment'],
+    'Revision' => ['icon' => 'fa-rotate', 'color' => '#059669', 'badge' => 'Revision'],
+    'Self-Assessment' => ['icon' => 'fa-clipboard-user', 'color' => '#7c3aed', 'badge' => 'Assessment'],
+    'Doubt Clearing Session' => ['icon' => 'fa-lightbulb', 'color' => '#eab308', 'badge' => 'Doubt'],
+    'Reading Assignment' => ['icon' => 'fa-book', 'color' => '#0891b2', 'badge' => 'Reading'],
+    'Video Lecture' => ['icon' => 'fa-circle-play', 'color' => '#b91c1c', 'badge' => 'Lecture'],
+    'PDF Material' => ['icon' => 'fa-file-pdf', 'color' => '#dc2626', 'badge' => 'PDF'],
+    'Workbook Activity' => ['icon' => 'fa-folder-open', 'color' => '#475569', 'badge' => 'Workbook']
+];
+
+// Fetch custom activity types
+$custom_types = $pdo->query("SELECT * FROM study_plan_custom_types ORDER BY name ASC")->fetchAll();
+$all_types = $default_types;
+foreach ($custom_types as $ct) {
+    $all_types[$ct['name']] = ['icon' => $ct['icon'], 'color' => $ct['color'], 'badge' => $ct['badge'] ?: $ct['name']];
+}
+
+$page_title = $plan_id > 0 ? "Visual Study Plan Designer" : "Create Study Plan";
+$page_sub = "Visually design, schedule, theme, and assign study plans with real-time preview";
+$active_page = 'studyplans';
+
+$extra_head = '
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<style>
+    .designer-container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.5rem;
+        height: calc(100vh - 160px);
+        margin-top: 1rem;
+    }
+    .designer-panel {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+    .panel-header-sticky {
+        padding: 1.2rem;
+        border-bottom: 1px solid var(--border);
+        background: var(--card-bg);
+        z-index: 10;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .panel-body-scrollable {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1.2rem;
+    }
+    .designer-tabs {
+        display: flex;
+        gap: 8px;
+        border-bottom: 1.5px solid var(--border);
+        margin-bottom: 1.2rem;
+    }
+    .designer-tab {
+        padding: 8px 16px;
+        font-weight: 700;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-bottom: 3px solid transparent;
+        transition: all 0.2s;
+        font-size: 0.88rem;
+    }
+    .designer-tab.active {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+    }
+    .day-container {
+        background: var(--input-bg);
+        border: 1.5px solid var(--border);
+        border-radius: 12px;
+        margin-bottom: 1rem;
+        overflow: hidden;
+    }
+    .day-header {
+        background: var(--border);
+        padding: 10px 14px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-weight: 700;
+        color: var(--text-main);
+    }
+    .activities-list {
+        min-height: 50px;
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .activity-card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 12px;
+        cursor: grab;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        transition: all 0.2s;
+    }
+    .activity-card:hover {
+        border-color: var(--accent);
+        box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    }
+    /* Layout styling for Live Preview */
+    .preview-phone-frame {
+        width: 100%;
+        height: 100%;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: #f8fafc;
+        overflow-y: auto;
+        padding: 1rem;
+    }
+    .theme-cyber {
+        background: #090d16;
+        color: #00ffcc;
+        font-family: monospace;
+    }
+    .theme-cyber .preview-card {
+        background: #111927;
+        border: 1.5px solid #00ffcc;
+    }
+    .theme-sunset {
+        background: linear-gradient(135deg, #f59e0b, #ec4899);
+        color: #fff;
+    }
+    .theme-sunset .preview-card {
+        background: rgba(255, 255, 255, 0.15);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    @media (max-width: 1024px) {
+        .designer-container {
+            grid-template-columns: 1fr;
+            height: auto;
+        }
+    }
+</style>
+';
+
+include 'includes/admin_nav.php';
+?>
+
+<div class="designer-container">
+    <!-- Left Configuration & Designer Tools Panel -->
+    <div class="designer-panel">
+        <div class="panel-header-sticky">
+            <h3 style="font-weight: 800; font-size: 1rem; display: flex; align-items: center; gap: 8px;">
+                <i class="fas fa-screwdriver-wrench" style="color:var(--accent);"></i> Designer Controls
+            </h3>
+            <div style="display:flex; gap:8px;">
+                <button type="button" class="btn btn-outline btn-sm" onclick="triggerImport()"><i class="fas fa-file-import"></i> Bulk Import</button>
+                <button type="button" class="btn btn-primary btn-sm" onclick="saveStudyPlan()"><i class="fas fa-floppy-disk"></i> Save Plan</button>
+            </div>
+        </div>
+
+        <div class="panel-body-scrollable">
+            <div class="designer-tabs">
+                <div class="designer-tab active" onclick="switchDesignerTab('settings')">Branding &amp; Settings</div>
+                <div class="designer-tab" onclick="switchDesignerTab('activities')">Daily Activities</div>
+                <div class="designer-tab" onclick="switchDesignerTab('templates')">Save Template</div>
+            </div>
+
+            <!-- Tab Content: Settings -->
+            <div id="tab-settings" class="designer-tab-content">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div class="field full">
+                        <label>Study Plan Title <span class="req">*</span></label>
+                        <input type="text" id="plan-title" value="<?php echo htmlspecialchars($plan['title'] ?? 'Psychology Exam Crack Plan'); ?>" oninput="updateLivePreview()">
+                    </div>
+                    <div class="field">
+                        <label>Academic Year <span class="req">*</span></label>
+                        <select id="plan-year" onchange="updateLivePreview()">
+                            <option value="">- Choose Year -</option>
+                            <?php foreach ($years as $y): ?>
+                                <option value="<?php echo $y; ?>" <?php echo ($plan['academic_year'] ?? '') === $y ? 'selected' : ''; ?>><?php echo $y; ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label>Target PEPP Course</label>
+                        <select id="plan-course" onchange="updateLivePreview()">
+                            <option value="">- Optional (Choose Course) -</option>
+                            <?php foreach ($courses as $c): ?>
+                                <option value="<?php echo $c['id']; ?>" data-name="<?php echo htmlspecialchars($c['course_name']); ?>" <?php echo ($plan['course_id'] ?? '') == $c['id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($c['course_name']); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label>Start Date <span class="req">*</span></label>
+                        <input type="date" id="plan-start" value="<?php echo $plan['start_date'] ?? date('Y-m-d'); ?>" onchange="regenerateDatesPreview()">
+                    </div>
+                    <div class="field">
+                        <label>End Date <span class="req">*</span></label>
+                        <input type="date" id="plan-end" value="<?php echo $plan['end_date'] ?? date('Y-m-d', strtotime('+7 days')); ?>" onchange="regenerateDatesPreview()">
+                    </div>
+                    <div class="field">
+                        <label>Theme Style</label>
+                        <select id="plan-theme" onchange="updateLivePreview()">
+                            <option value="default">PEPP Amber Style</option>
+                            <option value="cyber">Cyberpunk Emerald</option>
+                            <option value="sunset">Sunset Orange Gradient</option>
+                            <option value="minimal">Crisp Minimal Gray</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label>Visual Layout</label>
+                        <select id="plan-layout" onchange="updateLivePreview()">
+                            <option value="timeline">Timeline View</option>
+                            <option value="card">Card View Grid</option>
+                            <option value="journey">PEPP Monthly Journey Layout</option>
+                            <option value="magazine">Magazine Style Layout</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="field full">
+                    <label>Description (Optional)</label>
+                    <textarea id="plan-desc" rows="3" oninput="updateLivePreview()"><?php echo htmlspecialchars($plan['description'] ?? ''); ?></textarea>
+                </div>
+
+                <div class="field full">
+                    <label>Branding Quote / Motivational Quote</label>
+                    <input type="text" id="plan-quote" placeholder="e.g. Success is the sum of small efforts repeated day in and day out!" value="Commit to your dreams and execute every day!" oninput="updateLivePreview()">
+                </div>
+            </div>
+
+            <!-- Tab Content: Activities Builder -->
+            <div id="tab-activities" class="designer-tab-content" style="display:none;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                    <div style="font-size:0.82rem; font-weight:700; color:var(--text-muted);">Schedules by Date</div>
+                    <button class="btn btn-sm btn-secondary" onclick="addCustomActivityField()"><i class="fas fa-plus"></i> Add Activity</button>
+                </div>
+                <div id="activities-dates-wrapper">
+                    <!-- Loaded dynamically via JS -->
+                </div>
+            </div>
+
+            <!-- Tab Content: Templates Save -->
+            <div id="tab-templates" class="designer-tab-content" style="display:none;">
+                <div style="background:rgba(232,152,12,0.06); padding:1rem; border-radius:12px; border:1px dashed var(--border); margin-bottom:1.2rem;">
+                    <p style="font-size:0.85rem; line-height:1.5; color:var(--text-muted); margin:0;">
+                        Save this study plan configuration as a reusable template. You can quickly select templates while designing study plans for other courses later.
+                    </p>
+                </div>
+                <div class="field full">
+                    <label>Is Reusable Template?</label>
+                    <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input type="checkbox" id="plan-template" value="1" <?php echo ($plan['is_template'] ?? 0) ? 'checked' : ''; ?>>
+                        <span style="font-size:0.85rem; font-weight:700; color:var(--text-main);">Flag as a reusable template</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Live Interactive Preview Panel -->
+    <div class="designer-panel">
+        <div class="panel-header-sticky">
+            <h3 style="font-weight: 800; font-size: 1rem; display: flex; align-items: center; gap: 8px;">
+                <i class="fas fa-circle-play" style="color:#22c55e;"></i> Real-Time Live Preview
+            </h3>
+            <span class="badge green" style="font-weight:700; font-size:0.75rem;">Interactive Mock</span>
+        </div>
+
+        <div class="panel-body-scrollable" style="background:#f1f5f9;">
+            <div id="live-preview-wrapper" class="preview-phone-frame">
+                <!-- Live rendering of themes and layouts via Javascript -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Excel/CSV Bulk Import -->
+<div class="modal-backdrop" id="import-modal">
+    <div class="modal" style="max-width:540px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-file-csv" style="color:var(--accent);"></i> Bulk Import Activities</h3>
+            <button class="modal-close" onclick="closeModal('import-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:0.85rem; color:var(--text-muted); line-height:1.5; margin-bottom:1rem;">
+                Select a CSV file containing study activities. We will auto-map columns such as Date, Topic, Title, and Faculty.
+            </p>
+            <div class="field full">
+                <label>Upload CSV File</label>
+                <input type="file" id="import-file" accept=".csv" class="form-input">
+            </div>
+        </div>
+        <div class="modal-foot">
+            <button type="button" class="btn btn-outline" onclick="closeModal('import-modal')">Cancel</button>
+            <button type="button" class="btn btn-primary" onclick="processBulkImport()"><i class="fas fa-upload"></i> Process Import</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Add/Edit Activity -->
+<div class="modal-backdrop" id="activity-modal">
+    <div class="modal" style="max-width:480px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-calendar-plus" style="color:var(--accent);"></i> Study Activity Details</h3>
+            <button class="modal-close" onclick="closeModal('activity-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div class="modal-body" style="display:grid; grid-template-columns:1fr; gap:12px;">
+            <input type="hidden" id="act-edit-index">
+            <input type="hidden" id="act-edit-date">
+            
+            <div class="field">
+                <label>Activity Title <span class="req">*</span></label>
+                <input type="text" id="act-title" value="Read Material">
+            </div>
+
+            <div class="field">
+                <label>Activity Type</label>
+                <select id="act-type">
+                    <?php foreach ($all_types as $t_name => $t_conf): ?>
+                        <option value="<?php echo htmlspecialchars($t_name); ?>"><?php echo htmlspecialchars($t_name); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                <div class="field">
+                    <label>Chapter</label>
+                    <input type="text" id="act-chapter" placeholder="e.g. Cognitive Psychology">
+                </div>
+                <div class="field">
+                    <label>Subject</label>
+                    <input type="text" id="act-subject" placeholder="e.g. Psychology">
+                </div>
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                <div class="field">
+                    <label>Topic</label>
+                    <input type="text" id="act-topic" placeholder="e.g. Memory Models">
+                </div>
+                <div class="field">
+                    <label>Subtopic</label>
+                    <input type="text" id="act-subtopic" placeholder="e.g. Atkinson-Shiffrin">
+                </div>
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                <div class="field">
+                    <label>Faculty</label>
+                    <input type="text" id="act-faculty" placeholder="e.g. Dr. Anand">
+                </div>
+                <div class="field">
+                    <label>Mentor</label>
+                    <input type="text" id="act-mentor" placeholder="e.g. Prof. Priya">
+                </div>
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                <div class="field">
+                    <label>Duration (mins)</label>
+                    <input type="number" id="act-duration" value="60">
+                </div>
+                <div class="field">
+                    <label>Difficulty</label>
+                    <select id="act-difficulty">
+                        <option value="easy">Easy</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="hard">Hard</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="field">
+                <label>Resource Links / URLs</label>
+                <input type="text" id="act-resources" placeholder="e.g. https://pepplearning.in/materials/pdf1">
+            </div>
+        </div>
+        <div class="modal-foot">
+            <button type="button" class="btn btn-outline" onclick="closeModal('activity-modal')">Cancel</button>
+            <button type="button" class="btn btn-primary" onclick="saveActivityRow()"><i class="fas fa-check"></i> Apply Activity</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    var studyPlanId = <?php echo $plan_id; ?>;
+    var activities = <?php echo $activities_json; ?>;
+    var predefinedTypes = <?php echo json_encode($all_types); ?>;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        if (studyPlanId > 0) {
+            // Pre-select theme/layout
+            document.getElementById('plan-theme').value = "<?php echo $plan['theme'] ?? 'default'; ?>";
+            document.getElementById('plan-layout').value = "<?php echo $plan['layout'] ?? 'timeline'; ?>";
+        }
+        
+        regenerateDatesPreview();
+    });
+
+    function switchDesignerTab(tab) {
+        document.querySelectorAll('.designer-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.designer-tab-content').forEach(c => c.style.display = 'none');
+        
+        event.target.classList.add('active');
+        document.getElementById('tab-' + tab).style.display = 'block';
+    }
+
+    function regenerateDatesPreview() {
+        var startInput = document.getElementById('plan-start').value;
+        var endInput = document.getElementById('plan-end').value;
+        
+        if (!startInput || !endInput) return;
+        
+        var start = new Date(startInput);
+        var end = new Date(endInput);
+        var wrapper = document.getElementById('activities-dates-wrapper');
+        wrapper.innerHTML = '';
+        
+        var curr = new Date(start);
+        var dayNum = 1;
+        
+        while (curr <= end) {
+            var dateStr = curr.toISOString().split('T')[0];
+            var dayLabel = "Day " + dayNum + " (" + curr.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }) + ")";
+            
+            var dayContainer = document.createElement('div');
+            dayContainer.className = 'day-container';
+            dayContainer.id = 'day-group-' + dateStr;
+            
+            var dayHeader = document.createElement('div');
+            dayHeader.className = 'day-header';
+            dayHeader.innerHTML = '<span><i class="fas fa-calendar-day" style="color:var(--accent);"></i> ' + dayLabel + '</span>' +
+                                  '<button class="btn btn-sm btn-secondary" style="padding:2px 8px; font-size:0.72rem;" onclick="addActivityToDate(\'' + dateStr + '\', ' + dayNum + ')"><i class="fas fa-plus"></i> Add Item</button>';
+            
+            var activitiesList = document.createElement('div');
+            activitiesList.className = 'activities-list';
+            activitiesList.id = 'list-' + dateStr;
+            activitiesList.setAttribute('data-date', dateStr);
+            activitiesList.setAttribute('data-day', dayNum);
+            
+            dayContainer.appendChild(dayHeader);
+            dayContainer.appendChild(activitiesList);
+            wrapper.appendChild(dayContainer);
+            
+            // Initialize SortableJS drag and drop
+            new Sortable(activitiesList, {
+                group: 'activities-shared',
+                animation: 150,
+                onEnd: function (evt) {
+                    reindexSortOrder();
+                }
+            });
+            
+            curr.setDate(curr.getDate() + 1);
+            dayNum++;
+        }
+        
+        // Populate existing items
+        renderActivitiesList();
+        updateLivePreview();
+    }
+
+    function renderActivitiesList() {
+        // Clear all days
+        document.querySelectorAll('.activities-list').forEach(l => l.innerHTML = '');
+        
+        activities.forEach(function(act, index) {
+            var targetList = document.getElementById('list-' + act.activity_date);
+            if (targetList) {
+                var card = document.createElement('div');
+                card.className = 'activity-card';
+                card.setAttribute('data-index', index);
+                
+                var typeConf = predefinedTypes[act.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
+                
+                card.innerHTML = '<div style="display:flex; align-items:center; gap:8px;">' +
+                                    '<i class="fas ' + typeConf.icon + '" style="color:' + typeConf.color + '; font-size:1.1rem; width:20px;"></i>' +
+                                    '<div>' +
+                                        '<div style="font-size:0.85rem; font-weight:700; color:var(--text-main);">' + (act.activity_title || 'Self Study') + '</div>' +
+                                        '<div style="font-size:0.75rem; color:var(--text-muted);">' + (act.subject || 'Academics') + ' · ' + (act.chapter || 'Intro') + '</div>' +
+                                    '</div>' +
+                                 '</div>' +
+                                 '<div style="display:flex; gap:6px;">' +
+                                    '<button class="btn btn-sm btn-outline" style="padding:2px 6px;" onclick="editActivityRow(' + index + ')"><i class="fas fa-pencil"></i></button>' +
+                                    '<button class="btn btn-sm btn-soft-red" style="padding:2px 6px;" onclick="deleteActivityRow(' + index + ')"><i class="fas fa-trash"></i></button>' +
+                                 '</div>';
+                targetList.appendChild(card);
+            }
+        });
+    }
+
+    function reindexSortOrder() {
+        var updatedActivities = [];
+        document.querySelectorAll('.activities-list').forEach(function(list) {
+            var dateStr = list.getAttribute('data-date');
+            var dayNum = parseInt(list.getAttribute('data-day'));
+            
+            var cards = list.querySelectorAll('.activity-card');
+            cards.forEach(function(card, order) {
+                var oldIndex = parseInt(card.getAttribute('data-index'));
+                var act = activities[oldIndex];
+                
+                act.activity_date = dateStr;
+                act.day_number = dayNum;
+                act.sort_order = order;
+                updatedActivities.push(act);
+            });
+        });
+        
+        activities = updatedActivities;
+        renderActivitiesList();
+        updateLivePreview();
+    }
+
+    function addActivityToDate(dateStr, dayNum) {
+        document.getElementById('act-edit-index').value = "-1";
+        document.getElementById('act-edit-date').value = dateStr;
+        
+        document.getElementById('act-title').value = 'Read Study Material';
+        document.getElementById('act-chapter').value = '';
+        document.getElementById('act-subject').value = '';
+        document.getElementById('act-topic').value = '';
+        document.getElementById('act-subtopic').value = '';
+        document.getElementById('act-faculty').value = '';
+        document.getElementById('act-mentor').value = '';
+        document.getElementById('act-duration').value = '60';
+        document.getElementById('act-difficulty').value = 'medium';
+        document.getElementById('act-resources').value = '';
+        
+        openModal('activity-modal');
+    }
+
+    function editActivityRow(index) {
+        var act = activities[index];
+        document.getElementById('act-edit-index').value = index;
+        document.getElementById('act-edit-date').value = act.activity_date;
+        
+        document.getElementById('act-title').value = act.activity_title;
+        document.getElementById('act-type').value = act.activity_type;
+        document.getElementById('act-chapter').value = act.chapter || '';
+        document.getElementById('act-subject').value = act.subject || '';
+        document.getElementById('act-topic').value = act.topic || '';
+        document.getElementById('act-subtopic').value = act.subtopic || '';
+        document.getElementById('act-faculty').value = act.faculty || '';
+        document.getElementById('act-mentor').value = act.mentor || '';
+        document.getElementById('act-duration').value = act.estimated_duration || '60';
+        document.getElementById('act-difficulty').value = act.difficulty_level || 'medium';
+        document.getElementById('act-resources').value = act.resource_links || '';
+        
+        openModal('activity-modal');
+    }
+
+    function saveActivityRow() {
+        var index = parseInt(document.getElementById('act-edit-index').value);
+        var dateStr = document.getElementById('act-edit-date').value;
+        
+        var actObj = {
+            activity_date: dateStr,
+            day_number: 1,
+            sort_order: 0,
+            activity_title: document.getElementById('act-title').value,
+            activity_type: document.getElementById('act-type').value,
+            chapter: document.getElementById('act-chapter').value,
+            subject: document.getElementById('act-subject').value,
+            topic: document.getElementById('act-topic').value,
+            subtopic: document.getElementById('act-subtopic').value,
+            faculty: document.getElementById('act-faculty').value,
+            mentor: document.getElementById('act-mentor').value,
+            estimated_duration: parseInt(document.getElementById('act-duration').value) || 60,
+            difficulty_level: document.getElementById('act-difficulty').value,
+            resource_links: document.getElementById('act-resources').value,
+            priority: 'medium'
+        };
+        
+        if (index >= 0) {
+            activities[index] = actObj;
+        } else {
+            activities.push(actObj);
+        }
+        
+        closeModal('activity-modal');
+        reindexSortOrder();
+    }
+
+    function deleteActivityRow(index) {
+        if (confirm('Delete this study activity?')) {
+            activities.splice(index, 1);
+            reindexSortOrder();
+        }
+    }
+
+    function triggerImport() {
+        openModal('import-modal');
+    }
+
+    function processBulkImport() {
+        var fileEl = document.getElementById('import-file');
+        if (!fileEl.files || fileEl.files.length === 0) {
+            alert('Please select a file first.');
+            return;
+        }
+        
+        var formData = new FormData();
+        formData.append('action', 'import_activities');
+        formData.append('file', fileEl.files[0]);
+        formData.append('csrf_token', '<?php echo csrf_token(); ?>');
+        
+        fetch('api/studyplans-api.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                // Populate parsed list
+                activities = activities.concat(data.parsed);
+                closeModal('import-modal');
+                reindexSortOrder();
+            } else {
+                alert('Import Errors: \n' + (data.errors ? data.errors.join('\n') : data.message));
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Bulk import server connection error.');
+        });
+    }
+
+    function updateLivePreview() {
+        var wrapper = document.getElementById('live-preview-wrapper');
+        var theme = document.getElementById('plan-theme').value;
+        var layout = document.getElementById('plan-layout').value;
+        
+        var title = document.getElementById('plan-title').value;
+        var desc = document.getElementById('plan-desc').value;
+        var quote = document.getElementById('plan-quote').value;
+        
+        // Reset classes
+        wrapper.className = 'preview-phone-frame theme-' + theme;
+        
+        var html = '<div style="padding:10px; border-bottom:1px solid rgba(0,0,0,0.08); margin-bottom:16px; display:flex; align-items:center; gap:8px;">' +
+                        '<div style="width:36px; height:36px; border-radius:50%; background:var(--accent-soft); display:flex; align-items:center; justify-content:center; color:var(--accent); font-weight:800;">P</div>' +
+                        '<div>' +
+                            '<h4 style="margin:0; font-size:0.9rem; font-weight:800;">' + title + '</h4>' +
+                            '<small style="color:#64748b; font-size:0.75rem;">PEPP Journey Plan</small>' +
+                        '</div>' +
+                   '</div>';
+                   
+        if (quote) {
+            html += '<div style="background:rgba(232,152,12,0.08); border-left:4px solid var(--accent); padding:10px; border-radius:4px; font-style:italic; font-size:0.8rem; margin-bottom:16px;">' +
+                        '"' + quote + '"' +
+                    '</div>';
+        }
+        
+        if (activities.length === 0) {
+            html += '<div style="text-align:center; padding:3rem 0; color:#94a3b8; font-size:0.85rem;"><i class="fas fa-calendar-day" style="font-size:2rem; margin-bottom:6px; display:block;"></i>No schedules added yet. Use designer panel to populate items.</div>';
+        } else {
+            // Group by date
+            var grouped = {};
+            activities.forEach(function(act) {
+                if (!grouped[act.activity_date]) grouped[act.activity_date] = [];
+                grouped[act.activity_date].push(act);
+            });
+            
+            if (layout === 'card') {
+                html += '<div style="display:grid; grid-template-columns:1fr; gap:12px;">';
+                Object.keys(grouped).forEach(function(date) {
+                    var items = grouped[date];
+                    html += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:12px; box-shadow:0 1px 3px rgba(0,0,0,0.02);">' +
+                                '<div style="font-size:0.72rem; text-transform:uppercase; font-weight:800; color:var(--accent); margin-bottom:8px;">' + date + '</div>' +
+                                '<div style="display:flex; flex-direction:column; gap:8px;">';
+                    items.forEach(function(it) {
+                        var conf = predefinedTypes[it.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
+                        html += '<div style="display:flex; align-items:center; gap:8px; border-bottom:1px solid #f1f5f9; padding-bottom:6px;">' +
+                                    '<i class="fas ' + conf.icon + '" style="color:' + conf.color + '; font-size:0.95rem;"></i>' +
+                                    '<div>' +
+                                        '<div style="font-size:0.8rem; font-weight:700;">' + it.activity_title + '</div>' +
+                                        '<small style="font-size:0.7rem; color:#64748b;">' + (it.faculty || 'Mentor Team') + ' · ' + (it.estimated_duration || 45) + ' mins</small>' +
+                                    '</div>' +
+                                '</div>';
+                    });
+                    html += '</div></div>';
+                });
+                html += '</div>';
+            } else {
+                // Default Timeline layout
+                html += '<div style="display:flex; flex-direction:column; gap:16px; position:relative; padding-left:14px; border-left:2px solid #e2e8f0; margin-left:10px;">';
+                Object.keys(grouped).forEach(function(date) {
+                    var items = grouped[date];
+                    html += '<div>' +
+                                '<div style="position:absolute; left:-6px; width:10px; height:10px; border-radius:50%; background:var(--accent); border:2px solid #fff;"></div>' +
+                                '<div style="font-size:0.72rem; text-transform:uppercase; font-weight:800; color:var(--accent); margin-bottom:8px; display:flex; align-items:center; gap:6px;">' + date + '</div>' +
+                                '<div style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;">';
+                    items.forEach(function(it) {
+                        var conf = predefinedTypes[it.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
+                        html += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:10px; display:flex; align-items:center; justify-content:between; gap:10px;">' +
+                                    '<div style="display:flex; align-items:center; gap:8px;">' +
+                                        '<i class="fas ' + conf.icon + '" style="color:' + conf.color + '; font-size:1rem;"></i>' +
+                                        '<div>' +
+                                            '<div style="font-size:0.8rem; font-weight:700; color:#1e293b;">' + it.activity_title + '</div>' +
+                                            '<div style="font-size:0.7rem; color:#64748b;">' + (it.subject || 'General') + ' · ' + (it.chapter || 'Academics') + '</div>' +
+                                        '</div>' +
+                                    '</div>' +
+                                    '<span style="margin-left:auto; background:#f1f5f9; border-radius:4px; font-size:0.65rem; font-weight:700; padding:2px 6px; color:#475569;">' + (it.estimated_duration || 60) + 'm</span>' +
+                                '</div>';
+                    });
+                    html += '</div></div>';
+                });
+                html += '</div>';
+            }
+        }
+        
+        wrapper.innerHTML = html;
+    }
+
+    function saveStudyPlan() {
+        var title = document.getElementById('plan-title').value;
+        var year = document.getElementById('plan-year').value;
+        
+        if (!title || !year) {
+            alert('Study Plan Title and Academic Year are required.');
+            return;
+        }
+        
+        var planData = {
+            id: studyPlanId,
+            title: title,
+            academic_year: year,
+            course_id: document.getElementById('plan-course').value,
+            description: document.getElementById('plan-desc').value,
+            theme: document.getElementById('plan-theme').value,
+            layout: document.getElementById('plan-layout').value,
+            start_date: document.getElementById('plan-start').value,
+            end_date: document.getElementById('plan-end').value,
+            is_template: document.getElementById('plan-template').checked ? 1 : 0,
+            status: studyPlanId > 0 ? 'published' : 'draft', // defaults
+            custom_settings: {
+                quote: document.getElementById('plan-quote').value
+            }
+        };
+        
+        // Save plan first, then save activities list
+        fetch('api/studyplans-api.php?action=save_plan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(planData)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                var newPlanId = data.plan_id;
+                // Save activities
+                fetch('api/studyplans-api.php?action=save_activities', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        study_plan_id: newPlanId,
+                        activities: activities
+                    })
+                })
+                .then(r2 => r2.json())
+                .then(data2 => {
+                    if (data2.success) {
+                        alert('Study Plan & all schedules saved successfully!');
+                        window.location.href = 'studyplans.php';
+                    } else {
+                        alert('Failed to save activities: ' + data2.message);
+                    }
+                });
+            } else {
+                alert('Save failed: ' + data.message);
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Server connection error.');
+        });
+    }
+</script>
+
+<?php include 'includes/admin_footer.php'; ?>

@@ -37,6 +37,7 @@ $GLOBALS['ADMIN_PAGES'] = [
     'peppkit'      => ['PEPPKIT Report',          'fa-box-open'],
     'cards'        => ['Generate Cards',          'fa-id-card'],
     'campaigns'    => ['Campaign Forms',          'fa-wpforms'],
+    'studyplans'   => ['Study Plans',             'fa-calendar-days'],
     'settings'     => ['Settings',                'fa-gear'],
     // Future pages: add 'key' => ['Label', 'fa-icon'] and grant in Admin Management.
 ];
@@ -181,6 +182,7 @@ function get_first_accessible_page_url() {
         'whatsapp'     => 'whatsapp-notification.php',
         'courses'      => 'course-management.php',
         'faculties'    => 'faculties.php',
+        'studyplans'   => 'studyplans.php',
         'settings'     => 'settings.php',
     ];
     $perms = array_map('trim', explode(',', $admin_perms));
