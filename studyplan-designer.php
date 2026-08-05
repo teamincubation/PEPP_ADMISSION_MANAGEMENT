@@ -475,7 +475,10 @@ include 'includes/admin_nav.php';
         var dayNum = 1;
         
         while (curr <= end) {
-            var dateStr = curr.toISOString().split('T')[0];
+            var yyyy = curr.getFullYear();
+            var mm = String(curr.getMonth() + 1).padStart(2, '0');
+            var dd = String(curr.getDate()).padStart(2, '0');
+            var dateStr = yyyy + '-' + mm + '-' + dd;
             var dayLabel = "Day " + dayNum + " (" + curr.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }) + ")";
             
             var dayContainer = document.createElement('div');
@@ -634,13 +637,15 @@ include 'includes/admin_nav.php';
         }
         
         closeModal('activity-modal');
-        reindexSortOrder();
+        renderActivitiesList();
+        updateLivePreview();
     }
 
     function deleteActivityRow(index) {
         if (confirm('Delete this study activity?')) {
             activities.splice(index, 1);
-            reindexSortOrder();
+            renderActivitiesList();
+            updateLivePreview();
         }
     }
 
