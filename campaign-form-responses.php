@@ -682,6 +682,7 @@ include 'includes/admin_nav.php';
             <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:var(--input-bg);">
                 <th style="padding:15px; width:45px; text-align:center;"><input type="checkbox" id="select-all" onclick="toggleSelectAll(this)" style="accent-color:var(--accent);"></th>
                 <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted);">Submission At</th>
+                <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted);">Respondent ID</th>
                 
                 <!-- Dynamic Columns -->
                 <?php foreach ($fields as $f): 
@@ -698,7 +699,7 @@ include 'includes/admin_nav.php';
         <tbody>
             <?php if (empty($submissions)): ?>
                 <tr>
-                    <td colspan="<?php echo count($fields) + 3; ?>" style="padding:50px 20px; text-align:center; color:var(--text-muted);">
+                    <td colspan="<?php echo count($fields) + 4; ?>" style="padding:50px 20px; text-align:center; color:var(--text-muted);">
                         <div style="width:70px; height:70px; border-radius:50%; background:var(--input-bg); border:1.5px solid var(--border); display:flex; align-items:center; justify-content:center; margin:0 auto 1rem auto; font-size:2rem; color:var(--accent);">
                             <i class="fas fa-inbox"></i>
                         </div>
@@ -711,14 +712,19 @@ include 'includes/admin_nav.php';
                     <td style="padding:15px; text-align:center;">
                         <input type="checkbox" class="row-checkbox" value="<?php echo $s['id']; ?>" onclick="updateRowSelection()" style="accent-color:var(--accent);">
                     </td>
-                    <td style="padding:15px; white-space:nowrap; font-size:0.85rem; font-weight:700; color:var(--text-main); display:flex; align-items:center; gap:6px;">
-                        <span><?php echo date('d M Y, h:i A', strtotime($s['submitted_at'])); ?></span>
-                        <?php if (empty($s['is_read'])): ?>
-                            <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#3b82f6; flex-shrink:0;" title="Unread response"></span>
-                        <?php endif; ?>
-                        <?php if (!empty($s['latitude']) && !empty($s['longitude'])): ?>
-                            <a href="https://www.google.com/maps/search/?api=1&query=<?php echo $s['latitude']; ?>,<?php echo $s['longitude']; ?>" target="_blank" style="color:#ef4444; font-size:0.9rem;" title="View Google Map Location"><i class="fas fa-map-location-dot"></i></a>
-                        <?php endif; ?>
+                    <td style="padding:15px; white-space:nowrap; font-size:0.85rem; font-weight:700; color:var(--text-main);">
+                        <div style="display:flex; align-items:center; gap:6px;">
+                            <span><?php echo date('d M Y, h:i A', strtotime($s['submitted_at'])); ?></span>
+                            <?php if (empty($s['is_read'])): ?>
+                                <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#3b82f6; flex-shrink:0;" title="Unread response"></span>
+                            <?php endif; ?>
+                            <?php if (!empty($s['latitude']) && !empty($s['longitude'])): ?>
+                                <a href="https://www.google.com/maps/search/?api=1&query=<?php echo $s['latitude']; ?>,<?php echo $s['longitude']; ?>" target="_blank" style="color:#ef4444; font-size:0.9rem;" title="View Google Map Location"><i class="fas fa-map-location-dot"></i></a>
+                            <?php endif; ?>
+                        </div>
+                    </td>
+                    <td style="padding:15px; font-size:0.85rem; font-weight:700; color:var(--text-muted);">
+                        <?php echo htmlspecialchars($s['respondent_identifier'] ?: 'Anonymous'); ?>
                     </td>
                     <!-- Dynamic Answer Columns -->
                     <?php foreach ($fields as $f): 
