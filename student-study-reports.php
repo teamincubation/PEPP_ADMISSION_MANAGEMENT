@@ -253,6 +253,32 @@ if ($selected_course) {
     }
 }
 
+// Search, Performance status filtering & Completion Order usort
+$search_query = isset($_GET['search']) ? trim($_GET['search']) : '';
+$perf_filter = isset($_GET['perf_status']) ? trim($_GET['perf_status']) : '';
+
+if ($search_query !== '' || $perf_filter !== '') {
+    $filtered_list = [];
+    foreach ($students_list as $std) {
+        if ($search_query !== '') {
+            if (stripos($std['name'], $search_query) === false && stripos($std['email'], $search_query) === false) {
+                continue;
+            }
+        }
+        if ($perf_filter !== '') {
+            if (strcasecmp($std['performance']['label'], $perf_filter) !== 0) {
+                continue;
+            }
+        }
+        $filtered_list[] = $std;
+    }
+    $students_list = $filtered_list;
+}
+
+usort($students_list, function($a, $b) {
+    return $b['completed_pct'] <=> $a['completed_pct'];
+});
+
 // 2. Fetch specific user detail trace
 $view_user = $_GET['view_user'] ?? null;
 $view_user_email = $_GET['email'] ?? null;
@@ -467,22 +493,46 @@ include 'includes/admin_nav.php';
                             <span class="badge blue" style="font-size:0.78rem; font-weight:700;"><?php echo count($students_list); ?> total records</span>
                         </div>
                         
+                        <!-- Search & Filters Action Bar -->
+                        <div class="action-bar" style="background:#f8fafc; border:1px solid var(--border); padding:0.8rem 1rem; border-radius:12px; margin-bottom:1.2rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                            <form method="GET" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0; width:100%;">
+                                <?php if ($selected_course): ?>
+                                    <input type="hidden" name="course_name" value="<?php echo htmlspecialchars($selected_course); ?>">
+                                <?php elseif ($selected_form_id): ?>
+                                    <input type="hidden" name="form_id" value="<?php echo $selected_form_id; ?>">
+                                <?php endif; ?>
+                                
+                                <input type="text" name="search" class="form-input" style="margin-bottom:0; width:220px; font-size:0.85rem;" placeholder="Search student name or email..." value="<?php echo r_esc($search_query); ?>">
+                                
+                                <select name="perf_status" class="form-input" style="margin-bottom:0; width:180px; font-size:0.85rem;">
+                                    <option value="">All Performances</option>
+                                    <option value="Excellent" <?php echo $perf_filter === 'Excellent' ? 'selected' : ''; ?>>Excellent (>= 85%)</option>
+                                    <option value="Good" <?php echo $perf_filter === 'Good' ? 'selected' : ''; ?>>Good (60% - 84%)</option>
+                                    <option value="Average" <?php echo $perf_filter === 'Average' ? 'selected' : ''; ?>>Average (40% - 59%)</option>
+                                    <option value="Needs Improvement" <?php echo $perf_filter === 'Needs Improvement' ? 'selected' : ''; ?>>Needs Improvement (< 40%)</option>
+                                </select>
+                                
+                                <button type="submit" class="btn btn-sm btn-secondary"><i class="fas fa-filter"></i> Filter</button>
+                                <a href="?<?php echo $selected_course ? 'course_name='.urlencode($selected_course) : 'form_id='.$selected_form_id; ?>" class="btn btn-sm btn-outline">Reset</a>
+                            </form>
+                        </div>
+                        
                         <?php if (empty($students_list)): ?>
                             <div style="text-align:center; padding:4rem; color:var(--text-muted);">
                                 <i class="fas fa-user-slash" style="font-size:2rem; margin-bottom:8px; display:block;"></i>
-                                No student registrations found in this course/form.
+                                No student records match the filters.
                             </div>
                         <?php else: ?>
-                            <div class="table-responsive">
-                                <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+                            <div class="table-responsive" style="max-height:550px; overflow-y:auto; position:relative; border:1.5px solid var(--border); border-radius:12px;">
+                                <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem; position:relative;">
                                     <thead>
                                         <tr style="border-bottom:1.5px solid var(--border); text-align:left;">
-                                            <th style="padding:10px 8px; color:var(--text-muted); font-weight:700;">Student / User Name</th>
-                                            <th style="padding:10px 8px; color:var(--text-muted); font-weight:700;">Plans Assigned</th>
-                                            <th style="padding:10px 8px; color:var(--text-muted); font-weight:700;">Completed %</th>
-                                            <th style="padding:10px 8px; color:var(--text-muted); font-weight:700;">Pending %</th>
-                                            <th style="padding:10px 8px; color:var(--text-muted); font-weight:700;">Performance Status</th>
-                                            <th style="padding:10px 8px; color:var(--text-muted); font-weight:700;">Last Active</th>
+                                            <th style="padding:12px 10px; color:var(--text-muted); font-weight:700; position:sticky; top:0; background:#ffffff; z-index:10; border-bottom:2px solid var(--border);">Student / User Name</th>
+                                            <th style="padding:12px 10px; color:var(--text-muted); font-weight:700; position:sticky; top:0; background:#ffffff; z-index:10; border-bottom:2px solid var(--border);">Plans Assigned</th>
+                                            <th style="padding:12px 10px; color:var(--text-muted); font-weight:700; position:sticky; top:0; background:#ffffff; z-index:10; border-bottom:2px solid var(--border);">Completed %</th>
+                                            <th style="padding:12px 10px; color:var(--text-muted); font-weight:700; position:sticky; top:0; background:#ffffff; z-index:10; border-bottom:2px solid var(--border);">Pending %</th>
+                                            <th style="padding:12px 10px; color:var(--text-muted); font-weight:700; position:sticky; top:0; background:#ffffff; z-index:10; border-bottom:2px solid var(--border);">Performance Status</th>
+                                            <th style="padding:12px 10px; color:var(--text-muted); font-weight:700; position:sticky; top:0; background:#ffffff; z-index:10; border-bottom:2px solid var(--border);">Last Active</th>
                                         </tr>
                                     </thead>
                                     <tbody>
