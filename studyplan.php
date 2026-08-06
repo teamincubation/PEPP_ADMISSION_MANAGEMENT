@@ -46,6 +46,16 @@ function p_esc($str) {
     return htmlspecialchars($str ?? '', ENT_QUOTES, 'UTF-8');
 }
 
+// Helper to format/validate absolute resource URL
+function get_valid_url($url) {
+    $url = trim($url ?? '');
+    if (empty($url)) return '';
+    if (!preg_match("~^(?:f|ht)tps?://~i", $url)) {
+        $url = "https://" . $url;
+    }
+    return $url;
+}
+
 $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'login') {
     $email = trim($_POST['email'] ?? '');
@@ -773,7 +783,16 @@ if ($is_logged_in && $selected_plan_id > 0) {
                                                     </div>
                                                     
                                                     <div>
-                                                        <div style="font-size:0.85rem; font-weight:700; color:var(--text-main);"><?php echo p_esc($it['activity_title']); ?></div>
+                                                        <div style="font-size:0.85rem; font-weight:700; color:var(--text-main);">
+                                                            <?php if (!empty($it['resource_links'])): ?>
+                                                                <a href="<?php echo htmlspecialchars(get_valid_url($it['resource_links'])); ?>" target="_blank" style="color: var(--accent); text-decoration: underline; display: inline-flex; align-items: center; gap: 4px;">
+                                                                    <?php echo p_esc($it['activity_title']); ?>
+                                                                    <i class="fas fa-external-link-alt" style="font-size:0.68rem;"></i>
+                                                                </a>
+                                                            <?php else: ?>
+                                                                <?php echo p_esc($it['activity_title']); ?>
+                                                            <?php endif; ?>
+                                                        </div>
                                                         <div style="font-size:0.75rem; color:var(--text-muted);">
                                                             <?php echo p_esc($it['subject']); ?> · <?php echo p_esc($it['chapter']); ?>
                                                             <?php if ($it['faculty']): ?> · Fac: <?php echo p_esc($it['faculty']); ?><?php endif; ?>
