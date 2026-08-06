@@ -634,15 +634,22 @@ include 'includes/admin_nav.php';
                                 <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:24px;">
                                     <?php if (empty($plan_activities)): ?>
                                         <div style="color:var(--text-muted); font-size:0.85rem; text-align:center; padding:2rem;">No activities scheduled in this plan.</div>
-                                    <?php else: ?>
+                                    <?php else: 
+                                        $custom_settings = !empty($selected_plan_detail['custom_settings']) ? json_decode($selected_plan_detail['custom_settings'], true) : [];
+                                        $hide_date = !empty($custom_settings['hide_date']) ? true : false;
+                                    ?>
                                         <?php foreach ($plan_activities as $act): 
                                             $is_done = !empty($act['completed_at']);
+                                            $date_lbl = $act['activity_date'];
+                                            if ($hide_date) {
+                                                $date_lbl = "Day " . str_pad($act['day_number'], 2, '0', STR_PAD_LEFT);
+                                            }
                                         ?>
                                             <div style="background:#f8fafc; border:1px solid var(--border); border-radius:10px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center;">
                                                 <div>
                                                     <strong style="font-size:0.85rem; color:var(--text-main);"><?php echo r_esc($act['activity_title']); ?></strong>
                                                     <div style="font-size:0.75rem; color:var(--text-muted);">
-                                                        <?php echo r_esc($act['activity_date']); ?> · <?php echo r_esc($act['subject']); ?> · <?php echo r_esc($act['chapter']); ?>
+                                                        <?php echo r_esc($date_lbl); ?> · <?php echo r_esc($act['subject']); ?> · <?php echo r_esc($act['chapter']); ?>
                                                     </div>
                                                     <?php if ($is_done): ?>
                                                         <small style="display:block; font-size:0.7rem; color:#10b981; margin-top:2px;">

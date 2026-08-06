@@ -819,7 +819,7 @@ include 'includes/admin_nav.php';
                                         '<div style="font-size:0.85rem; font-weight:700;">' + it.activity_title + '</div>' +
                                         '<small style="font-size:0.75rem; color:#64748b;">' + (it.faculty || 'Mentor Team') + ' · ' + (it.estimated_duration || 45) + ' mins</small>' +
                                     '</div>' +
-                                </div>';
+                                '</div>';
                     });
                     html += '</div></div>';
                 });
@@ -855,7 +855,7 @@ include 'includes/admin_nav.php';
                                         '</div>' +
                                     '</div>' +
                                     '<span style="margin-left:auto; background:#f1f5f9; border-radius:4px; font-size:0.7rem; font-weight:700; padding:2px 6px; color:#475569;">' + (it.estimated_duration || 60) + 'm</span>' +
-                                </div>';
+                                '</div>';
                     });
                     html += '</div></div>';
                 });
