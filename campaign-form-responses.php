@@ -681,8 +681,8 @@ include 'includes/admin_nav.php';
         <thead>
             <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:var(--input-bg);">
                 <th style="padding:15px; width:45px; text-align:center;"><input type="checkbox" id="select-all" onclick="toggleSelectAll(this)" style="accent-color:var(--accent);"></th>
+                <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); width:50px;">Sl. No.</th>
                 <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted);">Submission At</th>
-                <th style="padding:15px; font-weight:800; font-size:0.8rem; text-transform:uppercase; color:var(--text-muted);">Respondent ID</th>
                 
                 <!-- Dynamic Columns -->
                 <?php foreach ($fields as $f): 
@@ -697,7 +697,10 @@ include 'includes/admin_nav.php';
             </tr>
         </thead>
         <tbody>
-            <?php if (empty($submissions)): ?>
+            <?php 
+            $sl_no = $offset + 1;
+            if (empty($submissions)): 
+            ?>
                 <tr>
                     <td colspan="<?php echo count($fields) + 4; ?>" style="padding:50px 20px; text-align:center; color:var(--text-muted);">
                         <div style="width:70px; height:70px; border-radius:50%; background:var(--input-bg); border:1.5px solid var(--border); display:flex; align-items:center; justify-content:center; margin:0 auto 1rem auto; font-size:2rem; color:var(--accent);">
@@ -712,44 +715,17 @@ include 'includes/admin_nav.php';
                     <td style="padding:15px; text-align:center;">
                         <input type="checkbox" class="row-checkbox" value="<?php echo $s['id']; ?>" onclick="updateRowSelection()" style="accent-color:var(--accent);">
                     </td>
-                    <td style="padding:15px; white-space:nowrap; font-size:0.85rem; font-weight:700; color:var(--text-main);">
-                        <div style="display:flex; align-items:center; gap:6px;">
-                            <span><?php echo date('d M Y, h:i A', strtotime($s['submitted_at'])); ?></span>
-                            <?php if (empty($s['is_read'])): ?>
-                                <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#3b82f6; flex-shrink:0;" title="Unread response"></span>
-                            <?php endif; ?>
-                            <?php if (!empty($s['latitude']) && !empty($s['longitude'])): ?>
-                                <a href="https://www.google.com/maps/search/?api=1&query=<?php echo $s['latitude']; ?>,<?php echo $s['longitude']; ?>" target="_blank" style="color:#ef4444; font-size:0.9rem;" title="View Google Map Location"><i class="fas fa-map-location-dot"></i></a>
-                            <?php endif; ?>
-                        </div>
+                    <td style="padding:15px; font-size:0.85rem; font-weight:700; color:var(--text-muted);">
+                        <?php echo $sl_no++; ?>
                     </td>
-                    <td style="padding:15px; font-size:0.85rem; font-weight:700; color:var(--text-main);">
-                        <?php 
-                        $disp_id = trim($s['respondent_identifier'] ?? '');
-                        if (empty($disp_id) || strtolower($disp_id) === 'anonymous' || strpos(strtolower($disp_id), 'respondent') !== false) {
-                            // Attempt to locate email field in the answers map
-                            foreach ($fields as $fld) {
-                                $ans = $answers_map[$s['id']][$fld['id']] ?? null;
-                                if (!$ans) continue;
-                                $txt = trim($ans['answer_text'] ?? '');
-                                if (empty($txt)) continue;
-                                
-                                $lbl = strtolower($fld['label']);
-                                if ($fld['type'] === 'email' || strpos($lbl, 'email') !== false) {
-                                    $disp_id = $txt;
-                                    break; // Email takes highest priority for campaign identifier!
-                                } elseif (empty($disp_id) && (strpos($lbl, 'name') !== false || $fld['type'] === 'short_text')) {
-                                    $disp_id = $txt;
-                                } elseif (empty($disp_id) && ($fld['type'] === 'phone' || $fld['type'] === 'whatsapp')) {
-                                    $disp_id = $txt;
-                                }
-                            }
-                        }
-                        if (empty($disp_id)) {
-                            $disp_id = 'Respondent #' . $s['id'];
-                        }
-                        echo htmlspecialchars($disp_id);
-                        ?>
+                    <td style="padding:15px; white-space:nowrap; font-size:0.85rem; font-weight:700; color:var(--text-main); display:flex; align-items:center; gap:6px;">
+                        <span><?php echo date('d M Y, h:i A', strtotime($s['submitted_at'])); ?></span>
+                        <?php if (empty($s['is_read'])): ?>
+                            <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#3b82f6; flex-shrink:0;" title="Unread response"></span>
+                        <?php endif; ?>
+                        <?php if (!empty($s['latitude']) && !empty($s['longitude'])): ?>
+                            <a href="https://www.google.com/maps/search/?api=1&query=<?php echo $s['latitude']; ?>,<?php echo $s['longitude']; ?>" target="_blank" style="color:#ef4444; font-size:0.9rem;" title="View Google Map Location"><i class="fas fa-map-location-dot"></i></a>
+                        <?php endif; ?>
                     </td>
                     <!-- Dynamic Answer Columns -->
                     <?php foreach ($fields as $f): 
