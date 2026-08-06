@@ -246,14 +246,34 @@ include 'includes/admin_nav.php';
                             <?php endforeach; ?>
                         </select>
                     </div>
-                    <div class="field">
+                    <div class="field" style="grid-column: span 2; margin-bottom: 8px;">
+                        <label style="font-weight: 700; display: block; margin-bottom: 6px;">Plan Scheduling Type</label>
+                        <div style="display:flex; gap:16px; align-items:center;">
+                            <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-weight:600;">
+                                <input type="radio" name="plan_type" value="date_wise" id="type-date-wise" onchange="togglePlanTypeView()" <?php echo ($plan['plan_type'] ?? 'date_wise') === 'date_wise' ? 'checked' : ''; ?>>
+                                Date Wise (Start/End Calendar Dates)
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-weight:600;">
+                                <input type="radio" name="plan_type" value="day_wise" id="type-day-wise" onchange="togglePlanTypeView()" <?php echo ($plan['plan_type'] ?? 'date_wise') === 'day_wise' ? 'checked' : ''; ?>>
+                                Day Count Wise (Total number of days)
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="field" id="date-wise-start-wrap">
                         <label>Start Date <span class="req">*</span></label>
                         <input type="date" id="plan-start" value="<?php echo $plan['start_date'] ?? date('Y-m-d'); ?>" onchange="regenerateDatesPreview()">
                     </div>
-                    <div class="field">
+                    <div class="field" id="date-wise-end-wrap">
                         <label>End Date <span class="req">*</span></label>
                         <input type="date" id="plan-end" value="<?php echo $plan['end_date'] ?? date('Y-m-d', strtotime('+7 days')); ?>" onchange="regenerateDatesPreview()">
                     </div>
+                    
+                    <div class="field" id="day-wise-days-wrap" style="display:none;">
+                        <label>Total Number of Days <span class="req">*</span></label>
+                        <input type="number" id="plan-total-days" min="1" max="365" value="<?php echo $plan['total_days'] ?? 7; ?>" onchange="regenerateDatesPreview()">
+                    </div>
+
                     <div class="field">
                         <label>Theme Style</label>
                         <select id="plan-theme" onchange="updateLivePreview()">
@@ -494,10 +514,32 @@ include 'includes/admin_nav.php';
             // Pre-select theme/layout
             document.getElementById('plan-theme').value = "<?php echo $plan['theme'] ?? 'default'; ?>";
             document.getElementById('plan-layout').value = "<?php echo $plan['layout'] ?? 'timeline'; ?>";
+            
+            // Set plan type state
+            var pType = "<?php echo $plan['plan_type'] ?? 'date_wise'; ?>";
+            if (pType === 'day_wise') {
+                document.getElementById('type-day-wise').checked = true;
+            } else {
+                document.getElementById('type-date-wise').checked = true;
+            }
         }
         
-        regenerateDatesPreview();
+        togglePlanTypeView();
     });
+
+    function togglePlanTypeView() {
+        var isDateWise = document.getElementById('type-date-wise').checked;
+        if (isDateWise) {
+            document.getElementById('date-wise-start-wrap').style.display = 'block';
+            document.getElementById('date-wise-end-wrap').style.display = 'block';
+            document.getElementById('day-wise-days-wrap').style.display = 'none';
+        } else {
+            document.getElementById('date-wise-start-wrap').style.display = 'none';
+            document.getElementById('date-wise-end-wrap').style.display = 'none';
+            document.getElementById('day-wise-days-wrap').style.display = 'block';
+        }
+        regenerateDatesPreview();
+    }
 
     function switchDesignerTab(tab) {
         document.querySelectorAll('.designer-tab').forEach(t => t.classList.remove('active'));
@@ -508,10 +550,23 @@ include 'includes/admin_nav.php';
     }
 
     function regenerateDatesPreview() {
-        var startInput = document.getElementById('plan-start').value;
-        var endInput = document.getElementById('plan-end').value;
+        var isDateWise = document.getElementById('type-date-wise').checked;
+        var startInput, endInput, totalDays;
         
-        if (!startInput || !endInput) return;
+        if (isDateWise) {
+            startInput = document.getElementById('plan-start').value;
+            endInput = document.getElementById('plan-end').value;
+            if (!startInput || !endInput) return;
+        } else {
+            totalDays = parseInt(document.getElementById('plan-total-days').value) || 7;
+            startInput = '2000-01-01';
+            var endD = new Date('2000-01-01');
+            endD.setDate(endD.getDate() + totalDays - 1);
+            var yyyy = endD.getFullYear();
+            var mm = String(endD.getMonth() + 1).padStart(2, '0');
+            var dd = String(endD.getDate()).padStart(2, '0');
+            endInput = yyyy + '-' + mm + '-' + dd;
+        }
         
         var start = new Date(startInput);
         var end = new Date(endInput);
@@ -526,7 +581,11 @@ include 'includes/admin_nav.php';
             var mm = String(curr.getMonth() + 1).padStart(2, '0');
             var dd = String(curr.getDate()).padStart(2, '0');
             var dateStr = yyyy + '-' + mm + '-' + dd;
-            var dayLabel = "Day " + dayNum + " (" + curr.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }) + ")";
+            
+            var dayLabel = "Day " + String(dayNum).padStart(2, '0');
+            if (isDateWise) {
+                dayLabel += " (" + curr.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }) + ")";
+            }
             
             var dayContainer = document.createElement('div');
             dayContainer.className = 'day-container';
@@ -779,12 +838,24 @@ include 'includes/admin_nav.php';
                 grouped[act.activity_date].push(act);
             });
             
+            var isDateWise = document.getElementById('type-date-wise').checked;
+
             if (layout === 'card') {
                 html += '<div style="display:grid; grid-template-columns:1fr; gap:12px;">';
                 Object.keys(grouped).forEach(function(date) {
                     var items = grouped[date];
+                    var dateLabel = date;
+                    if (!isDateWise) {
+                        var dayNum = (items && items[0] && items[0].day_number) ? items[0].day_number : 1;
+                        dateLabel = "Day " + String(dayNum).padStart(2, '0');
+                    } else {
+                        try {
+                            var dObj = new Date(date);
+                            dateLabel = dObj.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+                        } catch(e) {}
+                    }
                     html += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:12px; box-shadow:0 1px 3px rgba(0,0,0,0.02);">' +
-                                '<div style="font-size:0.72rem; text-transform:uppercase; font-weight:800; color:var(--accent); margin-bottom:8px;">' + date + '</div>' +
+                                '<div style="font-size:0.72rem; text-transform:uppercase; font-weight:800; color:var(--accent); margin-bottom:8px;">' + dateLabel + '</div>' +
                                 '<div style="display:flex; flex-direction:column; gap:8px;">';
                     items.forEach(function(it) {
                         var conf = predefinedTypes[it.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
@@ -804,9 +875,19 @@ include 'includes/admin_nav.php';
                 html += '<div style="display:flex; flex-direction:column; gap:16px; position:relative; padding-left:14px; border-left:2px solid #e2e8f0; margin-left:10px;">';
                 Object.keys(grouped).forEach(function(date) {
                     var items = grouped[date];
+                    var dateLabel = date;
+                    if (!isDateWise) {
+                        var dayNum = (items && items[0] && items[0].day_number) ? items[0].day_number : 1;
+                        dateLabel = "Day " + String(dayNum).padStart(2, '0');
+                    } else {
+                        try {
+                            var dObj = new Date(date);
+                            dateLabel = dObj.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+                        } catch(e) {}
+                    }
                     html += '<div>' +
                                 '<div style="position:absolute; left:-6px; width:10px; height:10px; border-radius:50%; background:var(--accent); border:2px solid #fff;"></div>' +
-                                '<div style="font-size:0.72rem; text-transform:uppercase; font-weight:800; color:var(--accent); margin-bottom:8px; display:flex; align-items:center; gap:6px;">' + date + '</div>' +
+                                '<div style="font-size:0.72rem; text-transform:uppercase; font-weight:800; color:var(--accent); margin-bottom:8px; display:flex; align-items:center; gap:6px;">' + dateLabel + '</div>' +
                                 '<div style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;">';
                     items.forEach(function(it) {
                         var conf = predefinedTypes[it.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
@@ -847,6 +928,22 @@ include 'includes/admin_nav.php';
             assignments.push({ type: 'form', value: el.value });
         });
 
+        var isDateWise = document.getElementById('type-date-wise').checked;
+        var startInput = isDateWise ? document.getElementById('plan-start').value : '2000-01-01';
+        var endInput = '2000-01-01';
+        var totalDays = parseInt(document.getElementById('plan-total-days').value) || 7;
+        
+        if (isDateWise) {
+            endInput = document.getElementById('plan-end').value;
+        } else {
+            var endD = new Date('2000-01-01');
+            endD.setDate(endD.getDate() + totalDays - 1);
+            var yyyy = endD.getFullYear();
+            var mm = String(endD.getMonth() + 1).padStart(2, '0');
+            var dd = String(endD.getDate()).padStart(2, '0');
+            endInput = yyyy + '-' + mm + '-' + dd;
+        }
+
         var planData = {
             id: studyPlanId,
             title: title,
@@ -855,8 +952,10 @@ include 'includes/admin_nav.php';
             description: document.getElementById('plan-desc').value,
             theme: document.getElementById('plan-theme').value,
             layout: document.getElementById('plan-layout').value,
-            start_date: document.getElementById('plan-start').value,
-            end_date: document.getElementById('plan-end').value,
+            plan_type: isDateWise ? 'date_wise' : 'day_wise',
+            total_days: isDateWise ? null : totalDays,
+            start_date: startInput,
+            end_date: endInput,
             is_template: document.getElementById('plan-template').checked ? 1 : 0,
             status: studyPlanId > 0 ? 'published' : 'draft', // defaults
             assignments: assignments,

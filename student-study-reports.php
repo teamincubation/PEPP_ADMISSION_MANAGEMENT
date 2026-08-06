@@ -635,14 +635,17 @@ include 'includes/admin_nav.php';
                                     <?php if (empty($plan_activities)): ?>
                                         <div style="color:var(--text-muted); font-size:0.85rem; text-align:center; padding:2rem;">No activities scheduled in this plan.</div>
                                     <?php else: ?>
-                                        <?php foreach ($plan_activities as $act): 
-                                            $is_done = !empty($act['completed_at']);
-                                        ?>
+                                        <?php 
+                                    $is_day_wise = ($selected_plan_detail['plan_type'] ?? 'date_wise') === 'day_wise';
+                                    foreach ($plan_activities as $act): 
+                                        $is_done = !empty($act['completed_at']);
+                                        $day_label = $is_day_wise ? ("Day " . str_pad($act['day_number'], 2, '0', STR_PAD_LEFT)) : $act['activity_date'];
+                                    ?>
                                             <div style="background:#f8fafc; border:1px solid var(--border); border-radius:10px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center;">
                                                 <div>
                                                     <strong style="font-size:0.85rem; color:var(--text-main);"><?php echo r_esc($act['activity_title']); ?></strong>
                                                     <div style="font-size:0.75rem; color:var(--text-muted);">
-                                                        <?php echo r_esc($act['activity_date']); ?> · <?php echo r_esc($act['subject']); ?> · <?php echo r_esc($act['chapter']); ?>
+                                                        <?php echo r_esc($day_label); ?> · <?php echo r_esc($act['subject']); ?> · <?php echo r_esc($act['chapter']); ?>
                                                     </div>
                                                     <?php if ($is_done): ?>
                                                         <small style="display:block; font-size:0.7rem; color:#10b981; margin-top:2px;">

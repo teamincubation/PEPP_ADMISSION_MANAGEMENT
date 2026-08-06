@@ -36,6 +36,9 @@ try {
         $status = trim($data['status'] ?? 'draft');
         $is_template = isset($data['is_template']) ? (int)$data['is_template'] : 0;
         
+        $plan_type = trim($data['plan_type'] ?? 'date_wise');
+        $total_days = !empty($data['total_days']) ? (int)$data['total_days'] : null;
+        
         $custom_settings = isset($data['custom_settings']) ? json_encode($data['custom_settings']) : null;
         
         if (empty($title) || empty($academic_year) || empty($start_date) || empty($end_date)) {
@@ -51,13 +54,13 @@ try {
                 UPDATE study_plans SET
                     title = ?, academic_year = ?, course_id = ?, description = ?,
                     cover_image = ?, theme = ?, layout = ?, start_date = ?, end_date = ?,
-                    status = ?, is_template = ?, custom_settings = ?, updated_at = NOW()
+                    status = ?, is_template = ?, custom_settings = ?, plan_type = ?, total_days = ?, updated_at = NOW()
                 WHERE id = ?
             ");
             $stmt->execute([
                 $title, $academic_year, $course_id, $description,
                 $cover_image, $theme, $layout, $start_date, $end_date,
-                $status, $is_template, $custom_settings, $id
+                $status, $is_template, $custom_settings, $plan_type, $total_days, $id
             ]);
             $plan_id = $id;
             
@@ -70,13 +73,13 @@ try {
                 INSERT INTO study_plans (
                     title, academic_year, course_id, description,
                     cover_image, theme, layout, start_date, end_date,
-                    status, is_template, custom_settings, created_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                    status, is_template, custom_settings, plan_type, total_days, created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
             ");
             $stmt->execute([
                 $title, $academic_year, $course_id, $description,
                 $cover_image, $theme, $layout, $start_date, $end_date,
-                $status, $is_template, $custom_settings, $admin_username
+                $status, $is_template, $custom_settings, $plan_type, $total_days, $admin_username
             ]);
             $plan_id = $pdo->lastInsertId();
             

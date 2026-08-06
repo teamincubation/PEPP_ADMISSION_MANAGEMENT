@@ -367,6 +367,13 @@ try {
             }
         } catch (Exception $e) {}
 
+        try {
+            $cols_plan = $pdo->query("SHOW COLUMNS FROM study_plans LIKE 'plan_type'")->fetch();
+            if (!$cols_plan) {
+                $pdo->exec("ALTER TABLE study_plans ADD COLUMN `plan_type` ENUM('date_wise', 'day_wise') NOT NULL DEFAULT 'date_wise', ADD COLUMN `total_days` INT DEFAULT NULL");
+            }
+        } catch (Exception $e) {}
+
     } catch (Exception $dbEx) {
         error_log("PEPP self-healing DB check failed: " . $dbEx->getMessage());
     }

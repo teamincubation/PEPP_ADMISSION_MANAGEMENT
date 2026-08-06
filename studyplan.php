@@ -775,8 +775,14 @@ if ($is_logged_in && $selected_plan_id > 0) {
                             $grouped[$act['activity_date']][] = $act;
                         }
                         
+                        $is_day_wise = ($selected_plan['plan_type'] ?? 'date_wise') === 'day_wise';
+                        
                         foreach ($grouped as $date => $items):
                             $date_lbl = date('d M Y (D)', strtotime($date));
+                            if ($is_day_wise) {
+                                $dayNum = !empty($items[0]['day_number']) ? $items[0]['day_number'] : 1;
+                                $date_lbl = "Day " . str_pad($dayNum, 2, '0', STR_PAD_LEFT);
+                            }
                             $total_date_tasks = count($items);
                             $completed_date_tasks = 0;
                             foreach ($items as $it) {
