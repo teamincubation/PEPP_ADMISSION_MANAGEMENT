@@ -340,7 +340,16 @@ $search = trim($_GET['search'] ?? '');
 $start_date = trim($_GET['start_date'] ?? '');
 $end_date = trim($_GET['end_date'] ?? '');
 $page = max(1, (int)($_GET['page'] ?? 1));
-$limit = max(10, (int)($_GET['limit'] ?? 20));
+$limit = 50;
+try {
+    $db_limit = (int)$pdo->query("SELECT value FROM settings WHERE key_name = 'campaign_responses_limit'")->fetchColumn();
+    if ($db_limit >= 10) {
+        $limit = $db_limit;
+    }
+} catch (Exception $e) {}
+if (isset($_GET['limit'])) {
+    $limit = max(10, (int)$_GET['limit']);
+}
 $offset = ($page - 1) * $limit;
 
 // Base queries for Submissions listing (excl. soft-deleted)
@@ -698,7 +707,7 @@ include 'includes/admin_nav.php';
         </thead>
         <tbody>
             <?php 
-            $sl_no = $offset + 1;
+            $sl_no = $total_rows - $offset;
             if (empty($submissions)): 
             ?>
                 <tr>
@@ -716,7 +725,7 @@ include 'includes/admin_nav.php';
                         <input type="checkbox" class="row-checkbox" value="<?php echo $s['id']; ?>" onclick="updateRowSelection()" style="accent-color:var(--accent);">
                     </td>
                     <td style="padding:15px; font-size:0.85rem; font-weight:700; color:var(--text-muted);">
-                        <?php echo $sl_no++; ?>
+                        <?php echo $sl_no--; ?>
                     </td>
                     <td style="padding:15px; white-space:nowrap; font-size:0.85rem; font-weight:700; color:var(--text-main); display:flex; align-items:center; gap:6px;">
                         <span><?php echo date('d M Y, h:i A', strtotime($s['submitted_at'])); ?></span>
