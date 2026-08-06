@@ -6,6 +6,55 @@ require_once 'includes/email_campaigns_helper.php';
 // Auto-run self-healing table check
 check_and_create_email_campaign_tables($pdo);
 
+// Handle CSV Report Download BEFORE layout output
+if (isset($_GET['action']) && $_GET['action'] === 'download_report') {
+    $campaign_id = (int)($_GET['campaign_id'] ?? 0);
+    try {
+        $stmt_camp = $pdo->prepare("SELECT * FROM email_campaigns WHERE id = ?");
+        $stmt_camp->execute([$campaign_id]);
+        $campaign = $stmt_camp->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$campaign) {
+            die('Campaign not found.');
+        }
+        
+        $stmt_queue = $pdo->prepare("SELECT * FROM email_queue WHERE campaign_id = ? ORDER BY id ASC");
+        $stmt_queue->execute([$campaign_id]);
+        $queue_items = $stmt_queue->fetchAll(PDO::FETCH_ASSOC);
+        
+        $filename = 'campaign_report_' . $campaign_id . '_' . date('Ymd_His') . '.csv';
+        
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+        
+        $output = fopen('php://output', 'w');
+        fputs($output, "\xEF\xBB\xBF"); // BOM for Excel
+        
+        fputcsv($output, ['Sl. No.', 'Recipient Name', 'Recipient Email', 'Student ID', 'Subject', 'Status', 'Sent At', 'Error Message']);
+        
+        $sl = 1;
+        foreach ($queue_items as $item) {
+            fputcsv($output, [
+                $sl++,
+                $item['recipient_name'],
+                $item['recipient_email'],
+                $item['student_id'],
+                $item['subject'],
+                ucfirst($item['status']),
+                $item['sent_at'] ? date('d M Y, h:i A', strtotime($item['sent_at'])) : 'N/A',
+                $item['error_message'] ?: 'None'
+            ]);
+        }
+        
+        fclose($output);
+        exit();
+    } catch (Exception $e) {
+        die('Error generating report: ' . $e->getMessage());
+    }
+}
+
 // Handle AJAX Targets Resolution BEFORE layout output
 if (isset($_GET['action']) && $_GET['action'] === 'resolve_targets') {
     header('Content-Type: application/json');
@@ -669,16 +718,19 @@ include 'includes/admin_nav.php';
                                     <?php endif; ?>
                                 </td>
                                 <td style="padding:12px 16px; text-align:right; vertical-align:middle;">
-                                    <?php if ($camp['status'] === 'scheduled'): ?>
-                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Cancel this scheduled campaign?');">
-                                            <?php echo csrf_field(); ?>
-                                            <input type="hidden" name="action" value="cancel_campaign">
-                                            <input type="hidden" name="campaign_id" value="<?php echo $camp['id']; ?>">
-                                            <button class="btn btn-sm btn-soft-red" type="submit"><i class="fas fa-xmark"></i> Cancel</button>
-                                        </form>
-                                    <?php else: ?>
-                                        <span class="cell-sub">-</span>
-                                    <?php endif; ?>
+                                    <div style="display:inline-flex; gap:6px; justify-content:flex-end; align-items:center;">
+                                        <a href="email-campaigns.php?action=download_report&campaign_id=<?php echo $camp['id']; ?>" class="btn btn-sm btn-outline" title="Download CSV Report" style="padding: 4px 8px; font-size: 0.8rem; height: 28px; line-height: 1.2; display: inline-flex; align-items: center; gap: 4px;">
+                                            <i class="fas fa-download"></i> Report
+                                        </a>
+                                        <?php if ($camp['status'] === 'scheduled'): ?>
+                                            <form method="POST" style="display:inline;" onsubmit="return confirm('Cancel this scheduled campaign?');">
+                                                <?php echo csrf_field(); ?>
+                                                <input type="hidden" name="action" value="cancel_campaign">
+                                                <input type="hidden" name="campaign_id" value="<?php echo $camp['id']; ?>">
+                                                <button class="btn btn-sm btn-soft-red" type="submit" style="padding: 4px 8px; font-size: 0.8rem; height: 28px; line-height: 1.2; display: inline-flex; align-items: center; gap: 4px;"><i class="fas fa-xmark"></i> Cancel</button>
+                                            </form>
+                                        <?php endif; ?>
+                                    </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
