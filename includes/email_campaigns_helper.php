@@ -39,6 +39,14 @@ function check_and_create_email_campaign_tables($pdo) {
               KEY `idx_eq_campaign` (`campaign_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ");
+        
+        // Self-healing columns check
+        try {
+            $cols = $pdo->query("SHOW COLUMNS FROM email_campaigns LIKE 'target_forms'")->fetch();
+            if (!$cols) {
+                $pdo->exec("ALTER TABLE email_campaigns ADD COLUMN `target_forms` TEXT DEFAULT NULL AFTER `target_courses`");
+            }
+        } catch (Exception $e) {}
     } catch (Exception $e) {
         error_log("Email campaign tables check/creation failed: " . $e->getMessage());
     }
@@ -78,7 +86,7 @@ function build_campaign_email_html($custom_body) {
       <div style="font-size:12px;color:rgba(255,255,255,.85);margin-top:2px;">Labinc Education Pvt. Ltd.</div>
   </td></tr>
   <tr><td style="padding:32px 32px 28px; font-size:15px; color:#1f2937; line-height:1.6;">
-      ' . nl2br($custom_body) . '
+      ' . $custom_body . '
   </td></tr>
   <tr><td style="background:#1c1917;padding:16px 32px;text-align:center;">
       <div style="font-size:11px;color:#a8a29e;">&copy; ' . date('Y') . ' PEPP Learning &mdash; Labinc Education Pvt. Ltd. &middot; www.pepplearning.com</div>
@@ -104,28 +112,111 @@ function email_campaigns_send_due($pdo) {
             $pdo->prepare("UPDATE email_campaigns SET status = 'sending' WHERE id = ?")->execute([$camp['id']]);
             
             // Resolve courses
-            $courses = array_filter(array_map('trim', explode(',', $camp['target_courses'])));
-            if (empty($courses)) {
+            $courses = array_filter(array_map('trim', explode(',', $camp['target_courses'] ?? '')));
+            $students = [];
+            if (!empty($courses)) {
+                $placeholders = implode(',', array_fill(0, count($courses), '?'));
+                $u_stmt = $pdo->prepare("SELECT user_id, name, email, pepp_course FROM users WHERE status = 'approved' AND pepp_course IN ($placeholders)");
+                $u_stmt->execute($courses);
+                $students = $u_stmt->fetchAll(PDO::FETCH_ASSOC);
+            }
+            
+            // Resolve forms
+            $forms = array_filter(array_map('intval', explode(',', $camp['target_forms'] ?? '')));
+            $form_users = [];
+            if (!empty($forms)) {
+                $placeholders_f = implode(',', array_fill(0, count($forms), '?'));
+                $f_stmt = $pdo->prepare("
+                    SELECT s.id as submission_id, s.respondent_identifier, s.form_id, f.title as form_title
+                    FROM campaign_form_submissions s
+                    JOIN campaign_forms f ON s.form_id = f.id
+                    WHERE s.form_id IN ($placeholders_f) AND s.is_deleted = 0
+                ");
+                $f_stmt->execute($forms);
+                $submissions = $f_stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                foreach ($submissions as $sub) {
+                    $email = $sub['respondent_identifier'];
+                    
+                    // Fetch name from answers
+                    $stmt_name = $pdo->prepare("
+                        SELECT a.answer_text 
+                        FROM campaign_form_answers a
+                        JOIN campaign_form_fields f ON a.field_id = f.id
+                        WHERE a.submission_id = ? AND (f.label LIKE '%name%' OR f.field_name LIKE '%name%')
+                        ORDER BY f.sort_order ASC
+                        LIMIT 1
+                    ");
+                    $stmt_name->execute([$sub['submission_id']]);
+                    $name = $stmt_name->fetchColumn();
+                    
+                    // Fetch email if respondent_identifier is not email
+                    if (empty($email) || strpos($email, '@') === false) {
+                        $stmt_email = $pdo->prepare("
+                            SELECT a.answer_text 
+                            FROM campaign_form_answers a
+                            JOIN campaign_form_fields f ON a.field_id = f.id
+                            WHERE a.submission_id = ? AND (f.type = 'email' OR f.label LIKE '%email%' OR f.field_name LIKE '%email%')
+                            ORDER BY f.sort_order ASC
+                            LIMIT 1
+                        ");
+                        $stmt_email->execute([$sub['submission_id']]);
+                        $ans_email = $stmt_email->fetchColumn();
+                        if ($ans_email) {
+                            $email = $ans_email;
+                        }
+                    }
+                    
+                    if (!empty($email) && strpos($email, '@') !== false) {
+                        $form_users[] = [
+                            'user_id' => 'form_' . $sub['submission_id'],
+                            'name' => $name ?: 'Form Registrant',
+                            'email' => $email,
+                            'pepp_course' => $sub['form_title']
+                        ];
+                    }
+                }
+            }
+            
+            // Merge uniquely by email address
+            $recipients = [];
+            $seen_emails = [];
+            foreach ($students as $s) {
+                if (empty($s['email'])) continue;
+                $lowercase_email = strtolower(trim($s['email']));
+                if (!isset($seen_emails[$lowercase_email])) {
+                    $seen_emails[$lowercase_email] = true;
+                    $recipients[] = [
+                        'user_id' => $s['user_id'],
+                        'name' => $s['name'],
+                        'email' => $s['email'],
+                        'pepp_course' => $s['pepp_course']
+                    ];
+                }
+            }
+            foreach ($form_users as $fu) {
+                $lowercase_email = strtolower(trim($fu['email']));
+                if (!isset($seen_emails[$lowercase_email])) {
+                    $seen_emails[$lowercase_email] = true;
+                    $recipients[] = $fu;
+                }
+            }
+            
+            if (empty($recipients)) {
                 $pdo->prepare("UPDATE email_campaigns SET status = 'sent' WHERE id = ?")->execute([$camp['id']]);
                 continue;
             }
-            
-            $placeholders = implode(',', array_fill(0, count($courses), '?'));
-            $u_stmt = $pdo->prepare("SELECT user_id, name, email, pepp_course FROM users WHERE status = 'approved' AND pepp_course IN ($placeholders)");
-            $u_stmt->execute($courses);
-            $students = $u_stmt->fetchAll(PDO::FETCH_ASSOC);
             
             // Queue individuals
             $search = ['{name}', '{email}', '{course}', '{user_id}'];
             $ins = $pdo->prepare("INSERT INTO email_queue (campaign_id, student_id, recipient_email, recipient_name, subject, body, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', NOW())");
             
-            foreach ($students as $s) {
-                if (empty($s['email'])) continue;
-                $replace = [$s['name'], $s['email'], $s['pepp_course'], $s['user_id']];
+            foreach ($recipients as $r) {
+                $replace = [$r['name'], $r['email'], $r['pepp_course'], $r['user_id']];
                 $custom_subj = str_replace($search, $replace, $camp['subject']);
                 $custom_body = str_replace($search, $replace, $camp['body']);
                 
-                $ins->execute([$camp['id'], $s['user_id'], $s['email'], $s['name'], $custom_subj, $custom_body]);
+                $ins->execute([$camp['id'], $r['user_id'], $r['email'], $r['name'], $custom_subj, $custom_body]);
             }
             
             $pdo->prepare("UPDATE email_campaigns SET status = 'sent' WHERE id = ?")->execute([$camp['id']]);

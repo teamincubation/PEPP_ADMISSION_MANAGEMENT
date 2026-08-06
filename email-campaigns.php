@@ -18,6 +18,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $subject = trim($_POST['subject'] ?? '');
             $body = trim($_POST['body'] ?? '');
             $target_courses = $_POST['scope_course'] ?? [];
+            $target_forms = $_POST['scope_form'] ?? [];
             $send_option = $_POST['send_option'] ?? 'instant';
             $scheduled_at = $_POST['scheduled_at'] ?? '';
             
@@ -27,10 +28,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $target_courses = [];
             }
             
-            if ($subject === '' || $body === '' || empty($target_courses)) {
-                $error_message = 'Subject, Body, and at least one Target Course are required.';
+            if (is_array($target_forms)) {
+                $target_forms = array_filter(array_map('intval', $target_forms));
+            } else {
+                $target_forms = [];
+            }
+            
+            if ($subject === '' || $body === '' || (empty($target_courses) && empty($target_forms))) {
+                $error_message = 'Subject, Body, and at least one Target Course or Target Form are required.';
             } else {
                 $courses_str = implode(',', $target_courses);
+                $forms_str = implode(',', $target_forms);
                 $status = 'scheduled';
                 $sched_time = null;
                 
@@ -45,8 +53,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 if ($error_message === '') {
                     try {
-                        $stmt = $pdo->prepare("INSERT INTO email_campaigns (subject, body, target_courses, scheduled_at, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())");
-                        $stmt->execute([$subject, $body, $courses_str, $sched_time, $status, $admin_username]);
+                        $stmt = $pdo->prepare("INSERT INTO email_campaigns (subject, body, target_courses, target_forms, scheduled_at, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())");
+                        $stmt->execute([$subject, $body, $courses_str, $forms_str, $sched_time, $status, $admin_username]);
                         $campaign_id = $pdo->lastInsertId();
                         
                         log_admin_activity($pdo, $admin_username, 'email_campaign_created', "Created email campaign \"{$subject}\"");
@@ -89,6 +97,12 @@ try {
     $courses = $pdo->query("SELECT DISTINCT course_name FROM pepp_courses ORDER BY course_name")->fetchAll(PDO::FETCH_COLUMN);
 } catch (Exception $e) {}
 
+// Fetch active forms for targeting
+$active_forms = [];
+try {
+    $active_forms = $pdo->query("SELECT id, title FROM campaign_forms WHERE is_deleted = 0 ORDER BY title")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {}
+
 // Fetch campaign history with queue statistics
 $campaigns = [];
 try {
@@ -108,6 +122,27 @@ $active_page = 'email-campaigns';
 $page_title = 'Email Campaigns';
 include 'includes/admin_nav.php';
 ?>
+
+<link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
+<style>
+.ql-toolbar.ql-snow {
+    border-color: var(--border) !important;
+    background: #f8fafc;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+}
+.ql-container.ql-snow {
+    border-color: var(--border) !important;
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
+    font-family: inherit;
+    font-size: 0.95rem;
+}
+.ql-editor {
+    min-height: 200px;
+}
+</style>
 
 <div class="page-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
     <div>
@@ -136,19 +171,37 @@ include 'includes/admin_nav.php';
                 <?php echo csrf_field(); ?>
                 <input type="hidden" name="action" value="create_campaign">
                 
-                <div class="field" style="margin-bottom:16px;">
-                    <label style="font-weight:600; display:block; margin-bottom:6px;">Target Courses <span class="req">*</span></label>
-                    <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:12px; max-height:160px; overflow-y:auto;">
-                        <?php if (empty($courses)): ?>
-                            <p style="margin:0; color:var(--text-muted); font-size:0.9rem;">No courses available. Add courses in settings first.</p>
-                        <?php else: ?>
-                            <?php foreach ($courses as $c): ?>
-                                <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:0.9rem; cursor:pointer;">
-                                    <input type="checkbox" name="scope_course[]" value="<?php echo htmlspecialchars($c); ?>" style="width:auto;">
-                                    <?php echo htmlspecialchars($c); ?>
-                                </label>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
+                    <div class="field">
+                        <label style="font-weight:600; display:block; margin-bottom:6px;">Target Courses</label>
+                        <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:12px; height:120px; overflow-y:auto;">
+                            <?php if (empty($courses)): ?>
+                                <p style="margin:0; color:var(--text-muted); font-size:0.9rem;">No courses available.</p>
+                            <?php else: ?>
+                                <?php foreach ($courses as $c): ?>
+                                    <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:0.9rem; cursor:pointer;">
+                                        <input type="checkbox" name="scope_course[]" value="<?php echo htmlspecialchars($c); ?>" style="width:auto;">
+                                        <?php echo htmlspecialchars($c); ?>
+                                    </label>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label style="font-weight:600; display:block; margin-bottom:6px;">Target Forms</label>
+                        <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:12px; height:120px; overflow-y:auto;">
+                            <?php if (empty($active_forms)): ?>
+                                <p style="margin:0; color:var(--text-muted); font-size:0.9rem;">No active forms available.</p>
+                            <?php else: ?>
+                                <?php foreach ($active_forms as $f): ?>
+                                    <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:0.9rem; cursor:pointer;">
+                                        <input type="checkbox" name="scope_form[]" value="<?php echo (int)$f['id']; ?>" style="width:auto;">
+                                        <?php echo htmlspecialchars($f['title']); ?>
+                                    </label>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
                     </div>
                 </div>
 
@@ -165,16 +218,17 @@ include 'includes/admin_nav.php';
 
                 <div class="field" style="margin-bottom:16px;">
                     <label style="font-weight:600; display:block; margin-bottom:4px;">Email Body Content <span class="req">*</span></label>
-                    <textarea name="body" id="camp-body" rows="8" placeholder="Hello {name},&#10;&#10;We are writing to update you on..." required style="width:100%; padding:10px; border-radius:6px; border:1px solid var(--border); font-family:inherit; resize:vertical;"></textarea>
+                    <div id="editor-container" style="height: 250px; background:#fff; border-radius:6px; border:1px solid var(--border); overflow: hidden;"></div>
+                    <input type="hidden" name="body" id="body-input">
                     <div style="margin-top:6px; display:flex; gap:6px; align-items:center; margin-bottom:12px;">
                         <span style="font-size:0.8rem; color:var(--text-muted);">Insert tokens:</span>
-                        <button type="button" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size:0.75rem;" onclick="insertPlaceholder('camp-body', '{name}')">{name}</button>
-                        <button type="button" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size:0.75rem;" onclick="insertPlaceholder('camp-body', '{email}')">{email}</button>
-                        <button type="button" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size:0.75rem;" onclick="insertPlaceholder('camp-body', '{course}')">{course}</button>
-                        <button type="button" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size:0.75rem;" onclick="insertPlaceholder('camp-body', '{user_id}')">{user_id}</button>
+                        <button type="button" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size:0.75rem;" onclick="insertQuillPlaceholder('{name}')">{name}</button>
+                        <button type="button" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size:0.75rem;" onclick="insertQuillPlaceholder('{email}')">{email}</button>
+                        <button type="button" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size:0.75rem;" onclick="insertQuillPlaceholder('{course}')">{course}</button>
+                        <button type="button" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size:0.75rem;" onclick="insertQuillPlaceholder('{user_id}')">{user_id}</button>
                     </div>
                     <p style="font-size:0.8rem; color:var(--text-muted); margin:0; line-height:1.4;">
-                        <i class="fas fa-circle-info"></i> Standard HTML tags (like <strong>&lt;b&gt;</strong>, <em>&lt;i&gt;</em>, &lt;a&gt;) can be used. Line breaks are converted to &lt;br&gt; tags automatically.
+                        <i class="fas fa-circle-info"></i> Use the formatting toolbar to customize fonts, bold text, links, colors, and lists. Tokens are replaced per recipient automatically.
                     </p>
                 </div>
 
@@ -300,6 +354,47 @@ include 'includes/admin_nav.php';
 </div>
 
 <script>
+var quill = new Quill('#editor-container', {
+    theme: 'snow',
+    modules: {
+        toolbar: [
+            [{ 'header': [1, 2, 3, false] }],
+            ['bold', 'italic', 'underline', 'strike'],
+            [{ 'color': [] }, { 'background': [] }],
+            [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+            ['link', 'clean']
+        ]
+    }
+});
+
+// Submit form bindings
+document.getElementById('campaign-form').addEventListener('submit', function(e) {
+    var bodyContent = quill.root.innerHTML;
+    // Check if empty
+    if (quill.getText().trim() === '') {
+        alert('Email Body Content is required.');
+        e.preventDefault();
+        return false;
+    }
+    
+    // Check that at least one checkbox is checked
+    var coursesChecked = document.querySelectorAll('input[name="scope_course[]"]:checked').length;
+    var formsChecked = document.querySelectorAll('input[name="scope_form[]"]:checked').length;
+    if (coursesChecked === 0 && formsChecked === 0) {
+        alert('Please select at least one Target Course or Target Form.');
+        e.preventDefault();
+        return false;
+    }
+    
+    document.getElementById('body-input').value = bodyContent;
+});
+
+function insertQuillPlaceholder(token) {
+    var range = quill.getSelection(true);
+    quill.insertText(range.index, token);
+    quill.setSelection(range.index + token.length);
+}
+
 function insertPlaceholder(fieldId, token) {
     var field = document.getElementById(fieldId);
     if (!field) return;
