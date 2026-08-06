@@ -175,15 +175,6 @@ if ($is_logged_in) {
     } catch (Exception $e) {}
 }
 
-// Auto-select first card if not set
-if ($is_logged_in && !isset($_GET['course_name']) && !isset($_GET['form_id']) && !isset($_GET['plan_id'])) {
-    if (!empty($my_courses)) {
-        $_GET['course_name'] = $my_courses[0];
-    } elseif (!empty($my_forms)) {
-        $_GET['form_id'] = $my_forms[0]['id'];
-    }
-}
-
 // Fetch plans inside selected course or form card
 $plans = [];
 if ($is_logged_in) {
@@ -526,7 +517,6 @@ if ($is_logged_in && $selected_plan_id > 0) {
             font-weight: 700;
             color: var(--accent);
             text-transform: uppercase;
-            margin-bottom: 8px;
         }
         
         .activity-item {
@@ -660,29 +650,43 @@ if ($is_logged_in && $selected_plan_id > 0) {
                 </div>
 
                 <!-- List plans assigned to selected target -->
-                <h3 style="font-family:var(--header-font); font-weight:700; font-size:0.9rem; color:var(--text-muted); text-transform:uppercase; margin-top:0.5rem; letter-spacing:0.5px;">Available Study Plans</h3>
-                
-                <?php if (empty($plans)): ?>
-                    <div style="text-align:center; padding:3rem; border:1px dashed var(--border); border-radius:16px; color:var(--text-muted);">
-                        <i class="fas fa-calendar-xmark" style="font-size:2.5rem; margin-bottom:8px; display:block;"></i>
-                        No study plans active for the selected card.
-                    </div>
+                <?php if (isset($_GET['course_name']) || isset($_GET['form_id'])): ?>
+                    <h3 style="font-family:var(--header-font); font-weight:700; font-size:0.9rem; color:var(--text-muted); text-transform:uppercase; margin-top:0.5rem; letter-spacing:0.5px;">Available Study Plans</h3>
+                    
+                    <?php if (empty($plans)): ?>
+                        <div style="text-align:center; padding:3rem; border:1px dashed var(--border); border-radius:16px; color:var(--text-muted);">
+                            <i class="fas fa-calendar-xmark" style="font-size:2.5rem; margin-bottom:8px; display:block;"></i>
+                            No study plans active for the selected card.
+                        </div>
+                    <?php else: ?>
+                        <div style="display:flex; flex-direction:column; gap:12px;">
+                            <?php foreach ($plans as $p): ?>
+                                <a href="?plan_id=<?php echo $p['id']; ?>" class="plan-row-card">
+                                    <div>
+                                        <div style="font-weight:700; font-size:0.95rem; color:var(--text-main);"><?php echo p_esc($p['title']); ?></div>
+                                        <small style="color:var(--text-muted);"><?php echo date('d M', strtotime($p['start_date'])); ?> to <?php echo date('d M Y', strtotime($p['end_date'])); ?></small>
+                                    </div>
+                                    <div style="width:30px; height:30px; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center;">
+                                        <i class="fas fa-arrow-right"></i>
+                                    </div>
+                                </a>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
                 <?php else: ?>
-                    <div style="display:flex; flex-direction:column; gap:12px;">
-                        <?php foreach ($plans as $p): ?>
-                            <a href="?plan_id=<?php echo $p['id']; ?>" class="plan-row-card">
-                                <div>
-                                    <div style="font-weight:700; font-size:0.95rem; color:var(--text-main);"><?php echo p_esc($p['title']); ?></div>
-                                    <small style="color:var(--text-muted);"><?php echo date('d M', strtotime($p['start_date'])); ?> to <?php echo date('d M Y', strtotime($p['end_date'])); ?></small>
-                                </div>
-                                <div style="width:30px; height:30px; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center;">
-                                    <i class="fas fa-arrow-right"></i>
-                                </div>
-                            </a>
-                        <?php endforeach; ?>
+                    <div style="text-align:center; padding:3rem; border:1px dashed var(--border); border-radius:16px; color:var(--text-muted); background:var(--bg);">
+                        <i class="fas fa-arrow-pointer" style="font-size:2rem; margin-bottom:8px; display:block; color:var(--accent);"></i>
+                        Please select a course or custom form card above to view available study plans.
                     </div>
                 <?php endif; ?>
-            <?php else: ?>
+            <?php else: 
+                // Calculate percentage stats
+                $total_tasks = count($activities);
+                $completed_tasks = count($completions);
+                $pending_tasks = $total_tasks - $completed_tasks;
+                $completed_pct = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
+                $pending_pct = $total_tasks > 0 ? 100 - $completed_pct : 0;
+            ?>
                 <!-- Render specific plan activities -->
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <a href="studyplan.php" style="text-decoration:none; color:var(--text-muted); font-size:0.85rem; font-weight:700;"><i class="fas fa-arrow-left"></i> All Plans</a>
@@ -693,17 +697,23 @@ if ($is_logged_in && $selected_plan_id > 0) {
                 <div style="position: sticky; top: 58px; background: rgba(255,255,255,0.95); backdrop-filter: blur(8px); border-bottom: 1.5px solid var(--border); padding: 10px 1.2rem; display: flex; justify-content: space-around; align-items: center; z-index: 50; margin: 0 -1.2rem 1rem -1.2rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02);">
                     <div style="text-align: center;">
                         <span style="font-size: 0.7rem; text-transform: uppercase; font-weight: 700; color: var(--text-muted); display: block;">Total Tasks</span>
-                        <strong id="header-total-tasks" style="font-size: 1.2rem; font-weight: 800; color: var(--text-main);"><?php echo count($activities); ?></strong>
+                        <strong id="header-total-tasks" style="font-size: 1.2rem; font-weight: 800; color: var(--text-main);"><?php echo $total_tasks; ?></strong>
                     </div>
                     <div style="width: 1px; height: 20px; background: var(--border);"></div>
                     <div style="text-align: center;">
                         <span style="font-size: 0.7rem; text-transform: uppercase; font-weight: 700; color: #10b981; display: block;">Completed</span>
-                        <strong id="header-completed-tasks" style="font-size: 1.2rem; font-weight: 800; color: #10b981;"><?php echo count($completions); ?></strong>
+                        <strong style="font-size: 1.2rem; font-weight: 800; color: #10b981;">
+                            <span id="header-completed-tasks"><?php echo $completed_tasks; ?></span> 
+                            (<span id="header-completed-pct"><?php echo $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0; ?></span>%)
+                        </strong>
                     </div>
                     <div style="width: 1px; height: 20px; background: var(--border);"></div>
                     <div style="text-align: center;">
                         <span style="font-size: 0.7rem; text-transform: uppercase; font-weight: 700; color: var(--accent); display: block;">Pending</span>
-                        <strong id="header-pending-tasks" style="font-size: 1.2rem; font-weight: 800; color: var(--accent);"><?php echo count($activities) - count($completions); ?></strong>
+                        <strong style="font-size: 1.2rem; font-weight: 800; color: var(--accent);">
+                            <span id="header-pending-tasks"><?php echo $pending_tasks; ?></span> 
+                            (<span id="header-pending-pct"><?php echo $total_tasks > 0 ? 100 - round(($completed_tasks / $total_tasks) * 100) : 0; ?></span>%)
+                        </strong>
                     </div>
                 </div>
                 
@@ -728,11 +738,23 @@ if ($is_logged_in && $selected_plan_id > 0) {
                         
                         foreach ($grouped as $date => $items):
                             $date_lbl = date('d M Y (D)', strtotime($date));
+                            $total_date_tasks = count($items);
+                            $completed_date_tasks = 0;
+                            foreach ($items as $it) {
+                                if (isset($completions[$it['id']])) {
+                                    $completed_date_tasks++;
+                                }
+                            }
                         ?>
                             <div class="timeline-day-node">
                                 <div class="timeline-badge"></div>
                                 <div class="timeline-card">
-                                    <div class="timeline-date-label"><?php echo $date_lbl; ?></div>
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                                        <div class="timeline-date-label" style="margin:0;"><?php echo $date_lbl; ?></div>
+                                        <div style="font-size:0.75rem; font-weight:700; color:var(--text-muted);" class="date-ratio-wrapper">
+                                            (<span class="completed-ratio-val"><?php echo $completed_date_tasks; ?></span>/<?php echo $total_date_tasks; ?>)
+                                        </div>
+                                    </div>
                                     <div style="display:flex; flex-direction:column; gap:10px;">
                                         <?php foreach ($items as $it): 
                                             $t_conf = $types_config[$it['activity_type']] ?? ['icon' => 'fa-book-open', 'color' => '#64748b'];
@@ -813,8 +835,19 @@ function toggleTaskCompletion(activityId, planId) {
                 completed--;
             }
 
+            // Update Sticky Header Numbers
+            var completedPct = total > 0 ? Math.round((completed / total) * 100) : 0;
+            var pendingPct = total > 0 ? (100 - completedPct) : 0;
+            
             document.getElementById('header-completed-tasks').innerText = completed;
+            document.getElementById('header-completed-pct').innerText = completedPct;
             document.getElementById('header-pending-tasks').innerText = total - completed;
+            document.getElementById('header-pending-pct').innerText = pendingPct;
+
+            // Update Date Ratio
+            var card = row.closest('.timeline-card');
+            var completedTasksOnDate = card.querySelectorAll('i.fa-circle-check').length;
+            card.querySelector('.completed-ratio-val').innerText = completedTasksOnDate;
         } else {
             alert('Failed to update task: ' + data.message);
         }
