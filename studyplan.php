@@ -27,13 +27,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             
             // 2. Check Custom Campaign Form Submissions
             $stmt_form = $pdo->prepare("
-                SELECT s.*, f.title as form_title 
+                SELECT DISTINCT s.*, f.title as form_title 
                 FROM campaign_form_submissions s
                 JOIN campaign_forms f ON s.form_id = f.id
-                WHERE s.respondent_identifier = ? AND s.is_deleted = 0
+                LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
+                WHERE (s.respondent_identifier = ? OR a.answer_text = ?) AND s.is_deleted = 0
                 LIMIT 1
             ");
-            $stmt_form->execute([$email]);
+            $stmt_form->execute([$email, $email]);
             $form_user = $stmt_form->fetch();
             
             if ($student || $form_user) {
@@ -111,6 +112,8 @@ if ($is_logged_in) {
                 )) OR
                 (sa.assignment_type = 'form' AND sa.assigned_value IN (
                     SELECT CAST(form_id AS CHAR) FROM campaign_form_submissions WHERE respondent_identifier = ? AND is_deleted = 0
+                    UNION
+                    SELECT CAST(s.form_id AS CHAR) FROM campaign_form_submissions s JOIN campaign_form_answers a ON s.id = a.submission_id WHERE a.answer_text = ? AND s.is_deleted = 0
                 )) OR
                 (sa.assignment_type = 'student' AND sa.assigned_value IN (
                     SELECT user_id FROM users WHERE email = ? AND status = 'approved'
@@ -119,7 +122,7 @@ if ($is_logged_in) {
             ORDER BY sp.start_date ASC
         ";
         $stmt = $pdo->prepare($sql);
-        $stmt->execute([$email, $email, $email]);
+        $stmt->execute([$email, $email, $email, $email]);
         $plans = $stmt->fetchAll();
     } catch (Exception $e) {
         $plans = [];
