@@ -89,7 +89,41 @@ a:hover { text-decoration: underline; }
     text-transform: uppercase;
     letter-spacing: 0.8px;
     color: var(--muted-foreground);
-    padding: 0 10px 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    user-select: none;
+    transition: color 0.15s ease;
+}
+.nav-section-label:hover {
+    color: var(--foreground);
+}
+.nav-section-label::after {
+    content: '\f107'; /* fontawesome angle-down */
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    font-size: 0.72rem;
+    transition: transform 0.2s ease;
+    opacity: 0.6;
+}
+.nav-section.collapsed .nav-section-label::after {
+    transform: rotate(-90deg);
+}
+.nav-section-content {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 800px;
+    opacity: 1;
+    overflow: hidden;
+    transition: max-height 0.25s ease-in-out, opacity 0.2s ease-in-out;
+}
+.nav-section.collapsed .nav-section-content {
+    max-height: 0;
+    opacity: 0;
+    pointer-events: none;
 }
 .nav-item {
     display: flex;
