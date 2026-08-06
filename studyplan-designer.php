@@ -205,10 +205,13 @@ include 'includes/admin_nav.php';
     <!-- Left Configuration & Designer Tools Panel -->
     <div class="designer-panel">
         <div class="panel-header-sticky">
-            <h3 style="font-weight: 800; font-size: 1rem; display: flex; align-items: center; gap: 8px;">
-                <i class="fas fa-screwdriver-wrench" style="color:var(--accent);"></i> Designer Controls
-            </h3>
-            <div style="display:flex; gap:8px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+                <a href="studyplans.php" class="btn btn-outline btn-sm" style="padding: 4px 8px; font-weight:700; text-decoration:none;"><i class="fas fa-arrow-left"></i> Back</a>
+                <h3 style="font-weight: 800; font-size: 1rem; display: flex; align-items: center; gap: 4px; margin: 0;">
+                    <i class="fas fa-screwdriver-wrench" style="color:var(--accent);"></i> Designer
+                </h3>
+            </div>
+            <div style="display:flex; gap:6px;">
                 <button type="button" class="btn btn-outline btn-sm" onclick="triggerImport()"><i class="fas fa-file-import"></i> Bulk Import</button>
                 <button type="button" class="btn btn-primary btn-sm" onclick="saveStudyPlan()"><i class="fas fa-floppy-disk"></i> Save Plan</button>
             </div>
@@ -529,14 +532,73 @@ include 'includes/admin_nav.php';
 
     function togglePlanTypeView() {
         var isDateWise = document.getElementById('type-date-wise').checked;
+        var startInput = document.getElementById('plan-start').value;
+        var endInput = document.getElementById('plan-end').value;
+
         if (isDateWise) {
             document.getElementById('date-wise-start-wrap').style.display = 'block';
             document.getElementById('date-wise-end-wrap').style.display = 'block';
             document.getElementById('day-wise-days-wrap').style.display = 'none';
+
+            // Shifting from Day Wise back to Date Wise:
+            // Translate relative placeholder dates starting with 2000-01-01 back to calendar dates
+            if (startInput) {
+                var baseDate = new Date(startInput);
+                activities.forEach(function(act) {
+                    if (act.activity_date && act.activity_date.startsWith('2000-')) {
+                        var dummyD = new Date(act.activity_date);
+                        var offsetD = new Date('2000-01-01');
+                        var diffT = dummyD - offsetD;
+                        var diffDays = Math.floor(diffT / (1000 * 60 * 60 * 24));
+                        if (diffDays < 0) diffDays = 0;
+                        
+                        var newD = new Date(baseDate);
+                        newD.setDate(newD.getDate() + diffDays);
+                        var yyyy = newD.getFullYear();
+                        var mm = String(newD.getMonth() + 1).padStart(2, '0');
+                        var dd = String(newD.getDate()).padStart(2, '0');
+                        act.activity_date = yyyy + '-' + mm + '-' + dd;
+                        act.day_number = diffDays + 1;
+                    }
+                });
+            }
         } else {
             document.getElementById('date-wise-start-wrap').style.display = 'none';
             document.getElementById('date-wise-end-wrap').style.display = 'none';
             document.getElementById('day-wise-days-wrap').style.display = 'block';
+
+            // Shifting from Date Wise to Day Count Wise:
+            // 1. Auto-calculate total days and set total number of days input
+            if (startInput && endInput) {
+                var startD = new Date(startInput);
+                var endD = new Date(endInput);
+                var diffTime = Math.abs(endD - startD);
+                var totalDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+                if (totalDays > 0) {
+                    document.getElementById('plan-total-days').value = totalDays;
+                }
+            }
+
+            // 2. Translate current calendar dates to relative dates starting from 2000-01-01
+            if (startInput) {
+                var baseDate = new Date(startInput);
+                activities.forEach(function(act) {
+                    if (act.activity_date && !act.activity_date.startsWith('2000-')) {
+                        var actD = new Date(act.activity_date);
+                        var diffT = actD - baseDate;
+                        var diffDays = Math.floor(diffT / (1000 * 60 * 60 * 24));
+                        if (diffDays < 0) diffDays = 0;
+                        
+                        var newD = new Date('2000-01-01');
+                        newD.setDate(newD.getDate() + diffDays);
+                        var yyyy = newD.getFullYear();
+                        var mm = String(newD.getMonth() + 1).padStart(2, '0');
+                        var dd = String(newD.getDate()).padStart(2, '0');
+                        act.activity_date = yyyy + '-' + mm + '-' + dd;
+                        act.day_number = diffDays + 1;
+                    }
+                });
+            }
         }
         regenerateDatesPreview();
     }

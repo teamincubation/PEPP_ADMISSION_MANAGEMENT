@@ -153,8 +153,13 @@ include 'includes/admin_nav.php';
                             <div class="cell-sub">Batch: <?php echo htmlspecialchars($p['academic_year']); ?></div>
                         </td>
                         <td>
-                            <div style="font-size:0.85rem; font-weight:600;"><i class="fas fa-clock" style="color:var(--accent);"></i> <?php echo date('d M Y', strtotime($p['start_date'])); ?></div>
-                            <div class="cell-sub">to <?php echo date('d M Y', strtotime($p['end_date'])); ?></div>
+                            <?php if (($p['plan_type'] ?? 'date_wise') === 'day_wise'): ?>
+                                <div style="font-size:0.85rem; font-weight:600;"><i class="fas fa-calendar-day" style="color:var(--accent);"></i> <?php echo ($p['total_days'] ?? 0); ?> Days</div>
+                                <div class="cell-sub">Day Count Wise</div>
+                            <?php else: ?>
+                                <div style="font-size:0.85rem; font-weight:600;"><i class="fas fa-clock" style="color:var(--accent);"></i> <?php echo date('d M Y', strtotime($p['start_date'])); ?></div>
+                                <div class="cell-sub">to <?php echo date('d M Y', strtotime($p['end_date'])); ?></div>
+                            <?php endif; ?>
                         </td>
                         <td>
                             <span class="badge blue" style="font-weight:700;">v<?php echo $p['version']; ?></span>
