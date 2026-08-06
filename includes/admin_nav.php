@@ -318,6 +318,23 @@ $nav_data = [
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="assets/css/admin-theme.css" rel="stylesheet">
     <style>
+        /* Selected/active sub-category menu styles: dark background with white icon & font */
+        .nav-item.active {
+            background: #0f172a !important;
+            color: #ffffff !important;
+            font-weight: 600;
+        }
+        .nav-item.active i {
+            color: #ffffff !important;
+        }
+        html.theme-dark .nav-item.active {
+            background: #4f46e5 !important;
+            color: #ffffff !important;
+        }
+        html.theme-dark .nav-item.active i {
+            color: #ffffff !important;
+        }
+
         /* Custom sidebar category background and high-visibility text colors */
         .nav-section-label.cat-overview {
             background: rgba(148, 163, 184, 0.12) !important;
