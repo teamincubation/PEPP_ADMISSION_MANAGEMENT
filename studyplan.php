@@ -607,7 +607,7 @@ if ($is_logged_in && $selected_plan_id > 0) {
                 
                 <div class="form-group">
                     <label>Registered Email Address</label>
-                    <input type="email" name="email" class="form-input" placeholder="e.g. adnan@gmail.com" required>
+                    <input type="email" name="email" class="form-input" placeholder="e.g. student@example.com" required>
                 </div>
                 
                 <button type="submit" class="btn-submit"><i class="fas fa-arrow-right-to-bracket"></i> Retrieve Study Journey</button>
