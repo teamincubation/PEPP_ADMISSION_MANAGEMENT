@@ -274,6 +274,9 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
             <a class="nav-item <?php echo nav_active('studyplans', $active_page); ?>" href="studyplans.php">
                 <i class="fas fa-calendar-days"></i> Study Plans
             </a>
+            <a class="nav-item <?php echo nav_active('student-study-reports', $active_page); ?>" href="student-study-reports.php">
+                <i class="fas fa-chart-line"></i> Student Reports
+            </a>
             <?php endif; ?>
         </div>
         <?php endif; ?>

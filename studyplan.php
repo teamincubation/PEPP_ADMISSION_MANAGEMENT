@@ -12,6 +12,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_completion') {
     
     $activity_id = (int)($_POST['activity_id'] ?? 0);
     $plan_id = (int)($_POST['study_plan_id'] ?? 0);
+    $latitude = !empty($_POST['latitude']) ? trim($_POST['latitude']) : null;
+    $longitude = !empty($_POST['longitude']) ? trim($_POST['longitude']) : null;
     $email = $_SESSION['sp_email'];
     
     if ($activity_id <= 0 || $plan_id <= 0) {
@@ -29,14 +31,41 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_completion') {
             $stmt_del->execute([$existing['id']]);
             echo json_encode(['success' => true, 'completed' => false, 'timestamp' => null]);
         } else {
-            $stmt_ins = $pdo->prepare("INSERT INTO study_plan_analytics (study_plan_id, student_email, action_type, activity_id, ip_address, created_at) VALUES (?, ?, 'complete_activity', ?, ?, NOW())");
-            $stmt_ins->execute([$plan_id, $email, $activity_id, $_SERVER['REMOTE_ADDR']]);
+            $stmt_ins = $pdo->prepare("INSERT INTO study_plan_analytics (study_plan_id, student_email, action_type, activity_id, ip_address, latitude, longitude, created_at) VALUES (?, ?, 'complete_activity', ?, ?, ?, ?, NOW())");
+            $stmt_ins->execute([$plan_id, $email, $activity_id, $_SERVER['REMOTE_ADDR'], $latitude, $longitude]);
             
             $completed_at = date('d M Y h:i A');
             echo json_encode(['success' => true, 'completed' => true, 'timestamp' => $completed_at]);
         }
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+    exit();
+}
+
+// Log location AJAX handler
+if (isset($_GET['action']) && $_GET['action'] === 'log_location') {
+    header('Content-Type: application/json');
+    if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true) {
+        echo json_encode(['success' => false]);
+        exit();
+    }
+    
+    $plan_id = (int)($_POST['study_plan_id'] ?? 0);
+    $latitude = trim($_POST['latitude'] ?? '');
+    $longitude = trim($_POST['longitude'] ?? '');
+    $email = $_SESSION['sp_email'];
+    
+    if ($plan_id > 0 && !empty($latitude) && !empty($longitude)) {
+        try {
+            $stmt = $pdo->prepare("INSERT INTO study_plan_analytics (study_plan_id, student_email, action_type, ip_address, latitude, longitude, created_at) VALUES (?, ?, 'view', ?, ?, ?, NOW())");
+            $stmt->execute([$plan_id, $email, $_SERVER['REMOTE_ADDR'], $latitude, $longitude]);
+            echo json_encode(['success' => true]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false]);
+        }
+    } else {
+        echo json_encode(['success' => false]);
     }
     exit();
 }
@@ -819,6 +848,31 @@ if ($is_logged_in && $selected_plan_id > 0) {
 </div>
 
 <script>
+var currentLat = null;
+var currentLon = null;
+
+// Background Geolocation coordinate fetcher
+if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(function(position) {
+        currentLat = position.coords.latitude;
+        currentLon = position.coords.longitude;
+        
+        <?php if ($selected_plan_id > 0): ?>
+        var fd = new FormData();
+        fd.append('study_plan_id', <?php echo $selected_plan_id; ?>);
+        fd.append('latitude', currentLat);
+        fd.append('longitude', currentLon);
+        
+        fetch('studyplan.php?action=log_location', {
+            method: 'POST',
+            body: fd
+        });
+        <?php endif; ?>
+    }, function(err) {
+        console.warn("Geolocation permission not granted / error", err);
+    });
+}
+
 function toggleTaskCompletion(activityId, planId) {
     var row = document.getElementById('activity-row-' + activityId);
     var btn = row.querySelector('.chk-circle-btn i');
@@ -828,6 +882,10 @@ function toggleTaskCompletion(activityId, planId) {
     var fd = new FormData();
     fd.append('activity_id', activityId);
     fd.append('study_plan_id', planId);
+    if (currentLat && currentLon) {
+        fd.append('latitude', currentLat);
+        fd.append('longitude', currentLon);
+    }
     
     fetch('studyplan.php?action=toggle_completion', {
         method: 'POST',

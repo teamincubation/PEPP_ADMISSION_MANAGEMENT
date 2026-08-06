@@ -360,6 +360,13 @@ try {
             $pdo->exec("ALTER TABLE study_plan_assignments MODIFY COLUMN assignment_type ENUM('all','course','batch','student','form') NOT NULL");
         } catch (Exception $e) {}
 
+        try {
+            $cols_anal = $pdo->query("SHOW COLUMNS FROM study_plan_analytics LIKE 'latitude'")->fetch();
+            if (!$cols_anal) {
+                $pdo->exec("ALTER TABLE study_plan_analytics ADD COLUMN `latitude` VARCHAR(50) DEFAULT NULL, ADD COLUMN `longitude` VARCHAR(50) DEFAULT NULL");
+            }
+        } catch (Exception $e) {}
+
     } catch (Exception $dbEx) {
         error_log("PEPP self-healing DB check failed: " . $dbEx->getMessage());
     }
