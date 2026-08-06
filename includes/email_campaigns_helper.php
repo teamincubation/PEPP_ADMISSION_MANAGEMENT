@@ -73,6 +73,18 @@ function check_and_create_email_campaign_tables($pdo) {
               KEY `idx_ecle_list` (`list_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ");
+        
+        // Custom email templates table
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `email_campaign_templates` (
+              `id` int(11) NOT NULL AUTO_INCREMENT,
+              `template_name` varchar(255) NOT NULL,
+              `subject` varchar(255) NOT NULL,
+              `body` longtext NOT NULL,
+              `created_at` datetime NOT NULL,
+              PRIMARY KEY (`id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
     } catch (Exception $e) {
         error_log("Email campaign tables check/creation failed: " . $e->getMessage());
     }

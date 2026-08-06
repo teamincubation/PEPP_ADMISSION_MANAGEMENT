@@ -381,6 +381,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } catch (Exception $e) {
                 $error_message = 'Failed to delete list: ' . $e->getMessage();
             }
+        } elseif ($action === 'save_template') {
+            $template_id = (int)($_POST['template_id'] ?? 0);
+            $template_name = trim($_POST['template_name'] ?? '');
+            $subject = trim($_POST['subject'] ?? '');
+            $body = trim($_POST['body'] ?? '');
+            
+            if ($subject === '' || $body === '') {
+                $error_message = 'Subject and Email Body are required to save a template.';
+            } else {
+                try {
+                    if ($template_id > 0) {
+                        // Update existing template
+                        $stmt = $pdo->prepare("UPDATE email_campaign_templates SET subject = ?, body = ? WHERE id = ?");
+                        $stmt->execute([$subject, $body, $template_id]);
+                        $success_message = 'Template updated successfully.';
+                        log_admin_activity($pdo, $admin_username, 'email_template_updated', "Updated email template #{$template_id}");
+                    } else {
+                        // Create new template
+                        if ($template_name === '') {
+                            $template_name = 'Template ' . date('Y-m-d H:i');
+                        }
+                        $stmt = $pdo->prepare("INSERT INTO email_campaign_templates (template_name, subject, body, created_at) VALUES (?, ?, ?, NOW())");
+                        $stmt->execute([$template_name, $subject, $body]);
+                        $success_message = 'Template "' . htmlspecialchars($template_name) . '" saved successfully.';
+                        log_admin_activity($pdo, $admin_username, 'email_template_created', "Created email template \"{$template_name}\"");
+                    }
+                } catch (Exception $e) {
+                    $error_message = 'Failed to save template: ' . $e->getMessage();
+                }
+            }
+        } elseif ($action === 'delete_template') {
+            $template_id = (int)($_POST['template_id'] ?? 0);
+            try {
+                $pdo->prepare("DELETE FROM email_campaign_templates WHERE id = ?")->execute([$template_id]);
+                $success_message = 'Template deleted successfully.';
+                log_admin_activity($pdo, $admin_username, 'email_template_deleted', "Deleted email template #{$template_id}");
+            } catch (Exception $e) {
+                $error_message = 'Failed to delete template: ' . $e->getMessage();
+            }
         }
     }
 }
@@ -408,6 +447,12 @@ try {
 $custom_lists = [];
 try {
     $custom_lists = $pdo->query("SELECT id, label, (SELECT COUNT(*) FROM email_campaign_list_emails WHERE list_id = l.id) as emails_count FROM email_campaign_lists l ORDER BY label")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {}
+
+// Fetch saved email templates
+$templates = [];
+try {
+    $templates = $pdo->query("SELECT * FROM email_campaign_templates ORDER BY template_name ASC")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
 // Fetch campaign history with queue statistics
@@ -545,6 +590,26 @@ include 'includes/admin_nav.php';
                                 <?php endforeach; ?>
                             <?php endif; ?>
                         </div>
+                    </div>
+                </div>
+
+                <!-- Email Template Manager -->
+                <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:16px;">
+                    <label style="font-weight:700; display:block; margin-bottom:6px; font-size:0.85rem; color:var(--text-muted);">
+                        <i class="fas fa-paste" style="margin-right:4px;"></i> Email Template Manager
+                    </label>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <select id="template-select" style="flex:1; min-width:200px; padding:8px; border-radius:6px; border:1px solid var(--border);" onchange="loadTemplate()">
+                            <option value="">-- Select template to load --</option>
+                            <?php foreach ($templates as $tmpl): ?>
+                                <option value="<?php echo $tmpl['id']; ?>" data-subject="<?php echo htmlspecialchars($tmpl['subject']); ?>" data-body="<?php echo htmlspecialchars($tmpl['body']); ?>">
+                                    <?php echo htmlspecialchars($tmpl['template_name']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <button type="button" class="btn btn-sm btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" onclick="saveAsNewTemplate()"><i class="fas fa-plus"></i> Save New</button>
+                        <button type="button" class="btn btn-sm btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" id="update-tmpl-btn" disabled onclick="updateSelectedTemplate()"><i class="fas fa-floppy-disk"></i> Update</button>
+                        <button type="button" class="btn btn-sm btn-soft-red" style="padding: 6px 12px; font-size: 0.8rem;" id="delete-tmpl-btn" disabled onclick="deleteSelectedTemplate()"><i class="fas fa-trash-can"></i> Delete</button>
                     </div>
                 </div>
 
@@ -909,6 +974,147 @@ function deleteCustomList(listId, listLabel) {
         document.body.appendChild(form);
         form.submit();
     }
+}
+
+// Email Template Manager Javascript Handlers
+function loadTemplate() {
+    var select = document.getElementById('template-select');
+    var opt = select.options[select.selectedIndex];
+    var updateBtn = document.getElementById('update-tmpl-btn');
+    var deleteBtn = document.getElementById('delete-tmpl-btn');
+    
+    if (opt && opt.value) {
+        var subject = opt.getAttribute('data-subject');
+        var body = opt.getAttribute('data-body');
+        
+        document.getElementById('camp-subject').value = subject;
+        if (typeof quill !== 'undefined') {
+            quill.root.innerHTML = body;
+        }
+        
+        updateBtn.disabled = false;
+        deleteBtn.disabled = false;
+    } else {
+        updateBtn.disabled = true;
+        deleteBtn.disabled = true;
+    }
+}
+
+function saveAsNewTemplate() {
+    var subject = document.getElementById('camp-subject').value.trim();
+    var body = typeof quill !== 'undefined' ? quill.root.innerHTML.trim() : '';
+    var rawText = typeof quill !== 'undefined' ? quill.getText().trim() : '';
+    
+    if (subject === '' || rawText === '') {
+        alert('Subject and Email Body Content are required to save a template.');
+        return;
+    }
+    
+    var name = prompt('Enter a unique name for this email template:');
+    if (name === null) return; // cancelled
+    name = name.trim();
+    if (name === '') {
+        alert('Template name cannot be empty.');
+        return;
+    }
+    
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '';
+    
+    var inputs = [
+        { name: 'csrf_token', value: document.querySelector('input[name="csrf_token"]').value },
+        { name: 'action', value: 'save_template' },
+        { name: 'template_name', value: name },
+        { name: 'subject', value: subject },
+        { name: 'body', value: body }
+    ];
+    
+    inputs.forEach(inp => {
+        var el = document.createElement('input');
+        el.type = 'hidden';
+        el.name = inp.name;
+        el.value = inp.value;
+        form.appendChild(el);
+    });
+    
+    document.body.appendChild(form);
+    form.submit();
+}
+
+function updateSelectedTemplate() {
+    var select = document.getElementById('template-select');
+    var templateId = select.value;
+    var opt = select.options[select.selectedIndex];
+    if (!templateId) return;
+    
+    var subject = document.getElementById('camp-subject').value.trim();
+    var body = typeof quill !== 'undefined' ? quill.root.innerHTML.trim() : '';
+    var rawText = typeof quill !== 'undefined' ? quill.getText().trim() : '';
+    
+    if (subject === '' || rawText === '') {
+        alert('Subject and Email Body Content are required to update a template.');
+        return;
+    }
+    
+    if (!confirm('Are you sure you want to update the template "' + opt.text.trim() + '" with the current Subject and Body?')) {
+        return;
+    }
+    
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '';
+    
+    var inputs = [
+        { name: 'csrf_token', value: document.querySelector('input[name="csrf_token"]').value },
+        { name: 'action', value: 'save_template' },
+        { name: 'template_id', value: templateId },
+        { name: 'subject', value: subject },
+        { name: 'body', value: body }
+    ];
+    
+    inputs.forEach(inp => {
+        var el = document.createElement('input');
+        el.type = 'hidden';
+        el.name = inp.name;
+        el.value = inp.value;
+        form.appendChild(el);
+    });
+    
+    document.body.appendChild(form);
+    form.submit();
+}
+
+function deleteSelectedTemplate() {
+    var select = document.getElementById('template-select');
+    var templateId = select.value;
+    var opt = select.options[select.selectedIndex];
+    if (!templateId) return;
+    
+    if (!confirm('Are you sure you want to delete the email template "' + opt.text.trim() + '"? This action cannot be undone.')) {
+        return;
+    }
+    
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '';
+    
+    var inputs = [
+        { name: 'csrf_token', value: document.querySelector('input[name="csrf_token"]').value },
+        { name: 'action', value: 'delete_template' },
+        { name: 'template_id', value: templateId }
+    ];
+    
+    inputs.forEach(inp => {
+        var el = document.createElement('input');
+        el.type = 'hidden';
+        el.name = inp.name;
+        el.value = inp.value;
+        form.appendChild(el);
+    });
+    
+    document.body.appendChild(form);
+    form.submit();
 }
 </script>
 
