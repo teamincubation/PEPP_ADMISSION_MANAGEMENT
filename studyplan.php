@@ -2,6 +2,45 @@
 session_start();
 require_once 'config/database.php';
 
+// Toggle task completion AJAX handler
+if (isset($_GET['action']) && $_GET['action'] === 'toggle_completion') {
+    header('Content-Type: application/json');
+    if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true) {
+        echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+        exit();
+    }
+    
+    $activity_id = (int)($_POST['activity_id'] ?? 0);
+    $plan_id = (int)($_POST['study_plan_id'] ?? 0);
+    $email = $_SESSION['sp_email'];
+    
+    if ($activity_id <= 0 || $plan_id <= 0) {
+        echo json_encode(['success' => false, 'message' => 'Invalid parameters']);
+        exit();
+    }
+    
+    try {
+        $stmt = $pdo->prepare("SELECT id FROM study_plan_analytics WHERE student_email = ? AND activity_id = ? AND action_type = 'complete_activity' LIMIT 1");
+        $stmt->execute([$email, $activity_id]);
+        $existing = $stmt->fetch();
+        
+        if ($existing) {
+            $stmt_del = $pdo->prepare("DELETE FROM study_plan_analytics WHERE id = ?");
+            $stmt_del->execute([$existing['id']]);
+            echo json_encode(['success' => true, 'completed' => false, 'timestamp' => null]);
+        } else {
+            $stmt_ins = $pdo->prepare("INSERT INTO study_plan_analytics (study_plan_id, student_email, action_type, activity_id, ip_address, created_at) VALUES (?, ?, 'complete_activity', ?, ?, NOW())");
+            $stmt_ins->execute([$plan_id, $email, $activity_id, $_SERVER['REMOTE_ADDR']]);
+            
+            $completed_at = date('d M Y h:i A');
+            echo json_encode(['success' => true, 'completed' => true, 'timestamp' => $completed_at]);
+        }
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+    exit();
+}
+
 // Helper to escape output
 function p_esc($str) {
     return htmlspecialchars($str ?? '', ENT_QUOTES, 'UTF-8');
@@ -133,6 +172,7 @@ if ($is_logged_in) {
 $selected_plan_id = (int)($_GET['plan_id'] ?? 0);
 $selected_plan = null;
 $activities = [];
+$completions = [];
 if ($is_logged_in && $selected_plan_id > 0) {
     // Validate assignment access
     foreach ($plans as $p) {
@@ -147,6 +187,11 @@ if ($is_logged_in && $selected_plan_id > 0) {
             $stmt = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? ORDER BY activity_date ASC, sort_order ASC");
             $stmt->execute([$selected_plan_id]);
             $activities = $stmt->fetchAll();
+            
+            // Fetch completions
+            $stmt_comp = $pdo->prepare("SELECT activity_id, created_at FROM study_plan_analytics WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity'");
+            $stmt_comp->execute([$_SESSION['sp_email'], $selected_plan_id]);
+            $completions = $stmt_comp->fetchAll(PDO::FETCH_KEY_PAIR);
             
             // Log view metric
             $stmt_an = $pdo->prepare("INSERT INTO study_plan_analytics (study_plan_id, student_email, action_type, ip_address) VALUES (?, ?, 'view', ?)");
@@ -590,19 +635,32 @@ if ($is_logged_in && $selected_plan_id > 0) {
                                     <div style="display:flex; flex-direction:column; gap:10px;">
                                         <?php foreach ($items as $it): 
                                             $t_conf = $types_config[$it['activity_type']] ?? ['icon' => 'fa-book-open', 'color' => '#64748b'];
+                                            $is_completed = isset($completions[$it['id']]);
+                                            $comp_time = $is_completed ? date('d M Y h:i A', strtotime($completions[$it['id']])) : '';
                                         ?>
-                                            <div class="activity-item">
-                                                <div class="activity-icon-wrap" style="background:<?php echo $t_conf['color']; ?>;">
-                                                    <i class="fas <?php echo $t_conf['icon']; ?>"></i>
-                                                </div>
-                                                <div style="flex:1;">
-                                                    <div style="font-size:0.85rem; font-weight:700; color:var(--text-main);"><?php echo p_esc($it['activity_title']); ?></div>
-                                                    <div style="font-size:0.75rem; color:var(--text-muted);">
-                                                        <?php echo p_esc($it['subject']); ?> · <?php echo p_esc($it['chapter']); ?>
-                                                        <?php if ($it['faculty']): ?> · Fac: <?php echo p_esc($it['faculty']); ?><?php endif; ?>
+                                            <div class="activity-item" id="activity-row-<?php echo $it['id']; ?>" style="display: flex; align-items: center; justify-content: space-between; <?php echo $is_completed ? 'opacity: 0.75;' : ''; ?>">
+                                                <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
+                                                    <!-- Check Circle to mark completion -->
+                                                    <div class="chk-circle-btn" onclick="toggleTaskCompletion(<?php echo $it['id']; ?>, <?php echo $selected_plan_id; ?>)" style="cursor: pointer; padding: 0 4px; font-size: 1.15rem; color: <?php echo $is_completed ? '#22c55e' : '#cbd5e1'; ?>; transition: color 0.2s;">
+                                                        <i class="fa-<?php echo $is_completed ? 'solid fa-circle-check' : 'regular fa-circle'; ?>"></i>
+                                                    </div>
+                                                    
+                                                    <div class="activity-icon-wrap" style="background:<?php echo $t_conf['color']; ?>; flex-shrink: 0;">
+                                                        <i class="fas <?php echo $t_conf['icon']; ?>"></i>
+                                                    </div>
+                                                    
+                                                    <div>
+                                                        <div style="font-size:0.85rem; font-weight:700; color:var(--text-main);"><?php echo p_esc($it['activity_title']); ?></div>
+                                                        <div style="font-size:0.75rem; color:var(--text-muted);">
+                                                            <?php echo p_esc($it['subject']); ?> · <?php echo p_esc($it['chapter']); ?>
+                                                            <?php if ($it['faculty']): ?> · Fac: <?php echo p_esc($it['faculty']); ?><?php endif; ?>
+                                                        </div>
+                                                        <small class="comp-time-lbl" style="display: <?php echo $is_completed ? 'block' : 'none'; ?>; font-size:0.65rem; color:#22c55e; margin-top:2px;">
+                                                            <i class="fas fa-check"></i> Completed on <span class="time-val"><?php echo $comp_time; ?></span>
+                                                        </small>
                                                     </div>
                                                 </div>
-                                                <span style="align-self:center; font-size:0.7rem; font-weight:700; color:var(--text-muted); background:#f1f5f9; padding:2px 6px; border-radius:4px;"><?php echo $it['estimated_duration']; ?>m</span>
+                                                <span style="font-size:0.7rem; font-weight:700; color:var(--text-muted); background:#f1f5f9; padding:2px 6px; border-radius:4px; flex-shrink: 0;"><?php echo $it['estimated_duration']; ?>m</span>
                                             </div>
                                         <?php endforeach; ?>
                                     </div>
@@ -618,5 +676,45 @@ if ($is_logged_in && $selected_plan_id > 0) {
     <?php endif; ?>
 </div>
 
+<script>
+function toggleTaskCompletion(activityId, planId) {
+    var row = document.getElementById('activity-row-' + activityId);
+    var btn = row.querySelector('.chk-circle-btn i');
+    var label = row.querySelector('.comp-time-lbl');
+    var timeSpan = row.querySelector('.time-val');
+    
+    var fd = new FormData();
+    fd.append('activity_id', activityId);
+    fd.append('study_plan_id', planId);
+    
+    fetch('studyplan.php?action=toggle_completion', {
+        method: 'POST',
+        body: fd
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            if (data.completed) {
+                btn.className = 'fa-solid fa-circle-check';
+                btn.parentElement.style.color = '#22c55e';
+                row.style.opacity = '0.75';
+                timeSpan.innerText = data.timestamp;
+                label.style.display = 'block';
+            } else {
+                btn.className = 'fa-regular fa-circle';
+                btn.parentElement.style.color = '#cbd5e1';
+                row.style.opacity = '1';
+                label.style.display = 'none';
+            }
+        } else {
+            alert('Failed to update task: ' + data.message);
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Server connection error.');
+    });
+}
+</script>
 </body>
 </html>
