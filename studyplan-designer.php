@@ -539,8 +539,9 @@ include 'includes/admin_nav.php';
                                     '</div>' +
                                  '</div>' +
                                  '<div style="display:flex; gap:6px;">' +
-                                    '<button class="btn btn-sm btn-outline" style="padding:2px 6px;" onclick="editActivityRow(' + index + ')"><i class="fas fa-pencil"></i></button>' +
-                                    '<button class="btn btn-sm btn-soft-red" style="padding:2px 6px;" onclick="deleteActivityRow(' + index + ')"><i class="fas fa-trash"></i></button>' +
+                                    '<button class="btn btn-sm btn-outline" style="padding:2px 6px;" title="Edit" onclick="editActivityRow(' + index + ')"><i class="fas fa-pencil"></i></button>' +
+                                    '<button class="btn btn-sm btn-outline" style="padding:2px 6px;" title="Clone / Duplicate" onclick="cloneActivityRow(' + index + ')"><i class="fas fa-copy"></i></button>' +
+                                    '<button class="btn btn-sm btn-soft-red" style="padding:2px 6px;" title="Delete" onclick="deleteActivityRow(' + index + ')"><i class="fas fa-trash"></i></button>' +
                                  '</div>';
                 targetList.appendChild(card);
             }
@@ -647,6 +648,15 @@ include 'includes/admin_nav.php';
             renderActivitiesList();
             updateLivePreview();
         }
+    }
+
+    function cloneActivityRow(index) {
+        var act = activities[index];
+        var cloned = JSON.parse(JSON.stringify(act));
+        // Insert right after the original item
+        activities.splice(index + 1, 0, cloned);
+        renderActivitiesList();
+        updateLivePreview();
     }
 
     function triggerImport() {
