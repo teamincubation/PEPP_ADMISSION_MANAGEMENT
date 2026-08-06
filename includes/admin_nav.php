@@ -79,6 +79,231 @@ try {
 } catch (Exception $navEx) { /* sidebar still renders */ }
 
 function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
+
+// Function to render nav items dynamically based on their keys
+function render_nav_item($key, $active_page, $nav_data) {
+    global $pdo, $admin_perms, $admin_role;
+    if (!function_exists('can_access') || !can_access($key)) return;
+    
+    // Extract variables from $nav_data
+    $nav_pending_approvals = $nav_data['pending_approvals'] ?? 0;
+    $nav_pending_onboarding = $nav_data['pending_onboarding'] ?? 0;
+    $nav_due_leads = $nav_data['due_leads'] ?? 0;
+    $nav_active_forms_count = $nav_data['active_forms_count'] ?? 0;
+    $nav_unread_submissions_count = $nav_data['unread_submissions_count'] ?? 0;
+    $nav_mkt = $nav_data['mkt'] ?? [];
+    $nav_pending_payments = $nav_data['pending_payments'] ?? 0;
+    $nav_due_within_10_days = $nav_data['due_within_10_days'] ?? 0;
+    
+    switch ($key) {
+        case 'dashboard':
+            echo '<a class="nav-item ' . nav_active('dashboard', $active_page) . '" href="dashboard.php"><i class="fas fa-gauge-high"></i> Dashboard</a>';
+            break;
+        case 'approvals':
+            echo '<a class="nav-item ' . nav_active('approvals', $active_page) . '" href="student-approval.php"><i class="fas fa-user-check"></i> Approvals';
+            if ($nav_pending_approvals > 0) {
+                echo '<span class="nav-badge">' . $nav_pending_approvals . '</span>';
+            }
+            echo '</a>';
+            break;
+        case 'add-student':
+            echo '<a class="nav-item ' . nav_active('add-student', $active_page) . '" href="add-student.php"><i class="fas fa-user-plus"></i> Add Student</a>';
+            break;
+        case 'students':
+            echo '<a class="nav-item ' . nav_active('students', $active_page) . '" href="studentpage.php"><i class="fas fa-users"></i> All Students</a>';
+            break;
+        case 'onboarding':
+            echo '<a class="nav-item ' . nav_active('onboarding', $active_page) . '" href="studentonboarding.php"><i class="fas fa-handshake"></i> Onboarding';
+            if ($nav_pending_onboarding > 0) {
+                echo '<span class="nav-badge">' . $nav_pending_onboarding . '</span>';
+            }
+            echo '</a>';
+            break;
+        case 'sessions':
+            echo '<a class="nav-item ' . nav_active('sessions', $active_page) . '" href="sessions.php"><i class="fas fa-video"></i> Sessions</a>';
+            break;
+        case 'leads':
+            echo '<a class="nav-item ' . nav_active('leads', $active_page) . '" href="lead-management.php"><i class="fas fa-user-tag"></i> Lead Management';
+            if ($nav_due_leads > 0) {
+                echo '<span class="nav-badge">' . $nav_due_leads . '</span>';
+            }
+            echo '</a>';
+            break;
+        case 'alumni':
+            echo '<a class="nav-item ' . nav_active('alumni', $active_page) . '" href="alumni-database.php"><i class="fas fa-user-graduate"></i> Alumni Database</a>';
+            break;
+        case 'peppkit':
+            echo '<a class="nav-item ' . nav_active('peppkit', $active_page) . '" href="peppkit-report.php"><i class="fas fa-box-open"></i> PEPPKIT Report</a>';
+            break;
+        case 'cards':
+            echo '<a class="nav-item ' . nav_active('cards', $active_page) . '" href="cards.php"><i class="fas fa-id-card"></i> Generate Custom Cards</a>';
+            break;
+        case 'accounts':
+            echo '<a class="nav-item ' . nav_active('accounts', $active_page) . '" href="accounts.php"><i class="fas fa-wallet"></i> Accounts &amp; Expenses</a>';
+            break;
+        case 'campaigns':
+            echo '<a class="nav-item ' . nav_active('campaigns', $active_page) . '" href="campaign-forms.php"><i class="fab fa-wpforms"></i> Custom Forms';
+            echo '<span style="margin-left:auto; display:inline-flex; gap:4px; align-items:center;">';
+            if ($nav_active_forms_count > 0) {
+                echo '<span class="nav-badge" style="background:rgba(34, 197, 94, 0.15); color:#22c55e; border:1px solid rgba(34, 197, 94, 0.3); padding:2px 6px; border-radius:6px; font-size:0.7rem; font-weight:700;" title="Active campaign forms">' . $nav_active_forms_count . ' Active</span>';
+            }
+            if ($nav_unread_submissions_count > 0) {
+                echo '<span class="nav-badge" style="background:rgba(59, 130, 246, 0.15); color:#3b82f6; border:1px solid rgba(59, 130, 246, 0.3); padding:2px 6px; border-radius:6px; font-size:0.7rem; font-weight:700;" title="New unread registrations">' . $nav_unread_submissions_count . ' New</span>';
+            }
+            echo '</span></a>';
+            break;
+        case 'marketing':
+            echo '<a class="nav-item ' . nav_active('marketing', $active_page) . '" href="marketing.php"><i class="fas fa-bullhorn"></i> Marketing';
+            echo '<span style="margin-left:auto; display:inline-flex; gap:4px;">';
+            if (!empty($nav_mkt['referral'])) {
+                echo '<span class="nav-badge" style="background:#16a34a; color:#fff;" title="New referral updates">' . (int)$nav_mkt['referral'] . '</span>';
+            }
+            if (!empty($nav_mkt['coupon'])) {
+                echo '<span class="nav-badge" style="background:#dc2626; color:#fff;" title="New coupon updates">' . (int)$nav_mkt['coupon'] . '</span>';
+            }
+            echo '</span></a>';
+            break;
+        case 'email-campaigns':
+            echo '<a class="nav-item ' . nav_active('email-campaigns', $active_page) . '" href="email-campaigns.php"><i class="fas fa-envelope"></i> Email Campaigns</a>';
+            break;
+        case 'installments':
+            echo '<a class="nav-item ' . nav_active('installments', $active_page) . '" href="phpinstalmentpaymentupdate.php"><i class="fas fa-money-bill-wave"></i> Installments';
+            echo '<span style="margin-left:auto; display:inline-flex; gap:4px; align-items:center;">';
+            if ($nav_pending_payments > 0) {
+                echo '<span class="nav-badge" style="background:#f59e0b; color:#fff;" title="Pending review">' . $nav_pending_payments . '</span>';
+            }
+            if ($nav_due_within_10_days > 0) {
+                echo '<span class="nav-badge" style="background:#ef4444; color:#fff;" title="Due within 10 days">' . $nav_due_within_10_days . '</span>';
+            }
+            echo '</span></a>';
+            break;
+        case 'invoices':
+            echo '<a class="nav-item ' . nav_active('invoices', $active_page) . '" href="invoices.php"><i class="fas fa-file-invoice"></i> Invoices</a>';
+            break;
+        case 'whatsapp':
+            echo '<a class="nav-item ' . nav_active('whatsapp', $active_page) . '" href="whatsapp-notification.php"><i class="fab fa-whatsapp"></i> WhatsApp Messages</a>';
+            break;
+        case 'courses':
+            echo '<a class="nav-item ' . nav_active('courses', $active_page) . '" href="course-management.php"><i class="fas fa-book-open"></i> Courses</a>';
+            break;
+        case 'faculties':
+            echo '<a class="nav-item ' . nav_active('faculties', $active_page) . '" href="faculties.php"><i class="fas fa-chalkboard-user"></i> Faculties</a>';
+            break;
+        case 'studyplans':
+            echo '<a class="nav-item ' . nav_active('studyplans', $active_page) . '" href="studyplans.php"><i class="fas fa-calendar-days"></i> Study Plans</a>';
+            break;
+        case 'student-study-reports':
+            echo '<a class="nav-item ' . nav_active('student-study-reports', $active_page) . '" href="student-study-reports.php"><i class="fas fa-chart-line"></i> Student Reports</a>';
+            break;
+        case 'settings':
+            echo '<a class="nav-item ' . nav_active('settings', $active_page) . '" href="settings.php"><i class="fas fa-gear"></i> Settings</a>';
+            break;
+        case 'admin-management':
+            if (is_super_admin()) {
+                echo '<a class="nav-item ' . nav_active('admin-management', $active_page) . '" href="admin-management.php"><i class="fas fa-user-shield"></i> Admin Management</a>';
+            }
+            break;
+        case 'admin-activity':
+            if (is_super_admin()) {
+                echo '<a class="nav-item ' . nav_active('admin-activity', $active_page) . '" href="admin-activity.php"><i class="fas fa-clock-rotate-left"></i> Activity Log</a>';
+            }
+            break;
+        case 'reports':
+            if (is_super_admin()) {
+                echo '<a class="nav-item ' . nav_active('reports', $active_page) . '" href="reports.php"><i class="fas fa-chart-pie"></i> Reports &amp; Export</a>';
+            }
+            break;
+    }
+}
+
+// Fallback Default Sidebar Layout with category icons
+$default_sidebar = [
+    [
+        'id' => 'overview',
+        'title' => 'Overview',
+        'icon' => 'fas fa-gauge-high',
+        'items' => ['dashboard']
+    ],
+    [
+        'id' => 'registrations',
+        'title' => 'Registrations',
+        'icon' => 'fas fa-user-plus',
+        'items' => ['approvals', 'add-student']
+    ],
+    [
+        'id' => 'students',
+        'title' => 'Students',
+        'icon' => 'fas fa-user-graduate',
+        'items' => ['students', 'onboarding', 'sessions']
+    ],
+    [
+        'id' => 'crm',
+        'title' => 'CRM',
+        'icon' => 'fas fa-handshake',
+        'items' => ['leads', 'alumni', 'peppkit', 'cards', 'accounts']
+    ],
+    [
+        'id' => 'campaigns',
+        'title' => 'Campaigns',
+        'icon' => 'fas fa-bullhorn',
+        'items' => ['campaigns', 'marketing', 'email-campaigns']
+    ],
+    [
+        'id' => 'payments',
+        'title' => 'Payments',
+        'icon' => 'fas fa-money-bill-wave',
+        'items' => ['installments', 'invoices', 'whatsapp']
+    ],
+    [
+        'id' => 'academics',
+        'title' => 'Academics',
+        'icon' => 'fas fa-graduation-cap',
+        'items' => ['courses', 'faculties', 'studyplans', 'student-study-reports']
+    ],
+    [
+        'id' => 'system',
+        'title' => 'System',
+        'icon' => 'fas fa-gears',
+        'items' => ['settings', 'admin-management', 'admin-activity', 'reports']
+    ]
+];
+
+// Load layout from database
+$sidebar_menu = $default_sidebar;
+try {
+    $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'sidebar_menu_config' LIMIT 1");
+    $stmt->execute();
+    $config_json = $stmt->fetchColumn();
+    if ($config_json) {
+        $decoded = json_decode($config_json, true);
+        if (is_array($decoded) && !empty($decoded)) {
+            // Keep category icons if not set in DB
+            foreach ($decoded as &$dec_sec) {
+                if (empty($dec_sec['icon'])) {
+                    foreach ($default_sidebar as $def_sec) {
+                        if ($def_sec['id'] === $dec_sec['id']) {
+                            $dec_sec['icon'] = $def_sec['icon'];
+                            break;
+                        }
+                    }
+                }
+            }
+            $sidebar_menu = $decoded;
+        }
+    }
+} catch (Exception $e) {}
+
+// Gather nav counts
+$nav_data = [
+    'pending_approvals' => $nav_pending_approvals ?? 0,
+    'pending_onboarding' => $nav_pending_onboarding ?? 0,
+    'due_leads' => $nav_due_leads ?? 0,
+    'active_forms_count' => $nav_active_forms_count ?? 0,
+    'unread_submissions_count' => $nav_unread_submissions_count ?? 0,
+    'mkt' => $nav_mkt ?? [],
+    'pending_payments' => $nav_pending_payments ?? 0,
+    'due_within_10_days' => $nav_due_within_10_days ?? 0
+];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -145,204 +370,41 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
             </div>
         </div>
 
-        <div class="nav-section <?php echo $active_page !== 'dashboard' ? 'collapsed' : ''; ?>">
-            <div class="nav-section-label">Overview</div>
-            <div class="nav-section-content">
-                <?php if (can_access('dashboard')): ?>
-                <a class="nav-item <?php echo nav_active('dashboard', $active_page); ?>" href="dashboard.php">
-                    <i class="fas fa-gauge-high"></i> Dashboard
-                </a>
-                <?php endif; ?>
-            </div>
-        </div>
-
-        <?php if (can_access('approvals') || can_access('add-student')): ?>
-        <div class="nav-section <?php echo !in_array($active_page, ['approvals', 'add-student']) ? 'collapsed' : ''; ?>">
-            <div class="nav-section-label">Registrations</div>
-            <div class="nav-section-content">
-                <?php if (can_access('approvals')): ?>
-                <a class="nav-item <?php echo nav_active('approvals', $active_page); ?>" href="student-approval.php">
-                    <i class="fas fa-user-check"></i> Approvals
-                    <?php if ($nav_pending_approvals > 0): ?><span class="nav-badge"><?php echo $nav_pending_approvals; ?></span><?php endif; ?>
-                </a>
-                <?php endif; ?>
-                <?php if (can_access('add-student')): ?>
-                <a class="nav-item <?php echo nav_active('add-student', $active_page); ?>" href="add-student.php">
-                    <i class="fas fa-user-plus"></i> Add Student
-                </a>
-                <?php endif; ?>
-            </div>
-        </div>
-        <?php endif; ?>
-
-        <?php if (can_access('students') || can_access('onboarding') || can_access('sessions')): ?>
-        <div class="nav-section <?php echo !in_array($active_page, ['students', 'onboarding', 'sessions']) ? 'collapsed' : ''; ?>">
-            <div class="nav-section-label">Students</div>
-            <div class="nav-section-content">
-                <?php if (can_access('students')): ?>
-                <a class="nav-item <?php echo nav_active('students', $active_page); ?>" href="studentpage.php">
-                    <i class="fas fa-users"></i> All Students
-                </a>
-                <?php endif; ?>
-                <?php if (can_access('onboarding')): ?>
-                <a class="nav-item <?php echo nav_active('onboarding', $active_page); ?>" href="studentonboarding.php">
-                    <i class="fas fa-handshake"></i> Onboarding
-                    <?php if ($nav_pending_onboarding > 0): ?><span class="nav-badge"><?php echo $nav_pending_onboarding; ?></span><?php endif; ?>
-                </a>
-                <?php endif; ?>
-                <?php if (can_access('sessions')): ?>
-                <a class="nav-item <?php echo nav_active('sessions', $active_page); ?>" href="sessions.php">
-                    <i class="fas fa-video"></i> Sessions
-                </a>
-                <?php endif; ?>
-            </div>
-        </div>
-        <?php endif; ?>
-
-        <?php if (can_access('leads') || can_access('accounts') || can_access('marketing') || can_access('alumni')): ?>
-        <div class="nav-section <?php echo !in_array($active_page, ['leads', 'alumni', 'peppkit', 'cards', 'accounts']) ? 'collapsed' : ''; ?>">
-            <div class="nav-section-label">CRM</div>
-            <div class="nav-section-content">
-                <?php if (can_access('leads')): ?>
-                <a class="nav-item <?php echo nav_active('leads', $active_page); ?>" href="lead-management.php">
-                    <i class="fas fa-user-tag"></i> Lead Management
-                    <?php if (!empty($nav_due_leads) && $nav_due_leads > 0): ?><span class="nav-badge"><?php echo $nav_due_leads; ?></span><?php endif; ?>
-                </a>
-                <?php endif; ?>
-                <?php if (can_access('alumni')): ?>
-                <a class="nav-item <?php echo nav_active('alumni', $active_page); ?>" href="alumni-database.php">
-                    <i class="fas fa-user-graduate"></i> Alumni Database
-                </a>
-                <?php endif; ?>
-                <?php if (can_access('peppkit')): ?>
-                <a class="nav-item <?php echo nav_active('peppkit', $active_page); ?>" href="peppkit-report.php">
-                    <i class="fas fa-box-open"></i> PEPPKIT Report
-                </a>
-                <?php endif; ?>
-                <?php if (can_access('cards')): ?>
-                <a class="nav-item <?php echo nav_active('cards', $active_page); ?>" href="cards.php">
-                    <i class="fas fa-id-card"></i> Generate Custom Cards
-                </a>
-                <?php endif; ?>
-                <?php if (can_access('accounts')): ?>
-                <a class="nav-item <?php echo nav_active('accounts', $active_page); ?>" href="accounts.php">
-                    <i class="fas fa-wallet"></i> Accounts &amp; Expenses
-                </a>
-                <?php endif; ?>
-            </div>
-        </div>
-        <?php endif; ?>
-
-        <?php if (can_access('campaigns') || can_access('marketing')): ?>
-        <div class="nav-section <?php echo !in_array($active_page, ['campaigns', 'marketing', 'email-campaigns']) ? 'collapsed' : ''; ?>">
-            <div class="nav-section-label">Campaigns</div>
-            <div class="nav-section-content">
-                <?php if (can_access('campaigns')): ?>
-                <a class="nav-item <?php echo nav_active('campaigns', $active_page); ?>" href="campaign-forms.php">
-                    <i class="fab fa-wpforms"></i> Custom Forms
-                    <span style="margin-left:auto; display:inline-flex; gap:4px; align-items:center;">
-                        <?php if ($nav_active_forms_count > 0): ?>
-                            <span class="nav-badge" style="background:rgba(34, 197, 94, 0.15); color:#22c55e; border:1px solid rgba(34, 197, 94, 0.3); padding:2px 6px; border-radius:6px; font-size:0.7rem; font-weight:700;" title="Active campaign forms"><?php echo $nav_active_forms_count; ?> Active</span>
+        <?php foreach ($sidebar_menu as $section): ?>
+            <?php
+            $has_access = false;
+            $is_collapsed = 'collapsed';
+            foreach ($section['items'] as $item) {
+                if (can_access($item)) {
+                    $has_access = true;
+                }
+                if ($item === $active_page) {
+                    $is_collapsed = '';
+                }
+            }
+            if (!$has_access) continue;
+            ?>
+            <div class="nav-section <?php echo $is_collapsed; ?>">
+                <div class="nav-section-label">
+                    <span>
+                        <?php if (!empty($section['icon'])): ?>
+                            <i class="<?php echo htmlspecialchars($section['icon']); ?>" style="margin-right:6px; font-size:0.8rem; opacity:0.8;"></i>
                         <?php endif; ?>
-                        <?php if ($nav_unread_submissions_count > 0): ?>
-                            <span class="nav-badge" style="background:rgba(59, 130, 246, 0.15); color:#3b82f6; border:1px solid rgba(59, 130, 246, 0.3); padding:2px 6px; border-radius:6px; font-size:0.7rem; font-weight:700;" title="New unread registrations"><?php echo $nav_unread_submissions_count; ?> New</span>
-                        <?php endif; ?>
+                        <?php echo htmlspecialchars($section['title']); ?>
                     </span>
-                </a>
-                <?php endif; ?>
-                <?php if (can_access('marketing')): ?>
-                <a class="nav-item <?php echo nav_active('marketing', $active_page); ?>" href="marketing.php">
-                    <i class="fas fa-bullhorn"></i> Marketing
-                    <span style="margin-left:auto; display:inline-flex; gap:4px;">
-                        <?php if (!empty($nav_mkt['referral'])): ?><span class="nav-badge" style="background:#16a34a; color:#fff;" title="New referral updates"><?php echo (int)$nav_mkt['referral']; ?></span><?php endif; ?>
-                        <?php if (!empty($nav_mkt['coupon'])): ?><span class="nav-badge" style="background:#dc2626; color:#fff;" title="New coupon updates"><?php echo (int)$nav_mkt['coupon']; ?></span><?php endif; ?>
-                    </span>
-                </a>
-                <a class="nav-item <?php echo nav_active('email-campaigns', $active_page); ?>" href="email-campaigns.php">
-                    <i class="fas fa-envelope"></i> Email Campaigns
-                </a>
-                <?php endif; ?>
+                </div>
+                <div class="nav-section-content">
+                    <?php 
+                    foreach ($section['items'] as $item) {
+                        render_nav_item($item, $active_page, $nav_data);
+                    }
+                    ?>
+                </div>
             </div>
-        </div>
-        <?php endif; ?>
-
-        <?php if (can_access('installments') || can_access('whatsapp') || can_access('invoices')): ?>
-        <div class="nav-section <?php echo !in_array($active_page, ['installments', 'invoices', 'whatsapp']) ? 'collapsed' : ''; ?>">
-            <div class="nav-section-label">Payments</div>
+        <?php endforeach; ?>
+        
+        <div class="nav-section" style="padding-top:0;">
             <div class="nav-section-content">
-                <?php if (can_access('installments')): ?>
-                <a class="nav-item <?php echo nav_active('installments', $active_page); ?>" href="phpinstalmentpaymentupdate.php">
-                    <i class="fas fa-money-bill-wave"></i> Installments
-                    <span style="margin-left:auto; display:inline-flex; gap:4px; align-items:center;">
-                        <?php if ($nav_pending_payments > 0): ?>
-                            <span class="nav-badge" style="background:#f59e0b; color:#fff;" title="Pending review"><?php echo $nav_pending_payments; ?></span>
-                        <?php endif; ?>
-                        <?php if ($nav_due_within_10_days > 0): ?>
-                            <span class="nav-badge" style="background:#ef4444; color:#fff;" title="Due within 10 days"><?php echo $nav_due_within_10_days; ?></span>
-                        <?php endif; ?>
-                    </span>
-                </a>
-                <?php endif; ?>
-                <?php if (can_access('invoices')): ?>
-                <a class="nav-item <?php echo nav_active('invoices', $active_page); ?>" href="invoices.php">
-                    <i class="fas fa-file-invoice"></i> Invoices
-                </a>
-                <?php endif; ?>
-                <?php if (can_access('whatsapp')): ?>
-                <a class="nav-item <?php echo nav_active('whatsapp', $active_page); ?>" href="whatsapp-notification.php">
-                    <i class="fab fa-whatsapp"></i> WhatsApp Messages
-                </a>
-                <?php endif; ?>
-            </div>
-        </div>
-        <?php endif; ?>
-
-        <?php if (can_access('courses') || can_access('faculties') || can_access('studyplans')): ?>
-        <div class="nav-section <?php echo !in_array($active_page, ['courses', 'faculties', 'studyplans', 'student-study-reports']) ? 'collapsed' : ''; ?>">
-            <div class="nav-section-label">Academics</div>
-            <div class="nav-section-content">
-                <?php if (can_access('courses')): ?>
-                <a class="nav-item <?php echo nav_active('courses', $active_page); ?>" href="course-management.php">
-                    <i class="fas fa-book-open"></i> Courses
-                </a>
-                <?php endif; ?>
-                <?php if (can_access('faculties')): ?>
-                <a class="nav-item <?php echo nav_active('faculties', $active_page); ?>" href="faculties.php">
-                    <i class="fas fa-chalkboard-user"></i> Faculties
-                </a>
-                <?php endif; ?>
-                <?php if (can_access('studyplans')): ?>
-                <a class="nav-item <?php echo nav_active('studyplans', $active_page); ?>" href="studyplans.php">
-                    <i class="fas fa-calendar-days"></i> Study Plans
-                </a>
-                <a class="nav-item <?php echo nav_active('student-study-reports', $active_page); ?>" href="student-study-reports.php">
-                    <i class="fas fa-chart-line"></i> Student Reports
-                </a>
-                <?php endif; ?>
-            </div>
-        </div>
-        <?php endif; ?>
-
-
-        <div class="nav-section <?php echo !in_array($active_page, ['settings', 'admin-management', 'admin-activity', 'reports']) ? 'collapsed' : ''; ?>">
-            <div class="nav-section-label">System</div>
-            <div class="nav-section-content">
-                <?php if (can_access('settings')): ?>
-                <a class="nav-item <?php echo nav_active('settings', $active_page); ?>" href="settings.php">
-                    <i class="fas fa-gear"></i> Settings
-                </a>
-                <?php endif; ?>
-                <?php if (is_super_admin()): ?>
-                <a class="nav-item <?php echo nav_active('admin-management', $active_page); ?>" href="admin-management.php">
-                    <i class="fas fa-user-shield"></i> Admin Management
-                </a>
-                <a class="nav-item <?php echo nav_active('admin-activity', $active_page); ?>" href="admin-activity.php">
-                    <i class="fas fa-clock-rotate-left"></i> Activity Log
-                </a>
-                <a class="nav-item <?php echo nav_active('reports', $active_page); ?>" href="reports.php">
-                    <i class="fas fa-chart-pie"></i> Reports &amp; Export
-                </a>
-                <?php endif; ?>
                 <a class="nav-item" href="register.php" target="_blank">
                     <i class="fas fa-arrow-up-right-from-square"></i> Registration Form
                 </a>
