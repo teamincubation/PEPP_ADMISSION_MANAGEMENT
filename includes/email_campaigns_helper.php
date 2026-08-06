@@ -47,6 +47,32 @@ function check_and_create_email_campaign_tables($pdo) {
                 $pdo->exec("ALTER TABLE email_campaigns ADD COLUMN `target_forms` TEXT DEFAULT NULL AFTER `target_courses`");
             }
         } catch (Exception $e) {}
+        try {
+            $cols = $pdo->query("SHOW COLUMNS FROM email_campaigns LIKE 'target_lists'")->fetch();
+            if (!$cols) {
+                $pdo->exec("ALTER TABLE email_campaigns ADD COLUMN `target_lists` TEXT DEFAULT NULL AFTER `target_forms`");
+            }
+        } catch (Exception $e) {}
+        
+        // Custom imported lists tables
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `email_campaign_lists` (
+              `id` int(11) NOT NULL AUTO_INCREMENT,
+              `label` varchar(255) NOT NULL,
+              `created_at` datetime NOT NULL,
+              PRIMARY KEY (`id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `email_campaign_list_emails` (
+              `id` int(11) NOT NULL AUTO_INCREMENT,
+              `list_id` int(11) NOT NULL,
+              `name` varchar(255) DEFAULT NULL,
+              `email` varchar(255) NOT NULL,
+              PRIMARY KEY (`id`),
+              KEY `idx_ecle_list` (`list_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
     } catch (Exception $e) {
         error_log("Email campaign tables check/creation failed: " . $e->getMessage());
     }
@@ -178,6 +204,33 @@ function email_campaigns_send_due($pdo) {
                 }
             }
             
+            
+            // Resolve custom lists
+            $lists = array_filter(array_map('intval', explode(',', $camp['target_lists'] ?? '')));
+            $list_users = [];
+            if (!empty($lists)) {
+                $placeholders_l = implode(',', array_fill(0, count($lists), '?'));
+                $l_stmt = $pdo->prepare("
+                    SELECT le.name, le.email, l.label as list_title
+                    FROM email_campaign_list_emails le
+                    JOIN email_campaign_lists l ON le.list_id = l.id
+                    WHERE le.list_id IN ($placeholders_l)
+                ");
+                $l_stmt->execute($lists);
+                $list_emails = $l_stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                foreach ($list_emails as $le) {
+                    if (!empty($le['email']) && strpos($le['email'], '@') !== false) {
+                        $list_users[] = [
+                            'user_id' => 'list_custom',
+                            'name' => $le['name'] ?: 'Recipient',
+                            'email' => $le['email'],
+                            'pepp_course' => $le['list_title']
+                        ];
+                    }
+                }
+            }
+            
             // Merge uniquely by email address
             $recipients = [];
             $seen_emails = [];
@@ -199,6 +252,13 @@ function email_campaigns_send_due($pdo) {
                 if (!isset($seen_emails[$lowercase_email])) {
                     $seen_emails[$lowercase_email] = true;
                     $recipients[] = $fu;
+                }
+            }
+            foreach ($list_users as $lu) {
+                $lowercase_email = strtolower(trim($lu['email']));
+                if (!isset($seen_emails[$lowercase_email])) {
+                    $seen_emails[$lowercase_email] = true;
+                    $recipients[] = $lu;
                 }
             }
             

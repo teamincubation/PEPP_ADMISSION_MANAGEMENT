@@ -6,6 +6,159 @@ require_once 'includes/email_campaigns_helper.php';
 // Auto-run self-healing table check
 check_and_create_email_campaign_tables($pdo);
 
+// Handle AJAX Targets Resolution BEFORE layout output
+if (isset($_GET['action']) && $_GET['action'] === 'resolve_targets') {
+    header('Content-Type: application/json');
+    $target_courses = $_POST['scope_course'] ?? [];
+    $target_forms = $_POST['scope_form'] ?? [];
+    $target_lists = $_POST['scope_list'] ?? [];
+    $raw_subject = $_POST['subject'] ?? '';
+    $raw_body = $_POST['body'] ?? '';
+    
+    // Resolve courses
+    $students = [];
+    if (!empty($target_courses) && is_array($target_courses)) {
+        $placeholders = implode(',', array_fill(0, count($target_courses), '?'));
+        $u_stmt = $pdo->prepare("SELECT name, email, pepp_course FROM users WHERE status = 'approved' AND pepp_course IN ($placeholders)");
+        $u_stmt->execute($target_courses);
+        $students = $u_stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+    
+    // Resolve forms
+    $form_users = [];
+    if (!empty($target_forms) && is_array($target_forms)) {
+        $placeholders_f = implode(',', array_fill(0, count($target_forms), '?'));
+        $f_stmt = $pdo->prepare("
+            SELECT s.id as submission_id, s.respondent_identifier, s.form_id, f.title as form_title
+            FROM campaign_form_submissions s
+            JOIN campaign_forms f ON s.form_id = f.id
+            WHERE s.form_id IN ($placeholders_f) AND s.is_deleted = 0
+        ");
+        $f_stmt->execute($target_forms);
+        $submissions = $f_stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($submissions as $sub) {
+            $email = $sub['respondent_identifier'];
+            
+            $stmt_name = $pdo->prepare("
+                SELECT a.answer_text 
+                FROM campaign_form_answers a
+                JOIN campaign_form_fields f ON a.field_id = f.id
+                WHERE a.submission_id = ? AND (f.label LIKE '%name%' OR f.field_name LIKE '%name%')
+                ORDER BY f.sort_order ASC
+                LIMIT 1
+            ");
+            $stmt_name->execute([$sub['submission_id']]);
+            $name = $stmt_name->fetchColumn();
+            
+            if (empty($email) || strpos($email, '@') === false) {
+                $stmt_email = $pdo->prepare("
+                    SELECT a.answer_text 
+                    FROM campaign_form_answers a
+                    JOIN campaign_form_fields f ON a.field_id = f.id
+                    WHERE a.submission_id = ? AND (f.type = 'email' OR f.label LIKE '%email%' OR f.field_name LIKE '%email%')
+                    ORDER BY f.sort_order ASC
+                    LIMIT 1
+                ");
+                $stmt_email->execute([$sub['submission_id']]);
+                $ans_email = $stmt_email->fetchColumn();
+                if ($ans_email) {
+                    $email = $ans_email;
+                }
+            }
+            
+            if (!empty($email) && strpos($email, '@') !== false) {
+                $form_users[] = [
+                    'name' => $name ?: 'Form Registrant',
+                    'email' => $email,
+                    'pepp_course' => $sub['form_title']
+                ];
+            }
+        }
+    }
+    
+    // Resolve lists
+    $list_users = [];
+    if (!empty($target_lists) && is_array($target_lists)) {
+        $placeholders_l = implode(',', array_fill(0, count($target_lists), '?'));
+        $l_stmt = $pdo->prepare("
+            SELECT le.name, le.email, l.label as list_title
+            FROM email_campaign_list_emails le
+            JOIN email_campaign_lists l ON le.list_id = l.id
+            WHERE le.list_id IN ($placeholders_l)
+        ");
+        $l_stmt->execute($target_lists);
+        $list_emails = $l_stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($list_emails as $le) {
+            if (!empty($le['email']) && strpos($le['email'], '@') !== false) {
+                $list_users[] = [
+                    'name' => $le['name'] ?: 'Recipient',
+                    'email' => $le['email'],
+                    'pepp_course' => $le['list_title']
+                ];
+            }
+        }
+    }
+    
+    // Merge uniquely by email address
+    $recipients = [];
+    $seen_emails = [];
+    foreach ($students as $s) {
+        if (empty($s['email'])) continue;
+        $lowercase_email = strtolower(trim($s['email']));
+        if (!isset($seen_emails[$lowercase_email])) {
+            $seen_emails[$lowercase_email] = true;
+            $recipients[] = [
+                'name' => $s['name'],
+                'email' => $s['email'],
+                'source' => $s['pepp_course']
+            ];
+        }
+    }
+    foreach ($form_users as $fu) {
+        $lowercase_email = strtolower(trim($fu['email']));
+        if (!isset($seen_emails[$lowercase_email])) {
+            $seen_emails[$lowercase_email] = true;
+            $recipients[] = [
+                'name' => $fu['name'],
+                'email' => $fu['email'],
+                'source' => $fu['pepp_course']
+            ];
+        }
+    }
+    foreach ($list_users as $lu) {
+        $lowercase_email = strtolower(trim($lu['email']));
+        if (!isset($seen_emails[$lowercase_email])) {
+            $seen_emails[$lowercase_email] = true;
+            $recipients[] = [
+                'name' => $lu['name'],
+                'email' => $lu['email'],
+                'source' => $lu['pepp_course']
+            ];
+        }
+    }
+    
+    // Render sample subject and body
+    $sample_subject = $raw_subject;
+    $sample_body = $raw_body;
+    if (!empty($recipients)) {
+        $first = $recipients[0];
+        $search = ['{name}', '{email}', '{course}', '{user_id}'];
+        $replace = [$first['name'], $first['email'], $first['source'], 'sample_user_id'];
+        $sample_subject = str_replace($search, $replace, $raw_subject);
+        $sample_body = str_replace($search, $replace, $raw_body);
+    }
+    $preview_html = build_campaign_email_html($sample_body);
+    
+    echo json_encode([
+        'recipients' => $recipients,
+        'sample_subject' => htmlspecialchars($sample_subject),
+        'preview_html' => $preview_html
+    ]);
+    exit();
+}
+
 $success_message = '';
 $error_message = '';
 
@@ -19,6 +172,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $body = trim($_POST['body'] ?? '');
             $target_courses = $_POST['scope_course'] ?? [];
             $target_forms = $_POST['scope_form'] ?? [];
+            $target_lists = $_POST['scope_list'] ?? [];
             $send_option = $_POST['send_option'] ?? 'instant';
             $scheduled_at = $_POST['scheduled_at'] ?? '';
             
@@ -34,11 +188,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $target_forms = [];
             }
             
-            if ($subject === '' || $body === '' || (empty($target_courses) && empty($target_forms))) {
-                $error_message = 'Subject, Body, and at least one Target Course or Target Form are required.';
+            if (is_array($target_lists)) {
+                $target_lists = array_filter(array_map('intval', $target_lists));
+            } else {
+                $target_lists = [];
+            }
+            
+            if ($subject === '' || $body === '' || (empty($target_courses) && empty($target_forms) && empty($target_lists))) {
+                $error_message = 'Subject, Body, and at least one Target Course, Form, or Custom List are required.';
             } else {
                 $courses_str = implode(',', $target_courses);
                 $forms_str = implode(',', $target_forms);
+                $lists_str = implode(',', $target_lists);
                 $status = 'scheduled';
                 $sched_time = null;
                 
@@ -53,8 +214,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 if ($error_message === '') {
                     try {
-                        $stmt = $pdo->prepare("INSERT INTO email_campaigns (subject, body, target_courses, target_forms, scheduled_at, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())");
-                        $stmt->execute([$subject, $body, $courses_str, $forms_str, $sched_time, $status, $admin_username]);
+                        $stmt = $pdo->prepare("INSERT INTO email_campaigns (subject, body, target_courses, target_forms, target_lists, scheduled_at, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+                        $stmt->execute([$subject, $body, $courses_str, $forms_str, $lists_str, $sched_time, $status, $admin_username]);
                         $campaign_id = $pdo->lastInsertId();
                         
                         log_admin_activity($pdo, $admin_username, 'email_campaign_created', "Created email campaign \"{$subject}\"");
@@ -87,6 +248,90 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } catch (Exception $e) {
                 $error_message = 'Failed to cancel campaign: ' . $e->getMessage();
             }
+        } elseif ($action === 'import_list') {
+            $label = trim($_POST['list_label'] ?? '');
+            if ($label === '' || empty($_FILES['list_file']['tmp_name'])) {
+                $error_message = 'List label and a valid CSV/Excel file are required.';
+            } else {
+                try {
+                    $file_path = $_FILES['list_file']['tmp_name'];
+                    $handle = fopen($file_path, 'r');
+                    $emails = [];
+                    if ($handle !== false) {
+                        $headers = fgetcsv($handle);
+                        $name_idx = -1;
+                        $email_idx = -1;
+                        
+                        if ($headers) {
+                            foreach ($headers as $idx => $header) {
+                                $header_clean = strtolower(trim($header));
+                                if (strpos($header_clean, 'email') !== false || strpos($header_clean, 'mail') !== false) {
+                                    $email_idx = $idx;
+                                } elseif (strpos($header_clean, 'name') !== false) {
+                                    $name_idx = $idx;
+                                }
+                            }
+                        }
+                        
+                        if ($email_idx === -1) {
+                            if ($headers && count($headers) === 1) {
+                                $email_idx = 0;
+                            } else {
+                                $name_idx = 0;
+                                $email_idx = 1;
+                            }
+                        }
+                        
+                        if ($email_idx !== -1 && $headers && count($headers) > 0) {
+                            $first_email = trim($headers[$email_idx]);
+                            if (strpos($first_email, '@') !== false) {
+                                $first_name = $name_idx !== -1 ? trim($headers[$name_idx]) : '';
+                                $emails[] = ['name' => $first_name, 'email' => $first_email];
+                            }
+                        }
+                        
+                        while (($row = fgetcsv($handle)) !== false) {
+                            if (count($row) <= max($name_idx, $email_idx)) continue;
+                            $email = trim($row[$email_idx] ?? '');
+                            if (strpos($email, '@') !== false) {
+                                $name = $name_idx !== -1 ? trim($row[$name_idx] ?? '') : '';
+                                $emails[] = ['name' => $name, 'email' => $email];
+                            }
+                        }
+                        fclose($handle);
+                    }
+                    
+                    if (empty($emails)) {
+                        $error_message = 'No valid email addresses found in the file.';
+                    } else {
+                        $pdo->beginTransaction();
+                        $stmt_list = $pdo->prepare("INSERT INTO email_campaign_lists (label, created_at) VALUES (?, NOW())");
+                        $stmt_list->execute([$label]);
+                        $list_id = $pdo->lastInsertId();
+                        
+                        $stmt_email = $pdo->prepare("INSERT INTO email_campaign_list_emails (list_id, name, email) VALUES (?, ?, ?)");
+                        foreach ($emails as $item) {
+                            $stmt_email->execute([$list_id, $item['name'], $item['email']]);
+                        }
+                        $pdo->commit();
+                        $success_message = 'Successfully imported custom list "' . htmlspecialchars($label) . '" with ' . count($emails) . ' recipients.';
+                        log_admin_activity($pdo, $admin_username, 'email_list_imported', "Imported custom email list \"{$label}\" with " . count($emails) . " emails");
+                    }
+                } catch (Exception $e) {
+                    if ($pdo->inTransaction()) $pdo->rollBack();
+                    $error_message = 'Failed to import list: ' . $e->getMessage();
+                }
+            }
+        } elseif ($action === 'delete_list') {
+            $list_id = (int)($_POST['list_id'] ?? 0);
+            try {
+                $pdo->prepare("DELETE FROM email_campaign_lists WHERE id = ?")->execute([$list_id]);
+                $pdo->prepare("DELETE FROM email_campaign_list_emails WHERE list_id = ?")->execute([$list_id]);
+                $success_message = 'Custom list deleted successfully.';
+                log_admin_activity($pdo, $admin_username, 'email_list_deleted', "Deleted custom email list #{$list_id}");
+            } catch (Exception $e) {
+                $error_message = 'Failed to delete list: ' . $e->getMessage();
+            }
         }
     }
 }
@@ -108,6 +353,12 @@ try {
           AND (ff.type = 'email' OR ff.field_name LIKE '%email%' OR ff.label LIKE '%email%')
         ORDER BY f.title
     ")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {}
+
+// Fetch active custom lists for targeting
+$custom_lists = [];
+try {
+    $custom_lists = $pdo->query("SELECT id, label, (SELECT COUNT(*) FROM email_campaign_list_emails WHERE list_id = l.id) as emails_count FROM email_campaign_lists l ORDER BY label")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
 // Fetch campaign history with queue statistics
@@ -149,12 +400,29 @@ include 'includes/admin_nav.php';
 .ql-editor {
     min-height: 200px;
 }
+.ql-editor {
+    min-height: 200px;
+}
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(15, 23, 42, 0.6);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    backdrop-filter: blur(4px);
+}
 </style>
 
 <div class="page-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
     <div>
         <h1 style="margin:0;"><i class="fas fa-envelope-open-text" style="color:var(--accent); margin-right:8px;"></i> Email Campaigns</h1>
-        <p class="subtitle" style="margin:4px 0 0 0; color:var(--text-muted);">Send and schedule custom emails to students targeted by courses</p>
+        <p class="subtitle" style="margin:4px 0 0 0; color:var(--text-muted);">Send and schedule custom emails to students targeted by courses, forms, or custom Excel lists</p>
     </div>
 </div>
 
@@ -178,7 +446,7 @@ include 'includes/admin_nav.php';
                 <?php echo csrf_field(); ?>
                 <input type="hidden" name="action" value="create_campaign">
                 
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-bottom:16px;">
                     <div class="field">
                         <label style="font-weight:600; display:block; margin-bottom:6px;">Target Courses</label>
                         <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:12px; height:120px; overflow-y:auto;">
@@ -187,7 +455,7 @@ include 'includes/admin_nav.php';
                             <?php else: ?>
                                 <?php foreach ($courses as $c): ?>
                                     <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:0.9rem; cursor:pointer;">
-                                        <input type="checkbox" name="scope_course[]" value="<?php echo htmlspecialchars($c); ?>" style="width:auto;">
+                                        <input type="checkbox" class="target-checkbox" name="scope_course[]" value="<?php echo htmlspecialchars($c); ?>" style="width:auto;" onchange="updatePreviewButtonVisibility()">
                                         <?php echo htmlspecialchars($c); ?>
                                     </label>
                                 <?php endforeach; ?>
@@ -203,9 +471,28 @@ include 'includes/admin_nav.php';
                             <?php else: ?>
                                 <?php foreach ($active_forms as $f): ?>
                                     <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:0.9rem; cursor:pointer;">
-                                        <input type="checkbox" name="scope_form[]" value="<?php echo (int)$f['id']; ?>" style="width:auto;">
+                                        <input type="checkbox" class="target-checkbox" name="scope_form[]" value="<?php echo (int)$f['id']; ?>" style="width:auto;" onchange="updatePreviewButtonVisibility()">
                                         <?php echo htmlspecialchars($f['title']); ?>
                                     </label>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label style="font-weight:600; display:block; margin-bottom:6px;">Target Custom Lists</label>
+                        <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:12px; height:120px; overflow-y:auto;">
+                            <?php if (empty($custom_lists)): ?>
+                                <p style="margin:0; color:var(--text-muted); font-size:0.9rem;">No custom lists available.</p>
+                            <?php else: ?>
+                                <?php foreach ($custom_lists as $l): ?>
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:0.9rem;">
+                                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin:0; flex:1;">
+                                            <input type="checkbox" class="target-checkbox" name="scope_list[]" value="<?php echo (int)$l['id']; ?>" style="width:auto;" onchange="updatePreviewButtonVisibility()">
+                                            <?php echo htmlspecialchars($l['label']); ?> (<?php echo $l['emails_count']; ?>)
+                                        </label>
+                                        <button type="button" class="btn btn-sm btn-soft-red" style="padding:2px 6px; font-size:0.75rem; border:none; margin-left:4px;" onclick="deleteCustomList(<?php echo $l['id']; ?>, '<?php echo addslashes($l['label']); ?>')"><i class="fas fa-trash-can"></i></button>
+                                    </div>
                                 <?php endforeach; ?>
                             <?php endif; ?>
                         </div>
@@ -256,59 +543,101 @@ include 'includes/admin_nav.php';
                     </div>
                 </div>
 
-                <div style="display:flex; justify-content:flex-end;">
+                <div style="display:flex; justify-content:flex-end; gap:10px;">
+                    <button type="button" class="btn btn-secondary" id="preview-btn" style="padding:10px 24px; display:none; align-items:center; gap:6px;" onclick="openPreviewModal()"><i class="fas fa-eye"></i> Preview</button>
                     <button type="submit" class="btn btn-primary" style="padding:10px 24px;"><i class="fas fa-paper-plane" style="margin-right:6px;"></i> Dispatch Campaign</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <!-- Campaigns Queue & Logs Card -->
-    <div class="panel">
-        <div class="panel-head">
-            <span class="head-icon"><i class="fas fa-history"></i></span>
-            <h2>Recent Campaigns</h2>
+    <!-- Right-Hand Side Column -->
+    <div style="display:flex; flex-direction:column; gap:20px;">
+        
+        <!-- Import Excel/CSV List Card -->
+        <div class="panel">
+            <div class="panel-head">
+                <span class="head-icon"><i class="fas fa-file-import"></i></span>
+                <h2>Import Custom Recipient List</h2>
+            </div>
+            <div class="panel-body">
+                <form method="POST" enctype="multipart/form-data">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="action" value="import_list">
+                    <div class="field" style="margin-bottom:12px;">
+                        <label style="font-weight:600; display:block; margin-bottom:4px;">List Label Name <span class="req">*</span></label>
+                        <input type="text" name="list_label" placeholder="e.g. Special Leads Aug 2026" required style="width:100%; padding:10px; border-radius:6px; border:1px solid var(--border);">
+                    </div>
+                    <div class="field" style="margin-bottom:12px;">
+                        <label style="font-weight:600; display:block; margin-bottom:4px;">Select CSV/Excel File (Columns: Name, Email) <span class="req">*</span></label>
+                        <input type="file" name="list_file" accept=".csv" required style="width:100%; padding:8px; border-radius:6px; border:1px solid var(--border); background:#fff;">
+                        <p style="font-size:0.75rem; color:var(--text-muted); margin:4px 0 0 0;"><i class="fas fa-circle-info"></i> Excel lists must be saved as CSV (.csv format) with columns for Name and Email before uploading.</p>
+                    </div>
+                    <button type="submit" class="btn btn-secondary" style="width:100%; padding:10px; font-weight:700;"><i class="fas fa-upload" style="margin-right:6px;"></i> Import &amp; Save List</button>
+                </form>
+            </div>
         </div>
-        <div class="panel-body" style="padding:0; overflow-x:auto;">
-            <table class="data-table" style="width:100%; border-collapse:collapse; margin:0;">
-                <thead>
-                    <tr>
-                        <th style="padding:12px 16px;">Campaign Info</th>
-                        <th style="padding:12px 16px;">Target</th>
-                        <th style="padding:12px 16px; text-align:center;">Status</th>
-                        <th style="padding:12px 16px; text-align:right;">Stats</th>
-                        <th style="padding:12px 16px; text-align:right;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php if (empty($campaigns)): ?>
+
+        <!-- Campaigns Queue & Logs Card -->
+        <div class="panel">
+            <div class="panel-head">
+                <span class="head-icon"><i class="fas fa-history"></i></span>
+                <h2>Recent Campaigns</h2>
+            </div>
+            <div class="panel-body" style="padding:0; overflow-x:auto;">
+                <table class="data-table" style="width:100%; border-collapse:collapse; margin:0;">
+                    <thead>
                         <tr>
-                            <td colspan="5" style="text-align:center; padding:32px 16px; color:var(--text-muted);">
-                                <i class="fas fa-inbox" style="font-size:2rem; margin-bottom:12px; display:block;"></i>
-                                No email campaigns dispatched yet.
-                            </td>
+                            <th style="padding:12px 16px;">Campaign Info</th>
+                            <th style="padding:12px 16px;">Target</th>
+                            <th style="padding:12px 16px; text-align:center;">Status</th>
+                            <th style="padding:12px 16px; text-align:right;">Stats</th>
+                            <th style="padding:12px 16px; text-align:right;">Actions</th>
                         </tr>
-                    <?php else: ?>
-                        <?php foreach ($campaigns as $camp): ?>
-                            <tr style="border-bottom:1px solid var(--border);">
-                                <td style="padding:12px 16px;">
-                                    <div class="cell-main" style="font-weight:600;"><?php echo htmlspecialchars($camp['subject']); ?></div>
-                                    <div class="cell-sub" style="font-size:0.8rem; color:var(--text-muted); margin-top:2px;">
-                                        Created by: <?php echo htmlspecialchars($camp['created_by']); ?>
-                                        <br>
-                                        Date: <?php echo date('d M Y, h:i A', strtotime($camp['created_at'])); ?>
-                                    </div>
+                    </thead>
+                    <tbody>
+                        <?php if (empty($campaigns)): ?>
+                            <tr>
+                                <td colspan="5" style="text-align:center; padding:32px 16px; color:var(--text-muted);">
+                                    <i class="fas fa-inbox" style="font-size:2rem; margin-bottom:12px; display:block;"></i>
+                                    No email campaigns dispatched yet.
                                 </td>
-                                <td style="padding:12px 16px; vertical-align:top;">
-                                    <div class="cell-sub" style="font-size:0.8rem; max-width:180px; word-break:break-all;">
-                                        <?php 
-                                        $t_courses = explode(',', $camp['target_courses']);
-                                        foreach ($t_courses as $tc) {
-                                            echo '<span class="badge blue" style="font-size:0.7rem; margin:1px; display:inline-block;">' . htmlspecialchars($tc) . '</span> ';
-                                        }
-                                        ?>
-                                    </div>
-                                </td>
+                            </tr>
+                        <?php else: ?>
+                            <?php foreach ($campaigns as $camp): ?>
+                                <tr style="border-bottom:1px solid var(--border);">
+                                    <td style="padding:12px 16px;">
+                                        <div class="cell-main" style="font-weight:600;"><?php echo htmlspecialchars($camp['subject']); ?></div>
+                                        <div class="cell-sub" style="font-size:0.8rem; color:var(--text-muted); margin-top:2px;">
+                                            Created by: <?php echo htmlspecialchars($camp['created_by']); ?>
+                                            <br>
+                                            Date: <?php echo date('d M Y, h:i A', strtotime($camp['created_at'])); ?>
+                                        </div>
+                                    </td>
+                                    <td style="padding:12px 16px; vertical-align:top;">
+                                        <div class="cell-sub" style="font-size:0.8rem; max-width:180px; word-break:break-all;">
+                                            <?php 
+                                            if (!empty($camp['target_courses'])) {
+                                                $t_courses = array_filter(explode(',', $camp['target_courses']));
+                                                foreach ($t_courses as $tc) {
+                                                    echo '<span class="badge blue" style="font-size:0.7rem; margin:1px; display:inline-block;">' . htmlspecialchars($tc) . '</span> ';
+                                                }
+                                            }
+                                            if (!empty($camp['target_forms'])) {
+                                                $t_forms = array_filter(explode(',', $camp['target_forms']));
+                                                foreach ($t_forms as $tf) {
+                                                    echo '<span class="badge green" style="font-size:0.7rem; margin:1px; display:inline-block;">Form #' . htmlspecialchars($tf) . '</span> ';
+                                                }
+                                            }
+                                            if (!empty($camp['target_lists'])) {
+                                                $t_lists = array_filter(explode(',', $camp['target_lists']));
+                                                foreach ($t_lists as $tl) {
+                                                    echo '<span class="badge purple" style="font-size:0.7rem; margin:1px; display:inline-block; background:rgba(168,85,247,0.15); color:#a855f7; border:1px solid rgba(168,85,247,0.3);">List #' . htmlspecialchars($tl) . '</span> ';
+                                                }
+                                            }
+                                            ?>
+                                        </div>
+                                    </td>
                                 <td style="padding:12px 16px; text-align:center; vertical-align:top;">
                                     <?php if ($camp['status'] === 'scheduled'): ?>
                                         <span class="badge amber"><i class="fas fa-clock"></i> Scheduled</span>
@@ -387,8 +716,9 @@ document.getElementById('campaign-form').addEventListener('submit', function(e) 
     // Check that at least one checkbox is checked
     var coursesChecked = document.querySelectorAll('input[name="scope_course[]"]:checked').length;
     var formsChecked = document.querySelectorAll('input[name="scope_form[]"]:checked').length;
-    if (coursesChecked === 0 && formsChecked === 0) {
-        alert('Please select at least one Target Course or Target Form.');
+    var listsChecked = document.querySelectorAll('input[name="scope_list[]"]:checked').length;
+    if (coursesChecked === 0 && formsChecked === 0 && listsChecked === 0) {
+        alert('Please select at least one Target Course, Target Form, or Target Custom List.');
         e.preventDefault();
         return false;
     }
@@ -427,6 +757,141 @@ function toggleSched(show) {
         input.value = '';
     }
 }
+
+// Collapsible Preview Trigger Buttons Logic
+function updatePreviewButtonVisibility() {
+    var checked = document.querySelectorAll('.target-checkbox:checked').length;
+    var previewBtn = document.getElementById('preview-btn');
+    if (checked > 0) {
+        previewBtn.style.display = 'inline-flex';
+    } else {
+        previewBtn.style.display = 'none';
+    }
+}
+
+function openPreviewModal() {
+    var formElement = document.getElementById('campaign-form');
+    var formData = new FormData(formElement);
+    if (typeof quill !== 'undefined') {
+        formData.set('body', quill.root.innerHTML);
+    }
+    
+    document.getElementById('target-list-container').innerHTML = '<div style="text-align:center; padding:40px 10px; color:var(--text-muted); font-size:0.95rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; margin-bottom:8px; display:block; color:var(--accent);"></i> Resolving target emails...</div>';
+    document.getElementById('preview-subject-text').innerText = 'Loading...';
+    document.getElementById('preview-body-iframe-container').innerHTML = '';
+    document.getElementById('preview-modal').style.display = 'flex';
+    
+    fetch('email-campaigns.php?action=resolve_targets', {
+        method: 'POST',
+        body: formData
+    })
+    .then(res => res.json())
+    .then(data => {
+        document.getElementById('target-count').innerText = data.recipients.length;
+        
+        var listHtml = '';
+        if (data.recipients.length === 0) {
+            listHtml = '<div style="text-align:center; color:var(--text-muted); padding:30px 10px; font-size:0.85rem;">No target recipients found. Check your filters.</div>';
+        } else {
+            data.recipients.forEach(r => {
+                var escName = (r.name || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                var escEmail = (r.email || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                var escSource = (r.source || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                listHtml += '<div style="background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:10px; display:flex; flex-direction:column; gap:2px; font-size:0.82rem;">' +
+                    '<div style="font-weight:700; color:var(--text-main); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">' + (escName || 'Recipient') + '</div>' +
+                    '<div style="color:var(--secondary); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">' + escEmail + '</div>' +
+                    '<div style="font-size:0.7rem; color:var(--accent); font-weight:600; text-transform:uppercase; margin-top:2px;">' + escSource + '</div>' +
+                '</div>';
+            });
+        }
+        document.getElementById('target-list-container').innerHTML = listHtml;
+        
+        document.getElementById('preview-subject-text').innerText = data.sample_subject || '(No Subject)';
+        
+        var iframe = document.createElement('iframe');
+        iframe.style.width = '100%';
+        iframe.style.height = '500px';
+        iframe.style.border = 'none';
+        iframe.style.borderRadius = '8px';
+        iframe.style.boxShadow = '0 4px 20px rgba(0,0,0,0.1)';
+        document.getElementById('preview-body-iframe-container').appendChild(iframe);
+        
+        var doc = iframe.contentWindow || iframe.contentDocument.document || iframe.contentDocument;
+        doc.document.open();
+        doc.document.write(data.preview_html);
+        doc.document.close();
+    })
+    .catch(err => {
+        document.getElementById('target-list-container').innerHTML = '<div style="text-align:center; color:#ef4444; padding:20px; font-size:0.85rem;">Error loading preview.</div>';
+    });
+}
+
+function closePreviewModal() {
+    document.getElementById('preview-modal').style.display = 'none';
+}
+
+function deleteCustomList(listId, listLabel) {
+    if (confirm('Are you sure you want to delete the custom list "' + listLabel + '"? This will remove all associated target email addresses.')) {
+        var form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '';
+        
+        var csrfInput = document.createElement('input');
+        csrfInput.type = 'hidden';
+        csrfInput.name = 'csrf_token';
+        csrfInput.value = document.querySelector('input[name="csrf_token"]').value;
+        form.appendChild(csrfInput);
+        
+        var actionInput = document.createElement('input');
+        actionInput.type = 'hidden';
+        actionInput.name = 'action';
+        actionInput.value = 'delete_list';
+        form.appendChild(actionInput);
+        
+        var idInput = document.createElement('input');
+        idInput.type = 'hidden';
+        idInput.name = 'list_id';
+        idInput.value = listId;
+        form.appendChild(idInput);
+        
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
 </script>
+
+<!-- Campaign Preview Modal -->
+<div class="modal-overlay" id="preview-modal" style="display:none; align-items:center; justify-content:center;">
+    <div style="background:var(--surface); border:1px solid var(--border); border-radius:18px; width:100%; max-width:980px; height:85vh; display:flex; flex-direction:column; box-shadow:0 20px 50px rgba(0,0,0,0.3); overflow:hidden;">
+        <div style="padding:16px 24px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; background:var(--card);">
+            <h3 style="margin:0; font-size:1.15rem; font-weight:800; color:var(--text-main);"><i class="fas fa-magnifying-glass-chart" style="color:var(--accent); margin-right:8px;"></i> Campaign Preview &amp; Target Verification</h3>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="closePreviewModal()" style="padding:4px 10px; font-size:0.8rem;"><i class="fas fa-xmark"></i> Close</button>
+        </div>
+        <div style="flex:1; display:grid; grid-template-columns:300px 1fr; overflow:hidden;">
+            <!-- Left Side: Target Verification List -->
+            <div style="border-right:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; background:var(--input-bg);">
+                <div style="padding:12px 16px; border-bottom:1px solid var(--border); background:var(--card); font-weight:700; font-size:0.85rem; color:var(--text-muted); display:flex; justify-content:space-between; align-items:center;">
+                    <span>Verified Targets</span>
+                    <span id="target-count" class="badge blue" style="font-size:0.75rem;">0</span>
+                </div>
+                <div id="target-list-container" style="flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:8px;">
+                    <!-- Recipients list dynamically inserted here -->
+                </div>
+            </div>
+            <!-- Right Side: Email Sample Preview -->
+            <div style="display:flex; flex-direction:column; overflow:hidden;">
+                <div style="padding:12px 20px; border-bottom:1px solid var(--border); background:var(--card); display:flex; flex-direction:column; gap:4px;">
+                    <div style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Sample Subject Preview:</div>
+                    <div id="preview-subject-text" style="font-weight:700; color:var(--text-main); font-size:0.95rem;">-</div>
+                </div>
+                <div style="flex:1; overflow-y:auto; padding:20px; background:#f5f5f4; display:flex; justify-content:center;">
+                    <div style="width:100%; max-width:580px;" id="preview-body-iframe-container">
+                        <!-- Rendered template body dynamically inserted here inside an iframe -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 
 <?php include 'admin_footer.php'; ?>
