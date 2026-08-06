@@ -100,6 +100,23 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
             }
         })();
         document.addEventListener('DOMContentLoaded', function() {
+            // Auto-expand any sections containing attention-seeking badges
+            var sections = document.querySelectorAll('.sidebar .nav-section');
+            sections.forEach(function(section) {
+                var badges = section.querySelectorAll('.nav-badge');
+                var hasActiveBadge = false;
+                badges.forEach(function(badge) {
+                    var val = badge.textContent.trim();
+                    // Match numbers greater than 0 or descriptive text badges (like "Active", "New")
+                    if (val !== '' && val !== '0') {
+                        hasActiveBadge = true;
+                    }
+                });
+                if (hasActiveBadge) {
+                    section.classList.remove('collapsed');
+                }
+            });
+
             var labels = document.querySelectorAll('.sidebar .nav-section-label');
             labels.forEach(function(label) {
                 var section = label.closest('.nav-section');
