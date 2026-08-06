@@ -168,6 +168,7 @@ include 'includes/admin_nav.php';
                             <a href="studyplan-designer.php?id=<?php echo $p['id']; ?>" class="btn btn-sm btn-outline" title="Visual Designer"><i class="fas fa-wand-magic-sparkles"></i> Edit</a>
                             <button class="btn btn-sm btn-outline" title="Clone / Duplicate" onclick="duplicatePlan(<?php echo $p['id']; ?>)"><i class="fas fa-copy"></i></button>
                             <?php if ($p['status'] === 'published'): ?>
+                                <button class="btn btn-sm btn-outline" title="Copy Public URL" onclick="copyPublicUrl(<?php echo $p['id']; ?>)"><i class="fas fa-link"></i> Link</button>
                                 <button class="btn btn-sm btn-soft-green" title="Send Email Update Notification" onclick="sendEmailNotification(<?php echo $p['id']; ?>)"><i class="fas fa-paper-plane"></i> Send Notify</button>
                             <?php endif; ?>
                             <button class="btn btn-sm btn-soft-red" title="Delete Plan" onclick="deletePlan(<?php echo $p['id']; ?>, '<?php echo htmlspecialchars(addslashes($p['title'])); ?>')"><i class="fas fa-trash"></i></button>
@@ -181,6 +182,15 @@ include 'includes/admin_nav.php';
 </div>
 
 <script>
+    function copyPublicUrl(id) {
+        var url = window.location.origin + window.location.pathname.replace('studyplans.php', 'studyplan.php') + '?plan_id=' + id;
+        navigator.clipboard.writeText(url).then(function() {
+            alert('Public Study Plan link copied to clipboard!');
+        }).catch(function() {
+            alert('Failed to copy: ' + url);
+        });
+    }
+
     function duplicatePlan(id) {
         if (!confirm('Are you sure you want to duplicate this study plan? All activities and styles will be copied.')) return;
         

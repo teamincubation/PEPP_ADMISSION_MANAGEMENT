@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS `study_plan_activities` (
 CREATE TABLE IF NOT EXISTS `study_plan_assignments` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `study_plan_id` int(11) NOT NULL,
-  `assignment_type` enum('all','course','batch','student') NOT NULL,
+  `assignment_type` enum('all','course','batch','student','form') NOT NULL,
   `assigned_value` varchar(255) NOT NULL, -- e.g. Course name, academic year, student_id, batch
   `created_at` datetime NOT NULL,
   PRIMARY KEY (`id`),

@@ -312,7 +312,7 @@ try {
             CREATE TABLE IF NOT EXISTS `study_plan_assignments` (
               `id` INT AUTO_INCREMENT PRIMARY KEY,
               `study_plan_id` INT NOT NULL,
-              `assignment_type` ENUM('all','course','batch','student') NOT NULL,
+              `assignment_type` ENUM('all','course','batch','student','form') NOT NULL,
               `assigned_value` VARCHAR(255) NOT NULL,
               `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
               KEY `idx_spa_assign_plan` (`study_plan_id`),
@@ -355,6 +355,10 @@ try {
               KEY `idx_sp_anal_plan` (`study_plan_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
+
+        try {
+            $pdo->exec("ALTER TABLE study_plan_assignments MODIFY COLUMN assignment_type ENUM('all','course','batch','student','form') NOT NULL");
+        } catch (Exception $e) {}
 
     } catch (Exception $dbEx) {
         error_log("PEPP self-healing DB check failed: " . $dbEx->getMessage());

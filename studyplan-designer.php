@@ -33,6 +33,8 @@ if ($plan_id > 0) {
 $courses = $pdo->query("SELECT * FROM pepp_courses WHERE status = 'active' ORDER BY course_name ASC")->fetchAll();
 // Fetch active academic years
 $years = $pdo->query("SELECT year FROM academic_years WHERE status = 'active' ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN);
+// Fetch active campaign forms
+$campaign_forms = $pdo->query("SELECT * FROM campaign_forms WHERE status = 'published' ORDER BY title ASC")->fetchAll();
 
 // Predefined activity types
 $default_types = [
@@ -280,6 +282,51 @@ include 'includes/admin_nav.php';
                 <div class="field full">
                     <label>Branding Quote / Motivational Quote</label>
                     <input type="text" id="plan-quote" placeholder="e.g. Success is the sum of small efforts repeated day in and day out!" value="Commit to your dreams and execute every day!" oninput="updateLivePreview()">
+                </div>
+
+                <div class="field full" style="border: 1px solid var(--border); padding: 16px; border-radius: 12px; margin-top: 10px; background: rgba(0,0,0,0.01);">
+                    <label style="font-weight: 700; display: block; margin-bottom: 8px;"><i class="fas fa-lock" style="color:var(--accent);"></i> Visibility &amp; Access Rules</label>
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4;">Select who can access this study plan via the public link. They will authenticate using their registered email.</p>
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+                        <div>
+                            <label style="font-size: 0.8rem; font-weight: 700; color: var(--text-main); margin-bottom: 4px; display: block;"><i class="fas fa-book"></i> Enrolled Courses (PEPP Students)</label>
+                            <div style="max-height: 120px; overflow-y: auto; border: 1.5px solid var(--border); border-radius: 8px; padding: 6px; background:#fff;">
+                                <?php foreach ($courses as $c): 
+                                    $isChecked = false;
+                                    foreach ($assigned as $a) {
+                                        if ($a['assignment_type'] === 'course' && $a['assigned_value'] === $c['course_name']) {
+                                            $isChecked = true; break;
+                                        }
+                                    }
+                                ?>
+                                    <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+                                        <input type="checkbox" name="access_courses[]" value="<?php echo htmlspecialchars($c['course_name']); ?>" id="ac-<?php echo $c['id']; ?>" <?php echo $isChecked ? 'checked' : ''; ?>>
+                                        <label for="ac-<?php echo $c['id']; ?>" style="font-size: 0.8rem; cursor:pointer; font-weight:normal; margin:0; text-transform:none;"><?php echo htmlspecialchars($c['course_name']); ?></label>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label style="font-size: 0.8rem; font-weight: 700; color: var(--text-main); margin-bottom: 4px; display: block;"><i class="fab fa-wpforms"></i> Registered in Custom Forms</label>
+                            <div style="max-height: 120px; overflow-y: auto; border: 1.5px solid var(--border); border-radius: 8px; padding: 6px; background:#fff;">
+                                <?php foreach ($campaign_forms as $f): 
+                                    $isChecked = false;
+                                    foreach ($assigned as $a) {
+                                        if ($a['assignment_type'] === 'form' && $a['assigned_value'] === (string)$f['id']) {
+                                            $isChecked = true; break;
+                                        }
+                                    }
+                                ?>
+                                    <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+                                        <input type="checkbox" name="access_forms[]" value="<?php echo htmlspecialchars($f['id']); ?>" id="af-<?php echo $f['id']; ?>" <?php echo $isChecked ? 'checked' : ''; ?>>
+                                        <label for="af-<?php echo $f['id']; ?>" style="font-size: 0.8rem; cursor:pointer; font-weight:normal; margin:0; text-transform:none;"><?php echo htmlspecialchars($f['title']); ?></label>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -792,6 +839,14 @@ include 'includes/admin_nav.php';
             return;
         }
         
+        var assignments = [];
+        document.querySelectorAll('input[name="access_courses[]"]:checked').forEach(function(el) {
+            assignments.push({ type: 'course', value: el.value });
+        });
+        document.querySelectorAll('input[name="access_forms[]"]:checked').forEach(function(el) {
+            assignments.push({ type: 'form', value: el.value });
+        });
+
         var planData = {
             id: studyPlanId,
             title: title,
@@ -804,6 +859,7 @@ include 'includes/admin_nav.php';
             end_date: document.getElementById('plan-end').value,
             is_template: document.getElementById('plan-template').checked ? 1 : 0,
             status: studyPlanId > 0 ? 'published' : 'draft', // defaults
+            assignments: assignments,
             custom_settings: {
                 quote: document.getElementById('plan-quote').value
             }
