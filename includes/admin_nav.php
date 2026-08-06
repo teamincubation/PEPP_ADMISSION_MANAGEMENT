@@ -317,6 +317,184 @@ $nav_data = [
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="assets/css/admin-theme.css" rel="stylesheet">
+    <style>
+        /* Custom sidebar category background and high-visibility text colors */
+        .nav-section-label.cat-overview {
+            background: rgba(148, 163, 184, 0.12) !important;
+            color: #334155 !important;
+            border-radius: 6px;
+            margin-bottom: 4px;
+        }
+        .nav-section-label.cat-overview:hover {
+            background: rgba(148, 163, 184, 0.22) !important;
+            color: #0f172a !important;
+        }
+        html.theme-dark .nav-section-label.cat-overview {
+            background: rgba(148, 163, 184, 0.22) !important;
+            color: #f1f5f9 !important;
+        }
+        html.theme-dark .nav-section-label.cat-overview:hover {
+            background: rgba(148, 163, 184, 0.32) !important;
+            color: #ffffff !important;
+        }
+        html.theme-sepia .nav-section-label.cat-overview {
+            color: #433422 !important;
+        }
+
+        .nav-section-label.cat-registrations {
+            background: rgba(34, 197, 94, 0.12) !important;
+            color: #15803d !important;
+            border-radius: 6px;
+            margin-bottom: 4px;
+        }
+        .nav-section-label.cat-registrations:hover {
+            background: rgba(34, 197, 94, 0.22) !important;
+            color: #166534 !important;
+        }
+        html.theme-dark .nav-section-label.cat-registrations {
+            background: rgba(34, 197, 94, 0.22) !important;
+            color: #4ade80 !important;
+        }
+        html.theme-dark .nav-section-label.cat-registrations:hover {
+            background: rgba(34, 197, 94, 0.32) !important;
+            color: #22c55e !important;
+        }
+        html.theme-sepia .nav-section-label.cat-registrations {
+            color: #14532d !important;
+        }
+
+        .nav-section-label.cat-students {
+            background: rgba(59, 130, 246, 0.12) !important;
+            color: #1d4ed8 !important;
+            border-radius: 6px;
+            margin-bottom: 4px;
+        }
+        .nav-section-label.cat-students:hover {
+            background: rgba(59, 130, 246, 0.22) !important;
+            color: #1e40af !important;
+        }
+        html.theme-dark .nav-section-label.cat-students {
+            background: rgba(59, 130, 246, 0.22) !important;
+            color: #60a5fa !important;
+        }
+        html.theme-dark .nav-section-label.cat-students:hover {
+            background: rgba(59, 130, 246, 0.32) !important;
+            color: #3b82f6 !important;
+        }
+        html.theme-sepia .nav-section-label.cat-students {
+            color: #1e3a8a !important;
+        }
+
+        .nav-section-label.cat-crm {
+            background: rgba(99, 102, 241, 0.12) !important;
+            color: #4f46e5 !important;
+            border-radius: 6px;
+            margin-bottom: 4px;
+        }
+        .nav-section-label.cat-crm:hover {
+            background: rgba(99, 102, 241, 0.22) !important;
+            color: #3730a3 !important;
+        }
+        html.theme-dark .nav-section-label.cat-crm {
+            background: rgba(99, 102, 241, 0.22) !important;
+            color: #818cf8 !important;
+        }
+        html.theme-dark .nav-section-label.cat-crm:hover {
+            background: rgba(99, 102, 241, 0.32) !important;
+            color: #6366f1 !important;
+        }
+        html.theme-sepia .nav-section-label.cat-crm {
+            color: #312e81 !important;
+        }
+
+        .nav-section-label.cat-campaigns {
+            background: rgba(245, 158, 11, 0.12) !important;
+            color: #b45309 !important;
+            border-radius: 6px;
+            margin-bottom: 4px;
+        }
+        .nav-section-label.cat-campaigns:hover {
+            background: rgba(245, 158, 11, 0.22) !important;
+            color: #92400e !important;
+        }
+        html.theme-dark .nav-section-label.cat-campaigns {
+            background: rgba(245, 158, 11, 0.22) !important;
+            color: #fbbf24 !important;
+        }
+        html.theme-dark .nav-section-label.cat-campaigns:hover {
+            background: rgba(245, 158, 11, 0.32) !important;
+            color: #f59e0b !important;
+        }
+        html.theme-sepia .nav-section-label.cat-campaigns {
+            color: #78350f !important;
+        }
+
+        .nav-section-label.cat-payments {
+            background: rgba(20, 184, 166, 0.12) !important;
+            color: #0d9488 !important;
+            border-radius: 6px;
+            margin-bottom: 4px;
+        }
+        .nav-section-label.cat-payments:hover {
+            background: rgba(20, 184, 166, 0.22) !important;
+            color: #0f766e !important;
+        }
+        html.theme-dark .nav-section-label.cat-payments {
+            background: rgba(20, 184, 166, 0.22) !important;
+            color: #2dd4bf !important;
+        }
+        html.theme-dark .nav-section-label.cat-payments:hover {
+            background: rgba(20, 184, 166, 0.32) !important;
+            color: #14b8a6 !important;
+        }
+        html.theme-sepia .nav-section-label.cat-payments {
+            color: #115e59 !important;
+        }
+
+        .nav-section-label.cat-academics {
+            background: rgba(139, 92, 246, 0.12) !important;
+            color: #7c3aed !important;
+            border-radius: 6px;
+            margin-bottom: 4px;
+        }
+        .nav-section-label.cat-academics:hover {
+            background: rgba(139, 92, 246, 0.22) !important;
+            color: #5b21b6 !important;
+        }
+        html.theme-dark .nav-section-label.cat-academics {
+            background: rgba(139, 92, 246, 0.22) !important;
+            color: #a78bfa !important;
+        }
+        html.theme-dark .nav-section-label.cat-academics:hover {
+            background: rgba(139, 92, 246, 0.32) !important;
+            color: #8b5cf6 !important;
+        }
+        html.theme-sepia .nav-section-label.cat-academics {
+            color: #4c1d95 !important;
+        }
+
+        .nav-section-label.cat-system {
+            background: rgba(244, 63, 94, 0.12) !important;
+            color: #e11d48 !important;
+            border-radius: 6px;
+            margin-bottom: 4px;
+        }
+        .nav-section-label.cat-system:hover {
+            background: rgba(244, 63, 94, 0.22) !important;
+            color: #9f1239 !important;
+        }
+        html.theme-dark .nav-section-label.cat-system {
+            background: rgba(244, 63, 94, 0.22) !important;
+            color: #fda4af !important;
+        }
+        html.theme-dark .nav-section-label.cat-system:hover {
+            background: rgba(244, 63, 94, 0.32) !important;
+            color: #f43f5e !important;
+        }
+        html.theme-sepia .nav-section-label.cat-system {
+            color: #881337 !important;
+        }
+    </style>
     <script>
         (function() {
             var theme = localStorage.getItem('admin-theme') || 'light';
@@ -385,7 +563,7 @@ $nav_data = [
             if (!$has_access) continue;
             ?>
             <div class="nav-section <?php echo $is_collapsed; ?>">
-                <div class="nav-section-label">
+                <div class="nav-section-label cat-<?php echo htmlspecialchars($section['id']); ?>">
                     <span>
                         <?php if (!empty($section['icon'])): ?>
                             <i class="<?php echo htmlspecialchars($section['icon']); ?>" style="margin-right:6px; font-size:0.8rem; opacity:0.8;"></i>
