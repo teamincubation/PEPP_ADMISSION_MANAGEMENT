@@ -77,9 +77,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $form_user = $stmt_form->fetch();
             
             if ($student || $form_user) {
+                // Fetch real name from answers if custom form user
+                $name = 'Student';
+                if ($student) {
+                    $name = $student['name'];
+                } elseif ($form_user) {
+                    // Try to resolve Name from answers
+                    $stmt_name = $pdo->prepare("
+                        SELECT a.answer_text 
+                        FROM campaign_form_answers a
+                        JOIN campaign_form_fields f ON a.field_id = f.id
+                        WHERE a.submission_id = ? AND (f.label LIKE '%name%' OR f.field_name LIKE '%name%')
+                        ORDER BY f.sort_order ASC
+                        LIMIT 1
+                    ");
+                    $stmt_name->execute([$form_user['id']]);
+                    $resolved = $stmt_name->fetchColumn();
+                    $name = $resolved ?: ($form_user['respondent_identifier'] ?: 'User');
+                }
+
                 $_SESSION['sp_logged_in'] = true;
                 $_SESSION['sp_email'] = $email;
-                $_SESSION['sp_name'] = $student ? $student['name'] : ($form_user['respondent_identifier'] ?: 'User');
+                $_SESSION['sp_name'] = $name;
                 $_SESSION['sp_course'] = $student ? $student['pepp_course'] : null;
                 $_SESSION['sp_year'] = $student ? $student['academic_year'] : null;
                 $_SESSION['sp_student_id'] = $student ? $student['user_id'] : null;
@@ -133,18 +152,82 @@ try {
     }
 } catch (Exception $e) {}
 
-// Fetch eligible study plans for logged in email
-$plans = [];
+// Fetch eligible courses and forms cards for the logged in email
+$my_courses = [];
+$my_forms = [];
 if ($is_logged_in) {
     try {
         $email = $_SESSION['sp_email'];
         
-        // Match either courses (enrolled) or forms (submitted) assignments
-        $sql = "
+        $stmt_courses = $pdo->prepare("SELECT DISTINCT pepp_course FROM users WHERE email = ? AND status = 'approved' AND pepp_course IS NOT NULL AND pepp_course != ''");
+        $stmt_courses->execute([$email]);
+        $my_courses = $stmt_courses->fetchAll(PDO::FETCH_COLUMN);
+        
+        $stmt_forms = $pdo->prepare("
+            SELECT DISTINCT f.id, f.title 
+            FROM campaign_form_submissions s 
+            JOIN campaign_forms f ON s.form_id = f.id 
+            LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
+            WHERE (s.respondent_identifier = ? OR a.answer_text = ?) AND s.is_deleted = 0
+        ");
+        $stmt_forms->execute([$email, $email]);
+        $my_forms = $stmt_forms->fetchAll();
+    } catch (Exception $e) {}
+}
+
+// Auto-select first card if not set
+if ($is_logged_in && !isset($_GET['course_name']) && !isset($_GET['form_id']) && !isset($_GET['plan_id'])) {
+    if (!empty($my_courses)) {
+        $_GET['course_name'] = $my_courses[0];
+    } elseif (!empty($my_forms)) {
+        $_GET['form_id'] = $my_forms[0]['id'];
+    }
+}
+
+// Fetch plans inside selected course or form card
+$plans = [];
+if ($is_logged_in) {
+    try {
+        if (isset($_GET['course_name'])) {
+            $stmt = $pdo->prepare("
+                SELECT DISTINCT sp.* 
+                FROM study_plans sp
+                JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
+                WHERE sp.status = 'published' AND sa.assignment_type = 'course' AND sa.assigned_value = ?
+                ORDER BY sp.start_date ASC
+            ");
+            $stmt->execute([$_GET['course_name']]);
+            $plans = $stmt->fetchAll();
+        } elseif (isset($_GET['form_id'])) {
+            $stmt = $pdo->prepare("
+                SELECT DISTINCT sp.* 
+                FROM study_plans sp
+                JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
+                WHERE sp.status = 'published' AND sa.assignment_type = 'form' AND sa.assigned_value = ?
+                ORDER BY sp.start_date ASC
+            ");
+            $stmt->execute([$_GET['form_id']]);
+            $plans = $stmt->fetchAll();
+        }
+    } catch (Exception $e) {
+        $plans = [];
+    }
+}
+
+// Fetch activities for a selected study plan
+$selected_plan_id = (int)($_GET['plan_id'] ?? 0);
+$selected_plan = null;
+$activities = [];
+$completions = [];
+if ($is_logged_in && $selected_plan_id > 0) {
+    try {
+        // Validate student has access to this plan
+        $email = $_SESSION['sp_email'];
+        $stmt_validate = $pdo->prepare("
             SELECT DISTINCT sp.* 
             FROM study_plans sp
             JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-            WHERE sp.status = 'published' AND (
+            WHERE sp.id = ? AND sp.status = 'published' AND (
                 sa.assignment_type = 'all' OR
                 (sa.assignment_type = 'course' AND sa.assigned_value IN (
                     SELECT pepp_course FROM users WHERE email = ? AND status = 'approved'
@@ -158,47 +241,22 @@ if ($is_logged_in) {
                     SELECT user_id FROM users WHERE email = ? AND status = 'approved'
                 ))
             )
-            ORDER BY sp.start_date ASC
-        ";
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([$email, $email, $email, $email]);
-        $plans = $stmt->fetchAll();
-    } catch (Exception $e) {
-        $plans = [];
-    }
-}
-
-// Fetch activities for a selected study plan
-$selected_plan_id = (int)($_GET['plan_id'] ?? 0);
-$selected_plan = null;
-$activities = [];
-$completions = [];
-if ($is_logged_in && $selected_plan_id > 0) {
-    // Validate assignment access
-    foreach ($plans as $p) {
-        if ($p['id'] == $selected_plan_id) {
-            $selected_plan = $p;
-            break;
-        }
-    }
-    
-    if ($selected_plan) {
-        try {
+        ");
+        $stmt_validate->execute([$selected_plan_id, $email, $email, $email, $email]);
+        $selected_plan = $stmt_validate->fetch();
+        
+        if ($selected_plan) {
             $stmt = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? ORDER BY activity_date ASC, sort_order ASC");
             $stmt->execute([$selected_plan_id]);
             $activities = $stmt->fetchAll();
             
             // Fetch completions
             $stmt_comp = $pdo->prepare("SELECT activity_id, created_at FROM study_plan_analytics WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity'");
-            $stmt_comp->execute([$_SESSION['sp_email'], $selected_plan_id]);
+            $stmt_comp->execute([$email, $selected_plan_id]);
             $completions = $stmt_comp->fetchAll(PDO::FETCH_KEY_PAIR);
-            
-            // Log view metric
-            $stmt_an = $pdo->prepare("INSERT INTO study_plan_analytics (study_plan_id, student_email, action_type, ip_address) VALUES (?, ?, 'view', ?)");
-            $stmt_an->execute([$selected_plan_id, $_SESSION['sp_email'], $_SERVER['REMOTE_ADDR']]);
-        } catch (Exception $e) {
-            $activities = [];
         }
+    } catch (Exception $e) {
+        $activities = [];
     }
 }
 ?>
@@ -418,6 +476,7 @@ if ($is_logged_in && $selected_plan_id > 0) {
             text-decoration: none;
             color: inherit;
             transition: all 0.2s;
+            margin-bottom: 8px;
         }
         
         .plan-row-card:hover {
@@ -576,13 +635,37 @@ if ($is_logged_in && $selected_plan_id > 0) {
             </div>
 
             <?php if (!$selected_plan): ?>
-                <!-- List plans assigned -->
-                <h3 style="font-family:var(--header-font); font-weight:700; font-size:1rem; margin-top:0.5rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">Your Assigned Study Plans</h3>
+                <!-- Enrolled Cards selector -->
+                <h3 style="font-family:var(--header-font); font-weight:700; font-size:0.9rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px;">Your Course &amp; Form Registrations</h3>
+                <div style="display:grid; grid-template-columns:1fr; gap:10px; margin-bottom:12px;">
+                    <!-- Course Cards -->
+                    <?php foreach ($my_courses as $cname): 
+                        $isSelected = isset($_GET['course_name']) && $_GET['course_name'] === $cname;
+                    ?>
+                        <a href="?course_name=<?php echo urlencode($cname); ?>" style="display:block; text-decoration:none; color:inherit; background: <?php echo $isSelected ? 'var(--accent-soft)' : '#fff'; ?>; border: 2px solid <?php echo $isSelected ? 'var(--accent)' : 'var(--border)'; ?>; padding: 12px; border-radius: 12px; transition: all 0.2s;">
+                            <div style="font-size:0.7rem; text-transform:uppercase; font-weight:700; color:var(--text-muted); margin-bottom:4px;"><i class="fas fa-graduation-cap"></i> Course Enrollment</div>
+                            <div style="font-size:0.95rem; font-weight:700; color:var(--text-main);"><?php echo p_esc($cname); ?></div>
+                        </a>
+                    <?php endforeach; ?>
+                    
+                    <!-- Form Cards -->
+                    <?php foreach ($my_forms as $form_card): 
+                        $isSelected = isset($_GET['form_id']) && $_GET['form_id'] == $form_card['id'];
+                    ?>
+                        <a href="?form_id=<?php echo $form_card['id']; ?>" style="display:block; text-decoration:none; color:inherit; background: <?php echo $isSelected ? 'var(--accent-soft)' : '#fff'; ?>; border: 2px solid <?php echo $isSelected ? 'var(--accent)' : 'var(--border)'; ?>; padding: 12px; border-radius: 12px; transition: all 0.2s;">
+                            <div style="font-size:0.7rem; text-transform:uppercase; font-weight:700; color:var(--text-muted); margin-bottom:4px;"><i class="fab fa-wpforms"></i> Custom Form</div>
+                            <div style="font-size:0.95rem; font-weight:700; color:var(--text-main);"><?php echo p_esc($form_card['title']); ?></div>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+
+                <!-- List plans assigned to selected target -->
+                <h3 style="font-family:var(--header-font); font-weight:700; font-size:0.9rem; color:var(--text-muted); text-transform:uppercase; margin-top:0.5rem; letter-spacing:0.5px;">Available Study Plans</h3>
                 
                 <?php if (empty($plans)): ?>
                     <div style="text-align:center; padding:3rem; border:1px dashed var(--border); border-radius:16px; color:var(--text-muted);">
                         <i class="fas fa-calendar-xmark" style="font-size:2.5rem; margin-bottom:8px; display:block;"></i>
-                        No study plans currently assigned to your email address.
+                        No study plans active for the selected card.
                     </div>
                 <?php else: ?>
                     <div style="display:flex; flex-direction:column; gap:12px;">
@@ -604,6 +687,24 @@ if ($is_logged_in && $selected_plan_id > 0) {
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <a href="studyplan.php" style="text-decoration:none; color:var(--text-muted); font-size:0.85rem; font-weight:700;"><i class="fas fa-arrow-left"></i> All Plans</a>
                     <span class="badge blue" style="font-size:0.75rem; font-weight:700; background:var(--accent-soft); color:var(--accent); padding:4px 10px; border-radius:30px;">v<?php echo $selected_plan['version']; ?></span>
+                </div>
+
+                <!-- Sticky Header for Task Counts -->
+                <div style="position: sticky; top: 58px; background: rgba(255,255,255,0.95); backdrop-filter: blur(8px); border-bottom: 1.5px solid var(--border); padding: 10px 1.2rem; display: flex; justify-content: space-around; align-items: center; z-index: 50; margin: 0 -1.2rem 1rem -1.2rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02);">
+                    <div style="text-align: center;">
+                        <span style="font-size: 0.7rem; text-transform: uppercase; font-weight: 700; color: var(--text-muted); display: block;">Total Tasks</span>
+                        <strong id="header-total-tasks" style="font-size: 1.2rem; font-weight: 800; color: var(--text-main);"><?php echo count($activities); ?></strong>
+                    </div>
+                    <div style="width: 1px; height: 20px; background: var(--border);"></div>
+                    <div style="text-align: center;">
+                        <span style="font-size: 0.7rem; text-transform: uppercase; font-weight: 700; color: #10b981; display: block;">Completed</span>
+                        <strong id="header-completed-tasks" style="font-size: 1.2rem; font-weight: 800; color: #10b981;"><?php echo count($completions); ?></strong>
+                    </div>
+                    <div style="width: 1px; height: 20px; background: var(--border);"></div>
+                    <div style="text-align: center;">
+                        <span style="font-size: 0.7rem; text-transform: uppercase; font-weight: 700; color: var(--accent); display: block;">Pending</span>
+                        <strong id="header-pending-tasks" style="font-size: 1.2rem; font-weight: 800; color: var(--accent);"><?php echo count($activities) - count($completions); ?></strong>
+                    </div>
                 </div>
                 
                 <h3 style="font-family:var(--header-font); font-weight:800; font-size:1.15rem;"><?php echo p_esc($selected_plan['title']); ?></h3>
@@ -694,18 +795,26 @@ function toggleTaskCompletion(activityId, planId) {
     .then(r => r.json())
     .then(data => {
         if (data.success) {
+            var total = parseInt(document.getElementById('header-total-tasks').innerText);
+            var completed = parseInt(document.getElementById('header-completed-tasks').innerText);
+
             if (data.completed) {
                 btn.className = 'fa-solid fa-circle-check';
                 btn.parentElement.style.color = '#22c55e';
                 row.style.opacity = '0.75';
                 timeSpan.innerText = data.timestamp;
                 label.style.display = 'block';
+                completed++;
             } else {
                 btn.className = 'fa-regular fa-circle';
                 btn.parentElement.style.color = '#cbd5e1';
                 row.style.opacity = '1';
                 label.style.display = 'none';
+                completed--;
             }
+
+            document.getElementById('header-completed-tasks').innerText = completed;
+            document.getElementById('header-pending-tasks').innerText = total - completed;
         } else {
             alert('Failed to update task: ' + data.message);
         }
