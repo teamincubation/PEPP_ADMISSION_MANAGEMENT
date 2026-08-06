@@ -29,10 +29,6 @@ if ($plan_id > 0) {
     $activities_json = json_encode($activities);
 }
 
-$custom_settings = !empty($plan['custom_settings']) ? json_decode($plan['custom_settings'], true) : [];
-$hide_date = !empty($custom_settings['hide_date']) ? true : false;
-$quote_val = $custom_settings['quote'] ?? 'Commit to your dreams and execute every day!';
-
 // Fetch active courses
 $courses = $pdo->query("SELECT * FROM pepp_courses WHERE status = 'active' ORDER BY course_name ASC")->fetchAll();
 // Fetch active academic years
@@ -285,12 +281,7 @@ include 'includes/admin_nav.php';
 
                 <div class="field full">
                     <label>Branding Quote / Motivational Quote</label>
-                    <input type="text" id="plan-quote" placeholder="e.g. Success is the sum of small efforts repeated day in and day out!" value="<?php echo htmlspecialchars($quote_val); ?>" oninput="updateLivePreview()">
-                </div>
-
-                <div class="field full" style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
-                    <input type="checkbox" id="plan-hide-date" style="width:auto; margin:0;" <?php echo $hide_date ? 'checked' : ''; ?> onchange="updateLivePreview(); regenerateDatesPreview();">
-                    <label for="plan-hide-date" style="margin:0; font-weight:700; cursor:pointer;">Hide Date (Show "Day 01, Day 02..." instead of Calendar Date)</label>
+                    <input type="text" id="plan-quote" placeholder="e.g. Success is the sum of small efforts repeated day in and day out!" value="Commit to your dreams and execute every day!" oninput="updateLivePreview()">
                 </div>
 
                 <div class="field full" style="border: 1px solid var(--border); padding: 16px; border-radius: 12px; margin-top: 10px; background: rgba(0,0,0,0.01);">
@@ -535,11 +526,7 @@ include 'includes/admin_nav.php';
             var mm = String(curr.getMonth() + 1).padStart(2, '0');
             var dd = String(curr.getDate()).padStart(2, '0');
             var dateStr = yyyy + '-' + mm + '-' + dd;
-            var hideDate = document.getElementById('plan-hide-date').checked;
-            var dayLabel = "Day " + String(dayNum).padStart(2, '0');
-            if (!hideDate) {
-                dayLabel += " (" + curr.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }) + ")";
-            }
+            var dayLabel = "Day " + dayNum + " (" + curr.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }) + ")";
             
             var dayContainer = document.createElement('div');
             dayContainer.className = 'day-container';
@@ -784,40 +771,28 @@ include 'includes/admin_nav.php';
         
         if (activities.length === 0) {
             html += '<div style="text-align:center; padding:3rem 0; color:#94a3b8; font-size:0.85rem;"><i class="fas fa-calendar-day" style="font-size:2rem; margin-bottom:6px; display:block;"></i>No schedules added yet. Use designer panel to populate items.</div>';
-        } else {            // Group by date
+        } else {
+            // Group by date
             var grouped = {};
             activities.forEach(function(act) {
                 if (!grouped[act.activity_date]) grouped[act.activity_date] = [];
                 grouped[act.activity_date].push(act);
             });
             
-            var hideDate = document.getElementById('plan-hide-date').checked;
-            
             if (layout === 'card') {
                 html += '<div style="display:grid; grid-template-columns:1fr; gap:12px;">';
                 Object.keys(grouped).forEach(function(date) {
                     var items = grouped[date];
-                    var dateLabel = date;
-                    if (hideDate) {
-                        var dayNum = (items && items[0] && items[0].day_number) ? items[0].day_number : 1;
-                        dateLabel = "Day " + String(dayNum).padStart(2, '0');
-                    } else {
-                        try {
-                            var dObj = new Date(date);
-                            dateLabel = dObj.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
-                        } catch(e) {}
-                    }
-                    
                     html += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:12px; box-shadow:0 1px 3px rgba(0,0,0,0.02);">' +
-                                '<div style="font-size:0.72rem; text-transform:uppercase; font-weight:800; color:var(--accent); margin-bottom:8px;">' + dateLabel + '</div>' +
+                                '<div style="font-size:0.72rem; text-transform:uppercase; font-weight:800; color:var(--accent); margin-bottom:8px;">' + date + '</div>' +
                                 '<div style="display:flex; flex-direction:column; gap:8px;">';
                     items.forEach(function(it) {
                         var conf = predefinedTypes[it.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
                         html += '<div style="display:flex; align-items:center; gap:8px; border-bottom:1px solid #f1f5f9; padding-bottom:6px;">' +
                                     '<i class="fas ' + conf.icon + '" style="color:' + conf.color + '; font-size:0.95rem;"></i>' +
                                     '<div>' +
-                                        '<div style="font-size:0.85rem; font-weight:700;">' + it.activity_title + '</div>' +
-                                        '<small style="font-size:0.75rem; color:#64748b;">' + (it.faculty || 'Mentor Team') + ' · ' + (it.estimated_duration || 45) + ' mins</small>' +
+                                        '<div style="font-size:0.8rem; font-weight:700;">' + it.activity_title + '</div>' +
+                                        '<small style="font-size:0.7rem; color:#64748b;">' + (it.faculty || 'Mentor Team') + ' · ' + (it.estimated_duration || 45) + ' mins</small>' +
                                     '</div>' +
                                 '</div>';
                     });
@@ -829,20 +804,9 @@ include 'includes/admin_nav.php';
                 html += '<div style="display:flex; flex-direction:column; gap:16px; position:relative; padding-left:14px; border-left:2px solid #e2e8f0; margin-left:10px;">';
                 Object.keys(grouped).forEach(function(date) {
                     var items = grouped[date];
-                    var dateLabel = date;
-                    if (hideDate) {
-                        var dayNum = (items && items[0] && items[0].day_number) ? items[0].day_number : 1;
-                        dateLabel = "Day " + String(dayNum).padStart(2, '0');
-                    } else {
-                        try {
-                            var dObj = new Date(date);
-                            dateLabel = dObj.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
-                        } catch(e) {}
-                    }
-                    
                     html += '<div>' +
                                 '<div style="position:absolute; left:-6px; width:10px; height:10px; border-radius:50%; background:var(--accent); border:2px solid #fff;"></div>' +
-                                '<div style="font-size:0.72rem; text-transform:uppercase; font-weight:800; color:var(--accent); margin-bottom:8px; display:flex; align-items:center; gap:6px;">' + dateLabel + '</div>' +
+                                '<div style="font-size:0.72rem; text-transform:uppercase; font-weight:800; color:var(--accent); margin-bottom:8px; display:flex; align-items:center; gap:6px;">' + date + '</div>' +
                                 '<div style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;">';
                     items.forEach(function(it) {
                         var conf = predefinedTypes[it.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
@@ -850,17 +814,17 @@ include 'includes/admin_nav.php';
                                     '<div style="display:flex; align-items:center; gap:8px;">' +
                                         '<i class="fas ' + conf.icon + '" style="color:' + conf.color + '; font-size:1rem;"></i>' +
                                         '<div>' +
-                                            '<div style="font-size:0.85rem; font-weight:700; color:#1e293b;">' + it.activity_title + '</div>' +
-                                            '<div style="font-size:0.75rem; color:#64748b;">' + (it.subject || 'General') + ' · ' + (it.chapter || 'Academics') + '</div>' +
+                                            '<div style="font-size:0.8rem; font-weight:700; color:#1e293b;">' + it.activity_title + '</div>' +
+                                            '<div style="font-size:0.7rem; color:#64748b;">' + (it.subject || 'General') + ' · ' + (it.chapter || 'Academics') + '</div>' +
                                         '</div>' +
                                     '</div>' +
-                                    '<span style="margin-left:auto; background:#f1f5f9; border-radius:4px; font-size:0.7rem; font-weight:700; padding:2px 6px; color:#475569;">' + (it.estimated_duration || 60) + 'm</span>' +
+                                    '<span style="margin-left:auto; background:#f1f5f9; border-radius:4px; font-size:0.65rem; font-weight:700; padding:2px 6px; color:#475569;">' + (it.estimated_duration || 60) + 'm</span>' +
                                 '</div>';
                     });
                     html += '</div></div>';
                 });
                 html += '</div>';
-            }  }
+            }
         }
         
         wrapper.innerHTML = html;
@@ -897,8 +861,7 @@ include 'includes/admin_nav.php';
             status: studyPlanId > 0 ? 'published' : 'draft', // defaults
             assignments: assignments,
             custom_settings: {
-                quote: document.getElementById('plan-quote').value,
-                hide_date: document.getElementById('plan-hide-date').checked ? 1 : 0
+                quote: document.getElementById('plan-quote').value
             }
         };
         

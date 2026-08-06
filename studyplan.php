@@ -725,9 +725,6 @@ if ($is_logged_in && $selected_plan_id > 0) {
                 $pending_tasks = $total_tasks - $completed_tasks;
                 $completed_pct = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
                 $pending_pct = $total_tasks > 0 ? 100 - $completed_pct : 0;
-                
-                $custom_settings = !empty($selected_plan['custom_settings']) ? json_decode($selected_plan['custom_settings'], true) : [];
-                $hide_date = !empty($custom_settings['hide_date']) ? true : false;
             ?>
                 <!-- Render specific plan activities -->
                 <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -780,10 +777,6 @@ if ($is_logged_in && $selected_plan_id > 0) {
                         
                         foreach ($grouped as $date => $items):
                             $date_lbl = date('d M Y (D)', strtotime($date));
-                            if ($hide_date) {
-                                $dayNum = !empty($items[0]['day_number']) ? $items[0]['day_number'] : 1;
-                                $date_lbl = "Day " . str_pad($dayNum, 2, '0', STR_PAD_LEFT);
-                            }
                             $total_date_tasks = count($items);
                             $completed_date_tasks = 0;
                             foreach ($items as $it) {
