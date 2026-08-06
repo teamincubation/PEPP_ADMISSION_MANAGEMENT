@@ -703,7 +703,13 @@ if ($is_logged_in && $selected_plan_id > 0) {
                                 <a href="?plan_id=<?php echo $p['id']; ?>" class="plan-row-card">
                                     <div>
                                         <div style="font-weight:700; font-size:0.95rem; color:var(--text-main);"><?php echo p_esc($p['title']); ?></div>
-                                        <small style="color:var(--text-muted);"><?php echo date('d M', strtotime($p['start_date'])); ?> to <?php echo date('d M Y', strtotime($p['end_date'])); ?></small>
+                                        <small style="color:var(--text-muted);">
+                                            <?php if (($p['plan_type'] ?? 'date_wise') === 'day_wise'): ?>
+                                                <?php echo ($p['total_days'] ?? 0); ?> Days
+                                            <?php else: ?>
+                                                <?php echo date('d M', strtotime($p['start_date'])); ?> to <?php echo date('d M Y', strtotime($p['end_date'])); ?>
+                                            <?php endif; ?>
+                                        </small>
                                     </div>
                                     <div style="width:30px; height:30px; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center;">
                                         <i class="fas fa-arrow-right"></i>
@@ -777,12 +783,22 @@ if ($is_logged_in && $selected_plan_id > 0) {
                         
                         $is_day_wise = ($selected_plan['plan_type'] ?? 'date_wise') === 'day_wise';
                         
+                        // Default timezone setup for India (IST)
+                        date_default_timezone_set('Asia/Kolkata');
+                        $today_str = date('Y-m-d');
+                        
                         foreach ($grouped as $date => $items):
                             $date_lbl = date('d M Y (D)', strtotime($date));
                             if ($is_day_wise) {
                                 $dayNum = !empty($items[0]['day_number']) ? $items[0]['day_number'] : 1;
                                 $date_lbl = "Day " . str_pad($dayNum, 2, '0', STR_PAD_LEFT);
                             }
+                            
+                            $is_open = true; // Always expanded for day-wise
+                            if (!$is_day_wise) {
+                                $is_open = ($date === $today_str);
+                            }
+                            
                             $total_date_tasks = count($items);
                             $completed_date_tasks = 0;
                             foreach ($items as $it) {
@@ -794,13 +810,18 @@ if ($is_logged_in && $selected_plan_id > 0) {
                             <div class="timeline-day-node">
                                 <div class="timeline-badge"></div>
                                 <div class="timeline-card">
-                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                                        <div class="timeline-date-label" style="margin:0;"><?php echo $date_lbl; ?></div>
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; <?php echo !$is_day_wise ? 'cursor:pointer;' : ''; ?>" <?php if (!$is_day_wise): ?>onclick="toggleDateCollapse('<?php echo $date; ?>')"<?php endif; ?>>
+                                        <div class="timeline-date-label" style="margin:0; display:flex; align-items:center; gap:6px;">
+                                            <span><?php echo $date_lbl; ?></span>
+                                            <?php if (!$is_day_wise): ?>
+                                                <i class="fas fa-chevron-<?php echo $is_open ? 'up' : 'down'; ?>" id="arrow-<?php echo $date; ?>" style="font-size:0.7rem; color:var(--text-muted);"></i>
+                                            <?php endif; ?>
+                                        </div>
                                         <div style="font-size:0.75rem; font-weight:700; color:var(--text-muted);" class="date-ratio-wrapper">
                                             (<span class="completed-ratio-val"><?php echo $completed_date_tasks; ?></span>/<?php echo $total_date_tasks; ?>)
                                         </div>
                                     </div>
-                                    <div style="display:flex; flex-direction:column; gap:10px;">
+                                    <div id="activities-group-<?php echo $date; ?>" style="display:<?php echo $is_open ? 'flex' : 'none'; ?>; flex-direction:column; gap:10px;">
                                         <?php foreach ($items as $it): 
                                             $t_conf = $types_config[$it['activity_type']] ?? ['icon' => 'fa-book-open', 'color' => '#64748b'];
                                             $is_completed = isset($completions[$it['id']]);
@@ -854,6 +875,26 @@ if ($is_logged_in && $selected_plan_id > 0) {
 </div>
 
 <script>
+function toggleDateCollapse(dateStr) {
+    var el = document.getElementById('activities-group-' + dateStr);
+    var arrow = document.getElementById('arrow-' + dateStr);
+    if (!el) return;
+    
+    if (el.style.display === 'none') {
+        el.style.display = 'flex';
+        if (arrow) {
+            arrow.classList.remove('fa-chevron-down');
+            arrow.classList.add('fa-chevron-up');
+        }
+    } else {
+        el.style.display = 'none';
+        if (arrow) {
+            arrow.classList.remove('fa-chevron-up');
+            arrow.classList.add('fa-chevron-down');
+        }
+    }
+}
+
 var currentLat = null;
 var currentLon = null;
 
