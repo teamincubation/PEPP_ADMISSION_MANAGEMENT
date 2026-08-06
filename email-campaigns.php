@@ -104,7 +104,7 @@ try {
         SELECT DISTINCT f.id, f.title 
         FROM campaign_forms f
         JOIN campaign_form_fields ff ON f.id = ff.form_id
-        WHERE f.is_deleted = 0 
+        WHERE ff.is_deleted = 0 
           AND (ff.type = 'email' OR ff.field_name LIKE '%email%' OR ff.label LIKE '%email%')
         ORDER BY f.title
     ")->fetchAll(PDO::FETCH_ASSOC);
