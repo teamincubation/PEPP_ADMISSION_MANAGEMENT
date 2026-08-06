@@ -208,6 +208,95 @@ if (isset($_GET['action']) && $_GET['action'] === 'resolve_targets') {
     exit();
 }
 
+// Handle AJAX Queue Processing
+if (isset($_GET['action']) && $_GET['action'] === 'process_queue') {
+    header('Content-Type: application/json');
+    
+    // Process a batch of 5 pending queue items
+    $stmt = $pdo->prepare("SELECT * FROM email_queue WHERE status = 'pending' ORDER BY id ASC LIMIT 5");
+    $stmt->execute();
+    $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    $processed = 0;
+    $sent = 0;
+    $failed = 0;
+    
+    foreach ($items as $item) {
+        $html = build_campaign_email_html($item['body']);
+        
+        // Add a small delay (250ms) between SMTP sends to prevent server blockages
+        usleep(250000);
+        
+        $ok = send_custom_email($item['recipient_email'], $item['subject'], $html);
+        if ($ok) {
+            $pdo->prepare("UPDATE email_queue SET status = 'sent', sent_at = NOW() WHERE id = ?")->execute([$item['id']]);
+            $sent++;
+        } else {
+            $pdo->prepare("UPDATE email_queue SET status = 'failed', error_message = 'Failed to deliver via mail()' WHERE id = ?")->execute([$item['id']]);
+            $failed++;
+        }
+        
+        // Update campaign status if no more pending items exist
+        $stmt_check = $pdo->prepare("SELECT COUNT(*) FROM email_queue WHERE campaign_id = ? AND status = 'pending'");
+        $stmt_check->execute([$item['campaign_id']]);
+        $pending_left = (int)$stmt_check->fetchColumn();
+        if ($pending_left === 0) {
+            $pdo->prepare("UPDATE email_campaigns SET status = 'sent' WHERE id = ?")->execute([$item['campaign_id']]);
+        }
+        
+        $processed++;
+    }
+    
+    // Fetch updated status of recent campaigns
+    $campaigns_status = [];
+    try {
+        $recent = $pdo->query("SELECT id FROM email_campaigns ORDER BY id DESC LIMIT 20")->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($recent as $camp_id) {
+            $total = (int)$pdo->query("SELECT COUNT(*) FROM email_queue WHERE campaign_id = $camp_id")->fetchColumn();
+            $s_count = (int)$pdo->query("SELECT COUNT(*) FROM email_queue WHERE campaign_id = $camp_id AND status = 'sent'")->fetchColumn();
+            $f_count = (int)$pdo->query("SELECT COUNT(*) FROM email_queue WHERE campaign_id = $camp_id AND status = 'failed'")->fetchColumn();
+            $p_count = (int)$pdo->query("SELECT COUNT(*) FROM email_queue WHERE campaign_id = $camp_id AND status = 'pending'")->fetchColumn();
+            
+            $campaigns_status[$camp_id] = [
+                'total' => $total,
+                'sent' => $s_count,
+                'failed' => $f_count,
+                'pending' => $p_count
+            ];
+        }
+    } catch (Exception $e) {}
+    
+    echo json_encode([
+        'processed' => $processed,
+        'sent_batch' => $sent,
+        'failed_batch' => $failed,
+        'campaigns' => $campaigns_status
+    ]);
+    exit();
+}
+
+// Handle AJAX Campaign Status Poll
+if (isset($_GET['action']) && $_GET['action'] === 'get_campaign_stats') {
+    header('Content-Type: application/json');
+    $recent_campaigns = [];
+    try {
+        $stmt = $pdo->query("
+            SELECT 
+                id, status,
+                (SELECT COUNT(*) FROM email_queue WHERE campaign_id = ec.id) as total_queued,
+                (SELECT COUNT(*) FROM email_queue WHERE campaign_id = ec.id AND status = 'sent') as sent_count,
+                (SELECT COUNT(*) FROM email_queue WHERE campaign_id = ec.id AND status = 'pending') as pending_count,
+                (SELECT COUNT(*) FROM email_queue WHERE campaign_id = ec.id AND status = 'failed') as failed_count
+            FROM email_campaigns ec
+            ORDER BY id DESC LIMIT 20
+        ");
+        $recent_campaigns = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+    
+    echo json_encode(['campaigns' => $recent_campaigns]);
+    exit();
+}
+
 $success_message = '';
 $error_message = '';
 
@@ -719,7 +808,7 @@ include 'includes/admin_nav.php';
                             </tr>
                         <?php else: ?>
                             <?php foreach ($campaigns as $camp): ?>
-                                <tr style="border-bottom:1px solid var(--border);">
+                                <tr style="border-bottom:1px solid var(--border);" id="campaign-row-<?php echo $camp['id']; ?>">
                                     <td style="padding:12px 16px;">
                                         <div class="cell-main" style="font-weight:600;"><?php echo htmlspecialchars($camp['subject']); ?></div>
                                         <div class="cell-sub" style="font-size:0.8rem; color:var(--text-muted); margin-top:2px;">
@@ -752,7 +841,7 @@ include 'includes/admin_nav.php';
                                             ?>
                                         </div>
                                     </td>
-                                <td style="padding:12px 16px; text-align:center; vertical-align:top;">
+                                <td style="padding:12px 16px; text-align:center; vertical-align:top;" class="campaign-status-cell" data-campaign-id="<?php echo $camp['id']; ?>">
                                     <?php if ($camp['status'] === 'scheduled'): ?>
                                         <span class="badge amber"><i class="fas fa-clock"></i> Scheduled</span>
                                         <?php if (!empty($camp['scheduled_at'])): ?>
@@ -760,7 +849,7 @@ include 'includes/admin_nav.php';
                                                 <?php echo date('d M Y, h:i A', strtotime($camp['scheduled_at'])); ?>
                                             </div>
                                         <?php endif; ?>
-                                    <?php elseif ($camp['status'] === 'sending'): ?>
+                                    <?php elseif ($camp['status'] === 'sending' || $camp['pending_count'] > 0): ?>
                                         <span class="badge blue" style="background:#2563eb; color:#fff;"><i class="fas fa-spinner fa-spin"></i> Sending</span>
                                     <?php elseif ($camp['status'] === 'sent'): ?>
                                         <span class="badge green"><i class="fas fa-circle-check"></i> Sent</span>
@@ -768,15 +857,24 @@ include 'includes/admin_nav.php';
                                         <span class="badge gray"><i class="fas fa-ban"></i> Cancelled</span>
                                     <?php endif; ?>
                                 </td>
-                                <td style="padding:12px 16px; text-align:right; vertical-align:top; font-size:0.85rem; line-height:1.4;">
+                                <td style="padding:12px 16px; text-align:right; vertical-align:top; font-size:0.85rem; line-height:1.4;" class="campaign-stats-cell" data-campaign-id="<?php echo $camp['id']; ?>" data-total="<?php echo $camp['total_queued']; ?>" data-sent="<?php echo $camp['sent_count']; ?>" data-pending="<?php echo $camp['pending_count']; ?>" data-failed="<?php echo $camp['failed_count']; ?>">
                                     <?php if ($camp['total_queued'] > 0): ?>
-                                        <span style="font-weight:600;"><?php echo $camp['total_queued']; ?> Total</span><br>
-                                        <span style="color:#16a34a;"><?php echo $camp['sent_count']; ?> Sent</span><br>
+                                        <span style="font-weight:600;"><span class="stat-total"><?php echo $camp['total_queued']; ?></span> Total</span><br>
+                                        <span style="color:#16a34a;"><span class="stat-sent"><?php echo $camp['sent_count']; ?></span> Sent</span><br>
                                         <?php if ($camp['pending_count'] > 0): ?>
-                                            <span style="color:#eab308;"><?php echo $camp['pending_count']; ?> Pending</span><br>
+                                            <span style="color:#eab308;"><span class="stat-pending"><?php echo $camp['pending_count']; ?></span> Pending</span><br>
+                                            <?php 
+                                            $pct = round(($camp['sent_count'] / $camp['total_queued']) * 100); 
+                                            ?>
+                                            <div class="progress-bar-container" style="width: 100px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 6px; margin-left: auto;">
+                                                <div class="progress-bar-fill" style="width: <?php echo $pct; ?>%; height: 100%; background: var(--accent); transition: width 0.3s;"></div>
+                                            </div>
+                                            <div style="font-size: 0.75rem; color: var(--accent); font-weight: 600; margin-top: 2px;">
+                                                <i class="fas fa-spinner fa-spin" style="margin-right: 2px;"></i> Sending <span class="stat-pct"><?php echo $pct; ?></span>%
+                                            </div>
                                         <?php endif; ?>
                                         <?php if ($camp['failed_count'] > 0): ?>
-                                            <span style="color:#ef4444; font-weight:600;"><?php echo $camp['failed_count']; ?> Failed</span>
+                                            <span style="color:#ef4444; font-weight:600;"><span class="stat-failed"><?php echo $camp['failed_count']; ?></span> Failed</span>
                                         <?php endif; ?>
                                     <?php else: ?>
                                         <span class="cell-sub">-</span>
@@ -1113,9 +1211,132 @@ function deleteSelectedTemplate() {
         form.appendChild(el);
     });
     
+    
     document.body.appendChild(form);
     form.submit();
 }
+
+// Live Queue processing and Stats polling auto-loader routines
+function updateCampaignStatsUI(campId, total, sent, pending, failed) {
+    var cell = document.querySelector('.campaign-stats-cell[data-campaign-id="' + campId + '"]');
+    if (!cell) return;
+    
+    cell.setAttribute('data-total', total);
+    cell.setAttribute('data-sent', sent);
+    cell.setAttribute('data-pending', pending);
+    cell.setAttribute('data-failed', failed);
+    
+    if (total > 0) {
+        var html = '<span style="font-weight:600;"><span class="stat-total">' + total + '</span> Total</span><br>' +
+                   '<span style="color:#16a34a;"><span class="stat-sent">' + sent + '</span> Sent</span><br>';
+                   
+        if (pending > 0) {
+            html += '<span style="color:#eab308;"><span class="stat-pending">' + pending + '</span> Pending</span><br>';
+            var pct = Math.round((sent / total) * 100);
+            html += '<div class="progress-bar-container" style="width: 100px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 6px; margin-left: auto;">' +
+                        '<div class="progress-bar-fill" style="width: ' + pct + '%; height: 100%; background: var(--accent); transition: width 0.3s;"></div>' +
+                    '</div>' +
+                    '<div style="font-size: 0.75rem; color: var(--accent); font-weight: 600; margin-top: 2px;">' +
+                        '<i class="fas fa-spinner fa-spin" style="margin-right: 2px;"></i> Sending <span class="stat-pct">' + pct + '</span>%' +
+                    '</div>';
+        }
+        
+        if (failed > 0) {
+            html += '<span style="color:#ef4444; font-weight:600;"><span class="stat-failed">' + failed + '</span> Failed</span>';
+        }
+        cell.innerHTML = html;
+    } else {
+        cell.innerHTML = '<span class="cell-sub">-</span>';
+    }
+}
+
+var processingQueue = false;
+
+function runQueueAutoLoader() {
+    var hasPending = false;
+    document.querySelectorAll('.campaign-stats-cell').forEach(cell => {
+        var pending = parseInt(cell.getAttribute('data-pending') || '0', 10);
+        if (pending > 0) {
+            hasPending = true;
+        }
+    });
+    
+    if (hasPending) {
+        if (processingQueue) return;
+        processingQueue = true;
+        
+        fetch('email-campaigns.php?action=process_queue')
+        .then(res => res.json())
+        .then(data => {
+            processingQueue = false;
+            if (data.campaigns) {
+                Object.keys(data.campaigns).forEach(campId => {
+                    var c = data.campaigns[campId];
+                    updateCampaignStatsUI(campId, c.total, c.sent, c.pending, c.failed);
+                    
+                    var statusCell = document.querySelector('.campaign-status-cell[data-campaign-id="' + campId + '"]');
+                    if (statusCell) {
+                        if (c.pending === 0) {
+                            statusCell.innerHTML = '<span class="badge green"><i class="fas fa-circle-check"></i> Sent</span>';
+                        } else {
+                            if (!statusCell.innerHTML.includes('Sending')) {
+                                statusCell.innerHTML = '<span class="badge blue" style="background:#2563eb; color:#fff;"><i class="fas fa-spinner fa-spin"></i> Sending</span>';
+                            }
+                        }
+                    }
+                });
+            }
+            setTimeout(runQueueAutoLoader, 500);
+        })
+        .catch(err => {
+            processingQueue = false;
+            setTimeout(runQueueAutoLoader, 3000);
+        });
+    } else {
+        setTimeout(pollCampaignStats, 5000);
+    }
+}
+
+function pollCampaignStats() {
+    fetch('email-campaigns.php?action=get_campaign_stats')
+    .then(res => res.json())
+    .then(data => {
+        var hasNewPending = false;
+        if (data.campaigns) {
+            data.campaigns.forEach(c => {
+                updateCampaignStatsUI(c.id, c.total_queued, c.sent_count, c.pending_count, c.failed_count);
+                
+                var statusCell = document.querySelector('.campaign-status-cell[data-campaign-id="' + c.id + '"]');
+                if (statusCell) {
+                    if (c.pending_count > 0) {
+                        hasNewPending = true;
+                        statusCell.innerHTML = '<span class="badge blue" style="background:#2563eb; color:#fff;"><i class="fas fa-spinner fa-spin"></i> Sending</span>';
+                    } else if (c.status === 'scheduled') {
+                        statusCell.innerHTML = '<span class="badge amber"><i class="fas fa-clock"></i> Scheduled</span>';
+                    } else if (c.status === 'sent') {
+                        statusCell.innerHTML = '<span class="badge green"><i class="fas fa-circle-check"></i> Sent</span>';
+                    } else if (c.status === 'sending') {
+                        statusCell.innerHTML = '<span class="badge blue" style="background:#2563eb; color:#fff;"><i class="fas fa-spinner fa-spin"></i> Sending</span>';
+                    } else {
+                        statusCell.innerHTML = '<span class="badge gray"><i class="fas fa-ban"></i> Cancelled</span>';
+                    }
+                }
+            });
+        }
+        if (hasNewPending) {
+            runQueueAutoLoader();
+        } else {
+            setTimeout(pollCampaignStats, 5000);
+        }
+    })
+    .catch(err => {
+        setTimeout(pollCampaignStats, 8000);
+    });
+}
+
+window.addEventListener('DOMContentLoaded', function() {
+    runQueueAutoLoader();
+});
 </script>
 
 <!-- Campaign Preview Modal -->

@@ -291,7 +291,7 @@ function email_campaigns_send_due($pdo) {
                 $ins->execute([$camp['id'], $r['user_id'], $r['email'], $r['name'], $custom_subj, $custom_body]);
             }
             
-            $pdo->prepare("UPDATE email_campaigns SET status = 'sent' WHERE id = ?")->execute([$camp['id']]);
+            $pdo->prepare("UPDATE email_campaigns SET status = 'sending' WHERE id = ?")->execute([$camp['id']]);
         }
     } catch (Exception $e) {
         error_log('email_campaigns_send_due check error: ' . $e->getMessage());
@@ -305,11 +305,23 @@ function email_campaigns_send_due($pdo) {
         
         foreach ($items as $item) {
             $html = build_campaign_email_html($item['body']);
+            
+            // Add a small delay (250ms) between each email send to prevent SMTP server blockage/rate limits
+            usleep(250000);
+            
             $ok = send_custom_email($item['recipient_email'], $item['subject'], $html);
             if ($ok) {
                 $pdo->prepare("UPDATE email_queue SET status = 'sent', sent_at = NOW() WHERE id = ?")->execute([$item['id']]);
             } else {
                 $pdo->prepare("UPDATE email_queue SET status = 'failed', error_message = 'Failed to deliver via mail()' WHERE id = ?")->execute([$item['id']]);
+            }
+            
+            // If no more pending items exist for this campaign, mark campaign as fully sent
+            $stmt_check = $pdo->prepare("SELECT COUNT(*) FROM email_queue WHERE campaign_id = ? AND status = 'pending'");
+            $stmt_check->execute([$item['campaign_id']]);
+            $pending_left = (int)$stmt_check->fetchColumn();
+            if ($pending_left === 0) {
+                $pdo->prepare("UPDATE email_campaigns SET status = 'sent' WHERE id = ?")->execute([$item['campaign_id']]);
             }
         }
     } catch (Exception $e) {
