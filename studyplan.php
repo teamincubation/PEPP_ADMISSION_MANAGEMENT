@@ -608,9 +608,54 @@ if ($is_logged_in && $selected_plan_id > 0) {
             header, .print-btn-float, .student-welcome {
                 display: none !important;
             }
-            body {
-                background: #fff !important;
+        }
+        
+        .pulsing-live-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(34, 197, 94, 0.1);
+            color: #22c55e;
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 2px;
+            width: fit-content;
+        }
+        .pulse-dot {
+            width: 6px;
+            height: 6px;
+            background-color: #22c55e;
+            border-radius: 50%;
+            display: inline-block;
+            box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+            animation: pulse 1.6s infinite;
+        }
+        @keyframes pulse {
+            0% {
+                transform: scale(0.95);
+                box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
             }
+            70% {
+                transform: scale(1);
+                box-shadow: 0 0 0 6px rgba(34, 197, 94, 0);
+            }
+            100% {
+                transform: scale(0.95);
+                box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+            }
+        }
+        
+        @media (min-width: 769px) {
+            .portal-mobile-only { display: none !important; }
+            .portal-desktop-only { display: block !important; }
+        }
+        @media (max-width: 768px) {
+            .portal-mobile-only { display: block !important; }
+            .portal-desktop-only { display: none !important; }
         }
     </style>
 </head>
@@ -651,6 +696,30 @@ if ($is_logged_in && $selected_plan_id > 0) {
                 
                 <button type="submit" class="btn-submit"><i class="fas fa-arrow-right-to-bracket"></i> Retrieve Study Journey</button>
             </form>
+
+            <!-- App Store shortcuts (Mobile/Tab only) -->
+            <div class="portal-mobile-only" style="margin-top:20px; text-align:center; width:100%; max-width:380px;">
+                <p style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px; letter-spacing:0.5px;">Download PEPP Learning App</p>
+                <div style="display:flex; justify-content:center; gap:10px; align-items:center;">
+                    <a href="https://play.google.com/store/apps/details?id=com.pepplearning&pcampaignid=web_share" target="_blank" style="display:inline-block; transition:transform 0.2s;" onmouseover="this.style.transform='scale(1.04)'" onmouseout="this.style.transform='scale(1)'">
+                        <img src="https://upload.wikimedia.org/wikipedia/commons/7/78/Google_Play_Store_badge_EN.svg" alt="Google Play Store" style="height:36px; border-radius:6px; box-shadow:0 2px 4px rgba(0,0,0,0.08);">
+                    </a>
+                    <a href="https://apps.apple.com/in/app/pepp-the-learning-app/id6475805137" target="_blank" style="display:inline-block; transition:transform 0.2s;" onmouseover="this.style.transform='scale(1.04)'" onmouseout="this.style.transform='scale(1)'">
+                        <img src="https://upload.wikimedia.org/wikipedia/commons/3/3c/Download_on_the_App_Store_Badge.svg" alt="Apple App Store" style="height:36px; border-radius:6px; box-shadow:0 2px 4px rgba(0,0,0,0.08);">
+                    </a>
+                </div>
+            </div>
+
+            <!-- Portal Signin link (Desktop only) -->
+            <div class="portal-desktop-only" style="margin-top:20px; text-align:center; width:100%; max-width:380px;">
+                <div style="background:#f8fafc; border:1.5px solid var(--border); border-radius:12px; padding:12px; display:flex; align-items:center; justify-content:center; gap:8px;">
+                    <i class="fas fa-right-to-bracket" style="color:var(--accent); font-size:1.1rem;"></i>
+                    <div style="text-align:left;">
+                        <span style="font-size:0.7rem; color:var(--text-muted); display:block; font-weight:700; text-transform:uppercase; letter-spacing:0.5px;">Already registered?</span>
+                        <a href="https://courses.pepplearning.com/learn/account/signin" target="_blank" style="font-size:0.85rem; font-weight:800; color:var(--accent); text-decoration:none;">Sign in to PEPP Learning Portal <i class="fas fa-arrow-right" style="font-size:0.7rem;"></i></a>
+                    </div>
+                </div>
+            </div>
         </div>
     <?php else: ?>
         <!-- Dashboard Portal -->
@@ -699,10 +768,25 @@ if ($is_logged_in && $selected_plan_id > 0) {
                         </div>
                     <?php else: ?>
                         <div style="display:flex; flex-direction:column; gap:12px;">
-                            <?php foreach ($plans as $p): ?>
-                                <a href="?plan_id=<?php echo $p['id']; ?>" class="plan-row-card">
+                            <?php foreach ($plans as $p): 
+                                $is_active_plan = false;
+                                if (($p['plan_type'] ?? 'date_wise') === 'date_wise') {
+                                    $p_start = strtotime($p['start_date']);
+                                    $p_end = strtotime($p['end_date'] . ' 23:59:59');
+                                    $now_time = time();
+                                    if ($now_time >= $p_start && $now_time <= $p_end) {
+                                        $is_active_plan = true;
+                                    }
+                                }
+                            ?>
+                                <a href="?plan_id=<?php echo $p['id']; ?>" class="plan-row-card" style="display:flex; justify-content:space-between; align-items:center;">
                                     <div>
-                                        <div style="font-weight:700; font-size:0.95rem; color:var(--text-main);"><?php echo p_esc($p['title']); ?></div>
+                                        <div style="font-weight:700; font-size:0.95rem; color:var(--text-main); display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                                            <span><?php echo p_esc($p['title']); ?></span>
+                                            <?php if ($is_active_plan): ?>
+                                                <span class="pulsing-live-badge"><span class="pulse-dot"></span> Active</span>
+                                            <?php endif; ?>
+                                        </div>
                                         <small style="color:var(--text-muted);">
                                             <?php if (($p['plan_type'] ?? 'date_wise') === 'day_wise'): ?>
                                                 <?php echo ($p['total_days'] ?? 0); ?> Days
@@ -711,7 +795,7 @@ if ($is_logged_in && $selected_plan_id > 0) {
                                             <?php endif; ?>
                                         </small>
                                     </div>
-                                    <div style="width:30px; height:30px; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center;">
+                                    <div style="width:30px; height:30px; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
                                         <i class="fas fa-arrow-right"></i>
                                     </div>
                                 </a>
