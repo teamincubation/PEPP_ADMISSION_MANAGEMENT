@@ -174,20 +174,6 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
                 <?php if (!empty($nav_due_leads) && $nav_due_leads > 0): ?><span class="nav-badge"><?php echo $nav_due_leads; ?></span><?php endif; ?>
             </a>
             <?php endif; ?>
-            <?php if (can_access('marketing')): ?>
-            <a class="nav-item <?php echo nav_active('marketing', $active_page); ?>" href="marketing.php">
-                <i class="fas fa-bullhorn"></i> Marketing
-                <span style="margin-left:auto; display:inline-flex; gap:4px;">
-                    <?php if (!empty($nav_mkt['referral'])): ?><span class="nav-badge" style="background:#16a34a; color:#fff;" title="New referral updates"><?php echo (int)$nav_mkt['referral']; ?></span><?php endif; ?>
-                    <?php if (!empty($nav_mkt['coupon'])): ?><span class="nav-badge" style="background:#dc2626; color:#fff;" title="New coupon updates"><?php echo (int)$nav_mkt['coupon']; ?></span><?php endif; ?>
-                </span>
-            </a>
-            <?php endif; ?>
-            <?php if (can_access('marketing')): ?>
-            <a class="nav-item <?php echo nav_active('email-campaigns', $active_page); ?>" href="email-campaigns.php">
-                <i class="fas fa-envelope"></i> Email Campaigns
-            </a>
-            <?php endif; ?>
             <?php if (can_access('alumni')): ?>
             <a class="nav-item <?php echo nav_active('alumni', $active_page); ?>" href="alumni-database.php">
                 <i class="fas fa-user-graduate"></i> Alumni Database
@@ -211,9 +197,10 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
         </div>
         <?php endif; ?>
 
-        <?php if (can_access('campaigns')): ?>
+        <?php if (can_access('campaigns') || can_access('marketing')): ?>
         <div class="nav-section">
             <div class="nav-section-label">Campaigns</div>
+            <?php if (can_access('campaigns')): ?>
             <a class="nav-item <?php echo nav_active('campaigns', $active_page); ?>" href="campaign-forms.php">
                 <i class="fab fa-wpforms"></i> Custom Forms
                 <span style="margin-left:auto; display:inline-flex; gap:4px; align-items:center;">
@@ -225,6 +212,19 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
                     <?php endif; ?>
                 </span>
             </a>
+            <?php endif; ?>
+            <?php if (can_access('marketing')): ?>
+            <a class="nav-item <?php echo nav_active('marketing', $active_page); ?>" href="marketing.php">
+                <i class="fas fa-bullhorn"></i> Marketing
+                <span style="margin-left:auto; display:inline-flex; gap:4px;">
+                    <?php if (!empty($nav_mkt['referral'])): ?><span class="nav-badge" style="background:#16a34a; color:#fff;" title="New referral updates"><?php echo (int)$nav_mkt['referral']; ?></span><?php endif; ?>
+                    <?php if (!empty($nav_mkt['coupon'])): ?><span class="nav-badge" style="background:#dc2626; color:#fff;" title="New coupon updates"><?php echo (int)$nav_mkt['coupon']; ?></span><?php endif; ?>
+                </span>
+            </a>
+            <a class="nav-item <?php echo nav_active('email-campaigns', $active_page); ?>" href="email-campaigns.php">
+                <i class="fas fa-envelope"></i> Email Campaigns
+            </a>
+            <?php endif; ?>
         </div>
         <?php endif; ?>
 

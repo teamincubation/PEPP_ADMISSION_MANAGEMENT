@@ -97,10 +97,17 @@ try {
     $courses = $pdo->query("SELECT DISTINCT course_name FROM pepp_courses ORDER BY course_name")->fetchAll(PDO::FETCH_COLUMN);
 } catch (Exception $e) {}
 
-// Fetch active forms for targeting
+// Fetch active forms for targeting that include an email address field
 $active_forms = [];
 try {
-    $active_forms = $pdo->query("SELECT id, title FROM campaign_forms WHERE is_deleted = 0 ORDER BY title")->fetchAll(PDO::FETCH_ASSOC);
+    $active_forms = $pdo->query("
+        SELECT DISTINCT f.id, f.title 
+        FROM campaign_forms f
+        JOIN campaign_form_fields ff ON f.id = ff.form_id
+        WHERE f.is_deleted = 0 
+          AND (ff.type = 'email' OR ff.field_name LIKE '%email%' OR ff.label LIKE '%email%')
+        ORDER BY f.title
+    ")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
 // Fetch campaign history with queue statistics
