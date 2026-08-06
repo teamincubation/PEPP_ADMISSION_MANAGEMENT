@@ -304,16 +304,31 @@ function email_campaigns_send_due($pdo) {
         $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         foreach ($items as $item) {
-            $html = build_campaign_email_html($item['body']);
+            // Validate email format to prevent spam blocks on SMTP
+            if (!filter_var($item['recipient_email'], FILTER_VALIDATE_EMAIL)) {
+                $pdo->prepare("UPDATE email_queue SET status = 'failed', error_message = 'Invalid email address format' WHERE id = ?")->execute([$item['id']]);
+                
+                // Check if this completes the campaign
+                $stmt_check = $pdo->prepare("SELECT COUNT(*) FROM email_queue WHERE campaign_id = ? AND status = 'pending'");
+                $stmt_check->execute([$item['campaign_id']]);
+                $pending_left = (int)$stmt_check->fetchColumn();
+                if ($pending_left === 0) {
+                    $pdo->prepare("UPDATE email_campaigns SET status = 'sent' WHERE id = ?")->execute([$item['campaign_id']]);
+                }
+                continue;
+            }
             
-            // Add a small delay (250ms) between each email send to prevent SMTP server blockage/rate limits
-            usleep(250000);
+            $html = build_campaign_email_html($item['body']);
             
             $ok = send_custom_email($item['recipient_email'], $item['subject'], $html);
             if ($ok) {
                 $pdo->prepare("UPDATE email_queue SET status = 'sent', sent_at = NOW() WHERE id = ?")->execute([$item['id']]);
+                // Sleep for 1 second after a successful send to throttle delivery
+                sleep(1);
             } else {
                 $pdo->prepare("UPDATE email_queue SET status = 'failed', error_message = 'Failed to deliver via mail()' WHERE id = ?")->execute([$item['id']]);
+                // Sleep for 3 seconds on failure to let the SMTP connection cool down
+                sleep(3);
             }
             
             // If no more pending items exist for this campaign, mark campaign as fully sent

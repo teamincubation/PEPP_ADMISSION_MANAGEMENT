@@ -222,18 +222,35 @@ if (isset($_GET['action']) && $_GET['action'] === 'process_queue') {
     $failed = 0;
     
     foreach ($items as $item) {
-        $html = build_campaign_email_html($item['body']);
+        // Validate email format to prevent spam blocks on SMTP
+        if (!filter_var($item['recipient_email'], FILTER_VALIDATE_EMAIL)) {
+            $pdo->prepare("UPDATE email_queue SET status = 'failed', error_message = 'Invalid email address format' WHERE id = ?")->execute([$item['id']]);
+            $failed++;
+            
+            // Check if this completes the campaign
+            $stmt_check = $pdo->prepare("SELECT COUNT(*) FROM email_queue WHERE campaign_id = ? AND status = 'pending'");
+            $stmt_check->execute([$item['campaign_id']]);
+            $pending_left = (int)$stmt_check->fetchColumn();
+            if ($pending_left === 0) {
+                $pdo->prepare("UPDATE email_campaigns SET status = 'sent' WHERE id = ?")->execute([$item['campaign_id']]);
+            }
+            $processed++;
+            continue;
+        }
         
-        // Add a small delay (250ms) between SMTP sends to prevent server blockages
-        usleep(250000);
+        $html = build_campaign_email_html($item['body']);
         
         $ok = send_custom_email($item['recipient_email'], $item['subject'], $html);
         if ($ok) {
             $pdo->prepare("UPDATE email_queue SET status = 'sent', sent_at = NOW() WHERE id = ?")->execute([$item['id']]);
             $sent++;
+            // Sleep for 1 second after a successful send to throttle delivery
+            sleep(1);
         } else {
             $pdo->prepare("UPDATE email_queue SET status = 'failed', error_message = 'Failed to deliver via mail()' WHERE id = ?")->execute([$item['id']]);
             $failed++;
+            // Sleep for 3 seconds on failure to let the SMTP connection cool down
+            sleep(3);
         }
         
         // Update campaign status if no more pending items exist
@@ -508,6 +525,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 log_admin_activity($pdo, $admin_username, 'email_template_deleted', "Deleted email template #{$template_id}");
             } catch (Exception $e) {
                 $error_message = 'Failed to delete template: ' . $e->getMessage();
+            }
+        } elseif ($action === 'delete_campaign') {
+            if (!is_super_admin()) {
+                $error_message = 'Only super administrators are permitted to delete campaign data.';
+            } else {
+                $campaign_id = (int)($_POST['campaign_id'] ?? 0);
+                try {
+                    $pdo->beginTransaction();
+                    $stmt1 = $pdo->prepare("DELETE FROM email_campaigns WHERE id = ?");
+                    $stmt1->execute([$campaign_id]);
+                    $stmt2 = $pdo->prepare("DELETE FROM email_queue WHERE campaign_id = ?");
+                    $stmt2->execute([$campaign_id]);
+                    $pdo->commit();
+                    $success_message = 'Campaign report and associated queue history hard-deleted successfully.';
+                    log_admin_activity($pdo, $admin_username, 'email_campaign_deleted', "Hard-deleted campaign #{$campaign_id}");
+                } catch (Exception $e) {
+                    if ($pdo->inTransaction()) $pdo->rollBack();
+                    $error_message = 'Failed to delete campaign: ' . $e->getMessage();
+                }
             }
         }
     }
@@ -891,6 +927,14 @@ include 'includes/admin_nav.php';
                                                 <input type="hidden" name="action" value="cancel_campaign">
                                                 <input type="hidden" name="campaign_id" value="<?php echo $camp['id']; ?>">
                                                 <button class="btn btn-sm btn-soft-red" type="submit" style="padding: 4px 8px; font-size: 0.8rem; height: 28px; line-height: 1.2; display: inline-flex; align-items: center; gap: 4px;"><i class="fas fa-xmark"></i> Cancel</button>
+                                            </form>
+                                        <?php endif; ?>
+                                        <?php if (is_super_admin()): ?>
+                                            <form method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to hard delete this campaign report and all associated email history? This action cannot be undone.');">
+                                                <?php echo csrf_field(); ?>
+                                                <input type="hidden" name="action" value="delete_campaign">
+                                                <input type="hidden" name="campaign_id" value="<?php echo $camp['id']; ?>">
+                                                <button class="btn btn-sm btn-soft-red" type="submit" style="padding: 4px 8px; font-size: 0.8rem; height: 28px; line-height: 1.2; display: inline-flex; align-items: center; gap: 4px;" title="Delete Campaign Data"><i class="fas fa-trash-can"></i> Delete</button>
                                             </form>
                                         <?php endif; ?>
                                     </div>
