@@ -723,8 +723,33 @@ include 'includes/admin_nav.php';
                             <?php endif; ?>
                         </div>
                     </td>
-                    <td style="padding:15px; font-size:0.85rem; font-weight:700; color:var(--text-muted);">
-                        <?php echo htmlspecialchars($s['respondent_identifier'] ?: 'Anonymous'); ?>
+                    <td style="padding:15px; font-size:0.85rem; font-weight:700; color:var(--text-main);">
+                        <?php 
+                        $disp_id = trim($s['respondent_identifier'] ?? '');
+                        if (empty($disp_id) || strtolower($disp_id) === 'anonymous' || strpos(strtolower($disp_id), 'respondent') !== false) {
+                            // Attempt to locate email field in the answers map
+                            foreach ($fields as $fld) {
+                                $ans = $answers_map[$s['id']][$fld['id']] ?? null;
+                                if (!$ans) continue;
+                                $txt = trim($ans['answer_text'] ?? '');
+                                if (empty($txt)) continue;
+                                
+                                $lbl = strtolower($fld['label']);
+                                if ($fld['type'] === 'email' || strpos($lbl, 'email') !== false) {
+                                    $disp_id = $txt;
+                                    break; // Email takes highest priority for campaign identifier!
+                                } elseif (empty($disp_id) && (strpos($lbl, 'name') !== false || $fld['type'] === 'short_text')) {
+                                    $disp_id = $txt;
+                                } elseif (empty($disp_id) && ($fld['type'] === 'phone' || $fld['type'] === 'whatsapp')) {
+                                    $disp_id = $txt;
+                                }
+                            }
+                        }
+                        if (empty($disp_id)) {
+                            $disp_id = 'Respondent #' . $s['id'];
+                        }
+                        echo htmlspecialchars($disp_id);
+                        ?>
                     </td>
                     <!-- Dynamic Answer Columns -->
                     <?php foreach ($fields as $f): 
