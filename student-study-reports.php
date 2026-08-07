@@ -1700,8 +1700,8 @@ include 'includes/admin_nav.php';
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(15, 23, 42, 0.45);
-        backdrop-filter: blur(4px);
+        background: rgba(15, 23, 42, 0.4);
+        backdrop-filter: blur(8px);
         z-index: 1000;
         display: none;
         align-items: center;
@@ -1715,38 +1715,53 @@ include 'includes/admin_nav.php';
     }
     .timeline-modal {
         background: #fff;
-        border-radius: 16px;
+        border-radius: 24px;
         width: 95vw;
-        max-width: 1400px;
-        height: 94vh;
-        max-height: 980px;
+        max-width: 1450px;
+        height: 90vh;
+        max-height: 920px;
         display: flex;
         flex-direction: column;
-        box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+        box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.25);
         transform: scale(0.97);
-        transition: transform 0.25s ease;
+        transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
         overflow: hidden;
-        border: 1px solid #e2e8f0;
     }
     .timeline-modal-backdrop.show .timeline-modal {
         transform: scale(1);
     }
     .timeline-modal-header {
         padding: 1.25rem 1.75rem;
-        border-bottom: 1px solid #f1f5f9;
+        border-bottom: 1px solid #e2e8f0;
         background: #fff;
         display: flex;
         justify-content: space-between;
         align-items: center;
     }
     .timeline-modal-body {
-        padding: 1.5rem 1.75rem;
+        padding: 0;
         flex-grow: 1;
-        overflow-y: auto;
+        overflow: hidden;
+        display: flex;
+    }
+    .dossier-sidebar {
+        width: 340px;
+        background: #f8fafc;
+        border-right: 1px solid #e2e8f0;
         display: flex;
         flex-direction: column;
+        padding: 1.5rem;
+        overflow-y: auto;
+        gap: 1.25rem;
+    }
+    .dossier-main {
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+        padding: 1.75rem;
+        overflow-y: auto;
         gap: 1.5rem;
-        background: #fafbfe;
+        background: #fff;
     }
 
     /* Lightbox Modal */
@@ -1783,274 +1798,71 @@ include 'includes/admin_nav.php';
         transition: transform 0.2s ease;
     }
 
-    /* Stats Widget Cards in Modal */
-    .timeline-kpis {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        gap: 14px;
-    }
-    .kpi-stat-card {
-        background: #fff;
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 14px 12px;
-        text-align: center;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.01);
-        transition: transform 0.2s ease, border-color 0.2s ease;
-    }
-    .kpi-stat-card:hover {
-        transform: translateY(-1px);
-        border-color: #cbd5e1;
-    }
-
-    /* Dossier Navigation Tab Switcher */
-    .dossier-tabs {
-        display: flex;
-        gap: 8px;
-        border-bottom: 1px solid #e2e8f0;
-        padding-bottom: 8px;
-        margin-bottom: 0.5rem;
-    }
-    .dossier-tab-btn {
-        padding: 8px 16px;
-        font-size: 0.85rem;
-        font-weight: 700;
-        color: #64748b;
-        border-radius: 8px;
-        background: transparent;
-        border: none;
-        cursor: pointer;
-        transition: all 0.2s ease;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-    }
-    .dossier-tab-btn:hover {
-        background: #f1f5f9;
-        color: #0f172a;
-    }
-    .dossier-tab-btn.active {
-        background: #f1f5f9;
-        color: #4f46e5;
-        box-shadow: inset 0 -2px 0 0 #4f46e5;
-        border-radius: 8px 8px 0 0;
-    }
-
-    /* Collapsible day folders */
-    .day-card {
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        background: #fff;
-        margin-bottom: 12px;
-        overflow: hidden;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.01);
-        transition: border-color 0.2s ease, box-shadow 0.2s ease;
-    }
-    .day-card:hover {
-        border-color: #cbd5e1;
-        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.03);
-    }
-    .day-card-header {
-        padding: 14px 18px;
-        background: #f8fafc;
+    /* Dossier stats rows */
+    .dossier-stat-row {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        cursor: pointer;
-        user-select: none;
-    }
-    .day-card-body {
-        padding: 16px 18px;
-        border-top: 1px solid #f1f5f9;
-        display: none;
+        padding: 10px 14px;
         background: #fff;
-    }
-    .day-card.open .day-card-body {
-        display: block;
-    }
-
-    /* Checklist task item cards */
-    .checklist-task-item {
-        display: flex;
-        align-items: flex-start;
-        gap: 12px;
-        padding: 12px 14px;
-        border-radius: 10px;
-        border: 1px solid #f1f5f9;
-        margin-bottom: 8px;
-        background: #fafbfe;
-        cursor: pointer;
-        transition: all 0.2s ease;
-    }
-    .checklist-task-item:hover {
-        background: #f8fafc;
-        border-color: #e2e8f0;
-    }
-    .checklist-task-circle {
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        border: 2px solid #cbd5e1;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-        margin-top: 2px;
-        font-size: 0.65rem;
-        color: transparent;
-        transition: all 0.2s ease;
-    }
-    .checklist-task-item.completed .checklist-task-circle {
-        background: #10b981;
-        border-color: #10b981;
-        color: #fff;
-    }
-    .checklist-task-item.overdue .checklist-task-circle {
-        border-color: #ef4444;
-    }
-    .checklist-task-item.pending .checklist-task-circle {
-        border-color: #f59e0b;
-    }
-
-    /* Detail visual grid inside checklist card */
-    .task-detail-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 12px;
-        padding: 12px 14px;
-        background: #f8fafc;
-        border-radius: 8px;
-        border: 1px dashed #cbd5e1;
-        margin-top: 8px;
-        font-size: 0.8rem;
-    }
-    .task-detail-item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: #475569;
-    }
-    .task-detail-item i {
-        color: #4f46e5;
-        width: 16px;
-        text-align: center;
-    }
-
-    /* Quick Recommendations / Insights cards */
-    .insight-card {
-        background: #fffbeb;
-        border: 1px solid #fde68a;
-        border-radius: 10px;
-        padding: 12px 16px;
-        margin-bottom: 10px;
-        display: flex;
-        align-items: flex-start;
-        gap: 10px;
-        font-size: 0.82rem;
-        color: #b45309;
-        line-height: 1.4;
-    }
-    .insight-card.success {
-        background: #f0fdf4;
-        border-color: #bbf7d0;
-        color: #15803d;
-    }
-    .insight-card.danger {
-        background: #fef2f2;
-        border-color: #fecaca;
-        color: #b91c1c;
-    }
-    .insight-card.info {
-        background: #f0f9ff;
-        border-color: #bae6fd;
-        color: #0369a1;
-    }
-
-    /* Calendar Visualizer layout */
-    .dossier-calendar-grid {
-        display: grid;
-        grid-template-columns: repeat(7, 1fr);
-        gap: 8px;
-        margin-top: 10px;
-    }
-    .dossier-calendar-header-day {
-        font-weight: 700;
-        font-size: 0.72rem;
-        color: #64748b;
-        padding: 4px 0;
-        text-transform: uppercase;
-        text-align: center;
-    }
-    .dossier-calendar-cell {
         border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        min-height: 85px;
-        padding: 8px;
-        background: #fff;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        align-items: stretch;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.01);
-    }
-    .dossier-calendar-cell.inactive {
-        background: #fafafa;
-        opacity: 0.4;
-        border-color: #f1f5f9;
-    }
-    .dossier-calendar-day-num {
+        border-radius: 12px;
         font-size: 0.8rem;
+        transition: all 0.2s ease;
+    }
+    .dossier-stat-row:hover {
+        border-color: #cbd5e1;
+        background: #f1f5f9;
+        transform: translateX(2px);
+    }
+    .dossier-stat-label {
+        font-weight: 600;
+        color: #64748b;
+    }
+    .dossier-stat-val {
         font-weight: 800;
-        color: #475569;
-        text-align: right;
-    }
-    .dossier-calendar-badge-list {
-        display: flex;
-        flex-direction: column;
-        gap: 3px;
-        margin-top: 4px;
-    }
-    .dossier-calendar-badge {
-        font-size: 0.58rem;
-        padding: 1px 4px;
-        border-radius: 4px;
-        color: #fff;
-        text-align: center;
-        font-weight: 700;
-    }
-    .dossier-calendar-badge.comp { background: #10b981; }
-    .dossier-calendar-badge.pend { background: #f59e0b; }
-    .dossier-calendar-badge.over { background: #ef4444; }
-
-    /* Quick day jump tabs list */
-    .quick-jump-container {
-        display: flex;
-        gap: 6px;
-        overflow-x: auto;
-        padding-bottom: 8px;
-        margin-bottom: 12px;
-        border-bottom: 1px solid #f1f5f9;
-        scrollbar-width: thin;
-    }
-    .quick-jump-btn {
-        padding: 4px 10px;
-        font-size: 0.72rem;
-        font-weight: 700;
-        color: #475569;
-        background: #f1f5f9;
-        border-radius: 6px;
-        border: none;
-        cursor: pointer;
-        white-space: nowrap;
-        transition: all 0.2s ease;
-    }
-    .quick-jump-btn:hover {
-        background: #e2e8f0;
         color: #0f172a;
     }
-    .quick-jump-btn.active {
-        background: #4f46e5;
-        color: #fff;
+
+    /* Vertical Timeline track design */
+    .timeline-track-container {
+        position: relative;
+        padding-left: 24px;
+    }
+    .timeline-track-line {
+        position: absolute;
+        top: 12px;
+        bottom: 12px;
+        left: 7px;
+        width: 2px;
+        background: #e2e8f0;
+    }
+    .timeline-track-item {
+        position: relative;
+        margin-bottom: 1rem;
+    }
+    .timeline-track-node {
+        position: absolute;
+        left: -21px;
+        top: 14px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #fff;
+        border: 2px solid #cbd5e1;
+        z-index: 2;
+    }
+    .timeline-track-node.completed {
+        border-color: #10b981;
+        background: #10b981;
+    }
+    .timeline-track-node.overdue {
+        border-color: #ef4444;
+        background: #ef4444;
+    }
+    .timeline-track-node.pending {
+        border-color: #cbd5e1;
+        background: #cbd5e1;
     }
     
     /* Interactive Profile Image */
@@ -2548,210 +2360,139 @@ include 'includes/admin_nav.php';
 <div class="timeline-modal-backdrop" id="student-task-modal-backdrop" onclick="closeTimelineModal()">
     <div class="timeline-modal" onclick="event.stopPropagation()">
         <!-- Modal Header -->
-        <div class="timeline-modal-header" style="border-bottom: 1px solid #f1f5f9; padding: 1.25rem 1.75rem;">
+        <div class="timeline-modal-header">
             <div>
                 <h4 id="st-modal-title" style="margin:0; font-family:var(--header-font); font-weight:800; font-size:1.2rem; color:var(--text-main); display:flex; align-items:center; gap:8px;">
-                    <i class="fas fa-graduation-cap" style="color:var(--accent);"></i>
-                    <span>Checklist Audit &amp; Study Plan Dossier</span>
+                    <i class="fas fa-folder-open" style="color:var(--accent);"></i>
+                    <span>Checklist Audit & Task Analytics Dashboard</span>
                 </h4>
-                <p id="st-modal-subtitle" style="margin:4px 0 0 0; font-size:0.75rem; color:var(--text-muted); font-weight:500; display:flex; gap:16px; flex-wrap:wrap;"></p>
+                <p id="st-modal-subtitle" style="margin:2px 0 0 0; font-size:0.75rem; color:var(--text-muted);"></p>
             </div>
             
             <!-- Quick Actions -->
             <div style="display:flex; gap:8px; align-items:center;">
-                <button type="button" class="btn btn-sm btn-outline" onclick="window.print()" title="Print report"><i class="fas fa-print"></i></button>
-                <button type="button" class="btn btn-sm btn-outline" onclick="exportTimelineExcel()" title="Export Excel"><i class="fas fa-file-excel"></i></button>
-                <button type="button" class="btn btn-sm btn-outline" onclick="exportTimelineCSV()" title="Export CSV"><i class="fas fa-file-csv"></i></button>
-                <button type="button" class="btn btn-sm btn-outline" onclick="shareTimelineReport()" title="Share Link"><i class="fas fa-share-nodes"></i></button>
+                <button type="button" class="btn btn-sm btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" onclick="window.print()"><i class="fas fa-print"></i> Print Report</button>
+                <button type="button" class="btn btn-sm btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" onclick="exportTimelineExcel()"><i class="fas fa-file-excel"></i> Excel</button>
+                <button type="button" class="btn btn-sm btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" onclick="exportTimelineCSV()"><i class="fas fa-file-csv"></i> CSV</button>
+                <button type="button" class="btn btn-sm btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" onclick="shareTimelineReport()"><i class="fas fa-share-nodes"></i> Share Link</button>
                 <button type="button" class="btn btn-sm btn-soft-red" style="padding: 6px 12px; margin-left: 10px;" onclick="closeTimelineModal()"><i class="fas fa-xmark"></i></button>
             </div>
         </div>
         
-        <!-- Modal Body -->
-        <div class="timeline-modal-body" style="background:#f8fafc; padding: 1.5rem 1.75rem;">
+        <!-- Modal Body (Dossier Split-pane Layout) -->
+        <div class="timeline-modal-body">
             
-            <!-- Tab Navigation Bar -->
-            <div class="dossier-tabs">
-                <button class="dossier-tab-btn active" id="tab-btn-timeline" onclick="switchDossierTab('timeline')"><i class="fas fa-list-check"></i> Timeline View</button>
-                <button class="dossier-tab-btn" id="tab-btn-checklist" onclick="switchDossierTab('checklist')"><i class="fas fa-table-list"></i> Checklist View</button>
-                <button class="dossier-tab-btn" id="tab-btn-calendar" onclick="switchDossierTab('calendar')"><i class="fas fa-calendar-days"></i> Calendar View</button>
-                <button class="dossier-tab-btn" id="tab-btn-analytics" onclick="switchDossierTab('analytics')"><i class="fas fa-chart-line"></i> Analytics View</button>
-            </div>
-            
-            <!-- Top Performance Summary row -->
-            <div class="timeline-kpis" style="margin-bottom: 1rem;">
-                <div class="kpi-stat-card" style="border-left: 4px solid var(--accent);">
-                    <div style="font-size:0.65rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">Total Tasks</div>
-                    <strong id="st-total-tasks-val" style="font-size:1.1rem; color:var(--text-main);">0</strong>
-                </div>
-                <div class="kpi-stat-card" style="border-left: 4px solid #10b981;">
-                    <div style="font-size:0.65rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">Completed</div>
-                    <strong id="st-completed-tasks-val" style="font-size:1.1rem; color:#10b981;">0</strong>
-                </div>
-                <div class="kpi-stat-card" style="border-left: 4px solid #f59e0b;">
-                    <div style="font-size:0.65rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">Pending</div>
-                    <strong id="st-pending-tasks-val" style="font-size:1.1rem; color:#f59e0b;">0</strong>
-                </div>
-                <div class="kpi-stat-card" style="border-left: 4px solid #ef4444;">
-                    <div style="font-size:0.65rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">Overdue</div>
-                    <strong id="st-overdue-tasks-val" style="font-size:1.1rem; color:#ef4444;">0</strong>
-                </div>
-                <div class="kpi-stat-card" style="border-left: 4px solid #3b82f6;">
-                    <div style="font-size:0.65rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">Attendance</div>
-                    <strong id="st-attendance-rate-val" style="font-size:1.1rem; color:#3b82f6;">0%</strong>
-                </div>
-                <div class="kpi-stat-card" style="border-left: 4px solid #8b5cf6;">
-                    <div style="font-size:0.65rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">Progress</div>
-                    <strong id="st-completion-pct-val" style="font-size:1.1rem; color:#8b5cf6;">0%</strong>
-                </div>
-                <div class="kpi-stat-card" style="border-left: 4px solid #eab308;">
-                    <div style="font-size:0.65rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">Streak</div>
-                    <strong id="st-streak-val" style="font-size:1.1rem; color:#d97706;">🔥 0 Days</strong>
-                </div>
-                <div class="kpi-stat-card" style="border-left: 4px solid #64748b;">
-                    <div style="font-size:0.65rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">Status</div>
-                    <strong id="st-perf-score-val" style="font-size:0.85rem; color:var(--text-main);">-</strong>
-                </div>
-            </div>
-            
-            <!-- Quick Insights Panel -->
-            <div id="st-insights-panel" style="margin-bottom: 0.5rem; display:none;">
-                <!-- Filled dynamically via JS -->
-            </div>
-
-            <!-- SECTION PANE 1: TIMELINE VIEW -->
-            <div class="dossier-pane" id="pane-timeline">
-                <!-- Filters Bar -->
-                <div class="panel" style="padding:10px 16px; margin:0 0 1rem 0; border: 1px solid #e2e8f0; border-radius:10px;">
-                    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; width:100%;">
-                        <div class="field" style="margin:0; flex-grow:2; min-width: 200px;">
-                            <input type="text" id="st-filter-search" oninput="applyTimelineFilters()" placeholder="Search chapter, topic, faculty..." style="padding: 6px 10px; font-size: 0.8rem; height: 34px;">
+            <!-- Left Dossier Sidebar -->
+            <div class="dossier-sidebar">
+                <!-- Circular Completion Metric Widget -->
+                <div style="display:flex; flex-direction:column; align-items:center; text-align:center; padding-bottom:12px; border-bottom:1px dashed #e2e8f0; margin-bottom:5px; width:100%;">
+                    <div style="position:relative; width:140px; height:140px; display:flex; align-items:center; justify-content:center; margin-bottom:12px; margin-top:5px;">
+                        <svg width="140" height="140" viewBox="0 0 140 140" style="transform: rotate(-90deg);">
+                            <circle cx="70" cy="70" r="58" stroke="#f1f5f9" stroke-width="10" fill="transparent" />
+                            <circle id="st-svg-progress-ring" cx="70" cy="70" r="58" stroke="url(#kpi-ring-grad)" stroke-width="10" fill="transparent" 
+                                    stroke-dasharray="364.4" stroke-dashoffset="364.4" stroke-linecap="round" style="transition: stroke-dashoffset 0.6s ease;" />
+                            <defs>
+                                <linearGradient id="kpi-ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#4f46e5" />
+                                    <stop offset="100%" stop-color="#3b82f6" />
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                        <div style="position:absolute; display:flex; flex-direction:column; align-items:center;">
+                            <strong id="st-ring-percent-text" style="font-size:1.5rem; font-weight:800; color:var(--text-main);">0%</strong>
+                            <span style="font-size:0.6rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">COMPLETED</span>
                         </div>
-                        <div class="field" style="margin:0; width:130px;">
-                            <select id="st-filter-status" onchange="applyTimelineFilters()" style="padding: 0 8px; font-size: 0.8rem; height: 34px;">
+                    </div>
+                    <div style="font-size:0.75rem; color:var(--text-muted); display:flex; justify-content:space-between; width:100%; padding:0 8px;">
+                        <span>Last Activity:</span>
+                        <strong id="st-last-activity-date" style="color:var(--text-main);">Never</strong>
+                    </div>
+                </div>
+                
+                <!-- Detailed Dossier KPI Cards List -->
+                <div style="display:flex; flex-direction:column; gap:8px; width:100%;">
+                    <div class="dossier-stat-row">
+                        <span class="dossier-stat-label">Total Assigned Tasks</span>
+                        <span id="st-total-tasks-val" class="dossier-stat-val">0</span>
+                    </div>
+                    <div class="dossier-stat-row" style="border-left: 3px solid #10b981;">
+                        <span class="dossier-stat-label" style="color:#047857;">Completed Tasks</span>
+                        <span id="st-completed-tasks-val" class="dossier-stat-val" style="color:#047857;">0</span>
+                    </div>
+                    <div class="dossier-stat-row" style="border-left: 3px solid #f59e0b;">
+                        <span class="dossier-stat-label" style="color:#d97706;">Pending Tasks</span>
+                        <span id="st-pending-tasks-val" class="dossier-stat-val" style="color:#d97706;">0</span>
+                    </div>
+                    <div class="dossier-stat-row" style="border-left: 3px solid #ef4444;">
+                        <span class="dossier-stat-label" style="color:#b91c1c;">Overdue Tasks</span>
+                        <span id="st-overdue-tasks-val" class="dossier-stat-val" style="color:#b91c1c;">0</span>
+                    </div>
+                    <div class="dossier-stat-row" style="border-left: 3px solid #3b82f6;">
+                        <span class="dossier-stat-label" style="color:#1d4ed8;">Attendance Rate</span>
+                        <span id="st-attendance-rate-val" class="dossier-stat-val" style="color:#1d4ed8;">0%</span>
+                    </div>
+                    <div class="dossier-stat-row" style="border-left: 3px solid #8b5cf6;">
+                        <span class="dossier-stat-label" style="color:#6d28d9;">Completion Rate</span>
+                        <span id="st-completion-pct-val" class="dossier-stat-val" style="color:#6d28d9;">0%</span>
+                    </div>
+                    <div class="dossier-stat-row" style="border-left: 3px solid #eab308;">
+                        <span class="dossier-stat-label" style="color:#a16207;">Learning Streak</span>
+                        <span id="st-streak-val" class="dossier-stat-val" style="color:#a16207;">🔥 0 Days</span>
+                    </div>
+                    <div class="dossier-stat-row" style="border-left: 3px solid #64748b;">
+                        <span class="dossier-stat-label">Performance Status</span>
+                        <span id="st-perf-score-val" class="dossier-stat-val">-</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Right Dossier Main Panel -->
+            <div class="dossier-main">
+                <!-- Filters & Controls Bar -->
+                <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:16px; padding:12px 16px;">
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; width:100%;">
+                        <!-- Search input -->
+                        <div style="flex-grow:2; min-width:220px;">
+                            <input type="text" id="st-filter-search" oninput="applyTimelineFilters()" placeholder="Search topic, chapter, subject, faculty..." style="width:100%; height:36px; padding:0 12px; border:1px solid #cbd5e1; border-radius:10px; font-size:0.82rem;">
+                        </div>
+                        <!-- Status Filter -->
+                        <div style="width:130px;">
+                            <select id="st-filter-status" onchange="applyTimelineFilters()" style="width:100%; height:36px; padding:0 10px; border:1px solid #cbd5e1; border-radius:10px; font-size:0.82rem;">
                                 <option value="ALL">All Statuses</option>
                                 <option value="Completed">Completed</option>
                                 <option value="Pending">Pending</option>
                                 <option value="Overdue">Overdue</option>
                             </select>
                         </div>
-                        <div class="field" style="margin:0; width:140px;">
-                            <select id="st-filter-subject" onchange="applyTimelineFilters()" style="padding: 0 8px; font-size: 0.8rem; height: 34px;">
+                        <!-- Subject Filter -->
+                        <div style="width:150px;">
+                            <select id="st-filter-subject" onchange="applyTimelineFilters()" style="width:100%; height:36px; padding:0 10px; border:1px solid #cbd5e1; border-radius:10px; font-size:0.82rem;">
                                 <option value="ALL">All Subjects</option>
                             </select>
                         </div>
-                        <div class="field" style="margin:0; width:130px;">
-                            <select id="st-filter-type" onchange="applyTimelineFilters()" style="padding: 0 8px; font-size: 0.8rem; height: 34px;">
-                                <option value="ALL">All Types</option>
-                                <option value="Video">Video/Classes</option>
-                                <option value="Reading">Reading/Notes</option>
-                                <option value="Practice">Practice/Quiz</option>
-                                <option value="Exam">Exam/Mock Test</option>
-                            </select>
-                        </div>
-                        <div class="field" style="margin:0; display:flex; align-items:center; gap:4px;">
-                            <input type="date" id="st-filter-start-date" onchange="applyTimelineFilters()" style="padding: 4px 6px; font-size: 0.75rem; height: 34px; width:115px;">
+                        <!-- Date Range -->
+                        <div style="display:flex; align-items:center; gap:4px;">
+                            <input type="date" id="st-filter-start-date" onchange="applyTimelineFilters()" style="width:125px; height:36px; padding:0 8px; border:1px solid #cbd5e1; border-radius:10px; font-size:0.8rem;">
                             <span style="font-size:0.75rem; color:var(--text-muted);">to</span>
-                            <input type="date" id="st-filter-end-date" onchange="applyTimelineFilters()" style="padding: 4px 6px; font-size: 0.75rem; height: 34px; width:115px;">
+                            <input type="date" id="st-filter-end-date" onchange="applyTimelineFilters()" style="width:125px; height:36px; padding:0 8px; border:1px solid #cbd5e1; border-radius:10px; font-size:0.8rem;">
                         </div>
-                        <button class="btn btn-outline btn-sm" onclick="resetTimelineFilters()" style="height:34px; padding:0 10px; font-size:0.8rem;"><i class="fas fa-arrows-rotate"></i></button>
+                        <!-- Reset Button -->
+                        <button class="btn btn-sm btn-outline" onclick="resetTimelineFilters()" style="height:36px; padding:0 12px; font-size:0.8rem; border-radius:10px;"><i class="fas fa-arrows-rotate"></i> Reset</button>
                     </div>
                 </div>
-
-                <!-- Quick Day Jump selector -->
-                <div class="quick-jump-container" id="st-quick-jump-list">
-                    <!-- Day jump buttons populated dynamically -->
-                </div>
-
-                <!-- Timeline List wrapper -->
-                <div id="st-dossier-timeline-list" style="display:flex; flex-direction:column; gap:12px;">
-                    <!-- Expansible Day Cards appended here -->
-                </div>
-            </div>
-
-            <!-- SECTION PANE 2: CHECKLIST VIEW -->
-            <div class="dossier-pane" id="pane-checklist" style="display:none;">
-                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:1.25rem;">
-                    <!-- Overdue Checklist Card -->
-                    <div class="widget-card" style="padding: 1.25rem; border-top: 3px solid #ef4444;">
-                        <h6 style="margin:0 0 12px 0; font-size:0.82rem; font-weight:800; color:#ef4444; display:flex; align-items:center; gap:6px;">
-                            <i class="fas fa-triangle-exclamation"></i> Overdue Tasks (<span id="chk-overdue-count">0</span>)
-                        </h6>
-                        <div id="chk-overdue-list" style="max-height: 500px; overflow-y:auto; display:flex; flex-direction:column; gap:8px;"></div>
-                    </div>
-                    
-                    <!-- Pending Checklist Card -->
-                    <div class="widget-card" style="padding: 1.25rem; border-top: 3px solid #f59e0b;">
-                        <h6 style="margin:0 0 12px 0; font-size:0.82rem; font-weight:800; color:#b45309; display:flex; align-items:center; gap:6px;">
-                            <i class="fas fa-clock"></i> Upcoming &amp; Pending Tasks (<span id="chk-pending-count">0</span>)
-                        </h6>
-                        <div id="chk-pending-list" style="max-height: 500px; overflow-y:auto; display:flex; flex-direction:column; gap:8px;"></div>
-                    </div>
-
-                    <!-- Completed Checklist Card -->
-                    <div class="widget-card" style="padding: 1.25rem; border-top: 3px solid #10b981;">
-                        <h6 style="margin:0 0 12px 0; font-size:0.82rem; font-weight:800; color:#10b981; display:flex; align-items:center; gap:6px;">
-                            <i class="fas fa-circle-check"></i> Completed Tasks (<span id="chk-completed-count">0</span>)
-                        </h6>
-                        <div id="chk-completed-list" style="max-height: 500px; overflow-y:auto; display:flex; flex-direction:column; gap:8px;"></div>
+                
+                <!-- Timeline List View -->
+                <div style="flex-grow:1; display:flex; flex-direction:column; gap:8px; overflow:hidden;">
+                    <h5 style="margin:4px 0; font-size:0.8rem; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Chronological Dossier Trail</h5>
+                    <div class="timeline-track-container" style="flex-grow:1; overflow-y:auto; padding-right:5px;">
+                        <div class="timeline-track-line"></div>
+                        <div id="st-timeline-list" style="display:flex; flex-direction:column; gap:12px;">
+                            <!-- Populated dynamically -->
+                        </div>
                     </div>
                 </div>
             </div>
-
-            <!-- SECTION PANE 3: CALENDAR VIEW -->
-            <div class="dossier-pane" id="pane-calendar" style="display:none;">
-                <div class="widget-card" style="padding: 1.5rem;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
-                        <h6 style="margin:0; font-size:0.9rem; font-weight:800; color:var(--text-main);"><i class="fas fa-calendar-days"></i> Monthly Tasks Schedule Visualizer</h6>
-                        <span id="cal-month-title" style="font-size:0.8rem; font-weight:700; color:var(--text-muted);"></span>
-                    </div>
-                    <div class="dossier-calendar-grid" id="st-calendar-grid-container">
-                        <!-- Headings + dates filled dynamically by JS -->
-                    </div>
-                </div>
-            </div>
-
-            <!-- SECTION PANE 4: ANALYTICS VIEW -->
-            <div class="dossier-pane" id="pane-analytics" style="display:none;">
-                <div style="display:grid; grid-template-columns: 320px 1fr; gap:1.5rem; align-items:start;">
-                    
-                    <!-- Left: Consistency and overall progress -->
-                    <div class="widget-card" style="padding:1.25rem; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;">
-                        <h5 style="margin:0 0 12px 0; font-size:0.8rem; font-weight:800; color:var(--text-muted); text-transform:uppercase; width:100%;">Learning Consistency</h5>
-                        <div style="position:relative; width:140px; height:140px; display:flex; align-items:center; justify-content:center; margin-bottom:12px;">
-                            <svg width="140" height="140" viewBox="0 0 140 140" style="transform: rotate(-90deg);">
-                                <circle cx="70" cy="70" r="58" stroke="#f1f5f9" stroke-width="12" fill="transparent" />
-                                <circle id="st-svg-progress-ring" cx="70" cy="70" r="58" stroke="url(#kpi-ring-grad)" stroke-width="12" fill="transparent" 
-                                        stroke-dasharray="364.4" stroke-dashoffset="364.4" stroke-linecap="round" style="transition: stroke-dashoffset 0.6s ease;" />
-                                <defs>
-                                    <linearGradient id="kpi-ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                        <stop offset="0%" stop-color="#4f46e5" />
-                                        <stop offset="100%" stop-color="#3b82f6" />
-                                    </linearGradient>
-                                </defs>
-                            </svg>
-                            <div style="position:absolute; display:flex; flex-direction:column; align-items:center;">
-                                <strong id="st-ring-percent-text" style="font-size:1.6rem; font-weight:800; color:var(--text-main);">0%</strong>
-                                <span style="font-size:0.65rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">COMPLETED</span>
-                            </div>
-                        </div>
-                        <div style="font-size:0.75rem; color:var(--text-muted); border-top:1px dashed var(--border); padding-top:10px; width:100%; display:flex; justify-content:space-between; align-items:center;">
-                            <span>Last Log Completion:</span>
-                            <strong id="st-last-activity-date" style="color:var(--text-main); font-size:0.75rem;">Never</strong>
-                        </div>
-                    </div>
-
-                    <!-- Right: Subject progress breaks -->
-                    <div class="widget-card" style="padding:1.25rem;">
-                        <h5 style="margin:0 0 15px 0; font-size:0.8rem; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Syllabus Subject Completion Rates</h5>
-                        <div id="st-subject-progress-bars" style="display:flex; flex-direction:column; gap:12px;">
-                            <!-- Filled dynamically -->
-                        </div>
-                    </div>
-
-                </div>
-            </div>
-
+            
         </div>
     </div>
 </div>
@@ -3248,53 +2989,25 @@ include 'includes/admin_nav.php';
 
     // ── TIMELINE DIALOG MODAL OPEN/CLOSE ──
     function openTimelineModal() {
-    let currentDossierTab = 'timeline';
-    let filteredTimelineActivities = [];
-
-    // ── DOSSIER TAB SWITCHER ──
-    function switchDossierTab(tabName) {
-        currentDossierTab = tabName;
-        
-        // Toggle tab buttons state
-        document.querySelectorAll('.dossier-tab-btn').forEach(btn => {
-            btn.classList.remove('active');
-        });
-        const activeBtn = document.getElementById(`tab-btn-${tabName}`);
-        if (activeBtn) activeBtn.classList.add('active');
-
-        // Toggle pane visibility
-        document.querySelectorAll('.dossier-pane').forEach(pane => {
-            pane.style.display = 'none';
-        });
-        const activePane = document.getElementById(`pane-${tabName}`);
-        if (activePane) activePane.style.display = 'block';
-
-        // Trigger corresponding sub-renderers
-        if (tabName === 'timeline') {
-            renderDossierTimeline(filteredTimelineActivities);
-        } else if (tabName === 'checklist') {
-            renderDossierChecklist(filteredTimelineActivities);
-        } else if (tabName === 'calendar') {
-            renderDossierCalendar(filteredTimelineActivities);
-        } else if (tabName === 'analytics') {
-            renderDossierAnalytics(filteredTimelineActivities);
-        }
+        const backdrop = document.getElementById('student-task-modal-backdrop');
+        backdrop.classList.add('show');
+    }
+    
+    function closeTimelineModal() {
+        const backdrop = document.getElementById('student-task-modal-backdrop');
+        backdrop.classList.remove('show');
     }
 
-    // ── DOSSIER DETAILS LOADING ──
+    // ── TIMELINE DETAILS LOADING ──
     function openStudentTimeline(email, planId, planTitle, streakDays, overallPerformance) {
         const titleEl = document.getElementById('st-modal-title');
         const subtitleEl = document.getElementById('st-modal-subtitle');
-        const timelineListContainer = document.getElementById('st-dossier-timeline-list');
+        const timelineListContainer = document.getElementById('st-timeline-list');
 
-        titleEl.innerHTML = `<i class="fas fa-folder-open" style="color:var(--accent);"></i> Study Plan Dossier: ${planTitle}`;
-        subtitleEl.innerHTML = `
-            <span><i class="fas fa-user-graduate"></i> Student: <strong>${email}</strong></span>
-            <span><i class="fas fa-clock"></i> Streak: <strong>${streakDays} Days</strong></span>
-            <span><i class="fas fa-chart-line"></i> Score: <strong>${overallPerformance}</strong></span>
-        `;
+        titleEl.innerHTML = `<i class="fas fa-graduation-cap" style="color:var(--accent);"></i> Checklist Audit: ${planTitle}`;
+        subtitleEl.innerText = `Detailed logs & learning trail for student: ${email}`;
         
-        timelineListContainer.innerHTML = `<div style="text-align:center; padding:3rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent);"></i><p>Generating Dossier Dashboard...</p></div>`;
+        timelineListContainer.innerHTML = `<div style="text-align:center; padding:3rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent);"></i><p>Loading chronological checklist timeline...</p></div>`;
 
         openTimelineModal();
 
@@ -3319,6 +3032,8 @@ include 'includes/admin_nav.php';
                 const overdue = data.timeline.filter(t => t.status === 'Overdue').length;
                 
                 const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+                
+                // Attendance mapped to completeness
                 const attendance = pct > 0 ? Math.min(100, Math.round(pct * 1.1)) : 0;
 
                 // Update summary KPI counters
@@ -3343,6 +3058,39 @@ include 'includes/admin_nav.php';
                 const lastActiveText = lastLog ? lastLog.completed_at : 'Never';
                 document.getElementById('st-last-activity-date').innerText = lastActiveText;
 
+                // Calculate Subject syllabus progress breakdown
+                const subjectsMap = {};
+                data.timeline.forEach(item => {
+                    const sub = item.subject || 'General Syllabus';
+                    if (!subjectsMap[sub]) {
+                        subjectsMap[sub] = { total: 0, completed: 0 };
+                    }
+                    subjectsMap[sub].total++;
+                    if (item.status === 'Completed') {
+                        subjectsMap[sub].completed++;
+                    }
+                });
+
+                let subHtml = '';
+                for (const [subName, stats] of Object.entries(subjectsMap)) {
+                    const subPct = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
+                    subHtml += `
+                        <div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:4px;">
+                                <span style="font-weight:600; color:var(--text-main);">${subName}</span>
+                                <span style="color:var(--text-muted);">${stats.completed}/${stats.total} (${subPct}%)</span>
+                            </div>
+                            <div style="background:#e2e8f0; height:6px; border-radius:3px; overflow:hidden;">
+                                <div style="background:var(--primary-gradient); width:${subPct}%; height:100%;"></div>
+                            </div>
+                        </div>
+                    `;
+                }
+                const subBarsEl = document.getElementById('st-subject-progress-bars');
+                if (subBarsEl) {
+                    subBarsEl.innerHTML = subHtml || '<div style="font-size:0.8rem; color:var(--text-muted);">No subjects found in syllabus outline.</div>';
+                }
+
                 // Initialize Subject Filter Select list
                 const subjectFilterSelect = document.getElementById('st-filter-subject');
                 subjectFilterSelect.innerHTML = '<option value="ALL">All Subjects</option>';
@@ -3360,51 +3108,9 @@ include 'includes/admin_nav.php';
                 document.getElementById('st-filter-start-date').value = '';
                 document.getElementById('st-filter-end-date').value = '';
 
-                // Generate smart recommendations
-                renderDossierInsights(streakDays, attendance, overdue);
-
-                // Set default tab timeline & draw
-                switchDossierTab('timeline');
+                // Draw timeline items
                 applyTimelineFilters();
             });
-    }
-
-    // ── RENDER QUICK INSIGHTS BAR ──
-    function renderDossierInsights(streakDays, attendance, overdueCount) {
-        const panel = document.getElementById('st-insights-panel');
-        let html = '';
-
-        if (attendance < 20) {
-            html += `
-                <div class="insight-card danger">
-                    <i class="fas fa-triangle-exclamation" style="margin-top:2px;"></i>
-                    <div><strong>Critical Attention Needed:</strong> The student's overall attendance rate is extremely low (${attendance}%). Establish contact to resume streak.</div>
-                </div>
-            `;
-        }
-        if (overdueCount > 3) {
-            html += `
-                <div class="insight-card info">
-                    <i class="fas fa-clock" style="margin-top:2px;"></i>
-                    <div><strong>Overdue Syllabus Load:</strong> Student has ${overdueCount} overdue daily tasks. Recommend break day/revision session.</div>
-                </div>
-            `;
-        }
-        if (streakDays > 5) {
-            html += `
-                <div class="insight-card success">
-                    <i class="fas fa-circle-check" style="margin-top:2px;"></i>
-                    <div><strong>Excellent Learning Pace:</strong> Consistent execution streak is currently at ${streakDays} days. High engagement score recorded.</div>
-                </div>
-            `;
-        }
-
-        if (html) {
-            panel.innerHTML = html;
-            panel.style.display = 'block';
-        } else {
-            panel.style.display = 'none';
-        }
     }
 
     // ── FILTER TIMELINE LOGS CLIENT-SIDE ──
@@ -3412,7 +3118,6 @@ include 'includes/admin_nav.php';
         const q = document.getElementById('st-filter-search').value.toLowerCase().trim();
         const status = document.getElementById('st-filter-status').value;
         const subject = document.getElementById('st-filter-subject').value;
-        const type = document.getElementById('st-filter-type').value;
         const startD = document.getElementById('st-filter-start-date').value;
         const endD = document.getElementById('st-filter-end-date').value;
         
@@ -3435,17 +3140,6 @@ include 'includes/admin_nav.php';
         if (subject !== 'ALL') {
             filtered = filtered.filter(item => item.subject === subject);
         }
-
-        if (type !== 'ALL') {
-            filtered = filtered.filter(item => {
-                const actType = (item.type || '').toLowerCase();
-                if (type === 'Video') return actType.includes('video') || actType.includes('class') || actType.includes('watch');
-                if (type === 'Reading') return actType.includes('read') || actType.includes('pdf') || actType.includes('note');
-                if (type === 'Practice') return actType.includes('practice') || actType.includes('quiz') || actType.includes('test');
-                if (type === 'Exam') return actType.includes('exam') || actType.includes('mock');
-                return true;
-            });
-        }
         
         if (startD) {
             filtered = filtered.filter(item => item.date !== 'TBD' && new Date(item.date) >= new Date(startD));
@@ -3455,348 +3149,92 @@ include 'includes/admin_nav.php';
             filtered = filtered.filter(item => item.date !== 'TBD' && new Date(item.date) <= new Date(endD));
         }
         
-        filteredTimelineActivities = filtered;
-
-        // Redraw current tab content
-        switchDossierTab(currentDossierTab);
+        renderTimelineList(filtered);
     }
 
     function resetTimelineFilters() {
         document.getElementById('st-filter-search').value = '';
         document.getElementById('st-filter-status').value = 'ALL';
         document.getElementById('st-filter-subject').value = 'ALL';
-        document.getElementById('st-filter-type').value = 'ALL';
         document.getElementById('st-filter-start-date').value = '';
         document.getElementById('st-filter-end-date').value = '';
         applyTimelineFilters();
     }
 
-    // ── TIMELINE RENDERER (COLLAPSIBLE DAYS GROUPING) ──
-    function renderDossierTimeline(list) {
-        const container = document.getElementById('st-dossier-timeline-list');
+    // ── CHRONOLOGICAL RENDERER ──
+    function renderTimelineList(list) {
+        const container = document.getElementById('st-timeline-list');
         container.innerHTML = '';
         
         if (list.length === 0) {
-            container.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding:2rem;">No matching checklist activities found.</div>';
+            container.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding:2rem;">No matching checklist activities found for selected filters.</div>';
             return;
         }
-
-        // Group by Day Number
-        const daysMap = {};
-        list.forEach(item => {
-            const d = item.day;
-            if (!daysMap[d]) {
-                daysMap[d] = {
-                    day: d,
-                    date: item.date,
-                    tasks: [],
-                    completed: 0,
-                    pending: 0,
-                    overdue: 0
-                };
-            }
-            daysMap[d].tasks.push(item);
-            if (item.status === 'Completed') daysMap[d].completed++;
-            else if (item.status === 'Overdue') daysMap[d].overdue++;
-            else daysMap[d].pending++;
-        });
-
-        // Quick Day Jump sidebar populate
-        const jumpContainer = document.getElementById('st-quick-jump-list');
-        jumpContainer.innerHTML = '';
-        Object.keys(daysMap).forEach(d => {
-            const btn = document.createElement('button');
-            btn.className = 'quick-jump-btn';
-            btn.innerText = `Day ${d}`;
-            btn.onclick = () => scrollToDossierDay(d);
-            jumpContainer.appendChild(btn);
-        });
-
-        // Loop and build collapsible day folders
-        Object.keys(daysMap).sort((a,b) => a - b).forEach((dKey) => {
-            const group = daysMap[dKey];
-            const pct = Math.round((group.completed / group.tasks.length) * 100);
-            const statusClass = pct === 100 ? 'green' : group.overdue > 0 ? 'red' : 'gray';
-            const statusLabel = pct === 100 ? 'Day Completed' : group.overdue > 0 ? `${group.overdue} Overdue` : 'Pending Tasks';
-
-            const dayDiv = document.createElement('div');
-            dayDiv.className = 'day-card';
-            dayDiv.id = `day-card-${group.day}`;
+        
+        list.forEach((item, idx) => {
+            const badgeClass = item.status === 'Completed' ? 'green' : item.status === 'Overdue' ? 'red' : 'gray';
+            const mapLink = item.location ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(item.location)}" target="_blank" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size: 0.7rem; border-color:#3b82f6; color:#3b82f6;"><i class="fas fa-location-dot"></i> Maps Location</a>` : '';
+            const resourceBtn = item.resource ? `<a href="${item.resource}" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:underline;">View Resource</a>` : 'Standard Materials';
             
-            let tasksHtml = '';
-            group.tasks.forEach((task) => {
-                const taskIdx = timelineActivities.findIndex(t => t.title === task.title && t.day === task.day);
-                const badge = task.status === 'Completed' ? 'green' : task.status === 'Overdue' ? 'red' : 'gray';
-                const mapLink = task.location ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(task.location)}" target="_blank" style="color:var(--accent); font-weight:700;"><i class="fas fa-location-dot"></i> Logged Coordinate</a>` : '';
-                const resourceBtn = task.resource ? `<a href="${task.resource}" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:underline;">Open Study Material</a>` : 'Standard Materials';
-
-                tasksHtml += `
-                    <div class="checklist-task-item ${task.status.toLowerCase()}" onclick="toggleTaskDetailExpand(event, ${taskIdx})">
-                        <span class="checklist-task-circle">${task.status === 'Completed' ? '✓' : ''}</span>
-                        <div style="flex-grow:1;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-                                <strong style="font-size:0.85rem; color:#1e293b;">${task.title}</strong>
-                                <span class="badge ${badge}" style="font-size:0.65rem; text-transform:uppercase;">${task.status}</span>
-                            </div>
-                            <div style="font-size:0.75rem; color:#64748b; margin-top:2px; display:flex; gap:12px; flex-wrap:wrap;">
-                                <span>Subject: <strong>${task.subject || 'N/A'}</strong></span>
-                                <span>Type: <strong>${task.type || 'Reading'}</strong></span>
-                                <span>Faculty: <strong>${task.faculty || 'N/A'}</strong></span>
-                                ${task.start_time ? `<span>Time: <strong>${task.start_time} - ${task.end_time}</strong></span>` : ''}
-                            </div>
-                            
-                            <!-- Expandable task details inside dossier row -->
-                            <div id="task-detail-card-${taskIdx}" style="display:none; margin-top: 10px;">
-                                <div class="task-detail-grid">
-                                    <div><i class="fas fa-book-open"></i> <strong>Chapter:</strong> ${task.chapter || 'N/A'}</div>
-                                    <div><i class="fas fa-tags"></i> <strong>Topic:</strong> ${task.topic || 'N/A'}</div>
-                                    <div><i class="fas fa-link"></i> <strong>Learning Resource:</strong> ${resourceBtn}</div>
-                                    <div><i class="fas fa-circle-info"></i> <strong>Activity Description:</strong> Core PEPP syllabus preparation.</div>
-                                    ${task.status === 'Completed' ? `
-                                        <div><i class="fas fa-calendar-check"></i> <strong>Completed Timestamp:</strong> ${task.completed_at}</div>
-                                        <div><i class="fas fa-desktop"></i> <strong>System Audit:</strong> ${task.device} (${task.browser})</div>
-                                        <div><i class="fas fa-network-wired"></i> <strong>IP Address:</strong> ${task.ip}</div>
-                                        <div><i class="fas fa-clock"></i> <strong>Duration:</strong> ${task.duration}</div>
-                                        ${mapLink ? `<div><i class="fas fa-map-pin"></i> <strong>GPS Coordinates:</strong> ${mapLink}</div>` : ''}
-                                    ` : ''}
-                                </div>
-                            </div>
+            const div = document.createElement('div');
+            div.className = 'timeline-track-item';
+            
+            div.innerHTML = `
+                <!-- Dot Indicator -->
+                <span class="timeline-track-node ${item.status.toLowerCase()}"></span>
+                
+                <div class="widget-card" style="padding:15px; margin:0; border: 1px solid var(--border); border-radius:12px; background:#fff; cursor:pointer;" onclick="toggleTaskExpand(${idx})">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                        <div>
+                            <span style="font-size:0.7rem; color:var(--text-muted); font-weight:800; text-transform:uppercase;">Day ${item.day} · ${item.date} ${item.start_time ? `(${item.start_time} - ${item.end_time})` : ''}</span>
+                            <h6 style="font-size:0.9rem; font-weight:800; color:var(--text-main); margin:3px 0 0 0;">${item.title}</h6>
                         </div>
-                    </div>
-                `;
-            });
-
-            dayDiv.innerHTML = `
-                <div class="day-card-header" onclick="toggleDossierDay(${group.day})">
-                    <div style="display:flex; flex-direction:column; gap:4px;">
-                        <strong style="font-size:0.95rem; color:var(--text-main);">Study Day ${group.day} · <span style="color:#64748b; font-weight:normal;">${group.date}</span></strong>
-                        <div style="display:flex; gap:12px; font-size:0.72rem; color:var(--text-muted);">
-                            <span>Tasks: <strong>${group.tasks.length}</strong></span>
-                            <span>Completed: <strong style="color:#10b981;">${group.completed}</strong></span>
-                            <span>Pending: <strong>${group.pending}</strong></span>
-                            ${group.overdue > 0 ? `<span>Overdue: <strong style="color:#ef4444;">${group.overdue}</strong></span>` : ''}
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span class="badge ${badgeClass}" style="font-size:0.65rem; text-transform:uppercase;">${item.status}</span>
+                            <i id="task-expand-icon-${idx}" class="fas fa-chevron-down" style="font-size:0.75rem; color:var(--text-muted); transition: transform 0.2s ease;"></i>
                         </div>
                     </div>
                     
-                    <div style="display:flex; align-items:center; gap:12px;">
-                        <span class="badge ${statusClass}" style="font-size:0.65rem; text-transform:uppercase;">${statusLabel} (${pct}%)</span>
-                        <i id="day-accordion-icon-${group.day}" class="fas fa-chevron-right" style="color:#64748b; font-size:0.8rem; transition: transform 0.2s ease;"></i>
-                    </div>
-                </div>
-                
-                <div class="day-card-body" id="day-accordion-body-${group.day}">
-                    <div style="display:flex; flex-direction:column; gap:8px;">
-                        ${tasksHtml}
+                    <!-- Expandable Details Area -->
+                    <div id="task-expand-body-${idx}" style="display:none; border-top:1px dashed #e2e8f0; margin-top:10px; padding-top:10px; font-size:0.8rem; color:var(--text-muted);">
+                        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:10px; margin-bottom:8px;">
+                            <div><strong>Subject:</strong> ${item.subject || 'N/A'}</div>
+                            <div><strong>Chapter:</strong> ${item.chapter || 'N/A'}</div>
+                            <div><strong>Topic:</strong> ${item.topic || 'N/A'}</div>
+                            <div><strong>Activity Type:</strong> ${item.type || 'Reading'}</div>
+                            <div><strong>Faculty:</strong> ${item.faculty || 'N/A'}</div>
+                            <div><strong>Resource Link:</strong> ${resourceBtn}</div>
+                        </div>
+                        
+                        ${item.status === 'Completed' ? `
+                            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; margin-top:8px; font-size:0.72rem; display:flex; flex-direction:column; gap:4px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+                                    <span><i class="fas fa-circle-check" style="color:#10b981; margin-right:4px;"></i> Completed Date &amp; Time: <strong>${item.completed_at}</strong></span>
+                                    <span>Study Duration: <strong>15 mins</strong></span>
+                                </div>
+                                <div><i class="fas fa-desktop"></i> IP Address: ${item.ip} | User Agent: ${item.browser} | Device: ${item.device}</div>
+                                ${mapLink ? `<div style="margin-top:4px;"><i class="fas fa-location-dot"></i> GPS Coordinates: ${item.location} ${mapLink}</div>` : ''}
+                            </div>
+                        ` : ''}
                     </div>
                 </div>
             `;
-
-            container.appendChild(dayDiv);
-        });
-
-        // Automatically expand the first card by default
-        const firstDay = Object.keys(daysMap).sort((a,b) => a - b)[0];
-        if (firstDay) {
-            toggleDossierDay(firstDay);
-        }
-    }
-
-    function toggleDossierDay(dayNum) {
-        const card = document.getElementById(`day-card-${dayNum}`);
-        const body = document.getElementById(`day-accordion-body-${dayNum}`);
-        const icon = document.getElementById(`day-accordion-icon-${dayNum}`);
-        if (!body) return;
-
-        if (card.classList.contains('open')) {
-            card.classList.remove('open');
-            body.style.display = 'none';
-            if (icon) icon.style.transform = 'rotate(0deg)';
-        } else {
-            card.classList.add('open');
-            body.style.display = 'block';
-            if (icon) icon.style.transform = 'rotate(90deg)';
-        }
-    }
-
-    function scrollToDossierDay(dayNum) {
-        const card = document.getElementById(`day-card-${dayNum}`);
-        if (card) {
-            if (!card.classList.contains('open')) {
-                toggleDossierDay(dayNum);
-            }
-            card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-    }
-
-    function toggleTaskDetailExpand(event, idx) {
-        if (event.target.tagName === 'A' || event.target.closest('a')) return;
-        const wrapper = document.getElementById(`task-detail-card-${idx}`);
-        if (wrapper) {
-            wrapper.style.display = wrapper.style.display === 'none' ? 'block' : 'none';
-        }
-    }
-
-    function renderDossierChecklist(list) {
-        const overdueContainer = document.getElementById('chk-overdue-list');
-        const pendingContainer = document.getElementById('chk-pending-list');
-        const completedContainer = document.getElementById('chk-completed-list');
-
-        if (!overdueContainer || !pendingContainer || !completedContainer) return;
-
-        overdueContainer.innerHTML = '';
-        pendingContainer.innerHTML = '';
-        completedContainer.innerHTML = '';
-
-        const overdue = list.filter(t => t.status === 'Overdue');
-        const pending = list.filter(t => t.status === 'Pending');
-        const completed = list.filter(t => t.status === 'Completed');
-
-        document.getElementById('chk-overdue-count').innerText = overdue.length;
-        document.getElementById('chk-pending-count').innerText = pending.length;
-        document.getElementById('chk-completed-count').innerText = completed.length;
-
-        if (overdue.length === 0) {
-            overdueContainer.innerHTML = '<div style="font-size:0.8rem; color:#64748b; padding:10px 0; text-align:center;">No overdue tasks.</div>';
-        } else {
-            overdue.forEach(t => overdueContainer.appendChild(createChecklistItemRow(t)));
-        }
-
-        if (pending.length === 0) {
-            pendingContainer.innerHTML = '<div style="font-size:0.8rem; color:#64748b; padding:10px 0; text-align:center;">No pending tasks.</div>';
-        } else {
-            pending.forEach(t => pendingContainer.appendChild(createChecklistItemRow(t)));
-        }
-
-        if (completed.length === 0) {
-            completedContainer.innerHTML = '<div style="font-size:0.8rem; color:#64748b; padding:10px 0; text-align:center;">No completed tasks.</div>';
-        } else {
-            completed.forEach(t => completedContainer.appendChild(createChecklistItemRow(t)));
-        }
-    }
-
-    function createChecklistItemRow(task) {
-        const div = document.createElement('div');
-        div.className = 'checklist-task-item';
-        div.style.padding = '8px 12px';
-        div.style.marginBottom = '4px';
-        div.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
-                <div>
-                    <span style="font-size:0.68rem; color:#64748b; font-weight:700; text-transform:uppercase;">Day ${task.day} · ${task.date}</span>
-                    <div style="font-size:0.82rem; font-weight:700; color:#1e293b; margin-top:2px;">${task.title}</div>
-                </div>
-                <span class="badge ${task.status === 'Completed' ? 'green' : task.status === 'Overdue' ? 'red' : 'gray'}" style="font-size:0.6rem;">${task.status}</span>
-            </div>
-        `;
-        return div;
-    }
-
-    function renderDossierCalendar(list) {
-        const grid = document.getElementById('st-calendar-grid-container');
-        if (!grid) return;
-        grid.innerHTML = '';
-
-        const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-        daysOfWeek.forEach(day => {
-            const h = document.createElement('div');
-            h.className = 'dossier-calendar-header-day';
-            h.innerText = day;
-            grid.appendChild(h);
-        });
-
-        const dateMap = {};
-        list.forEach(t => {
-            if (t.date && t.date !== 'TBD') {
-                try {
-                    const dateKey = new Date(t.date).toISOString().split('T')[0];
-                    if (!dateMap[dateKey]) {
-                        dateMap[dateKey] = { comp: 0, pend: 0, over: 0 };
-                    }
-                    if (t.status === 'Completed') dateMap[dateKey].comp++;
-                    else if (t.status === 'Overdue') dateMap[dateKey].over++;
-                    else dateMap[dateKey].pend++;
-                } catch(e) {}
-            }
-        });
-
-        const validDates = list.filter(t => t.date && t.date !== 'TBD').map(t => new Date(t.date));
-        if (validDates.length === 0) {
-            grid.innerHTML += `<div style="grid-column: span 7; text-align:center; padding:3rem; color:var(--text-muted);">No calendar data scheduled.</div>`;
-            return;
-        }
-
-        const baseDate = validDates[0];
-        const year = baseDate.getFullYear();
-        const month = baseDate.getMonth();
-
-        const monthName = baseDate.toLocaleString('default', { month: 'long', year: 'numeric' });
-        const monthTitleEl = document.getElementById('cal-month-title');
-        if (monthTitleEl) monthTitleEl.innerText = monthName;
-
-        const firstDayIndex = new Date(year, month, 1).getDay();
-        const totalDays = new Date(year, month + 1, 0).getDate();
-
-        for (let i = 0; i < firstDayIndex; i++) {
-            const filler = document.createElement('div');
-            filler.className = 'dossier-calendar-cell inactive';
-            grid.appendChild(filler);
-        }
-
-        for (let d = 1; d <= totalDays; d++) {
-            const cellDateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-            const cellData = dateMap[cellDateKey];
-
-            const cell = document.createElement('div');
-            cell.className = 'dossier-calendar-cell';
             
-            let badgesHtml = '';
-            if (cellData) {
-                if (cellData.comp > 0) badgesHtml += `<span class="dossier-calendar-badge comp">${cellData.comp} Comp</span>`;
-                if (cellData.pend > 0) badgesHtml += `<span class="dossier-calendar-badge pend">${cellData.pend} Pend</span>`;
-                if (cellData.over > 0) badgesHtml += `<span class="dossier-calendar-badge over">${cellData.over} Over</span>`;
-            }
-
-            cell.innerHTML = `
-                <span class="dossier-calendar-day-num">${d}</span>
-                <div class="dossier-calendar-badge-list">
-                    ${badgesHtml}
-                </div>
-            `;
-            grid.appendChild(cell);
-        }
-    }
-
-    function renderDossierAnalytics(list) {
-        const subjectsMap = {};
-        list.forEach(item => {
-            const sub = item.subject || 'General Syllabus';
-            if (!subjectsMap[sub]) {
-                subjectsMap[sub] = { total: 0, completed: 0 };
-            }
-            subjectsMap[sub].total++;
-            if (item.status === 'Completed') {
-                subjectsMap[sub].completed++;
-            }
+            container.appendChild(div);
         });
-
-        let subHtml = '';
-        for (const [subName, stats] of Object.entries(subjectsMap)) {
-            const subPct = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
-            subHtml += `
-                <div>
-                    <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:4px;">
-                        <span style="font-weight:600; color:var(--text-main);">${subName}</span>
-                        <span style="color:var(--text-muted);">${stats.completed}/${stats.total} (${subPct}%)</span>
-                    </div>
-                    <div style="background:#e2e8f0; height:6px; border-radius:3px; overflow:hidden;">
-                        <div style="background:var(--primary-gradient); width:${subPct}%; height:100%;"></div>
-                    </div>
-                </div>
-            `;
-        }
-        const subBarsEl = document.getElementById('st-subject-progress-bars');
-        if (subBarsEl) {
-            subBarsEl.innerHTML = subHtml || '<div style="font-size:0.8rem; color:var(--text-muted);">No subjects found in syllabus outline.</div>';
+    }
+    
+    function toggleTaskExpand(idx) {
+        const body = document.getElementById(`task-expand-body-${idx}`);
+        const icon = document.getElementById(`task-expand-icon-${idx}`);
+        if (!body) return;
+        
+        if (body.style.display === 'none') {
+            body.style.display = 'block';
+            icon.style.transform = 'rotate(180deg)';
+        } else {
+            body.style.display = 'none';
+            icon.style.transform = 'rotate(0deg)';
         }
     }
 
