@@ -62,20 +62,21 @@ if (!function_exists('db_count')) {
 
 // Helper to check if a student has any assigned study plans
 if (!function_exists('student_has_plans')) {
-    function student_has_plans($pdo, $user_id, $pepp_course, $email) {
+    function student_has_plans($pdo, $user_id, $pepp_course, $pepp_academic_year, $email) {
         return db_count($pdo, "
             SELECT COUNT(*) FROM study_plan_assignments sa
             JOIN study_plans sp ON sa.study_plan_id = sp.id
             WHERE sp.status = 'published' AND (
                 sa.assignment_type = 'all' OR
                 (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
+                (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
                 (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
                 (sa.assignment_type = 'form' AND EXISTS (
                     SELECT 1 FROM campaign_form_submissions s 
                     WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
                 ))
             )
-        ", [$pepp_course, $user_id, $email]) > 0;
+        ", [$pepp_course, $pepp_academic_year, $user_id, $email]) > 0;
     }
 }
 
@@ -99,7 +100,7 @@ if (isset($_GET['action'])) {
                 $stmt->execute([$like, $like, $like, $like]);
                 $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 foreach ($users as $u) {
-                    $has_plans = student_has_plans($pdo, $u['user_id'], $u['pepp_course'], $u['email']);
+                    $has_plans = student_has_plans($pdo, $u['user_id'], $u['pepp_course'], $u['academic_year'], $u['email']);
                     $results[] = [
                         'id' => $u['user_id'],
                         'name' => $u['name'],
@@ -142,6 +143,7 @@ if (isset($_GET['action'])) {
                 WHERE sp.status = 'published' AND (
                     sa.assignment_type = 'all' OR
                     (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
+                    (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
                     (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
                     (sa.assignment_type = 'form' AND EXISTS (
                         SELECT 1 FROM campaign_form_submissions s 
@@ -149,7 +151,7 @@ if (isset($_GET['action'])) {
                     ))
                 )
             ");
-            $stmt_as->execute([$student['pepp_course'], $student['user_id'], $student['email']]);
+            $stmt_as->execute([$student['pepp_course'], $student['academic_year'], $student['user_id'], $student['email']]);
             $assigned_plans = $stmt_as->fetchAll(PDO::FETCH_ASSOC);
 
             $plans_data = [];
@@ -688,9 +690,14 @@ if (isset($_GET['action'])) {
                             WHERE sp.status = 'published' AND (
                                 sa.assignment_type = 'all' OR
                                 (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
-                                (sa.assignment_type = 'student' AND sa.assigned_value = ?)
+                                (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'form' AND EXISTS (
+                                    SELECT 1 FROM campaign_form_submissions s 
+                                    WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+                                ))
                             )
-                        ", [$r['pepp_course'], $r['user_id']]);
+                        ", [$r['pepp_course'], $r['academic_year'], $r['user_id'], $r['email']]);
                         
                         $data[] = [
                             r_esc($r['name']),
@@ -828,10 +835,15 @@ if (isset($_GET['action'])) {
                             WHERE sp.status = 'published' AND (
                                 sa.assignment_type = 'all' OR
                                 (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
-                                (sa.assignment_type = 'student' AND sa.assigned_value = ?)
+                                (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'form' AND EXISTS (
+                                    SELECT 1 FROM campaign_form_submissions s 
+                                    WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+                                ))
                             )
                         ");
-                        $stmt_plans->execute([$std['pepp_course'], $std['user_id']]);
+                        $stmt_plans->execute([$std['pepp_course'], $std['academic_year'], $std['user_id'], $std['email']]);
                         $pids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
                         
                         $total = 0;
@@ -932,10 +944,15 @@ if (isset($_GET['action'])) {
                     WHERE sp.status = 'published' AND (
                         sa.assignment_type = 'all' OR
                         (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
-                        (sa.assignment_type = 'student' AND sa.assigned_value = ?)
+                        (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+                        (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
+                        (sa.assignment_type = 'form' AND EXISTS (
+                            SELECT 1 FROM campaign_form_submissions s 
+                            WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+                        ))
                     )
                 ");
-                $stmt_plans->execute([$std['pepp_course'], $std['user_id']]);
+                $stmt_plans->execute([$std['pepp_course'], $std['academic_year'], $std['user_id'], $std['email']]);
                 $plan_ids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
                 $plans_count = count($plan_ids);
                 
@@ -1014,7 +1031,12 @@ if ($source === 'courses') {
             WHERE sp.status = 'published' AND (
                 sa.assignment_type = 'all' OR
                 (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
-                (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id)
+                (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
+                (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
+                (sa.assignment_type = 'form' AND EXISTS (
+                    SELECT 1 FROM campaign_form_submissions s 
+                    WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+                ))
             )
         )
     ";
@@ -1889,10 +1911,10 @@ include 'includes/admin_nav.php';
                             const row = document.createElement('div');
                             row.className = 'search-autocomplete-item';
                             row.innerHTML = `
-                                <div style="font-weight:700; color:var(--text-main); font-size:0.85rem;">\${item.name}</div>
+                                <div style="font-weight:700; color:var(--text-main); font-size:0.85rem;">${item.name}</div>
                                 <div style="font-size:0.75rem; color:var(--text-muted); display:flex; justify-content:space-between; margin-top:2px;">
-                                    <span>\${item.email}</span>
-                                    <strong>\${item.subtitle}</strong>
+                                    <span>${item.email}</span>
+                                    <strong>${item.subtitle}</strong>
                                 </div>
                             `;
                             row.addEventListener('click', function() {
@@ -2031,25 +2053,25 @@ include 'includes/admin_nav.php';
         headersEl.innerHTML = '';
         container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-        fetch(`?action=kpi_drilldown&kpi=\${kpiKey}`)
+        fetch(`?action=kpi_drilldown&kpi=${kpiKey}`)
             .then(res => res.json())
             .then(res => {
-                titleEl.innerHTML = `<i class="fas fa-chart-line" style="color:#4f46e5; margin-right:8px;"></i> \${res.title}`;
+                titleEl.innerHTML = `<i class="fas fa-chart-line" style="color:#4f46e5; margin-right:8px;"></i> ${res.title}`;
                 
                 let hHtml = '';
                 res.headers.forEach(h => {
-                    hHtml += `<th style="padding:10px 14px; font-weight:700; color:#475569;">\${h}</th>`;
+                    hHtml += `<th style="padding:10px 14px; font-weight:700; color:#475569;">${h}</th>`;
                 });
                 headersEl.innerHTML = hHtml;
 
                 let bHtml = '';
                 if (res.data.length === 0) {
-                    bHtml = `<tr><td colspan="\${res.headers.length}" style="text-align:center; padding:1.5rem; color:var(--text-muted);">No records found matching this KPI.</td></tr>`;
+                    bHtml = `<tr><td colspan="${res.headers.length}" style="text-align:center; padding:1.5rem; color:var(--text-muted);">No records found matching this KPI.</td></tr>`;
                 } else {
                     res.data.forEach(row => {
                         bHtml += `<tr style="border-bottom:1px solid #f1f5f9;">`;
                         row.forEach(val => {
-                            bHtml += `<td style="padding:10px 14px; color:#334155;">\${val}</td>`;
+                            bHtml += `<td style="padding:10px 14px; color:#334155;">${val}</td>`;
                         });
                         bHtml += `</tr>`;
                     });
@@ -2057,7 +2079,7 @@ include 'includes/admin_nav.php';
                 bodyEl.innerHTML = bHtml;
             })
             .catch(err => {
-                bodyEl.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:1.5rem; color:#ef4444;"><i class="fas fa-exclamation-triangle" style="margin-right:8px;"></i> Error analyzing data: \${err.message}</td></tr>`;
+                bodyEl.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:1.5rem; color:#ef4444;"><i class="fas fa-exclamation-triangle" style="margin-right:8px;"></i> Error analyzing data: ${err.message}</td></tr>`;
             });
     }
 
@@ -2084,7 +2106,7 @@ include 'includes/admin_nav.php';
             .then(res => res.json())
             .then(data => {
                 if (data.error) {
-                    container.innerHTML = `<div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i> <span>\${data.error}</span></div>`;
+                    container.innerHTML = `<div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i> <span>${data.error}</span></div>`;
                     return;
                 }
 
@@ -2100,41 +2122,41 @@ include 'includes/admin_nav.php';
                             <div style="text-align:center; margin-bottom:20px; border-bottom:1px solid var(--border); padding-bottom:15px;">
                                 <div style="width:90px; height:90px; border-radius:50%; background:#f1f5f9; display:inline-flex; align-items:center; justify-content:center; border:3px solid var(--accent); margin-bottom:12px; color:var(--accent); font-size:2.5rem; position:relative;">
                                     <i class="fas fa-user-graduate"></i>
-                                    \${s.online ? `<span class="pulse-dot" style="position:absolute; bottom:2px; right:2px; margin:0; border:2px solid #fff; width:12px; height:12px;"></span>` : ''}
+                                    ${s.online ? `<span class="pulse-dot" style="position:absolute; bottom:2px; right:2px; margin:0; border:2px solid #fff; width:12px; height:12px;"></span>` : ''}
                                 </div>
-                                <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.2rem; color:var(--text-main); margin:0 0 4px 0;">\${s.name}</h4>
-                                <span style="font-size:0.7rem; font-weight:700; text-transform:uppercase;" class="badge \${statusBadgeClass}">\${s.status}</span>
+                                <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.2rem; color:var(--text-main); margin:0 0 4px 0;">${s.name}</h4>
+                                <span style="font-size:0.7rem; font-weight:700; text-transform:uppercase;" class="badge ${statusBadgeClass}">${s.status}</span>
                             </div>
 
                             <div style="display:flex; flex-direction:column; gap:12px; font-size:0.85rem; border-bottom:1px solid var(--border); padding-bottom:15px; margin-bottom:15px;">
-                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Student ID:</span><strong style="color:var(--text-main);">\${s.user_id}</strong></div>
-                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Email:</span><strong style="color:var(--text-main);">\${s.masked_email}</strong></div>
-                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Mobile:</span><strong style="color:var(--text-main);">\${s.masked_phone}</strong></div>
-                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Course:</span><strong style="color:var(--text-main);">\${s.course}</strong></div>
-                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Batch Year:</span><strong style="color:var(--text-main);">\${s.academic_year || 'N/A'}</strong></div>
-                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Joined:</span><strong style="color:var(--text-main);">\${s.joined_date}</strong></div>
-                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Last Active:</span><strong style="color:var(--text-main);">\${s.last_login}</strong></div>
-                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Presence:</span><strong style="color:var(--text-main); font-size:0.75rem;">\${s.presence}</strong></div>
+                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Student ID:</span><strong style="color:var(--text-main);">${s.user_id}</strong></div>
+                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Email:</span><strong style="color:var(--text-main);">${s.masked_email}</strong></div>
+                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Mobile:</span><strong style="color:var(--text-main);">${s.masked_phone}</strong></div>
+                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Course:</span><strong style="color:var(--text-main);">${s.course}</strong></div>
+                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Batch Year:</span><strong style="color:var(--text-main);">${s.academic_year || 'N/A'}</strong></div>
+                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Joined:</span><strong style="color:var(--text-main);">${s.joined_date}</strong></div>
+                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Last Active:</span><strong style="color:var(--text-main);">${s.last_login}</strong></div>
+                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Presence:</span><strong style="color:var(--text-main); font-size:0.75rem;">${s.presence}</strong></div>
                             </div>
 
                             <!-- Streaks / Attendance Metrics -->
                             <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:20px; text-align:center;">
                                 <div style="background:#fff3c7; border-radius:10px; padding:10px 5px; color:#b45309;">
                                     <div style="font-size:0.65rem; font-weight:800; text-transform:uppercase;">Completeness Streak</div>
-                                    <strong style="font-size:1.2rem;">🔥 \${s.streak} Days</strong>
+                                    <strong style="font-size:1.2rem;">🔥 ${s.streak} Days</strong>
                                 </div>
                                 <div style="background:#d1fae5; border-radius:10px; padding:10px 5px; color:#047857;">
                                     <div style="font-size:0.65rem; font-weight:800; text-transform:uppercase;">Attendance Rate</div>
-                                    <strong style="font-size:1.2rem;">📊 \${s.attendance}%</strong>
+                                    <strong style="font-size:1.2rem;">📊 ${s.attendance}%</strong>
                                 </div>
                             </div>
 
                             <!-- Communication Actions -->
                             <div style="display:flex; flex-direction:column; gap:8px;">
-                                <a href="https://wa.me/\${s.masked_phone.replace(/\\D/g, '')}" target="_blank" class="btn btn-whatsapp" style="width:100%; text-align:center;"><i class="fab fa-whatsapp"></i> Chat on WhatsApp</a>
-                                <a href="mailto:\${s.email}" class="btn btn-primary" style="width:100%; text-align:center;"><i class="fas fa-envelope"></i> Send Email</a>
-                                <a href="tel:\${s.masked_phone}" class="btn btn-outline" style="width:100%; text-align:center;"><i class="fas fa-phone"></i> Call Student</a>
-                                <a href="student-details.php?user_id=\${s.user_id}" class="btn btn-outline" style="width:100%; text-align:center;"><i class="fas fa-user-graduate"></i> View Profile Page</a>
+                                <a href="https://wa.me/${s.masked_phone.replace(/\\D/g, '')}" target="_blank" class="btn btn-whatsapp" style="width:100%; text-align:center;"><i class="fab fa-whatsapp"></i> Chat on WhatsApp</a>
+                                <a href="mailto:${s.email}" class="btn btn-primary" style="width:100%; text-align:center;"><i class="fas fa-envelope"></i> Send Email</a>
+                                <a href="tel:${s.masked_phone}" class="btn btn-outline" style="width:100%; text-align:center;"><i class="fas fa-phone"></i> Call Student</a>
+                                <a href="student-details.php?user_id=${s.user_id}" class="btn btn-outline" style="width:100%; text-align:center;"><i class="fas fa-user-graduate"></i> View Profile Page</a>
                             </div>
                         </div>
 
@@ -2159,7 +2181,7 @@ include 'includes/admin_nav.php';
                         <div style="text-align:center; padding:3rem; border:2px dashed var(--border); border-radius:12px; color:var(--text-muted);">
                             <i class="fas fa-folder-open" style="font-size:2.5rem; margin-bottom:10px;"></i>
                             <p style="margin:0; font-weight:700;">No Study Plans Assigned</p>
-                            <small style="font-size:0.75rem;">This student does not have any active or draft study plan assignments under course \${s.course}.</small>
+                            <small style="font-size:0.75rem;">This student does not have any active or draft study plan assignments under course ${s.course}.</small>
                         </div>
                     `;
                     return;
@@ -2177,20 +2199,20 @@ include 'includes/admin_nav.php';
                     row.innerHTML = `
                         <div style="display:flex; justify-content:space-between; align-items:center;">
                             <div>
-                                <strong style="font-size:1rem; color:var(--text-main);">\${p.title}</strong>
-                                <span style="font-size:0.72rem; color:var(--text-muted); display:block; margin-top:2px;">Scheduled: \${p.start_date} to \${p.end_date}</span>
+                                <strong style="font-size:1rem; color:var(--text-main);">${p.title}</strong>
+                                <span style="font-size:0.72rem; color:var(--text-muted); display:block; margin-top:2px;">Scheduled: ${p.start_date} to ${p.end_date}</span>
                             </div>
-                            <button class="btn btn-sm btn-soft-violet" onclick="openStudentTimeline('\${s.email}', \${p.id}, '\${p.title.replace(/'/g, "\\\\'")}')"><i class="fas fa-list-check"></i> View Timeline Checklist</button>
+                            <button class="btn btn-sm btn-soft-violet" onclick="openStudentTimeline('${s.email}', ${p.id}, '${p.title.replace(/'/g, "\\\\'")}')"><i class="fas fa-list-check"></i> View Timeline Checklist</button>
                         </div>
 
                         <!-- Progress calculations bar -->
                         <div style="display:flex; gap:1.5rem; margin-top:5px; border-top:1px dashed #e2e8f0; padding-top:10px; flex-wrap:wrap;">
-                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Total Tasks:</span> <strong style="font-size:0.85rem;">\${p.total_tasks}</strong></div>
-                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Completed:</span> <strong style="font-size:0.85rem; color:#10b981;">\${p.completed}</strong></div>
-                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Pending:</span> <strong style="font-size:0.85rem; color:#ef4444;">\${p.pending}</strong></div>
-                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Checklist Progress:</span> <strong style="font-size:0.85rem; color:var(--accent);">\${p.pct}%</strong></div>
-                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Performance:</span> <strong style="font-size:0.85rem; color:\${p.perf_class === 'green' ? '#10b981' : p.perf_class === 'red' ? '#ef4444' : '#f59e0b'};\"><span class="badge \${p.perf_class}">\${p.performance}</span></strong></div>
-                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Last Active:</span> <strong style="font-size:0.85rem;">\${p.last_updated}</strong></div>
+                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Total Tasks:</span> <strong style="font-size:0.85rem;">${p.total_tasks}</strong></div>
+                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Completed:</span> <strong style="font-size:0.85rem; color:#10b981;">${p.completed}</strong></div>
+                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Pending:</span> <strong style="font-size:0.85rem; color:#ef4444;">${p.pending}</strong></div>
+                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Checklist Progress:</span> <strong style="font-size:0.85rem; color:var(--accent);">${p.pct}%</strong></div>
+                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Performance:</span> <strong style="font-size:0.85rem; color:${p.perf_class === 'green' ? '#10b981' : p.perf_class === 'red' ? '#ef4444' : '#f59e0b'};\"><span class="badge ${p.perf_class}">${p.performance}</span></strong></div>
+                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Last Active:</span> <strong style="font-size:0.85rem;">${p.last_updated}</strong></div>
                         </div>
                     `;
                     plansListContainer.appendChild(row);
@@ -2208,17 +2230,17 @@ include 'includes/admin_nav.php';
         const subtitleEl = document.getElementById('st-slideover-subtitle');
         const timelineContainer = document.getElementById('st-timeline-container');
 
-        titleEl.innerText = `Checklist Audit: \${planTitle}`;
-        subtitleEl.innerText = `Fetching timeline logs for student: \${email}...`;
+        titleEl.innerText = `Checklist Audit: ${planTitle}`;
+        subtitleEl.innerText = `Fetching timeline logs for student: ${email}...`;
         timelineContainer.innerHTML = `<div style="text-align:center; padding:3rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent);"></i><p>Loading activities checklist timeline...</p></div>`;
 
         openSlideOver('student-task-slideover');
 
-        fetch(`?action=get_student_plan_timeline&email=\${encodeURIComponent(email)}&plan_id=\${planId}`)
+        fetch(`?action=get_student_plan_timeline&email=${encodeURIComponent(email)}&plan_id=${planId}`)
             .then(res => res.json())
             .then(data => {
                 timelineActivities = data.timeline;
-                subtitleEl.innerText = `Timeline includes \${data.timeline.length} tasks scheduled.`;
+                subtitleEl.innerText = `Timeline includes ${data.timeline.length} tasks scheduled.`;
 
                 // Update Overall Checklist Performance Widget
                 const total = data.timeline.length;
@@ -2227,11 +2249,11 @@ include 'includes/admin_nav.php';
                 const pct = total > 0 ? round((completed / total) * 100) : 0;
                 const perf = get_performance_status(pct);
 
-                document.getElementById('st-completion-pct').innerText = `\${pct}%`;
-                document.getElementById('st-completion-bar').style.width = `\${pct}%`;
+                document.getElementById('st-completion-pct').innerText = `${pct}%`;
+                document.getElementById('st-completion-bar').style.width = `${pct}%`;
                 document.getElementById('st-completed-count').innerText = completed;
                 document.getElementById('st-pending-count').innerText = pending;
-                document.getElementById('st-perf-badge').innerHTML = `<span class="badge \${perf.class}">\${perf.label}</span>`;
+                document.getElementById('st-perf-badge').innerHTML = `<span class="badge ${perf.class}">${perf.label}</span>`;
                 
                 const lastLog = data.timeline.filter(t => t.completed_at !== '').sort((a,b) => new Date(b.completed_at) - new Date(a.completed_at))[0];
                 document.getElementById('st-last-active').innerText = lastLog ? lastLog.completed_at : 'Never';
@@ -2245,29 +2267,29 @@ include 'includes/admin_nav.php';
 
                 data.timeline.forEach((item, idx) => {
                     const badge = item.status === 'Completed' ? 'green' : item.status === 'Overdue' ? 'red' : 'gray';
-                    const mapLink = item.location ? `<a href="https://www.google.com/maps?q=\${encodeURIComponent(item.location)}" target="_blank" style="color:var(--accent); font-weight:700;"><i class="fas fa-location-dot"></i> Logged Location</a>` : '';
+                    const mapLink = item.location ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(item.location)}" target="_blank" style="color:var(--accent); font-weight:700;"><i class="fas fa-location-dot"></i> Logged Location</a>` : '';
                     
                     const itemDiv = document.createElement('div');
                     itemDiv.style.position = 'relative';
                     itemDiv.style.marginBottom = '15px';
                     itemDiv.innerHTML = `
                         <!-- Dot Indicator -->
-                        <span style="position:absolute; left:-20px; top:4px; width:10px; height:10px; border-radius:50%; border:2px solid #fff; background:\${item.status === 'Completed' ? '#10b981' : '#cbd5e1'}; box-shadow:0 0 0 2px \${item.status === 'Completed' ? 'rgba(16,185,129,0.2)' : 'transparent'};"></span>
+                        <span style="position:absolute; left:-20px; top:4px; width:10px; height:10px; border-radius:50%; border:2px solid #fff; background:${item.status === 'Completed' ? '#10b981' : '#cbd5e1'}; box-shadow:0 0 0 2px ${item.status === 'Completed' ? 'rgba(16,185,129,0.2)' : 'transparent'};"></span>
                         
                         <div style="display:flex; justify-content:space-between; align-items:flex-start;">
                             <div>
-                                <span style="font-size:0.7rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Day \${item.day} · \${item.date}</span>
-                                <h6 style="font-size:0.85rem; font-weight:800; color:var(--text-main); margin:2px 0;">\${item.title}</h6>
-                                <p style="font-size:0.75rem; color:var(--text-muted); margin:0;">Subject: \${item.subject} | Chapter: \${item.chapter} | Faculty: \${item.faculty}</p>
+                                <span style="font-size:0.7rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Day ${item.day} · ${item.date}</span>
+                                <h6 style="font-size:0.85rem; font-weight:800; color:var(--text-main); margin:2px 0;">${item.title}</h6>
+                                <p style="font-size:0.75rem; color:var(--text-muted); margin:0;">Subject: ${item.subject} | Chapter: ${item.chapter} | Faculty: ${item.faculty}</p>
                             </div>
-                            <span class="badge \${badge}" style="font-size:0.65rem; text-transform:uppercase;">\${item.status}</span>
+                            <span class="badge ${badge}" style="font-size:0.65rem; text-transform:uppercase;">${item.status}</span>
                         </div>
                         
-                        \${item.status === 'Completed' ? `
+                        ${item.status === 'Completed' ? `
                             <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; margin-top:6px; font-size:0.72rem; color:var(--text-muted); display:flex; flex-direction:column; gap:4px;">
-                                <div><i class="fas fa-circle-check" style="color:#10b981;"></i> Completed on: <strong>\${item.completed_at}</strong></div>
-                                <div><i class="fas fa-desktop"></i> IP: \${item.ip} | Device: \${item.device} (\${item.browser})</div>
-                                \${mapLink ? `<div><i class="fas fa-map-pin"></i> \${mapLink}</div>` : ''}
+                                <div><i class="fas fa-circle-check" style="color:#10b981;"></i> Completed on: <strong>${item.completed_at}</strong></div>
+                                <div><i class="fas fa-desktop"></i> IP: ${item.ip} | Device: ${item.device} (${item.browser})</div>
+                                ${mapLink ? `<div><i class="fas fa-map-pin"></i> ${mapLink}</div>` : ''}
                             </div>
                         ` : ''}
                     `;
@@ -2347,18 +2369,18 @@ include 'includes/admin_nav.php';
                     tbody.innerHTML += `
                         <tr style="border-bottom:1px solid #f1f5f9;">
                             <td style="padding:12px 10px;">
-                                \${dot} <strong style="font-size:0.88rem; color:var(--text-main);">\${p.title}</strong>
-                                <small style="display:block; color:var(--text-muted);">Status: \${p.status}</small>
+                                ${dot} <strong style="font-size:0.88rem; color:var(--text-main);">${p.title}</strong>
+                                <small style="display:block; color:var(--text-muted);">Status: ${p.status}</small>
                             </td>
-                            <td style="padding:12px 10px; font-size:0.78rem;">\${p.start_date} to \${p.end_date}</td>
-                            <td style="padding:12px 10px; text-align:center; font-weight:700;">\${p.duration}</td>
-                            <td style="padding:12px 10px; text-align:center; font-weight:700;">\${p.tasks}</td>
+                            <td style="padding:12px 10px; font-size:0.78rem;">${p.start_date} to ${p.end_date}</td>
+                            <td style="padding:12px 10px; text-align:center; font-weight:700;">${p.duration}</td>
+                            <td style="padding:12px 10px; text-align:center; font-weight:700;">${p.tasks}</td>
                             <td style="padding:12px 10px; text-align:center;">
-                                <strong style="color:var(--accent);">\${p.completion_rate}%</strong>
-                                <span style="display:block; font-size:0.7rem; color:var(--text-muted);">\${p.completed_students} of \${p.completed_students + p.pending_students} students done</span>
+                                <strong style="color:var(--accent);">${p.completion_rate}%</strong>
+                                <span style="display:block; font-size:0.7rem; color:var(--text-muted);">${p.completed_students} of ${p.completed_students + p.pending_students} students done</span>
                             </td>
                             <td style="padding:12px 10px; text-align:right;">
-                                <a href="studyplan-designer.php?id=\${p.id}" class="btn btn-xs btn-outline" style="padding:4px 8px;"><i class="fas fa-edit"></i> Edit Structure</a>
+                                <a href="studyplan-designer.php?id=${p.id}" class="btn btn-xs btn-outline" style="padding:4px 8px;"><i class="fas fa-edit"></i> Edit Structure</a>
                             </td>
                         </tr>
                     `;
@@ -2382,15 +2404,15 @@ include 'includes/admin_nav.php';
                 data.forEach(t => {
                     tbody.innerHTML += `
                         <tr style="border-bottom:1px solid #f1f5f9;">
-                            <td style="padding:10px 8px; font-weight:600; color:var(--text-muted); font-size:0.78rem;">\${t.plan}</td>
-                            <td style="padding:10px 8px; text-align:center; font-weight:700;">\${t.day}</td>
-                            <td style="padding:10px 8px;"><strong style="color:var(--text-main); font-size:0.85rem;">\${t.title}</strong><br><small style="color:var(--text-muted);">\${t.topic}</small></td>
-                            <td style="padding:10px 8px; font-size:0.78rem;">Subject: \${t.subject}<br>Chapter: \${t.chapter}</td>
-                            <td style="padding:10px 8px; font-size:0.78rem;">\${t.faculty}</td>
-                            <td style="padding:10px 8px; text-align:center; font-weight:700; color:#10b981;">\${t.completed}</td>
-                            <td style="padding:10px 8px; text-align:center; font-weight:700; color:#ef4444;">\${t.pending}</td>
+                            <td style="padding:10px 8px; font-weight:600; color:var(--text-muted); font-size:0.78rem;">${t.plan}</td>
+                            <td style="padding:10px 8px; text-align:center; font-weight:700;">${t.day}</td>
+                            <td style="padding:10px 8px;"><strong style="color:var(--text-main); font-size:0.85rem;">${t.title}</strong><br><small style="color:var(--text-muted);">${t.topic}</small></td>
+                            <td style="padding:10px 8px; font-size:0.78rem;">Subject: ${t.subject}<br>Chapter: ${t.chapter}</td>
+                            <td style="padding:10px 8px; font-size:0.78rem;">${t.faculty}</td>
+                            <td style="padding:10px 8px; text-align:center; font-weight:700; color:#10b981;">${t.completed}</td>
+                            <td style="padding:10px 8px; text-align:center; font-weight:700; color:#ef4444;">${t.pending}</td>
                             <td style="padding:10px 8px; text-align:right;">
-                                <strong style="color:var(--accent);">\${t.pct}%</strong>
+                                <strong style="color:var(--accent);">${t.pct}%</strong>
                             </td>
                         </tr>
                     `;
@@ -2412,13 +2434,13 @@ include 'includes/admin_nav.php';
                 const pending = cols[6].innerText;
                 const rate = cols[7].innerText;
 
-                csv += `"\${plan}","\${day}","\${title}","\${metadata}","\${faculty}","\${completed}","\${pending}","\${rate}"\r\n`;
+                csv += `"${plan}","${day}","${title}","${metadata}","${faculty}","${completed}","${pending}","${rate}"\r\n`;
             }
         });
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement("a");
         link.href = URL.createObjectURL(blob);
-        link.setAttribute("download", `Course_Tasks_Analytics_\${currentCourseNameSelected}.csv`);
+        link.setAttribute("download", `Course_Tasks_Analytics_${currentCourseNameSelected}.csv`);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -2436,11 +2458,11 @@ include 'includes/admin_nav.php';
                     list.innerHTML += `
                         <tr>
                             <td style="padding:10px 8px;">
-                                <strong style="font-size:0.85rem; color:var(--text-main); display:block;">\${t.title}</strong>
-                                <small style="color:var(--text-muted); font-size:0.72rem;">Plan: \${t.plan} · Day \${t.day} · Completions: \${t.completed}</small>
+                                <strong style="font-size:0.85rem; color:var(--text-main); display:block;">${t.title}</strong>
+                                <small style="color:var(--text-muted); font-size:0.72rem;">Plan: ${t.plan} · Day ${t.day} · Completions: ${t.completed}</small>
                             </td>
                             <td style="padding:10px 8px; text-align:right;">
-                                <button class="btn btn-xs btn-primary" onclick="drilldownCompletedTask(\${t.id}, '\${t.title.replace(/'/g, "\\\\'")}')" style="font-size:0.7rem; font-weight:700; padding:4px 8px;">View Students</button>
+                                <button class="btn btn-xs btn-primary" onclick="drilldownCompletedTask(${t.id}, '${t.title.replace(/'/g, "\\\\'")}')" style="font-size:0.7rem; font-weight:700; padding:4px 8px;">View Students</button>
                             </td>
                         </tr>
                     `;
@@ -2454,7 +2476,7 @@ include 'includes/admin_nav.php';
     function drilldownCompletedTask(activityId, title) {
         currentDrilldownActivityId = activityId;
         currentDrilldownActivityTitle = title;
-        document.getElementById('c-completions-drilldown-header').innerText = `Completed Students for: \${title}`;
+        document.getElementById('c-completions-drilldown-header').innerText = `Completed Students for: ${title}`;
         document.getElementById('c-completions-export-btn').style.display = 'inline-block';
 
         const tbody = document.getElementById('course-completed-students-body');
@@ -2469,13 +2491,13 @@ include 'includes/admin_nav.php';
                     return;
                 }
                 data.forEach(s => {
-                    const mapLink = s.location !== 'N/A' ? `<a href="https://www.google.com/maps?q=\${encodeURIComponent(s.location)}" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none;"><i class="fas fa-map-location-dot"></i> Maps</a>` : 'N/A';
+                    const mapLink = s.location !== 'N/A' ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(s.location)}" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none;"><i class="fas fa-map-location-dot"></i> Maps</a>` : 'N/A';
                     tbody.innerHTML += `
                         <tr>
-                            <td style="padding:8px; font-weight:700; color:var(--text-main);">\${s.name}<br><small style="color:var(--text-muted);">\${s.masked_email}</small></td>
-                            <td style="padding:8px; font-size:0.75rem;">\${s.completed_at}</td>
-                            <td style="padding:8px; font-size:0.72rem; color:var(--text-muted);">\${s.ip}<br>\${s.device} (\${s.browser})</td>
-                            <td style="padding:8px; text-align:right;">\${mapLink}</td>
+                            <td style="padding:8px; font-weight:700; color:var(--text-main);">${s.name}<br><small style="color:var(--text-muted);">${s.masked_email}</small></td>
+                            <td style="padding:8px; font-size:0.75rem;">${s.completed_at}</td>
+                            <td style="padding:8px; font-size:0.72rem; color:var(--text-muted);">${s.ip}<br>${s.device} (${s.browser})</td>
+                            <td style="padding:8px; text-align:right;">${mapLink}</td>
                         </tr>
                     `;
                 });
@@ -2494,11 +2516,11 @@ include 'includes/admin_nav.php';
                     list.innerHTML += `
                         <tr>
                             <td style="padding:10px 8px;">
-                                <strong style="font-size:0.85rem; color:var(--text-main); display:block;">\${t.title}</strong>
-                                <small style="color:var(--text-muted); font-size:0.72rem;">Plan: \${t.plan} · Day \${t.day} · Pending: \${t.pending}</small>
+                                <strong style="font-size:0.85rem; color:var(--text-main); display:block;">${t.title}</strong>
+                                <small style="color:var(--text-muted); font-size:0.72rem;">Plan: ${t.plan} · Day ${t.day} · Pending: ${t.pending}</small>
                             </td>
                             <td style="padding:10px 8px; text-align:right;">
-                                <button class="btn btn-xs btn-outline" onclick="drilldownPendingTask(\${t.id}, '\${t.title.replace(/'/g, "\\\\'")}')" style="font-size:0.7rem; font-weight:700; padding:4px 8px; border-color:var(--accent); color:var(--accent);">View Pending</button>
+                                <button class="btn btn-xs btn-outline" onclick="drilldownPendingTask(${t.id}, '${t.title.replace(/'/g, "\\\\'")}')" style="font-size:0.7rem; font-weight:700; padding:4px 8px; border-color:var(--accent); color:var(--accent);">View Pending</button>
                             </td>
                         </tr>
                     `;
@@ -2509,14 +2531,14 @@ include 'includes/admin_nav.php';
     function drilldownPendingTask(activityId, title) {
         currentDrilldownActivityId = activityId;
         currentDrilldownActivityTitle = title;
-        document.getElementById('c-pending-drilldown-header').innerText = `Pending Students for: \${title}`;
+        document.getElementById('c-pending-drilldown-header').innerText = `Pending Students for: ${title}`;
         document.getElementById('c-pending-bulk-btn').style.display = 'inline-block';
         document.getElementById('c-pending-export-btn').style.display = 'inline-block';
 
         const tbody = document.getElementById('course-pending-students-body');
         tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;"><i class="fas fa-spinner fa-spin"></i> Fetching list...</td></tr>';
 
-        fetch(`?action=get_course_pending_tasks_drilldown&activity_id=\${activityId}&course_name=\${encodeURIComponent(currentCourseNameSelected)}`)
+        fetch(`?action=get_course_pending_tasks_drilldown&activity_id=${activityId}&course_name=${encodeURIComponent(currentCourseNameSelected)}`)
             .then(res => res.json())
             .then(data => {
                 tbody.innerHTML = '';
@@ -2525,17 +2547,17 @@ include 'includes/admin_nav.php';
                     return;
                 }
                 data.forEach(s => {
-                    const waLink = `https://wa.me/\${s.phone.replace(/\\D/g, '')}`;
+                    const waLink = `https://wa.me/${s.phone.replace(/\\D/g, '')}`;
                     tbody.innerHTML += `
                         <tr>
-                            <td style="padding:8px; font-weight:700; color:var(--text-main);">\${s.name}<br><small style="color:var(--text-muted);">\${s.masked_email}</small></td>
-                            <td style="padding:8px; font-size:0.75rem;">\${s.masked_phone}</td>
-                            <td style="padding:8px; text-align:center; color:#ef4444; font-weight:800;">\${s.overdue_days} Days</td>
+                            <td style="padding:8px; font-weight:700; color:var(--text-main);">${s.name}<br><small style="color:var(--text-muted);">${s.masked_email}</small></td>
+                            <td style="padding:8px; font-size:0.75rem;">${s.masked_phone}</td>
+                            <td style="padding:8px; text-align:center; color:#ef4444; font-weight:800;">${s.overdue_days} Days</td>
                             <td style="padding:8px; text-align:right;">
                                 <div style="display:inline-flex; gap:4px;">
-                                    <a href="\&{waLink}" target="_blank" class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.65rem;" title="Send WhatsApp alert"><i class="fab fa-whatsapp"></i></a>
-                                    <a href="mailto:\${s.email}?subject=Pending Task Alert" class="btn btn-xs btn-primary" style="padding:3px 6px; font-size:0.65rem;" title="Send Email alert"><i class="fas fa-envelope"></i></a>
-                                    <a href="tel:\${s.phone}" class="btn btn-xs btn-info" style="padding:3px 6px; font-size:0.65rem;" title="Call student"><i class="fas fa-phone"></i></a>
+                                    <a href="${waLink}" target="_blank" class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.65rem;" title="Send WhatsApp alert"><i class="fab fa-whatsapp"></i></a>
+                                    <a href="mailto:${s.email}?subject=Pending Task Alert" class="btn btn-xs btn-primary" style="padding:3px 6px; font-size:0.65rem;" title="Send Email alert"><i class="fas fa-envelope"></i></a>
+                                    <a href="tel:${s.phone}" class="btn btn-xs btn-info" style="padding:3px 6px; font-size:0.65rem;" title="Call student"><i class="fas fa-phone"></i></a>
                                 </div>
                             </td>
                         </tr>
@@ -2556,7 +2578,7 @@ include 'includes/admin_nav.php';
     // Client-side Excel builder using SheetJS CDN
     function exportDrilldownExcel(type) {
         const tableId = type === 'completed' ? 'course-completed-students-body' : 'course-pending-students-body';
-        const rows = document.querySelectorAll(`#\${tableId} tr`);
+        const rows = document.querySelectorAll(`#${tableId} tr`);
         
         const dataArr = [];
         if (type === 'completed') {
@@ -2581,7 +2603,7 @@ include 'includes/admin_nav.php';
         XLSX.utils.book_append_sheet(wb, ws, "Drilldown Analysis");
         
         const title = currentDrilldownActivityTitle.replace(/\\s+/g, '_');
-        XLSX.writeFile(wb, `\${type}_tasks_\${title}.xlsx`);
+        XLSX.writeFile(wb, `${type}_tasks_${title}.xlsx`);
     }
 
     // ════════════════ CUSTOM CAMPAIGNS & FORMS WORKSPACE ════════════════
@@ -2607,8 +2629,8 @@ include 'includes/admin_nav.php';
                     item.style.cursor = 'pointer';
                     item.style.transition = 'all 0.2s ease';
                     item.innerHTML = `
-                        <div style="font-weight:800; color:var(--text-main); font-size:0.85rem; margin-bottom:4px;">\${f.title}</div>
-                        <small style="color:var(--text-muted); font-size:0.72rem; display:block;">Submissions: \${f.submissions} · Converted: \${f.conversions} (\${f.rate})</small>
+                        <div style="font-weight:800; color:var(--text-main); font-size:0.85rem; margin-bottom:4px;">${f.title}</div>
+                        <small style="color:var(--text-muted); font-size:0.72rem; display:block;">Submissions: ${f.submissions} · Converted: ${f.conversions} (${f.rate})</small>
                     `;
                     
                     item.addEventListener('click', function() {
@@ -2647,11 +2669,11 @@ include 'includes/admin_nav.php';
                     <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid var(--border); padding-bottom:12px; margin-bottom:15px; flex-wrap:wrap; gap:8px;">
                         <div>
                             <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.1rem; color:var(--text-main); margin:0;">
-                                <i class="fab fa-wpforms" style="color:var(--accent); margin-right:6px;"></i> Submissions analysis: \${title}
+                                <i class="fab fa-wpforms" style="color:var(--accent); margin-right:6px;"></i> Submissions analysis: ${title}
                             </h4>
-                            <p style="font-size:0.75rem; color:var(--text-muted); margin:4px 0 0 0;">Total submission counts: \${data.length} responses recorded.</p>
+                            <p style="font-size:0.75rem; color:var(--text-muted); margin:4px 0 0 0;">Total submission counts: ${data.length} responses recorded.</p>
                         </div>
-                        <button class="btn btn-sm btn-outline" onclick="exportFormSubmissionsExcel('\${title.replace(/'/g, "\\\\'")}')"><i class="fas fa-file-excel"></i> Export Excel</button>
+                        <button class="btn btn-sm btn-outline" onclick="exportFormSubmissionsExcel('${title.replace(/'/g, "\\\\'")}')"><i class="fas fa-file-excel"></i> Export Excel</button>
                     </div>
 
                     <div style="display:grid; grid-template-columns: 1fr 1.5fr; gap:1.5rem; margin-bottom:20px;">
@@ -2675,12 +2697,12 @@ include 'includes/admin_nav.php';
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    \${data.map((row, idx) => `
+                                    ${data.map((row, idx) => `
                                         <tr>
-                                            <td style="padding:10px 8px; font-weight:700;">\${idx + 1}</td>
-                                            <td style="padding:10px 8px; font-weight:700; color:var(--text-main);">\${row.masked_identifier}</td>
-                                            <td style="padding:10px 8px; font-size:0.78rem;">\${row.date}</td>
-                                            <td style="padding:10px 8px; text-align:right;"><span class="badge \${row.converted === 'Yes' ? 'green' : 'gray'}" style="font-size:0.65rem; text-transform:uppercase;">\${row.converted}</span></td>
+                                            <td style="padding:10px 8px; font-weight:700;">${idx + 1}</td>
+                                            <td style="padding:10px 8px; font-weight:700; color:var(--text-main);">${row.masked_identifier}</td>
+                                            <td style="padding:10px 8px; font-size:0.78rem;">${row.date}</td>
+                                            <td style="padding:10px 8px; text-align:right;"><span class="badge ${row.converted === 'Yes' ? 'green' : 'gray'}" style="font-size:0.65rem; text-transform:uppercase;">${row.converted}</span></td>
                                         </tr>
                                     `).join('')}
                                 </tbody>
@@ -2733,7 +2755,7 @@ include 'includes/admin_nav.php';
         const ws = XLSX.utils.aoa_to_sheet(dataArr);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Submissions");
-        XLSX.writeFile(wb, `submissions_\${title.replace(/\\s+/g, '_')}.xlsx`);
+        XLSX.writeFile(wb, `submissions_${title.replace(/\\s+/g, '_')}.xlsx`);
     }
 
     function exportTimelineExcel() {
