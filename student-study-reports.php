@@ -1899,6 +1899,15 @@ include 'includes/admin_nav.php';
             display: block !important;
             width: 100% !important;
             max-width: 100% !important;
+            height: auto !important;
+            min-height: auto !important;
+            max-height: none !important;
+        }
+        html, body {
+            height: auto !important;
+            min-height: auto !important;
+            max-height: none !important;
+            overflow: visible !important;
         }
         body {
             background: #fff !important;
@@ -1969,9 +1978,13 @@ include 'includes/admin_nav.php';
         }
         
         /* Let timeline flow and prevent page-break cuts */
-        .timeline-track-container {
+        .timeline-track-container,
+        #st-timeline-list,
+        .dossier-main > div {
             overflow: visible !important;
             height: auto !important;
+            min-height: auto !important;
+            max-height: none !important;
         }
         .timeline-track-item {
             page-break-inside: avoid !important;
