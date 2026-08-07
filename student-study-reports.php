@@ -380,7 +380,12 @@ if (isset($_GET['action'])) {
             }
 
             $total_students = db_count($pdo, "SELECT COUNT(*) FROM users WHERE pepp_course = ? AND status = 'approved'", [$course_name]);
-            $active_students = db_count($pdo, "SELECT COUNT(*) FROM users WHERE pepp_course = ? AND status = 'approved' AND student_status = 'active'", [$course_name]);
+            $active_students = db_count($pdo, "
+                SELECT COUNT(DISTINCT u.email) 
+                FROM study_plan_analytics an 
+                JOIN users u ON an.student_email = u.email 
+                WHERE u.pepp_course = ? AND u.status = 'approved' AND an.created_at >= DATE_SUB(NOW(), INTERVAL 30 SECOND)
+            ", [$course_name]);
 
             $avg_comp = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
             $performance = get_performance_status($avg_comp);
@@ -710,24 +715,85 @@ if (isset($_GET['action'])) {
                     break;
                     
                 case 'active_students':
-                    $title = 'Active Enrolled Students';
-                    $headers = ['Student Name', 'Email', 'Course', 'Academic Year', 'Last Activity Status'];
+                    $title = 'Online & Active Enrolled Students';
+                    $headers = ['Student Name', 'Email', 'Course', 'Academic Year', 'Last Activity Status', 'Location Map'];
                     $stmt = $pdo->prepare("
                         SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year 
                         FROM users u 
-                        WHERE u.status = 'approved' AND u.student_status = 'active' AND $assigned_plans_subquery
-                        ORDER BY u.name ASC
+                        WHERE u.status = 'approved' AND $assigned_plans_subquery
                     ");
                     $stmt->execute();
                     $rows = $stmt->fetchAll();
+                    
+                    $student_rows = [];
                     foreach ($rows as $r) {
-                        $last = db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE student_email = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)", [$r['email']]);
+                        // Get latest activity log
+                        $stmt_act = $pdo->prepare("
+                            SELECT created_at, latitude, longitude 
+                            FROM study_plan_analytics 
+                            WHERE student_email = ? 
+                            ORDER BY created_at DESC LIMIT 1
+                        ");
+                        $stmt_act->execute([$r['email']]);
+                        $act = $stmt_act->fetch(PDO::FETCH_ASSOC);
+                        
+                        $is_online = false;
+                        $status_html = 'Never';
+                        $sort_weight = 0;
+                        $last_timestamp = 0;
+                        $map_html = '-';
+                        
+                        if ($act) {
+                            $last_time = $act['created_at'];
+                            $last_timestamp = strtotime($last_time);
+                            $diff = time() - $last_timestamp;
+                            
+                            if ($diff <= 30) {
+                                $is_online = true;
+                                $status_html = '<span class="badge green" style="font-size:0.7rem; font-weight:700; text-transform:uppercase;"><span class="pulse-dot" style="margin-right:4px; width:6px; height:6px;"></span>Online Now</span>';
+                                $sort_weight = 2; // online first
+                            } else {
+                                $status_html = time_ago($last_time);
+                                $sort_weight = 1; // offline second
+                            }
+                            
+                            if (!empty($act['latitude']) && !empty($act['longitude'])) {
+                                $map_html = '<a href="https://www.google.com/maps?q=' . urlencode($act['latitude'] . ',' . $act['longitude']) . '" target="_blank" title="View logged location"><i class="fas fa-map-marker-alt" style="color:#ef4444; font-size:1.1rem;"></i></a>';
+                            }
+                        }
+                        
+                        $student_rows[] = [
+                            'name' => r_esc($r['name']),
+                            'email' => format_credential_text($r['email'], 'email', 'student-study-reports'),
+                            'course' => r_esc($r['pepp_course']),
+                            'year' => r_esc($r['academic_year']),
+                            'status' => $status_html,
+                            'map' => $map_html,
+                            'sort_weight' => $sort_weight,
+                            'last_timestamp' => $last_timestamp,
+                            'raw_name' => $r['name']
+                        ];
+                    }
+                    
+                    // Sort by sort_weight desc, last_timestamp desc, name asc
+                    usort($student_rows, function($a, $b) {
+                        if ($b['sort_weight'] !== $a['sort_weight']) {
+                            return $b['sort_weight'] <=> $a['sort_weight'];
+                        }
+                        if ($b['last_timestamp'] !== $a['last_timestamp']) {
+                            return $b['last_timestamp'] <=> $a['last_timestamp'];
+                        }
+                        return strcasecmp($a['raw_name'], $b['raw_name']);
+                    });
+                    
+                    foreach ($student_rows as $row) {
                         $data[] = [
-                            r_esc($r['name']),
-                            format_credential_text($r['email'], 'email', 'student-study-reports'),
-                            r_esc($r['pepp_course']),
-                            r_esc($r['academic_year']),
-                            $last > 0 ? '<span class="badge green">Online Now</span>' : 'Offline'
+                            $row['name'],
+                            $row['email'],
+                            $row['course'],
+                            $row['year'],
+                            $row['status'],
+                            $row['map']
                         ];
                     }
                     break;
@@ -1043,7 +1109,12 @@ if ($source === 'courses') {
 
     $kpis = [
         'total_students' => db_count($pdo, "SELECT COUNT(*) FROM users u WHERE u.status = 'approved' AND $assigned_plans_subquery"),
-        'active_students' => db_count($pdo, "SELECT COUNT(*) FROM users u WHERE u.status = 'approved' AND u.student_status = 'active' AND $assigned_plans_subquery"),
+        'active_students' => db_count($pdo, "
+            SELECT COUNT(DISTINCT u.email) 
+            FROM study_plan_analytics an 
+            JOIN users u ON an.student_email = u.email 
+            WHERE u.status = 'approved' AND an.created_at >= DATE_SUB(NOW(), INTERVAL 30 SECOND) AND $assigned_plans_subquery
+        "),
         'total_courses' => db_count($pdo, "SELECT COUNT(DISTINCT u.pepp_course) FROM users u WHERE u.pepp_course IS NOT NULL AND u.pepp_course != '' AND u.status = 'approved' AND $assigned_plans_subquery"),
         'total_study_plans' => db_count($pdo, "SELECT COUNT(*) FROM study_plans"),
         'active_study_plans' => db_count($pdo, "SELECT COUNT(*) FROM study_plans WHERE status = 'published'"),
@@ -1426,7 +1497,7 @@ include 'includes/admin_nav.php';
                 <div class="kpi-icon green"><i class="fas fa-user-check"></i></div>
                 <div class="kpi-info">
                     <div class="kpi-value"><?php echo number_format($kpis['active_students']); ?></div>
-                    <div class="kpi-label">Active Students</div>
+                    <div class="kpi-label">Online Students</div>
                 </div>
             </div>
             <div class="kpi-card blue" id="card-total-courses">
@@ -1779,7 +1850,7 @@ include 'includes/admin_nav.php';
                 <label class="switch"><input type="checkbox" class="card-toggle" data-card-id="card-total-students" checked><span class="slider"></span></label>
             </div>
             <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="font-size:0.85rem; font-weight:600; color:var(--text-main);">Active Student Metrics</span>
+                <span style="font-size:0.85rem; font-weight:600; color:var(--text-main);">Online Student Metrics</span>
                 <label class="switch"><input type="checkbox" class="card-toggle" data-card-id="card-active-students" checked><span class="slider"></span></label>
             </div>
             <div style="display:flex; justify-content:space-between; align-items:center;">
