@@ -170,6 +170,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
                                 <?php $num = preg_replace('/[^0-9]/', '', $val); ?>
                                 <a href="https://wa.me/<?php echo $num; ?>" target="_blank" class="btn btn-sm btn-soft-green" style="padding:2px 8px; font-size:0.75rem;"><i class="fab fa-whatsapp"></i> Chat</a>
                             </div>
+                        <?php elseif (($ans['type'] === 'email' || strpos(strtolower($ans['label']), 'email') !== false) && !empty($val)): ?>
+                            <div style="font-size:0.95rem; font-weight:700; color:var(--text-main); display:flex; align-items:center; gap:8px;">
+                                <?php echo htmlspecialchars($val); ?>
+                                <button type="button" class="btn btn-sm btn-soft-blue" onclick="copyTextToClipboard('<?php echo addslashes($val); ?>', this)" style="padding:2px 8px; font-size:0.75rem; border:none; display:inline-flex; align-items:center; gap:4px; cursor:pointer;" title="Copy Email"><i class="fas fa-copy"></i> Copy</button>
+                            </div>
                         <?php elseif (!empty($val)): ?>
                             <div style="font-size:0.95rem; font-weight:700; color:var(--text-main); white-space:pre-line;">
                                 <?php echo htmlspecialchars($val); ?>
