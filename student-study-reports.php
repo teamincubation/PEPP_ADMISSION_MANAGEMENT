@@ -2958,6 +2958,15 @@ include 'includes/admin_nav.php';
         fetch(`?action=get_student_plan_timeline&email=${encodeURIComponent(email)}&plan_id=${planId}`)
             .then(res => res.json())
             .then(data => {
+                if (data.error) {
+                    timelineListContainer.innerHTML = `<div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i> <span>${data.error}</span></div>`;
+                    return;
+                }
+                if (!data.timeline) {
+                    timelineListContainer.innerHTML = `<div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i> <span>Invalid response structure from server.</span></div>`;
+                    return;
+                }
+
                 timelineActivities = data.timeline;
                 
                 // Calculate dynamic metrics
@@ -2987,8 +2996,9 @@ include 'includes/admin_nav.php';
                 circle.style.strokeDashoffset = strokeDashoffset;
                 document.getElementById('st-ring-percent-text').innerText = `${pct}%`;
                 
-                // Last activity log date
-                const lastLog = data.timeline.filter(t => t.completed_at !== '').sort((a,b) => new Date(b.completed_at) - new Date(a.completed_at))[0];
+                // Last activity log date safely computed
+                const completedLogs = data.timeline.filter(t => t.completed_at && t.completed_at !== '');
+                const lastLog = completedLogs.length > 0 ? completedLogs.sort((a,b) => new Date(b.completed_at) - new Date(a.completed_at))[0] : null;
                 const lastActiveText = lastLog ? lastLog.completed_at : 'Never';
                 document.getElementById('st-last-activity-date').innerText = lastActiveText;
 
