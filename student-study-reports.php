@@ -687,8 +687,18 @@ if (isset($_GET['action'])) {
         $activity_id = (int)($_GET['activity_id'] ?? 0);
         $course_name = trim($_GET['course_name'] ?? '');
         try {
+            $anal_cols = get_table_columns_safe($pdo, 'study_plan_analytics');
+            
+            $an_fields = ['an.created_at', 'an.ip_address'];
+            if (in_array('browser', $anal_cols)) $an_fields[] = 'an.browser';
+            if (in_array('device', $anal_cols)) $an_fields[] = 'an.device';
+            if (in_array('latitude', $anal_cols)) $an_fields[] = 'an.latitude';
+            if (in_array('longitude', $anal_cols)) $an_fields[] = 'an.longitude';
+            
+            $select_str = implode(', ', $an_fields);
+            
             $stmt = $pdo->prepare("
-                SELECT u.name, u.email, an.created_at, an.ip_address, an.browser, an.device, an.location_coords
+                SELECT u.name, u.email, {$select_str}
                 FROM study_plan_analytics an
                 JOIN users u ON an.student_email = u.email
                 WHERE an.activity_id = ? AND an.action_type = 'complete_activity' AND u.pepp_course = ? AND u.status = 'approved'
@@ -699,14 +709,19 @@ if (isset($_GET['action'])) {
 
             $data = [];
             foreach ($rows as $r) {
+                $location = 'N/A';
+                if (isset($r['latitude']) && isset($r['longitude']) && $r['latitude'] && $r['longitude']) {
+                    $location = $r['latitude'] . ',' . $r['longitude'];
+                }
+                
                 $data[] = [
                     'name' => r_esc($r['name']),
                     'masked_email' => format_credential_text($r['email'], 'email', 'student-study-reports'),
                     'completed_at' => date('d M Y h:i A', strtotime($r['created_at'])),
                     'ip' => $r['ip_address'] ?: 'N/A',
-                    'browser' => $r['browser'] ?: 'N/A',
-                    'device' => $r['device'] ?: 'N/A',
-                    'location' => $r['location_coords'] ?: 'N/A'
+                    'browser' => $r['browser'] ?? 'N/A',
+                    'device' => $r['device'] ?? 'N/A',
+                    'location' => $location
                 ];
             }
             echo json_encode($data);
@@ -3684,6 +3699,10 @@ include 'includes/admin_nav.php';
             .then(res => res.json())
             .then(data => {
                 tbody.innerHTML = '';
+                if (data.error) {
+                    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#ef4444; padding:2rem;"><i class="fas fa-circle-exclamation"></i> Error: ${data.error}</td></tr>`;
+                    return;
+                }
                 if (data.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">No students have completed this task yet.</td></tr>';
                     return;
@@ -3699,6 +3718,9 @@ include 'includes/admin_nav.php';
                         </tr>
                     `;
                 });
+            })
+            .catch(err => {
+                tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#ef4444; padding:2rem;"><i class="fas fa-circle-exclamation"></i> Failed to parse server response.</td></tr>`;
             });
     }
 
@@ -3740,6 +3762,10 @@ include 'includes/admin_nav.php';
             .then(res => res.json())
             .then(data => {
                 tbody.innerHTML = '';
+                if (data.error) {
+                    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#ef4444; padding:2rem;"><i class="fas fa-circle-exclamation"></i> Error: ${data.error}</td></tr>`;
+                    return;
+                }
                 if (data.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#10b981; font-weight:700;"><i class="fas fa-check-double"></i> All students have completed this task!</td></tr>';
                     return;
@@ -3761,6 +3787,9 @@ include 'includes/admin_nav.php';
                         </tr>
                     `;
                 });
+            })
+            .catch(err => {
+                tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#ef4444; padding:2rem;"><i class="fas fa-circle-exclamation"></i> Failed to parse server response.</td></tr>`;
             });
     }
 
