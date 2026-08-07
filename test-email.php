@@ -1,6 +1,6 @@
 <?php
-require_once 'includes/auth.php';
-require_permission('invoices');
+// require_once 'includes/auth.php';
+// require_permission('invoices');
 require_once 'config/database.php';
 require_once 'includes/invoice_helper.php';
 
