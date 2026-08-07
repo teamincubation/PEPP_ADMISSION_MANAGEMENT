@@ -1647,7 +1647,7 @@ include 'includes/admin_nav.php';
                 <div class="kpi-icon amber"><i class="fas fa-folder-open"></i></div>
                 <div class="kpi-info">
                     <div class="kpi-value"><?php echo number_format($kpis['active_study_plans']); ?></div>
-                    <div class="kpi-label">Active Plans</div>
+                    <div class="kpi-label">TOTAL STUDY PLANS</div>
                 </div>
             </div>
             <div class="kpi-card indigo" id="card-checklist-completions">
@@ -1662,13 +1662,6 @@ include 'includes/admin_nav.php';
                 <div class="kpi-info">
                     <div class="kpi-value"><?php echo $kpis['attendance_pct']; ?>%</div>
                     <div class="kpi-label">Attendance Rate</div>
-                </div>
-            </div>
-            <div class="kpi-card blue" id="card-weekly-active">
-                <div class="kpi-icon blue"><i class="fas fa-chart-line"></i></div>
-                <div class="kpi-info">
-                    <div class="kpi-value"><?php echo number_format($kpis['active_weekly']); ?></div>
-                    <div class="kpi-label">Weekly Active</div>
                 </div>
             </div>
             <div class="kpi-card amber" id="card-leads-converted">
@@ -1697,13 +1690,6 @@ include 'includes/admin_nav.php';
                 <div class="kpi-info">
                     <div class="kpi-value"><?php echo number_format($kpis['certificates']); ?></div>
                     <div class="kpi-label">Certificates</div>
-                </div>
-            </div>
-            <div class="kpi-card blue" id="card-engagement-score">
-                <div class="kpi-icon blue"><i class="fas fa-brain"></i></div>
-                <div class="kpi-info">
-                    <div class="kpi-value"><?php echo $kpis['engagement_score']; ?>/100</div>
-                    <div class="kpi-label">Engagement</div>
                 </div>
             </div>
         </div>
@@ -1994,7 +1980,7 @@ include 'includes/admin_nav.php';
                 <label class="switch"><input type="checkbox" class="card-toggle" data-card-id="card-total-courses" checked><span class="slider"></span></label>
             </div>
             <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="font-size:0.85rem; font-weight:600; color:var(--text-main);">Active Study Plans</span>
+                <span style="font-size:0.85rem; font-weight:600; color:var(--text-main);">Total Study Plans</span>
                 <label class="switch"><input type="checkbox" class="card-toggle" data-card-id="card-active-plans" checked><span class="slider"></span></label>
             </div>
             <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -2004,10 +1990,6 @@ include 'includes/admin_nav.php';
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="font-size:0.85rem; font-weight:600; color:var(--text-main);">Attendance Rate Metrics</span>
                 <label class="switch"><input type="checkbox" class="card-toggle" data-card-id="card-attendance" checked><span class="slider"></span></label>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="font-size:0.85rem; font-weight:600; color:var(--text-main);">Weekly Active Audits</span>
-                <label class="switch"><input type="checkbox" class="card-toggle" data-card-id="card-weekly-active" checked><span class="slider"></span></label>
             </div>
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="font-size:0.85rem; font-weight:600; color:var(--text-main);">Leads Converted Stats</span>
@@ -2024,10 +2006,6 @@ include 'includes/admin_nav.php';
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="font-size:0.85rem; font-weight:600; color:var(--text-main);">Issued Certificates</span>
                 <label class="switch"><input type="checkbox" class="card-toggle" data-card-id="card-certificates" checked><span class="slider"></span></label>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="font-size:0.85rem; font-weight:600; color:var(--text-main);">User Engagement Score</span>
-                <label class="switch"><input type="checkbox" class="card-toggle" data-card-id="card-engagement-score" checked><span class="slider"></span></label>
             </div>
         </div>
     </div>
@@ -2219,12 +2197,10 @@ include 'includes/admin_nav.php';
             { id: 'card-active-plans', key: 'active_plans' },
             { id: 'card-checklist-completions', key: 'task_completions' },
             { id: 'card-attendance', key: 'attendance_rate' },
-            { id: 'card-weekly-active', key: 'weekly_active' },
             { id: 'card-leads-converted', key: 'leads_converted' },
             { id: 'card-mock-tests', key: 'mock_tests' },
             { id: 'card-live-sessions', key: 'live_sessions' },
-            { id: 'card-certificates', key: 'certificates' },
-            { id: 'card-engagement-score', key: 'engagement_score' }
+            { id: 'card-certificates', key: 'certificates' }
         ];
 
         cards.forEach(c => {
