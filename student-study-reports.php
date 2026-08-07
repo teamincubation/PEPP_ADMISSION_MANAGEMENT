@@ -145,7 +145,7 @@ if (isset($_GET['action'])) {
                     $title = 'Total Registered Students with Study Plans';
                     $headers = ['Student Name', 'Email', 'Course', 'Academic Year', 'Plans Assigned'];
                     $stmt = $pdo->prepare("
-                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.academic_year 
+                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year 
                         FROM users u 
                         WHERE u.status = 'approved' AND $assigned_plans_subquery
                         ORDER BY u.name ASC
@@ -178,7 +178,7 @@ if (isset($_GET['action'])) {
                     $title = 'Active Enrolled Students';
                     $headers = ['Student Name', 'Email', 'Course', 'Academic Year', 'Last Active Checklist'];
                     $stmt = $pdo->prepare("
-                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.academic_year 
+                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year 
                         FROM users u 
                         WHERE u.status = 'approved' AND u.student_status = 'active' AND $assigned_plans_subquery
                         ORDER BY u.name ASC
@@ -307,7 +307,7 @@ if (isset($_GET['action'])) {
                         FROM users u
                         JOIN study_plan_analytics an ON u.email = an.student_email
                         WHERE u.status = 'approved' AND an.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND $assigned_plans_subquery
-                        GROUP BY u.email
+                        GROUP BY u.email, u.name, u.pepp_course
                         ORDER BY last_action DESC
                     ");
                     $stmt->execute();
@@ -351,7 +351,7 @@ if (isset($_GET['action'])) {
                     $title = 'Engagement Leaderboard Analysis';
                     $headers = ['Student Name', 'Course', 'Tasks Assigned', 'Completions count', 'Completion Rate'];
                     $stmt = $pdo->prepare("
-                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.academic_year
+                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year
                         FROM users u 
                         WHERE u.status = 'approved' AND $assigned_plans_subquery
                     ");
@@ -988,7 +988,7 @@ $assigned_plans_subquery = "
         WHERE sp.status = 'published' AND (
             sa.assignment_type = 'all' OR
             (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
-            (sa.assignment_type = 'batch' AND sa.assigned_value = u.academic_year) OR
+            (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
             (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
             (sa.assignment_type = 'form' AND EXISTS (
                 SELECT 1 FROM campaign_form_submissions s 
@@ -1001,7 +1001,7 @@ $assigned_plans_subquery = "
 if ($selected_form_id) {
     try {
         $stmt = $pdo->prepare("
-            SELECT DISTINCT u.user_id, u.name, u.email, u.pepp_course, u.academic_year, u.phone 
+            SELECT DISTINCT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year, u.phone 
             FROM users u 
             JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
             WHERE s.form_id = ? AND u.status = 'approved' AND $assigned_plans_subquery
@@ -1079,7 +1079,7 @@ if ($selected_form_id) {
 } elseif ($selected_course) {
     try {
         $stmt = $pdo->prepare("
-            SELECT u.user_id, u.name, u.email, u.pepp_course, u.academic_year, u.phone 
+            SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year, u.phone 
             FROM users u 
             WHERE u.pepp_course = ? AND u.status = 'approved' AND $assigned_plans_subquery
             ORDER BY u.name ASC
@@ -1895,29 +1895,6 @@ include 'includes/admin_nav.php';
             </div>
         </div>
 
-        <!-- 2.5 KPI Drilldown Details Section -->
-        <div id="kpi-drilldown-container" class="chart-card" style="display:none; margin-bottom:1.5rem; transition: all 0.3s ease;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; border-bottom: 1.5px solid var(--border); padding-bottom:10px;">
-                <h4 id="kpi-drilldown-title" style="font-family:var(--header-font); font-weight:800; font-size:1.05rem; color:var(--text-main); margin:0;">
-                    <i class="fas fa-chart-line" style="color:var(--accent); margin-right:8px;"></i>
-                    KPI Drilldown Details
-                </h4>
-                <button class="btn btn-outline btn-sm" onclick="closeKPIDrilldown()" style="padding: 4px 8px; font-size:0.75rem;"><i class="fas fa-times"></i> Close Details</button>
-            </div>
-            <div style="overflow-x:auto;">
-                <table class="table table-hover" id="kpi-drilldown-table" style="width:100%; border-collapse: collapse; font-size: 0.85rem;">
-                    <thead>
-                        <tr id="kpi-drilldown-headers" style="background:#f8fafc; border-bottom:2px solid #e2e8f0; text-align:left;">
-                            <!-- dynamically populated -->
-                        </tr>
-                    </thead>
-                    <tbody id="kpi-drilldown-body">
-                        <!-- dynamically populated -->
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
         <!-- 3. Main Dashboard Workspace Layout -->
         <div class="dashboard-layout">
             <!-- Left advanced sidebar filters -->
@@ -2014,17 +1991,40 @@ include 'includes/admin_nav.php';
 
             <!-- Right Workspace content blocks -->
             <div>
-                <!-- View Selector Tabs -->
-                <div class="view-tabs">
-                    <button class="view-tab-btn active" onclick="switchView('dashboard-view', this)"><i class="fas fa-chart-column"></i> Dashboard Overview</button>
-                    <button class="view-tab-btn" onclick="switchView('students-view', this)"><i class="fas fa-users-viewfinder"></i> Student Table</button>
-                    <button class="view-tab-btn" onclick="switchView('courses-view', this)"><i class="fas fa-book-bookmark"></i> Course Progress</button>
-                    <button class="view-tab-btn" onclick="switchView('faculties-view', this)"><i class="fas fa-user-tie"></i> Faculty Performance</button>
-                    <button class="view-tab-btn" id="study-plan-tab-btn" onclick="switchView('study-plan-view', this)" style="display:none;"><i class="fas fa-list-check"></i> Study Plan Report</button>
+                <!-- Dynamic Analytics Workspace Viewport -->
+                
+                <!-- Welcome Viewport Placeholder -->
+                <div id="viewport-placeholder" class="chart-card" style="text-align:center; padding:4rem; color:var(--text-muted); border:1px dashed var(--border); border-radius:16px; background:#fafafa;">
+                    <i class="fas fa-chart-line" style="font-size:3rem; color:var(--accent); margin-bottom:12px; opacity:0.8;"></i>
+                    <h4 style="margin:0; font-family:var(--header-font); font-weight:800; color:var(--text-main); font-size:1.2rem;">PEPP Analytics Dashboard</h4>
+                    <p style="margin:6px 0 0 0; font-size:0.85rem;">Click any active metrics card above to display its detailed graphs, tables, and analysis.</p>
+                </div>
+
+                <!-- 2.5 KPI Drilldown Details Section -->
+                <div id="kpi-drilldown-container" class="chart-card" style="display:none; margin-bottom:1.5rem; transition: all 0.3s ease;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; border-bottom: 1.5px solid var(--border); padding-bottom:10px;">
+                        <h4 id="kpi-drilldown-title" style="font-family:var(--header-font); font-weight:800; font-size:1.05rem; color:var(--text-main); margin:0;">
+                            <i class="fas fa-chart-line" style="color:var(--accent); margin-right:8px;"></i>
+                            KPI Drilldown Details
+                        </h4>
+                        <button class="btn btn-outline btn-sm" onclick="closeKPIDrilldown()" style="padding: 4px 8px; font-size:0.75rem;"><i class="fas fa-times"></i> Close Details</button>
+                    </div>
+                    <div style="overflow-x:auto;">
+                        <table class="table table-hover" id="kpi-drilldown-table" style="width:100%; border-collapse: collapse; font-size: 0.85rem;">
+                            <thead style="position: sticky; top: 0; background: var(--card-bg); z-index: 1;">
+                                <tr id="kpi-drilldown-headers" style="background:#f8fafc; border-bottom:2px solid #e2e8f0; text-align:left;">
+                                    <!-- dynamically populated -->
+                                </tr>
+                            </thead>
+                            <tbody id="kpi-drilldown-body">
+                                <!-- dynamically populated -->
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
                 <!-- 1. Dashboard View Workspace -->
-                <div id="dashboard-view" class="view-container">
+                <div id="dashboard-view" class="view-container" style="display:none;">
                     <!-- Charts Row -->
                     <div class="widget-container" style="grid-template-columns: 1fr 1fr 1fr;">
                         <div class="chart-card">
@@ -2262,6 +2262,43 @@ include 'includes/admin_nav.php';
                         </div>
                     </div>
                 </div>
+                <!-- 5. Study Plan Report View Panel -->
+                <div id="study-plan-view" class="view-container" style="display:none;">
+                    <div class="chart-card">
+                        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid var(--border); padding-bottom:12px; margin-bottom:15px; flex-wrap:wrap; gap:8px;">
+                            <div>
+                                <h4 id="sp-report-title" style="font-family:var(--header-font); font-weight:800; font-size:1.1rem; color:var(--text-main); margin:0;">
+                                    <i class="fas fa-list-check" style="color:var(--accent); margin-right:6px;"></i>
+                                    Study Plan Report
+                                </h4>
+                                <p id="sp-report-subtitle" style="font-size:0.78rem; color:var(--text-muted); margin:4px 0 0 0;"></p>
+                            </div>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <input type="text" id="sp-students-search" class="modern-input" style="width:220px;" placeholder="Search students in plan..." onkeyup="searchStudyPlanStudentsTable()">
+                                <button class="btn btn-outline btn-sm" onclick="closeStudyPlanReport()" style="padding: 6px 12px; font-weight: 700;"><i class="fas fa-times"></i> Close Report</button>
+                            </div>
+                        </div>
+                        
+                        <div class="table-responsive" style="border:1.5px solid var(--border); border-radius:12px; overflow-x:auto;">
+                            <table class="data-table" id="sp-students-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+                                <thead>
+                                    <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:#f8fafc;">
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted); width:60px;">Sl.</th>
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted);">Student Details</th>
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted); text-align:center;">Total Tasks</th>
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted);">Completed Tasks</th>
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted);">Pending Tasks</th>
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted);">Status</th>
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted); text-align:right; width:120px;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="sp-students-tbody">
+                                    <!-- Populated dynamically via AJAX -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -2394,43 +2431,6 @@ include 'includes/admin_nav.php';
                             </div>
                         <?php endif; ?>
                     <?php endif; ?>
-                </div>
-
-                <!-- 5. Study Plan Report View Panel -->
-                <div id="study-plan-view" class="view-container" style="display:none;">
-                    <div class="chart-card">
-                        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid var(--border); padding-bottom:12px; margin-bottom:15px; flex-wrap:wrap; gap:8px;">
-                            <div>
-                                <h4 id="sp-report-title" style="font-family:var(--header-font); font-weight:800; font-size:1.1rem; color:var(--text-main); margin:0;">
-                                    <i class="fas fa-list-check" style="color:var(--accent); margin-right:6px;"></i>
-                                    Study Plan Report
-                                </h4>
-                                <p id="sp-report-subtitle" style="font-size:0.78rem; color:var(--text-muted); margin:4px 0 0 0;"></p>
-                            </div>
-                            <div style="display:flex; gap:8px; align-items:center;">
-                                <input type="text" id="sp-students-search" class="modern-input" style="width:220px;" placeholder="Search students in plan..." onkeyup="searchStudyPlanStudentsTable()">
-                            </div>
-                        </div>
-                        
-                        <div class="table-responsive" style="border:1.5px solid var(--border); border-radius:12px; overflow-x:auto;">
-                            <table class="data-table" id="sp-students-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
-                                <thead>
-                                    <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:#f8fafc;">
-                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted); width:60px;">Sl.</th>
-                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted);">Student Details</th>
-                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted); text-align:center;">Total Tasks</th>
-                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted);">Completed Tasks</th>
-                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted);">Pending Tasks</th>
-                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted);">Status</th>
-                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted); text-align:right; width:120px;">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="sp-students-tbody">
-                                    <!-- Populated dynamically via AJAX -->
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
                 </div>
             </div>
         <?php endif; ?>
@@ -2705,10 +2705,7 @@ include 'includes/admin_nav.php';
 
     function loadStudyPlanReport(planId, element) {
         activePlanId = planId;
-        
-        // Show loading state
-        const tbody = document.getElementById('sp-students-tbody');
-        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:3rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent); margin-bottom:8px;"></i><p style="margin:0; font-size:0.85rem; color:var(--text-muted);">Fetching study plan report analysis...</p></td></tr>`;
+        hideAllViewportViews();
         
         // Highlight active list item
         document.querySelectorAll('.nested-plan-item').forEach(el => {
@@ -2718,12 +2715,16 @@ include 'includes/admin_nav.php';
         element.style.background = 'var(--accent-soft)';
         element.style.borderColor = 'var(--accent)';
 
-        // Open/Show the tab button
-        const tabBtn = document.getElementById('study-plan-tab-btn');
-        tabBtn.style.display = 'inline-block';
-        
-        // Switch to the view
-        switchView('study-plan-view', tabBtn);
+        // Open/Show the view
+        const view = document.getElementById('study-plan-view');
+        if (view) {
+            view.style.display = 'block';
+            view.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        // Show loading state
+        const tbody = document.getElementById('sp-students-tbody');
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:3rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent); margin-bottom:8px;"></i><p style="margin:0; font-size:0.85rem; color:var(--text-muted);">Fetching study plan report analysis...</p></td></tr>`;
 
         // Fetch via AJAX
         fetch(`?action=get_study_plan_students&plan_id=${planId}`)
@@ -3079,7 +3080,61 @@ include 'includes/admin_nav.php';
         });
     }
 
+    function hideAllViewportViews() {
+        const placeholder = document.getElementById('viewport-placeholder');
+        if (placeholder) placeholder.style.display = 'none';
+        
+        const views = ['dashboard-view', 'students-view', 'courses-view', 'faculties-view', 'study-plan-view', 'kpi-drilldown-container'];
+        views.forEach(v => {
+            const el = document.getElementById(v);
+            if (el) el.style.display = 'none';
+        });
+    }
+
+    function closeStudyPlanReport() {
+        hideAllViewportViews();
+        const placeholder = document.getElementById('viewport-placeholder');
+        if (placeholder) placeholder.style.display = 'block';
+        
+        document.querySelectorAll('.nested-plan-item').forEach(el => {
+            el.style.background = '#f8fafc';
+            el.style.borderColor = '#e2e8f0';
+        });
+    }
+
     function loadKPIDrilldown(kpiKey) {
+        hideAllViewportViews();
+
+        // 1. Check if the key maps to a predefined full view
+        if (kpiKey === 'total_students' || kpiKey === 'active_students') {
+            const view = document.getElementById('students-view');
+            if (view) {
+                view.style.display = 'block';
+                view.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+            return;
+        }
+
+        if (kpiKey === 'total_courses') {
+            const view = document.getElementById('courses-view');
+            if (view) {
+                view.style.display = 'block';
+                view.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+            return;
+        }
+
+        if (kpiKey === 'task_completions' || kpiKey === 'engagement_score' || kpiKey === 'attendance_rate' || kpiKey === 'weekly_active') {
+            const view = document.getElementById('dashboard-view');
+            if (view) {
+                view.style.display = 'block';
+                view.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                renderDashboardCharts();
+            }
+            return;
+        }
+
+        // 2. Otherwise, fetch AJAX drilldown details and render inside kpi-drilldown-container
         const container = document.getElementById('kpi-drilldown-container');
         const titleEl = document.getElementById('kpi-drilldown-title');
         const headersEl = document.getElementById('kpi-drilldown-headers');
@@ -3128,8 +3183,9 @@ include 'includes/admin_nav.php';
     }
 
     function closeKPIDrilldown() {
-        const container = document.getElementById('kpi-drilldown-container');
-        if (container) container.style.display = 'none';
+        hideAllViewportViews();
+        const placeholder = document.getElementById('viewport-placeholder');
+        if (placeholder) placeholder.style.display = 'block';
         
         // Remove active highlight class from all KPI cards
         const cards = [
