@@ -3,7 +3,9 @@ require_once 'includes/auth.php';
 require_once 'config/database.php';
 require_once 'includes/file_helper.php';
 
-require_permission('cards');
+if (!can_access('cards') && !can_access('card-templates')) {
+    require_permission('cards');
+}
 
 try {
     $pdo->exec("CREATE TABLE IF NOT EXISTS clipart_images (
@@ -18,6 +20,13 @@ $success_message = '';
 $error_message = '';
 
 // ── Action: Upload Custom Font ────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!can_access('card-templates')) {
+        $error_message = 'Access Denied. You do not have permission to modify card templates or assets.';
+        $_POST = [];
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'upload_font') {
     if (!csrf_verify()) {
         $error_message = 'Security token mismatch. Please retry.';
@@ -302,6 +311,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // ── Load Templates, Categories, and Fonts ────────────
 $active_tab = $_GET['tab'] ?? 'generate'; // 'generate' or 'templates'
+if ($active_tab === 'templates' && !can_access('card-templates')) {
+    $active_tab = 'generate';
+}
+if ($active_tab === 'generate' && !can_access('cards')) {
+    $active_tab = 'templates';
+}
 $search_q = trim($_GET['search'] ?? '');
 $cat_filter = trim($_GET['category'] ?? '');
 
@@ -480,11 +495,15 @@ include 'includes/admin_nav.php';
 <?php if ($error_message):   ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($error_message); ?></span></div><?php endif; ?>
 
 <div class="tab-row">
-    <a href="cards.php?tab=generate" class="tab-btn <?php echo $active_tab === 'generate' ? 'active' : ''; ?>"><i class="fas fa-magic"></i> Generate Cards</a>
-    <a href="cards.php?tab=templates" class="tab-btn <?php echo $active_tab === 'templates' ? 'active' : ''; ?>"><i class="fas fa-layer-group"></i> Card Templates</a>
+    <?php if (can_access('cards')): ?>
+        <a href="cards.php?tab=generate" class="tab-btn <?php echo $active_tab === 'generate' ? 'active' : ''; ?>"><i class="fas fa-magic"></i> Generate Cards</a>
+    <?php endif; ?>
+    <?php if (can_access('card-templates')): ?>
+        <a href="cards.php?tab=templates" class="tab-btn <?php echo $active_tab === 'templates' ? 'active' : ''; ?>"><i class="fas fa-layer-group"></i> Card Templates</a>
+    <?php endif; ?>
 </div>
 
-<div class="cards-layout">
+<div class="cards-layout" <?php if (!can_access('card-templates')) echo 'style="grid-template-columns: 1fr;"'; ?>>
     <!-- Left Area: Active View -->
     <div>
         <!-- Search Bar & Categories -->
@@ -545,7 +564,9 @@ include 'includes/admin_nav.php';
                                 </div>
                                 <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.75rem; color:#64748b;">
                                     <span><?php echo $tpl['canvas_width'] . 'x' . $tpl['canvas_height']; ?> px</span>
-                                    <a href="cards-generate.php?template_id=<?php echo (int)$tpl['id']; ?>" class="btn btn-sm btn-primary" style="padding: 4px 10px; font-size: 0.75rem;"><i class="fas fa-magic"></i> Generate</a>
+                                    <?php if (can_access('cards')): ?>
+                                        <a href="cards-generate.php?template_id=<?php echo (int)$tpl['id']; ?>" class="btn btn-sm btn-primary" style="padding: 4px 10px; font-size: 0.75rem;"><i class="fas fa-magic"></i> Generate</a>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         </div>
@@ -586,14 +607,16 @@ include 'includes/admin_nav.php';
                                     <p class="tpl-desc"><?php echo htmlspecialchars($tpl['description'] ?: 'Personalized card design.'); ?></p>
                                 </div>
                                 <div style="display:flex; gap:6px; align-items:center; font-size:0.75rem;">
-                                    <a href="cards-edit.php?id=<?php echo (int)$tpl['id']; ?>" class="btn btn-sm btn-outline" style="padding:4px 8px; font-size:0.72rem; flex:1; text-align:center;"><i class="fas fa-edit"></i> Edit</a>
-                                    <button type="button" class="btn btn-sm btn-soft-violet" style="padding:4px 8px; font-size:0.72rem; flex:1; text-align:center;" onclick="openCloneModal(<?php echo (int)$tpl['id']; ?>, <?php echo htmlspecialchars(json_encode($tpl['title']), ENT_QUOTES, 'UTF-8'); ?>)"><i class="fas fa-copy"></i> Clone</button>
-                                    <form method="POST" onsubmit="return confirm('Are you sure you want to delete this template?');" style="flex:1;">
-                                        <?php echo csrf_field(); ?>
-                                        <input type="hidden" name="action" value="delete_template">
-                                        <input type="hidden" name="template_id" value="<?php echo (int)$tpl['id']; ?>">
-                                        <button type="submit" class="btn btn-sm btn-soft-red" style="padding:4px 8px; font-size:0.72rem; width:100%;"><i class="fas fa-trash"></i> Delete</button>
-                                    </form>
+                                    <?php if (can_access('card-templates')): ?>
+                                        <a href="cards-edit.php?id=<?php echo (int)$tpl['id']; ?>" class="btn btn-sm btn-outline" style="padding:4px 8px; font-size:0.72rem; flex:1; text-align:center;"><i class="fas fa-edit"></i> Edit</a>
+                                        <button type="button" class="btn btn-sm btn-soft-violet" style="padding:4px 8px; font-size:0.72rem; flex:1; text-align:center;" onclick="openCloneModal(<?php echo (int)$tpl['id']; ?>, <?php echo htmlspecialchars(json_encode($tpl['title']), ENT_QUOTES, 'UTF-8'); ?>)"><i class="fas fa-copy"></i> Clone</button>
+                                        <form method="POST" onsubmit="return confirm('Are you sure you want to delete this template?');" style="flex:1;">
+                                            <?php echo csrf_field(); ?>
+                                            <input type="hidden" name="action" value="delete_template">
+                                            <input type="hidden" name="template_id" value="<?php echo (int)$tpl['id']; ?>">
+                                            <button type="submit" class="btn btn-sm btn-soft-red" style="padding:4px 8px; font-size:0.72rem; width:100%;"><i class="fas fa-trash"></i> Delete</button>
+                                        </form>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         </div>
@@ -603,137 +626,139 @@ include 'includes/admin_nav.php';
         <?php endif; ?>
     </div>
 
-    <!-- Right Area: Sidebar for Fonts -->
-    <div>
-        <div class="panel">
-            <div class="panel-head">
-                <h3><i class="fas fa-font" style="color:var(--accent);"></i> Custom Fonts</h3>
-            </div>
-            <div class="panel-body">
-                <form method="POST" enctype="multipart/form-data" style="margin-bottom: 20px;">
-                    <?php echo csrf_field(); ?>
-                    <input type="hidden" name="action" value="upload_font">
-                    <div class="field full">
-                        <label>Font Name</label>
-                        <input type="text" name="font_name" placeholder="e.g. Montserrat Bold" required>
-                    </div>
-                    <div class="field full">
-                        <label>File (.ttf, .otf, .woff)</label>
-                        <input type="file" name="font_file" accept=".ttf,.otf,.woff,.woff2" required>
-                    </div>
-                    <button type="submit" class="btn btn-sm btn-primary" style="width:100%;"><i class="fas fa-upload"></i> Upload Font</button>
-                </form>
+    <?php if (can_access('card-templates')): ?>
+        <!-- Right Area: Sidebar for Fonts -->
+        <div>
+            <div class="panel">
+                <div class="panel-head">
+                    <h3><i class="fas fa-font" style="color:var(--accent);"></i> Custom Fonts</h3>
+                </div>
+                <div class="panel-body">
+                    <form method="POST" enctype="multipart/form-data" style="margin-bottom: 20px;">
+                        <?php echo csrf_field(); ?>
+                        <input type="hidden" name="action" value="upload_font">
+                        <div class="field full">
+                            <label>Font Name</label>
+                            <input type="text" name="font_name" placeholder="e.g. Montserrat Bold" required>
+                        </div>
+                        <div class="field full">
+                            <label>File (.ttf, .otf, .woff)</label>
+                            <input type="file" name="font_file" accept=".ttf,.otf,.woff,.woff2" required>
+                        </div>
+                        <button type="submit" class="btn btn-sm btn-primary" style="width:100%;"><i class="fas fa-upload"></i> Upload Font</button>
+                    </form>
 
-                <h4 style="font-size:0.8rem; font-weight:700; color:#475569; margin:15px 0 8px 0; border-bottom:1px solid #e2e8f0; padding-bottom:4px;">Installed Fonts</h4>
-                <?php if (empty($fonts)): ?>
-                    <div style="text-align:center; padding:15px 0; font-size:0.8rem; color:#94a3b8;"><p>No custom fonts uploaded yet.</p></div>
-                <?php else: foreach ($fonts as $f): ?>
-                    <div class="font-list-item">
-                        <span><strong><?php echo htmlspecialchars($f['font_name']); ?></strong></span>
-                        <div style="display:flex; align-items:center; gap:8px;">
-                            <span style="font-size:0.7rem; color:#94a3b8;"><?php echo strtoupper(pathinfo($f['font_file'], PATHINFO_EXTENSION)); ?></span>
-                            <form method="POST" onsubmit="return confirm('Are you sure you want to delete this font?');" style="margin:0;">
+                    <h4 style="font-size:0.8rem; font-weight:700; color:#475569; margin:15px 0 8px 0; border-bottom:1px solid #e2e8f0; padding-bottom:4px;">Installed Fonts</h4>
+                    <?php if (empty($fonts)): ?>
+                        <div style="text-align:center; padding:15px 0; font-size:0.8rem; color:#94a3b8;"><p>No custom fonts uploaded yet.</p></div>
+                    <?php else: foreach ($fonts as $f): ?>
+                        <div class="font-list-item">
+                            <span><strong><?php echo htmlspecialchars($f['font_name']); ?></strong></span>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="font-size:0.7rem; color:#94a3b8;"><?php echo strtoupper(pathinfo($f['font_file'], PATHINFO_EXTENSION)); ?></span>
+                                <form method="POST" onsubmit="return confirm('Are you sure you want to delete this font?');" style="margin:0;">
+                                    <?php echo csrf_field(); ?>
+                                    <input type="hidden" name="action" value="delete_font">
+                                    <input type="hidden" name="font_id" value="<?php echo (int)$f['id']; ?>">
+                                    <button type="submit" style="background:none; border:none; color:#ef4444; cursor:pointer; padding:0; font-size:0.85rem; line-height:1;" title="Delete Font"><i class="fas fa-trash"></i></button>
+                                </form>
+                            </div>
+                        </div>
+                    <?php endforeach; endif; ?>
+                </div>
+            </div>
+
+            <div class="panel" style="margin-top: 15px;">
+                <div class="panel-head">
+                    <h3><i class="fas fa-university" style="color:var(--accent);"></i> University Logos</h3>
+                </div>
+                <div class="panel-body">
+                    <form method="POST" enctype="multipart/form-data" style="margin-bottom: 20px;">
+                        <?php echo csrf_field(); ?>
+                        <input type="hidden" name="action" value="upload_logo">
+                        <div class="field full">
+                            <label>University Name</label>
+                            <input type="text" name="univ_name" placeholder="e.g. Calicut University" required>
+                        </div>
+                        <div class="field full">
+                            <label>Logo File (.png, .jpg, .jpeg)</label>
+                            <input type="file" name="logo_file" accept=".png,.jpg,.jpeg" required>
+                        </div>
+                        <div class="prop-group" style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                            <div class="field">
+                                <label>Width (px)</label>
+                                <input type="number" name="univ_width" value="150" required>
+                            </div>
+                            <div class="field">
+                                <label>Height (px)</label>
+                                <input type="number" name="univ_height" value="150" required>
+                            </div>
+                        </div>
+                        <div class="field full" style="margin-top:6px;">
+                            <label>Resolution (DPI)</label>
+                            <input type="number" name="univ_dpi" value="72" required>
+                        </div>
+                        <button type="submit" class="btn btn-sm btn-primary" style="width:100%; margin-top:10px;"><i class="fas fa-upload"></i> Upload Logo</button>
+                    </form>
+
+                    <h4 style="font-size:0.8rem; font-weight:700; color:#475569; margin:15px 0 8px 0; border-bottom:1px solid #e2e8f0; padding-bottom:4px;">Preset Logos</h4>
+                    <?php if (empty($logos)): ?>
+                        <div style="text-align:center; padding:15px 0; font-size:0.8rem; color:#94a3b8;"><p>No preset logos uploaded yet.</p></div>
+                    <?php else: foreach ($logos as $l): ?>
+                        <div class="font-list-item" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #f1f5f9; padding:6px 0;">
+                            <div>
+                                <span style="font-size:0.8rem; font-weight:700; display:block;"><?php echo htmlspecialchars($l['name']); ?></span>
+                                <span style="font-size:0.65rem; color:#94a3b8;"><?php echo $l['width'] . 'x' . $l['height'] . ' px @ ' . $l['dpi'] . ' DPI'; ?></span>
+                            </div>
+                            <form method="POST" onsubmit="return confirm('Are you sure you want to delete this logo?');" style="margin:0;">
                                 <?php echo csrf_field(); ?>
-                                <input type="hidden" name="action" value="delete_font">
-                                <input type="hidden" name="font_id" value="<?php echo (int)$f['id']; ?>">
-                                <button type="submit" style="background:none; border:none; color:#ef4444; cursor:pointer; padding:0; font-size:0.85rem; line-height:1;" title="Delete Font"><i class="fas fa-trash"></i></button>
+                                <input type="hidden" name="action" value="delete_logo">
+                                <input type="hidden" name="logo_id" value="<?php echo (int)$l['id']; ?>">
+                                <button type="submit" style="background:none; border:none; color:#ef4444; cursor:pointer; padding:0; font-size:0.85rem; line-height:1;" title="Delete Logo"><i class="fas fa-trash"></i></button>
                             </form>
                         </div>
-                    </div>
-                <?php endforeach; endif; ?>
+                    <?php endforeach; endif; ?>
+                </div>
+            </div>
+            <div class="panel" style="margin-top: 15px;">
+                <div class="panel-head">
+                    <h3><i class="fas fa-shapes" style="color:var(--accent);"></i> Clipart Images</h3>
+                </div>
+                <div class="panel-body">
+                    <form method="POST" enctype="multipart/form-data" style="margin-bottom: 20px;">
+                        <?php echo csrf_field(); ?>
+                        <input type="hidden" name="action" value="upload_clipart">
+                        <div class="field full">
+                            <label>Clipart Name</label>
+                            <input type="text" name="clipart_name" placeholder="e.g. Star Logo" required>
+                        </div>
+                        <div class="field full">
+                            <label>Image File (.png, .jpg, .jpeg)</label>
+                            <input type="file" name="clipart_file" accept=".png,.jpg,.jpeg" required>
+                        </div>
+                        <button type="submit" class="btn btn-sm btn-primary" style="width:100%; margin-top:10px;"><i class="fas fa-upload"></i> Upload Clipart</button>
+                    </form>
+
+                    <h4 style="font-size:0.8rem; font-weight:700; color:#475569; margin:15px 0 8px 0; border-bottom:1px solid #e2e8f0; padding-bottom:4px;">Available Cliparts</h4>
+                    <?php if (empty($cliparts)): ?>
+                        <div style="text-align:center; padding:15px 0; font-size:0.8rem; color:#94a3b8;"><p>No cliparts uploaded yet.</p></div>
+                    <?php else: foreach ($cliparts as $c): ?>
+                        <div class="font-list-item" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #f1f5f9; padding:6px 0;">
+                            <div>
+                                <span style="font-size:0.8rem; font-weight:700; display:block;"><?php echo htmlspecialchars($c['name']); ?></span>
+                            </div>
+                            <form method="POST" onsubmit="return confirm('Are you sure you want to delete this clipart?');" style="margin:0;">
+                                <?php echo csrf_field(); ?>
+                                <input type="hidden" name="action" value="delete_clipart">
+                                <input type="hidden" name="clipart_id" value="<?php echo (int)$c['id']; ?>">
+                                <button type="submit" style="background:none; border:none; color:#ef4444; cursor:pointer; padding:0; font-size:0.85rem; line-height:1;" title="Delete Clipart"><i class="fas fa-trash"></i></button>
+                            </form>
+                        </div>
+                    <?php endforeach; endif; ?>
+                </div>
             </div>
         </div>
-
-        <div class="panel" style="margin-top: 15px;">
-            <div class="panel-head">
-                <h3><i class="fas fa-university" style="color:var(--accent);"></i> University Logos</h3>
-            </div>
-            <div class="panel-body">
-                <form method="POST" enctype="multipart/form-data" style="margin-bottom: 20px;">
-                    <?php echo csrf_field(); ?>
-                    <input type="hidden" name="action" value="upload_logo">
-                    <div class="field full">
-                        <label>University Name</label>
-                        <input type="text" name="univ_name" placeholder="e.g. Calicut University" required>
-                    </div>
-                    <div class="field full">
-                        <label>Logo File (.png, .jpg, .jpeg)</label>
-                        <input type="file" name="logo_file" accept=".png,.jpg,.jpeg" required>
-                    </div>
-                    <div class="prop-group" style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-                        <div class="field">
-                            <label>Width (px)</label>
-                            <input type="number" name="univ_width" value="150" required>
-                        </div>
-                        <div class="field">
-                            <label>Height (px)</label>
-                            <input type="number" name="univ_height" value="150" required>
-                        </div>
-                    </div>
-                    <div class="field full" style="margin-top:6px;">
-                        <label>Resolution (DPI)</label>
-                        <input type="number" name="univ_dpi" value="72" required>
-                    </div>
-                    <button type="submit" class="btn btn-sm btn-primary" style="width:100%; margin-top:10px;"><i class="fas fa-upload"></i> Upload Logo</button>
-                </form>
-
-                <h4 style="font-size:0.8rem; font-weight:700; color:#475569; margin:15px 0 8px 0; border-bottom:1px solid #e2e8f0; padding-bottom:4px;">Preset Logos</h4>
-                <?php if (empty($logos)): ?>
-                    <div style="text-align:center; padding:15px 0; font-size:0.8rem; color:#94a3b8;"><p>No preset logos uploaded yet.</p></div>
-                <?php else: foreach ($logos as $l): ?>
-                    <div class="font-list-item" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #f1f5f9; padding:6px 0;">
-                        <div>
-                            <span style="font-size:0.8rem; font-weight:700; display:block;"><?php echo htmlspecialchars($l['name']); ?></span>
-                            <span style="font-size:0.65rem; color:#94a3b8;"><?php echo $l['width'] . 'x' . $l['height'] . ' px @ ' . $l['dpi'] . ' DPI'; ?></span>
-                        </div>
-                        <form method="POST" onsubmit="return confirm('Are you sure you want to delete this logo?');" style="margin:0;">
-                            <?php echo csrf_field(); ?>
-                            <input type="hidden" name="action" value="delete_logo">
-                            <input type="hidden" name="logo_id" value="<?php echo (int)$l['id']; ?>">
-                            <button type="submit" style="background:none; border:none; color:#ef4444; cursor:pointer; padding:0; font-size:0.85rem; line-height:1;" title="Delete Logo"><i class="fas fa-trash"></i></button>
-                        </form>
-                    </div>
-                <?php endforeach; endif; ?>
-            </div>
-        </div>
-        <div class="panel" style="margin-top: 15px;">
-            <div class="panel-head">
-                <h3><i class="fas fa-shapes" style="color:var(--accent);"></i> Clipart Images</h3>
-            </div>
-            <div class="panel-body">
-                <form method="POST" enctype="multipart/form-data" style="margin-bottom: 20px;">
-                    <?php echo csrf_field(); ?>
-                    <input type="hidden" name="action" value="upload_clipart">
-                    <div class="field full">
-                        <label>Clipart Name</label>
-                        <input type="text" name="clipart_name" placeholder="e.g. Star Logo" required>
-                    </div>
-                    <div class="field full">
-                        <label>Image File (.png, .jpg, .jpeg)</label>
-                        <input type="file" name="clipart_file" accept=".png,.jpg,.jpeg" required>
-                    </div>
-                    <button type="submit" class="btn btn-sm btn-primary" style="width:100%; margin-top:10px;"><i class="fas fa-upload"></i> Upload Clipart</button>
-                </form>
-
-                <h4 style="font-size:0.8rem; font-weight:700; color:#475569; margin:15px 0 8px 0; border-bottom:1px solid #e2e8f0; padding-bottom:4px;">Available Cliparts</h4>
-                <?php if (empty($cliparts)): ?>
-                    <div style="text-align:center; padding:15px 0; font-size:0.8rem; color:#94a3b8;"><p>No cliparts uploaded yet.</p></div>
-                <?php else: foreach ($cliparts as $c): ?>
-                    <div class="font-list-item" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #f1f5f9; padding:6px 0;">
-                        <div>
-                            <span style="font-size:0.8rem; font-weight:700; display:block;"><?php echo htmlspecialchars($c['name']); ?></span>
-                        </div>
-                        <form method="POST" onsubmit="return confirm('Are you sure you want to delete this clipart?');" style="margin:0;">
-                            <?php echo csrf_field(); ?>
-                            <input type="hidden" name="action" value="delete_clipart">
-                            <input type="hidden" name="clipart_id" value="<?php echo (int)$c['id']; ?>">
-                            <button type="submit" style="background:none; border:none; color:#ef4444; cursor:pointer; padding:0; font-size:0.85rem; line-height:1;" title="Delete Clipart"><i class="fas fa-trash"></i></button>
-                        </form>
-                    </div>
-                <?php endforeach; endif; ?>
-            </div>
-        </div>
-    </div>
+    <?php endif; ?>
 <!-- ── CLONE TEMPLATE MODAL ── -->
 <div class="modal-backdrop" id="clone-modal">
     <div class="modal" style="max-width:440px;">

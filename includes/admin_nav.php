@@ -136,7 +136,14 @@ function render_nav_item($key, $active_page, $nav_data) {
             echo '<a class="nav-item ' . nav_active('peppkit', $active_page) . '" href="peppkit-report.php"><i class="fas fa-box-open"></i> PEPPKIT Report</a>';
             break;
         case 'cards':
-            echo '<a class="nav-item ' . nav_active('cards', $active_page) . '" href="cards.php"><i class="fas fa-id-card"></i> Generate Custom Cards</a>';
+            if (can_access('cards')) {
+                echo '<a class="nav-item ' . nav_active('cards', $active_page) . '" href="cards.php"><i class="fas fa-id-card"></i> Generate Custom Cards</a>';
+            }
+            break;
+        case 'card-templates':
+            if (can_access('card-templates')) {
+                echo '<a class="nav-item ' . nav_active('card-templates', $active_page) . '" href="cards.php?tab=templates"><i class="fas fa-layer-group"></i> Create Card Templates</a>';
+            }
             break;
         case 'accounts':
             echo '<a class="nav-item ' . nav_active('accounts', $active_page) . '" href="accounts.php"><i class="fas fa-wallet"></i> Accounts &amp; Expenses</a>';
@@ -240,7 +247,7 @@ $default_sidebar = [
         'id' => 'crm',
         'title' => 'CRM',
         'icon' => 'fas fa-handshake',
-        'items' => ['leads', 'alumni', 'peppkit', 'cards', 'accounts']
+        'items' => ['leads', 'alumni', 'peppkit', 'cards', 'card-templates', 'accounts']
     ],
     [
         'id' => 'campaigns',
