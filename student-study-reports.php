@@ -410,20 +410,35 @@ if (isset($_GET['action'])) {
             $stmt_pids->execute([$course_name]);
             $pids = $stmt_pids->fetchAll(PDO::FETCH_COLUMN);
 
-            $total_tasks = 0;
-            $completed_tasks = 0;
-            if (!empty($pids)) {
-                $in_clause = implode(',', array_fill(0, count($pids), '?'));
-                $total_tasks = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)", $pids);
-                $completed_tasks = db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE action_type = 'complete_activity' AND study_plan_id IN ($in_clause)", $pids);
-            }
-
             $total_students = db_count($pdo, "SELECT COUNT(*) FROM users WHERE pepp_course = ? AND status = 'approved'", [$course_name]);
             $active_students = db_count($pdo, "
                 SELECT COUNT(DISTINCT u.email) 
                 FROM study_plan_analytics an 
                 JOIN users u ON an.student_email = u.email 
                 WHERE u.pepp_course = ? AND u.status = 'approved' AND an.created_at >= DATE_SUB(NOW(), INTERVAL 30 SECOND)
+            ", [$course_name]);
+
+            // Calculate total available tasks for this course (tasks per plan * students assigned to that plan)
+            $total_tasks = db_count($pdo, "
+                SELECT COUNT(*) 
+                FROM users u
+                JOIN study_plan_assignments sa ON (
+                    sa.assignment_type = 'all' OR
+                    (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
+                    (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
+                    (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id)
+                )
+                JOIN study_plans sp ON sa.study_plan_id = sp.id
+                JOIN study_plan_activities act ON sp.id = act.study_plan_id
+                WHERE u.pepp_course = ? AND u.status = 'approved' AND sp.status = 'published'
+            ", [$course_name]);
+
+            // Calculate total completed tasks by students in this course
+            $completed_tasks = db_count($pdo, "
+                SELECT COUNT(*) 
+                FROM study_plan_analytics an
+                JOIN users u ON an.student_email = u.email
+                WHERE u.pepp_course = ? AND u.status = 'approved' AND an.action_type = 'complete_activity'
             ", [$course_name]);
 
             $avg_comp = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
@@ -475,15 +490,20 @@ if (isset($_GET['action'])) {
 
                 $completed_std_cnt = 0;
                 $pending_std_cnt = 0;
+                $total_completed_tasks_sum = 0;
 
                 foreach ($stds as $email) {
                     $comp = db_count($pdo, "SELECT COUNT(DISTINCT activity_id) FROM study_plan_analytics WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity'", [$email, $p['id']]);
+                    $total_completed_tasks_sum += $comp;
                     if ($tasks_cnt > 0 && $comp === $tasks_cnt) {
                         $completed_std_cnt++;
                     } else {
                         $pending_std_cnt++;
                     }
                 }
+
+                $total_available_tasks = $tasks_cnt * count($stds);
+                $completion_rate = $total_available_tasks > 0 ? round(($total_completed_tasks_sum / $total_available_tasks) * 100) : 0;
 
                 $data[] = [
                     'id' => $p['id'],
@@ -496,7 +516,7 @@ if (isset($_GET['action'])) {
                     'tasks' => $tasks_cnt,
                     'completed_students' => $completed_std_cnt,
                     'pending_students' => $pending_std_cnt,
-                    'completion_rate' => count($stds) > 0 ? round(($completed_std_cnt / count($stds)) * 100) : 0
+                    'completion_rate' => $completion_rate
                 ];
             }
             echo json_encode($data);
@@ -1231,7 +1251,28 @@ if ($source === 'courses') {
     ];
 
     // Calculated metrics
-    $kpis['attendance_pct'] = 87;
+    $total_available_tasks = db_count($pdo, "
+        SELECT COUNT(*) 
+        FROM users u
+        JOIN study_plan_assignments sa ON (
+            sa.assignment_type = 'all' OR
+            (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
+            (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
+            (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id)
+        )
+        JOIN study_plans sp ON sa.study_plan_id = sp.id
+        JOIN study_plan_activities act ON sp.id = act.study_plan_id
+        WHERE u.status = 'approved' AND sp.status = 'published'
+    ");
+    
+    $total_completed_tasks = db_count($pdo, "
+        SELECT COUNT(*) 
+        FROM study_plan_analytics an
+        JOIN users u ON an.student_email = u.email
+        WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND $assigned_plans_subquery
+    ");
+    
+    $kpis['attendance_pct'] = $total_available_tasks > 0 ? round(($total_completed_tasks / $total_available_tasks) * 100) : 0;
     $kpis['mock_tests'] = round($kpis['total_checklist_completions'] * 0.35);
     $kpis['mega_tests'] = round($kpis['total_checklist_completions'] * 0.08);
     $kpis['live_sessions'] = round($kpis['upcoming_sessions'] * 0.4);
