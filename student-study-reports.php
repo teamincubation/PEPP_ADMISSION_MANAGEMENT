@@ -531,6 +531,210 @@ if (isset($_GET['action'])) {
         exit;
     }
 
+    // 1.6 Study Plan Students list API
+    if ($_GET['action'] === 'get_study_plan_students') {
+        $plan_id = (int)($_GET['plan_id'] ?? 0);
+        $stmt = $pdo->prepare("SELECT * FROM study_plans WHERE id = ?");
+        $stmt->execute([$plan_id]);
+        $plan = $stmt->fetch();
+        if (!$plan) {
+            echo json_encode(['error' => 'Study plan not found.']);
+            exit;
+        }
+
+        $stmt = $pdo->prepare("SELECT * FROM study_plan_assignments WHERE study_plan_id = ?");
+        $stmt->execute([$plan_id]);
+        $assignments = $stmt->fetchAll();
+
+        $assign_clauses = [];
+        $assign_params = [];
+        foreach ($assignments as $asg) {
+            if ($asg['assignment_type'] === 'all') {
+                $assign_clauses[] = "1=1";
+            } elseif ($asg['assignment_type'] === 'course') {
+                $assign_clauses[] = "u.pepp_course = ?";
+                $assign_params[] = $asg['assigned_value'];
+            } elseif ($asg['assignment_type'] === 'batch') {
+                $assign_clauses[] = "u.academic_year = ?";
+                $assign_params[] = $asg['assigned_value'];
+            } elseif ($asg['assignment_type'] === 'student') {
+                $assign_clauses[] = "u.user_id = ?";
+                $assign_params[] = $asg['assigned_value'];
+            } elseif ($asg['assignment_type'] === 'form') {
+                $assign_clauses[] = "EXISTS (
+                    SELECT 1 FROM campaign_form_submissions s 
+                    WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = ? AND s.is_deleted = 0
+                )";
+                $assign_params[] = $asg['assigned_value'];
+            }
+        }
+
+        if (empty($assign_clauses)) {
+            echo json_encode(['title' => $plan['title'], 'total_tasks' => 0, 'students' => []]);
+            exit;
+        }
+        
+        $where_assign = '(' . implode(' OR ', $assign_clauses) . ')';
+        
+        $stmt_students = $pdo->prepare("
+            SELECT u.user_id, u.name, u.email, u.phone 
+            FROM users u 
+            WHERE u.status = 'approved' AND $where_assign
+            ORDER BY u.name ASC
+        ");
+        $stmt_students->execute($assign_params);
+        $stds = $stmt_students->fetchAll();
+
+        $stmt_act_cnt = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ?");
+        $stmt_act_cnt->execute([$plan_id]);
+        $total_tasks = (int)$stmt_act_cnt->fetchColumn();
+
+        $stmt_act_ids = $pdo->prepare("SELECT id FROM study_plan_activities WHERE study_plan_id = ?");
+        $stmt_act_ids->execute([$plan_id]);
+        $act_ids = $stmt_act_ids->fetchAll(PDO::FETCH_COLUMN);
+
+        $in_clause = !empty($act_ids) ? implode(',', array_fill(0, count($act_ids), '?')) : '0';
+
+        $students_data = [];
+        $sl = 1;
+        foreach ($stds as $s) {
+            $completed_count = 0;
+            if ($total_tasks > 0 && !empty($act_ids)) {
+                $stmt_comp = $pdo->prepare("
+                    SELECT COUNT(DISTINCT activity_id) 
+                    FROM study_plan_analytics 
+                    WHERE student_email = ? AND action_type = 'complete_activity' AND activity_id IN ($in_clause)
+                ");
+                $stmt_comp->execute(array_merge([$s['email']], $act_ids));
+                $completed_count = (int)$stmt_comp->fetchColumn();
+            }
+            
+            $pending_count = $total_tasks - $completed_count;
+            $comp_pct = $total_tasks > 0 ? round(($completed_count / $total_tasks) * 100) : 0;
+            $pend_pct = 100 - $comp_pct;
+            
+            $status = 'In Progress';
+            $status_class = 'blue';
+            if ($comp_pct == 100) {
+                $status = 'Completed';
+                $status_class = 'green';
+            } elseif ($comp_pct < 40) {
+                $status = 'At Risk';
+                $status_class = 'red';
+            }
+            
+            $students_data[] = [
+                'sl' => $sl++,
+                'user_id' => $s['user_id'],
+                'name' => r_esc($s['name']),
+                'raw_email' => $s['email'],
+                'email' => r_esc(format_credential_text($s['email'], 'email', 'student-study-reports')),
+                'total_tasks' => $total_tasks,
+                'completed' => $completed_count,
+                'completed_pct' => $comp_pct,
+                'pending' => $pending_count,
+                'pending_pct' => $pend_pct,
+                'status' => $status,
+                'status_class' => $status_class
+            ];
+        }
+
+        echo json_encode([
+            'title' => $plan['title'],
+            'total_tasks' => $total_tasks,
+            'students' => $students_data
+        ]);
+        exit;
+    }
+
+    // 1.7 Student Task Details API
+    if ($_GET['action'] === 'get_student_plan_tasks') {
+        $plan_id = (int)($_GET['plan_id'] ?? 0);
+        $email = trim($_GET['email'] ?? '');
+        
+        $stmt = $pdo->prepare("SELECT name, user_id, email, pepp_course FROM users WHERE email = ? LIMIT 1");
+        $stmt->execute([$email]);
+        $student = $stmt->fetch();
+        if (!$student) {
+            echo json_encode(['error' => 'Student not found.']);
+            exit;
+        }
+
+        $stmt = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? ORDER BY activity_date ASC, id ASC");
+        $stmt->execute([$plan_id]);
+        $activities = $stmt->fetchAll();
+
+        $tasks = [];
+        $completed_count = 0;
+        $total_count = count($activities);
+
+        foreach ($activities as $act) {
+            $stmt_an = $pdo->prepare("
+                SELECT created_at, latitude, longitude 
+                FROM study_plan_analytics 
+                WHERE student_email = ? AND action_type = 'complete_activity' AND activity_id = ?
+                ORDER BY created_at DESC LIMIT 1
+            ");
+            $stmt_an->execute([$email, $act['id']]);
+            $log = $stmt_an->fetch();
+            
+            $is_completed = (bool)$log;
+            if ($is_completed) $completed_count++;
+            
+            $loc_str = '';
+            $map_link = '';
+            if ($is_completed && !empty($log['latitude']) && !empty($log['longitude'])) {
+                $loc_str = round((float)$log['latitude'], 3) . ', ' . round((float)$log['longitude'], 3);
+                $map_link = "https://www.google.com/maps?q=" . urlencode($log['latitude'] . ',' . $log['longitude']);
+            }
+            
+            $tasks[] = [
+                'title' => r_esc($act['activity_title']),
+                'chapter' => r_esc($act['chapter'] ?? ''),
+                'subject' => r_esc($act['subject'] ?? ''),
+                'topic' => r_esc($act['topic'] ?? ''),
+                'priority' => r_esc($act['priority'] ?? 'medium'),
+                'is_completed' => $is_completed,
+                'completed_at' => $is_completed && $log['created_at'] ? date('d M Y, h:i A', strtotime($log['created_at'])) : null,
+                'location' => $loc_str,
+                'map_link' => $map_link
+            ];
+        }
+
+        $pct = $total_count > 0 ? round(($completed_count / $total_count) * 100) : 0;
+        $performance = get_performance_status($pct);
+
+        $stmt_last = $pdo->prepare("
+            SELECT created_at 
+            FROM study_plan_analytics 
+            WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity'
+            ORDER BY created_at DESC LIMIT 1
+        ");
+        $stmt_last->execute([$email, $plan_id]);
+        $last_act = $stmt_last->fetchColumn();
+        $last_active_str = $last_act ? date('d M Y h:i A', strtotime($last_act)) : 'No activity logged';
+
+        echo json_encode([
+            'student' => [
+                'name' => r_esc($student['name']),
+                'user_id' => $student['user_id'],
+                'email' => r_esc(format_credential_text($student['email'], 'email', 'student-study-reports')),
+                'course' => r_esc($student['pepp_course']),
+            ],
+            'stats' => [
+                'total' => $total_count,
+                'completed' => $completed_count,
+                'pending' => $total_count - $completed_count,
+                'pct' => $pct,
+                'perf_label' => $performance['label'],
+                'perf_class' => $performance['class'],
+                'last_active' => $last_active_str
+            ],
+            'tasks' => $tasks
+        ]);
+        exit;
+    }
+
     // 2. Export csv
     if ($_GET['action'] === 'export_report') {
         $course_filter = $_GET['course_name'] ?? null;
@@ -741,6 +945,38 @@ $selected_course = null;
 if (!$selected_form_id) {
     $selected_course = $_GET['course_name'] ?? ($assigned_courses[0] ?? null);
 }
+
+// Fetch available study plans for the sidebar selection
+$sidebar_study_plans = [];
+try {
+    if ($selected_form_id) {
+        $stmt_plans_side = $pdo->prepare("
+            SELECT DISTINCT sp.id, sp.title, sp.start_date, sp.end_date 
+            FROM study_plans sp
+            JOIN study_plan_assignments sa ON sa.study_plan_id = sp.id
+            WHERE sp.status = 'published' AND (
+                sa.assignment_type = 'all' OR
+                (sa.assignment_type = 'form' AND sa.assigned_value = ?)
+            )
+            ORDER BY sp.title ASC
+        ");
+        $stmt_plans_side->execute([ (string)$selected_form_id ]);
+        $sidebar_study_plans = $stmt_plans_side->fetchAll();
+    } elseif ($selected_course) {
+        $stmt_plans_side = $pdo->prepare("
+            SELECT DISTINCT sp.id, sp.title, sp.start_date, sp.end_date 
+            FROM study_plans sp
+            JOIN study_plan_assignments sa ON sa.study_plan_id = sp.id
+            WHERE sp.status = 'published' AND (
+                sa.assignment_type = 'all' OR
+                (sa.assignment_type = 'course' AND sa.assigned_value = ?)
+            )
+            ORDER BY sp.title ASC
+        ");
+        $stmt_plans_side->execute([ $selected_course ]);
+        $sidebar_study_plans = $stmt_plans_side->fetchAll();
+    }
+} catch (Exception $e) {}
 
 // Fetch active student list based on selected course or form
 $students_list = [];
@@ -1065,6 +1301,43 @@ include 'includes/admin_nav.php';
 ?>
 
 <style>
+    /* Pulsing active study plan indicator dot */
+    .pulse-dot {
+        width: 8px;
+        height: 8px;
+        background-color: #10b981;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 8px;
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+        animation: pulse 1.6s infinite;
+        vertical-align: middle;
+    }
+
+    @keyframes pulse {
+        0% {
+            transform: scale(0.95);
+            box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+        }
+        70% {
+            transform: scale(1);
+            box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+        }
+        100% {
+            transform: scale(0.95);
+            box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+        }
+    }
+
+    /* Wide Slide-over Panel for Student Tasks */
+    .slide-over.wide {
+        width: 600px;
+        right: -620px;
+    }
+    .slide-over.wide.open {
+        right: 0;
+    }
+
     :root {
         --primary-gradient: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%);
         --accent-gradient: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
@@ -1653,7 +1926,7 @@ include 'includes/admin_nav.php';
                     <span>Academic Courses</span>
                     <i class="fas fa-chevron-down" id="course-acc-icon"></i>
                 </div>
-                <div id="course-acc" style="margin-bottom: 20px;">
+                <div id="course-acc" style="<?php echo $selected_course ? 'display:block;' : 'margin-bottom: 20px;'; ?>">
                     <?php foreach ($assigned_courses as $cname): 
                         $active = $selected_course === $cname;
                     ?>
@@ -1661,6 +1934,23 @@ include 'includes/admin_nav.php';
                             <span><i class="fas fa-graduation-cap" style="margin-right: 6px;"></i> <?php echo r_esc($cname); ?></span>
                             <i class="fas fa-angle-right" style="font-size:0.75rem;"></i>
                         </a>
+
+                        <?php if ($active && !empty($sidebar_study_plans)): ?>
+                            <div class="sidebar-nested-plans" style="padding-left: 1rem; margin-top: 4px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px;">
+                                <div style="font-size: 0.65rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 2px;">Study Plans</div>
+                                <?php foreach ($sidebar_study_plans as $sp): 
+                                    $today = date('Y-m-d');
+                                    $is_plan_active = ($today >= $sp['start_date'] && $today <= $sp['end_date']);
+                                ?>
+                                    <div class="nested-plan-item" onclick="loadStudyPlanReport(<?php echo $sp['id']; ?>, this)" style="cursor: pointer; font-size: 0.78rem; font-weight: 600; color: var(--text-main); padding: 6px 10px; border-radius: 8px; background: #f8fafc; border: 1.5px solid #e2e8f0; display: flex; align-items: center; transition: all 0.2s ease;">
+                                        <?php if ($is_plan_active): ?>
+                                            <span class="pulse-dot" title="Currently Active Study Plan"></span>
+                                        <?php endif; ?>
+                                        <span class="plan-title-text" style="flex-grow: 1; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;"><?php echo r_esc($sp['title']); ?></span>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endif; ?>
                     <?php endforeach; ?>
                 </div>
 
@@ -1668,13 +1958,30 @@ include 'includes/admin_nav.php';
                     <span>Custom Forms</span>
                     <i class="fas fa-chevron-down" id="form-acc-icon"></i>
                 </div>
-                <div id="form-acc" style="display:none; margin-bottom: 20px;">
+                <div id="form-acc" style="<?php echo $selected_form_id ? 'display:block;' : 'display:none;'; ?> margin-bottom: 20px;">
                     <?php foreach ($assigned_forms as $frm): 
                         $active = $selected_form_id === (int)$frm['id'];
                     ?>
                         <a href="?form_id=<?php echo $frm['id']; ?>" class="filter-item-link <?php echo $active ? 'active' : ''; ?>">
                             <span><i class="fab fa-wpforms" style="margin-right: 6px;"></i> <?php echo r_esc($frm['title']); ?></span>
                         </a>
+
+                        <?php if ($active && !empty($sidebar_study_plans)): ?>
+                            <div class="sidebar-nested-plans" style="padding-left: 1rem; margin-top: 4px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px;">
+                                <div style="font-size: 0.65rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 2px;">Study Plans</div>
+                                <?php foreach ($sidebar_study_plans as $sp): 
+                                    $today = date('Y-m-d');
+                                    $is_plan_active = ($today >= $sp['start_date'] && $today <= $sp['end_date']);
+                                ?>
+                                    <div class="nested-plan-item" onclick="loadStudyPlanReport(<?php echo $sp['id']; ?>, this)" style="cursor: pointer; font-size: 0.78rem; font-weight: 600; color: var(--text-main); padding: 6px 10px; border-radius: 8px; background: #f8fafc; border: 1.5px solid #e2e8f0; display: flex; align-items: center; transition: all 0.2s ease;">
+                                        <?php if ($is_plan_active): ?>
+                                            <span class="pulse-dot" title="Currently Active Study Plan"></span>
+                                        <?php endif; ?>
+                                        <span class="plan-title-text" style="flex-grow: 1; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;"><?php echo r_esc($sp['title']); ?></span>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endif; ?>
                     <?php endforeach; ?>
                 </div>
 
@@ -1713,6 +2020,7 @@ include 'includes/admin_nav.php';
                     <button class="view-tab-btn" onclick="switchView('students-view', this)"><i class="fas fa-users-viewfinder"></i> Student Table</button>
                     <button class="view-tab-btn" onclick="switchView('courses-view', this)"><i class="fas fa-book-bookmark"></i> Course Progress</button>
                     <button class="view-tab-btn" onclick="switchView('faculties-view', this)"><i class="fas fa-user-tie"></i> Faculty Performance</button>
+                    <button class="view-tab-btn" id="study-plan-tab-btn" onclick="switchView('study-plan-view', this)" style="display:none;"><i class="fas fa-list-check"></i> Study Plan Report</button>
                 </div>
 
                 <!-- 1. Dashboard View Workspace -->
@@ -2087,6 +2395,43 @@ include 'includes/admin_nav.php';
                         <?php endif; ?>
                     <?php endif; ?>
                 </div>
+
+                <!-- 5. Study Plan Report View Panel -->
+                <div id="study-plan-view" class="view-container" style="display:none;">
+                    <div class="chart-card">
+                        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid var(--border); padding-bottom:12px; margin-bottom:15px; flex-wrap:wrap; gap:8px;">
+                            <div>
+                                <h4 id="sp-report-title" style="font-family:var(--header-font); font-weight:800; font-size:1.1rem; color:var(--text-main); margin:0;">
+                                    <i class="fas fa-list-check" style="color:var(--accent); margin-right:6px;"></i>
+                                    Study Plan Report
+                                </h4>
+                                <p id="sp-report-subtitle" style="font-size:0.78rem; color:var(--text-muted); margin:4px 0 0 0;"></p>
+                            </div>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <input type="text" id="sp-students-search" class="modern-input" style="width:220px;" placeholder="Search students in plan..." onkeyup="searchStudyPlanStudentsTable()">
+                            </div>
+                        </div>
+                        
+                        <div class="table-responsive" style="border:1.5px solid var(--border); border-radius:12px; overflow-x:auto;">
+                            <table class="data-table" id="sp-students-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+                                <thead>
+                                    <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:#f8fafc;">
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted); width:60px;">Sl.</th>
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted);">Student Details</th>
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted); text-align:center;">Total Tasks</th>
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted);">Completed Tasks</th>
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted);">Pending Tasks</th>
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted);">Status</th>
+                                        <th style="padding:12px 10px; font-weight:700; color:var(--text-muted); text-align:right; width:120px;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="sp-students-tbody">
+                                    <!-- Populated dynamically via AJAX -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             </div>
         <?php endif; ?>
     <?php endif; ?>
@@ -2155,6 +2500,58 @@ include 'includes/admin_nav.php';
     
     <div style="margin-top:15px; border-top:1.5px solid var(--border); padding-top:10px; display:flex; justify-content:flex-end;">
         <button type="button" class="btn btn-primary" onclick="saveDashboardCardsConfig()"><i class="fas fa-check"></i> Save Layout</button>
+    </div>
+</div>
+
+<!-- 6. Student Task Details Timeline Slide-over -->
+<div class="slide-over-backdrop" id="student-task-slideover-backdrop" onclick="closeSlideOver('student-task-slideover')"></div>
+<div class="slide-over wide" id="student-task-slideover" style="width: 580px; right: -600px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid var(--border); padding-bottom:12px; margin-bottom:15px;">
+        <div>
+            <h4 id="st-slideover-title" style="margin:0; font-family:var(--header-font); font-weight:800; font-size:1.15rem; color:var(--text-main);"><i class="fas fa-user-graduate" style="color:var(--accent); margin-right:6px;"></i> Student Tasks View</h4>
+            <span id="st-slideover-subtitle" style="font-size:0.75rem; color:var(--text-muted);"></span>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline" style="padding:4px 8px;" onclick="closeSlideOver('student-task-slideover')"><i class="fas fa-xmark"></i></button>
+    </div>
+    
+    <div style="flex-grow:1; overflow-y:auto; padding-right:5px; display:flex; flex-direction:column; gap:16px;">
+        <!-- Overall Analysis Card -->
+        <div class="widget-card" style="background:#f8fafc; border:1px solid var(--border); border-radius:12px; padding:15px; margin-bottom:5px;">
+            <h5 style="margin:0 0 10px 0; font-size:0.85rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Overall Study Plan Performance</h5>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <span style="font-size:0.82rem; font-weight:600; color:var(--text-main);">Progress Checklist Rate</span>
+                <strong id="st-completion-pct" style="font-size:1rem; color:var(--accent);">0%</strong>
+            </div>
+            <div style="background:#cbd5e1; height:8px; border-radius:4px; overflow:hidden; margin-bottom:12px; position:relative;">
+                <div id="st-completion-bar" style="background:var(--primary-gradient); height:100%; width:0%; transition: width 0.4s ease;"></div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:10px; text-align:center;">
+                <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 5px;">
+                    <div style="font-size:0.68rem; font-weight:700; color:var(--text-muted);">COMPLETED</div>
+                    <strong id="st-completed-count" style="font-size:0.9rem; color:#10b981;">0</strong>
+                </div>
+                <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 5px;">
+                    <div style="font-size:0.68rem; font-weight:700; color:var(--text-muted);">PENDING</div>
+                    <strong id="st-pending-count" style="font-size:0.9rem; color:#ef4444;">0</strong>
+                </div>
+                <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 5px;">
+                    <div style="font-size:0.68rem; font-weight:700; color:var(--text-muted);">PERFORMANCE</div>
+                    <strong id="st-perf-badge" style="font-size:0.75rem; text-transform:uppercase;">-</strong>
+                </div>
+            </div>
+            <div style="font-size:0.75rem; color:var(--text-muted); margin-top:10px; padding-top:8px; border-top:1px dashed #e2e8f0; display:flex; justify-content:space-between;">
+                <span>Last Checklist Update:</span>
+                <strong id="st-last-active" style="color:var(--text-main);">-</strong>
+            </div>
+        </div>
+
+        <!-- Timeline Container -->
+        <div>
+            <h5 style="margin:0 0 12px 0; font-size:0.85rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Study Plan Checklist Activities</h5>
+            <div id="st-timeline-container" style="display:flex; flex-direction:column; gap:14px; position:relative; padding-left:15px; border-left:2px solid #e2e8f0; margin-left:8px;">
+                <!-- Dynamically filled timeline items -->
+            </div>
+        </div>
     </div>
 </div>
 
@@ -2301,6 +2698,197 @@ include 'includes/admin_nav.php';
                 row.style.display = 'none';
             }
         });
+    }
+
+    // ════════════════ STUDY PLAN ANALYSIS JS HANDLERS ════════════════
+    let activePlanId = null;
+
+    function loadStudyPlanReport(planId, element) {
+        activePlanId = planId;
+        
+        // Show loading state
+        const tbody = document.getElementById('sp-students-tbody');
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:3rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent); margin-bottom:8px;"></i><p style="margin:0; font-size:0.85rem; color:var(--text-muted);">Fetching study plan report analysis...</p></td></tr>`;
+        
+        // Highlight active list item
+        document.querySelectorAll('.nested-plan-item').forEach(el => {
+            el.style.background = '#f8fafc';
+            el.style.borderColor = '#e2e8f0';
+        });
+        element.style.background = 'var(--accent-soft)';
+        element.style.borderColor = 'var(--accent)';
+
+        // Open/Show the tab button
+        const tabBtn = document.getElementById('study-plan-tab-btn');
+        tabBtn.style.display = 'inline-block';
+        
+        // Switch to the view
+        switchView('study-plan-view', tabBtn);
+
+        // Fetch via AJAX
+        fetch(`?action=get_study_plan_students&plan_id=${planId}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:2rem; color:var(--red-ink);"><i class="fas fa-triangle-exclamation"></i> ${data.error}</td></tr>`;
+                    return;
+                }
+
+                document.getElementById('sp-report-title').innerHTML = `<i class="fas fa-list-check" style="color:var(--accent); margin-right:6px;"></i> Report: ${data.title}`;
+                document.getElementById('sp-report-subtitle').innerText = `Overall checklist activities: ${data.total_tasks} tasks assigned.`;
+
+                if (data.students.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:3rem; color:var(--text-muted);"><i class="fas fa-user-slash" style="font-size:1.5rem; display:block; margin-bottom:8px;"></i>No students assigned to this study plan.</td></tr>`;
+                    return;
+                }
+
+                let html = '';
+                data.students.forEach(s => {
+                    html += `
+                        <tr style="border-bottom:1px solid #f1f5f9;">
+                            <td style="padding:12px 10px; font-weight:700;">${s.sl}</td>
+                            <td style="padding:12px 10px;">
+                                <div style="font-weight:700; font-size:0.85rem; color:var(--text-main);">${s.name}</div>
+                                <div style="font-size:0.75rem; color:var(--text-muted);">${s.email}</div>
+                                <small style="font-size:0.7rem; color:var(--text-muted);">ID: ${s.user_id}</small>
+                            </td>
+                            <td style="padding:12px 10px; font-weight:700; text-align:center; font-size:0.9rem;">${s.total_tasks}</td>
+                            <td style="padding:12px 10px;">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <div style="flex-grow:1; background:#e2e8f0; height:6px; border-radius:3px; overflow:hidden; width:80px;">
+                                        <div style="background:#10b981; height:100%; width:${s.completed_pct}%;"></div>
+                                    </div>
+                                    <strong style="color:#10b981; font-size:0.78rem;">${s.completed} (${s.completed_pct}%)</strong>
+                                </div>
+                            </td>
+                            <td style="padding:12px 10px;">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <div style="flex-grow:1; background:#e2e8f0; height:6px; border-radius:3px; overflow:hidden; width:80px;">
+                                        <div style="background:#ef4444; height:100%; width:${s.pending_pct}%;"></div>
+                                    </div>
+                                    <strong style="color:#ef4444; font-size:0.78rem;">${s.pending} (${s.pending_pct}%)</strong>
+                                </div>
+                            </td>
+                            <td style="padding:12px 10px;">
+                                <span class="badge ${s.status_class}" style="font-size:0.72rem; font-weight:700; text-transform:uppercase;">${s.status}</span>
+                            </td>
+                            <td style="padding:12px 10px; text-align:right;">
+                                <button class="btn btn-sm btn-soft-violet" onclick="viewStudentTasks(${planId}, '${s.raw_email}')" title="View details & logs" style="padding:4px 8px; border-radius:8px;"><i class="fas fa-eye"></i> View Student</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+                tbody.innerHTML = html;
+            })
+            .catch(err => {
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:2rem; color:var(--red-ink);"><i class="fas fa-triangle-exclamation"></i> Error loading report data.</td></tr>`;
+            });
+    }
+
+    function searchStudyPlanStudentsTable() {
+        const query = document.getElementById('sp-students-search').value.toLowerCase().trim();
+        const rows = document.querySelectorAll('#sp-students-tbody tr');
+        rows.forEach(row => {
+            const text = row.innerText.toLowerCase();
+            if (text.includes(query)) {
+                row.style.display = '';
+            } else {
+                row.style.display = 'none';
+            }
+        });
+    }
+
+    function viewStudentTasks(planId, email) {
+        // Show slide-over and loading state inside timeline
+        openSlideOver('student-task-slideover');
+        
+        document.getElementById('st-slideover-subtitle').innerText = 'Loading student metrics...';
+        document.getElementById('st-completion-pct').innerText = '0%';
+        document.getElementById('st-completion-bar').style.width = '0%';
+        document.getElementById('st-completed-count').innerText = '-';
+        document.getElementById('st-pending-count').innerText = '-';
+        document.getElementById('st-perf-badge').innerText = '-';
+        document.getElementById('st-perf-badge').className = '';
+        document.getElementById('st-last-active').innerText = '-';
+        
+        const container = document.getElementById('st-timeline-container');
+        container.innerHTML = `<div style="text-align:center; padding:2rem; width:100%;"><i class="fas fa-spinner fa-spin" style="font-size:1.25rem; color:var(--accent); margin-bottom:6px;"></i><p style="margin:0; font-size:0.75rem; color:var(--text-muted);">Fetching timeline...</p></div>`;
+
+        fetch(`?action=get_student_plan_tasks&plan_id=${planId}&email=${encodeURIComponent(email)}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    document.getElementById('st-slideover-subtitle').innerText = 'Error: ' + data.error;
+                    container.innerHTML = `<div style="color:var(--red-ink); font-size:0.8rem; text-align:center; padding:1.5rem;"><i class="fas fa-circle-exclamation"></i> ${data.error}</div>`;
+                    return;
+                }
+
+                // Render metrics
+                document.getElementById('st-slideover-title').innerText = data.student.name;
+                document.getElementById('st-slideover-subtitle').innerText = `${data.student.course} · ID: ${data.student.user_id} · Email: ${data.student.email}`;
+                
+                document.getElementById('st-completion-pct').innerText = data.stats.pct + '%';
+                document.getElementById('st-completion-bar').style.width = data.stats.pct + '%';
+                document.getElementById('st-completed-count').innerText = data.stats.completed;
+                document.getElementById('st-pending-count').innerText = data.stats.pending;
+                
+                const perfBadge = document.getElementById('st-perf-badge');
+                perfBadge.innerText = data.stats.perf_label;
+                perfBadge.className = 'badge ' + data.stats.perf_class;
+                
+                document.getElementById('st-last-active').innerText = data.stats.last_active;
+
+                // Render timeline checklist
+                if (data.tasks.length === 0) {
+                    container.innerHTML = `<div style="color:var(--text-muted); font-size:0.8rem; text-align:center; padding:1.5rem;">No tasks mapped in this study plan.</div>`;
+                    return;
+                }
+
+                let html = '';
+                data.tasks.forEach(t => {
+                    const icon = t.is_completed 
+                        ? `<i class="fas fa-circle-check" style="color:#10b981; font-size:1.1rem; background:#fff; border-radius:50%; position:absolute; left:-23px; top:2px; z-index:2;"></i>` 
+                        : `<i class="far fa-circle" style="color:#cbd5e1; font-size:1.1rem; background:#fff; border-radius:50%; position:absolute; left:-23px; top:2px; z-index:2;"></i>`;
+                        
+                    const completedInfo = t.is_completed
+                        ? `<div style="font-size:0.72rem; color:#10b981; font-weight:700; margin-top:4px;"><i class="fas fa-clock"></i> Completed on ${t.completed_at}</div>`
+                        : `<div style="font-size:0.72rem; color:var(--text-muted); font-weight:600; margin-top:4px;"><i class="far fa-clock"></i> Status: Pending</div>`;
+
+                    let locHtml = '';
+                    if (t.location) {
+                        locHtml = `
+                            <div style="margin-top: 6px;">
+                                <a href="${t.map_link}" target="_blank" style="font-size:0.72rem; color:var(--accent); font-weight:700; text-decoration:none; display:inline-flex; align-items:center; gap:4px; padding:3px 6px; background:var(--accent-soft); border-radius:6px; border:1px solid #fbd38d;">
+                                    <i class="fas fa-map-location-dot"></i> Logged Loc: ${t.location}
+                                </a>
+                            </div>
+                        `;
+                    }
+
+                    const badgePriority = t.priority === 'high' ? 'red' : (t.priority === 'medium' ? 'blue' : 'gray');
+
+                    html += `
+                        <div style="position:relative; margin-bottom:15px; padding-bottom:12px; border-bottom:1px dashed #f1f5f9;">
+                            ${icon}
+                            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+                                <div>
+                                    <strong style="font-size:0.85rem; color:var(--text-main); display:block; line-height:1.25;">${t.title}</strong>
+                                    <span style="font-size:0.75rem; color:var(--text-muted); display:block; margin-top:2px;">
+                                        Subject: ${t.subject || '-'} · Chapter: ${t.chapter || '-'}
+                                    </span>
+                                </div>
+                                <span class="badge ${badgePriority}" style="font-size:0.6rem; text-transform:uppercase; padding:2px 6px;">${t.priority}</span>
+                            </div>
+                            ${completedInfo}
+                            ${locHtml}
+                        </div>
+                    `;
+                });
+                container.innerHTML = html;
+            })
+            .catch(err => {
+                container.innerHTML = `<div style="color:var(--red-ink); font-size:0.8rem; text-align:center; padding:1.5rem;"><i class="fas fa-circle-exclamation"></i> Error loading tasks.</div>`;
+            });
     }
 
     // Card Manager Overlay Handlers
