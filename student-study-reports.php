@@ -721,14 +721,31 @@ if (isset($_GET['action'])) {
         $activity_id = (int)($_GET['activity_id'] ?? 0);
         $course_name = trim($_GET['course_name'] ?? '');
         try {
-            // Get all approved students in this course
-            $stmt_students = $pdo->prepare("SELECT name, email, phone FROM users WHERE pepp_course = ? AND status = 'approved'");
-            $stmt_students->execute([$course_name]);
-            $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
-
             $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ?");
             $stmt_act->execute([$activity_id]);
             $act = $stmt_act->fetch(PDO::FETCH_ASSOC);
+            $plan_id = $act ? $act['study_plan_id'] : 0;
+
+            // Get all approved students in this course who are assigned to this study plan
+            $stmt_students = $pdo->prepare("
+                SELECT DISTINCT u.name, u.email, u.phone 
+                FROM users u
+                JOIN study_plan_assignments sa ON (
+                    sa.study_plan_id = ? AND (
+                        sa.assignment_type = 'all' OR
+                        (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
+                        (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
+                        (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
+                        (sa.assignment_type = 'form' AND EXISTS (
+                            SELECT 1 FROM campaign_form_submissions s 
+                            WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+                        ))
+                    )
+                )
+                WHERE u.pepp_course = ? AND u.status = 'approved'
+            ");
+            $stmt_students->execute([$plan_id, $course_name]);
+            $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
 
             $data = [];
             $today = new DateTime();
