@@ -62,7 +62,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         
                         $stmt = $pdo->prepare("
                             INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, permissions, status, credential_visibility, credential_visibility_scopes, can_edit, can_delete, can_export, allow_copy_email, allow_whatsapp_chat, created_by, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                            VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                         ");
                         $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $perms, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $allow_copy_email, $allow_whatsapp_chat, $admin_username]);
                         log_admin_activity($pdo, $admin_username, 'admin_created', "Created admin \"{$username}\" with access: {$perms}");
