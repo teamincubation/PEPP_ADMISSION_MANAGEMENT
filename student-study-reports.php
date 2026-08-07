@@ -2394,10 +2394,9 @@ include 'includes/admin_nav.php';
                 </div>
             </div>
             
-            <!-- Interactive Analytics Progress Ring & Chart Section -->
-            <div style="display:grid; grid-template-columns: 320px 1fr; gap:1.5rem;">
-                <!-- Left: Progress Ring & Summary -->
-                <div class="widget-card" style="padding:1.25rem; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;">
+            <!-- Centered Completion Metric Card -->
+            <div style="display:flex; justify-content:center; margin-bottom:1.5rem;">
+                <div class="widget-card" style="padding:1.25rem; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; width: 100%; max-width: 400px; margin: 0 auto;">
                     <h5 style="margin:0 0 12px 0; font-size:0.8rem; font-weight:800; color:var(--text-muted); text-transform:uppercase; width:100%;">Completion Metric</h5>
                     <div style="position:relative; width:140px; height:140px; display:flex; align-items:center; justify-content:center; margin-bottom:12px;">
                         <svg width="140" height="140" viewBox="0 0 140 140" style="transform: rotate(-90deg);">
@@ -2419,14 +2418,6 @@ include 'includes/admin_nav.php';
                     <div style="font-size:0.75rem; color:var(--text-muted); border-top:1px dashed var(--border); padding-top:10px; width:100%; display:flex; justify-content:space-between; align-items:center;">
                         <span>Last Activity:</span>
                         <strong id="st-last-activity-date" style="color:var(--text-main); font-size:0.75rem;">Never</strong>
-                    </div>
-                </div>
-                
-                <!-- Right: Bar Chart Breakdown & Timeline visualizer -->
-                <div class="widget-card" style="padding:1.25rem;">
-                    <h5 style="margin:0 0 15px 0; font-size:0.8rem; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Subject-wise Syllabus Progress</h5>
-                    <div id="st-subject-progress-bars" style="display:flex; flex-direction:column; gap:12px;">
-                        <!-- Subject bars filled dynamically -->
                     </div>
                 </div>
             </div>
@@ -3067,7 +3058,10 @@ include 'includes/admin_nav.php';
                         </div>
                     `;
                 }
-                document.getElementById('st-subject-progress-bars').innerHTML = subHtml || '<div style="font-size:0.8rem; color:var(--text-muted);">No subjects found in syllabus outline.</div>';
+                const subBarsEl = document.getElementById('st-subject-progress-bars');
+                if (subBarsEl) {
+                    subBarsEl.innerHTML = subHtml || '<div style="font-size:0.8rem; color:var(--text-muted);">No subjects found in syllabus outline.</div>';
+                }
 
                 // Initialize Subject Filter Select list
                 const subjectFilterSelect = document.getElementById('st-filter-subject');
