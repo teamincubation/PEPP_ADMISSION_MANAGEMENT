@@ -951,9 +951,9 @@ if (isset($_GET['action'])) {
 
                 case 'task_completions':
                     $title = 'Checklist Completions Logs';
-                    $headers = ['Student Name', 'Email', 'Plan Title', 'Task Title', 'Completed Time'];
+                    $headers = ['Student Name', 'Email', 'Plan Title', 'Subject', 'Chapter', 'Task Title', 'Completed Time'];
                     $stmt = $pdo->query("
-                        SELECT u.name, u.email, sp.title as plan_title, act.activity_title as task_title, an.created_at
+                        SELECT u.name, u.email, sp.title as plan_title, act.subject, act.chapter, act.activity_title as task_title, an.created_at
                         FROM study_plan_analytics an
                         JOIN users u ON an.student_email = u.email
                         JOIN study_plans sp ON an.study_plan_id = sp.id
@@ -967,6 +967,8 @@ if (isset($_GET['action'])) {
                             r_esc($r['name']),
                             format_credential_text($r['email'], 'email', 'student-study-reports'),
                             r_esc($r['plan_title']),
+                            r_esc($r['subject'] ?: '-'),
+                            r_esc($r['chapter'] ?: '-'),
                             r_esc($r['task_title']),
                             date('d M Y h:i A', strtotime($r['created_at']))
                         ];
