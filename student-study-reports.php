@@ -1875,6 +1875,92 @@ include 'includes/admin_nav.php';
         border-color: var(--accent) !important;
         box-shadow: 0 8px 16px rgba(79, 70, 229, 0.15);
     }
+    
+    /* Print styles to isolate dossier content */
+    @media print {
+        /* Hide everything else on the page */
+        body > *:not(#student-task-modal-backdrop) {
+            display: none !important;
+            visibility: hidden !important;
+        }
+        body {
+            background: #fff !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        
+        /* Position modal backdrop as plain container, no dim overlay */
+        #student-task-modal-backdrop {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 100% !important;
+            height: auto !important;
+            background: transparent !important;
+            backdrop-filter: none !important;
+            display: block !important;
+            opacity: 1 !important;
+            overflow: visible !important;
+        }
+        
+        /* Remove shadows and scroll restrictions from timeline modal */
+        .timeline-modal {
+            width: 100% !important;
+            max-width: 100% !important;
+            height: auto !important;
+            max-height: none !important;
+            box-shadow: none !important;
+            border: none !important;
+            transform: none !important;
+            display: block !important;
+            position: static !important;
+            overflow: visible !important;
+        }
+        
+        /* Render dossier sidebar and main side-by-side */
+        .timeline-modal-body {
+            display: flex !important;
+            flex-direction: row !important;
+            height: auto !important;
+            overflow: visible !important;
+        }
+        .dossier-sidebar {
+            width: 280px !important;
+            min-width: 280px !important;
+            height: auto !important;
+            overflow: visible !important;
+            background: #f8fafc !important;
+            border-right: 1px solid #e2e8f0 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+            padding: 1.25rem !important;
+        }
+        .dossier-main {
+            flex-grow: 1 !important;
+            height: auto !important;
+            overflow: visible !important;
+            padding: 1.25rem !important;
+            background: #fff !important;
+        }
+        
+        /* Hide header action buttons, filters bar and list headers during print */
+        .timeline-modal-header .btn, 
+        .timeline-modal-header button,
+        .dossier-main > div:first-child,
+        .dossier-main h5 {
+            display: none !important;
+        }
+        
+        /* Let timeline flow and prevent page-break cuts */
+        .timeline-track-container {
+            overflow: visible !important;
+            height: auto !important;
+        }
+        .timeline-track-item {
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+        }
+    }
 </style>
 
 <div class="container-fluid" style="padding: 1.5rem 0;">
@@ -2727,6 +2813,8 @@ include 'includes/admin_nav.php';
 
     // ════════════════ STUDENT INTELLIGENCE VIEWPORT ════════════════
     let currentSelectedStudentEmail = '';
+    let currentSelectedStudentName = '';
+    let currentSelectedStudentCourse = '';
     let timelineActivities = [];
 
     // ── LIGHTBOX HELPERS ──
@@ -2800,6 +2888,8 @@ include 'includes/admin_nav.php';
                 }
 
                 const s = data.student;
+                currentSelectedStudentName = s.name;
+                currentSelectedStudentCourse = s.course;
                 const statusBadgeClass = s.status === 'active' ? 'green' : 'gray';
                 const profilePhotoSrc = s.photo ? '../' + s.photo : 'assets/img/default-avatar.svg';
 
@@ -3004,8 +3094,8 @@ include 'includes/admin_nav.php';
         const subtitleEl = document.getElementById('st-modal-subtitle');
         const timelineListContainer = document.getElementById('st-timeline-list');
 
-        titleEl.innerHTML = `<i class="fas fa-graduation-cap" style="color:var(--accent);"></i> Checklist Audit: ${planTitle}`;
-        subtitleEl.innerText = `Detailed logs & learning trail for student: ${email}`;
+        titleEl.innerHTML = `<i class="fas fa-folder-open" style="color:var(--accent);"></i> Checklist Audit: ${planTitle}`;
+        subtitleEl.innerHTML = `Student: <strong>${currentSelectedStudentName}</strong> (${email}) &nbsp;|&nbsp; Course: <strong>${currentSelectedStudentCourse}</strong>`;
         
         timelineListContainer.innerHTML = `<div style="text-align:center; padding:3rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent);"></i><p>Loading chronological checklist timeline...</p></div>`;
 
