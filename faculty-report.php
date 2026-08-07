@@ -90,10 +90,10 @@ if (isset($_GET['email']) && $f['email'] && filter_var($f['email'], FILTER_VALID
           . '<p>Completed sessions: <b>' . $completed . '</b><br>Total earned: <b>Rs. ' . number_format($earned, 2) . '</b>'
           . '<br>Total paid: <b>Rs. ' . number_format($paid, 2) . '</b><br>Balance due: <b>Rs. ' . number_format($due, 2) . '</b></p>'
           . '<p style="color:#9ca3af;font-size:12px;">PEPP Learning - Labinc Education Pvt. Ltd. This mailbox is not monitored.</p></div>';
-    $headers = "From: PEPP Learning <noreply@pepplearning.in>\r\nReply-To: noreply@pepplearning.in\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"$bMix\"";
-    $body  = "--$bMix\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n$html\r\n\r\n";
-    $body .= "--$bMix\r\nContent-Type: application/pdf; name=\"$fname\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"$fname\"\r\n\r\n" . chunk_split(base64_encode($bytes)) . "\r\n--$bMix--";
-    $ok = @mail($f['email'], $subject, $body, $headers);
+    $headers = "From: PEPP Learning <noreply@pepplearning.in>\nReply-To: noreply@pepplearning.in\nMIME-Version: 1.0\nContent-Type: multipart/mixed; boundary=\"$bMix\"";
+    $body  = "--$bMix\nContent-Type: text/html; charset=UTF-8\n\n$html\n\n";
+    $body .= "--$bMix\nContent-Type: application/pdf; name=\"$fname\"\nContent-Transfer-Encoding: base64\nContent-Disposition: attachment; filename=\"$fname\"\n\n" . chunk_split(base64_encode($bytes)) . "\n--$bMix--";
+    $ok = @mail($f['email'], $subject, $body, $headers, "-fnoreply@pepplearning.in");
     log_admin_activity($pdo, $admin_username, 'faculty_statement_emailed', "Statement emailed to {$f['name']} ({$f['email']})" . ($ok ? '' : ' [FAILED]'));
     header('Location: faculties.php?view=' . $id . '&msg=' . ($ok ? 'mailed' : 'mailfail'));
     exit();

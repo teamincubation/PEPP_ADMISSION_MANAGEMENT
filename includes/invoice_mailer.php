@@ -92,31 +92,31 @@ function send_invoice_email(array $inv, $pdfBytes) {
     $bAlt = 'alt_' . md5(uniqid('', true));
     $fname = str_replace(['/', '\\'], '-', $inv['invoice_no']) . '.pdf';
 
-    $headers = "From: PEPP Learning Payments <payments@pepplearning.in>\r\n"
-             . "Reply-To: noreply@pepplearning.in\r\n"
-             . "MIME-Version: 1.0\r\n"
-             . "X-Mailer: PEPP-Admin\r\n"
+    $headers = "From: PEPP Learning Payments <payments@pepplearning.in>\n"
+             . "Reply-To: noreply@pepplearning.in\n"
+             . "MIME-Version: 1.0\n"
+             . "X-Mailer: PEPP-Admin\n"
              . "Content-Type: multipart/mixed; boundary=\"{$bMix}\"";
 
-    $body  = "--{$bMix}\r\n";
-    $body .= "Content-Type: multipart/alternative; boundary=\"{$bAlt}\"\r\n\r\n";
-    $body .= "--{$bAlt}\r\n";
-    $body .= "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
-    $body .= $text . "\r\n\r\n";
-    $body .= "--{$bAlt}\r\n";
-    $body .= "Content-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
-    $body .= $html . "\r\n\r\n";
-    $body .= "--{$bAlt}--\r\n\r\n";
-    $body .= "--{$bMix}\r\n";
-    $body .= "Content-Type: application/pdf; name=\"{$fname}\"\r\n";
-    $body .= "Content-Transfer-Encoding: base64\r\n";
-    $body .= "Content-Disposition: attachment; filename=\"{$fname}\"\r\n\r\n";
-    $body .= chunk_split(base64_encode($pdfBytes)) . "\r\n";
+    $body  = "--{$bMix}\n";
+    $body .= "Content-Type: multipart/alternative; boundary=\"{$bAlt}\"\n\n";
+    $body .= "--{$bAlt}\n";
+    $body .= "Content-Type: text/plain; charset=UTF-8\nContent-Transfer-Encoding: 8bit\n\n";
+    $body .= $text . "\n\n";
+    $body .= "--{$bAlt}\n";
+    $body .= "Content-Type: text/html; charset=UTF-8\nContent-Transfer-Encoding: 8bit\n\n";
+    $body .= $html . "\n\n";
+    $body .= "--{$bAlt}--\n\n";
+    $body .= "--{$bMix}\n";
+    $body .= "Content-Type: application/pdf; name=\"{$fname}\"\n";
+    $body .= "Content-Transfer-Encoding: base64\n";
+    $body .= "Content-Disposition: attachment; filename=\"{$fname}\"\n\n";
+    $body .= chunk_split(base64_encode($pdfBytes)) . "\n";
     $body .= "--{$bMix}--";
 
     $subjectEnc = '=?UTF-8?B?' . base64_encode($subject) . '?=';
     try {
-        return @mail($to, $subjectEnc, $body, $headers);
+        return @mail($to, $subjectEnc, $body, $headers, "-fpayments@pepplearning.in");
     } catch (Exception $e) {
         error_log('Invoice mail: ' . $e->getMessage());
         return false;

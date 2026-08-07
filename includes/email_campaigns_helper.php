@@ -97,17 +97,17 @@ function send_custom_email($to, $subject, $body_html, $body_text = '') {
     
     $subjectEnc = '=?UTF-8?B?' . base64_encode($subject) . '?=';
     $bAlt = 'alt_' . md5(uniqid('', true));
-    $headers = "From: PEPP Learning <noreply@pepplearning.in>\r\n"
-             . "Reply-To: noreply@pepplearning.in\r\n"
-             . "MIME-Version: 1.0\r\n"
+    $headers = "From: PEPP Learning <noreply@pepplearning.in>\n"
+             . "Reply-To: noreply@pepplearning.in\n"
+             . "MIME-Version: 1.0\n"
              . "Content-Type: multipart/alternative; boundary=\"{$bAlt}\"";
              
-    $body  = "--{$bAlt}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" . $body_text . "\r\n\r\n";
-    $body .= "--{$bAlt}\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" . $body_html . "\r\n\r\n";
+    $body  = "--{$bAlt}\nContent-Type: text/plain; charset=UTF-8\nContent-Transfer-Encoding: 8bit\n\n" . $body_text . "\n\n";
+    $body .= "--{$bAlt}\nContent-Type: text/html; charset=UTF-8\nContent-Transfer-Encoding: 8bit\n\n" . $body_html . "\n\n";
     $body .= "--{$bAlt}--";
     
     try {
-        return @mail($to, $subjectEnc, $body, $headers);
+        return @mail($to, $subjectEnc, $body, $headers, "-fnoreply@pepplearning.in");
     } catch (Exception $e) {
         error_log('Custom campaign email send failed to ' . $to . ': ' . $e->getMessage());
         return false;
