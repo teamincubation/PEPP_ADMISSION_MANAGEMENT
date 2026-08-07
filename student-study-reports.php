@@ -163,8 +163,8 @@ if (isset($_GET['action'])) {
         $email = trim($_GET['email'] ?? '');
         try {
             $stmt = $pdo->prepare("
-                SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year, created_at, student_status 
-                FROM users 
+                 SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year, created_at, student_status, user_photo 
+                 FROM users 
                 WHERE email = ? AND status = 'approved' LIMIT 1
             ");
             $stmt->execute([$email]);
@@ -176,8 +176,9 @@ if (isset($_GET['action'])) {
 
             // Quick calculations for learning statistics
             $stmt_as = $pdo->prepare("
-                SELECT DISTINCT sp.* 
+                SELECT DISTINCT sp.*, pc.course_name 
                 FROM study_plans sp
+                LEFT JOIN pepp_courses pc ON sp.course_id = pc.id
                 JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
                 WHERE sp.status = 'published' AND (
                     sa.assignment_type = 'all' OR
@@ -222,7 +223,8 @@ if (isset($_GET['action'])) {
                     'perf_class' => $perf['class'],
                     'last_updated' => $lut ? date('d M Y h:i A', strtotime($lut)) : 'Never',
                     'start_date' => $p['start_date'],
-                    'end_date' => $p['end_date']
+                    'end_date' => $p['end_date'],
+                    'course_name' => $p['course_name'] ?: 'General'
                 ];
             }
 
@@ -286,6 +288,7 @@ if (isset($_GET['action'])) {
                     'academic_year' => r_esc($student['academic_year']),
                     'joined_date' => $student['created_at'] ? date('d M Y', strtotime($student['created_at'])) : 'N/A',
                     'status' => $student['student_status'] ?: 'inactive',
+                    'user_photo' => $student['user_photo'] ?: '',
                     'online' => $online,
                     'presence' => $presence,
                     'last_login' => $pres ? date('d M Y h:i A', strtotime($pres['created_at'])) : 'Never',
@@ -298,6 +301,44 @@ if (isset($_GET['action'])) {
                 ],
                 'plans' => $plans_data
             ]);
+        } catch (Exception $e) {
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // 3b. Toggle admin student task status
+    if (isset($_GET['action']) && $_GET['action'] === 'toggle_admin_student_task_status') {
+        $email = trim($_GET['email'] ?? '');
+        $plan_id = (int)($_GET['plan_id'] ?? 0);
+        $activity_id = (int)($_GET['activity_id'] ?? 0);
+        
+        try {
+            // Check if already completed
+            $stmt = $pdo->prepare("
+                SELECT id FROM study_plan_analytics 
+                WHERE student_email = ? AND study_plan_id = ? AND activity_id = ? AND action_type = 'complete_activity'
+                LIMIT 1
+            ");
+            $stmt->execute([$email, $plan_id, $activity_id]);
+            $existing = $stmt->fetch();
+            
+            if ($existing) {
+                // Remove completion log
+                $del = $pdo->prepare("DELETE FROM study_plan_analytics WHERE id = ?");
+                $del->execute([$existing['id']]);
+                $status = 'Pending';
+            } else {
+                // Add completion log
+                $ins = $pdo->prepare("
+                    INSERT INTO study_plan_analytics (study_plan_id, student_email, action_type, activity_id, ip_address, latitude, longitude, created_at, browser, device) 
+                    VALUES (?, ?, 'complete_activity', ?, 'Admin Override', NULL, NULL, NOW(), 'System', 'Admin Panel')
+                ");
+                $ins->execute([$plan_id, $email, $activity_id]);
+                $status = 'Completed';
+            }
+            
+            echo json_encode(['success' => true, 'status' => $status]);
         } catch (Exception $e) {
             echo json_encode(['error' => $e->getMessage()]);
         }
@@ -325,7 +366,7 @@ if (isset($_GET['action'])) {
             foreach ($activities as $a) {
                 // Fetch logged actions
                 $stmt_log = $pdo->prepare("
-                    SELECT created_at, ip_address, user_agent, location_coords, browser, device 
+                    SELECT id, created_at, ip_address, user_agent, location_coords, browser, device, resolved_place 
                     FROM study_plan_analytics 
                     WHERE student_email = ? AND study_plan_id = ? AND activity_id = ? AND action_type = 'complete_activity'
                     LIMIT 1
@@ -347,7 +388,26 @@ if (isset($_GET['action'])) {
                     }
                 }
 
+                $resolved_loc = $log ? trim($log['resolved_place'] ?? '') : '';
+                if ($log && empty($resolved_loc) && !empty($log['location_coords'])) {
+                    $parts = explode(',', $log['location_coords']);
+                    if (count($parts) === 2) {
+                        $lat = trim($parts[0]);
+                        $lon = trim($parts[1]);
+                        if (is_numeric($lat) && is_numeric($lon)) {
+                            $resolved_loc = reverse_geocode_nominatim($lat, $lon);
+                            if (!empty($resolved_loc)) {
+                                try {
+                                    $stmt_upd = $pdo->prepare("UPDATE study_plan_analytics SET resolved_place = ? WHERE id = ?");
+                                    $stmt_upd->execute([$resolved_loc, $log['id']]);
+                                } catch (Exception $ex) {}
+                            }
+                        }
+                    }
+                }
+
                 $timeline[] = [
+                    'id' => $a['id'],
                     'day' => $a['day_number'],
                     'date' => $a['activity_date'] ? date('d M Y', strtotime($a['activity_date'])) : 'TBD',
                     'start_time' => $a['start_time'] ? date('h:i A', strtotime($a['start_time'])) : '',
@@ -366,6 +426,7 @@ if (isset($_GET['action'])) {
                     'browser' => $log ? $log['browser'] : '',
                     'device' => $log ? $log['device'] : '',
                     'location' => $log ? $log['location_coords'] : '',
+                    'resolved_location' => $resolved_loc,
                     'duration' => $log ? '15 mins' : '' // Fallback mockup duration
                 ];
 
@@ -1549,6 +1610,77 @@ include 'includes/admin_nav.php';
     }
     input:checked + .slider { background-color: #4f46e5; }
     input:checked + .slider:before { transform: translateX(20px); }
+
+    /* Enrolled Course Cards */
+    .course-card-selector {
+        border: 2px solid var(--border);
+        background: #fff;
+        border-radius: 12px;
+        padding: 15px;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        position: relative;
+        cursor: pointer;
+    }
+    .course-card-selector:hover {
+        border-color: var(--accent) !important;
+        box-shadow: 0 4px 12px rgba(139, 92, 246, 0.08);
+        transform: translateY(-2px);
+    }
+    .course-card-selector.active {
+        border-color: var(--accent) !important;
+        background: #faf5ff !important;
+        box-shadow: 0 4px 12px rgba(139, 92, 246, 0.12);
+    }
+
+    /* Checklist audit table styling */
+    .audit-task-checkbox {
+        width: 18px;
+        height: 18px;
+        cursor: pointer;
+        accent-color: var(--accent);
+    }
+    .data-table th {
+        color: var(--text-muted);
+        text-transform: uppercase;
+        font-size: 0.72rem;
+        letter-spacing: 0.05em;
+    }
+    .data-table td {
+        vertical-align: middle;
+        border-bottom: 1px solid #f1f5f9;
+        padding: 12px 10px;
+    }
+
+    /* Print Stylesheet integration */
+    @media print {
+        body * {
+            visibility: hidden;
+        }
+        #timeline-audit-modal-backdrop,
+        #timeline-audit-modal-backdrop * {
+            visibility: visible;
+        }
+        #timeline-audit-modal-backdrop {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            background: none !important;
+            display: block !important;
+        }
+        .modal {
+            box-shadow: none !important;
+            border: none !important;
+            max-height: none !important;
+            width: 100% !important;
+            max-width: none !important;
+        }
+        .modal-head button,
+        .modal-head .btn,
+        .audit-task-checkbox {
+            display: none !important;
+        }
+    }
 </style>
 
 <div class="container-fluid" style="padding: 1.5rem 0;">
@@ -2015,58 +2147,82 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
-<!-- 5. Student Checklist Day-by-Day Timeline slide-over -->
-<div class="slide-over-backdrop" id="student-task-slideover-backdrop" onclick="closeSlideOver('student-task-slideover')"></div>
-<div class="slide-over" id="student-task-slideover" style="width: 580px; right: -600px;">
-    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid var(--border); padding-bottom:12px; margin-bottom:15px;">
-        <div>
-            <h4 id="st-slideover-title" style="margin:0; font-family:var(--header-font); font-weight:800; font-size:1.15rem; color:var(--text-main);"><i class="fas fa-user-graduate" style="color:var(--accent); margin-right:6px;"></i> Student Tasks View</h4>
-            <span id="st-slideover-subtitle" style="font-size:0.75rem; color:var(--text-muted);"></span>
+<!-- 5. Student Checklist Day-by-Day Timeline Modal -->
+<div class="modal-backdrop" id="timeline-audit-modal-backdrop" style="display:none; justify-content:center; align-items:center; z-index:999;" onclick="closeTimelineAuditModal()">
+    <div class="modal" style="max-width:980px; width:95%; max-height:90vh; display:flex; flex-direction:column; padding:0; overflow:hidden;" onclick="event.stopPropagation()">
+        <!-- Header -->
+        <div class="modal-head" style="padding:1.2rem 1.5rem; background:var(--primary-gradient); color:#fff; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.1);">
+            <div>
+                <h3 id="st-slideover-title" style="margin:0; font-family:var(--header-font); font-weight:800; font-size:1.25rem; color:#fff; display:flex; align-items:center; gap:8px;"><i class="fas fa-list-check"></i> Checklist Audit</h3>
+                <span id="st-slideover-subtitle" style="font-size:0.75rem; opacity:0.8; display:block; margin-top:2px;"></span>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+                <button type="button" class="btn btn-sm" style="background:rgba(255,255,255,0.15); color:#fff; border:none; padding:6px 12px; font-weight:700;" onclick="exportTimelineExcel()"><i class="fas fa-file-excel"></i> Export Excel</button>
+                <button type="button" class="btn btn-sm" style="background:rgba(255,255,255,0.15); color:#fff; border:none; padding:6px 12px; font-weight:700;" onclick="printTimelineChecklist()"><i class="fas fa-print"></i> Print PDF</button>
+                <button type="button" class="btn btn-sm" style="background:rgba(255,255,255,0.15); color:#fff; border:none; padding:6px 12px; font-size:1.1rem; border-radius:50%; width:32px; height:32px; display:inline-flex; align-items:center; justify-content:center;" onclick="closeTimelineAuditModal()"><i class="fas fa-xmark"></i></button>
+            </div>
         </div>
-        <div style="display:flex; gap:6px;">
-            <button type="button" class="btn btn-sm btn-outline" style="padding:4px 8px;" onclick="exportTimelineExcel()"><i class="fas fa-file-excel"></i> Export</button>
-            <button type="button" class="btn btn-sm btn-outline" style="padding:4px 8px;" onclick="closeSlideOver('student-task-slideover')"><i class="fas fa-xmark"></i></button>
+        
+        <!-- Scrollable Modal Content -->
+        <div style="flex:1; overflow-y:auto; padding:1.5rem; display:flex; flex-direction:column; gap:1.2rem; background:#f8fafc;">
+            <!-- Top Dashboard Stats -->
+            <div style="display:grid; grid-template-columns: 200px 1fr; gap:1.5rem; background:#fff; border:1px solid var(--border); border-radius:12px; padding:1.2rem; box-shadow:0 2px 4px rgba(0,0,0,0.02);">
+                <!-- Completion score ring / text -->
+                <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; border-right:1px solid var(--border); padding-right:1.2rem; text-align:center;">
+                    <div style="font-size:0.75rem; font-weight:800; color:var(--text-muted); text-transform:uppercase; margin-bottom:5px;">Progress Rate</div>
+                    <strong id="st-completion-pct" style="font-size:2rem; font-weight:900; color:var(--accent); line-height:1;">0%</strong>
+                    <div style="background:#cbd5e1; height:6px; width:100%; border-radius:3px; overflow:hidden; margin-top:8px;">
+                        <div id="st-completion-bar" style="background:var(--primary-gradient); height:100%; width:0%; transition: width 0.4s ease;"></div>
+                    </div>
+                </div>
+                
+                <!-- Performance summary & analysis -->
+                <div style="display:flex; flex-direction:column; justify-content:center;">
+                    <div style="display:flex; gap:1.5rem; flex-wrap:wrap; margin-bottom:12px;">
+                        <div><span style="font-size:0.72rem; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Completed</span> <strong id="st-completed-count" style="font-size:1rem; color:#10b981; display:block;">0</strong></div>
+                        <div><span style="font-size:0.72rem; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Pending</span> <strong id="st-pending-count" style="font-size:1rem; color:#ef4444; display:block;">0</strong></div>
+                        <div><span style="font-size:0.72rem; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Performance</span> <div id="st-perf-badge" style="margin-top:2px;">-</div></div>
+                        <div><span style="font-size:0.72rem; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Last Logged Update</span> <strong id="st-last-active" style="font-size:0.9rem; color:var(--text-main); display:block; margin-top:2px;">Never</strong></div>
+                    </div>
+                    <div style="padding-top:10px; border-top:1px dashed var(--border); font-size:0.8rem; color:var(--text-muted); line-height:1.4;">
+                        <strong>Overall Analysis:</strong> <span id="st-overall-analysis">Analysis is generated based on daily student tasks completions rate.</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Tasks checklist grid list -->
+            <div style="background:#fff; border:1px solid var(--border); border-radius:12px; padding:1.2rem; box-shadow:0 2px 4px rgba(0,0,0,0.02);">
+                <h4 style="margin:0 0 1rem 0; font-family:var(--header-font); font-weight:800; font-size:1rem; color:var(--text-main); display:flex; align-items:center; gap:8px;"><i class="fas fa-list-check" style="color:var(--accent);"></i> Tasks Checklist Detailed Logs</h4>
+                
+                <!-- Table listing tasks -->
+                <div style="overflow-x:auto;">
+                    <table class="data-table" style="width:100%; border-collapse:collapse; text-align:left; font-size:0.8rem;">
+                        <thead>
+                            <tr style="background:#f1f5f9; border-bottom:1.5px solid var(--border);">
+                                <th style="padding:10px; font-weight:700; width:60px; text-align:center;">Status</th>
+                                <th style="padding:10px; font-weight:700; width:100px;">Schedule</th>
+                                <th style="padding:10px; font-weight:700;">Task Details</th>
+                                <th style="padding:10px; font-weight:700;">Subject &amp; Chapter</th>
+                                <th style="padding:10px; font-weight:700;">Logged Details</th>
+                                <th style="padding:10px; font-weight:700; width:150px;">Map Location</th>
+                            </tr>
+                        </thead>
+                        <tbody id="st-timeline-container">
+                            <!-- Populated dynamically via JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
-    
-    <div style="flex-grow:1; overflow-y:auto; padding-right:5px; display:flex; flex-direction:column; gap:16px;">
-        <!-- Overall Analysis Card -->
-        <div class="widget-card" style="background:#f8fafc; border:1px solid var(--border); border-radius:12px; padding:15px; margin-bottom:5px;">
-            <h5 style="margin:0 0 10px 0; font-size:0.85rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Overall Study Plan Performance</h5>
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <span style="font-size:0.82rem; font-weight:600; color:var(--text-main);">Progress Checklist Rate</span>
-                <strong id="st-completion-pct" style="font-size:1rem; color:var(--accent);">0%</strong>
-            </div>
-            <div style="background:#cbd5e1; height:8px; border-radius:4px; overflow:hidden; margin-bottom:12px; position:relative;">
-                <div id="st-completion-bar" style="background:var(--primary-gradient); height:100%; width:0%; transition: width 0.4s ease;"></div>
-            </div>
-            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:10px; text-align:center;">
-                <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 5px;">
-                    <div style="font-size:0.68rem; font-weight:700; color:var(--text-muted);">COMPLETED</div>
-                    <strong id="st-completed-count" style="font-size:0.9rem; color:#10b981;">0</strong>
-                </div>
-                <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 5px;">
-                    <div style="font-size:0.68rem; font-weight:700; color:var(--text-muted);">PENDING</div>
-                    <strong id="st-pending-count" style="font-size:0.9rem; color:#ef4444;">0</strong>
-                </div>
-                <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 5px;">
-                    <div style="font-size:0.68rem; font-weight:700; color:var(--text-muted);">PERFORMANCE</div>
-                    <strong id="st-perf-badge" style="font-size:0.75rem; text-transform:uppercase;">-</strong>
-                </div>
-            </div>
-            <div style="font-size:0.75rem; color:var(--text-muted); margin-top:10px; padding-top:8px; border-top:1px dashed #e2e8f0; display:flex; justify-content:space-between;">
-                <span>Last Checklist Update:</span>
-                <strong id="st-last-active" style="color:var(--text-main);">-</strong>
-            </div>
-        </div>
+</div>
 
-        <!-- Timeline Container -->
-        <div>
-            <h5 style="margin:0 0 12px 0; font-size:0.85rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Study Plan Checklist Activities</h5>
-            <div id="st-timeline-container" style="display:flex; flex-direction:column; gap:14px; position:relative; padding-left:15px; border-left:2px solid #e2e8f0; margin-left:8px;">
-                <!-- Dynamically filled timeline items -->
-            </div>
-        </div>
+<!-- 6. Student Photo Lightbox Modal -->
+<div class="modal-backdrop" id="student-photo-lightbox-modal" style="display:none; justify-content:center; align-items:center; z-index:9999;" onclick="closePhotoLightbox()">
+    <div class="modal" style="max-width:500px; padding:0; background:transparent; border:none; box-shadow:none; text-align:center; position:relative;" onclick="event.stopPropagation()">
+        <button onclick="closePhotoLightbox()" style="position:absolute; top:-40px; right:0; background:none; border:none; color:#fff; font-size:2rem; cursor:pointer;" title="Close"><i class="fas fa-circle-xmark"></i></button>
+        <img id="lightbox-img" src="" style="max-width:100%; max-height:80vh; border-radius:16px; box-shadow:0 12px 30px rgba(0,0,0,0.3); border:4px solid #fff; background:#fff;" alt="Student Photo">
+        <h4 id="lightbox-title" style="color:#fff; font-family:var(--header-font); font-weight:800; margin-top:15px; font-size:1.2rem;"></h4>
     </div>
 </div>
 
@@ -2301,6 +2457,24 @@ include 'includes/admin_nav.php';
     // ════════════════ STUDENT INTELLIGENCE VIEWPORT ════════════════
     let currentSelectedStudentEmail = '';
     
+    // Lightbox handlers
+    window.openPhotoLightbox = function(photoUrl, studentName) {
+        if (!photoUrl) return;
+        const modal = document.getElementById('student-photo-lightbox-modal');
+        const img = document.getElementById('lightbox-img');
+        const title = document.getElementById('lightbox-title');
+        img.src = photoUrl;
+        title.innerText = studentName;
+        modal.style.display = 'flex';
+    };
+
+    window.closePhotoLightbox = function() {
+        const modal = document.getElementById('student-photo-lightbox-modal');
+        modal.style.display = 'none';
+    };
+
+    let plansByCourse = {};
+
     function loadStudentIntelligenceDashboard(email) {
         currentSelectedStudentEmail = email;
         hideAllViewportViews();
@@ -2318,19 +2492,18 @@ include 'includes/admin_nav.php';
 
                 const s = data.student;
                 const statusBadgeClass = s.status === 'active' ? 'green' : 'gray';
-                const onlineDotClass = s.online ? 'pulse-dot' : '';
 
-                // Build HTML
+                // Build HTML structure
                 let html = `
                     <div style="display:grid; grid-template-columns: 320px 1fr; gap:1.5rem; align-items:start;">
                         <!-- Left Panel: Profile Info Card -->
                         <div class="widget-card" style="padding:1.5rem; background:#fff; border:1px solid var(--border); border-radius:16px;">
                             <div style="text-align:center; margin-bottom:20px; border-bottom:1px solid var(--border); padding-bottom:15px;">
-                                <div style="width:90px; height:90px; border-radius:50%; background:#f1f5f9; display:inline-flex; align-items:center; justify-content:center; border:3px solid var(--accent); margin-bottom:12px; color:var(--accent); font-size:2.5rem; position:relative;">
-                                    <i class="fas fa-user-graduate"></i>
+                                <div onclick="openPhotoLightbox('${s.user_photo ? s.user_photo : ''}', '${s.name.replace(/'/g, "\\'")}')" style="width:90px; height:90px; border-radius:50%; background:#f1f5f9; display:inline-flex; align-items:center; justify-content:center; border:3px solid var(--accent); margin:0 auto 12px auto; color:var(--accent); font-size:2.5rem; position:relative; cursor:${s.user_photo ? 'pointer' : 'default'}; overflow:hidden;" title="${s.user_photo ? 'Click to view full size photo' : ''}">
+                                    ${s.user_photo ? `<img src="${s.user_photo}" style="width:100%; height:100%; object-fit:cover;" onerror="this.src=''; this.parentElement.innerHTML='<i class=\'fas fa-user-graduate\'></i>';">` : `<i class="fas fa-user-graduate"></i>`}
                                     ${s.online ? `<span class="pulse-dot" style="position:absolute; bottom:2px; right:2px; margin:0; border:2px solid #fff; width:12px; height:12px;"></span>` : ''}
                                 </div>
-                                <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.2rem; color:var(--text-main); margin:0 0 4px 0;">${s.name}</h4>
+                                <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.2rem; color:var(--text-main); margin:4px 0;">${s.name}</h4>
                                 <span style="font-size:0.7rem; font-weight:700; text-transform:uppercase;" class="badge ${statusBadgeClass}">${s.status}</span>
                             </div>
 
@@ -2359,149 +2532,310 @@ include 'includes/admin_nav.php';
 
                             <!-- Communication Actions -->
                             <div style="display:flex; flex-direction:column; gap:8px;">
-                                <a href="https://wa.me/${s.masked_phone.replace(/\\D/g, '')}" target="_blank" class="btn btn-whatsapp" style="width:100%; text-align:center;"><i class="fab fa-whatsapp"></i> Chat on WhatsApp</a>
+                                <a href="https://wa.me/${s.masked_phone.replace(/\D/g, '')}" target="_blank" class="btn btn-whatsapp" style="width:100%; text-align:center;"><i class="fab fa-whatsapp"></i> Chat on WhatsApp</a>
                                 <a href="mailto:${s.email}" class="btn btn-primary" style="width:100%; text-align:center;"><i class="fas fa-envelope"></i> Send Email</a>
                                 <a href="tel:${s.masked_phone}" class="btn btn-outline" style="width:100%; text-align:center;"><i class="fas fa-phone"></i> Call Student</a>
                                 <a href="student-details.php?user_id=${s.user_id}" class="btn btn-outline" style="width:100%; text-align:center;"><i class="fas fa-user-graduate"></i> View Profile Page</a>
                             </div>
                         </div>
 
-                        <!-- Right Panel: Course Cards / Study Plans List -->
+                        <!-- Right Panel: Course Cards & Plans selection layout -->
                         <div>
                             <div class="chart-card">
-                                <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.1rem; color:var(--text-main); margin-bottom:12px; border-bottom:1.5px solid var(--border); padding-bottom:8px;">Enrolled Courses &amp; Study Plans</h4>
-                                <div style="display:flex; flex-direction:column; gap:12px;" id="std-intelligence-plans-list">
-                                    <!-- Plan summary list populated dynamically below -->
+                                <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.1rem; color:var(--text-main); margin-bottom:15px; border-bottom:1.5px solid var(--border); padding-bottom:8px;">Enrolled Courses &amp; Study Plans</h4>
+                                <div id="nested-courses-workspace">
+                                    <!-- Populated dynamically -->
                                 </div>
                             </div>
                         </div>
                     </div>
                 `;
-                
+
                 container.innerHTML = html;
 
-                // Build Study plans List
-                const plansListContainer = document.getElementById('std-intelligence-plans-list');
-                if (data.plans.length === 0) {
-                    plansListContainer.innerHTML = `
-                        <div style="text-align:center; padding:3rem; border:2px dashed var(--border); border-radius:12px; color:var(--text-muted);">
-                            <i class="fas fa-folder-open" style="font-size:2.5rem; margin-bottom:10px;"></i>
-                            <p style="margin:0; font-weight:700;">No Study Plans Assigned</p>
-                            <small style="font-size:0.75rem;">This student does not have any active or draft study plan assignments under course ${s.course}.</small>
-                        </div>
-                    `;
-                    return;
+                // Group plans by course
+                plansByCourse = {};
+                
+                // Add student primary course as default key
+                if (s.course) {
+                    plansByCourse[s.course] = [];
                 }
-
+                
                 data.plans.forEach(p => {
-                    const row = document.createElement('div');
-                    row.className = 'landing-card';
-                    row.style.height = 'auto';
-                    row.style.padding = '20px';
-                    row.style.alignItems = 'stretch';
-                    row.style.gap = '15px';
-                    row.style.textAlign = 'left';
-                    row.style.background = '#f8fafc';
-                    row.innerHTML = `
-                        <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <div>
-                                <strong style="font-size:1rem; color:var(--text-main);">${p.title}</strong>
-                                <span style="font-size:0.72rem; color:var(--text-muted); display:block; margin-top:2px;">Scheduled: ${p.start_date} to ${p.end_date}</span>
-                            </div>
-                            <button class="btn btn-sm btn-soft-violet" onclick="openStudentTimeline('${s.email}', ${p.id}, '${p.title.replace(/'/g, "\\\\'")}')"><i class="fas fa-list-check"></i> View Timeline Checklist</button>
-                        </div>
+                    const cname = p.course_name || 'General';
+                    if (!plansByCourse[cname]) {
+                        plansByCourse[cname] = [];
+                    }
+                    plansByCourse[cname].push(p);
+                });
 
-                        <!-- Progress calculations bar -->
-                        <div style="display:flex; gap:1.5rem; margin-top:5px; border-top:1px dashed #e2e8f0; padding-top:10px; flex-wrap:wrap;">
-                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Total Tasks:</span> <strong style="font-size:0.85rem;">${p.total_tasks}</strong></div>
-                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Completed:</span> <strong style="font-size:0.85rem; color:#10b981;">${p.completed}</strong></div>
-                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Pending:</span> <strong style="font-size:0.85rem; color:#ef4444;">${p.pending}</strong></div>
-                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Checklist Progress:</span> <strong style="font-size:0.85rem; color:var(--accent);">${p.pct}%</strong></div>
-                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Performance:</span> <strong style="font-size:0.85rem; color:${p.perf_class === 'green' ? '#10b981' : p.perf_class === 'red' ? '#ef4444' : '#f59e0b'};\"><span class="badge ${p.perf_class}">${p.performance}</span></strong></div>
-                            <div><span style="font-size:0.75rem; color:var(--text-muted);">Last Active:</span> <strong style="font-size:0.85rem;">${p.last_updated}</strong></div>
+                const workspace = document.getElementById('nested-courses-workspace');
+                
+                // Generate Course Card Elements
+                let coursesHtml = `
+                    <div style="margin-bottom: 20px;">
+                        <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap:12px;" id="std-courses-cards-grid">
+                `;
+                
+                let index = 0;
+                let firstCourseName = '';
+                Object.keys(plansByCourse).forEach(cname => {
+                    if (index === 0) firstCourseName = cname;
+                    const plansCount = plansByCourse[cname].length;
+                    const isActive = index === 0 ? 'active' : '';
+                    coursesHtml += `
+                        <div class="course-card-selector ${isActive}" data-course-name="${cname.replace(/"/g, '&quot;')}" onclick="selectCourseTab(this)" style="cursor:pointer; border:2px solid ${isActive ? 'var(--accent)' : 'var(--border)'}; border-radius:12px; padding:15px; background:#fff; transition:all 0.2s ease; position:relative;">
+                            <div style="display:flex; align-items:center; gap:10px;">
+                                <div style="width:40px; height:40px; border-radius:10px; background:${isActive ? 'rgba(139, 92, 246, 0.1)' : '#f8fafc'}; color:${isActive ? 'var(--accent)' : 'var(--text-muted)'}; display:flex; align-items:center; justify-content:center; font-size:1.2rem;">
+                                    <i class="fas fa-graduation-cap"></i>
+                                </div>
+                                <div style="flex:1;">
+                                    <h4 style="font-family:var(--header-font); font-weight:800; font-size:0.85rem; color:var(--text-main); margin:0; line-height:1.2;">${cname}</h4>
+                                    <span style="font-size:0.7rem; color:var(--text-muted); font-weight:600; display:block; margin-top:2px;">${plansCount} ${plansCount === 1 ? 'Study Plan' : 'Study Plans'}</span>
+                                </div>
+                            </div>
+                            ${isActive ? `<span class="checked-badge" style="position:absolute; top:-6px; right:-6px; background:var(--accent); color:#fff; width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:0.6rem;"><i class="fas fa-check"></i></span>` : ''}
                         </div>
                     `;
-                    plansListContainer.appendChild(row);
+                    index++;
                 });
+
+                coursesHtml += `
+                        </div>
+                    </div>
+                    <div>
+                        <h5 style="font-size:0.75rem; font-weight:800; text-transform:uppercase; color:var(--text-muted); margin-bottom:12px; border-bottom: 1px dashed var(--border); padding-bottom: 6px;" id="study-plans-section-title">Assigned Study Plans</h5>
+                        <div style="display:flex; flex-direction:column; gap:12px;" id="std-intelligence-plans-list">
+                            <!-- Render plans here -->
+                        </div>
+                    </div>
+                `;
+
+                workspace.innerHTML = coursesHtml;
+
+                // Handle Course Tab Selection Click
+                window.selectCourseTab = function(el) {
+                    document.querySelectorAll('.course-card-selector').forEach(card => {
+                        card.classList.remove('active');
+                        card.style.borderColor = 'var(--border)';
+                        card.style.background = '#fff';
+                        const badge = card.querySelector('.checked-badge');
+                        if (badge) badge.remove();
+                    });
+                    el.classList.add('active');
+                    el.style.borderColor = 'var(--accent)';
+                    el.style.background = '#faf5ff';
+                    
+                    const badgeSpan = document.createElement('span');
+                    badgeSpan.className = 'checked-badge';
+                    badgeSpan.style.cssText = "position:absolute; top:-6px; right:-6px; background:var(--accent); color:#fff; width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:0.6rem;";
+                    badgeSpan.innerHTML = '<i class="fas fa-check"></i>';
+                    el.appendChild(badgeSpan);
+                    
+                    const cname = el.getAttribute('data-course-name');
+                    renderPlansForCourse(cname);
+                };
+
+                // Render active plan listing
+                window.renderPlansForCourse = function(cname) {
+                    const plansListContainer = document.getElementById('std-intelligence-plans-list');
+                    plansListContainer.innerHTML = '';
+                    
+                    const plans = plansByCourse[cname] || [];
+                    if (plans.length === 0) {
+                        plansListContainer.innerHTML = `
+                            <div style="text-align:center; padding:3rem; border:2px dashed var(--border); border-radius:12px; color:var(--text-muted); background:#fff;">
+                                <i class="fas fa-folder-open" style="font-size:2.5rem; margin-bottom:10px;"></i>
+                                <p style="margin:0; font-weight:700;">No Study Plans Assigned</p>
+                                <small style="font-size:0.75rem;">This student does not have any study plans assigned under course ${cname}.</small>
+                            </div>
+                        `;
+                        return;
+                    }
+                    
+                    plans.forEach(p => {
+                        const row = document.createElement('div');
+                        row.className = 'landing-card';
+                        row.style.height = 'auto';
+                        row.style.padding = '20px';
+                        row.style.alignItems = 'stretch';
+                        row.style.gap = '15px';
+                        row.style.textAlign = 'left';
+                        row.style.background = '#fff';
+                        row.style.border = '1px solid var(--border)';
+                        row.style.borderRadius = '12px';
+                        row.innerHTML = `
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <div>
+                                    <strong style="font-size:1rem; color:var(--text-main); font-family:var(--header-font); font-weight:800;">${p.title}</strong>
+                                    <span style="font-size:0.72rem; color:var(--text-muted); display:block; margin-top:2px;">Scheduled: ${p.start_date} to ${p.end_date}</span>
+                                </div>
+                                <button class="btn btn-sm btn-soft-violet" onclick="openStudentTimeline('${email}', ${p.id}, '${p.title.replace(/'/g, "\\\\'")}')"><i class="fas fa-list-check"></i> View Timeline Checklist</button>
+                            </div>
+
+                            <!-- Progress calculations bar -->
+                            <div style="display:flex; gap:1.5rem; margin-top:5px; border-top:1px dashed #e2e8f0; padding-top:10px; flex-wrap:wrap;">
+                                <div><span style="font-size:0.75rem; color:var(--text-muted);">Total Tasks:</span> <strong style="font-size:0.85rem;">${p.total_tasks}</strong></div>
+                                <div><span style="font-size:0.75rem; color:var(--text-muted);">Completed:</span> <strong style="font-size:0.85rem; color:#10b981;">${p.completed}</strong></div>
+                                <div><span style="font-size:0.75rem; color:var(--text-muted);">Pending:</span> <strong style="font-size:0.85rem; color:#ef4444;">${p.pending}</strong></div>
+                                <div><span style="font-size:0.75rem; color:var(--text-muted);">Checklist Progress:</span> <strong style="font-size:0.85rem; color:var(--accent);">${p.pct}%</strong></div>
+                                <div><span style="font-size:0.75rem; color:var(--text-muted);">Performance:</span> <strong style="font-size:0.85rem; color:${p.perf_class === 'green' ? '#10b981' : p.perf_class === 'red' ? '#ef4444' : '#f59e0b'};"><span class="badge ${p.perf_class}">${p.performance}</span></strong></div>
+                                <div><span style="font-size:0.75rem; color:var(--text-muted);">Last Active:</span> <strong style="font-size:0.85rem;">${p.last_updated}</strong></div>
+                            </div>
+                        `;
+                        plansListContainer.appendChild(row);
+                    });
+                };
+
+                // Render initial course plans
+                if (firstCourseName) {
+                    renderPlansForCourse(firstCourseName);
+                }
             });
+    }
     }
 
     // ════════════════ STUDENT DAY-BY-DAY TIMELINE DRAWER ════════════════
     let timelineActivities = [];
     
-    function openStudentTimeline(email, planId, planTitle) {
-        const slideover = document.getElementById('student-task-slideover');
-        const slideoverBackdrop = document.getElementById('student-task-slideover-backdrop');
-        const titleEl = document.getElementById('st-slideover-title');
-        const subtitleEl = document.getElementById('st-slideover-subtitle');
-        const timelineContainer = document.getElementById('st-timeline-container');
+    let activeAuditPlanId = null;
+    let activeAuditPlanTitle = '';
 
-        titleEl.innerText = `Checklist Audit: ${planTitle}`;
-        subtitleEl.innerText = `Fetching timeline logs for student: ${email}...`;
-        timelineContainer.innerHTML = `<div style="text-align:center; padding:3rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent);"></i><p>Loading activities checklist timeline...</p></div>`;
+    window.closeTimelineAuditModal = function() {
+        const backdrop = document.getElementById('timeline-audit-modal-backdrop');
+        backdrop.style.display = 'none';
+    };
 
-        openSlideOver('student-task-slideover');
+    window.printTimelineChecklist = function() {
+        window.print();
+    };
 
+    function get_performance_status_js(pct) {
+        if (pct >= 85) return { label: 'Excellent', class: 'green' };
+        if (pct >= 60) return { label: 'Good', class: 'blue' };
+        if (pct >= 40) return { label: 'Average', class: 'amber' };
+        return { label: 'At Risk', class: 'red' };
+    }
+
+    function getOverallAnalysisText(pct, completed, pending) {
+        if (pct === 100) {
+            return "Excellent! The student has completed 100% of the assigned tasks. They are showing consistent learning dedication and perfect attendance.";
+        } else if (pct >= 85) {
+            return `Great progress! With ${pct}% of tasks completed (${completed}/${completed+pending}), this student exhibits high commitment and is well-positioned for top performance.`;
+        } else if (pct >= 60) {
+            return `Steady progress. The student has completed ${pct}% of tasks. There are ${pending} pending tasks remaining. Encouraging more consistency is recommended to maintain momentum.`;
+        } else if (pct >= 40) {
+            return `Moderate performance. The student has completed ${pct}% of tasks. They are currently missing ${pending} tasks. Targeted intervention can help them catch up.`;
+        } else if (pct > 0) {
+            return `At Risk! The student's completion rate is very low at ${pct}%. They have completed only ${completed} tasks out of ${completed+pending}. Immediate academic counseling is advised to address learning gaps.`;
+        } else {
+            return "Critical: The student has not started any tasks in this study plan yet (0% progress). Immediate follow-up is required to ensure engagement.";
+        }
+    }
+
+    window.toggleTaskCompletion = function(email, planId, activityId) {
+        fetch(`?action=toggle_admin_student_task_status&email=${encodeURIComponent(email)}&plan_id=${planId}&activity_id=${activityId}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    refreshStudentTimeline(email, planId);
+                    loadStudentIntelligenceDashboard(email);
+                } else if (data.error) {
+                    alert("Error toggling task status: " + data.error);
+                }
+            });
+    };
+
+    window.refreshStudentTimeline = function(email, planId) {
+        const timelineContainer = document.querySelector('#timeline-audit-modal-backdrop #st-timeline-container');
         fetch(`?action=get_student_plan_timeline&email=${encodeURIComponent(email)}&plan_id=${planId}`)
             .then(res => res.json())
             .then(data => {
                 timelineActivities = data.timeline;
-                subtitleEl.innerText = `Timeline includes ${data.timeline.length} tasks scheduled.`;
-
+                
                 // Update Overall Checklist Performance Widget
                 const total = data.timeline.length;
                 const completed = data.timeline.filter(t => t.status === 'Completed').length;
                 const pending = total - completed;
-                const pct = total > 0 ? round((completed / total) * 100) : 0;
-                const perf = get_performance_status(pct);
+                const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+                const perf = get_performance_status_js(pct);
 
-                document.getElementById('st-completion-pct').innerText = `${pct}%`;
-                document.getElementById('st-completion-bar').style.width = `${pct}%`;
-                document.getElementById('st-completed-count').innerText = completed;
-                document.getElementById('st-pending-count').innerText = pending;
-                document.getElementById('st-perf-badge').innerHTML = `<span class="badge ${perf.class}">${perf.label}</span>`;
+                document.querySelector('#timeline-audit-modal-backdrop #st-completion-pct').innerText = `${pct}%`;
+                document.querySelector('#timeline-audit-modal-backdrop #st-completion-bar').style.width = `${pct}%`;
+                document.querySelector('#timeline-audit-modal-backdrop #st-completed-count').innerText = completed;
+                document.querySelector('#timeline-audit-modal-backdrop #st-pending-count').innerText = pending;
+                document.querySelector('#timeline-audit-modal-backdrop #st-perf-badge').innerHTML = `<span class="badge ${perf.class}">${perf.label}</span>`;
                 
                 const lastLog = data.timeline.filter(t => t.completed_at !== '').sort((a,b) => new Date(b.completed_at) - new Date(a.completed_at))[0];
-                document.getElementById('st-last-active').innerText = lastLog ? lastLog.completed_at : 'Never';
+                document.querySelector('#timeline-audit-modal-backdrop #st-last-active').innerText = lastLog ? lastLog.completed_at : 'Never';
+                document.querySelector('#timeline-audit-modal-backdrop #st-overall-analysis').innerText = getOverallAnalysisText(pct, completed, pending);
 
-                // Build Timeline list
+                // Build Table Rows
                 timelineContainer.innerHTML = '';
                 if (data.timeline.length === 0) {
-                    timelineContainer.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding:1rem;">No checklist activities mapped to this study plan.</div>';
+                    timelineContainer.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted); padding:2rem;">No checklist activities mapped to this study plan.</td></tr>';
                     return;
                 }
 
-                data.timeline.forEach((item, idx) => {
-                    const badge = item.status === 'Completed' ? 'green' : item.status === 'Overdue' ? 'red' : 'gray';
-                    const mapLink = item.location ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(item.location)}" target="_blank" style="color:var(--accent); font-weight:700;"><i class="fas fa-location-dot"></i> Logged Location</a>` : '';
+                data.timeline.forEach(item => {
+                    const tr = document.createElement('tr');
+                    tr.style.borderBottom = '1px solid #e2e8f0';
                     
-                    const itemDiv = document.createElement('div');
-                    itemDiv.style.position = 'relative';
-                    itemDiv.style.marginBottom = '15px';
-                    itemDiv.innerHTML = `
-                        <!-- Dot Indicator -->
-                        <span style="position:absolute; left:-20px; top:4px; width:10px; height:10px; border-radius:50%; border:2px solid #fff; background:${item.status === 'Completed' ? '#10b981' : '#cbd5e1'}; box-shadow:0 0 0 2px ${item.status === 'Completed' ? 'rgba(16,185,129,0.2)' : 'transparent'};"></span>
-                        
-                        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                            <div>
-                                <span style="font-size:0.7rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Day ${item.day} · ${item.date}</span>
-                                <h6 style="font-size:0.85rem; font-weight:800; color:var(--text-main); margin:2px 0;">${item.title}</h6>
-                                <p style="font-size:0.75rem; color:var(--text-muted); margin:0;">Subject: ${item.subject} | Chapter: ${item.chapter} | Faculty: ${item.faculty}</p>
-                            </div>
-                            <span class="badge ${badge}" style="font-size:0.65rem; text-transform:uppercase;">${item.status}</span>
+                    const isChecked = item.status === 'Completed' ? 'checked' : '';
+                    const mapCell = item.location ? `
+                        <a href="https://www.google.com/maps?q=${encodeURIComponent(item.location)}" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none; display:inline-flex; align-items:center; gap:4px;">
+                            <i class="fas fa-location-dot" style="color:#ef4444;"></i> ${item.resolved_location || 'Map coordinates'}
+                        </a>
+                    ` : '-';
+                    
+                    const logCell = item.status === 'Completed' ? `
+                        <div style="font-size:0.75rem; color:var(--text-muted); line-height:1.3;">
+                            <div><strong>Done:</strong> ${item.completed_at}</div>
+                            <div style="font-size:0.7rem; opacity:0.8;">IP: ${item.ip} | ${item.device} (${item.browser})</div>
                         </div>
-                        
-                        ${item.status === 'Completed' ? `
-                            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; margin-top:6px; font-size:0.72rem; color:var(--text-muted); display:flex; flex-direction:column; gap:4px;">
-                                <div><i class="fas fa-circle-check" style="color:#10b981;"></i> Completed on: <strong>${item.completed_at}</strong></div>
-                                <div><i class="fas fa-desktop"></i> IP: ${item.ip} | Device: ${item.device} (${item.browser})</div>
-                                ${mapLink ? `<div><i class="fas fa-map-pin"></i> ${mapLink}</div>` : ''}
-                            </div>
-                        ` : ''}
+                    ` : '-';
+
+                    tr.innerHTML = `
+                        <td style="padding:12px 10px; text-align:center;">
+                            <input type="checkbox" class="audit-task-checkbox" ${isChecked} onchange="toggleTaskCompletion('${email}', ${planId}, ${item.id})">
+                        </td>
+                        <td style="padding:12px 10px; font-weight:700; color:var(--text-main);">
+                            Day ${item.day}<br>
+                            <span style="font-size:0.75rem; color:var(--text-muted); font-weight:normal;">${item.date}</span>
+                        </td>
+                        <td style="padding:12px 10px;">
+                            <div style="font-weight:700; color:var(--text-main); font-size:0.85rem;">${item.title}</div>
+                            <span style="font-size:0.72rem; color:var(--text-muted);">Topic: ${item.topic || 'N/A'}</span>
+                        </td>
+                        <td style="padding:12px 10px; font-size:0.75rem; color:var(--text-muted); line-height:1.3;">
+                            <div><strong>Subject:</strong> ${item.subject}</div>
+                            <div><strong>Chapter:</strong> ${item.chapter}</div>
+                            <div><strong>Faculty:</strong> ${item.faculty}</div>
+                        </td>
+                        <td style="padding:12px 10px;">${logCell}</td>
+                        <td style="padding:12px 10px;">${mapCell}</td>
                     `;
-                    timelineContainer.appendChild(itemDiv);
+                    timelineContainer.appendChild(tr);
                 });
             });
+    };
+
+    function openStudentTimeline(email, planId, planTitle) {
+        activeAuditPlanId = planId;
+        activeAuditPlanTitle = planTitle;
+
+        const backdrop = document.getElementById('timeline-audit-modal-backdrop');
+        const titleEl = document.querySelector('#timeline-audit-modal-backdrop #st-slideover-title');
+        const subtitleEl = document.querySelector('#timeline-audit-modal-backdrop #st-slideover-subtitle');
+        const timelineContainer = document.querySelector('#timeline-audit-modal-backdrop #st-timeline-container');
+
+        titleEl.innerHTML = `<i class="fas fa-list-check"></i> Checklist Audit: ${planTitle}`;
+        subtitleEl.innerText = `Fetching timeline logs for student: ${email}...`;
+        timelineContainer.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent);"></i><p style="margin:5px 0 0 0;">Loading activities checklist timeline...</p></td></tr>';
+
+        backdrop.style.display = 'flex';
+
+        refreshStudentTimeline(email, planId);
     }
 
     // ════════════════ COURSE ANALYTICS ACCORDIONS / TABS ════════════════
@@ -2965,17 +3299,23 @@ include 'includes/admin_nav.php';
     }
 
     function exportTimelineExcel() {
-        const rows = document.querySelectorAll('#st-timeline-container > div');
-        const dataArr = [['Day & Date', 'Activity / Task Title', 'Metadata & Info', 'Status', 'Logged Details']];
+        const rows = document.querySelectorAll('#timeline-audit-modal-backdrop #st-timeline-container tr');
+        const dataArr = [['Status', 'Day & Date', 'Activity / Task Title', 'Subject & Chapter', 'Logged Details', 'Location Coordinate']];
 
         rows.forEach(row => {
-            const dayDate = row.querySelector('span').innerText;
-            const title = row.querySelector('h6').innerText;
-            const meta = row.querySelector('p').innerText;
-            const status = row.querySelector('.badge').innerText;
-            const logsBox = row.querySelector('div[style*="background"]');
-            const logs = logsBox ? logsBox.innerText.replace(/\\n+/g, ' | ') : 'N/A';
-            dataArr.push([dayDate, title, meta, status, logs]);
+            const cells = row.querySelectorAll('td');
+            if (cells.length >= 6) {
+                const isChecked = cells[0].querySelector('input').checked;
+                const status = isChecked ? 'Completed' : 'Pending';
+                
+                const dayDate = cells[1].innerText.replace(/\n+/g, ' ');
+                const title = cells[2].innerText.replace(/\n+/g, ' | ');
+                const subjChap = cells[3].innerText.replace(/\n+/g, ' | ');
+                const logged = cells[4].innerText.replace(/\n+/g, ' | ');
+                const location = cells[5].innerText.replace(/\n+/g, ' ');
+                
+                dataArr.push([status, dayDate, title, subjChap, logged, location]);
+            }
         });
 
         const ws = XLSX.utils.aoa_to_sheet(dataArr);
