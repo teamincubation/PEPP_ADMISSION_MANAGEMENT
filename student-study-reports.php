@@ -860,11 +860,17 @@ if (isset($_GET['action'])) {
             // Study plans assigned
             $plans_count = db_count($pdo, "SELECT COUNT(*) FROM study_plan_assignments WHERE assignment_type = 'form' AND assigned_value = ?", [(string)$form_id]);
             
-            // Campaign Respondents (approved students matching submission identifier)
+            // Campaign Respondents (approved students matching submission identifier or answer text)
             $respondents_count = db_count($pdo, "
                 SELECT COUNT(*) 
                 FROM users u
-                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                JOIN campaign_form_submissions s ON (
+                    u.email = s.respondent_identifier OR
+                    EXISTS (
+                        SELECT 1 FROM campaign_form_answers fa 
+                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
+                    )
+                )
                 WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
             ", [$form_id]);
             
@@ -872,7 +878,13 @@ if (isset($_GET['action'])) {
             $stmt_emails = $pdo->prepare("
                 SELECT u.email, u.user_id, u.pepp_course, u.pepp_academic_year
                 FROM users u
-                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                JOIN campaign_form_submissions s ON (
+                    u.email = s.respondent_identifier OR
+                    EXISTS (
+                        SELECT 1 FROM campaign_form_answers fa 
+                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
+                    )
+                )
                 WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
             ");
             $stmt_emails->execute([$form_id]);
@@ -958,7 +970,13 @@ if (isset($_GET['action'])) {
             $stmt_students = $pdo->prepare("
                 SELECT u.email 
                 FROM users u
-                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                JOIN campaign_form_submissions s ON (
+                    u.email = s.respondent_identifier OR
+                    EXISTS (
+                        SELECT 1 FROM campaign_form_answers fa 
+                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
+                    )
+                )
                 WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
             ");
             $stmt_students->execute([$form_id]);
@@ -1007,7 +1025,13 @@ if (isset($_GET['action'])) {
             $stmt_students = $pdo->prepare("
                 SELECT u.user_id, u.name, u.email, u.phone, u.created_at, s.is_converted_lead
                 FROM users u
-                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                JOIN campaign_form_submissions s ON (
+                    u.email = s.respondent_identifier OR
+                    EXISTS (
+                        SELECT 1 FROM campaign_form_answers fa 
+                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
+                    )
+                )
                 WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
                 ORDER BY u.name ASC
             ");
@@ -1079,7 +1103,13 @@ if (isset($_GET['action'])) {
             $stmt_students = $pdo->prepare("
                 SELECT u.email 
                 FROM users u
-                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                JOIN campaign_form_submissions s ON (
+                    u.email = s.respondent_identifier OR
+                    EXISTS (
+                        SELECT 1 FROM campaign_form_answers fa 
+                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
+                    )
+                )
                 WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
             ");
             $stmt_students->execute([$form_id]);
@@ -1157,7 +1187,13 @@ if (isset($_GET['action'])) {
                 SELECT u.name, u.email, {$select_str}
                 FROM study_plan_analytics an
                 JOIN users u ON an.student_email = u.email
-                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                JOIN campaign_form_submissions s ON (
+                    u.email = s.respondent_identifier OR
+                    EXISTS (
+                        SELECT 1 FROM campaign_form_answers fa 
+                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
+                    )
+                )
                 WHERE an.activity_id = ? 
                   AND an.action_type = 'complete_activity' 
                   AND s.form_id = ? 
@@ -1206,7 +1242,13 @@ if (isset($_GET['action'])) {
             $stmt_students = $pdo->prepare("
                 SELECT DISTINCT u.name, u.email, u.phone 
                 FROM users u
-                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                JOIN campaign_form_submissions s ON (
+                    u.email = s.respondent_identifier OR
+                    EXISTS (
+                        SELECT 1 FROM campaign_form_answers fa 
+                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
+                    )
+                )
                 JOIN study_plan_assignments sa ON (
                     sa.study_plan_id = ? AND (
                         sa.assignment_type = 'all' OR
