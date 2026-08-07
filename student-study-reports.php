@@ -37,6 +37,45 @@ if (!function_exists('time_ago')) {
     }
 }
 
+// Nominatim reverse geocode helper
+if (!function_exists('reverse_geocode_nominatim')) {
+    function reverse_geocode_nominatim($lat, $lon) {
+        $lat = trim((string)$lat);
+        $lon = trim((string)$lon);
+        if (empty($lat) || empty($lon)) return '';
+        
+        $url = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=" . urlencode($lat) . "&lon=" . urlencode($lon) . "&zoom=14";
+        
+        $opts = [
+            'http' => [
+                'method' => "GET",
+                'header' => "User-Agent: PEPPLearningAnalyticsDashboard/1.0 (support@pepplearning.in)\r\n",
+                'timeout' => 3
+            ]
+        ];
+        $context = stream_context_create($opts);
+        $res = @file_get_contents($url, false, $context);
+        if ($res) {
+            $data = json_decode($res, true);
+            if (!empty($data['address'])) {
+                $addr = $data['address'];
+                $place = $addr['suburb'] ?? $addr['neighbourhood'] ?? $addr['village'] ?? $addr['town'] ?? $addr['city'] ?? $addr['county'] ?? $addr['state'] ?? '';
+                if (!empty($place)) {
+                    $region = $addr['state'] ?? $addr['country'] ?? '';
+                    if (!empty($region) && strcasecmp($place, $region) !== 0) {
+                        return $place . ', ' . $region;
+                    }
+                    return $place;
+                }
+            }
+            if (!empty($data['display_name'])) {
+                return $data['display_name'];
+            }
+        }
+        return '';
+    }
+}
+
 // Get performance status mapping
 if (!function_exists('get_performance_status')) {
     function get_performance_status($pct) {
@@ -729,7 +768,7 @@ if (isset($_GET['action'])) {
                     foreach ($rows as $r) {
                         // Get latest activity log
                         $stmt_act = $pdo->prepare("
-                            SELECT created_at, latitude, longitude 
+                            SELECT id, created_at, latitude, longitude, resolved_place 
                             FROM study_plan_analytics 
                             WHERE student_email = ? 
                             ORDER BY created_at DESC LIMIT 1
@@ -749,10 +788,6 @@ if (isset($_GET['action'])) {
                         }
                         if (empty($reg_place)) $reg_place = 'N/A';
                         
-                        // Live last online place name from u.last_visit_location
-                        $live_place = trim($r['last_visit_location'] ?? '');
-                        if (empty($live_place)) $live_place = 'Unknown';
-                        
                         $map_html = '-';
                         if ($act) {
                             $last_time = $act['created_at'];
@@ -769,6 +804,25 @@ if (isset($_GET['action'])) {
                             }
                             
                             if (!empty($act['latitude']) && !empty($act['longitude'])) {
+                                // Resolve place using OpenStreetMap Nominatim and cache it in the database column
+                                $live_place = trim($act['resolved_place'] ?? '');
+                                if (empty($live_place)) {
+                                    $live_place = reverse_geocode_nominatim($act['latitude'], $act['longitude']);
+                                    if (!empty($live_place)) {
+                                        // Save resolved place back to study_plan_analytics table
+                                        try {
+                                            $stmt_upd = $pdo->prepare("UPDATE study_plan_analytics SET resolved_place = ? WHERE id = ?");
+                                            $stmt_upd->execute([$live_place, $act['id']]);
+                                        } catch (Exception $ex) {}
+                                    }
+                                }
+                                if (empty($live_place)) {
+                                    $live_place = trim($r['last_visit_location'] ?? '');
+                                }
+                                if (empty($live_place)) {
+                                    $live_place = 'Unknown Location';
+                                }
+                                
                                 $map_html = '<a href="https://www.google.com/maps?q=' . urlencode($act['latitude'] . ',' . $act['longitude']) . '" target="_blank" title="View logged location" style="margin-right:6px; display:inline-flex; align-items:center; vertical-align:middle;"><i class="fas fa-map-marker-alt" style="color:#ef4444; font-size:1.1rem;"></i></a>';
                                 $map_html .= '<span style="font-size:0.75rem; color:var(--text-muted); font-weight:500; vertical-align:middle;">' . r_esc($live_place) . '</span>';
                             }

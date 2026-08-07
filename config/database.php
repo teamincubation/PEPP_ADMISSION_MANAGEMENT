@@ -368,6 +368,13 @@ try {
         } catch (Exception $e) {}
 
         try {
+            $cols_anal_place = $pdo->query("SHOW COLUMNS FROM study_plan_analytics LIKE 'resolved_place'")->fetch();
+            if (!$cols_anal_place) {
+                $pdo->exec("ALTER TABLE study_plan_analytics ADD COLUMN `resolved_place` VARCHAR(255) DEFAULT NULL");
+            }
+        } catch (Exception $e) {}
+
+        try {
             $cols_plan = $pdo->query("SHOW COLUMNS FROM study_plans LIKE 'plan_type'")->fetch();
             if (!$cols_plan) {
                 $pdo->exec("ALTER TABLE study_plans ADD COLUMN `plan_type` ENUM('date_wise', 'day_wise') NOT NULL DEFAULT 'date_wise', ADD COLUMN `total_days` INT DEFAULT NULL");
