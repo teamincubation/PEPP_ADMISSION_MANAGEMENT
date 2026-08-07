@@ -694,7 +694,7 @@ if (isset($_GET['action'])) {
                                 (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
                                 (sa.assignment_type = 'form' AND EXISTS (
                                     SELECT 1 FROM campaign_form_submissions s 
-                                    WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+                                    WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
                                 ))
                             )
                         ", [$r['pepp_course'], $r['academic_year'], $r['user_id'], $r['email']]);
@@ -1507,6 +1507,11 @@ include 'includes/admin_nav.php';
                 <h4 id="kpi-drilldown-title" style="font-family:var(--header-font); font-weight:800; font-size:1.1rem; color:var(--text-main); margin:0;">KPI Details</h4>
                 <button class="btn btn-xs btn-outline" onclick="closeKPIDrilldown()"><i class="fas fa-xmark"></i> Close Details</button>
             </div>
+            <!-- Search bar for KPI Drilldown Table -->
+            <div style="margin-bottom:12px; position:relative;" id="kpi-drilldown-search-wrapper">
+                <i class="fas fa-search" style="color:var(--text-muted); position:absolute; left:12px; top:50%; transform:translateY(-50%);"></i>
+                <input type="text" id="kpi-drilldown-search-input" class="modern-input" placeholder="Search this table..." style="padding-left:34px; width:100%; border-radius:10px;" oninput="filterKPIDrilldownTable()">
+            </div>
             <div class="table-responsive" style="max-height:300px; overflow-y:auto; border:1px solid var(--border); border-radius:12px;">
                 <table class="data-table" style="width:100%;">
                     <thead>
@@ -2047,6 +2052,10 @@ include 'includes/admin_nav.php';
         const titleEl = document.getElementById('kpi-drilldown-title');
         const headersEl = document.getElementById('kpi-drilldown-headers');
         const bodyEl = document.getElementById('kpi-drilldown-body');
+        
+        // Clear search input on new load
+        const searchInput = document.getElementById('kpi-drilldown-search-input');
+        if (searchInput) searchInput.value = '';
 
         container.style.display = 'block';
         bodyEl.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:2rem; color:var(--text-muted);"><i class="fas fa-spinner fa-spin" style="margin-right:8px;"></i> Analyzing data...</td></tr>`;
@@ -2089,6 +2098,19 @@ include 'includes/admin_nav.php';
         
         document.querySelectorAll('.kpi-card').forEach(el => {
             el.classList.remove('selected-kpi');
+        });
+    }
+
+    function filterKPIDrilldownTable() {
+        const query = document.getElementById('kpi-drilldown-search-input').value.toLowerCase().trim();
+        const rows = document.querySelectorAll('#kpi-drilldown-body tr');
+        rows.forEach(row => {
+            const text = row.innerText.toLowerCase();
+            if (text.includes(query)) {
+                row.style.display = '';
+            } else {
+                row.style.display = 'none';
+            }
         });
     }
 
