@@ -686,8 +686,15 @@ include 'includes/admin_nav.php';
         </span>
     <?php endif; ?>
     <div style="margin-left:auto; display:flex; gap:8px;">
-        <?php $wa = preg_replace('/\D/', '', $student['whatsapp_country_code'] . $student['whatsapp_number']); ?>
-        <a class="btn btn-sm btn-whatsapp" href="https://wa.me/<?php echo e($wa); ?>" target="_blank"><i class="fab fa-whatsapp"></i> WhatsApp</a>
+        <?php 
+        $raw_wa = preg_replace('/\D/', '', $student['whatsapp_country_code'] . $student['whatsapp_number']);
+        $use_wa = (is_credential_restricted('students') && !can_admin_whatsapp_chat()) ? '' : $raw_wa;
+        
+        if (is_credential_restricted('students') && !can_admin_whatsapp_chat()): ?>
+            <a class="btn btn-sm btn-whatsapp" href="javascript:void(0)" onclick="alert('Access to student WhatsApp chat is restricted.')" style="opacity:0.6; cursor:not-allowed;" title="WhatsApp chat denied"><i class="fab fa-whatsapp"></i> WhatsApp</a>
+        <?php else: ?>
+            <a class="btn btn-sm btn-whatsapp" href="https://wa.me/<?php echo e($use_wa); ?>" target="_blank"><i class="fab fa-whatsapp"></i> WhatsApp</a>
+        <?php endif; ?>
         <?php if ($admin_credential_visibility === 'visible' || is_super_admin()): ?>
             <a class="btn btn-sm btn-outline" href="mailto:<?php echo e($student['email']); ?>"><i class="fas fa-envelope"></i> Email</a>
         <?php else: ?>

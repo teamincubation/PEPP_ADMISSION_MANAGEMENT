@@ -202,9 +202,13 @@ include 'includes/admin_nav.php';
                     <td class="cell-sub"><?php echo e($n['phone']); ?></td>
                     <td class="cell-sub" style="max-width:380px;"><?php echo e(mb_strimwidth($n['message'], 0, 110, '…')); ?></td>
                     <td class="cell-sub"><?php echo e($n['sent_by']); ?></td>
-                    <td><a class="btn btn-sm btn-whatsapp" target="_blank"
-                           href="https://wa.me/<?php echo e(preg_replace('/\D/', '', $n['phone'])); ?>?text=<?php echo rawurlencode($n['message']); ?>"
-                           title="Resend"><i class="fab fa-whatsapp"></i></a></td>
+                    <td>
+                        <?php if (is_credential_restricted('students') && !can_admin_whatsapp_chat()): ?>
+                            <a class="btn btn-sm btn-whatsapp" href="javascript:void(0)" onclick="alert('Access to student WhatsApp chat is restricted.')" style="opacity:0.6; cursor:not-allowed;" title="WhatsApp chat denied"><i class="fab fa-whatsapp"></i></a>
+                        <?php else: ?>
+                            <a class="btn btn-sm btn-whatsapp" target="_blank" href="https://wa.me/<?php echo e(preg_replace('/\D/', '', $n['phone'])); ?>?text=<?php echo rawurlencode($n['message']); ?>" title="Resend"><i class="fab fa-whatsapp"></i></a>
+                        <?php endif; ?>
+                    </td>
                 </tr>
             <?php endforeach; ?>
             </tbody>

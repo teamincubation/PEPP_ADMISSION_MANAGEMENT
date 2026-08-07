@@ -493,9 +493,16 @@ include 'includes/admin_nav.php';
                                 $clean_digits = substr($clean_digits, 1);
                             }
                             $wa_num = (strlen($clean_digits) === 10) ? '91' . $clean_digits : $clean_digits;
+                            $restricted_alumni = is_credential_restricted('alumni');
+                            $restricted_students = is_credential_restricted('students');
+                            $is_restricted = ($restricted_alumni || $restricted_students);
                         ?>
                             <div style="margin-top: 6px; display: flex; gap: 6px;">
-                                <a class="btn btn-sm btn-whatsapp" href="https://wa.me/<?php echo e($wa_num); ?>" target="_blank" title="WhatsApp: <?php echo e($ref_phone); ?>" style="text-decoration: none;"><i class="fab fa-whatsapp"></i> Chat</a>
+                                <?php if ($is_restricted && !can_admin_whatsapp_chat()): ?>
+                                    <a class="btn btn-sm btn-whatsapp" href="javascript:void(0)" onclick="alert('Access to WhatsApp chat is restricted.')" style="text-decoration: none; opacity:0.6; cursor:not-allowed;" title="WhatsApp chat denied"><i class="fab fa-whatsapp"></i> Chat</a>
+                                <?php else: ?>
+                                    <a class="btn btn-sm btn-whatsapp" href="https://wa.me/<?php echo e($wa_num); ?>" target="_blank" title="WhatsApp: <?php echo e($ref_phone); ?>" style="text-decoration: none;"><i class="fab fa-whatsapp"></i> Chat</a>
+                                <?php endif; ?>
                                 <a class="btn btn-sm btn-outline" href="tel:<?php echo e($clean_digits); ?>" title="Call: <?php echo e($ref_phone); ?>" style="text-decoration: none;"><i class="fas fa-phone"></i> Call</a>
                             </div>
                         <?php endif; ?>

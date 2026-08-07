@@ -167,13 +167,30 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
                         <?php elseif ($ans['type'] === 'whatsapp' && !empty($val)): ?>
                             <div style="font-size:0.95rem; font-weight:700; color:var(--text-main); display:flex; align-items:center; gap:8px;">
                                 <?php echo htmlspecialchars($val); ?>
-                                <?php $num = preg_replace('/[^0-9]/', '', $val); ?>
-                                <a href="https://wa.me/<?php echo $num; ?>" target="_blank" class="btn btn-sm btn-soft-green" style="padding:2px 8px; font-size:0.75rem;"><i class="fab fa-whatsapp"></i> Chat</a>
+                                <?php 
+                                $raw_phone = $ans['answer_text'];
+                                $use_phone = (is_credential_restricted('campaigns') && !can_admin_whatsapp_chat()) ? $val : $raw_phone;
+                                $num = preg_replace('/[^0-9]/', '', $use_phone); 
+                                
+                                if (is_credential_restricted('campaigns') && !can_admin_whatsapp_chat()): ?>
+                                    <a href="javascript:void(0)" class="btn btn-sm btn-soft-green" style="padding:2px 8px; font-size:0.75rem; cursor:not-allowed; opacity:0.5; pointer-events:none;" title="WhatsApp chat denied"><i class="fab fa-whatsapp"></i> Chat</a>
+                                <?php else: ?>
+                                    <a href="https://wa.me/<?php echo $num; ?>" target="_blank" class="btn btn-sm btn-soft-green" style="padding:2px 8px; font-size:0.75rem;"><i class="fab fa-whatsapp"></i> Chat</a>
+                                <?php endif; ?>
                             </div>
                         <?php elseif (($ans['type'] === 'email' || strpos(strtolower($ans['label']), 'email') !== false) && !empty($val)): ?>
                             <div style="font-size:0.95rem; font-weight:700; color:var(--text-main); display:flex; align-items:center; gap:8px;">
                                 <?php echo htmlspecialchars($val); ?>
-                                <button type="button" class="btn btn-sm btn-soft-blue" onclick="copyTextToClipboard('<?php echo addslashes($val); ?>', this)" style="padding:2px 8px; font-size:0.75rem; border:none; display:inline-flex; align-items:center; gap:4px; cursor:pointer;" title="Copy Email"><i class="fas fa-copy"></i> Copy</button>
+                                <?php 
+                                $raw_email = $ans['answer_text'];
+                                $copy_email = (is_credential_restricted('campaigns') && !can_admin_copy_original_email()) ? $val : $raw_email;
+                                $js_email = addslashes($copy_email);
+                                
+                                if (is_credential_restricted('campaigns') && !can_admin_copy_original_email()): ?>
+                                    <button type="button" class="btn btn-sm btn-soft-blue" disabled style="padding:2px 8px; font-size:0.75rem; border:none; display:inline-flex; align-items:center; gap:4px; cursor:not-allowed; opacity:0.5;" title="Copy unmasked email denied"><i class="fas fa-copy"></i> Copy</button>
+                                <?php else: ?>
+                                    <button type="button" class="btn btn-sm btn-soft-blue" onclick="copyTextToClipboard('<?php echo $js_email; ?>', this)" style="padding:2px 8px; font-size:0.75rem; border:none; display:inline-flex; align-items:center; gap:4px; cursor:pointer;" title="Copy Email"><i class="fas fa-copy"></i> Copy</button>
+                                <?php endif; ?>
                             </div>
                         <?php elseif (!empty($val)): ?>
                             <div style="font-size:0.95rem; font-weight:700; color:var(--text-main); white-space:pre-line;">
@@ -794,8 +811,17 @@ include 'includes/admin_nav.php';
                         } elseif ($file) {
                             $disp_val = "<a href='{$file}' target='_blank' class='btn btn-sm btn-soft-blue' style='padding:2px 8px; font-size:0.75rem; text-decoration:none;'><i class='fas fa-paperclip'></i> File</a>";
                         } elseif ($is_email) {
-                            $js_val = addslashes($val);
-                            $disp_val = "<button type='button' class='btn btn-sm btn-soft-blue copy-email-btn' onclick=\"copyTextToClipboard('{$js_val}', this)\" style='display:inline-flex; align-items:center; gap:5px; font-size:0.78rem; font-weight:600; padding:4px 10px; border-radius:8px; border:none; cursor:pointer;' title='Copy Email'><i class='fas fa-copy'></i> Copy Email</button>";
+                            $raw_val = $ans ? $ans['answer_text'] : '';
+                            $copy_val = (is_credential_restricted('campaigns') && !can_admin_copy_original_email()) ? $val : $raw_val;
+                            $js_val = addslashes($copy_val);
+                            
+                            $btn_attrs = "";
+                            if (is_credential_restricted('campaigns') && !can_admin_copy_original_email()) {
+                                $btn_attrs = "disabled style='display:inline-flex; align-items:center; gap:5px; font-size:0.78rem; font-weight:600; padding:4px 10px; border-radius:8px; border:none; cursor:not-allowed; opacity:0.5;' title='Copy unmasked email denied'";
+                            } else {
+                                $btn_attrs = "onclick=\"copyTextToClipboard('{$js_val}', this)\" style='display:inline-flex; align-items:center; gap:5px; font-size:0.78rem; font-weight:600; padding:4px 10px; border-radius:8px; border:none; cursor:pointer;' title='Copy Email'";
+                            }
+                            $disp_val = "<button type='button' class='btn btn-sm btn-soft-blue copy-email-btn' {$btn_attrs}><i class='fas fa-copy'></i> Copy Email</button>";
                         } else {
                             $disp_val = htmlspecialchars(strlen($val) > 40 ? substr($val, 0, 40) . '...' : $val);
                         }

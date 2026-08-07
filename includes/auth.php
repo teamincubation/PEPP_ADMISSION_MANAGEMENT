@@ -76,6 +76,14 @@ function ensure_credential_visibility_column($pdo) {
         if (!$cols_export) {
             $pdo->exec("ALTER TABLE admins ADD COLUMN `can_export` TINYINT(1) NOT NULL DEFAULT 1");
         }
+        $cols_copy_email = $pdo->query("SHOW COLUMNS FROM admins LIKE 'allow_copy_email'")->fetch();
+        if (!$cols_copy_email) {
+            $pdo->exec("ALTER TABLE admins ADD COLUMN `allow_copy_email` TINYINT(1) NOT NULL DEFAULT 1");
+        }
+        $cols_wa_chat = $pdo->query("SHOW COLUMNS FROM admins LIKE 'allow_whatsapp_chat'")->fetch();
+        if (!$cols_wa_chat) {
+            $pdo->exec("ALTER TABLE admins ADD COLUMN `allow_whatsapp_chat` TINYINT(1) NOT NULL DEFAULT 1");
+        }
         $ensured = true;
     } catch (Exception $e) {
         error_log("Failed to ensure admins schema updates: " . $e->getMessage());
@@ -87,6 +95,18 @@ function can_admin_edit() {
     global $admin_role, $admin_row;
     if ($admin_role === 'super_admin') return true;
     return isset($admin_row['can_edit']) ? (int)$admin_row['can_edit'] === 1 : true;
+}
+
+function can_admin_copy_original_email() {
+    global $admin_role, $admin_row;
+    if ($admin_role === 'super_admin') return true;
+    return isset($admin_row['allow_copy_email']) ? (int)$admin_row['allow_copy_email'] === 1 : true;
+}
+
+function can_admin_whatsapp_chat() {
+    global $admin_role, $admin_row;
+    if ($admin_role === 'super_admin') return true;
+    return isset($admin_row['allow_whatsapp_chat']) ? (int)$admin_row['allow_whatsapp_chat'] === 1 : true;
 }
 
 function can_admin_delete() {

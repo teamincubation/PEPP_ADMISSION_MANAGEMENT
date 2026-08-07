@@ -57,12 +57,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $can_edit = isset($_POST['can_edit']) ? 1 : 0;
                         $can_delete = isset($_POST['can_delete']) ? 1 : 0;
                         $can_export = isset($_POST['can_export']) ? 1 : 0;
+                        $allow_copy_email = isset($_POST['allow_copy_email']) ? 1 : 0;
+                        $allow_whatsapp_chat = isset($_POST['allow_whatsapp_chat']) ? 1 : 0;
                         
                         $stmt = $pdo->prepare("
-                            INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, permissions, status, credential_visibility, credential_visibility_scopes, can_edit, can_delete, can_export, created_by, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, 'active', ?, ?, ?, ?, ?, ?, NOW())
+                            INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, permissions, status, credential_visibility, credential_visibility_scopes, can_edit, can_delete, can_export, allow_copy_email, allow_whatsapp_chat, created_by, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                         ");
-                        $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $perms, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $admin_username]);
+                        $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $perms, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $allow_copy_email, $allow_whatsapp_chat, $admin_username]);
                         log_admin_activity($pdo, $admin_username, 'admin_created', "Created admin \"{$username}\" with access: {$perms}");
                         $success_message = "Admin \"{$username}\" created.";
                     }
@@ -94,9 +96,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $can_edit = isset($_POST['can_edit']) ? 1 : 0;
                         $can_delete = isset($_POST['can_delete']) ? 1 : 0;
                         $can_export = isset($_POST['can_export']) ? 1 : 0;
+                        $allow_copy_email = isset($_POST['allow_copy_email']) ? 1 : 0;
+                        $allow_whatsapp_chat = isset($_POST['allow_whatsapp_chat']) ? 1 : 0;
                         
-                        $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ?, credential_visibility = ?, credential_visibility_scopes = ?, can_edit = ?, can_delete = ?, can_export = ? WHERE id = ?")
-                            ->execute([$perms, $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $id]);
+                        $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ?, credential_visibility = ?, credential_visibility_scopes = ?, can_edit = ?, can_delete = ?, can_export = ?, allow_copy_email = ?, allow_whatsapp_chat = ? WHERE id = ?")
+                            ->execute([$perms, $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $allow_copy_email, $allow_whatsapp_chat, $id]);
                         log_admin_activity($pdo, $admin_username, 'permissions_changed', "Access and visibility for \"{$target['username']}\" updated.");
                         $success_message = "Access and visibility updated for {$target['username']}.";
                     }
@@ -256,6 +260,8 @@ include 'includes/admin_nav.php';
                                 "can_edit" => (int)($a["can_edit"] ?? 1),
                                 "can_delete" => (int)($a["can_delete"] ?? 1),
                                 "can_export" => (int)($a["can_export"] ?? 1),
+                                "allow_copy_email" => (int)($a["allow_copy_email"] ?? 1),
+                                "allow_whatsapp_chat" => (int)($a["allow_whatsapp_chat"] ?? 1),
                             ], JSON_HEX_APOS | JSON_HEX_QUOT); ?>)'><i class="fas fa-key"></i></button>
                             <button class="btn btn-sm btn-soft-blue" title="Reset password" onclick="resetPassword(<?php echo (int)$a['id']; ?>, '<?php echo e(addslashes($a['username'])); ?>')"><i class="fas fa-lock-open"></i></button>
                             <form method="POST" style="display:inline;">
@@ -342,6 +348,12 @@ include 'includes/admin_nav.php';
                         </label>
                         <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
                             <input type="checkbox" name="can_export" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Export
+                        </label>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                            <input type="checkbox" name="allow_copy_email" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Copy Original Email
+                        </label>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                            <input type="checkbox" name="allow_whatsapp_chat" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow WhatsApp Chat
                         </label>
                     </div>
                 </div>
@@ -431,6 +443,12 @@ include 'includes/admin_nav.php';
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
                                 <input type="checkbox" name="can_export" value="1" id="pm-can-export" style="width:16px; height:16px; accent-color:var(--accent);"> Allow Export
                             </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="allow_copy_email" value="1" id="pm-allow-copy-email" style="width:16px; height:16px; accent-color:var(--accent);"> Allow Copy Original Email
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="allow_whatsapp_chat" value="1" id="pm-allow-whatsapp-chat" style="width:16px; height:16px; accent-color:var(--accent);"> Allow WhatsApp Chat
+                            </label>
                         </div>
                     </div>
                 </div>
@@ -482,6 +500,8 @@ function openPerms(a) {
     document.getElementById('pm-can-edit').checked = (parseInt(a.can_edit ?? 1) === 1);
     document.getElementById('pm-can-delete').checked = (parseInt(a.can_delete ?? 1) === 1);
     document.getElementById('pm-can-export').checked = (parseInt(a.can_export ?? 1) === 1);
+    document.getElementById('pm-allow-copy-email').checked = (parseInt(a.allow_copy_email ?? 1) === 1);
+    document.getElementById('pm-allow-whatsapp-chat').checked = (parseInt(a.allow_whatsapp_chat ?? 1) === 1);
     document.getElementById('pm-username').textContent = a.username;
     const isAll = (a.perms === 'ALL');
     document.getElementById('pm-all').checked = isAll;
