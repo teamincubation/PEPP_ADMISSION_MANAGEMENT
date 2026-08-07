@@ -650,7 +650,12 @@ if (isset($_GET['action'])) {
                 $total_students = db_count($pdo, "SELECT COUNT(*) FROM users WHERE pepp_course = ? AND status = 'approved'", [$course_name]);
 
                 foreach ($tasks as $t) {
-                    $comp = db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE activity_id = ? AND action_type = 'complete_activity'", [$t['id']]);
+                    $comp = db_count($pdo, "
+                        SELECT COUNT(*) 
+                        FROM study_plan_analytics an
+                        JOIN users u ON an.student_email = u.email
+                        WHERE an.activity_id = ? AND an.action_type = 'complete_activity' AND u.pepp_course = ? AND u.status = 'approved'
+                    ", [$t['id'], $course_name]);
                     $pending = $total_students - $comp;
                     
                     $data[] = [
@@ -680,15 +685,16 @@ if (isset($_GET['action'])) {
     // 7. Course Analytics: Completed Tasks drilldown details
     if ($_GET['action'] === 'get_course_completed_tasks_drilldown') {
         $activity_id = (int)($_GET['activity_id'] ?? 0);
+        $course_name = trim($_GET['course_name'] ?? '');
         try {
             $stmt = $pdo->prepare("
                 SELECT u.name, u.email, an.created_at, an.ip_address, an.browser, an.device, an.location_coords
                 FROM study_plan_analytics an
                 JOIN users u ON an.student_email = u.email
-                WHERE an.activity_id = ? AND an.action_type = 'complete_activity'
+                WHERE an.activity_id = ? AND an.action_type = 'complete_activity' AND u.pepp_course = ? AND u.status = 'approved'
                 ORDER BY an.created_at DESC
             ");
-            $stmt->execute([$activity_id]);
+            $stmt->execute([$activity_id, $course_name]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             $data = [];
@@ -3606,7 +3612,7 @@ include 'includes/admin_nav.php';
         const tbody = document.getElementById('course-completed-students-body');
         tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;"><i class="fas fa-spinner fa-spin"></i> Fetching list...</td></tr>';
 
-        fetch('?action=get_course_completed_tasks_drilldown&activity_id=' + activityId)
+        fetch('?action=get_course_completed_tasks_drilldown&activity_id=' + activityId + '&course_name=' + encodeURIComponent(currentCourseNameSelected))
             .then(res => res.json())
             .then(data => {
                 tbody.innerHTML = '';
