@@ -907,7 +907,7 @@ if (isset($_GET['action'])) {
 
                 case 'active_plans':
                     $title = 'Active Published Study Plans';
-                    $headers = ['Plan Title', 'Start Date', 'End Date', 'Total Days', 'Assigned Value', 'completions'];
+                    $headers = ['Plan Title', 'Start Date', 'End Date', 'Total Days', 'Assigned Value', 'Total Daily Tasks'];
                     $stmt = $pdo->query("
                         SELECT sp.*, sa.assignment_type, sa.assigned_value 
                         FROM study_plans sp
