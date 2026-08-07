@@ -716,7 +716,7 @@ if (isset($_GET['action'])) {
                     
                 case 'active_students':
                     $title = 'Online & Active Enrolled Students';
-                    $headers = ['Student Name', 'Email', 'Course', 'Academic Year', 'Last Activity Status', 'Location Map'];
+                    $headers = ['Student Name', 'Email', 'Course', 'Academic Year', 'Registered Place', 'Last Activity Status', 'Location Map'];
                     $stmt = $pdo->prepare("
                         SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year, u.place_post_office, u.district, u.last_visit_location 
                         FROM users u 
@@ -742,16 +742,18 @@ if (isset($_GET['action'])) {
                         $sort_weight = 0;
                         $last_timestamp = 0;
                         
-                        $place = trim($r['last_visit_location'] ?? '');
-                        if (empty($place)) {
-                            $parts = [];
-                            if (!empty($r['place_post_office'])) $parts[] = $r['place_post_office'];
-                            if (!empty($r['district'])) $parts[] = $r['district'];
-                            $place = implode(', ', $parts);
+                        // Registered place
+                        $reg_place = trim($r['place_post_office'] ?? '');
+                        if (!empty($r['district'])) {
+                            $reg_place = $reg_place ? $reg_place . ', ' . $r['district'] : $r['district'];
                         }
-                        if (empty($place)) $place = 'Unknown';
+                        if (empty($reg_place)) $reg_place = 'N/A';
                         
-                        $map_html = '';
+                        // Live last online place name from u.last_visit_location
+                        $live_place = trim($r['last_visit_location'] ?? '');
+                        if (empty($live_place)) $live_place = 'Unknown';
+                        
+                        $map_html = '-';
                         if ($act) {
                             $last_time = $act['created_at'];
                             $last_timestamp = strtotime($last_time);
@@ -768,15 +770,16 @@ if (isset($_GET['action'])) {
                             
                             if (!empty($act['latitude']) && !empty($act['longitude'])) {
                                 $map_html = '<a href="https://www.google.com/maps?q=' . urlencode($act['latitude'] . ',' . $act['longitude']) . '" target="_blank" title="View logged location" style="margin-right:6px; display:inline-flex; align-items:center; vertical-align:middle;"><i class="fas fa-map-marker-alt" style="color:#ef4444; font-size:1.1rem;"></i></a>';
+                                $map_html .= '<span style="font-size:0.75rem; color:var(--text-muted); font-weight:500; vertical-align:middle;">' . r_esc($live_place) . '</span>';
                             }
                         }
-                        $map_html .= '<span style="font-size:0.75rem; color:var(--text-muted); font-weight:500; vertical-align:middle;">' . r_esc($place) . '</span>';
                         
                         $student_rows[] = [
                             'name' => r_esc($r['name']),
                             'email' => format_credential_text($r['email'], 'email', 'student-study-reports'),
                             'course' => r_esc($r['pepp_course']),
                             'year' => r_esc($r['academic_year']),
+                            'registered_place' => r_esc($reg_place),
                             'status' => $status_html,
                             'map' => $map_html,
                             'sort_weight' => $sort_weight,
@@ -802,6 +805,7 @@ if (isset($_GET['action'])) {
                             $row['email'],
                             $row['course'],
                             $row['year'],
+                            $row['registered_place'],
                             $row['status'],
                             $row['map']
                         ];
