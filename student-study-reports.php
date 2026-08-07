@@ -2273,18 +2273,23 @@ include 'includes/admin_nav.php';
 
                     <!-- 2. Tasks Pane -->
                     <div class="course-tab-pane" id="pane-tasks" style="display:none;">
-                        <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
-                            <button class="btn btn-sm btn-outline" onclick="exportCourseTasksCSV()"><i class="fas fa-file-csv"></i> Export CSV</button>
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+                            <div style="display:flex; gap:10px; align-items:center; flex-grow:1;">
+                                <input type="text" id="course-task-search" oninput="filterCourseTasksTable()" placeholder="Search task, subject, chapter, plan..." style="padding:6px 12px; font-size:0.8rem; border:1.5px solid var(--border); border-radius:8px; width:220px; outline:none; height:34px; background:#fff;">
+                                <select id="course-task-subject-filter" onchange="filterCourseTasksTable()" style="padding:0 10px; font-size:0.8rem; border:1.5px solid var(--border); border-radius:8px; width:160px; height:34px; background:#fff; cursor:pointer; outline:none;">
+                                    <option value="ALL">All Subjects</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-sm btn-outline" style="height:34px; padding:0 12px; display:inline-flex; align-items:center; gap:6px;" onclick="exportCourseTasksCSV()"><i class="fas fa-file-csv"></i> Export CSV</button>
                         </div>
                         <div class="table-responsive" style="border:1.5px solid var(--border); border-radius:12px; max-height:400px; overflow-y:auto;">
                             <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
                                 <thead>
                                     <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:#f8fafc; position:sticky; top:0; z-index:2;">
                                         <th style="padding:12px 10px; font-weight:700;">Plan</th>
-                                        <th style="padding:12px 10px; font-weight:700; text-align:center; width:60px;">Day</th>
+                                        <th style="padding:12px 10px; font-weight:700; text-align:center; width:110px;">Date</th>
                                         <th style="padding:12px 10px; font-weight:700;">Task Title</th>
                                         <th style="padding:12px 10px; font-weight:700;">Subject &amp; Chapter</th>
-                                        <th style="padding:12px 10px; font-weight:700;">Faculty</th>
                                         <th style="padding:12px 10px; font-weight:700; text-align:center;">Completed</th>
                                         <th style="padding:12px 10px; font-weight:700; text-align:center;">Pending</th>
                                         <th style="padding:12px 10px; font-weight:700; text-align:right;">Completion Rate</th>
@@ -3430,6 +3435,7 @@ include 'includes/admin_nav.php';
 
     // ════════════════ COURSE ANALYTICS ACCORDIONS / TABS ════════════════
     let currentCourseNameSelected = '';
+    let courseTasksData = [];
     
     function loadCourseDashboard(cname) {
         currentCourseNameSelected = cname;
@@ -3520,51 +3526,96 @@ include 'includes/admin_nav.php';
 
     function loadCourseTasksTab(cname) {
         const tbody = document.getElementById('course-tasks-table-body');
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin"></i> Mapping course checklist matrix...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin"></i> Mapping course checklist matrix...</td></tr>';
 
         fetch('?action=get_course_tasks&course_name=' + encodeURIComponent(cname))
             .then(res => res.json())
             .then(data => {
-                tbody.innerHTML = '';
-                if (data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">No task activities mapped yet.</td></tr>';
-                    return;
+                courseTasksData = data;
+                
+                // Populate Subject filter select list dynamically
+                const subjectSelect = document.getElementById('course-task-subject-filter');
+                if (subjectSelect) {
+                    subjectSelect.innerHTML = '<option value="ALL">All Subjects</option>';
+                    const uniqueSubjects = [...new Set(data.map(t => t.subject).filter(Boolean))];
+                    uniqueSubjects.sort().forEach(sub => {
+                        const opt = document.createElement('option');
+                        opt.value = sub;
+                        opt.innerText = sub;
+                        subjectSelect.appendChild(opt);
+                    });
                 }
+                
+                // Clear input filters first
+                const searchInput = document.getElementById('course-task-search');
+                if (searchInput) searchInput.value = '';
+                if (subjectSelect) subjectSelect.value = 'ALL';
 
-                data.forEach(t => {
-                    tbody.innerHTML += `
-                        <tr style="border-bottom:1px solid #f1f5f9;">
-                            <td style="padding:10px 8px; font-weight:600; color:var(--text-muted); font-size:0.78rem;">${t.plan}</td>
-                            <td style="padding:10px 8px; text-align:center; font-weight:700;">${t.day}</td>
-                            <td style="padding:10px 8px;"><strong style="color:var(--text-main); font-size:0.85rem;">${t.title}</strong><br><small style="color:var(--text-muted);">${t.topic}</small></td>
-                            <td style="padding:10px 8px; font-size:0.78rem;">Subject: ${t.subject}<br>Chapter: ${t.chapter}</td>
-                            <td style="padding:10px 8px; font-size:0.78rem;">${t.faculty}</td>
-                            <td style="padding:10px 8px; text-align:center; font-weight:700; color:#10b981;">${t.completed}</td>
-                            <td style="padding:10px 8px; text-align:center; font-weight:700; color:#ef4444;">${t.pending}</td>
-                            <td style="padding:10px 8px; text-align:right;">
-                                <strong style="color:var(--accent);">${t.pct}%</strong>
-                            </td>
-                        </tr>
-                    `;
-                });
+                renderCourseTasksTable(data);
             });
     }
 
+    function renderCourseTasksTable(data) {
+        const tbody = document.getElementById('course-tasks-table-body');
+        tbody.innerHTML = '';
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:2rem;">No matching tasks found.</td></tr>';
+            return;
+        }
+
+        data.forEach(t => {
+            tbody.innerHTML += `
+                <tr style="border-bottom:1px solid #f1f5f9;">
+                    <td style="padding:10px 8px; font-weight:600; color:var(--text-muted); font-size:0.78rem;">${t.plan}</td>
+                    <td style="padding:10px 8px; text-align:center; font-weight:700; font-size:0.78rem;">${t.date}</td>
+                    <td style="padding:10px 8px;"><strong style="color:var(--text-main); font-size:0.85rem;">${t.title}</strong><br><small style="color:var(--text-muted);">${t.topic}</small></td>
+                    <td style="padding:10px 8px; font-size:0.78rem;">Subject: ${t.subject}<br>Chapter: ${t.chapter}</td>
+                    <td style="padding:10px 8px; text-align:center; font-weight:700; color:#10b981;">${t.completed}</td>
+                    <td style="padding:10px 8px; text-align:center; font-weight:700; color:#ef4444;">${t.pending}</td>
+                    <td style="padding:10px 8px; text-align:right;">
+                        <strong style="color:var(--accent);">${t.pct}%</strong>
+                    </td>
+                </tr>
+            `;
+        });
+    }
+
+    function filterCourseTasksTable() {
+        const searchVal = document.getElementById('course-task-search').value.toLowerCase().trim();
+        const subjectVal = document.getElementById('course-task-subject-filter').value;
+        
+        const filtered = courseTasksData.filter(t => {
+            // Search filter
+            const matchesSearch = !searchVal || 
+                (t.title && t.title.toLowerCase().includes(searchVal)) ||
+                (t.topic && t.topic.toLowerCase().includes(searchVal)) ||
+                (t.subject && t.subject.toLowerCase().includes(searchVal)) ||
+                (t.chapter && t.chapter.toLowerCase().includes(searchVal)) ||
+                (t.plan && t.plan.toLowerCase().includes(searchVal));
+                
+            // Subject filter
+            const matchesSubject = (subjectVal === 'ALL' || t.subject === subjectVal);
+            
+            return matchesSearch && matchesSubject;
+        });
+        
+        renderCourseTasksTable(filtered);
+    }
+
     function exportCourseTasksCSV() {
-        let csv = 'Plan Title,Day,Task Title,Subject,Chapter,Faculty,Completed Students,Pending Students,Completion %\r\n';
+        let csv = 'Plan Title,Task Date,Task Title,Subject & Chapter,Completed Students,Pending Students,Completion %\r\n';
         document.querySelectorAll('#course-tasks-table-body tr').forEach(row => {
             const cols = row.querySelectorAll('td');
-            if (cols.length > 0) {
-                const plan = cols[0].innerText;
-                const day = cols[1].innerText;
-                const title = cols[2].innerText;
-                const metadata = cols[3].innerText;
-                const faculty = cols[4].innerText;
-                const completed = cols[5].innerText;
-                const pending = cols[6].innerText;
-                const rate = cols[7].innerText;
+            if (cols.length >= 7) {
+                const plan = cols[0].innerText.replace(/"/g, '""');
+                const date = cols[1].innerText.replace(/"/g, '""');
+                const title = cols[2].innerText.replace(/\n/g, ' | ').replace(/"/g, '""');
+                const metadata = cols[3].innerText.replace(/\n/g, ' | ').replace(/"/g, '""');
+                const completed = cols[4].innerText.replace(/"/g, '""');
+                const pending = cols[5].innerText.replace(/"/g, '""');
+                const rate = cols[6].innerText.replace(/"/g, '""');
 
-                csv += `"${plan}","${day}","${title}","${metadata}","${faculty}","${completed}","${pending}","${rate}"\r\n`;
+                csv += `"${plan}","${date}","${title}","${metadata}","${completed}","${pending}","${rate}"\r\n`;
             }
         });
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
