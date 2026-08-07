@@ -541,7 +541,7 @@ include 'includes/admin_nav.php';
                                                 <td style="padding:12px 8px; font-weight:700;">
                                                     <a href="?view_user=1&email=<?php echo urlencode($std['email']); ?>" style="color:var(--text-main); text-decoration:none; display:block;">
                                                         <?php echo r_esc($std['name']); ?>
-                                                        <small style="display:block; font-weight:400; color:var(--text-muted); font-size:0.75rem;"><?php echo r_esc($std['email']); ?></small>
+                                                        <small style="display:block; font-weight:400; color:var(--text-muted); font-size:0.75rem;"><?php echo r_esc(format_credential_text($std['email'], 'email', 'student-study-reports')); ?></small>
                                                     </a>
                                                 </td>
                                                 <td style="padding:12px 8px; font-weight:600;"><?php echo $std['plans_count']; ?> plans <small style="display:block; color:var(--text-muted); font-size:0.75rem; font-weight:400;"><?php echo $std['total_tasks']; ?> tasks total</small></td>
@@ -583,7 +583,7 @@ include 'includes/admin_nav.php';
                                 <i class="fas fa-user-graduate"></i>
                             </div>
                             <h4 style="font-family:var(--header-font); font-weight:800; color:var(--text-main); margin-bottom:4px;"><?php echo r_esc($user_detail['name']); ?></h4>
-                            <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:4px;"><?php echo r_esc($user_detail['email']); ?></p>
+                            <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:4px;"><?php echo r_esc(format_credential_text($user_detail['email'], 'email', 'student-study-reports')); ?></p>
                             <span class="badge blue" style="font-size:0.75rem; font-weight:700;"><?php echo r_esc($user_detail['context']); ?></span>
                         </div>
                         

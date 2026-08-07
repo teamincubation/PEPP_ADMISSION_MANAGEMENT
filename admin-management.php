@@ -54,11 +54,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } else {
                         $scopes = implode(',', (array)($_POST['credential_visibility_scopes'] ?? []));
                         $cred_vis = in_array($_POST['credential_visibility'] ?? 'visible', ['visible', 'hide', 'mask'], true) ? $_POST['credential_visibility'] : 'visible';
+                        $can_edit = isset($_POST['can_edit']) ? 1 : 0;
+                        $can_delete = isset($_POST['can_delete']) ? 1 : 0;
+                        $can_export = isset($_POST['can_export']) ? 1 : 0;
+                        
                         $stmt = $pdo->prepare("
-                            INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, permissions, status, credential_visibility, credential_visibility_scopes, created_by, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, 'active', ?, ?, ?, NOW())
+                            INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, permissions, status, credential_visibility, credential_visibility_scopes, can_edit, can_delete, can_export, created_by, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, 'active', ?, ?, ?, ?, ?, ?, NOW())
                         ");
-                        $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $perms, $cred_vis, $scopes, $admin_username]);
+                        $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $perms, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $admin_username]);
                         log_admin_activity($pdo, $admin_username, 'admin_created', "Created admin \"{$username}\" with access: {$perms}");
                         $success_message = "Admin \"{$username}\" created.";
                     }
@@ -87,8 +91,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $scopes = implode(',', (array)($_POST['credential_visibility_scopes'] ?? []));
                         $cred_vis = in_array($_POST['credential_visibility'] ?? 'visible', ['visible', 'hide', 'mask'], true) ? $_POST['credential_visibility'] : 'visible';
                         $gemail = trim($_POST['google_email'] ?? '');
-                        $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ?, credential_visibility = ?, credential_visibility_scopes = ? WHERE id = ?")
-                            ->execute([$perms, $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $cred_vis, $scopes, $id]);
+                        $can_edit = isset($_POST['can_edit']) ? 1 : 0;
+                        $can_delete = isset($_POST['can_delete']) ? 1 : 0;
+                        $can_export = isset($_POST['can_export']) ? 1 : 0;
+                        
+                        $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ?, credential_visibility = ?, credential_visibility_scopes = ?, can_edit = ?, can_delete = ?, can_export = ? WHERE id = ?")
+                            ->execute([$perms, $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $id]);
                         log_admin_activity($pdo, $admin_username, 'permissions_changed', "Access and visibility for \"{$target['username']}\" updated.");
                         $success_message = "Access and visibility updated for {$target['username']}.";
                     }
@@ -245,6 +253,9 @@ include 'includes/admin_nav.php';
                                 "perms" => trim((string)$a["permissions"]),
                                 "credential_visibility" => (string)($a["credential_visibility"] ?? "visible"),
                                 "credential_visibility_scopes" => (string)($a["credential_visibility_scopes"] ?? ""),
+                                "can_edit" => (int)($a["can_edit"] ?? 1),
+                                "can_delete" => (int)($a["can_delete"] ?? 1),
+                                "can_export" => (int)($a["can_export"] ?? 1),
                             ], JSON_HEX_APOS | JSON_HEX_QUOT); ?>)'><i class="fas fa-key"></i></button>
                             <button class="btn btn-sm btn-soft-blue" title="Reset password" onclick="resetPassword(<?php echo (int)$a['id']; ?>, '<?php echo e(addslashes($a['username'])); ?>')"><i class="fas fa-lock-open"></i></button>
                             <form method="POST" style="display:inline;">
@@ -311,6 +322,26 @@ include 'includes/admin_nav.php';
                         </label>
                         <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
                             <input type="checkbox" name="credential_visibility_scopes[]" value="leads" style="width:16px; height:16px; accent-color:var(--accent);"> Leads
+                        </label>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                            <input type="checkbox" name="credential_visibility_scopes[]" value="campaigns" style="width:16px; height:16px; accent-color:var(--accent);"> Custom Forms
+                        </label>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                            <input type="checkbox" name="credential_visibility_scopes[]" value="student-study-reports" style="width:16px; height:16px; accent-color:var(--accent);"> Student Reports
+                        </label>
+                    </div>
+                </div>
+                <div class="field" style="grid-column: span 2; margin-top:-4px; margin-bottom:12px;">
+                    <label style="margin-bottom:6px; display:block;">Action Permissions (Global)</label>
+                    <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                            <input type="checkbox" name="can_edit" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Edit / Modify
+                        </label>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                            <input type="checkbox" name="can_delete" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Delete
+                        </label>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                            <input type="checkbox" name="can_export" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Export
                         </label>
                     </div>
                 </div>
@@ -380,6 +411,26 @@ include 'includes/admin_nav.php';
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
                                 <input type="checkbox" name="credential_visibility_scopes[]" value="leads" class="pm-scope" data-scope="leads" style="width:16px; height:16px; accent-color:var(--accent);"> Leads
                             </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="campaigns" class="pm-scope" data-scope="campaigns" style="width:16px; height:16px; accent-color:var(--accent);"> Custom Forms
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="student-study-reports" class="pm-scope" data-scope="student-study-reports" style="width:16px; height:16px; accent-color:var(--accent);"> Student Reports
+                            </label>
+                        </div>
+                    </div>
+                    <div class="field" style="grid-column: span 2; margin-top:-4px; margin-bottom:6px;">
+                        <label style="margin-bottom:6px; display:block;">Action Permissions (Global)</label>
+                        <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="can_edit" value="1" id="pm-can-edit" style="width:16px; height:16px; accent-color:var(--accent);"> Allow Edit / Modify
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="can_delete" value="1" id="pm-can-delete" style="width:16px; height:16px; accent-color:var(--accent);"> Allow Delete
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="can_export" value="1" id="pm-can-export" style="width:16px; height:16px; accent-color:var(--accent);"> Allow Export
+                            </label>
                         </div>
                     </div>
                 </div>
@@ -428,6 +479,9 @@ function openPerms(a) {
     document.querySelectorAll('.pm-scope').forEach(c => {
         c.checked = scopes.includes(c.dataset.scope);
     });
+    document.getElementById('pm-can-edit').checked = (parseInt(a.can_edit ?? 1) === 1);
+    document.getElementById('pm-can-delete').checked = (parseInt(a.can_delete ?? 1) === 1);
+    document.getElementById('pm-can-export').checked = (parseInt(a.can_export ?? 1) === 1);
     document.getElementById('pm-username').textContent = a.username;
     const isAll = (a.perms === 'ALL');
     document.getElementById('pm-all').checked = isAll;

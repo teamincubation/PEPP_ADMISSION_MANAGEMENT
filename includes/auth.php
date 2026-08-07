@@ -64,10 +64,41 @@ function ensure_credential_visibility_column($pdo) {
         if (!$cols_scopes) {
             $pdo->exec("ALTER TABLE admins ADD COLUMN `credential_visibility_scopes` VARCHAR(255) NOT NULL DEFAULT ''");
         }
+        $cols_edit = $pdo->query("SHOW COLUMNS FROM admins LIKE 'can_edit'")->fetch();
+        if (!$cols_edit) {
+            $pdo->exec("ALTER TABLE admins ADD COLUMN `can_edit` TINYINT(1) NOT NULL DEFAULT 1");
+        }
+        $cols_delete = $pdo->query("SHOW COLUMNS FROM admins LIKE 'can_delete'")->fetch();
+        if (!$cols_delete) {
+            $pdo->exec("ALTER TABLE admins ADD COLUMN `can_delete` TINYINT(1) NOT NULL DEFAULT 1");
+        }
+        $cols_export = $pdo->query("SHOW COLUMNS FROM admins LIKE 'can_export'")->fetch();
+        if (!$cols_export) {
+            $pdo->exec("ALTER TABLE admins ADD COLUMN `can_export` TINYINT(1) NOT NULL DEFAULT 1");
+        }
         $ensured = true;
     } catch (Exception $e) {
         error_log("Failed to ensure admins schema updates: " . $e->getMessage());
     }
+}
+
+// Action authorization capabilities check helpers
+function can_admin_edit() {
+    global $admin_role, $admin_row;
+    if ($admin_role === 'super_admin') return true;
+    return isset($admin_row['can_edit']) ? (int)$admin_row['can_edit'] === 1 : true;
+}
+
+function can_admin_delete() {
+    global $admin_role, $admin_row;
+    if ($admin_role === 'super_admin') return true;
+    return isset($admin_row['can_delete']) ? (int)$admin_row['can_delete'] === 1 : true;
+}
+
+function can_admin_export() {
+    global $admin_role, $admin_row;
+    if ($admin_role === 'super_admin') return true;
+    return isset($admin_row['can_export']) ? (int)$admin_row['can_export'] === 1 : true;
 }
 
 /* ── Activity logging (logins, logouts, exports, admin events) ──────────── */
@@ -147,6 +178,76 @@ if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity']) >
     exit();
 }
 $_SESSION['last_activity'] = time();
+
+// Server-side action check blocks to prevent unauthorized actions
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $post_action = strtolower($_POST['action'] ?? '');
+    
+    // Allow self-account updates (like change_password)
+    if ($post_action !== 'change_password') {
+        // Check Delete
+        if (!can_admin_delete()) {
+            if (strpos($post_action, 'delete') !== false || 
+                strpos($post_action, 'remove') !== false || 
+                strpos($post_action, 'reject') !== false || 
+                strpos($post_action, 'cancel') !== false ||
+                strpos($post_action, 'purge') !== false) {
+                
+                die("<div style='color:#ef4444; font-family:sans-serif; text-align:center; margin-top:50px; padding:20px; border:1px solid #fca5a5; background:#fef2f2; border-radius:12px; max-width:500px; margin-left:auto; margin-right:auto;'><h3>Access Denied</h3><p>You do not have permission to delete records.</p></div>");
+            }
+        }
+        
+        // Check Export
+        if (!can_admin_export()) {
+            if (strpos($post_action, 'export') !== false || 
+                strpos($post_action, 'download') !== false || 
+                strpos($post_action, 'csv') !== false || 
+                strpos($post_action, 'excel') !== false || 
+                strpos($post_action, 'report') !== false) {
+                
+                die("<div style='color:#ef4444; font-family:sans-serif; text-align:center; margin-top:50px; padding:20px; border:1px solid #fca5a5; background:#fef2f2; border-radius:12px; max-width:500px; margin-left:auto; margin-right:auto;'><h3>Access Denied</h3><p>You do not have permission to export data.</p></div>");
+            }
+        }
+        
+        // Check Edit / Create
+        if (!can_admin_edit()) {
+            // Block any modifications except search or details viewing
+            if ($post_action !== '' && 
+                $post_action !== 'search' && 
+                $post_action !== 'filter' && 
+                strpos($post_action, 'load') === false && 
+                strpos($post_action, 'view') === false) {
+                
+                die("<div style='color:#ef4444; font-family:sans-serif; text-align:center; margin-top:50px; padding:20px; border:1px solid #fca5a5; background:#fef2f2; border-radius:12px; max-width:500px; margin-left:auto; margin-right:auto;'><h3>Access Denied</h3><p>You do not have permission to edit or create records.</p></div>");
+            }
+        }
+    }
+}
+
+// Check GET exports and deletions
+if (isset($_GET['action'])) {
+    $get_action = strtolower($_GET['action']);
+    if (!can_admin_export()) {
+        if (strpos($get_action, 'export') !== false || 
+            strpos($get_action, 'download') !== false || 
+            strpos($get_action, 'csv') !== false || 
+            strpos($get_action, 'excel') !== false || 
+            strpos($get_action, 'report') !== false) {
+            
+            die("<div style='color:#ef4444; font-family:sans-serif; text-align:center; margin-top:50px; padding:20px; border:1px solid #fca5a5; background:#fef2f2; border-radius:12px; max-width:500px; margin-left:auto; margin-right:auto;'><h3>Access Denied</h3><p>You do not have permission to export data.</p></div>");
+        }
+    }
+    if (!can_admin_delete()) {
+        if (strpos($get_action, 'delete') !== false || 
+            strpos($get_action, 'remove') !== false || 
+            strpos($get_action, 'reject') !== false || 
+            strpos($get_action, 'cancel') !== false ||
+            strpos($get_action, 'purge') !== false) {
+            
+            die("<div style='color:#ef4444; font-family:sans-serif; text-align:center; margin-top:50px; padding:20px; border:1px solid #fca5a5; background:#fef2f2; border-radius:12px; max-width:500px; margin-left:auto; margin-right:auto;'><h3>Access Denied</h3><p>You do not have permission to delete records.</p></div>");
+        }
+    }
+}
 
 /* ── Role / permission helpers ──────────────────────────────────────────── */
 function is_super_admin() {

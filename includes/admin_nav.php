@@ -546,6 +546,95 @@ $nav_data = [
                     section.classList.toggle('collapsed');
                 });
             });
+
+            // Action Permissions - Front-end enforcer
+            <?php if (!can_admin_delete()): ?>
+            document.querySelectorAll('button, a, input[type=button], input[type=submit]').forEach(function(el) {
+                var txt = (el.textContent || el.value || '').toLowerCase();
+                var onclick = (el.getAttribute('onclick') || '').toLowerCase();
+                var href = (el.getAttribute('href') || '').toLowerCase();
+                var id = (el.id || '').toLowerCase();
+                var cls = (el.className || '').toLowerCase();
+                var name = (el.name || '').toLowerCase();
+                if (txt.includes('delete') || txt.includes('remove') || txt.includes('reject') || txt.includes('cancel') ||
+                    onclick.includes('delete') || onclick.includes('remove') || onclick.includes('reject') || onclick.includes('cancel') ||
+                    href.includes('delete') || href.includes('remove') || href.includes('reject') || href.includes('cancel') ||
+                    id.includes('delete') || id.includes('remove') || id.includes('reject') ||
+                    cls.includes('delete') || cls.includes('remove') || cls.includes('reject') || cls.includes('danger') ||
+                    name.includes('delete') || name.includes('remove') || name.includes('reject')) {
+                    
+                    el.disabled = true;
+                    el.style.pointerEvents = 'none';
+                    el.style.opacity = '0.4';
+                    el.style.cursor = 'not-allowed';
+                    if (el.tagName === 'A') {
+                        el.removeAttribute('href');
+                    }
+                }
+            });
+            <?php endif; ?>
+
+            <?php if (!can_admin_edit()): ?>
+            document.querySelectorAll('button, a, input[type=button], input[type=submit]').forEach(function(el) {
+                var txt = (el.textContent || el.value || '').toLowerCase();
+                var onclick = (el.getAttribute('onclick') || '').toLowerCase();
+                var href = (el.getAttribute('href') || '').toLowerCase();
+                var id = (el.id || '').toLowerCase();
+                var cls = (el.className || '').toLowerCase();
+                var name = (el.name || '').toLowerCase();
+                // Avoid disabling filters, paging buttons, logout, or modal close buttons
+                if (txt.includes('logout') || cls.includes('modal-close') || id.includes('toggle') || cls.includes('toggle') || txt.includes('close') || txt.includes('cancel')) {
+                    return;
+                }
+                if (txt.includes('edit') || txt.includes('update') || txt.includes('save') || txt.includes('create') || txt.includes('add') || txt.includes('convert') || txt.includes('new') ||
+                    onclick.includes('edit') || onclick.includes('update') || onclick.includes('save') || onclick.includes('create') || onclick.includes('add') || onclick.includes('convert') ||
+                    href.includes('edit') || href.includes('update') || href.includes('save') || href.includes('create') || href.includes('add') || href.includes('convert') ||
+                    id.includes('edit') || id.includes('update') || id.includes('save') || id.includes('create') || id.includes('add') || id.includes('convert') ||
+                    cls.includes('edit') || cls.includes('update') || cls.includes('save') || cls.includes('create') || cls.includes('add') || cls.includes('convert') ||
+                    name.includes('edit') || name.includes('update') || name.includes('save') || name.includes('create') || name.includes('add') || name.includes('convert')) {
+                    
+                    el.disabled = true;
+                    el.style.pointerEvents = 'none';
+                    el.style.opacity = '0.4';
+                    el.style.cursor = 'not-allowed';
+                    if (el.tagName === 'A') {
+                        el.removeAttribute('href');
+                    }
+                }
+            });
+            document.querySelectorAll('input, select, textarea').forEach(function(el) {
+                var name = (el.name || '').toLowerCase();
+                var id = (el.id || '').toLowerCase();
+                if (name === 'csrf_token' || name === 'search' || name.includes('filter') || id.includes('filter') || id.includes('search')) {
+                    return;
+                }
+                el.disabled = true;
+            });
+            <?php endif; ?>
+
+            <?php if (!can_admin_export()): ?>
+            document.querySelectorAll('button, a, .export-dropdown, .dropdown-item').forEach(function(el) {
+                var txt = (el.textContent || el.value || '').toLowerCase();
+                var onclick = (el.getAttribute('onclick') || '').toLowerCase();
+                var href = (el.getAttribute('href') || '').toLowerCase();
+                var id = (el.id || '').toLowerCase();
+                var cls = (el.className || '').toLowerCase();
+                if (txt.includes('export') || txt.includes('download') || txt.includes('csv') || txt.includes('excel') || txt.includes('report') ||
+                    onclick.includes('export') || onclick.includes('download') || onclick.includes('csv') || onclick.includes('excel') || onclick.includes('report') ||
+                    href.includes('export') || href.includes('download') || href.includes('csv') || href.includes('excel') || href.includes('report') ||
+                    id.includes('export') || id.includes('download') ||
+                    cls.includes('export') || cls.includes('download')) {
+                    
+                    el.disabled = true;
+                    el.style.pointerEvents = 'none';
+                    el.style.opacity = '0.4';
+                    el.style.cursor = 'not-allowed';
+                    if (el.tagName === 'A') {
+                        el.removeAttribute('href');
+                    }
+                }
+            });
+            <?php endif; ?>
         });
     </script>
     <?php if (!empty($extra_head)) echo $extra_head; ?>

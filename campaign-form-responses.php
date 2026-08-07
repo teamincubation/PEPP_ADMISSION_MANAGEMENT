@@ -20,6 +20,35 @@ $page_title  = htmlspecialchars($form['title']) . ' — Responses';
 $page_sub    = 'Review and export user submissions for this campaign';
 $active_page = 'campaigns';
 
+function mask_campaign_field_if_needed($val, $field_label, $field_type) {
+    if (!is_credential_restricted('campaigns')) return $val;
+    $val = trim((string)$val);
+    if ($val === '') return '';
+    $label_lower = strtolower($field_label);
+    $type_lower = strtolower($field_type);
+    if ($type_lower === 'email' || strpos($label_lower, 'email') !== false) {
+        return format_credential_text($val, 'email', 'campaigns');
+    }
+    if ($type_lower === 'tel' || $type_lower === 'phone' || strpos($label_lower, 'phone') !== false || strpos($label_lower, 'mobile') !== false || strpos($label_lower, 'contact') !== false || strpos($label_lower, 'whatsapp') !== false) {
+        return format_credential_text($val, 'phone', 'campaigns');
+    }
+    return $val;
+}
+
+function mask_respondent_identifier_if_needed($val) {
+    if (!is_credential_restricted('campaigns')) return $val;
+    $val = trim((string)$val);
+    if ($val === '') return '';
+    if (filter_var($val, FILTER_VALIDATE_EMAIL)) {
+        return format_credential_text($val, 'email', 'campaigns');
+    }
+    $clean_val = preg_replace('/[^0-9]/', '', $val);
+    if (strlen($clean_val) >= 7 && strlen($clean_val) <= 15) {
+        return format_credential_text($val, 'phone', 'campaigns');
+    }
+    return $val;
+}
+
 // Handle AJAX Response Detail View BEFORE layout output
 if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
     $sub_id = (int)($_GET['sub_id'] ?? 0);
@@ -80,7 +109,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
                         if (empty($disp_id)) {
                             $disp_id = 'Respondent #' . $sub['id'];
                         }
-                        echo htmlspecialchars($disp_id);
+                        echo htmlspecialchars(mask_respondent_identifier_if_needed($disp_id));
                         ?>
                     </div>
                 </div>
@@ -113,6 +142,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_detail') {
             <div style="display:grid; grid-template-columns:1fr; gap:12px;">
                 <?php foreach ($answers as $ans): 
                     $val = trim($ans['answer_text'] ?? '');
+                    $val = mask_campaign_field_if_needed($val, $ans['label'], $ans['type']);
                     $file = $ans['file_path'] ?? null;
                     $icon = 'fa-pen-to-square';
                     if ($ans['type'] === 'phone') $icon = 'fa-phone';
@@ -241,16 +271,20 @@ if (isset($_GET['export'])) {
 
         // Rows
         foreach ($export_subs as $s) {
+            $resp_id = $s['respondent_identifier'] ?: 'Anonymous';
+            $resp_id = mask_respondent_identifier_if_needed($resp_id);
             $row = [
                 $s['id'],
                 $s['submitted_at'],
-                $s['respondent_identifier'] ?: 'Anonymous',
+                $resp_id,
                 $s['ip_address'],
                 $s['user_agent']
             ];
             foreach ($fields as $f) {
                 $ans = $answers_map[$s['id']][$f['id']] ?? null;
-                $row[] = $ans ? ($ans['file_path'] ? $ans['file_path'] : $ans['answer_text']) : '';
+                $val = $ans ? ($ans['file_path'] ? $ans['file_path'] : $ans['answer_text']) : '';
+                $val = mask_campaign_field_if_needed($val, $f['label'], $f['type']);
+                $row[] = $val;
             }
             fputcsv($output, $row);
         }
@@ -275,15 +309,18 @@ if (isset($_GET['export'])) {
 
         // Rows
         foreach ($export_subs as $s) {
+            $resp_id = $s['respondent_identifier'] ?: 'Anonymous';
+            $resp_id = mask_respondent_identifier_if_needed($resp_id);
             echo "<tr>";
             echo "<td>" . $s['id'] . "</td>";
             echo "<td>" . $s['submitted_at'] . "</td>";
-            echo "<td>" . htmlspecialchars($s['respondent_identifier'] ?: 'Anonymous') . "</td>";
+            echo "<td>" . htmlspecialchars($resp_id) . "</td>";
             echo "<td>" . htmlspecialchars($s['ip_address']) . "</td>";
             echo "<td>" . htmlspecialchars($s['user_agent']) . "</td>";
             foreach ($fields as $f) {
                 $ans = $answers_map[$s['id']][$f['id']] ?? null;
                 $val = $ans ? ($ans['file_path'] ? $ans['file_path'] : $ans['answer_text']) : '';
+                $val = mask_campaign_field_if_needed($val, $f['label'], $f['type']);
                 echo "<td>" . htmlspecialchars($val) . "</td>";
             }
             echo "</tr>";
@@ -742,6 +779,7 @@ include 'includes/admin_nav.php';
                         $ans = $answers_map[$s['id']][$f['id']] ?? null;
                         
                         $val = $ans ? $ans['answer_text'] : '';
+                        $val = mask_campaign_field_if_needed($val, $f['label'], $f['type']);
                         $file = $ans ? $ans['file_path'] : null;
                         
                         // Formatting
