@@ -1878,10 +1878,27 @@ include 'includes/admin_nav.php';
     
     /* Print styles to isolate dossier content */
     @media print {
-        /* Hide everything else on the page */
-        body > *:not(#student-task-modal-backdrop) {
+        /* Hide all page layout outer wrapper elements without breaking nested modal backdrop */
+        .sidebar,
+        .sidebar-overlay,
+        .topbar,
+        .container-fluid,
+        .slide-over,
+        .slide-over-backdrop,
+        .lightbox-backdrop,
+        #photo-lightbox {
             display: none !important;
             visibility: hidden !important;
+        }
+        .admin-shell, .main-area, .content {
+            background: transparent !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            overflow: visible !important;
+            display: block !important;
+            width: 100% !important;
+            max-width: 100% !important;
         }
         body {
             background: #fff !important;
