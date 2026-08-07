@@ -848,6 +848,408 @@ if (isset($_GET['action'])) {
         exit;
     }
 
+    // 11.1 Campaign Analytics statistics summary
+    if ($_GET['action'] === 'get_campaign_analytics') {
+        $form_id = (int)($_GET['form_id'] ?? 0);
+        try {
+            // Total submissions
+            $submissions = db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = ? AND is_deleted = 0", [$form_id]);
+            // Converted leads
+            $conversions = db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = ? AND is_deleted = 0 AND is_converted_lead = 1", [$form_id]);
+            
+            // Study plans assigned
+            $plans_count = db_count($pdo, "SELECT COUNT(*) FROM study_plan_assignments WHERE assignment_type = 'form' AND assigned_value = ?", [(string)$form_id]);
+            
+            // Campaign Respondents (approved students matching submission identifier)
+            $respondents_count = db_count($pdo, "
+                SELECT COUNT(*) 
+                FROM users u
+                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
+            ", [$form_id]);
+            
+            // Fetch respondents emails to calculate learning progress
+            $stmt_emails = $pdo->prepare("
+                SELECT u.email, u.user_id, u.pepp_course, u.pepp_academic_year
+                FROM users u
+                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
+            ");
+            $stmt_emails->execute([$form_id]);
+            $students = $stmt_emails->fetchAll(PDO::FETCH_ASSOC);
+            
+            // Get assigned plans IDs
+            $stmt_pids = $pdo->prepare("SELECT DISTINCT study_plan_id FROM study_plan_assignments WHERE assignment_type = 'form' AND assigned_value = ?");
+            $stmt_pids->execute([(string)$form_id]);
+            $pids = $stmt_pids->fetchAll(PDO::FETCH_COLUMN);
+            
+            $total_available_tasks = 0;
+            $total_completed_tasks = 0;
+            $active_30d = 0;
+            
+            if (!empty($pids) && !empty($students)) {
+                $in_clause = implode(',', array_fill(0, count($pids), '?'));
+                
+                // Count total available tasks for all assigned plans
+                $stmt_tasks_cnt = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)");
+                $stmt_tasks_cnt->execute($pids);
+                $tasks_per_plan = (int)$stmt_tasks_cnt->fetchColumn();
+                $total_available_tasks = $tasks_per_plan * count($students);
+                
+                // Count completions by these students for activities in these plans
+                $student_emails = array_map(fn($s) => $s['email'], $students);
+                $email_placeholders = implode(',', array_fill(0, count($student_emails), '?'));
+                $plan_placeholders = implode(',', array_fill(0, count($pids), '?'));
+                
+                $stmt_comp_cnt = $pdo->prepare("
+                    SELECT COUNT(*) 
+                    FROM study_plan_analytics 
+                    WHERE student_email IN ($email_placeholders) 
+                      AND study_plan_id IN ($plan_placeholders) 
+                      AND action_type = 'complete_activity'
+                ");
+                $stmt_comp_cnt->execute(array_merge($student_emails, $pids));
+                $total_completed_tasks = (int)$stmt_comp_cnt->fetchColumn();
+                
+                // Active in last 30 days
+                $stmt_active = $pdo->prepare("
+                    SELECT COUNT(DISTINCT student_email) 
+                    FROM study_plan_analytics 
+                    WHERE student_email IN ($email_placeholders) 
+                      AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                ");
+                $stmt_active->execute($student_emails);
+                $active_30d = (int)$stmt_active->fetchColumn();
+            }
+            
+            $avg_completion_rate = $total_available_tasks > 0 ? round(($total_completed_tasks / $total_available_tasks) * 100, 1) : 0;
+            
+            echo json_encode([
+                'submissions' => $submissions,
+                'conversions' => $conversions,
+                'conversion_rate' => $submissions > 0 ? round(($conversions / $submissions) * 100, 1) . '%' : '0%',
+                'plans_count' => $plans_count,
+                'respondents' => $respondents_count,
+                'avg_completion_rate' => $avg_completion_rate . '%',
+                'active_30d' => $active_30d
+            ]);
+        } catch (Exception $e) {
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // 11.2 Campaign Assigned Plans
+    if ($_GET['action'] === 'get_campaign_plans') {
+        $form_id = (int)($_GET['form_id'] ?? 0);
+        try {
+            // Get assigned plans
+            $stmt_plans = $pdo->prepare("
+                SELECT sp.id, sp.title, sp.status, sp.start_date, sp.end_date
+                FROM study_plans sp
+                JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
+                WHERE sa.assignment_type = 'form' AND sa.assigned_value = ?
+                ORDER BY sp.title ASC
+            ");
+            $stmt_plans->execute([(string)$form_id]);
+            $plans = $stmt_plans->fetchAll(PDO::FETCH_ASSOC);
+            
+            // Approved students under this form
+            $stmt_students = $pdo->prepare("
+                SELECT u.email 
+                FROM users u
+                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
+            ");
+            $stmt_students->execute([$form_id]);
+            $students = $stmt_students->fetchAll(PDO::FETCH_COLUMN);
+            
+            $data = [];
+            foreach ($plans as $p) {
+                $tasks_count = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ?", [$p['id']]);
+                $total_possible = $tasks_count * count($students);
+                
+                $completions_count = 0;
+                if (!empty($students)) {
+                    $placeholders = implode(',', array_fill(0, count($students), '?'));
+                    $stmt_comp = $pdo->prepare("
+                       SELECT COUNT(*) 
+                       FROM study_plan_analytics 
+                       WHERE study_plan_id = ? AND student_email IN ($placeholders) AND action_type = 'complete_activity'
+                    ");
+                    $stmt_comp->execute(array_merge([$p['id']], $students));
+                    $completions_count = (int)$stmt_comp->fetchColumn();
+                }
+                
+                $data[] = [
+                    'id' => $p['id'],
+                    'title' => r_esc($p['title']),
+                    'status' => ucfirst($p['status']),
+                    'start_date' => $p['start_date'] ? date('d M Y', strtotime($p['start_date'])) : 'N/A',
+                    'end_date' => $p['end_date'] ? date('d M Y', strtotime($p['end_date'])) : 'N/A',
+                    'duration' => $p['start_date'] && $p['end_date'] ? (int)round((strtotime($p['end_date']) - strtotime($p['start_date'])) / 86400) . ' days' : 'N/A',
+                    'tasks' => $tasks_count,
+                    'pct' => $total_possible > 0 ? round(($completions_count / $total_possible) * 100, 1) : 0
+                ];
+            }
+            echo json_encode($data);
+        } catch (Exception $e) {
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // 11.3 Campaign Respondents learning details
+    if ($_GET['action'] === 'get_campaign_respondents') {
+        $form_id = (int)($_GET['form_id'] ?? 0);
+        try {
+            // Get approved respondents
+            $stmt_students = $pdo->prepare("
+                SELECT u.user_id, u.name, u.email, u.phone, u.created_at, s.is_converted_lead
+                FROM users u
+                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
+                ORDER BY u.name ASC
+            ");
+            $stmt_students->execute([$form_id]);
+            $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
+            
+            // Assigned plans IDs
+            $stmt_pids = $pdo->prepare("SELECT DISTINCT study_plan_id FROM study_plan_assignments WHERE assignment_type = 'form' AND assigned_value = ?");
+            $stmt_pids->execute([(string)$form_id]);
+            $pids = $stmt_pids->fetchAll(PDO::FETCH_COLUMN);
+            
+            $tasks_count = 0;
+            if (!empty($pids)) {
+                $in_clause = implode(',', array_fill(0, count($pids), '?'));
+                $stmt_tasks_cnt = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)");
+                $stmt_tasks_cnt->execute($pids);
+                $tasks_count = (int)$stmt_tasks_cnt->fetchColumn();
+            }
+            
+            $data = [];
+            foreach ($students as $s) {
+                $comp = 0;
+                if (!empty($pids)) {
+                    $in_clause = implode(',', array_fill(0, count($pids), '?'));
+                    $stmt_comp = $pdo->prepare("
+                        SELECT COUNT(*) 
+                        FROM study_plan_analytics 
+                        WHERE student_email = ? AND study_plan_id IN ($in_clause) AND action_type = 'complete_activity'
+                    ");
+                    $stmt_comp->execute(array_merge([$s['email']], $pids));
+                    $comp = (int)$stmt_comp->fetchColumn();
+                }
+                
+                $streak = 0;
+                $score = $comp * 10;
+                
+                $data[] = [
+                    'user_id' => $s['user_id'],
+                    'name' => r_esc($s['name']),
+                    'email' => $s['email'],
+                    'masked_email' => format_credential_text($s['email'], 'email', 'student-study-reports'),
+                    'phone' => format_credential_text($s['phone'], 'phone', 'student-study-reports'),
+                    'joined' => date('d M Y', strtotime($s['created_at'])),
+                    'converted' => $s['is_converted_lead'] ? 'Yes' : 'No',
+                    'completed' => $comp,
+                    'total_tasks' => $tasks_count,
+                    'streak' => $streak,
+                    'score' => $score,
+                    'pct' => $tasks_count > 0 ? round(($comp / $tasks_count) * 100, 1) : 0
+                ];
+            }
+            echo json_encode($data);
+        } catch (Exception $e) {
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // 11.4 Campaign task matrices list
+    if ($_GET['action'] === 'get_campaign_tasks') {
+        $form_id = (int)($_GET['form_id'] ?? 0);
+        try {
+            // Assigned plans IDs
+            $stmt_pids = $pdo->prepare("SELECT DISTINCT study_plan_id FROM study_plan_assignments WHERE assignment_type = 'form' AND assigned_value = ?");
+            $stmt_pids->execute([(string)$form_id]);
+            $pids = $stmt_pids->fetchAll(PDO::FETCH_COLUMN);
+            
+            // Campaign Respondents (approved students)
+            $stmt_students = $pdo->prepare("
+                SELECT u.email 
+                FROM users u
+                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
+            ");
+            $stmt_students->execute([$form_id]);
+            $students = $stmt_students->fetchAll(PDO::FETCH_COLUMN);
+            
+            $total_students = count($students);
+            
+            $data = [];
+            if (!empty($pids)) {
+                $in_clause = implode(',', array_fill(0, count($pids), '?'));
+                $stmt_tasks = $pdo->prepare("
+                    SELECT a.id, a.day_number, a.activity_date, a.chapter, a.subject, a.topic, a.activity_title as title, a.faculty, sp.title as plan_title 
+                    FROM study_plan_activities a
+                    JOIN study_plans sp ON a.study_plan_id = sp.id
+                    WHERE a.study_plan_id IN ($in_clause)
+                    ORDER BY sp.title ASC, a.day_number ASC
+                ");
+                $stmt_tasks->execute($pids);
+                $tasks = $stmt_tasks->fetchAll(PDO::FETCH_ASSOC);
+                
+                foreach ($tasks as $t) {
+                    $comp = 0;
+                    if ($total_students > 0) {
+                        $placeholders = implode(',', array_fill(0, count($students), '?'));
+                        $stmt_comp = $pdo->prepare("
+                            SELECT COUNT(*) 
+                            FROM study_plan_analytics 
+                            WHERE activity_id = ? AND action_type = 'complete_activity' AND student_email IN ($placeholders)
+                        ");
+                        $stmt_comp->execute(array_merge([$t['id']], $students));
+                        $comp = (int)$stmt_comp->fetchColumn();
+                    }
+                    
+                    $pending = $total_students - $comp;
+                    
+                    $data[] = [
+                       'id' => $t['id'],
+                       'day' => $t['day_number'],
+                       'date' => $t['activity_date'] ? date('d M Y', strtotime($t['activity_date'])) : 'TBD',
+                       'title' => r_esc($t['title']),
+                       'subject' => r_esc($t['subject']),
+                       'chapter' => r_esc($t['chapter']),
+                       'topic' => r_esc($t['topic']),
+                       'faculty' => r_esc($t['faculty']),
+                       'plan' => r_esc($t['plan_title']),
+                       'completed' => $comp,
+                       'pending' => $pending,
+                       'pct' => $total_students > 0 ? round(($comp / $total_students) * 100) : 0
+                    ];
+                }
+            }
+            echo json_encode($data);
+        } catch (Exception $e) {
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // 11.5 Campaign completed task drilldown
+    if ($_GET['action'] === 'get_campaign_completed_tasks_drilldown') {
+        $activity_id = (int)($_GET['activity_id'] ?? 0);
+        $form_id = (int)($_GET['form_id'] ?? 0);
+        try {
+            $anal_cols = get_table_columns_safe($pdo, 'study_plan_analytics');
+            
+            $an_fields = ['an.created_at', 'an.ip_address'];
+            if (in_array('browser', $anal_cols)) $an_fields[] = 'an.browser';
+            if (in_array('device', $anal_cols)) $an_fields[] = 'an.device';
+            if (in_array('latitude', $anal_cols)) $an_fields[] = 'an.latitude';
+            if (in_array('longitude', $anal_cols)) $an_fields[] = 'an.longitude';
+            
+            $select_str = implode(', ', $an_fields);
+            
+            $stmt = $pdo->prepare("
+                SELECT u.name, u.email, {$select_str}
+                FROM study_plan_analytics an
+                JOIN users u ON an.student_email = u.email
+                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                WHERE an.activity_id = ? 
+                  AND an.action_type = 'complete_activity' 
+                  AND s.form_id = ? 
+                  AND s.is_deleted = 0 
+                  AND u.status = 'approved'
+                ORDER BY an.created_at DESC
+            ");
+            $stmt->execute([$activity_id, $form_id]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $data = [];
+            foreach ($rows as $r) {
+                $location = 'N/A';
+                if (isset($r['latitude']) && isset($r['longitude']) && $r['latitude'] && $r['longitude']) {
+                    $location = $r['latitude'] . ',' . $r['longitude'];
+                }
+                
+                $data[] = [
+                    'name' => r_esc($r['name']),
+                    'masked_email' => format_credential_text($r['email'], 'email', 'student-study-reports'),
+                    'completed_at' => date('d M Y h:i A', strtotime($r['created_at'])),
+                    'ip' => $r['ip_address'] ?: 'N/A',
+                    'browser' => $r['browser'] ?? 'N/A',
+                    'device' => $r['device'] ?? 'N/A',
+                    'location' => $location
+                ];
+            }
+            echo json_encode($data);
+        } catch (Exception $e) {
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // 11.6 Campaign pending task drilldown
+    if ($_GET['action'] === 'get_campaign_pending_tasks_drilldown') {
+        $activity_id = (int)($_GET['activity_id'] ?? 0);
+        $form_id = (int)($_GET['form_id'] ?? 0);
+        try {
+            $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ?");
+            $stmt_act->execute([$activity_id]);
+            $act = $stmt_act->fetch(PDO::FETCH_ASSOC);
+            $plan_id = $act ? $act['study_plan_id'] : 0;
+
+            // Get all approved students in this campaign who are assigned to this study plan
+            $stmt_students = $pdo->prepare("
+                SELECT DISTINCT u.name, u.email, u.phone 
+                FROM users u
+                JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                JOIN study_plan_assignments sa ON (
+                    sa.study_plan_id = ? AND (
+                        sa.assignment_type = 'all' OR
+                        (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
+                        (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
+                        (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
+                        (sa.assignment_type = 'form' AND CAST(s.form_id AS CHAR) = sa.assigned_value)
+                    )
+                )
+                WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
+            ");
+            $stmt_students->execute([$plan_id, $form_id]);
+            $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
+
+            $data = [];
+            $today = new DateTime();
+            $due_date = $act['activity_date'] ? new DateTime($act['activity_date']) : null;
+            $overdue_days = 0;
+            if ($due_date && $due_date < $today) {
+                $overdue_days = $today->diff($due_date)->days;
+            }
+
+            foreach ($students as $s) {
+                // Check if completed
+                $comp = db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE activity_id = ? AND student_email = ? AND action_type = 'complete_activity'", [$activity_id, $s['email']]);
+                if ($comp === 0) {
+                    $data[] = [
+                        'name' => r_esc($s['name']),
+                        'email' => $s['email'],
+                        'phone' => $s['phone'],
+                        'masked_email' => format_credential_text($s['email'], 'email', 'student-study-reports'),
+                        'masked_phone' => format_credential_text($s['phone'], 'phone', 'student-study-reports'),
+                        'overdue_days' => $overdue_days
+                    ];
+                }
+            }
+            echo json_encode($data);
+        } catch (Exception $e) {
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+        exit;
+    }
+
     // 12. KPI Card Click Drilldowns (Load detailed lists dynamically)
     if ($_GET['action'] === 'kpi_drilldown') {
         $kpi = $_GET['kpi'] ?? '';
@@ -3469,6 +3871,11 @@ include 'includes/admin_nav.php';
     let currentCourseNameSelected = '';
     let courseTasksData = [];
     
+    let currentCampaignIdSelected = 0;
+    let currentCampaignTitleSelected = '';
+    let campaignRespondentsData = [];
+    let campaignTasksData = [];
+    
     function loadCourseDashboard(cname) {
         currentCourseNameSelected = cname;
         const workspace = document.getElementById('course-dashboard-workspace');
@@ -3864,11 +4271,29 @@ include 'includes/admin_nav.php';
                         document.querySelectorAll('#forms-sidebar-list > div').forEach(c => {
                             c.style.borderColor = 'var(--border)';
                             c.style.background = '#f8fafc';
+                            c.style.boxShadow = 'none';
                         });
                         item.style.borderColor = 'var(--accent)';
                         item.style.background = 'rgba(79, 70, 229, 0.02)';
+                        item.style.boxShadow = '0 4px 12px rgba(79, 70, 229, 0.05)';
 
                         loadFormAnalyticsWorkspace(f.id, f.title);
+                    });
+
+                    item.addEventListener('mouseenter', () => {
+                        if (currentCampaignIdSelected !== f.id) {
+                            item.style.borderColor = 'var(--accent)';
+                            item.style.background = '#fff';
+                            item.style.boxShadow = '0 4px 12px rgba(0,0,0,0.05)';
+                        }
+                    });
+
+                    item.addEventListener('mouseleave', () => {
+                        if (currentCampaignIdSelected !== f.id) {
+                            item.style.borderColor = 'var(--border)';
+                            item.style.background = '#f8fafc';
+                            item.style.boxShadow = 'none';
+                        }
                     });
 
                     container.appendChild(item);
@@ -3879,110 +4304,510 @@ include 'includes/admin_nav.php';
     let formDonutChartInstance = null;
 
     function loadFormAnalyticsWorkspace(formId, title) {
+        currentCampaignIdSelected = formId;
+        currentCampaignTitleSelected = title;
         const workspace = document.getElementById('form-intelligence-workspace');
         workspace.innerHTML = `
-            <div class="chart-card" style="text-align:center; padding:4rem;"><i class="fas fa-spinner fa-spin" style="font-size:2rem; color:var(--accent);"></i><p>Gathering submissions funnel metrics...</p></div>
+            <div class="chart-card" style="text-align:center; padding:4rem;"><i class="fas fa-spinner fa-spin" style="font-size:2rem; color:var(--accent);"></i><p>Gathering campaign performance metrics...</p></div>
         `;
 
-        fetch('?action=get_form_details&form_id=' + formId)
+        fetch('?action=get_campaign_analytics&form_id=' + formId)
             .then(res => res.json())
-            .then(data => {
+            .then(stats => {
                 workspace.innerHTML = '';
+                if (stats.error) {
+                    workspace.innerHTML = `<div class="chart-card" style="color:#ef4444; text-align:center; padding:2rem;"><i class="fas fa-circle-exclamation"></i> Error: ${stats.error}</div>`;
+                    return;
+                }
 
-                // Build HTML
-                const card = document.createElement('div');
-                card.className = 'chart-card';
-                card.innerHTML = `
-                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid var(--border); padding-bottom:12px; margin-bottom:15px; flex-wrap:wrap; gap:8px;">
-                        <div>
-                            <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.1rem; color:var(--text-main); margin:0;">
-                                <i class="fab fa-wpforms" style="color:var(--accent); margin-right:6px;"></i> Submissions analysis: ${title}
-                            </h4>
-                            <p style="font-size:0.75rem; color:var(--text-muted); margin:4px 0 0 0;">Total submission counts: ${data.length} responses recorded.</p>
-                        </div>
-                        <button class="btn btn-sm btn-outline" onclick="exportFormSubmissionsExcel('${title.replace(/'/g, "\\\\'")}')"><i class="fas fa-file-excel"></i> Export Excel</button>
-                    </div>
-
-                    <div style="display:grid; grid-template-columns: 1fr 1.5fr; gap:1.5rem; margin-bottom:20px;">
-                        <!-- Chart Area -->
-                        <div class="chart-card" style="height:250px; border:1px solid var(--border);">
-                            <h5 style="font-size:0.8rem; font-weight:800;"><i class="fas fa-funnel-dollar"></i> Lead Conversion Funnel</h5>
-                            <div style="height:190px; display:flex; justify-content:center; align-items:center;">
-                                <canvas id="form-conversion-chart"></canvas>
+                // Render KPI Stats cards & Tab panes
+                workspace.innerHTML = `
+                    <div class="chart-card">
+                        <!-- Dashboard Header -->
+                        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid var(--border); padding-bottom:12px; margin-bottom:15px; flex-wrap:wrap; gap:8px;">
+                            <div>
+                                <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.15rem; color:var(--text-main); margin:0;">
+                                    <i class="fab fa-wpforms" style="color:var(--accent); margin-right:6px;"></i> Campaign Dashboard: ${title}
+                                </h4>
+                                <p style="font-size:0.75rem; color:var(--text-muted); margin:4px 0 0 0;">Comprehensive analytics and study plan performance tracker.</p>
                             </div>
                         </div>
 
-                        <!-- Table Area -->
-                        <div class="table-responsive" style="border:1px solid var(--border); border-radius:12px; max-height:250px; overflow-y:auto;">
-                            <table class="data-table" id="form-submissions-table" style="width:100%;">
-                                <thead style="position:sticky; top:0; background:#f8fafc; z-index:2;">
-                                    <tr style="text-align:left;">
-                                        <th style="padding:10px 8px;">Sl.</th>
-                                        <th style="padding:10px 8px;">Respondent Identifier (Email)</th>
-                                        <th style="padding:10px 8px;">Submitted Date</th>
-                                        <th style="padding:10px 8px; text-align:right;">Converted Lead</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    ${data.map((row, idx) => `
-                                        <tr>
-                                            <td style="padding:10px 8px; font-weight:700;">${idx + 1}</td>
-                                            <td style="padding:10px 8px; font-weight:700; color:var(--text-main);">${row.masked_identifier}</td>
-                                            <td style="padding:10px 8px; font-size:0.78rem;">${row.date}</td>
-                                            <td style="padding:10px 8px; text-align:right;"><span class="badge ${row.converted === 'Yes' ? 'green' : 'gray'}" style="font-size:0.65rem; text-transform:uppercase;">${row.converted}</span></td>
-                                        </tr>
-                                    `).join('')}
-                                </tbody>
-                            </table>
+                        <!-- KPI Grid -->
+                        <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); margin-bottom:20px;">
+                            <div class="kpi-card indigo">
+                                <div class="kpi-icon indigo"><i class="fab fa-wpforms"></i></div>
+                                <div class="kpi-info">
+                                    <div class="kpi-value">${stats.submissions}</div>
+                                    <div class="kpi-label">Submissions</div>
+                                </div>
+                            </div>
+                            <div class="kpi-card green">
+                                <div class="kpi-icon green"><i class="fas fa-funnel-dollar"></i></div>
+                                <div class="kpi-info">
+                                    <div class="kpi-value">${stats.conversions}</div>
+                                    <div class="kpi-label">Converted Leads (${stats.conversion_rate})</div>
+                                </div>
+                            </div>
+                            <div class="kpi-card blue">
+                                <div class="kpi-icon blue"><i class="fas fa-user-graduate"></i></div>
+                                <div class="kpi-info">
+                                    <div class="kpi-value">${stats.respondents}</div>
+                                    <div class="kpi-label">Approved Students</div>
+                                </div>
+                            </div>
+                            <div class="kpi-card purple">
+                                <div class="kpi-icon purple"><i class="fas fa-folder-open"></i></div>
+                                <div class="kpi-info">
+                                    <div class="kpi-value">${stats.plans_count}</div>
+                                    <div class="kpi-label">Assigned Plans</div>
+                                </div>
+                            </div>
+                            <div class="kpi-card amber">
+                                <div class="kpi-icon amber"><i class="fas fa-percent"></i></div>
+                                <div class="kpi-info">
+                                    <div class="kpi-value">${stats.avg_completion_rate}</div>
+                                    <div class="kpi-label">Avg. Task Completion</div>
+                                </div>
+                            </div>
+                            <div class="kpi-card teal">
+                                <div class="kpi-icon teal"><i class="fas fa-users-viewfinder"></i></div>
+                                <div class="kpi-info">
+                                    <div class="kpi-value">${stats.active_30d}</div>
+                                    <div class="kpi-label">Active Users (30d)</div>
+                                </div>
+                            </div>
                         </div>
+
+                        <!-- Tab Headers -->
+                        <div style="display:flex; gap:10px; border-bottom:1px solid var(--border); padding-bottom:8px; margin-bottom:15px;">
+                            <button class="btn btn-sm btn-outline campaign-tab-btn active" id="btn-c-tab-plans" onclick="switchCampaignTab('plans')"><i class="fas fa-folder-open"></i> Assigned Plans</button>
+                            <button class="btn btn-sm btn-outline campaign-tab-btn" id="btn-c-tab-respondents" onclick="switchCampaignTab('respondents')"><i class="fas fa-user-graduate"></i> Respondent Performance</button>
+                            <button class="btn btn-sm btn-outline campaign-tab-btn" id="btn-c-tab-tasks" onclick="switchCampaignTab('tasks')"><i class="fas fa-list-check"></i> Task Checklist Matrix</button>
+                        </div>
+
+                        <!-- 1. Assigned Plans Pane -->
+                        <div class="campaign-tab-pane" id="pane-campaign-plans" style="display:block;">
+                            <div class="table-responsive" style="border:1.5px solid var(--border); border-radius:12px;">
+                                <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+                                    <thead>
+                                        <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:#f8fafc;">
+                                            <th style="padding:12px 10px; font-weight:700;">Study Plan Title</th>
+                                            <th style="padding:12px 10px; font-weight:700;">Active Dates</th>
+                                            <th style="padding:12px 10px; font-weight:700; text-align:center;">Duration</th>
+                                            <th style="padding:12px 10px; font-weight:700; text-align:center;">Total Tasks</th>
+                                            <th style="padding:12px 10px; font-weight:700; text-align:right;">Completions Rate</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="campaign-plans-table-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- 2. Respondent Performance Pane -->
+                        <div class="campaign-tab-pane" id="pane-campaign-respondents" style="display:none;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+                                <input type="text" id="campaign-respondent-search" oninput="filterCampaignRespondentsTable()" placeholder="Search student name, email, phone..." style="padding:6px 12px; font-size:0.8rem; border:1.5px solid var(--border); border-radius:8px; width:260px; outline:none; height:34px;">
+                                <button class="btn btn-sm btn-outline" style="height:34px; padding:0 12px;" onclick="exportCampaignRespondentsCSV()"><i class="fas fa-file-csv"></i> Export CSV</button>
+                            </div>
+                            <div class="table-responsive" style="border:1.5px solid var(--border); border-radius:12px; max-height:400px; overflow-y:auto;">
+                                <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+                                    <thead>
+                                        <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:#f8fafc; position:sticky; top:0; z-index:2;">
+                                            <th style="padding:12px 10px; font-weight:700;">Respondent Name</th>
+                                            <th style="padding:12px 10px; font-weight:700;">Contact Details</th>
+                                            <th style="padding:12px 10px; font-weight:700; text-align:center;">Converted</th>
+                                            <th style="padding:12px 10px; font-weight:700; text-align:center;">Tasks Done</th>
+                                            <th style="padding:12px 10px; font-weight:700; text-align:center;">Score</th>
+                                            <th style="padding:12px 10px; font-weight:700; text-align:center;">Attendance Rate</th>
+                                            <th style="padding:12px 10px; font-weight:700; text-align:right;">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="campaign-respondents-table-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- 3. Task Checklist Matrix Pane -->
+                        <div class="campaign-tab-pane" id="pane-campaign-tasks" style="display:none;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+                                <div style="display:flex; gap:10px; align-items:center; flex-grow:1;">
+                                    <input type="text" id="campaign-task-search" oninput="filterCampaignTasksTable()" placeholder="Search task title, subject, chapter, plan..." style="padding:6px 12px; font-size:0.8rem; border:1.5px solid var(--border); border-radius:8px; width:220px; outline:none; height:34px;">
+                                    <select id="campaign-task-chapter-filter" onchange="filterCampaignTasksTable()" style="padding:0 10px; font-size:0.8rem; border:1.5px solid var(--border); border-radius:8px; width:160px; height:34px; background:#fff; cursor:pointer; outline:none;">
+                                        <option value="ALL">All Chapters</option>
+                                    </select>
+                                </div>
+                                <button class="btn btn-sm btn-outline" style="height:34px; padding:0 12px;" onclick="exportCampaignTasksCSV()"><i class="fas fa-file-csv"></i> Export CSV</button>
+                            </div>
+                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px;">
+                                <div class="table-responsive" style="border:1.5px solid var(--border); border-radius:12px; max-height:400px; overflow-y:auto;">
+                                    <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+                                        <thead>
+                                            <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:#f8fafc; position:sticky; top:0; z-index:2;">
+                                                <th style="padding:12px 10px; font-weight:700;">Plan</th>
+                                                <th style="padding:12px 10px; font-weight:700; text-align:center; width:100px;">Date</th>
+                                                <th style="padding:12px 10px; font-weight:700;">Task Activity</th>
+                                                <th style="padding:12px 10px; font-weight:700;">Subject &amp; Chapter</th>
+                                                <th style="padding:12px 10px; font-weight:700; text-align:center; width:65px;">Done</th>
+                                                <th style="padding:12px 10px; font-weight:700; text-align:center; width:65px;">Pend</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="campaign-tasks-table-body"></tbody>
+                                    </table>
+                                </div>
+                                <div class="widget-card" id="campaign-drilldown-card" style="border:1.5px solid var(--border); border-radius:12px; background:#fff; padding:15px; display:none; max-height:400px; overflow-y:auto;">
+                                    <!-- Dynamic Drilldown Completed/Pending student details populated here -->
+                                </div>
+                            </div>
+                        </div>
+
                     </div>
                 `;
 
-                workspace.appendChild(card);
+                // Load default sub-tab
+                switchCampaignTab('plans');
+            });
+    }
 
-                // Render conversions Pie chart
-                const convertedCount = data.filter(r => r.converted === 'Yes').length;
-                const pendingCount = data.length - convertedCount;
+    function switchCampaignTab(tabKey) {
+        document.querySelectorAll('.campaign-tab-pane').forEach(p => p.style.display = 'none');
+        document.querySelectorAll('.campaign-tab-btn').forEach(b => b.classList.remove('active'));
 
-                if (formDonutChartInstance) formDonutChartInstance.destroy();
-                const pieCtx = document.getElementById('form-conversion-chart').getContext('2d');
-                formDonutChartInstance = new Chart(pieCtx, {
-                    type: 'doughnut',
-                    data: {
-                        labels: ['Converted Leads', 'General Submissions'],
-                        datasets: [{
-                            data: [convertedCount, pendingCount],
-                            backgroundColor: ['#10b981', '#64748b']
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false
-                    }
+        if (tabKey === 'plans') {
+            document.getElementById('pane-campaign-plans').style.display = 'block';
+            document.getElementById('btn-c-tab-plans').classList.add('active');
+            loadCampaignPlansTab(currentCampaignIdSelected);
+        } else if (tabKey === 'respondents') {
+            document.getElementById('pane-campaign-respondents').style.display = 'block';
+            document.getElementById('btn-c-tab-respondents').classList.add('active');
+            loadCampaignRespondentsTab(currentCampaignIdSelected);
+        } else if (tabKey === 'tasks') {
+            document.getElementById('pane-campaign-tasks').style.display = 'block';
+            document.getElementById('btn-c-tab-tasks').classList.add('active');
+            loadCampaignTasksTab(currentCampaignIdSelected);
+        }
+    }
+
+    function loadCampaignPlansTab(formId) {
+        const tbody = document.getElementById('campaign-plans-table-body');
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin"></i> Loading campaign plans...</td></tr>';
+        fetch('?action=get_campaign_plans&form_id=' + formId)
+            .then(res => res.json())
+            .then(data => {
+                tbody.innerHTML = '';
+                if (data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:2rem;">No study plans mapped to this campaign.</td></tr>';
+                    return;
+                }
+                data.forEach(p => {
+                    tbody.innerHTML += `
+                        <tr style="border-bottom:1px solid #f1f5f9;">
+                            <td style="padding:12px 10px;"><strong style="font-size:0.85rem; color:var(--text-main);">${p.title}</strong><br><small style="color:var(--text-muted); font-size:0.72rem;">Status: ${p.status}</small></td>
+                            <td style="padding:12px 10px; font-size:0.78rem;">${p.start_date} to ${p.end_date}</td>
+                            <td style="padding:12px 10px; text-align:center; font-weight:700;">${p.duration}</td>
+                            <td style="padding:12px 10px; text-align:center; font-weight:700;">${p.tasks}</td>
+                            <td style="padding:12px 10px; text-align:right;"><strong style="color:var(--accent); font-size:0.85rem;">${p.pct}%</strong></td>
+                        </tr>
+                    `;
                 });
             });
     }
 
-    function exportFormSubmissionsExcel(title) {
-        const rows = document.querySelectorAll('#form-submissions-table tbody tr');
-        const dataArr = [['Sl. No', 'Respondent Identifier (Email)', 'Submitted Date', 'Converted Lead']];
-        
-        rows.forEach(row => {
-            const cols = row.querySelectorAll('td');
-            if (cols.length > 0) {
-                dataArr.push([
-                    cols[0].innerText,
-                    cols[1].innerText,
-                    cols[2].innerText,
-                    cols[3].innerText
-                ]);
-            }
+    function loadCampaignRespondentsTab(formId) {
+        const tbody = document.getElementById('campaign-respondents-table-body');
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin"></i> Loading respondents list...</td></tr>';
+        fetch('?action=get_campaign_respondents&form_id=' + formId)
+            .then(res => res.json())
+            .then(data => {
+                campaignRespondentsData = data;
+                
+                // Clear search
+                const searchInp = document.getElementById('campaign-respondent-search');
+                if (searchInp) searchInp.value = '';
+
+                renderCampaignRespondentsTable(data);
+            });
+    }
+
+    function renderCampaignRespondentsTable(data) {
+        const tbody = document.getElementById('campaign-respondents-table-body');
+        tbody.innerHTML = '';
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:2rem;">No respondents matching criteria.</td></tr>';
+            return;
+        }
+        data.forEach(s => {
+            const badgeColor = s.converted === 'Yes' ? 'green' : 'gray';
+            tbody.innerHTML += `
+                <tr style="border-bottom:1px solid #f1f5f9;">
+                    <td style="padding:10px 8px;"><strong style="font-size:0.82rem; color:var(--text-main);">${s.name}</strong><br><small style="color:var(--text-muted); font-size:0.72rem;">${s.masked_email}</small></td>
+                    <td style="padding:10px 8px; font-size:0.78rem;">${s.phone}<br><small style="color:var(--text-muted); font-size:0.72rem;">Joined: ${s.joined}</small></td>
+                    <td style="padding:10px 8px; text-align:center;"><span class="badge ${badgeColor}" style="font-size:0.65rem; text-transform:uppercase;">${s.converted}</span></td>
+                    <td style="padding:10px 8px; text-align:center; font-weight:700;">${s.completed} of ${s.total_tasks}</td>
+                    <td style="padding:10px 8px; text-align:center; font-weight:700;">${s.score}</td>
+                    <td style="padding:10px 8px; text-align:center; font-weight:700; color:var(--accent);">${s.pct}%</td>
+                    <td style="padding:10px 8px; text-align:right;">
+                        <button class="btn btn-xs btn-outline" style="padding:4px 8px;" onclick="loadStudentTimelineChecklist('${s.email}')"><i class="fas fa-eye"></i> View Dossier</button>
+                    </td>
+                </tr>
+            `;
         });
+    }
+
+    function filterCampaignRespondentsTable() {
+        const query = document.getElementById('campaign-respondent-search').value.toLowerCase().trim();
+        const filtered = campaignRespondentsData.filter(s => 
+            s.name.toLowerCase().includes(query) || 
+            s.email.toLowerCase().includes(query) ||
+            s.phone.includes(query)
+        );
+        renderCampaignRespondentsTable(filtered);
+    }
+
+    function loadCampaignTasksTab(formId) {
+        const tbody = document.getElementById('campaign-tasks-table-body');
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin"></i> Mapping task matrix...</td></tr>';
+        
+        // Hide drilldown card initially
+        const drilldownCard = document.getElementById('campaign-drilldown-card');
+        if (drilldownCard) {
+            drilldownCard.style.display = 'none';
+            drilldownCard.innerHTML = '';
+        }
+
+        fetch('?action=get_campaign_tasks&form_id=' + formId)
+            .then(res => res.json())
+            .then(data => {
+                campaignTasksData = data;
+                
+                // Populate Chapter select
+                const chapterSelect = document.getElementById('campaign-task-chapter-filter');
+                if (chapterSelect) {
+                    chapterSelect.innerHTML = '<option value="ALL">All Chapters</option>';
+                    const uniqueChapters = [...new Set(data.map(t => t.chapter).filter(Boolean))];
+                    uniqueChapters.sort().forEach(ch => {
+                        const opt = document.createElement('option');
+                        opt.value = ch;
+                        opt.innerText = ch;
+                        chapterSelect.appendChild(opt);
+                    });
+                }
+                
+                // Clear filters
+                const searchInp = document.getElementById('campaign-task-search');
+                if (searchInp) searchInp.value = '';
+                if (chapterSelect) chapterSelect.value = 'ALL';
+
+                renderCampaignTasksTable(data);
+            });
+    }
+
+    function renderCampaignTasksTable(data) {
+        const tbody = document.getElementById('campaign-tasks-table-body');
+        tbody.innerHTML = '';
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:2rem;">No matching tasks found.</td></tr>';
+            return;
+        }
+        data.forEach(t => {
+            tbody.innerHTML += `
+                <tr style="border-bottom:1px solid #f1f5f9;">
+                    <td style="padding:10px 8px; font-weight:600; color:var(--text-muted); font-size:0.72rem;">${t.plan}</td>
+                    <td style="padding:10px 8px; text-align:center; font-weight:700; font-size:0.72rem;">${t.date}</td>
+                    <td style="padding:10px 8px;"><strong style="color:var(--text-main); font-size:0.82rem;">${t.title}</strong><br><small style="color:var(--text-muted); font-size:0.72rem;">${t.topic}</small></td>
+                    <td style="padding:10px 8px; font-size:0.72rem;">Sub: ${t.subject}<br>Ch: ${t.chapter}</td>
+                    <td style="padding:10px 8px; text-align:center;">
+                        <button class="btn btn-xs btn-link" onclick="drilldownCampaignCompleted(${t.id}, '${t.title.replace(/'/g, "\\\\'")}')" style="color:#10b981; font-weight:800; font-size:0.78rem; text-decoration:none;">${t.completed} <i class="fas fa-eye" style="font-size:0.65rem;"></i></button>
+                    </td>
+                    <td style="padding:10px 8px; text-align:center;">
+                        <button class="btn btn-xs btn-link" onclick="drilldownCampaignPending(${t.id}, '${t.title.replace(/'/g, "\\\\'")}')" style="color:#ef4444; font-weight:800; font-size:0.78rem; text-decoration:none;">${t.pending} <i class="fas fa-eye" style="font-size:0.65rem;"></i></button>
+                    </td>
+                </tr>
+            `;
+        });
+    }
+
+    function filterCampaignTasksTable() {
+        const searchVal = document.getElementById('campaign-task-search').value.toLowerCase().trim();
+        const chapterVal = document.getElementById('campaign-task-chapter-filter').value;
+        const filtered = campaignTasksData.filter(t => {
+            const matchesSearch = !searchVal || 
+                (t.title && t.title.toLowerCase().includes(searchVal)) ||
+                (t.topic && t.topic.toLowerCase().includes(searchVal)) ||
+                (t.subject && t.subject.toLowerCase().includes(searchVal)) ||
+                (t.chapter && t.chapter.toLowerCase().includes(searchVal)) ||
+                (t.plan && t.plan.toLowerCase().includes(searchVal));
+            const matchesChapter = (chapterVal === 'ALL' || t.chapter === chapterVal);
+            return matchesSearch && matchesChapter;
+        });
+        renderCampaignTasksTable(filtered);
+    }
+
+    function drilldownCampaignCompleted(activityId, title) {
+        const card = document.getElementById('campaign-drilldown-card');
+        card.style.display = 'block';
+        card.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:8px; margin-bottom:10px;">
+                <strong style="font-size:0.8rem; color:var(--text-main);">Completed for: ${title}</strong>
+                <button class="btn btn-xs btn-outline" onclick="exportCampaignDrilldownExcel('completed', '${title.replace(/'/g, "\\\\'")}')"><i class="fas fa-file-excel"></i> Export</button>
+            </div>
+            <div class="table-responsive" style="max-height:300px; overflow-y:auto; border:1px solid var(--border); border-radius:8px;">
+                <table class="data-table" style="width:100%; font-size:0.78rem;">
+                    <thead>
+                        <tr style="text-align:left; background:#f8fafc;">
+                            <th style="padding:8px;">Respondent</th>
+                            <th style="padding:8px;">Completed At</th>
+                            <th style="padding:8px; text-align:right;">Map</th>
+                        </tr>
+                    </thead>
+                    <tbody id="campaign-drilldown-completed-body">
+                        <tr><td colspan="3" style="text-align:center; padding:1.5rem;"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        `;
+        const tbody = document.getElementById('campaign-drilldown-completed-body');
+        fetch(`?action=get_campaign_completed_tasks_drilldown&activity_id=${activityId}&form_id=${currentCampaignIdSelected}`)
+            .then(res => res.json())
+            .then(data => {
+                tbody.innerHTML = '';
+                if (data.error) {
+                    tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#ef4444; padding:1rem;">Error: ${data.error}</td></tr>`;
+                    return;
+                }
+                if (data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem;">No students completed this task yet.</td></tr>';
+                    return;
+                }
+                data.forEach(s => {
+                    const mapLink = s.location !== 'N/A' ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(s.location)}" target="_blank" style="color:var(--accent); font-weight:700;"><i class="fas fa-map-location-dot"></i> Maps</a>` : 'N/A';
+                    tbody.innerHTML += `
+                        <tr>
+                            <td style="padding:6px; font-weight:700;">${s.name}<br><small style="color:var(--text-muted); font-size:0.7rem;">${s.masked_email}</small></td>
+                            <td style="padding:6px; font-size:0.7rem;">${s.completed_at}<br><small style="color:var(--text-muted);">${s.ip}</small></td>
+                            <td style="padding:6px; text-align:right;">${mapLink}</td>
+                        </tr>
+                    `;
+                });
+            });
+    }
+
+    function drilldownCampaignPending(activityId, title) {
+        const card = document.getElementById('campaign-drilldown-card');
+        card.style.display = 'block';
+        card.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:8px; margin-bottom:10px;">
+                <strong style="font-size:0.8rem; color:var(--text-main);">Pending for: ${title}</strong>
+                <button class="btn btn-xs btn-outline" onclick="exportCampaignDrilldownExcel('pending', '${title.replace(/'/g, "\\\\'")}')"><i class="fas fa-file-excel"></i> Export</button>
+            </div>
+            <div class="table-responsive" style="max-height:300px; overflow-y:auto; border:1px solid var(--border); border-radius:8px;">
+                <table class="data-table" style="width:100%; font-size:0.78rem;">
+                    <thead>
+                        <tr style="text-align:left; background:#f8fafc;">
+                            <th style="padding:8px;">Respondent</th>
+                            <th style="padding:8px;">Contact Number</th>
+                            <th style="padding:8px; text-align:right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="campaign-drilldown-pending-body">
+                        <tr><td colspan="3" style="text-align:center; padding:1.5rem;"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        `;
+        const tbody = document.getElementById('campaign-drilldown-pending-body');
+        fetch(`?action=get_campaign_pending_tasks_drilldown&activity_id=${activityId}&form_id=${currentCampaignIdSelected}`)
+            .then(res => res.json())
+            .then(data => {
+                tbody.innerHTML = '';
+                if (data.error) {
+                    tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#ef4444; padding:1rem;">Error: ${data.error}</td></tr>`;
+                    return;
+                }
+                if (data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:#10b981; font-weight:700; padding:1rem;"><i class="fas fa-check-double"></i> All respondents completed!</td></tr>';
+                    return;
+                }
+                data.forEach(s => {
+                    const waLink = `https://wa.me/${s.phone.replace(/\\D/g, '')}`;
+                    tbody.innerHTML += `
+                        <tr>
+                            <td style="padding:6px; font-weight:700;">${s.name}<br><small style="color:var(--text-muted); font-size:0.7rem;">${s.masked_email}</small></td>
+                            <td style="padding:6px;">${s.masked_phone}</td>
+                            <td style="padding:6px; text-align:right;">
+                                <div style="display:inline-flex; gap:3px;">
+                                    <a href="${waLink}" target="_blank" class="btn btn-xs btn-success" style="padding:2px 4px; font-size:0.6rem;"><i class="fab fa-whatsapp"></i></a>
+                                    <a href="mailto:${s.email}?subject=Pending Task Checklist Alert" class="btn btn-xs btn-primary" style="padding:2px 4px; font-size:0.6rem;"><i class="fas fa-envelope"></i></a>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                });
+            });
+    }
+
+    function exportCampaignRespondentsCSV() {
+        let csv = 'Respondent Name,Email Address,Phone Number,Joined Date,Converted Lead,Completed Tasks,Streak Count,Total Score,Completion %\r\n';
+        campaignRespondentsData.forEach(s => {
+            csv += `"${s.name}","${s.email}","${s.phone}","${s.joined}","${s.converted}","${s.completed} of ${s.total_tasks}","${s.streak}","${s.score}","${s.pct}%"\r\n`;
+        });
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.setAttribute("download", `Campaign_Respondents_Performance_${currentCampaignTitleSelected.replace(/\\s+/g, '_')}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    function exportCampaignTasksCSV() {
+        let csv = 'Plan Title,Task Date,Task Title,Subject & Chapter,Completed Count,Pending Count,Completion %\r\n';
+        campaignTasksData.forEach(t => {
+            csv += `"${t.plan}","${t.date}","${t.title}","Subject: ${t.subject} | Chapter: ${t.chapter}","${t.completed}","${t.pending}","${t.pct}%"\r\n`;
+        });
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.setAttribute("download", `Campaign_Tasks_Analytics_${currentCampaignTitleSelected.replace(/\\s+/g, '_')}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    function exportCampaignDrilldownExcel(type, taskTitle) {
+        const tableId = type === 'completed' ? 'campaign-drilldown-completed-body' : 'campaign-drilldown-pending-body';
+        const rows = document.querySelectorAll(`#${tableId} tr`);
+        const dataArr = [];
+        
+        if (type === 'completed') {
+            dataArr.push(['Respondent Name', 'Completion Timestamp', 'Map Coordinates']);
+            rows.forEach(row => {
+                const cols = row.querySelectorAll('td');
+                if (cols.length >= 3) {
+                    dataArr.push([
+                        cols[0].innerText.split('\n')[0],
+                        cols[1].innerText.replace(/\n/g, ' '),
+                        cols[2].innerText
+                    ]);
+                }
+            });
+        } else {
+            dataArr.push(['Respondent Name', 'Contact Number']);
+            rows.forEach(row => {
+                const cols = row.querySelectorAll('td');
+                if (cols.length >= 2) {
+                    dataArr.push([
+                        cols[0].innerText.split('\n')[0],
+                        cols[1].innerText
+                    ]);
+                }
+            });
+        }
 
         const ws = XLSX.utils.aoa_to_sheet(dataArr);
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Submissions");
-        XLSX.writeFile(wb, `submissions_${title.replace(/\\s+/g, '_')}.xlsx`);
+        XLSX.utils.book_append_sheet(wb, ws, "Campaign Drilldown");
+        XLSX.writeFile(wb, `campaign_${type}_drilldown_${taskTitle.replace(/\\s+/g, '_')}.xlsx`);
     }
 
     function exportTimelineExcel() {
