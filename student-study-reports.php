@@ -2276,8 +2276,8 @@ include 'includes/admin_nav.php';
                         <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
                             <div style="display:flex; gap:10px; align-items:center; flex-grow:1;">
                                 <input type="text" id="course-task-search" oninput="filterCourseTasksTable()" placeholder="Search task, subject, chapter, plan..." style="padding:6px 12px; font-size:0.8rem; border:1.5px solid var(--border); border-radius:8px; width:220px; outline:none; height:34px; background:#fff;">
-                                <select id="course-task-subject-filter" onchange="filterCourseTasksTable()" style="padding:0 10px; font-size:0.8rem; border:1.5px solid var(--border); border-radius:8px; width:160px; height:34px; background:#fff; cursor:pointer; outline:none;">
-                                    <option value="ALL">All Subjects</option>
+                                <select id="course-task-chapter-filter" onchange="filterCourseTasksTable()" style="padding:0 10px; font-size:0.8rem; border:1.5px solid var(--border); border-radius:8px; width:160px; height:34px; background:#fff; cursor:pointer; outline:none;">
+                                    <option value="ALL">All Chapters</option>
                                 </select>
                             </div>
                             <button class="btn btn-sm btn-outline" style="height:34px; padding:0 12px; display:inline-flex; align-items:center; gap:6px;" onclick="exportCourseTasksCSV()"><i class="fas fa-file-csv"></i> Export CSV</button>
@@ -3533,23 +3533,23 @@ include 'includes/admin_nav.php';
             .then(data => {
                 courseTasksData = data;
                 
-                // Populate Subject filter select list dynamically
-                const subjectSelect = document.getElementById('course-task-subject-filter');
-                if (subjectSelect) {
-                    subjectSelect.innerHTML = '<option value="ALL">All Subjects</option>';
-                    const uniqueSubjects = [...new Set(data.map(t => t.subject).filter(Boolean))];
-                    uniqueSubjects.sort().forEach(sub => {
+                // Populate Chapter filter select list dynamically
+                const chapterSelect = document.getElementById('course-task-chapter-filter');
+                if (chapterSelect) {
+                    chapterSelect.innerHTML = '<option value="ALL">All Chapters</option>';
+                    const uniqueChapters = [...new Set(data.map(t => t.chapter).filter(Boolean))];
+                    uniqueChapters.sort().forEach(ch => {
                         const opt = document.createElement('option');
-                        opt.value = sub;
-                        opt.innerText = sub;
-                        subjectSelect.appendChild(opt);
+                        opt.value = ch;
+                        opt.innerText = ch;
+                        chapterSelect.appendChild(opt);
                     });
                 }
                 
                 // Clear input filters first
                 const searchInput = document.getElementById('course-task-search');
                 if (searchInput) searchInput.value = '';
-                if (subjectSelect) subjectSelect.value = 'ALL';
+                if (chapterSelect) chapterSelect.value = 'ALL';
 
                 renderCourseTasksTable(data);
             });
@@ -3582,7 +3582,7 @@ include 'includes/admin_nav.php';
 
     function filterCourseTasksTable() {
         const searchVal = document.getElementById('course-task-search').value.toLowerCase().trim();
-        const subjectVal = document.getElementById('course-task-subject-filter').value;
+        const chapterVal = document.getElementById('course-task-chapter-filter').value;
         
         const filtered = courseTasksData.filter(t => {
             // Search filter
@@ -3593,10 +3593,10 @@ include 'includes/admin_nav.php';
                 (t.chapter && t.chapter.toLowerCase().includes(searchVal)) ||
                 (t.plan && t.plan.toLowerCase().includes(searchVal));
                 
-            // Subject filter
-            const matchesSubject = (subjectVal === 'ALL' || t.subject === subjectVal);
+            // Chapter filter
+            const matchesChapter = (chapterVal === 'ALL' || t.chapter === chapterVal);
             
-            return matchesSearch && matchesSubject;
+            return matchesSearch && matchesChapter;
         });
         
         renderCourseTasksTable(filtered);
