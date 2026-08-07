@@ -918,11 +918,31 @@ if (isset($_GET['action'])) {
                     $rows = $stmt->fetchAll();
                     foreach ($rows as $r) {
                         $tasks = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ?", [$r['id']]);
+                        
+                        $plan_type = $r['plan_type'] ?? 'date_wise';
+                        if ($plan_type === 'date_wise') {
+                            $start_date = !empty($r['start_date']) && $r['start_date'] !== '0000-00-00' ? date('d M Y', strtotime($r['start_date'])) : '-';
+                            $end_date = !empty($r['end_date']) && $r['end_date'] !== '0000-00-00' ? date('d M Y', strtotime($r['end_date'])) : '-';
+                            
+                            if ($start_date !== '-' && $end_date !== '-') {
+                                $start = strtotime($r['start_date']);
+                                $end = strtotime($r['end_date']);
+                                $days = round(($end - $start) / 86400) + 1;
+                                $total_days = ($days > 0 ? $days : 0) . ' Days';
+                            } else {
+                                $total_days = '-';
+                            }
+                        } else {
+                            $start_date = '-';
+                            $end_date = '-';
+                            $total_days = (!empty($r['total_days']) ? $r['total_days'] : '0') . ' Days';
+                        }
+                        
                         $data[] = [
                             r_esc($r['title']),
-                            date('d M Y', strtotime($r['start_date'])),
-                            date('d M Y', strtotime($r['end_date'])),
-                            $r['total_days'] ?: 'N/A',
+                            $start_date,
+                            $end_date,
+                            $total_days,
                             ucfirst($r['assignment_type'] ?? 'N/A') . ': ' . ($r['assigned_value'] ?? 'All'),
                             $tasks . ' tasks'
                         ];
