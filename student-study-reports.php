@@ -912,7 +912,7 @@ if (isset($_GET['action'])) {
                         SELECT sp.*, sa.assignment_type, sa.assigned_value 
                         FROM study_plans sp
                         LEFT JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                        WHERE sp.status = 'published'
+                        WHERE sp.status = 'published' AND (sa.assignment_type IS NULL OR sa.assignment_type != 'form')
                         ORDER BY sp.created_at DESC
                     ");
                     $rows = $stmt->fetchAll();
@@ -1185,7 +1185,12 @@ if ($source === 'courses') {
         "),
         'total_courses' => db_count($pdo, "SELECT COUNT(DISTINCT u.pepp_course) FROM users u WHERE u.pepp_course IS NOT NULL AND u.pepp_course != '' AND u.status = 'approved' AND $assigned_plans_subquery"),
         'total_study_plans' => db_count($pdo, "SELECT COUNT(*) FROM study_plans"),
-        'active_study_plans' => db_count($pdo, "SELECT COUNT(*) FROM study_plans WHERE status = 'published'"),
+        'active_study_plans' => db_count($pdo, "
+            SELECT COUNT(DISTINCT sp.id) 
+            FROM study_plans sp
+            LEFT JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
+            WHERE sp.status = 'published' AND (sa.assignment_type IS NULL OR sa.assignment_type != 'form')
+        "),
         'total_custom_forms' => db_count($pdo, "SELECT COUNT(*) FROM campaign_forms WHERE status = 'published'"),
         'total_submissions' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions s JOIN users u ON s.respondent_identifier = u.email WHERE s.is_deleted = 0 AND u.status = 'approved' AND $assigned_plans_subquery"),
         'total_assignments' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_assignments"),
