@@ -71,13 +71,30 @@ if (isset($_GET['action'])) {
         if ($q !== '') {
             $like = "%{$q}%";
             
-            // Search users table
+            // Search users table who have at least one study plan assigned
             try {
+                $assigned_plans_subquery = "
+                    EXISTS (
+                        SELECT 1 FROM study_plan_assignments sa
+                        JOIN study_plans sp ON sa.study_plan_id = sp.id
+                        WHERE sp.status = 'published' AND (
+                            sa.assignment_type = 'all' OR
+                            (sa.assignment_type = 'course' AND sa.assigned_value = users.pepp_course) OR
+                            (sa.assignment_type = 'batch' AND sa.assigned_value = users.academic_year) OR
+                            (sa.assignment_type = 'student' AND sa.assigned_value = users.user_id) OR
+                            (sa.assignment_type = 'form' AND EXISTS (
+                                SELECT 1 FROM campaign_form_submissions s 
+                                WHERE s.respondent_identifier = users.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+                            ))
+                        )
+                    )
+                ";
+                
                 $stmt = $pdo->prepare("
                     SELECT user_id, name, email, phone, pepp_course, academic_year 
                     FROM users 
-                    WHERE (name LIKE ? OR email LIKE ? OR phone LIKE ? OR user_id LIKE ? OR pepp_course LIKE ? OR academic_year LIKE ?) AND status = 'approved'
-                    LIMIT 8
+                    WHERE (name LIKE ? OR email LIKE ? OR phone LIKE ? OR user_id LIKE ? OR pepp_course LIKE ? OR academic_year LIKE ?) AND status = 'approved' AND $assigned_plans_subquery
+                    LIMIT 15
                 ");
                 $stmt->execute([$like, $like, $like, $like, $like, $like]);
                 $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -93,43 +110,424 @@ if (isset($_GET['action'])) {
                     ];
                 }
             } catch (Exception $ex) {}
-
-            // Search campaign submissions
-            try {
-                $stmt_subs = $pdo->prepare("
-                    SELECT DISTINCT s.id, s.respondent_identifier, f.title as form_title
-                    FROM campaign_form_submissions s
-                    JOIN campaign_forms f ON s.form_id = f.id
-                    LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
-                    WHERE s.is_deleted = 0 AND (s.respondent_identifier LIKE ? OR a.answer_text LIKE ?)
-                    LIMIT 8
-                ");
-                $stmt_subs->execute([$like, $like]);
-                $subs = $stmt_subs->fetchAll(PDO::FETCH_ASSOC);
-                foreach ($subs as $sub) {
-                    $stmt_name = $pdo->prepare("
-                        SELECT a.answer_text 
-                        FROM campaign_form_answers a
-                        JOIN campaign_form_fields f ON a.field_id = f.id
-                        WHERE a.submission_id = ? AND (f.label LIKE '%name%' OR f.field_name LIKE '%name%')
-                        ORDER BY f.sort_order ASC LIMIT 1
-                    ");
-                    $stmt_name->execute([$sub['id']]);
-                    $resolved_name = $stmt_name->fetchColumn();
-
-                    $results[] = [
-                        'id' => $sub['id'],
-                        'name' => $resolved_name ?: 'Respondent #' . $sub['id'],
-                        'email' => format_credential_text($sub['respondent_identifier'], 'email', 'student-study-reports'),
-                        'phone' => '',
-                        'subtitle' => 'Form: ' . $sub['form_title'],
-                        'raw_email' => $sub['respondent_identifier'],
-                        'type' => 'form_user'
-                    ];
-                }
-            } catch (Exception $ex) {}
         }
         echo json_encode($results);
+        exit;
+    }
+
+    // 1.5 KPI Drilldown details API
+    if ($_GET['action'] === 'kpi_drilldown') {
+        $kpi = $_GET['kpi'] ?? '';
+        $data = [];
+        $title = '';
+        $headers = [];
+        
+        $assigned_plans_subquery = "
+            EXISTS (
+                SELECT 1 FROM study_plan_assignments sa
+                JOIN study_plans sp ON sa.study_plan_id = sp.id
+                WHERE sp.status = 'published' AND (
+                    sa.assignment_type = 'all' OR
+                    (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
+                    (sa.assignment_type = 'batch' AND sa.assigned_value = u.academic_year) OR
+                    (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
+                    (sa.assignment_type = 'form' AND EXISTS (
+                        SELECT 1 FROM campaign_form_submissions s 
+                        WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+                    ))
+                )
+            )
+        ";
+
+        try {
+            switch ($kpi) {
+                case 'total_students':
+                    $title = 'Total Registered Students with Study Plans';
+                    $headers = ['Student Name', 'Email', 'Course', 'Academic Year', 'Plans Assigned'];
+                    $stmt = $pdo->prepare("
+                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.academic_year 
+                        FROM users u 
+                        WHERE u.status = 'approved' AND $assigned_plans_subquery
+                        ORDER BY u.name ASC
+                    ");
+                    $stmt->execute();
+                    $rows = $stmt->fetchAll();
+                    foreach ($rows as $r) {
+                        $plans = db_count($pdo, "
+                            SELECT COUNT(DISTINCT sa.study_plan_id) FROM study_plan_assignments sa
+                            JOIN study_plans sp ON sa.study_plan_id = sp.id
+                            WHERE sp.status = 'published' AND (
+                                sa.assignment_type = 'all' OR
+                                (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'student' AND sa.assigned_value = ?)
+                            )
+                        ", [$r['pepp_course'], $r['academic_year'], $r['user_id']]);
+                        
+                        $data[] = [
+                            r_esc($r['name']),
+                            format_credential_text($r['email'], 'email', 'student-study-reports'),
+                            r_esc($r['pepp_course']),
+                            r_esc($r['academic_year']),
+                            $plans
+                        ];
+                    }
+                    break;
+                    
+                case 'active_students':
+                    $title = 'Active Enrolled Students';
+                    $headers = ['Student Name', 'Email', 'Course', 'Academic Year', 'Last Active Checklist'];
+                    $stmt = $pdo->prepare("
+                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.academic_year 
+                        FROM users u 
+                        WHERE u.status = 'approved' AND u.student_status = 'active' AND $assigned_plans_subquery
+                        ORDER BY u.name ASC
+                    ");
+                    $stmt->execute();
+                    $rows = $stmt->fetchAll();
+                    foreach ($rows as $r) {
+                        $last = $pdo->prepare("SELECT MAX(created_at) FROM study_plan_analytics WHERE student_email = ?");
+                        $last->execute([$r['email']]);
+                        $last_time = $last->fetchColumn();
+                        $data[] = [
+                            r_esc($r['name']),
+                            format_credential_text($r['email'], 'email', 'student-study-reports'),
+                            r_esc($r['pepp_course']),
+                            r_esc($r['academic_year']),
+                            $last_time ? time_ago($last_time) : 'Never'
+                        ];
+                    }
+                    break;
+                    
+                case 'total_courses':
+                    $title = 'Academic Courses Active Status';
+                    $headers = ['Course Name', 'Published Study Plans', 'Students Enrolled'];
+                    $stmt = $pdo->prepare("
+                        SELECT DISTINCT u.pepp_course 
+                        FROM users u 
+                        WHERE u.pepp_course IS NOT NULL AND u.pepp_course != '' AND u.status = 'approved' AND $assigned_plans_subquery
+                        ORDER BY u.pepp_course ASC
+                    ");
+                    $stmt->execute();
+                    $courses = $stmt->fetchAll(PDO::FETCH_COLUMN);
+                    foreach ($courses as $cname) {
+                        $plans = db_count($pdo, "SELECT COUNT(DISTINCT study_plan_id) FROM study_plan_assignments WHERE assignment_type='course' AND assigned_value = ?", [$cname]);
+                        $enrolled = db_count($pdo, "SELECT COUNT(*) FROM users u WHERE u.pepp_course = ? AND u.status = 'approved' AND $assigned_plans_subquery", [$cname]);
+                        $data[] = [
+                            r_esc($cname),
+                            $plans,
+                            $enrolled
+                        ];
+                    }
+                    break;
+                    
+                case 'active_plans':
+                    $title = 'Active Study Plans List';
+                    $headers = ['Plan Title', 'Start Date', 'Total Tasks', 'Assigned Courses/Forms'];
+                    $stmt = $pdo->query("
+                        SELECT id, title, start_date 
+                        FROM study_plans 
+                        WHERE status = 'published'
+                        ORDER BY start_date DESC
+                    ");
+                    $plans = $stmt->fetchAll();
+                    foreach ($plans as $p) {
+                        $tasks = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ?", [$p['id']]);
+                        $assigns = $pdo->prepare("SELECT DISTINCT assigned_value FROM study_plan_assignments WHERE study_plan_id = ?");
+                        $assigns->execute([$p['id']]);
+                        $vals = $assigns->fetchAll(PDO::FETCH_COLUMN);
+                        $data[] = [
+                            r_esc($p['title']),
+                            $p['start_date'] ? date('d M Y', strtotime($p['start_date'])) : 'N/A',
+                            $tasks,
+                            implode(', ', array_map('r_esc', $vals))
+                        ];
+                    }
+                    break;
+                    
+                case 'task_completions':
+                    $title = 'Recent Checklist Task Completions';
+                    $headers = ['Student Email', 'Plan Title', 'Task Title', 'Completed Date'];
+                    $stmt = $pdo->prepare("
+                        SELECT a.student_email, sp.title as plan_title, act.title as task_title, a.created_at
+                        FROM study_plan_analytics a 
+                        JOIN study_plans sp ON a.study_plan_id = sp.id 
+                        JOIN study_plan_activities act ON a.activity_id = act.id
+                        JOIN users u ON a.student_email = u.email
+                        WHERE u.status = 'approved' AND a.action_type = 'complete_activity' AND $assigned_plans_subquery
+                        ORDER BY a.created_at DESC 
+                        LIMIT 50
+                    ");
+                    $stmt->execute();
+                    $rows = $stmt->fetchAll();
+                    foreach ($rows as $r) {
+                        $data[] = [
+                            format_credential_text($r['student_email'], 'email', 'student-study-reports'),
+                            r_esc($r['plan_title']),
+                            r_esc($r['task_title']),
+                            date('d M Y h:i A', strtotime($r['created_at']))
+                        ];
+                    }
+                    break;
+                    
+                case 'attendance_rate':
+                    $title = 'Daily Learning Attendance Details';
+                    $headers = ['Course Name', 'Students count', 'Total Tasks Completions', 'Engagement Average'];
+                    $stmt = $pdo->prepare("
+                        SELECT DISTINCT u.pepp_course 
+                        FROM users u 
+                        WHERE u.pepp_course IS NOT NULL AND u.pepp_course != '' AND u.status = 'approved' AND $assigned_plans_subquery
+                        ORDER BY u.pepp_course ASC
+                    ");
+                    $stmt->execute();
+                    $courses = $stmt->fetchAll(PDO::FETCH_COLUMN);
+                    foreach ($courses as $cname) {
+                        $std_count = db_count($pdo, "SELECT COUNT(*) FROM users u WHERE u.pepp_course = ? AND u.status = 'approved' AND $assigned_plans_subquery", [$cname]);
+                        
+                        $completions = db_count($pdo, "
+                            SELECT COUNT(*) FROM study_plan_analytics an
+                            JOIN users u ON an.student_email = u.email
+                            WHERE u.pepp_course = ? AND u.status = 'approved' AND an.action_type = 'complete_activity' AND $assigned_plans_subquery
+                        ", [$cname]);
+                        
+                        $data[] = [
+                            r_esc($cname),
+                            $std_count,
+                            $completions,
+                            $std_count > 0 ? round($completions / $std_count, 1) . ' tasks/student' : '0'
+                        ];
+                    }
+                    break;
+                    
+                case 'weekly_active':
+                    $title = 'Weekly Active Students (Last 7 Days)';
+                    $headers = ['Student Name', 'Email', 'Course', 'Checklist Actions count', 'Last Action Time'];
+                    $stmt = $pdo->prepare("
+                        SELECT u.name, u.email, u.pepp_course, COUNT(an.id) as actions_count, MAX(an.created_at) as last_action
+                        FROM users u
+                        JOIN study_plan_analytics an ON u.email = an.student_email
+                        WHERE u.status = 'approved' AND an.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND $assigned_plans_subquery
+                        GROUP BY u.email
+                        ORDER BY last_action DESC
+                    ");
+                    $stmt->execute();
+                    $rows = $stmt->fetchAll();
+                    foreach ($rows as $r) {
+                        $data[] = [
+                            r_esc($r['name']),
+                            format_credential_text($r['email'], 'email', 'student-study-reports'),
+                            r_esc($r['pepp_course']),
+                            $r['actions_count'],
+                            time_ago($r['last_action'])
+                        ];
+                    }
+                    break;
+                    
+                case 'leads_converted':
+                    $title = 'Leads Converted with assigned study plans';
+                    $headers = ['Student Name', 'Email', 'Course', 'Conversions Form', 'Conversion Date'];
+                    $stmt = $pdo->prepare("
+                        SELECT u.name, u.email, u.pepp_course, f.title as form_title, s.created_at
+                        FROM campaign_form_submissions s
+                        JOIN campaign_forms f ON s.form_id = f.id
+                        JOIN users u ON s.respondent_identifier = u.email
+                        WHERE s.is_converted_lead = 1 AND u.status = 'approved' AND $assigned_plans_subquery
+                        ORDER BY s.created_at DESC
+                    ");
+                    $stmt->execute();
+                    $rows = $stmt->fetchAll();
+                    foreach ($rows as $r) {
+                        $data[] = [
+                            r_esc($r['name']),
+                            format_credential_text($r['email'], 'email', 'student-study-reports'),
+                            r_esc($r['pepp_course']),
+                            r_esc($r['form_title']),
+                            date('d M Y h:i A', strtotime($r['created_at']))
+                        ];
+                    }
+                    break;
+                    
+                case 'engagement_score':
+                    $title = 'Engagement Leaderboard Analysis';
+                    $headers = ['Student Name', 'Course', 'Tasks Assigned', 'Completions count', 'Completion Rate'];
+                    $stmt = $pdo->prepare("
+                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.academic_year
+                        FROM users u 
+                        WHERE u.status = 'approved' AND $assigned_plans_subquery
+                    ");
+                    $stmt->execute();
+                    $rows = $stmt->fetchAll();
+                    $rates = [];
+                    foreach ($rows as $r) {
+                        $stmt_plans = $pdo->prepare("
+                            SELECT DISTINCT sa.study_plan_id 
+                            FROM study_plan_assignments sa 
+                            JOIN study_plans sp ON sa.study_plan_id = sp.id 
+                            WHERE sp.status = 'published' AND (
+                                sa.assignment_type = 'all' OR
+                                (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'student' AND sa.assigned_value = ?)
+                            )
+                        ");
+                        $stmt_plans->execute([$r['pepp_course'], $r['academic_year'], $r['user_id']]);
+                        $plan_ids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
+                        $plans_count = count($plan_ids);
+                        
+                        $total_tasks = 0;
+                        $completed_tasks = 0;
+                        if ($plans_count > 0) {
+                            $in_clause = implode(',', array_fill(0, $plans_count, '?'));
+                            $stmt_tasks = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)");
+                            $stmt_tasks->execute($plan_ids);
+                            $total_tasks = (int)$stmt_tasks->fetchColumn();
+                            
+                            if ($total_tasks > 0) {
+                                $stmt_comp = $pdo->prepare("
+                                    SELECT COUNT(DISTINCT activity_id) 
+                                    FROM study_plan_analytics 
+                                    WHERE student_email = ? AND action_type = 'complete_activity' AND study_plan_id IN ($in_clause)
+                                ");
+                                $stmt_comp->execute(array_merge([$r['email']], $plan_ids));
+                                $completed_tasks = (int)$stmt_comp->fetchColumn();
+                            }
+                        }
+                        
+                        $pct = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
+                        $rates[] = [
+                            'name' => $r['name'],
+                            'course' => $r['pepp_course'],
+                            'total' => $total_tasks,
+                            'completed' => $completed_tasks,
+                            'pct' => $pct
+                        ];
+                    }
+                    usort($rates, function($a, $b) { return $b['pct'] <=> $a['pct']; });
+                    $top_rates = array_slice($rates, 0, 50);
+                    foreach ($top_rates as $tr) {
+                        $data[] = [
+                            r_esc($tr['name']),
+                            r_esc($tr['course']),
+                            $tr['total'],
+                            $tr['completed'],
+                            $tr['pct'] . '%'
+                        ];
+                    }
+                    break;
+                    
+                case 'mock_tests':
+                    $title = 'Mock Tests & Study materials';
+                    $headers = ['Activity/Test Title', 'Course ID', 'Faculty In-Charge', 'Target Date'];
+                    $stmt = $pdo->query("
+                        SELECT a.title, sp.title as plan_title, a.faculty, a.activity_date 
+                        FROM study_plan_activities a
+                        JOIN study_plans sp ON a.study_plan_id = sp.id
+                        WHERE sp.status = 'published' AND (a.title LIKE '%mock%' OR a.title LIKE '%test%')
+                        ORDER BY a.activity_date DESC LIMIT 50
+                    ");
+                    $rows = $stmt->fetchAll();
+                    foreach ($rows as $r) {
+                        $data[] = [
+                            r_esc($r['title']),
+                            r_esc($r['plan_title']),
+                            r_esc($r['faculty'] ?: 'TBD'),
+                            $r['activity_date'] ? date('d M Y', strtotime($r['activity_date'])) : 'N/A'
+                        ];
+                    }
+                    break;
+                    
+                case 'live_sessions':
+                    $title = 'Upcoming Live Sessions & Tasks';
+                    $headers = ['Activity Title', 'Study Plan', 'Faculty In-Charge', 'Session Date'];
+                    $stmt = $pdo->query("
+                        SELECT a.title, sp.title as plan_title, a.faculty, a.activity_date 
+                        FROM study_plan_activities a
+                        JOIN study_plans sp ON a.study_plan_id = sp.id
+                        WHERE sp.status = 'published' AND a.activity_date >= CURDATE()
+                        ORDER BY a.activity_date ASC LIMIT 50
+                    ");
+                    $rows = $stmt->fetchAll();
+                    foreach ($rows as $r) {
+                        $data[] = [
+                            r_esc($r['title']),
+                            r_esc($r['plan_title']),
+                            r_esc($r['faculty'] ?: 'TBD'),
+                            $r['activity_date'] ? date('d M Y', strtotime($r['activity_date'])) : 'N/A'
+                        ];
+                    }
+                    break;
+                    
+                case 'certificates':
+                    $title = 'Student Certification Eligibility List (>=90% completions)';
+                    $headers = ['Student Name', 'Course Name', 'Checklists Completions', 'Progress Rate', 'Eligibility Status'];
+                    $stmt = $pdo->prepare("
+                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.academic_year
+                        FROM users u 
+                        WHERE u.status = 'approved' AND $assigned_plans_subquery
+                    ");
+                    $stmt->execute();
+                    $rows = $stmt->fetchAll();
+                    foreach ($rows as $r) {
+                        $stmt_plans = $pdo->prepare("
+                            SELECT DISTINCT sa.study_plan_id 
+                            FROM study_plan_assignments sa 
+                            JOIN study_plans sp ON sa.study_plan_id = sp.id 
+                            WHERE sp.status = 'published' AND (
+                                sa.assignment_type = 'all' OR
+                                (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'student' AND sa.assigned_value = ?)
+                            )
+                        ");
+                        $stmt_plans->execute([$r['pepp_course'], $r['academic_year'], $r['user_id']]);
+                        $plan_ids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
+                        $plans_count = count($plan_ids);
+                        
+                        $total_tasks = 0;
+                        $completed_tasks = 0;
+                        if ($plans_count > 0) {
+                            $in_clause = implode(',', array_fill(0, $plans_count, '?'));
+                            $stmt_tasks = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)");
+                            $stmt_tasks->execute($plan_ids);
+                            $total_tasks = (int)$stmt_tasks->fetchColumn();
+                            
+                            if ($total_tasks > 0) {
+                                $stmt_comp = $pdo->prepare("
+                                    SELECT COUNT(DISTINCT activity_id) 
+                                    FROM study_plan_analytics 
+                                    WHERE student_email = ? AND action_type = 'complete_activity' AND study_plan_id IN ($in_clause)
+                                ");
+                                $stmt_comp->execute(array_merge([$r['email']], $plan_ids));
+                                $completed_tasks = (int)$stmt_comp->fetchColumn();
+                            }
+                        }
+                        
+                        $pct = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
+                        if ($pct >= 90) {
+                            $data[] = [
+                                r_esc($r['name']),
+                                r_esc($r['pepp_course']),
+                                $completed_tasks . ' / ' . $total_tasks,
+                                $pct . '%',
+                                '<span class="badge badge-success" style="background:#10b981; color:#fff; padding:4px 8px; border-radius:12px; font-size:0.75rem;">Eligible</span>'
+                            ];
+                        }
+                    }
+                    break;
+                    
+                default:
+                    $title = 'Drilldown Analysis';
+                    break;
+            }
+        } catch (Exception $e) {
+            $data = [['Error', $e->getMessage(), '', '', '']];
+        }
+        
+        echo json_encode([
+            'title' => $title,
+            'headers' => $headers,
+            'data' => $data
+        ]);
         exit;
     }
 
@@ -142,55 +540,104 @@ if (isset($_GET['action'])) {
         
         $export_list = [];
         
-        if ($course_filter) {
-            try {
-                $stmt = $pdo->prepare("SELECT user_id, name, email, pepp_course, academic_year FROM users WHERE pepp_course = ? AND status = 'approved'");
+        $assigned_plans_subquery = "
+            EXISTS (
+                SELECT 1 FROM study_plan_assignments sa
+                JOIN study_plans sp ON sa.study_plan_id = sp.id
+                WHERE sp.status = 'published' AND (
+                    sa.assignment_type = 'all' OR
+                    (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
+                    (sa.assignment_type = 'batch' AND sa.assigned_value = u.academic_year) OR
+                    (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
+                    (sa.assignment_type = 'form' AND EXISTS (
+                        SELECT 1 FROM campaign_form_submissions s 
+                        WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+                    ))
+                )
+            )
+        ";
+
+        try {
+            if ($form_filter) {
+                $stmt = $pdo->prepare("
+                    SELECT DISTINCT u.user_id, u.name, u.email, u.pepp_course, u.academic_year 
+                    FROM users u 
+                    JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+                    WHERE s.form_id = ? AND u.status = 'approved' AND $assigned_plans_subquery
+                ");
+                $stmt->execute([$form_filter]);
+                $stds = $stmt->fetchAll();
+            } else {
+                $stmt = $pdo->prepare("
+                    SELECT u.user_id, u.name, u.email, u.pepp_course, u.academic_year 
+                    FROM users u 
+                    WHERE u.pepp_course = ? AND u.status = 'approved' AND $assigned_plans_subquery
+                ");
                 $stmt->execute([$course_filter]);
                 $stds = $stmt->fetchAll();
-                
-                $stmt_plans = $pdo->prepare("SELECT DISTINCT study_plan_id FROM study_plan_assignments sa JOIN study_plans sp ON sa.study_plan_id = sp.id WHERE sa.assignment_type = 'course' AND sa.assigned_value = ? AND sp.status = 'published'");
-                $stmt_plans->execute([$course_filter]);
+            }
+            
+            foreach ($stds as $std) {
+                // Find all plan IDs assigned to this specific student
+                $stmt_plans = $pdo->prepare("
+                    SELECT DISTINCT sa.study_plan_id 
+                    FROM study_plan_assignments sa 
+                    JOIN study_plans sp ON sa.study_plan_id = sp.id 
+                    WHERE sp.status = 'published' AND (
+                        sa.assignment_type = 'all' OR
+                        (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
+                        (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+                        (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
+                        (sa.assignment_type = 'form' AND EXISTS (
+                            SELECT 1 FROM campaign_form_submissions s 
+                            WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+                        ))
+                    )
+                ");
+                $stmt_plans->execute([$std['pepp_course'], $std['academic_year'], $std['user_id'], $std['email']]);
                 $plan_ids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
                 $plans_count = count($plan_ids);
                 
                 $total_tasks = 0;
+                $completed = 0;
+                $last_active = null;
+                
                 if ($plans_count > 0) {
                     $in_clause = implode(',', array_fill(0, $plans_count, '?'));
                     $stmt_tasks = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)");
                     $stmt_tasks->execute($plan_ids);
                     $total_tasks = (int)$stmt_tasks->fetchColumn();
-                }
-                
-                foreach ($stds as $std) {
-                    $completed = 0;
-                    $last_active = null;
-                    if ($plans_count > 0 && $total_tasks > 0) {
-                        $in_clause = implode(',', array_fill(0, $plans_count, '?'));
-                        $stmt_comp = $pdo->prepare("SELECT COUNT(DISTINCT activity_id), MAX(created_at) FROM study_plan_analytics WHERE student_email = ? AND action_type = 'complete_activity' AND study_plan_id IN ($in_clause)");
+                    
+                    if ($total_tasks > 0) {
+                        $stmt_comp = $pdo->prepare("
+                            SELECT COUNT(DISTINCT activity_id), MAX(created_at) 
+                            FROM study_plan_analytics 
+                            WHERE student_email = ? AND action_type = 'complete_activity' AND study_plan_id IN ($in_clause)
+                        ");
                         $stmt_comp->execute(array_merge([$std['email']], $plan_ids));
                         $res = $stmt_comp->fetch(PDO::FETCH_NUM);
                         $completed = (int)($res[0] ?? 0);
                         $last_active = $res[1] ?? null;
                     }
-                    
-                    $pct = $total_tasks > 0 ? round(($completed / $total_tasks) * 100) : 0;
-                    $perf = get_performance_status($pct);
-                    
-                    if ($search !== '' && stripos($std['name'], $search) === false && stripos($std['email'], $search) === false) continue;
-                    if ($status !== '' && strcasecmp($perf['label'], $status) !== 0) continue;
-                    
-                    $export_list[] = [
-                        'name' => $std['name'],
-                        'email' => format_credential_text($std['email'], 'email', 'student-study-reports'),
-                        'plans' => $plans_count,
-                        'tasks' => $completed . ' / ' . $total_tasks,
-                        'pct' => $pct . '%',
-                        'perf' => $perf['label'],
-                        'active' => $last_active ? date('d M Y h:i A', strtotime($last_active)) : 'Never'
-                    ];
                 }
-            } catch (Exception $e) {}
-        }
+                
+                $pct = $total_tasks > 0 ? round(($completed / $total_tasks) * 100) : 0;
+                $perf = get_performance_status($pct);
+                
+                if ($search !== '' && stripos($std['name'], $search) === false && stripos($std['email'], $search) === false) continue;
+                if ($status !== '' && strcasecmp($perf['label'], $status) !== 0) continue;
+                
+                $export_list[] = [
+                    'name' => $std['name'],
+                    'email' => format_credential_text($std['email'], 'email', 'student-study-reports'),
+                    'plans' => $plans_count,
+                    'tasks' => $completed . ' / ' . $total_tasks,
+                    'pct' => $pct . '%',
+                    'perf' => $perf['label'],
+                    'active' => $last_active ? date('d M Y h:i A', strtotime($last_active)) : 'Never'
+                ];
+            }
+        } catch (Exception $e) {}
         
         header('Content-Type: text/csv');
         header('Content-Disposition: attachment; filename="pepp_student_study_report_' . date('Ymd_His') . '.csv"');
@@ -213,24 +660,41 @@ if (isset($_GET['action'])) {
 }
 
 // 1. Fetch KPI counts
+$assigned_plans_subquery = "
+    EXISTS (
+        SELECT 1 FROM study_plan_assignments sa
+        JOIN study_plans sp ON sa.study_plan_id = sp.id
+        WHERE sp.status = 'published' AND (
+            sa.assignment_type = 'all' OR
+            (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
+            (sa.assignment_type = 'batch' AND sa.assigned_value = u.academic_year) OR
+            (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
+            (sa.assignment_type = 'form' AND EXISTS (
+                SELECT 1 FROM campaign_form_submissions s 
+                WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+            ))
+        )
+    )
+";
+
 $kpis = [
-    'total_students' => db_count($pdo, "SELECT COUNT(*) FROM users WHERE status = 'approved'"),
-    'active_students' => db_count($pdo, "SELECT COUNT(*) FROM users WHERE status = 'approved' AND student_status = 'active'"),
-    'total_courses' => db_count($pdo, "SELECT COUNT(DISTINCT pepp_course) FROM users WHERE pepp_course IS NOT NULL AND pepp_course != '' AND status = 'approved'"),
+    'total_students' => db_count($pdo, "SELECT COUNT(*) FROM users u WHERE u.status = 'approved' AND $assigned_plans_subquery"),
+    'active_students' => db_count($pdo, "SELECT COUNT(*) FROM users u WHERE u.status = 'approved' AND u.student_status = 'active' AND $assigned_plans_subquery"),
+    'total_courses' => db_count($pdo, "SELECT COUNT(DISTINCT u.pepp_course) FROM users u WHERE u.pepp_course IS NOT NULL AND u.pepp_course != '' AND u.status = 'approved' AND $assigned_plans_subquery"),
     'total_study_plans' => db_count($pdo, "SELECT COUNT(*) FROM study_plans"),
     'active_study_plans' => db_count($pdo, "SELECT COUNT(*) FROM study_plans WHERE status = 'published'"),
     'total_custom_forms' => db_count($pdo, "SELECT COUNT(*) FROM campaign_forms WHERE status = 'published'"),
-    'total_submissions' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions WHERE is_deleted = 0"),
+    'total_submissions' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions s JOIN users u ON s.respondent_identifier = u.email WHERE s.is_deleted = 0 AND u.status = 'approved' AND $assigned_plans_subquery"),
     'total_assignments' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_assignments"),
-    'learning_started' => db_count($pdo, "SELECT COUNT(DISTINCT student_email) FROM study_plan_analytics WHERE action_type = 'complete_activity'"),
-    'total_checklist_completions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE action_type = 'complete_activity'"),
-    'total_views' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE action_type = 'view'"),
-    'total_downloads' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE action_type = 'download'"),
-    'active_today' => db_count($pdo, "SELECT COUNT(DISTINCT student_email) FROM study_plan_analytics WHERE DATE(created_at) = CURDATE()"),
-    'active_weekly' => db_count($pdo, "SELECT COUNT(DISTINCT student_email) FROM study_plan_analytics WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)"),
-    'active_monthly' => db_count($pdo, "SELECT COUNT(DISTINCT student_email) FROM study_plan_analytics WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)"),
-    'logins_today' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE action_type = 'view' AND DATE(created_at) = CURDATE()"),
-    'leads_converted' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions WHERE is_converted_lead = 1"),
+    'learning_started' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM users u JOIN study_plan_analytics an ON u.email = an.student_email WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND $assigned_plans_subquery"),
+    'total_checklist_completions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND $assigned_plans_subquery"),
+    'total_views' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'view' AND $assigned_plans_subquery"),
+    'total_downloads' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'download' AND $assigned_plans_subquery"),
+    'active_today' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND DATE(an.created_at) = CURDATE() AND $assigned_plans_subquery"),
+    'active_weekly' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND $assigned_plans_subquery"),
+    'active_monthly' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND $assigned_plans_subquery"),
+    'logins_today' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'view' AND DATE(an.created_at) = CURDATE() AND $assigned_plans_subquery"),
+    'leads_converted' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions s JOIN users u ON s.respondent_identifier = u.email WHERE s.is_converted_lead = 1 AND u.status = 'approved' AND $assigned_plans_subquery"),
     'total_faculty' => db_count($pdo, "SELECT COUNT(DISTINCT faculty) FROM study_plan_activities WHERE faculty IS NOT NULL AND faculty != ''"),
     'pending_activities' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities a LEFT JOIN study_plan_analytics an ON a.id = an.activity_id AND an.action_type = 'complete_activity' WHERE an.id IS NULL"),
     'upcoming_sessions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE activity_date >= CURDATE()")
@@ -272,40 +736,166 @@ try {
     $assigned_forms = [];
 }
 
-$selected_course = $_GET['course_name'] ?? ($assigned_courses[0] ?? null);
 $selected_form_id = isset($_GET['form_id']) ? (int)$_GET['form_id'] : null;
+$selected_course = null;
+if (!$selected_form_id) {
+    $selected_course = $_GET['course_name'] ?? ($assigned_courses[0] ?? null);
+}
 
 // Fetch active student list based on selected course or form
 $students_list = [];
-if ($selected_course) {
+
+$assigned_plans_subquery = "
+    EXISTS (
+        SELECT 1 FROM study_plan_assignments sa
+        JOIN study_plans sp ON sa.study_plan_id = sp.id
+        WHERE sp.status = 'published' AND (
+            sa.assignment_type = 'all' OR
+            (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
+            (sa.assignment_type = 'batch' AND sa.assigned_value = u.academic_year) OR
+            (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
+            (sa.assignment_type = 'form' AND EXISTS (
+                SELECT 1 FROM campaign_form_submissions s 
+                WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+            ))
+        )
+    )
+";
+
+if ($selected_form_id) {
     try {
-        $stmt = $pdo->prepare("SELECT user_id, name, email, pepp_course, academic_year, phone FROM users WHERE pepp_course = ? AND status = 'approved' ORDER BY name ASC");
+        $stmt = $pdo->prepare("
+            SELECT DISTINCT u.user_id, u.name, u.email, u.pepp_course, u.academic_year, u.phone 
+            FROM users u 
+            JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
+            WHERE s.form_id = ? AND u.status = 'approved' AND $assigned_plans_subquery
+            ORDER BY u.name ASC
+        ");
+        $stmt->execute([$selected_form_id]);
+        $raw_students = $stmt->fetchAll();
+        
+        foreach ($raw_students as $std) {
+            // Find all plan IDs assigned to this specific student
+            $stmt_plans = $pdo->prepare("
+                SELECT DISTINCT sa.study_plan_id 
+                FROM study_plan_assignments sa 
+                JOIN study_plans sp ON sa.study_plan_id = sp.id 
+                WHERE sp.status = 'published' AND (
+                    sa.assignment_type = 'all' OR
+                    (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
+                    (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+                    (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
+                    (sa.assignment_type = 'form' AND EXISTS (
+                        SELECT 1 FROM campaign_form_submissions s 
+                        WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+                    ))
+                )
+            ");
+            $stmt_plans->execute([$std['pepp_course'], $std['academic_year'], $std['user_id'], $std['email']]);
+            $plan_ids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
+            $plans_count = count($plan_ids);
+            
+            $total_tasks = 0;
+            $completed_tasks = 0;
+            $last_updated = null;
+            
+            if ($plans_count > 0) {
+                $in_clause = implode(',', array_fill(0, $plans_count, '?'));
+                
+                // Get total activities
+                $stmt_tasks = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)");
+                $stmt_tasks->execute($plan_ids);
+                $total_tasks = (int)$stmt_tasks->fetchColumn();
+                
+                if ($total_tasks > 0) {
+                    // Get completed activities
+                    $stmt_comp = $pdo->prepare("
+                        SELECT COUNT(DISTINCT activity_id), MAX(created_at) 
+                        FROM study_plan_analytics 
+                        WHERE student_email = ? AND action_type = 'complete_activity' AND study_plan_id IN ($in_clause)
+                    ");
+                    $stmt_comp->execute(array_merge([$std['email']], $plan_ids));
+                    $row_comp = $stmt_comp->fetch(PDO::FETCH_NUM);
+                    $completed_tasks = (int)($row_comp[0] ?? 0);
+                    $last_updated = $row_comp[1] ?? null;
+                }
+            }
+            
+            $comp_pct = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
+            $perf = get_performance_status($comp_pct);
+            
+            $students_list[] = [
+                'id' => $std['user_id'],
+                'name' => $std['name'],
+                'email' => $std['email'],
+                'phone' => $std['phone'] ?? '',
+                'type' => 'student',
+                'plans_count' => $plans_count,
+                'total_tasks' => $total_tasks,
+                'completed_tasks' => $completed_tasks,
+                'completed_pct' => $comp_pct,
+                'pending_pct' => 100 - $comp_pct,
+                'performance' => $perf,
+                'last_updated' => $last_updated
+            ];
+        }
+    } catch (Exception $e) {}
+} elseif ($selected_course) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT u.user_id, u.name, u.email, u.pepp_course, u.academic_year, u.phone 
+            FROM users u 
+            WHERE u.pepp_course = ? AND u.status = 'approved' AND $assigned_plans_subquery
+            ORDER BY u.name ASC
+        ");
         $stmt->execute([$selected_course]);
         $raw_students = $stmt->fetchAll();
         
-        $stmt_plans = $pdo->prepare("SELECT DISTINCT study_plan_id FROM study_plan_assignments sa JOIN study_plans sp ON sa.study_plan_id = sp.id WHERE sa.assignment_type = 'course' AND sa.assigned_value = ? AND sp.status = 'published'");
-        $stmt_plans->execute([$selected_course]);
-        $plan_ids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
-        $plans_count = count($plan_ids);
-        
-        $total_tasks = 0;
-        if ($plans_count > 0) {
-            $in_clause = implode(',', array_fill(0, $plans_count, '?'));
-            $stmt_tasks = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)");
-            $stmt_tasks->execute($plan_ids);
-            $total_tasks = (int)$stmt_tasks->fetchColumn();
-        }
-        
         foreach ($raw_students as $std) {
+            // Find all plan IDs assigned to this specific student
+            $stmt_plans = $pdo->prepare("
+                SELECT DISTINCT sa.study_plan_id 
+                FROM study_plan_assignments sa 
+                JOIN study_plans sp ON sa.study_plan_id = sp.id 
+                WHERE sp.status = 'published' AND (
+                    sa.assignment_type = 'all' OR
+                    (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
+                    (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+                    (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
+                    (sa.assignment_type = 'form' AND EXISTS (
+                        SELECT 1 FROM campaign_form_submissions s 
+                        WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+                    ))
+                )
+            ");
+            $stmt_plans->execute([$std['pepp_course'], $std['academic_year'], $std['user_id'], $std['email']]);
+            $plan_ids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
+            $plans_count = count($plan_ids);
+            
+            $total_tasks = 0;
             $completed_tasks = 0;
             $last_updated = null;
-            if ($plans_count > 0 && $total_tasks > 0) {
+            
+            if ($plans_count > 0) {
                 $in_clause = implode(',', array_fill(0, $plans_count, '?'));
-                $stmt_comp = $pdo->prepare("SELECT COUNT(DISTINCT activity_id), MAX(created_at) FROM study_plan_analytics WHERE student_email = ? AND action_type = 'complete_activity' AND study_plan_id IN ($in_clause)");
-                $stmt_comp->execute(array_merge([$std['email']], $plan_ids));
-                $row_comp = $stmt_comp->fetch(PDO::FETCH_NUM);
-                $completed_tasks = (int)($row_comp[0] ?? 0);
-                $last_updated = $row_comp[1] ?? null;
+                
+                // Get total activities
+                $stmt_tasks = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)");
+                $stmt_tasks->execute($plan_ids);
+                $total_tasks = (int)$stmt_tasks->fetchColumn();
+                
+                if ($total_tasks > 0) {
+                    // Get completed activities
+                    $stmt_comp = $pdo->prepare("
+                        SELECT COUNT(DISTINCT activity_id), MAX(created_at) 
+                        FROM study_plan_analytics 
+                        WHERE student_email = ? AND action_type = 'complete_activity' AND study_plan_id IN ($in_clause)
+                    ");
+                    $stmt_comp->execute(array_merge([$std['email']], $plan_ids));
+                    $row_comp = $stmt_comp->fetch(PDO::FETCH_NUM);
+                    $completed_tasks = (int)($row_comp[0] ?? 0);
+                    $last_updated = $row_comp[1] ?? null;
+                }
             }
             
             $comp_pct = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
@@ -358,10 +948,29 @@ foreach ($students_list as $s) {
 // Study Plan Analytics recent logs timeline
 $recent_logs = [];
 try {
+    $assigned_plans_subquery = "
+        EXISTS (
+            SELECT 1 FROM study_plan_assignments sa
+            JOIN study_plans sp ON sa.study_plan_id = sp.id
+            WHERE sp.status = 'published' AND (
+                sa.assignment_type = 'all' OR
+                (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
+                (sa.assignment_type = 'batch' AND sa.assigned_value = u.academic_year) OR
+                (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
+                (sa.assignment_type = 'form' AND EXISTS (
+                    SELECT 1 FROM campaign_form_submissions s 
+                    WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+                ))
+            )
+        )
+    ";
+
     $recent_logs = $pdo->query("
         SELECT a.student_email, a.action_type, a.created_at, sp.title as plan_title 
         FROM study_plan_analytics a 
         JOIN study_plans sp ON a.study_plan_id = sp.id 
+        JOIN users u ON a.student_email = u.email
+        WHERE u.status = 'approved' AND $assigned_plans_subquery
         ORDER BY a.created_at DESC 
         LIMIT 10
     ")->fetchAll();
@@ -570,6 +1179,11 @@ include 'includes/admin_nav.php';
     .kpi-card.green::after { background: #10b981; }
     .kpi-card.amber::after { background: #f59e0b; }
     .kpi-card.red::after { background: #ef4444; }
+
+    .kpi-card.selected-kpi {
+        border-color: #4f46e5 !important;
+        box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.15) !important;
+    }
 
     .kpi-icon {
         width: 48px;
@@ -1005,6 +1619,29 @@ include 'includes/admin_nav.php';
                     <div class="kpi-value"><?php echo $kpis['engagement_score']; ?>/100</div>
                     <div class="kpi-label">Engagement Score</div>
                 </div>
+            </div>
+        </div>
+
+        <!-- 2.5 KPI Drilldown Details Section -->
+        <div id="kpi-drilldown-container" class="chart-card" style="display:none; margin-bottom:1.5rem; transition: all 0.3s ease;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; border-bottom: 1.5px solid var(--border); padding-bottom:10px;">
+                <h4 id="kpi-drilldown-title" style="font-family:var(--header-font); font-weight:800; font-size:1.05rem; color:var(--text-main); margin:0;">
+                    <i class="fas fa-chart-line" style="color:var(--accent); margin-right:8px;"></i>
+                    KPI Drilldown Details
+                </h4>
+                <button class="btn btn-outline btn-sm" onclick="closeKPIDrilldown()" style="padding: 4px 8px; font-size:0.75rem;"><i class="fas fa-times"></i> Close Details</button>
+            </div>
+            <div style="overflow-x:auto;">
+                <table class="table table-hover" id="kpi-drilldown-table" style="width:100%; border-collapse: collapse; font-size: 0.85rem;">
+                    <thead>
+                        <tr id="kpi-drilldown-headers" style="background:#f8fafc; border-bottom:2px solid #e2e8f0; text-align:left;">
+                            <!-- dynamically populated -->
+                        </tr>
+                    </thead>
+                    <tbody id="kpi-drilldown-body">
+                        <!-- dynamically populated -->
+                    </tbody>
+                </table>
             </div>
         </div>
 
@@ -1575,6 +2212,9 @@ include 'includes/admin_nav.php';
 
         // Initialize Card configurations
         restoreDashboardCardsConfig();
+        
+        // Initialize KPI Card Drilldown interaction
+        initKPIDrilldown();
 
         // Render Charts if we are on Dashboard View
         <?php if (!$view_user): ?>
@@ -1815,6 +2455,104 @@ include 'includes/admin_nav.php';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+    }
+
+    function initKPIDrilldown() {
+        const cards = [
+            { id: 'card-total-students', key: 'total_students' },
+            { id: 'card-active-students', key: 'active_students' },
+            { id: 'card-total-courses', key: 'total_courses' },
+            { id: 'card-active-plans', key: 'active_plans' },
+            { id: 'card-checklist-completions', key: 'task_completions' },
+            { id: 'card-attendance', key: 'attendance_rate' },
+            { id: 'card-weekly-active', key: 'weekly_active' },
+            { id: 'card-leads-converted', key: 'leads_converted' },
+            { id: 'card-mock-tests', key: 'mock_tests' },
+            { id: 'card-live-sessions', key: 'live_sessions' },
+            { id: 'card-certificates', key: 'certificates' },
+            { id: 'card-engagement-score', key: 'engagement_score' }
+        ];
+
+        cards.forEach(c => {
+            const el = document.getElementById(c.id);
+            if (el) {
+                el.addEventListener('click', () => {
+                    // Highlight clicked card
+                    cards.forEach(x => {
+                        const other = document.getElementById(x.id);
+                        if (other) other.classList.remove('selected-kpi');
+                    });
+                    el.classList.add('selected-kpi');
+                    
+                    // Fetch and render data
+                    loadKPIDrilldown(c.key);
+                });
+            }
+        });
+    }
+
+    function loadKPIDrilldown(kpiKey) {
+        const container = document.getElementById('kpi-drilldown-container');
+        const titleEl = document.getElementById('kpi-drilldown-title');
+        const headersEl = document.getElementById('kpi-drilldown-headers');
+        const bodyEl = document.getElementById('kpi-drilldown-body');
+
+        if (!container || !titleEl || !headersEl || !bodyEl) return;
+
+        // Show loading state
+        container.style.display = 'block';
+        bodyEl.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:2rem; color:var(--text-muted);"><i class="fas fa-spinner fa-spin" style="margin-right:8px;"></i> Analyzing data...</td></tr>`;
+        headersEl.innerHTML = '';
+        
+        // Scroll to container smoothly
+        container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+        fetch(`student-study-reports.php?action=kpi_drilldown&kpi=${kpiKey}`)
+            .then(res => res.json())
+            .then(res => {
+                titleEl.innerHTML = `<i class="fas fa-chart-line" style="color:#4f46e5; margin-right:8px;"></i> ${res.title}`;
+                
+                // Build headers
+                let hHtml = '';
+                res.headers.forEach(h => {
+                    hHtml += `<th style="padding:10px 14px; font-weight:700; color:#475569;">${h}</th>`;
+                });
+                headersEl.innerHTML = hHtml;
+
+                // Build body
+                let bHtml = '';
+                if (res.data.length === 0) {
+                    bHtml = `<tr><td colspan="${res.headers.length}" style="text-align:center; padding:1.5rem; color:var(--text-muted);">No records found matching this KPI.</td></tr>`;
+                } else {
+                    res.data.forEach(row => {
+                        bHtml += `<tr style="border-bottom:1px solid #f1f5f9;">`;
+                        row.forEach(val => {
+                            bHtml += `<td style="padding:10px 14px; color:#334155;">${val}</td>`;
+                        });
+                        bHtml += `</tr>`;
+                    });
+                }
+                bodyEl.innerHTML = bHtml;
+            })
+            .catch(err => {
+                bodyEl.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:1.5rem; color:#ef4444;"><i class="fas fa-exclamation-triangle" style="margin-right:8px;"></i> Error analyzing data: ${err.message}</td></tr>`;
+            });
+    }
+
+    function closeKPIDrilldown() {
+        const container = document.getElementById('kpi-drilldown-container');
+        if (container) container.style.display = 'none';
+        
+        // Remove active highlight class from all KPI cards
+        const cards = [
+            'card-total-students', 'card-active-students', 'card-total-courses', 'card-active-plans',
+            'card-checklist-completions', 'card-attendance', 'card-weekly-active', 'card-leads-converted',
+            'card-mock-tests', 'card-live-sessions', 'card-certificates', 'card-engagement-score'
+        ];
+        cards.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.classList.remove('selected-kpi');
+        });
     }
 </script>
 </body>
