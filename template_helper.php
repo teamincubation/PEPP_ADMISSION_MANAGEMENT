@@ -92,8 +92,8 @@ function send_invoice_email(array $inv, $pdfBytes) {
     $bAlt = 'alt_' . md5(uniqid('', true));
     $fname = str_replace(['/', '\\'], '-', $inv['invoice_no']) . '.pdf';
 
-    $headers = "From: PEPP Learning Payments <payments@pepplearning.com>\n"
-             . "Reply-To: noreply@pepplearning.com\n"
+    $headers = "From: PEPP Learning Payments <noreply@pepplearning.in>\n"
+             . "Reply-To: noreply@pepplearning.in\n"
              . "MIME-Version: 1.0\n"
              . "X-Mailer: PEPP-Admin\n"
              . "Content-Type: multipart/mixed; boundary=\"{$bMix}\"";
@@ -116,7 +116,7 @@ function send_invoice_email(array $inv, $pdfBytes) {
 
     $subjectEnc = '=?UTF-8?B?' . base64_encode($subject) . '?=';
     try {
-        return @mail($to, $subjectEnc, $body, $headers, "-fpayments@pepplearning.com");
+        return @mail($to, $subjectEnc, $body, $headers, "-fnoreply@pepplearning.in");
     } catch (Exception $e) {
         error_log('Invoice mail: ' . $e->getMessage());
         return false;
