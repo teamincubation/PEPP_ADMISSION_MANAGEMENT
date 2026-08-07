@@ -783,10 +783,14 @@ include 'includes/admin_nav.php';
                         $file = $ans ? $ans['file_path'] : null;
                         
                         // Formatting
+                        $is_email = ($f['type'] === 'email' || strpos(strtolower($f['label']), 'email') !== false);
                         if (empty($val) && empty($file)) {
                             $disp_val = '<span style="color:var(--text-muted); opacity:0.6;">-</span>';
                         } elseif ($file) {
                             $disp_val = "<a href='{$file}' target='_blank' class='btn btn-sm btn-soft-blue' style='padding:2px 8px; font-size:0.75rem; text-decoration:none;'><i class='fas fa-paperclip'></i> File</a>";
+                        } elseif ($is_email) {
+                            $js_val = addslashes($val);
+                            $disp_val = "<button type='button' class='btn btn-sm btn-soft-blue copy-email-btn' onclick=\"copyTextToClipboard('{$js_val}', this)\" style='display:inline-flex; align-items:center; gap:5px; font-size:0.78rem; font-weight:600; padding:4px 10px; border-radius:8px; border:none; cursor:pointer;' title='Copy Email'><i class='fas fa-copy'></i> Copy Email</button>";
                         } else {
                             $disp_val = htmlspecialchars(strlen($val) > 40 ? substr($val, 0, 40) . '...' : $val);
                         }
@@ -1036,6 +1040,47 @@ include 'includes/admin_nav.php';
         var d = new Date();
         d.setTime(d.getTime() + (365*24*60*60*1000));
         document.cookie = 'form_cols_hide_<?php echo $form_id; ?>=' + hidden.join(',') + ';expires=' + d.toUTCString() + ';path=/';
+    }
+
+    function copyTextToClipboard(text, btn) {
+        if (!navigator.clipboard) {
+            // Fallback for older browsers
+            var textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.top = "0";
+            textArea.style.left = "0";
+            textArea.style.position = "fixed";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                showCopiedState(btn);
+            } catch (err) {
+                console.error('Fallback: unable to copy', err);
+            }
+            document.body.removeChild(textArea);
+            return;
+        }
+        navigator.clipboard.writeText(text).then(function() {
+            showCopiedState(btn);
+        }, function(err) {
+            console.error('Could not copy text: ', err);
+        });
+    }
+
+    function showCopiedState(btn) {
+        var origHTML = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+        btn.style.background = 'rgba(22, 163, 74, 0.15)';
+        btn.style.color = '#16a34a';
+        btn.style.borderColor = 'rgba(22, 163, 74, 0.3)';
+        setTimeout(function() {
+            btn.innerHTML = origHTML;
+            btn.style.background = '';
+            btn.style.color = '';
+            btn.style.borderColor = '';
+        }, 1500);
     }
 
     // View submission detail loader
