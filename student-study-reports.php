@@ -857,24 +857,7 @@ if (isset($_GET['action'])) {
             // Converted leads
             $conversions = db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = ? AND is_deleted = 0 AND is_converted_lead = 1", [$form_id]);
             
-            // Study plans assigned
-            $plans_count = db_count($pdo, "SELECT COUNT(*) FROM study_plan_assignments WHERE assignment_type = 'form' AND assigned_value = ?", [(string)$form_id]);
-            
-            // Campaign Respondents (approved students matching submission identifier or answer text)
-            $respondents_count = db_count($pdo, "
-                SELECT COUNT(*) 
-                FROM users u
-                JOIN campaign_form_submissions s ON (
-                    u.email = s.respondent_identifier OR
-                    EXISTS (
-                        SELECT 1 FROM campaign_form_answers fa 
-                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
-                    )
-                )
-                WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
-            ", [$form_id]);
-            
-            // Fetch respondents emails to calculate learning progress
+            // Approved students
             $stmt_emails = $pdo->prepare("
                 SELECT u.email, u.user_id, u.pepp_course, u.pepp_academic_year
                 FROM users u
@@ -889,11 +872,33 @@ if (isset($_GET['action'])) {
             ");
             $stmt_emails->execute([$form_id]);
             $students = $stmt_emails->fetchAll(PDO::FETCH_ASSOC);
+            $respondents_count = count($students);
             
-            // Get assigned plans IDs
-            $stmt_pids = $pdo->prepare("SELECT DISTINCT study_plan_id FROM study_plan_assignments WHERE assignment_type = 'form' AND assigned_value = ?");
-            $stmt_pids->execute([(string)$form_id]);
+            // Assigned plans IDs (either direct or via student courses)
+            $stmt_pids = $pdo->prepare("
+                SELECT DISTINCT sp.id
+                FROM study_plans sp
+                JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
+                WHERE (
+                    (sa.assignment_type = 'form' AND sa.assigned_value = ?) OR
+                    (sa.assignment_type = 'course' AND sa.assigned_value IN (
+                        SELECT DISTINCT u.pepp_course 
+                        FROM users u
+                        JOIN campaign_form_submissions s ON (
+                            u.email = s.respondent_identifier OR
+                            EXISTS (
+                                SELECT 1 FROM campaign_form_answers fa 
+                                WHERE fa.submission_id = s.id AND fa.answer_text = u.email
+                            )
+                        )
+                        WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved' AND u.pepp_course IS NOT NULL AND u.pepp_course != ''
+                    ))
+                )
+            ");
+            $stmt_pids->execute([(string)$form_id, $form_id]);
             $pids = $stmt_pids->fetchAll(PDO::FETCH_COLUMN);
+            
+            $plans_count = count($pids);
             
             $total_available_tasks = 0;
             $total_completed_tasks = 0;
@@ -902,11 +907,30 @@ if (isset($_GET['action'])) {
             if (!empty($pids) && !empty($students)) {
                 $in_clause = implode(',', array_fill(0, count($pids), '?'));
                 
-                // Count total available tasks for all assigned plans
-                $stmt_tasks_cnt = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)");
-                $stmt_tasks_cnt->execute($pids);
-                $tasks_per_plan = (int)$stmt_tasks_cnt->fetchColumn();
-                $total_available_tasks = $tasks_per_plan * count($students);
+                // Count total available tasks for all assigned plans (multiplied by eligible students)
+                foreach ($pids as $pid) {
+                    $tasks_in_plan = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ?", [$pid]);
+                    
+                    $assigned_students_count = 0;
+                    foreach ($students as $s) {
+                        $is_assigned = db_count($pdo, "
+                            SELECT COUNT(*) 
+                            FROM study_plan_assignments sa
+                            WHERE sa.study_plan_id = ? AND (
+                                sa.assignment_type = 'all' OR
+                                (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'form' AND sa.assigned_value = ?)
+                            )
+                        ", [$pid, $s['pepp_course'], $s['pepp_academic_year'], $s['user_id'], (string)$form_id]) > 0;
+                        
+                        if ($is_assigned) {
+                            $assigned_students_count++;
+                        }
+                    }
+                    $total_available_tasks += $tasks_in_plan * $assigned_students_count;
+                }
                 
                 // Count completions by these students for activities in these plans
                 $student_emails = array_map(fn($s) => $s['email'], $students);
@@ -955,20 +979,34 @@ if (isset($_GET['action'])) {
     if ($_GET['action'] === 'get_campaign_plans') {
         $form_id = (int)($_GET['form_id'] ?? 0);
         try {
-            // Get assigned plans
+            // Get assigned plans (either direct or via student courses)
             $stmt_plans = $pdo->prepare("
-                SELECT sp.id, sp.title, sp.status, sp.start_date, sp.end_date
+                SELECT DISTINCT sp.id, sp.title, sp.status, sp.start_date, sp.end_date
                 FROM study_plans sp
                 JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                WHERE sa.assignment_type = 'form' AND sa.assigned_value = ?
+                WHERE (
+                    (sa.assignment_type = 'form' AND sa.assigned_value = ?) OR
+                    (sa.assignment_type = 'course' AND sa.assigned_value IN (
+                        SELECT DISTINCT u.pepp_course 
+                        FROM users u
+                        JOIN campaign_form_submissions s ON (
+                            u.email = s.respondent_identifier OR
+                            EXISTS (
+                                SELECT 1 FROM campaign_form_answers fa 
+                                WHERE fa.submission_id = s.id AND fa.answer_text = u.email
+                            )
+                        )
+                        WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved' AND u.pepp_course IS NOT NULL AND u.pepp_course != ''
+                    ))
+                )
                 ORDER BY sp.title ASC
             ");
-            $stmt_plans->execute([(string)$form_id]);
+            $stmt_plans->execute([(string)$form_id, $form_id]);
             $plans = $stmt_plans->fetchAll(PDO::FETCH_ASSOC);
             
-            // Approved students under this form
+            // Fetch approved students to count eligible ones for each plan
             $stmt_students = $pdo->prepare("
-                SELECT u.email 
+                SELECT u.email, u.user_id, u.pepp_course, u.pepp_academic_year
                 FROM users u
                 JOIN campaign_form_submissions s ON (
                     u.email = s.respondent_identifier OR
@@ -980,22 +1018,42 @@ if (isset($_GET['action'])) {
                 WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
             ");
             $stmt_students->execute([$form_id]);
-            $students = $stmt_students->fetchAll(PDO::FETCH_COLUMN);
+            $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
             
             $data = [];
             foreach ($plans as $p) {
                 $tasks_count = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ?", [$p['id']]);
-                $total_possible = $tasks_count * count($students);
                 
+                // Find which students are assigned to this study plan
+                $assigned_students = [];
+                foreach ($students as $s) {
+                    $is_assigned = db_count($pdo, "
+                        SELECT COUNT(*) 
+                        FROM study_plan_assignments sa
+                        WHERE sa.study_plan_id = ? AND (
+                            sa.assignment_type = 'all' OR
+                            (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
+                            (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+                            (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
+                            (sa.assignment_type = 'form' AND sa.assigned_value = ?)
+                        )
+                    ", [$p['id'], $s['pepp_course'], $s['pepp_academic_year'], $s['user_id'], (string)$form_id]) > 0;
+                    
+                    if ($is_assigned) {
+                        $assigned_students[] = $s['email'];
+                    }
+                }
+                
+                $total_possible = $tasks_count * count($assigned_students);
                 $completions_count = 0;
-                if (!empty($students)) {
-                    $placeholders = implode(',', array_fill(0, count($students), '?'));
+                if (!empty($assigned_students)) {
+                    $placeholders = implode(',', array_fill(0, count($assigned_students), '?'));
                     $stmt_comp = $pdo->prepare("
                        SELECT COUNT(*) 
                        FROM study_plan_analytics 
                        WHERE study_plan_id = ? AND student_email IN ($placeholders) AND action_type = 'complete_activity'
                     ");
-                    $stmt_comp->execute(array_merge([$p['id']], $students));
+                    $stmt_comp->execute(array_merge([$p['id']], $assigned_students));
                     $completions_count = (int)$stmt_comp->fetchColumn();
                 }
                 
@@ -1023,7 +1081,7 @@ if (isset($_GET['action'])) {
         try {
             // Get approved respondents
             $stmt_students = $pdo->prepare("
-                SELECT u.user_id, u.name, u.email, u.phone, u.created_at, s.is_converted_lead
+                SELECT u.user_id, u.name, u.email, u.phone, u.created_at, u.pepp_course, u.pepp_academic_year, s.is_converted_lead
                 FROM users u
                 JOIN campaign_form_submissions s ON (
                     u.email = s.respondent_identifier OR
@@ -1038,30 +1096,66 @@ if (isset($_GET['action'])) {
             $stmt_students->execute([$form_id]);
             $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
             
-            // Assigned plans IDs
-            $stmt_pids = $pdo->prepare("SELECT DISTINCT study_plan_id FROM study_plan_assignments WHERE assignment_type = 'form' AND assigned_value = ?");
-            $stmt_pids->execute([(string)$form_id]);
+            // Assigned plans IDs (either direct or via student courses)
+            $stmt_pids = $pdo->prepare("
+                SELECT DISTINCT sp.id
+                FROM study_plans sp
+                JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
+                WHERE (
+                    (sa.assignment_type = 'form' AND sa.assigned_value = ?) OR
+                    (sa.assignment_type = 'course' AND sa.assigned_value IN (
+                        SELECT DISTINCT u.pepp_course 
+                        FROM users u
+                        JOIN campaign_form_submissions s ON (
+                            u.email = s.respondent_identifier OR
+                            EXISTS (
+                                SELECT 1 FROM campaign_form_answers fa 
+                                WHERE fa.submission_id = s.id AND fa.answer_text = u.email
+                            )
+                        )
+                        WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved' AND u.pepp_course IS NOT NULL AND u.pepp_course != ''
+                    ))
+                )
+            ");
+            $stmt_pids->execute([(string)$form_id, $form_id]);
             $pids = $stmt_pids->fetchAll(PDO::FETCH_COLUMN);
-            
-            $tasks_count = 0;
-            if (!empty($pids)) {
-                $in_clause = implode(',', array_fill(0, count($pids), '?'));
-                $stmt_tasks_cnt = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)");
-                $stmt_tasks_cnt->execute($pids);
-                $tasks_count = (int)$stmt_tasks_cnt->fetchColumn();
-            }
             
             $data = [];
             foreach ($students as $s) {
+                // Filter plans assigned to this specific student
+                $assigned_pids = [];
+                foreach ($pids as $pid) {
+                    $is_assigned = db_count($pdo, "
+                        SELECT COUNT(*) 
+                        FROM study_plan_assignments sa
+                        WHERE sa.study_plan_id = ? AND (
+                            sa.assignment_type = 'all' OR
+                            (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
+                            (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+                            (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
+                            (sa.assignment_type = 'form' AND sa.assigned_value = ?)
+                        )
+                    ", [$pid, $s['pepp_course'], $s['pepp_academic_year'], $s['user_id'], (string)$form_id]) > 0;
+                    
+                    if ($is_assigned) {
+                        $assigned_pids[] = $pid;
+                    }
+                }
+                
+                $tasks_count = 0;
                 $comp = 0;
-                if (!empty($pids)) {
-                    $in_clause = implode(',', array_fill(0, count($pids), '?'));
+                if (!empty($assigned_pids)) {
+                    $in_clause = implode(',', array_fill(0, count($assigned_pids), '?'));
+                    $stmt_tasks_cnt = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)");
+                    $stmt_tasks_cnt->execute($assigned_pids);
+                    $tasks_count = (int)$stmt_tasks_cnt->fetchColumn();
+                    
                     $stmt_comp = $pdo->prepare("
                         SELECT COUNT(*) 
                         FROM study_plan_analytics 
                         WHERE student_email = ? AND study_plan_id IN ($in_clause) AND action_type = 'complete_activity'
                     ");
-                    $stmt_comp->execute(array_merge([$s['email']], $pids));
+                    $stmt_comp->execute(array_merge([$s['email']], $assigned_pids));
                     $comp = (int)$stmt_comp->fetchColumn();
                 }
                 
@@ -1094,14 +1188,33 @@ if (isset($_GET['action'])) {
     if ($_GET['action'] === 'get_campaign_tasks') {
         $form_id = (int)($_GET['form_id'] ?? 0);
         try {
-            // Assigned plans IDs
-            $stmt_pids = $pdo->prepare("SELECT DISTINCT study_plan_id FROM study_plan_assignments WHERE assignment_type = 'form' AND assigned_value = ?");
-            $stmt_pids->execute([(string)$form_id]);
+            // Assigned plans IDs (either direct or via student courses)
+            $stmt_pids = $pdo->prepare("
+                SELECT DISTINCT sp.id
+                FROM study_plans sp
+                JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
+                WHERE (
+                    (sa.assignment_type = 'form' AND sa.assigned_value = ?) OR
+                    (sa.assignment_type = 'course' AND sa.assigned_value IN (
+                        SELECT DISTINCT u.pepp_course 
+                        FROM users u
+                        JOIN campaign_form_submissions s ON (
+                            u.email = s.respondent_identifier OR
+                            EXISTS (
+                                SELECT 1 FROM campaign_form_answers fa 
+                                WHERE fa.submission_id = s.id AND fa.answer_text = u.email
+                            )
+                        )
+                        WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved' AND u.pepp_course IS NOT NULL AND u.pepp_course != ''
+                    ))
+                )
+            ");
+            $stmt_pids->execute([(string)$form_id, $form_id]);
             $pids = $stmt_pids->fetchAll(PDO::FETCH_COLUMN);
             
             // Campaign Respondents (approved students)
             $stmt_students = $pdo->prepare("
-                SELECT u.email 
+                SELECT u.email, u.user_id, u.pepp_course, u.pepp_academic_year
                 FROM users u
                 JOIN campaign_form_submissions s ON (
                     u.email = s.respondent_identifier OR
@@ -1113,15 +1226,13 @@ if (isset($_GET['action'])) {
                 WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
             ");
             $stmt_students->execute([$form_id]);
-            $students = $stmt_students->fetchAll(PDO::FETCH_COLUMN);
-            
-            $total_students = count($students);
+            $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
             
             $data = [];
             if (!empty($pids)) {
                 $in_clause = implode(',', array_fill(0, count($pids), '?'));
                 $stmt_tasks = $pdo->prepare("
-                    SELECT a.id, a.day_number, a.activity_date, a.chapter, a.subject, a.topic, a.activity_title as title, a.faculty, sp.title as plan_title 
+                    SELECT a.id, a.study_plan_id, a.day_number, a.activity_date, a.chapter, a.subject, a.topic, a.activity_title as title, a.faculty, sp.title as plan_title 
                     FROM study_plan_activities a
                     JOIN study_plans sp ON a.study_plan_id = sp.id
                     WHERE a.study_plan_id IN ($in_clause)
@@ -1131,19 +1242,40 @@ if (isset($_GET['action'])) {
                 $tasks = $stmt_tasks->fetchAll(PDO::FETCH_ASSOC);
                 
                 foreach ($tasks as $t) {
+                    // Only count students assigned to this task's plan
+                    $assigned_students = [];
+                    foreach ($students as $s) {
+                        $is_assigned = db_count($pdo, "
+                            SELECT COUNT(*) 
+                            FROM study_plan_assignments sa
+                            WHERE sa.study_plan_id = ? AND (
+                                sa.assignment_type = 'all' OR
+                                (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
+                                (sa.assignment_type = 'form' AND sa.assigned_value = ?)
+                            )
+                        ", [$t['study_plan_id'], $s['pepp_course'], $s['pepp_academic_year'], $s['user_id'], (string)$form_id]) > 0;
+                        
+                        if ($is_assigned) {
+                            $assigned_students[] = $s['email'];
+                        }
+                    }
+                    
+                    $total_assigned = count($assigned_students);
                     $comp = 0;
-                    if ($total_students > 0) {
-                        $placeholders = implode(',', array_fill(0, count($students), '?'));
+                    if ($total_assigned > 0) {
+                        $placeholders = implode(',', array_fill(0, $total_assigned, '?'));
                         $stmt_comp = $pdo->prepare("
                             SELECT COUNT(*) 
                             FROM study_plan_analytics 
                             WHERE activity_id = ? AND action_type = 'complete_activity' AND student_email IN ($placeholders)
                         ");
-                        $stmt_comp->execute(array_merge([$t['id']], $students));
+                        $stmt_comp->execute(array_merge([$t['id']], $assigned_students));
                         $comp = (int)$stmt_comp->fetchColumn();
                     }
                     
-                    $pending = $total_students - $comp;
+                    $pending = $total_assigned - $comp;
                     
                     $data[] = [
                        'id' => $t['id'],
@@ -1157,7 +1289,7 @@ if (isset($_GET['action'])) {
                        'plan' => r_esc($t['plan_title']),
                        'completed' => $comp,
                        'pending' => $pending,
-                       'pct' => $total_students > 0 ? round(($comp / $total_students) * 100) : 0
+                       'pct' => $total_assigned > 0 ? round(($comp / $total_assigned) * 100) : 0
                     ];
                 }
             }
