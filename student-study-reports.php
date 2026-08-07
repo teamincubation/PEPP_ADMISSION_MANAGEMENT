@@ -1756,7 +1756,6 @@ include 'includes/admin_nav.php';
                             <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
                                 <thead>
                                     <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:#f8fafc;">
-                                        <th style="padding:12px 10px; font-weight:700; width: 60px;">Sl. No.</th>
                                         <th style="padding:12px 10px; font-weight:700;">Study Plan Title</th>
                                         <th style="padding:12px 10px; font-weight:700;">Active Dates</th>
                                         <th style="padding:12px 10px; font-weight:700; text-align:center;">Duration</th>
@@ -1779,7 +1778,6 @@ include 'includes/admin_nav.php';
                             <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
                                 <thead>
                                     <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:#f8fafc; position:sticky; top:0; z-index:2;">
-                                        <th style="padding:12px 10px; font-weight:700; width: 60px;">Sl. No.</th>
                                         <th style="padding:12px 10px; font-weight:700;">Plan</th>
                                         <th style="padding:12px 10px; font-weight:700; text-align:center; width:60px;">Day</th>
                                         <th style="padding:12px 10px; font-weight:700;">Task Title</th>
@@ -1802,7 +1800,6 @@ include 'includes/admin_nav.php';
                                 <table class="data-table" style="width:100%;">
                                     <thead>
                                         <tr style="text-align:left; background:#f8fafc; position:sticky; top:0; z-index:2;">
-                                            <th style="padding:10px 8px; width: 60px;">Sl. No.</th>
                                             <th style="padding:10px 8px;">Activity / Task</th>
                                             <th style="padding:10px 8px; text-align:right;">Action</th>
                                         </tr>
@@ -1819,7 +1816,6 @@ include 'includes/admin_nav.php';
                                     <table class="data-table" style="width:100%;">
                                         <thead>
                                             <tr style="text-align:left; background:#f8fafc; font-size:0.75rem;">
-                                                <th style="padding:8px; width: 60px;">Sl. No.</th>
                                                 <th style="padding:8px;">Student Details</th>
                                                 <th style="padding:8px;">Timestamp</th>
                                                 <th style="padding:8px;">Metadata Info</th>
@@ -1827,7 +1823,7 @@ include 'includes/admin_nav.php';
                                             </tr>
                                         </thead>
                                         <tbody id="course-completed-students-body">
-                                            <tr><td colspan="5" style="text-align:center; padding:2rem; color:var(--text-muted);">No task selected yet.</td></tr>
+                                            <tr><td colspan="4" style="text-align:center; padding:2rem; color:var(--text-muted);">No task selected yet.</td></tr>
                                         </tbody>
                                     </table>
                                 </div>
@@ -1842,7 +1838,6 @@ include 'includes/admin_nav.php';
                                 <table class="data-table" style="width:100%;">
                                     <thead>
                                         <tr style="text-align:left; background:#f8fafc; position:sticky; top:0; z-index:2;">
-                                            <th style="padding:10px 8px; width: 60px;">Sl. No.</th>
                                             <th style="padding:10px 8px;">Activity / Task</th>
                                             <th style="padding:10px 8px; text-align:right;">Action</th>
                                         </tr>
@@ -1862,7 +1857,6 @@ include 'includes/admin_nav.php';
                                     <table class="data-table" style="width:100%;">
                                         <thead>
                                             <tr style="text-align:left; background:#f8fafc; font-size:0.75rem;">
-                                                <th style="padding:8px; width: 60px;">Sl. No.</th>
                                                 <th style="padding:8px;">Student Details</th>
                                                 <th style="padding:8px;">Contact</th>
                                                 <th style="padding:8px; text-align:center;">Overdue Days</th>
@@ -1870,7 +1864,7 @@ include 'includes/admin_nav.php';
                                             </tr>
                                         </thead>
                                         <tbody id="course-pending-students-body">
-                                            <tr><td colspan="5" style="text-align:center; padding:2rem; color:var(--text-muted);">No task selected yet.</td></tr>
+                                            <tr><td colspan="4" style="text-align:center; padding:2rem; color:var(--text-muted);">No task selected yet.</td></tr>
                                         </tbody>
                                     </table>
                                 </div>
@@ -2212,7 +2206,7 @@ include 'includes/admin_nav.php';
             .then(res => {
                 titleEl.innerHTML = `<i class="fas fa-chart-line" style="color:#4f46e5; margin-right:8px;"></i> ${res.title}`;
                 
-                let hHtml = '';
+                let hHtml = '<th style="padding:10px 14px; font-weight:700; color:#475569; width:70px;">Sl. No.</th>';
                 res.headers.forEach(h => {
                     hHtml += `<th style="padding:10px 14px; font-weight:700; color:#475569;">${h}</th>`;
                 });
@@ -2220,10 +2214,11 @@ include 'includes/admin_nav.php';
 
                 let bHtml = '';
                 if (res.data.length === 0) {
-                    bHtml = `<tr><td colspan="${res.headers.length}" style="text-align:center; padding:1.5rem; color:var(--text-muted);">No records found matching this KPI.</td></tr>`;
+                    bHtml = `<tr><td colspan="${res.headers.length + 1}" style="text-align:center; padding:1.5rem; color:var(--text-muted);">No records found matching this KPI.</td></tr>`;
                 } else {
-                    res.data.forEach(row => {
+                    res.data.forEach((row, idx) => {
                         bHtml += `<tr style="border-bottom:1px solid #f1f5f9;">`;
+                        bHtml += `<td style="padding:10px 14px; color:#334155; font-weight:700;">${idx + 1}</td>`;
                         row.forEach(val => {
                             bHtml += `<td style="padding:10px 14px; color:#334155;">${val}</td>`;
                         });
@@ -2512,24 +2507,29 @@ include 'includes/admin_nav.php';
             document.getElementById('btn-tab-completed').classList.add('active');
             loadCourseCompletionsTab(currentCourseNameSelected);
         } else if (tabKey === 'pending-logs') {
-            document.getElementById('pane    function loadCoursePlansTab(cname) {
+            document.getElementById('pane-pending-logs').style.display = 'block';
+            document.getElementById('btn-tab-pending').classList.add('active');
+            loadCoursePendingTab(currentCourseNameSelected);
+        }
+    }
+
+    function loadCoursePlansTab(cname) {
         const tbody = document.getElementById('course-plans-table-body');
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin"></i> Fetching plans list...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin"></i> Fetching plans list...</td></tr>';
 
         fetch('?action=get_course_plans&course_name=' + encodeURIComponent(cname))
             .then(res => res.json())
             .then(data => {
                 tbody.innerHTML = '';
                 if (data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No study plans assigned directly to this course.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;">No study plans assigned directly to this course.</td></tr>';
                     return;
                 }
 
-                data.forEach((p, idx) => {
+                data.forEach(p => {
                     const dot = p.is_active ? '<span class="pulse-dot" title="Currently Active Plan"></span>' : '';
                     tbody.innerHTML += `
                         <tr style="border-bottom:1px solid #f1f5f9;">
-                            <td style="padding:12px 10px; font-weight:700; color:var(--text-muted);">${idx + 1}</td>
                             <td style="padding:12px 10px;">
                                 ${dot} <strong style="font-size:0.88rem; color:var(--text-main);">${p.title}</strong>
                                 <small style="display:block; color:var(--text-muted);">Status: ${p.status}</small>
@@ -2552,21 +2552,20 @@ include 'includes/admin_nav.php';
 
     function loadCourseTasksTab(cname) {
         const tbody = document.getElementById('course-tasks-table-body');
-        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin"></i> Mapping course checklist matrix...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin"></i> Mapping course checklist matrix...</td></tr>';
 
         fetch('?action=get_course_tasks&course_name=' + encodeURIComponent(cname))
             .then(res => res.json())
             .then(data => {
                 tbody.innerHTML = '';
                 if (data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;">No task activities mapped yet.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">No task activities mapped yet.</td></tr>';
                     return;
                 }
 
-                data.forEach((t, idx) => {
+                data.forEach(t => {
                     tbody.innerHTML += `
                         <tr style="border-bottom:1px solid #f1f5f9;">
-                            <td style="padding:10px 8px; font-weight:700; color:var(--text-muted);">${idx + 1}</td>
                             <td style="padding:10px 8px; font-weight:600; color:var(--text-muted); font-size:0.78rem;">${t.plan}</td>
                             <td style="padding:10px 8px; text-align:center; font-weight:700;">${t.day}</td>
                             <td style="padding:10px 8px;"><strong style="color:var(--text-main); font-size:0.85rem;">${t.title}</strong><br><small style="color:var(--text-muted);">${t.topic}</small></td>
@@ -2588,14 +2587,14 @@ include 'includes/admin_nav.php';
         document.querySelectorAll('#course-tasks-table-body tr').forEach(row => {
             const cols = row.querySelectorAll('td');
             if (cols.length > 0) {
-                const plan = cols[1].innerText;
-                const day = cols[2].innerText;
-                const title = cols[3].innerText;
-                const metadata = cols[4].innerText;
-                const faculty = cols[5].innerText;
-                const completed = cols[6].innerText;
-                const pending = cols[7].innerText;
-                const rate = cols[8].innerText;
+                const plan = cols[0].innerText;
+                const day = cols[1].innerText;
+                const title = cols[2].innerText;
+                const metadata = cols[3].innerText;
+                const faculty = cols[4].innerText;
+                const completed = cols[5].innerText;
+                const pending = cols[6].innerText;
+                const rate = cols[7].innerText;
 
                 csv += `"${plan}","${day}","${title}","${metadata}","${faculty}","${completed}","${pending}","${rate}"\r\n`;
             }
@@ -2611,16 +2610,15 @@ include 'includes/admin_nav.php';
 
     function loadCourseCompletionsTab(cname) {
         const list = document.getElementById('course-completed-activities-body');
-        list.innerHTML = '<tr><td colspan="3" style="text-align:center;"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>';
+        list.innerHTML = '<tr><td style="text-align:center;"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>';
 
         fetch('?action=get_course_tasks&course_name=' + encodeURIComponent(cname))
             .then(res => res.json())
             .then(data => {
                 list.innerHTML = '';
-                data.forEach((t, idx) => {
+                data.forEach(t => {
                     list.innerHTML += `
                         <tr>
-                            <td style="padding:10px 8px; font-weight:700; color:var(--text-muted);">${idx + 1}</td>
                             <td style="padding:10px 8px;">
                                 <strong style="font-size:0.85rem; color:var(--text-main); display:block;">${t.title}</strong>
                                 <small style="color:var(--text-muted); font-size:0.72rem;">Plan: ${t.plan} · Day ${t.day} · Completions: ${t.completed}</small>
@@ -2644,21 +2642,20 @@ include 'includes/admin_nav.php';
         document.getElementById('c-completions-export-btn').style.display = 'inline-block';
 
         const tbody = document.getElementById('course-completed-students-body');
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;"><i class="fas fa-spinner fa-spin"></i> Fetching list...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;"><i class="fas fa-spinner fa-spin"></i> Fetching list...</td></tr>';
 
         fetch('?action=get_course_completed_tasks_drilldown&activity_id=' + activityId)
             .then(res => res.json())
             .then(data => {
                 tbody.innerHTML = '';
                 if (data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No students have completed this task yet.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">No students have completed this task yet.</td></tr>';
                     return;
                 }
-                data.forEach((s, idx) => {
+                data.forEach(s => {
                     const mapLink = s.location !== 'N/A' ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(s.location)}" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none;"><i class="fas fa-map-location-dot"></i> Maps</a>` : 'N/A';
                     tbody.innerHTML += `
                         <tr>
-                            <td style="padding:8px; font-weight:700; color:var(--text-muted);">${idx + 1}</td>
                             <td style="padding:8px; font-weight:700; color:var(--text-main);">${s.name}<br><small style="color:var(--text-muted);">${s.masked_email}</small></td>
                             <td style="padding:8px; font-size:0.75rem;">${s.completed_at}</td>
                             <td style="padding:8px; font-size:0.72rem; color:var(--text-muted);">${s.ip}<br>${s.device} (${s.browser})</td>
@@ -2671,16 +2668,15 @@ include 'includes/admin_nav.php';
 
     function loadCoursePendingTab(cname) {
         const list = document.getElementById('course-pending-activities-body');
-        list.innerHTML = '<tr><td colspan="3" style="text-align:center;"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>';
+        list.innerHTML = '<tr><td style="text-align:center;"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>';
 
         fetch('?action=get_course_tasks&course_name=' + encodeURIComponent(cname))
             .then(res => res.json())
             .then(data => {
                 list.innerHTML = '';
-                data.forEach((t, idx) => {
+                data.forEach(t => {
                     list.innerHTML += `
                         <tr>
-                            <td style="padding:10px 8px; font-weight:700; color:var(--text-muted);">${idx + 1}</td>
                             <td style="padding:10px 8px;">
                                 <strong style="font-size:0.85rem; color:var(--text-main); display:block;">${t.title}</strong>
                                 <small style="color:var(--text-muted); font-size:0.72rem;">Plan: ${t.plan} · Day ${t.day} · Pending: ${t.pending}</small>
@@ -2702,21 +2698,20 @@ include 'includes/admin_nav.php';
         document.getElementById('c-pending-export-btn').style.display = 'inline-block';
 
         const tbody = document.getElementById('course-pending-students-body');
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;"><i class="fas fa-spinner fa-spin"></i> Fetching list...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;"><i class="fas fa-spinner fa-spin"></i> Fetching list...</td></tr>';
 
         fetch(`?action=get_course_pending_tasks_drilldown&activity_id=${activityId}&course_name=${encodeURIComponent(currentCourseNameSelected)}`)
             .then(res => res.json())
             .then(data => {
                 tbody.innerHTML = '';
                 if (data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#10b981; font-weight:700;"><i class="fas fa-check-double"></i> All students have completed this task!</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#10b981; font-weight:700;"><i class="fas fa-check-double"></i> All students have completed this task!</td></tr>';
                     return;
                 }
-                data.forEach((s, idx) => {
+                data.forEach(s => {
                     const waLink = `https://wa.me/${s.phone.replace(/\\D/g, '')}`;
                     tbody.innerHTML += `
                         <tr>
-                            <td style="padding:8px; font-weight:700; color:var(--text-muted);">${idx + 1}</td>
                             <td style="padding:8px; font-weight:700; color:var(--text-main);">${s.name}<br><small style="color:var(--text-muted);">${s.masked_email}</small></td>
                             <td style="padding:8px; font-size:0.75rem;">${s.masked_phone}</td>
                             <td style="padding:8px; text-align:center; color:#ef4444; font-weight:800;">${s.overdue_days} Days</td>
@@ -2757,10 +2752,10 @@ include 'includes/admin_nav.php';
         rows.forEach(row => {
             const cols = row.querySelectorAll('td');
             if (cols.length > 0) {
-                const name = cols[1].innerText.split('\n')[0];
-                const col2 = cols[2].innerText;
-                const col3 = cols[3].innerText;
-                const col4 = cols[4].innerText;
+                const name = cols[0].innerText.split('\n')[0];
+                const col2 = cols[1].innerText;
+                const col3 = cols[2].innerText;
+                const col4 = cols[3].innerText;
                 dataArr.push([name, col2, col3, col4]);
             }
         });
@@ -2768,8 +2763,8 @@ include 'includes/admin_nav.php';
         const ws = XLSX.utils.aoa_to_sheet(dataArr);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Drilldown Analysis");
-
-        const title = currentDrilldownActivityTitle.replace(/\s+/g, '_');
+        
+        const title = currentDrilldownActivityTitle.replace(/\\s+/g, '_');
         XLSX.writeFile(wb, `${type}_tasks_${title}.xlsx`);
     }
 
