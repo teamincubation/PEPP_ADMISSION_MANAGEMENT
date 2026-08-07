@@ -465,6 +465,68 @@ include 'includes/admin_nav.php';
         --hover-shadow: 0 10px 25px -5px rgba(79, 70, 229, 0.1), 0 8px 16px -6px rgba(0, 0, 0, 0.05);
     }
 
+    .modern-search-input {
+        background: #ffffff;
+        border: 1.5px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 10px 14px 10px 38px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: #1e293b;
+        outline: none;
+        width: 100%;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+    .modern-search-input:focus {
+        border-color: #4f46e5;
+        background: #ffffff;
+        box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.12), 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+
+    .modern-select {
+        background: #ffffff;
+        border: 1.5px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 9px 14px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #475569;
+        outline: none;
+        width: 100%;
+        transition: all 0.2s ease;
+        cursor: pointer;
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2364748b' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+        background-position: right 12px center;
+        background-repeat: no-repeat;
+        background-size: 1.25rem;
+        padding-right: 2.5rem;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    }
+    .modern-select:focus {
+        border-color: #4f46e5;
+        box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+    }
+
+    .modern-input {
+        background: #ffffff;
+        border: 1.5px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 9px 14px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: #1e293b;
+        outline: none;
+        width: 100%;
+        transition: all 0.2s ease;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    }
+    .modern-input:focus {
+        border-color: #4f46e5;
+        box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+    }
+
     .kpi-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -841,7 +903,7 @@ include 'includes/admin_nav.php';
         <div style="position:relative; width:320px;">
             <div class="form-input-icon" style="margin-bottom:0;">
                 <i class="fas fa-search" style="color:var(--text-muted); position:absolute; left:12px; top:50%; transform:translateY(-50%);"></i>
-                <input type="text" id="global-student-search-input" class="form-input" style="margin-bottom:0; padding-left:36px; border-radius:12px;" placeholder="Search students (Name, ID, Email...)" autocomplete="off">
+                <input type="text" id="global-student-search-input" class="modern-search-input" placeholder="Search students (Name, ID, Email...)" autocomplete="off">
             </div>
             <div id="search-autocomplete-box" class="search-autocomplete-box"></div>
         </div>
@@ -982,7 +1044,7 @@ include 'includes/admin_nav.php';
                 <!-- Custom static filters -->
                 <div style="border-top: 1px solid var(--border); padding-top: 15px; margin-top: 15px;">
                     <label style="font-size: 0.72rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Performance Filter</label>
-                    <select id="ui-perf-filter" class="form-input" style="font-size: 0.85rem; margin-top: 4px;" onchange="applyUIFilters()">
+                    <select id="ui-perf-filter" class="modern-select" style="margin-top: 4px;" onchange="applyUIFilters()">
                         <option value="">All Statuses</option>
                         <option value="Excellent">Excellent (>= 85%)</option>
                         <option value="Good">Good (60% - 84%)</option>
@@ -993,7 +1055,7 @@ include 'includes/admin_nav.php';
 
                 <div style="margin-top: 10px;">
                     <label style="font-size: 0.72rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Completion Filter</label>
-                    <select id="ui-comp-filter" class="form-input" style="font-size: 0.85rem; margin-top: 4px;" onchange="applyUIFilters()">
+                    <select id="ui-comp-filter" class="modern-select" style="margin-top: 4px;" onchange="applyUIFilters()">
                         <option value="">All Completion %</option>
                         <option value="high">High (>75%)</option>
                         <option value="mid">Mid (40% - 75%)</option>
@@ -1106,8 +1168,8 @@ include 'includes/admin_nav.php';
                     <div class="chart-card">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
                             <div style="display:flex; gap:8px; align-items:center;">
-                                <input type="text" id="students-search-field" class="form-input" style="margin-bottom:0; width:220px; font-size:0.85rem;" placeholder="Search students in table..." onkeyup="searchStudentTable()">
-                                <select id="columns-customize-select" class="form-input" style="margin-bottom:0; width:160px; font-size:0.85rem;" onchange="toggleTableColumn(this)">
+                                <input type="text" id="students-search-field" class="modern-input" style="width:220px;" placeholder="Search students in table..." onkeyup="searchStudentTable()">
+                                <select id="columns-customize-select" class="modern-select" style="width:160px;" onchange="toggleTableColumn(this)">
                                     <option value="">Toggle Columns...</option>
                                     <option value="1">Plans Assigned</option>
                                     <option value="2">Completed %</option>
