@@ -206,12 +206,13 @@ include 'includes/admin_nav.php';
     <div class="designer-panel">
         <div class="panel-header-sticky">
             <div style="display:flex; align-items:center; gap:8px;">
-                <a href="studyplans.php" class="btn btn-outline btn-sm" style="padding: 4px 8px; font-weight:700; text-decoration:none;"><i class="fas fa-arrow-left"></i> Back</a>
+                <a href="javascript:void(0)" onclick="confirmBack()" class="btn btn-outline btn-sm" style="padding: 4px 8px; font-weight:700; text-decoration:none;"><i class="fas fa-arrow-left"></i> Back</a>
                 <h3 style="font-weight: 800; font-size: 1rem; display: flex; align-items: center; gap: 4px; margin: 0;">
                     <i class="fas fa-screwdriver-wrench" style="color:var(--accent);"></i> Designer
                 </h3>
             </div>
-            <div style="display:flex; gap:6px;">
+            <div style="display:flex; align-items:center; gap:10px;">
+                <span id="autosave-indicator" style="display:none; font-size:0.75rem; font-weight:600; align-items:center; gap:4px;"></span>
                 <button type="button" class="btn btn-outline btn-sm" onclick="triggerImport()"><i class="fas fa-file-import"></i> Bulk Import</button>
                 <button type="button" class="btn btn-primary btn-sm" onclick="saveStudyPlan()"><i class="fas fa-floppy-disk"></i> Save Plan</button>
             </div>
@@ -507,6 +508,20 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- Modal: Exit Confirmation -->
+<div class="modal-backdrop" id="exit-confirm-modal">
+    <div class="modal" style="max-width:400px; text-align:center; padding:1.5rem; border-radius: 16px;">
+        <div style="font-size:3rem; color:#f59e0b; margin-bottom:12px;"><i class="fas fa-triangle-exclamation"></i></div>
+        <h3 style="font-weight:800; font-size:1.2rem; margin-bottom:8px; color: #1e293b;">Unsaved Changes</h3>
+        <p style="color:#64748b; font-size:0.85rem; margin-bottom:20px;">You have unsaved changes in your study plan. What would you like to do?</p>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+            <button type="button" class="btn btn-primary" style="background:#10b981; border-color:#10b981;" onclick="saveAndExit()"><i class="fas fa-floppy-disk"></i> Save Changes &amp; Exit</button>
+            <button type="button" class="btn btn-soft-red" style="background:#fef2f2; border-color:#fca5a5; color:#ef4444; font-weight:700;" onclick="exitWithoutSaving()"><i class="fas fa-trash-can"></i> Discard Changes &amp; Exit</button>
+            <button type="button" class="btn btn-outline" onclick="closeModal('exit-confirm-modal')">Cancel (Stay on Page)</button>
+        </div>
+    </div>
+</div>
+
 <script>
     var studyPlanId = <?php echo $plan_id; ?>;
     var activities = <?php echo $activities_json; ?>;
@@ -528,6 +543,16 @@ include 'includes/admin_nav.php';
         }
         
         togglePlanTypeView();
+        
+        // Bind change listeners to detect unsaved settings changes
+        ['plan-title', 'plan-desc', 'plan-quote'].forEach(id => {
+            var el = document.getElementById(id);
+            if (el) el.addEventListener('input', markUnsavedChanges);
+        });
+        ['plan-year', 'plan-course', 'plan-theme', 'plan-layout', 'plan-template', 'plan-start', 'plan-end'].forEach(id => {
+            var el = document.getElementById(id);
+            if (el) el.addEventListener('change', markUnsavedChanges);
+        });
     });
 
     function togglePlanTypeView() {
@@ -737,6 +762,7 @@ include 'includes/admin_nav.php';
         activities = updatedActivities;
         renderActivitiesList();
         updateLivePreview();
+        autoSaveActivities();
     }
 
     function addActivityToDate(dateStr, dayNum) {
@@ -808,6 +834,7 @@ include 'includes/admin_nav.php';
         closeModal('activity-modal');
         renderActivitiesList();
         updateLivePreview();
+        autoSaveActivities();
     }
 
     function deleteActivityRow(index) {
@@ -815,6 +842,7 @@ include 'includes/admin_nav.php';
             activities.splice(index, 1);
             renderActivitiesList();
             updateLivePreview();
+            autoSaveActivities();
         }
     }
 
@@ -825,6 +853,7 @@ include 'includes/admin_nav.php';
         activities.splice(index + 1, 0, cloned);
         renderActivitiesList();
         updateLivePreview();
+        autoSaveActivities();
     }
 
     function triggerImport() {
@@ -1048,6 +1077,7 @@ include 'includes/admin_nav.php';
                 .then(r2 => r2.json())
                 .then(data2 => {
                     if (data2.success) {
+                        hasUnsavedChanges = false;
                         alert('Study Plan & all schedules saved successfully!');
                         window.location.href = 'studyplans.php';
                     } else {
@@ -1063,6 +1093,93 @@ include 'includes/admin_nav.php';
             alert('Server connection error.');
         });
     }
+
+    /* ── AUTOSAVE & EXIT CONFIRMATION LOGIC ── */
+    var hasUnsavedChanges = false;
+
+    function markUnsavedChanges() {
+        hasUnsavedChanges = true;
+    }
+
+    function autoSaveActivities() {
+        if (studyPlanId <= 0) {
+            hasUnsavedChanges = true;
+            return;
+        }
+        
+        var indicator = document.getElementById('autosave-indicator');
+        if (indicator) {
+            indicator.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Auto-saving...';
+            indicator.style.color = '#f59e0b';
+            indicator.style.display = 'inline-flex';
+        }
+        
+        fetch('api/studyplans-api.php?action=save_activities', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                study_plan_id: studyPlanId,
+                activities: activities
+            })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                if (indicator) {
+                    indicator.innerHTML = '<i class="fas fa-circle-check"></i> Changes saved';
+                    indicator.style.color = '#10b981';
+                    setTimeout(function() {
+                        if (indicator.innerHTML.includes('Changes saved')) {
+                            indicator.style.display = 'none';
+                        }
+                    }, 3000);
+                }
+                hasUnsavedChanges = false;
+            } else {
+                if (indicator) {
+                    indicator.innerHTML = '<i class="fas fa-circle-xmark"></i> Save failed';
+                    indicator.style.color = '#ef4444';
+                }
+                hasUnsavedChanges = true;
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            if (indicator) {
+                indicator.innerHTML = '<i class="fas fa-circle-xmark"></i> Connection error';
+                indicator.style.color = '#ef4444';
+            }
+            hasUnsavedChanges = true;
+        });
+    }
+
+    function confirmBack() {
+        if (hasUnsavedChanges) {
+            openModal('exit-confirm-modal');
+        } else {
+            window.location.href = 'studyplans.php';
+        }
+    }
+
+    function saveAndExit() {
+        closeModal('exit-confirm-modal');
+        saveStudyPlan();
+    }
+
+    function exitWithoutSaving() {
+        hasUnsavedChanges = false;
+        window.location.href = 'studyplans.php';
+    }
+
+    window.addEventListener('beforeunload', function (e) {
+        if (hasUnsavedChanges) {
+            e.preventDefault();
+            e.returnValue = 'You have unsaved changes. Are you sure you want to leave without saving?';
+            return e.returnValue;
+        }
+    });
 </script>
 
 <?php include 'includes/admin_footer.php'; ?>
