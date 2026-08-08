@@ -202,14 +202,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $validation_errors['mobile_number'] = 'Mobile number is required when different from WhatsApp';
     }
     
-    // Mandatory file uploads
-    if (!isset($_FILES['payment_screenshot']) || $_FILES['payment_screenshot']['error'] !== UPLOAD_ERR_OK) {
-        $validation_errors['payment_screenshot'] = 'Payment screenshot is required';
-    }
-    if (!isset($_FILES['photo_upload']) || $_FILES['photo_upload']['error'] !== UPLOAD_ERR_OK) {
-        $validation_errors['photo_upload'] = 'Student photo is required';
-    }
-    
     if (!empty($form_data['email']) && !empty($form_data['pepp_course']) && !empty($form_data['pepp_academic_year'])) {
         try {
             $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE email = ? AND pepp_course = ? AND pepp_academic_year = ?");
@@ -236,15 +228,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // Handle file uploads
-    $payment_screenshot_path = '';
-    $photo_upload_path = '';
-    
-    $payment_screenshot_path = handle_file_upload_with_replace('payment_screenshot', 'payments', null, ['jpg', 'jpeg', 'png', 'webp', 'pdf']);
-    if ($payment_screenshot_path === null) $payment_screenshot_path = '';
-    
-    $photo_upload_path = handle_file_upload_with_replace('photo_upload', 'photos', null, ['jpg', 'jpeg', 'png', 'webp']);
-    if ($photo_upload_path === null) $photo_upload_path = '';
+    // Handle file uploads with session persistence
+    $payment_screenshot_path = $_SESSION['temp_payment_screenshot_path'] ?? '';
+    if (isset($_FILES['payment_screenshot']) && $_FILES['payment_screenshot']['error'] === UPLOAD_ERR_OK) {
+        $new_path = handle_file_upload_with_replace('payment_screenshot', 'payments', $payment_screenshot_path ?: null, ['jpg', 'jpeg', 'png', 'webp', 'pdf']);
+        if ($new_path) {
+            $payment_screenshot_path = $new_path;
+            $_SESSION['temp_payment_screenshot_path'] = $payment_screenshot_path;
+        }
+    }
+    if (empty($payment_screenshot_path)) {
+        $validation_errors['payment_screenshot'] = 'Payment screenshot is required';
+    }
+
+    $photo_upload_path = $_SESSION['temp_photo_upload_path'] ?? '';
+    if (isset($_FILES['photo_upload']) && $_FILES['photo_upload']['error'] === UPLOAD_ERR_OK) {
+        $new_path = handle_file_upload_with_replace('photo_upload', 'photos', $photo_upload_path ?: null, ['jpg', 'jpeg', 'png', 'webp']);
+        if ($new_path) {
+            $photo_upload_path = $new_path;
+            $_SESSION['temp_photo_upload_path'] = $photo_upload_path;
+        }
+    }
+    if (empty($photo_upload_path)) {
+        $validation_errors['photo_upload'] = 'Student photo is required';
+    }
     
     if (empty($validation_errors)) {
         try {
@@ -290,6 +297,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 require_once __DIR__ . '/includes/referral_helper.php';
                 record_code_use($pdo, $applied_code_info, $user_id, $form_data['name'], $form_data['email'], $form_data['whatsapp_number'], (float)$form_data['paid_amount']);
             }
+
+            // Clear temp upload paths from session on successful registration
+            unset($_SESSION['temp_payment_screenshot_path']);
+            unset($_SESSION['temp_photo_upload_path']);
 
             // Redirect to success page with the record ID
             header("Location: success.php?id=" . $inserted_id);
@@ -1096,6 +1107,10 @@ $country_codes = [
         .upload-area.upload-error {
             border-color: #ef4444;
             background: #fff5f5;
+        }
+        .upload-area.upload-success {
+            border-color: #10b981;
+            background: #f0fdf4;
         }
 
         /* ── TERMS CARD ───────────────────────────────────────────── */
@@ -1919,11 +1934,16 @@ $country_codes = [
                         <!-- Payment Screenshot -->
                         <div class="col-md-6">
                             <label class="form-label">Payment Screenshot <span style="color:#ef4444">*</span></label>
-                            <div class="upload-area <?php echo isset($validation_errors['payment_screenshot']) ? 'upload-error' : ''; ?>">
-                                <input type="file" name="payment_screenshot" accept="image/*" required>
-                                <i class="fas fa-receipt upload-icon" style="color:#fb923c;font-size:1.6rem;display:block;margin-bottom:6px;"></i>
-                                <div class="upload-title">Upload Payment Receipt</div>
-                                <div class="upload-hint">JPG, PNG - click or tap to browse</div>
+                            <?php
+                            $has_receipt = !empty($_SESSION['temp_payment_screenshot_path']);
+                            $receipt_title = $has_receipt ? '✓ Receipt uploaded' : 'Upload Payment Receipt';
+                            $receipt_hint = $has_receipt ? 'Click to change/replace receipt' : 'JPG, PNG - click or tap to browse';
+                            ?>
+                            <div class="upload-area <?php echo isset($validation_errors['payment_screenshot']) ? 'upload-error' : ''; ?> <?php echo $has_receipt ? 'upload-success' : ''; ?>">
+                                <input type="file" name="payment_screenshot" accept="image/*" <?php echo $has_receipt ? '' : 'required'; ?> data-pre-uploaded="<?php echo $has_receipt ? 'yes' : 'no'; ?>">
+                                <i class="fas <?php echo $has_receipt ? 'fa-check-circle' : 'fa-receipt'; ?> upload-icon" style="<?php echo $has_receipt ? 'color:#10b981;' : 'color:#fb923c;'; ?>font-size:1.6rem;display:block;margin-bottom:6px;"></i>
+                                <div class="upload-title"><?php echo $receipt_title; ?></div>
+                                <div class="upload-hint"><?php echo $receipt_hint; ?></div>
                             </div>
                             <?php if (isset($validation_errors['payment_screenshot'])): ?>
                                 <div class="error-message"><i class="fas fa-exclamation-circle"></i><?php echo $validation_errors['payment_screenshot']; ?></div>
@@ -1933,11 +1953,16 @@ $country_codes = [
                         <!-- Photo Upload -->
                         <div class="col-md-6">
                             <label class="form-label">Student Photo <span style="color:#ef4444">*</span></label>
-                            <div class="upload-area <?php echo isset($validation_errors['photo_upload']) ? 'upload-error' : ''; ?>">
-                                <input type="file" name="photo_upload" accept="image/*" required>
-                                <i class="fas fa-user-circle upload-icon" style="color:#f59e0b;font-size:1.6rem;display:block;margin-bottom:6px;"></i>
-                                <div class="upload-title">Upload Your Photo</div>
-                                <div class="upload-hint">JPG, PNG - your best quality photo</div>
+                            <?php
+                            $has_photo = !empty($_SESSION['temp_photo_upload_path']);
+                            $photo_title = $has_photo ? '✓ Photo uploaded' : 'Upload Your Photo';
+                            $photo_hint = $has_photo ? 'Click to change/replace photo' : 'JPG, PNG - your best quality photo';
+                            ?>
+                            <div class="upload-area <?php echo isset($validation_errors['photo_upload']) ? 'upload-error' : ''; ?> <?php echo $has_photo ? 'upload-success' : ''; ?>">
+                                <input type="file" name="photo_upload" accept="image/*" <?php echo $has_photo ? '' : 'required'; ?> data-pre-uploaded="<?php echo $has_photo ? 'yes' : 'no'; ?>">
+                                <i class="fas <?php echo $has_photo ? 'fa-check-circle' : 'fa-user-circle'; ?> upload-icon" style="<?php echo $has_photo ? 'color:#10b981;' : 'color:#f59e0b;'; ?>font-size:1.6rem;display:block;margin-bottom:6px;"></i>
+                                <div class="upload-title"><?php echo $photo_title; ?></div>
+                                <div class="upload-hint"><?php echo $photo_hint; ?></div>
                             </div>
                             <?php if (isset($validation_errors['photo_upload'])): ?>
                                 <div class="error-message"><i class="fas fa-exclamation-circle"></i><?php echo $validation_errors['photo_upload']; ?></div>
@@ -2041,7 +2066,8 @@ $country_codes = [
                         labelText = 'Terms & Conditions Agreement';
                     }
                 } else if (el.type === 'file') {
-                    if (!el.files || el.files.length === 0) {
+                    const preUploaded = el.getAttribute('data-pre-uploaded') === 'yes';
+                    if (!preUploaded && (!el.files || el.files.length === 0)) {
                         isInvalid = true;
                         labelText = el.name === 'photo_upload' ? 'Student Photo' : 'Payment Receipt/Screenshot';
                     }
