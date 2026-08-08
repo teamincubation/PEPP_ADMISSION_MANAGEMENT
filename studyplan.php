@@ -289,6 +289,9 @@ if ($is_logged_in && $selected_plan_id > 0) {
         $activities = [];
     }
 }
+
+$theme = !empty($selected_plan['theme']) ? $selected_plan['theme'] : 'default';
+$layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timeline';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -312,6 +315,201 @@ if ($is_logged_in && $selected_plan_id > 0) {
             --font-family: 'DM Sans', sans-serif;
             --header-font: 'Space Grotesk', sans-serif;
         }
+
+        /* ── CUSTOM THEME STYLES (STUDENT SIDE) ── */
+        .theme-default {
+            --accent: #E8980C;
+            --accent-hover: #d2860a;
+            --accent-soft: rgba(232, 152, 12, 0.08);
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+        }
+        .theme-cyber {
+            --accent: #10b981;
+            --accent-hover: #059669;
+            --accent-soft: rgba(16, 185, 129, 0.12);
+            --bg: #090d16;
+            --card-bg: #111827;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --border: #374151;
+            font-family: monospace !important;
+        }
+        .theme-cyber .timeline-card {
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
+        }
+        .theme-cyber .timeline-badge {
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+        }
+        .theme-sunset {
+            --accent: #f97316;
+            --accent-hover: #ea580c;
+            --accent-soft: rgba(249, 115, 22, 0.12);
+            --bg: #fff7ed;
+            --card-bg: #ffffff;
+            --text-main: #431407;
+            --text-muted: #9a3412;
+            --border: #fed7aa;
+        }
+        .theme-sunset .timeline-card {
+            border-radius: 16px;
+        }
+        .theme-minimal {
+            --accent: #475569;
+            --accent-hover: #334155;
+            --accent-soft: rgba(75, 85, 99, 0.08);
+            --bg: #fafafa;
+            --card-bg: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --border: #e5e7eb;
+        }
+        .theme-royal {
+            --accent: #8b5cf6;
+            --accent-hover: #7c3aed;
+            --accent-soft: rgba(139, 92, 246, 0.1);
+            --bg: #faf5ff;
+            --card-bg: #ffffff;
+            --text-main: #2e1065;
+            --text-muted: #6d28d9;
+            --border: #e9d5ff;
+        }
+        .theme-ocean {
+            --accent: #0ea5e9;
+            --accent-hover: #0284c7;
+            --accent-soft: rgba(14, 165, 233, 0.1);
+            --bg: #f0f9ff;
+            --card-bg: #ffffff;
+            --text-main: #0c4a6e;
+            --text-muted: #0284c7;
+            --border: #bae6fd;
+        }
+        .theme-midnight {
+            --accent: #f43f5e;
+            --accent-hover: #e11d48;
+            --accent-soft: rgba(244, 63, 94, 0.2);
+            --bg: #030712;
+            --card-bg: #0f172a;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: #1e293b;
+        }
+        .theme-midnight .timeline-card {
+            background: rgba(15, 23, 42, 0.6) !important;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1.5px solid rgba(255, 255, 255, 0.08);
+        }
+        .theme-midnight .activity-item {
+            border-bottom: 1px solid #1e293b;
+        }
+
+        /* ── CUSTOM VISUAL LAYOUTS (STUDENT SIDE) ── */
+        /* 1. Card Layout */
+        .layout-card .timeline-wrapper {
+            border-left: none !important;
+            padding-left: 0 !important;
+            margin-left: 0 !important;
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+        }
+        .layout-card .timeline-day-node {
+            padding: 0 !important;
+        }
+        .layout-card .timeline-badge {
+            display: none !important;
+        }
+        .layout-card .timeline-card {
+            border-radius: 18px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.03);
+            border: 1.5px solid var(--border);
+        }
+
+        /* 2. Journey Layout */
+        .layout-journey .timeline-wrapper {
+            border-left: 3px dashed var(--accent) !important;
+            padding-left: 1.8rem !important;
+            margin-left: 14px !important;
+            gap: 2rem;
+            display: flex;
+            flex-direction: column;
+        }
+        .layout-journey .timeline-day-node {
+            position: relative;
+        }
+        .layout-journey .timeline-badge {
+            left: -39px;
+            top: 6px;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: var(--accent);
+            border: 3px solid var(--card-bg);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .layout-journey .timeline-badge::after {
+            content: '★';
+            color: #fff;
+            font-size: 0.65rem;
+            font-weight: 700;
+            display: block;
+            line-height: 1;
+            margin-top: -1px;
+        }
+        .layout-journey .timeline-card {
+            border-radius: 20px;
+            background: var(--card-bg);
+            border: 1.5px solid var(--border);
+            padding: 16px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.02);
+        }
+
+        /* 3. Magazine Layout */
+        .layout-magazine .timeline-wrapper {
+            border-left: none !important;
+            padding-left: 0 !important;
+            margin-left: 0 !important;
+            gap: 2.5rem;
+            display: flex;
+            flex-direction: column;
+        }
+        .layout-magazine .timeline-day-node {
+            padding: 0 !important;
+        }
+        .layout-magazine .timeline-badge {
+            display: none !important;
+        }
+        .layout-magazine .timeline-card {
+            border: none !important;
+            border-top: 3px solid var(--text-main) !important;
+            border-radius: 0 !important;
+            padding: 16px 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+        }
+        .layout-magazine .timeline-date-label {
+            font-family: var(--header-font);
+            font-size: 1.25rem !important;
+            font-weight: 800;
+            color: var(--text-main);
+            text-transform: none;
+            letter-spacing: -0.5px;
+            margin-bottom: 12px;
+        }
+        .layout-magazine .activity-item {
+            padding: 12px 0;
+            border-bottom: 1.5px solid var(--border);
+        }
+        .layout-magazine .activity-item:last-child {
+            border-bottom: none;
+        }
         
         * {
             box-sizing: border-box;
@@ -334,9 +532,11 @@ if ($is_logged_in && $selected_plan_id > 0) {
             min-height: 100vh;
             display: flex;
             flex-direction: column;
-            background: #fff;
+            background: var(--bg);
+            color: var(--text-main);
             position: relative;
             box-shadow: 0 0 20px rgba(0,0,0,0.05);
+            transition: all 0.3s ease;
         }
         
         /* Header styling */
@@ -377,7 +577,7 @@ if ($is_logged_in && $selected_plan_id > 0) {
         }
         
         .login-card {
-            background: #fff;
+            background: var(--card-bg);
             border: 1px solid var(--border);
             border-radius: 20px;
             padding: 2.2rem 1.8rem;
@@ -496,7 +696,7 @@ if ($is_logged_in && $selected_plan_id > 0) {
         }
         
         .plan-row-card {
-            background: #fff;
+            background: var(--card-bg);
             border: 1.5px solid var(--border);
             border-radius: 16px;
             padding: 1.2rem;
@@ -543,11 +743,12 @@ if ($is_logged_in && $selected_plan_id > 0) {
         }
         
         .timeline-card {
-            background: #fff;
+            background: var(--card-bg);
             border: 1px solid var(--border);
             border-radius: 14px;
             padding: 12px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+            transition: all 0.25s ease;
         }
         
         .timeline-date-label {
@@ -560,9 +761,10 @@ if ($is_logged_in && $selected_plan_id > 0) {
         
         .activity-item {
             display: flex;
+            align-items: center;
             gap: 10px;
             padding: 8px 0;
-            border-bottom: 1px solid #f1f5f9;
+            border-bottom: 1px solid var(--border);
         }
         
         .activity-item:last-child {
@@ -661,7 +863,7 @@ if ($is_logged_in && $selected_plan_id > 0) {
 </head>
 <body>
 
-<div class="container">
+<div class="container theme-<?php echo p_esc($theme); ?> layout-<?php echo p_esc($layout); ?>">
     <header>
         <div class="header-logo">
             <img src="logo.png" alt="PEPP">
@@ -740,7 +942,7 @@ if ($is_logged_in && $selected_plan_id > 0) {
                     <?php foreach ($my_courses as $cname): 
                         $isSelected = isset($_GET['course_name']) && $_GET['course_name'] === $cname;
                     ?>
-                        <a href="?course_name=<?php echo urlencode($cname); ?>" style="display:block; text-decoration:none; color:inherit; background: <?php echo $isSelected ? 'var(--accent-soft)' : '#fff'; ?>; border: 2px solid <?php echo $isSelected ? 'var(--accent)' : 'var(--border)'; ?>; padding: 12px; border-radius: 12px; transition: all 0.2s;">
+                        <a href="?course_name=<?php echo urlencode($cname); ?>" style="display:block; text-decoration:none; color:inherit; background: <?php echo $isSelected ? 'var(--accent-soft)' : 'var(--card-bg)'; ?>; border: 2px solid <?php echo $isSelected ? 'var(--accent)' : 'var(--border)'; ?>; padding: 12px; border-radius: 12px; transition: all 0.2s;">
                             <div style="font-size:0.7rem; text-transform:uppercase; font-weight:700; color:var(--text-muted); margin-bottom:4px;"><i class="fas fa-graduation-cap"></i> Course Enrollment</div>
                             <div style="font-size:0.95rem; font-weight:700; color:var(--text-main);"><?php echo p_esc($cname); ?></div>
                         </a>
@@ -750,7 +952,7 @@ if ($is_logged_in && $selected_plan_id > 0) {
                     <?php foreach ($my_forms as $form_card): 
                         $isSelected = isset($_GET['form_id']) && $_GET['form_id'] == $form_card['id'];
                     ?>
-                        <a href="?form_id=<?php echo $form_card['id']; ?>" style="display:block; text-decoration:none; color:inherit; background: <?php echo $isSelected ? 'var(--accent-soft)' : '#fff'; ?>; border: 2px solid <?php echo $isSelected ? 'var(--accent)' : 'var(--border)'; ?>; padding: 12px; border-radius: 12px; transition: all 0.2s;">
+                        <a href="?form_id=<?php echo $form_card['id']; ?>" style="display:block; text-decoration:none; color:inherit; background: <?php echo $isSelected ? 'var(--accent-soft)' : 'var(--card-bg)'; ?>; border: 2px solid <?php echo $isSelected ? 'var(--accent)' : 'var(--border)'; ?>; padding: 12px; border-radius: 12px; transition: all 0.2s;">
                             <div style="font-size:0.7rem; text-transform:uppercase; font-weight:700; color:var(--text-muted); margin-bottom:4px;"><i class="fab fa-wpforms"></i> Custom Form</div>
                             <div style="font-size:0.95rem; font-weight:700; color:var(--text-main);"><?php echo p_esc($form_card['title']); ?></div>
                         </a>
@@ -823,7 +1025,7 @@ if ($is_logged_in && $selected_plan_id > 0) {
                 </div>
 
                 <!-- Sticky Header for Task Counts -->
-                <div style="position: sticky; top: 58px; background: rgba(255,255,255,0.95); backdrop-filter: blur(8px); border-bottom: 1.5px solid var(--border); padding: 10px 1.2rem; display: flex; justify-content: space-around; align-items: center; z-index: 50; margin: 0 -1.2rem 1rem -1.2rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02);">
+                <div style="position: sticky; top: 58px; background: var(--card-bg); opacity: 0.95; backdrop-filter: blur(8px); border-bottom: 1.5px solid var(--border); padding: 10px 1.2rem; display: flex; justify-content: space-around; align-items: center; z-index: 50; margin: 0 -1.2rem 1rem -1.2rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02);">
                     <div style="text-align: center;">
                         <span style="font-size: 0.7rem; text-transform: uppercase; font-weight: 700; color: var(--text-muted); display: block;">Total Tasks</span>
                         <strong id="header-total-tasks" style="font-size: 1.2rem; font-weight: 800; color: var(--text-main);"><?php echo $total_tasks; ?></strong>

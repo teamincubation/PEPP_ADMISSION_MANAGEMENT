@@ -167,27 +167,259 @@ $extra_head = '
         height: 100%;
         border-radius: 12px;
         border: 1px solid var(--border);
-        background: #f8fafc;
+        background: var(--bg);
+        color: var(--text-main);
         overflow-y: auto;
         padding: 1rem;
+        transition: all 0.3s ease;
+    }
+
+    /* ── BASE TIMELINE LAYOUT STYLES ── */
+    .preview-phone-frame .timeline-wrapper {
+        position: relative;
+        padding-left: 1rem;
+        border-left: 2px solid var(--border);
+        margin-left: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+        margin-top: 1rem;
+    }
+    .preview-phone-frame .timeline-day-node {
+        position: relative;
+    }
+    .preview-phone-frame .timeline-badge {
+        position: absolute;
+        left: -21px;
+        top: 2px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--accent);
+        border: 2px solid var(--card-bg);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .preview-phone-frame .timeline-card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+        transition: all 0.25s ease;
+    }
+    .preview-phone-frame .timeline-date-label {
+        font-family: var(--header-font);
+        font-size: 0.8rem;
+        font-weight: 700;
+        color: var(--accent);
+        text-transform: uppercase;
+        margin-bottom: 8px;
+    }
+    .preview-phone-frame .activity-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--border);
+    }
+    .preview-phone-frame .activity-item:last-child {
+        border-bottom: none;
+        padding-bottom: 0;
+    }
+
+    /* ── CUSTOM THEME STYLES (PREVIEW & STUDENT SIDE) ── */
+    .theme-default {
+        --accent: #E8980C;
+        --accent-hover: #d2860a;
+        --accent-soft: rgba(232, 152, 12, 0.08);
+        --bg: #f8fafc;
+        --card-bg: #ffffff;
+        --text-main: #0f172a;
+        --text-muted: #64748b;
+        --border: #e2e8f0;
     }
     .theme-cyber {
-        background: #090d16;
-        color: #00ffcc;
-        font-family: monospace;
+        --accent: #10b981;
+        --accent-hover: #059669;
+        --accent-soft: rgba(16, 185, 129, 0.12);
+        --bg: #090d16;
+        --card-bg: #111827;
+        --text-main: #f3f4f6;
+        --text-muted: #9ca3af;
+        --border: #374151;
+        font-family: monospace !important;
     }
-    .theme-cyber .preview-card {
-        background: #111927;
-        border: 1.5px solid #00ffcc;
+    .theme-cyber .timeline-card {
+        box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
+    }
+    .theme-cyber .timeline-badge {
+        box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
     }
     .theme-sunset {
-        background: linear-gradient(135deg, #f59e0b, #ec4899);
-        color: #fff;
+        --accent: #f97316;
+        --accent-hover: #ea580c;
+        --accent-soft: rgba(249, 115, 22, 0.12);
+        --bg: #fff7ed;
+        --card-bg: #ffffff;
+        --text-main: #431407;
+        --text-muted: #9a3412;
+        --border: #fed7aa;
     }
-    .theme-sunset .preview-card {
-        background: rgba(255, 255, 255, 0.15);
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(255, 255, 255, 0.2);
+    .theme-sunset .timeline-card {
+        border-radius: 16px;
+    }
+    .theme-minimal {
+        --accent: #475569;
+        --accent-hover: #334155;
+        --accent-soft: rgba(75, 85, 99, 0.08);
+        --bg: #fafafa;
+        --card-bg: #ffffff;
+        --text-main: #1e293b;
+        --text-muted: #64748b;
+        --border: #e5e7eb;
+    }
+    .theme-royal {
+        --accent: #8b5cf6;
+        --accent-hover: #7c3aed;
+        --accent-soft: rgba(139, 92, 246, 0.1);
+        --bg: #faf5ff;
+        --card-bg: #ffffff;
+        --text-main: #2e1065;
+        --text-muted: #6d28d9;
+        --border: #e9d5ff;
+    }
+    .theme-ocean {
+        --accent: #0ea5e9;
+        --accent-hover: #0284c7;
+        --accent-soft: rgba(14, 165, 233, 0.1);
+        --bg: #f0f9ff;
+        --card-bg: #ffffff;
+        --text-main: #0c4a6e;
+        --text-muted: #0284c7;
+        --border: #bae6fd;
+    }
+    .theme-midnight {
+        --accent: #f43f5e;
+        --accent-hover: #e11d48;
+        --accent-soft: rgba(244, 63, 94, 0.2);
+        --bg: #030712;
+        --card-bg: #0f172a;
+        --text-main: #f8fafc;
+        --text-muted: #94a3b8;
+        --border: #1e293b;
+    }
+    .theme-midnight .timeline-card {
+        background: rgba(15, 23, 42, 0.6) !important;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1.5px solid rgba(255, 255, 255, 0.08);
+    }
+    .theme-midnight .activity-item {
+        border-bottom: 1px solid #1e293b;
+    }
+
+    /* ── CUSTOM VISUAL LAYOUTS (PREVIEW & STUDENT SIDE) ── */
+    /* 1. Card Layout */
+    .layout-card .timeline-wrapper {
+        border-left: none !important;
+        padding-left: 0 !important;
+        margin-left: 0 !important;
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+    }
+    .layout-card .timeline-day-node {
+        padding: 0 !important;
+    }
+    .layout-card .timeline-badge {
+        display: none !important;
+    }
+    .layout-card .timeline-card {
+        border-radius: 18px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.03);
+        border: 1.5px solid var(--border);
+    }
+
+    /* 2. Journey Layout */
+    .layout-journey .timeline-wrapper {
+        border-left: 3px dashed var(--accent) !important;
+        padding-left: 1.8rem !important;
+        margin-left: 14px !important;
+        gap: 2rem;
+        display: flex;
+        flex-direction: column;
+    }
+    .layout-journey .timeline-day-node {
+        position: relative;
+    }
+    .layout-journey .timeline-badge {
+        left: -39px;
+        top: 6px;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background: var(--accent);
+        border: 3px solid var(--card-bg);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .layout-journey .timeline-badge::after {
+        content: "★";
+        color: #fff;
+        font-size: 0.65rem;
+        font-weight: 700;
+        display: block;
+        line-height: 1;
+        margin-top: -1px;
+    }
+    .layout-journey .timeline-card {
+        border-radius: 20px;
+        background: var(--card-bg);
+        border: 1.5px solid var(--border);
+        padding: 16px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.02);
+    }
+
+    /* 3. Magazine Layout */
+    .layout-magazine .timeline-wrapper {
+        border-left: none !important;
+        padding-left: 0 !important;
+        margin-left: 0 !important;
+        gap: 2.5rem;
+        display: flex;
+        flex-direction: column;
+    }
+    .layout-magazine .timeline-day-node {
+        padding: 0 !important;
+    }
+    .layout-magazine .timeline-badge {
+        display: none !important;
+    }
+    .layout-magazine .timeline-card {
+        border: none !important;
+        border-top: 3px solid var(--text-main) !important;
+        border-radius: 0 !important;
+        padding: 16px 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
+    }
+    .layout-magazine .timeline-date-label {
+        font-family: var(--header-font);
+        font-size: 1.25rem !important;
+        font-weight: 800;
+        color: var(--text-main);
+        text-transform: none;
+        letter-spacing: -0.5px;
+        margin-bottom: 12px;
+    }
+    .layout-magazine .activity-item {
+        padding: 12px 0;
+        border-bottom: 1.5px solid var(--border);
+    }
+    .layout-magazine .activity-item:last-child {
+        border-bottom: none;
     }
     @media (max-width: 1024px) {
         .designer-container {
@@ -285,6 +517,9 @@ include 'includes/admin_nav.php';
                             <option value="cyber">Cyberpunk Emerald</option>
                             <option value="sunset">Sunset Orange Gradient</option>
                             <option value="minimal">Crisp Minimal Gray</option>
+                            <option value="royal">Royal Amethyst Style</option>
+                            <option value="ocean">Ocean Breeze Style</option>
+                            <option value="midnight">Midnight Aurora Dark Mode</option>
                         </select>
                     </div>
                     <div class="field">
@@ -903,24 +1138,24 @@ include 'includes/admin_nav.php';
         var quote = document.getElementById('plan-quote').value;
         
         // Reset classes
-        wrapper.className = 'preview-phone-frame theme-' + theme;
+        wrapper.className = 'preview-phone-frame theme-' + theme + ' layout-' + layout;
         
-        var html = '<div style="padding:10px; border-bottom:1px solid rgba(0,0,0,0.08); margin-bottom:16px; display:flex; align-items:center; gap:8px;">' +
+        var html = '<div style="padding:10px; border-bottom:1px solid var(--border); margin-bottom:16px; display:flex; align-items:center; gap:8px;">' +
                         '<div style="width:36px; height:36px; border-radius:50%; background:var(--accent-soft); display:flex; align-items:center; justify-content:center; color:var(--accent); font-weight:800;">P</div>' +
                         '<div>' +
-                            '<h4 style="margin:0; font-size:0.9rem; font-weight:800;">' + title + '</h4>' +
-                            '<small style="color:#64748b; font-size:0.75rem;">PEPP Journey Plan</small>' +
+                            '<h4 style="margin:0; font-size:0.9rem; font-weight:800; color:var(--text-main);">' + title + '</h4>' +
+                            '<small style="color:var(--text-muted); font-size:0.75rem;">PEPP Journey Plan</small>' +
                         '</div>' +
                    '</div>';
                    
         if (quote) {
-            html += '<div style="background:rgba(232,152,12,0.08); border-left:4px solid var(--accent); padding:10px; border-radius:4px; font-style:italic; font-size:0.8rem; margin-bottom:16px;">' +
+            html += '<div style="background:var(--accent-soft); border-left:4px solid var(--accent); padding:10px; border-radius:4px; font-style:italic; font-size:0.8rem; margin-bottom:16px; color:var(--text-main);">' +
                         '"' + quote + '"' +
                     '</div>';
         }
         
         if (activities.length === 0) {
-            html += '<div style="text-align:center; padding:3rem 0; color:#94a3b8; font-size:0.85rem;"><i class="fas fa-calendar-day" style="font-size:2rem; margin-bottom:6px; display:block;"></i>No schedules added yet. Use designer panel to populate items.</div>';
+            html += '<div style="text-align:center; padding:3rem 0; color:var(--text-muted); font-size:0.85rem;"><i class="fas fa-calendar-day" style="font-size:2rem; margin-bottom:6px; display:block;"></i>No schedules added yet. Use designer panel to populate items.</div>';
         } else {
             // Group by date
             var grouped = {};
@@ -931,72 +1166,45 @@ include 'includes/admin_nav.php';
             
             var isDateWise = document.getElementById('type-date-wise').checked;
 
-            if (layout === 'card') {
-                html += '<div style="display:grid; grid-template-columns:1fr; gap:12px;">';
-                Object.keys(grouped).forEach(function(date) {
-                    var items = grouped[date];
-                    var dateLabel = date;
-                    if (!isDateWise) {
-                        var dayNum = (items && items[0] && items[0].day_number) ? items[0].day_number : 1;
-                        dateLabel = "Day " + String(dayNum).padStart(2, '0');
-                    } else {
-                        try {
-                            var dObj = new Date(date);
-                            dateLabel = dObj.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
-                        } catch(e) {}
-                    }
-                    html += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:12px; box-shadow:0 1px 3px rgba(0,0,0,0.02);">' +
-                                '<div style="font-size:0.72rem; text-transform:uppercase; font-weight:800; color:var(--accent); margin-bottom:8px;">' + dateLabel + '</div>' +
-                                '<div style="display:flex; flex-direction:column; gap:8px;">';
-                    items.forEach(function(it) {
-                        var conf = predefinedTypes[it.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
-                        html += '<div style="display:flex; align-items:center; gap:8px; border-bottom:1px solid #f1f5f9; padding-bottom:6px;">' +
-                                    '<i class="fas ' + conf.icon + '" style="color:' + conf.color + '; font-size:0.95rem;"></i>' +
-                                    '<div>' +
-                                        '<div style="font-size:0.8rem; font-weight:700;">' + it.activity_title + '</div>' +
-                                        '<small style="font-size:0.7rem; color:#64748b;">' + (it.faculty || 'Mentor Team') + ' · ' + (it.estimated_duration || 45) + ' mins</small>' +
-                                    '</div>' +
-                                '</div>';
-                    });
-                    html += '</div></div>';
-                });
-                html += '</div>';
-            } else {
-                // Default Timeline layout
-                html += '<div style="display:flex; flex-direction:column; gap:16px; position:relative; padding-left:14px; border-left:2px solid #e2e8f0; margin-left:10px;">';
-                Object.keys(grouped).forEach(function(date) {
-                    var items = grouped[date];
-                    var dateLabel = date;
-                    if (!isDateWise) {
-                        var dayNum = (items && items[0] && items[0].day_number) ? items[0].day_number : 1;
-                        dateLabel = "Day " + String(dayNum).padStart(2, '0');
-                    } else {
-                        try {
-                            var dObj = new Date(date);
-                            dateLabel = dObj.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
-                        } catch(e) {}
-                    }
-                    html += '<div>' +
-                                '<div style="position:absolute; left:-6px; width:10px; height:10px; border-radius:50%; background:var(--accent); border:2px solid #fff;"></div>' +
-                                '<div style="font-size:0.72rem; text-transform:uppercase; font-weight:800; color:var(--accent); margin-bottom:8px; display:flex; align-items:center; gap:6px;">' + dateLabel + '</div>' +
+            html += '<div class="timeline-wrapper">';
+            Object.keys(grouped).forEach(function(date) {
+                var items = grouped[date];
+                var dateLabel = date;
+                if (!isDateWise) {
+                    var dayNum = (items && items[0] && items[0].day_number) ? items[0].day_number : 1;
+                    dateLabel = "Day " + String(dayNum).padStart(2, '0');
+                } else {
+                    try {
+                        var dObj = new Date(date);
+                        dateLabel = dObj.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+                    } catch(e) {}
+                }
+                
+                html += '<div class="timeline-day-node">' +
+                            '<div class="timeline-badge"></div>' +
+                            '<div class="timeline-card">' +
+                                '<div class="timeline-date-label">' + dateLabel + '</div>' +
                                 '<div style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;">';
-                    items.forEach(function(it) {
-                        var conf = predefinedTypes[it.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
-                        html += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:10px; display:flex; align-items:center; justify-content:between; gap:10px;">' +
-                                    '<div style="display:flex; align-items:center; gap:8px;">' +
-                                        '<i class="fas ' + conf.icon + '" style="color:' + conf.color + '; font-size:1rem;"></i>' +
-                                        '<div>' +
-                                            '<div style="font-size:0.8rem; font-weight:700; color:#1e293b;">' + it.activity_title + '</div>' +
-                                            '<div style="font-size:0.7rem; color:#64748b;">' + (it.subject || 'General') + ' · ' + (it.chapter || 'Academics') + '</div>' +
-                                        '</div>' +
+                                
+                items.forEach(function(it) {
+                    var conf = predefinedTypes[it.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
+                    html += '<div class="activity-item" style="display:flex; align-items:center; justify-content:space-between; gap:10px; border-bottom:1px solid var(--border); padding:8px 0;">' +
+                                '<div style="display:flex; align-items:center; gap:8px; flex:1;">' +
+                                    '<div style="background:' + conf.color + '; width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; flex-shrink:0;">' +
+                                        '<i class="fas ' + conf.icon + '" style="font-size:0.85rem;"></i>' +
                                     '</div>' +
-                                    '<span style="margin-left:auto; background:#f1f5f9; border-radius:4px; font-size:0.65rem; font-weight:700; padding:2px 6px; color:#475569;">' + (it.estimated_duration || 60) + 'm</span>' +
-                                '</div>';
-                    });
-                    html += '</div></div>';
+                                    '<div>' +
+                                        '<div style="font-size:0.8rem; font-weight:700; color:var(--text-main);">' + it.activity_title + '</div>' +
+                                        '<div style="font-size:0.7rem; color:var(--text-muted);">' + (it.subject || 'General') + ' · ' + (it.chapter || 'Academics') + '</div>' +
+                                    '</div>' +
+                                '</div>' +
+                                '<span style="margin-left:auto; background:var(--accent-soft); border-radius:4px; font-size:0.65rem; font-weight:700; padding:2px 6px; color:var(--accent); flex-shrink:0;">' + (it.estimated_duration || 60) + 'm</span>' +
+                            '</div>';
                 });
-                html += '</div>';
-            }
+                
+                html += '</div></div></div>';
+            });
+            html += '</div>';
         }
         
         wrapper.innerHTML = html;
