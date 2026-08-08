@@ -79,6 +79,43 @@ if (!$student) {
     exit();
 }
 
+/* ── EXPORT INSTALLMENTS TO EXCEL ── */
+if (isset($_GET['export']) && $_GET['export'] === 'excel') {
+    if (!can_admin_export()) {
+        die("<div style='color:#ef4444; font-family:sans-serif; text-align:center; margin-top:50px; padding:20px; border:1px solid #fca5a5; background:#fef2f2; border-radius:12px; max-width:500px; margin-left:auto; margin-right:auto;'><h3>Access Denied</h3><p>You do not have permission to export data.</p></div>");
+    }
+    try {
+        $stmt_inst = $pdo->prepare("SELECT * FROM instalment_details WHERE user_id = ? ORDER BY instalment_number ASC");
+        $stmt_inst->execute([$user_id]);
+        $rows = $stmt_inst->fetchAll(PDO::FETCH_ASSOC);
+
+        log_admin_activity($pdo, $admin_username, 'data_export', "Exported installment schedule for student {$user_id} (" . count($rows) . ' rows)');
+
+        header('Content-Type: text/csv; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="student-installments-' . $user_id . '-' . date('Y-m-d-Hi') . '.csv"');
+        $out = fopen('php://output', 'w');
+        fputs($out, "\xEF\xBB\xBF"); // UTF-8 BOM
+        fputcsv($out, ['Student ID', 'Student Name', 'Installment #', 'Amount (₹)', 'Due Date', 'Status', 'Paid Date', 'Payment Reference']);
+        
+        foreach ($rows as $r) {
+            fputcsv($out, [
+                $student['user_id'],
+                $student['name'],
+                $r['instalment_number'],
+                $r['amount'],
+                $r['due_date'] ? date('d M Y', strtotime($r['due_date'])) : '-',
+                ucfirst($r['status'] ?: 'pending'),
+                $r['paid_date'] ? date('d M Y', strtotime($r['paid_date'])) : '-',
+                $r['payment_reference'] ?: '-'
+            ]);
+        }
+        fclose($out);
+        exit();
+    } catch (Exception $e) {
+        die("Export failed: " . htmlspecialchars($e->getMessage()));
+    }
+}
+
 /* ── POST: update attachments (photo / screenshot) ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_attachments') {
     if (!csrf_verify()) {
@@ -670,7 +707,7 @@ $days = $student['course_duration_date'] ? (int)floor((strtotime($student['cours
 
 $active_page = 'students';
 $page_title  = 'Student Profile';
-$page_sub    = $student['name'] . ' · ' . $student['user_id'];
+$page_sub    = $student['name'] . ' · ' . trim(($student['whatsapp_country_code'] ?? '') . ' ' . format_credential_text($student['whatsapp_number'], 'phone'));
 include 'includes/admin_nav.php';
 ?>
 
@@ -754,7 +791,7 @@ include 'includes/admin_nav.php';
             <?php endif; ?>
         </div>
         <div class="detail-list" style="flex:1;">
-            <div class="detail-row"><div class="dl">Student ID</div><div class="dv"><?php echo e($student['user_id']); ?></div></div>
+            <div class="detail-row"><div class="dl">WhatsApp Number</div><div class="dv"><?php echo trim(($student['whatsapp_country_code'] ?? '') . ' ' . format_credential($student['whatsapp_number'], 'phone')); ?></div></div>
             <div class="detail-row"><div class="dl">Gender / DOB</div><div class="dv"><?php echo e($student['gender']); ?> · <?php echo $student['date_of_birth'] ? date('d M Y', strtotime($student['date_of_birth'])) : '-'; ?></div></div>
             <div class="detail-row"><div class="dl">PEPP Course</div><div class="dv"><?php echo e($student['pepp_course']); ?> (<?php echo e($student['pepp_academic_year']); ?>)</div></div>
             <div class="detail-row"><div class="dl">Joined</div><div class="dv"><?php echo $student['joined_date'] ? date('d M Y', strtotime($student['joined_date'])) : '-'; ?></div></div>
@@ -781,6 +818,9 @@ include 'includes/admin_nav.php';
         <span class="head-icon" style="background:var(--pink-soft);color:var(--pink-ink);"><i class="fas fa-money-bill-wave"></i></span>
         <h2>Installments</h2>
         <div class="head-right" style="display:flex; gap:8px; align-items:center;">
+            <?php if (can_admin_export()): ?>
+                <a class="btn btn-sm btn-soft-green" href="?user_id=<?php echo urlencode($student['user_id']); ?>&export=excel"><i class="fas fa-file-excel"></i> Export to Excel</a>
+            <?php endif; ?>
             <?php if ($student['status'] === 'approved'): ?>
                 <button class="btn btn-sm btn-primary" onclick="openEditInstallmentsModal()"><i class="fas fa-edit"></i> Edit Installments</button>
             <?php endif; ?>

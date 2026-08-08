@@ -246,6 +246,54 @@ if ($sort_by === 'remarks_desc') {
     $order_by = "ORDER BY remarks_count DESC, u.created_at DESC";
 }
 
+/* ── EXPORT TO EXCEL ── */
+if (isset($_GET['export']) && $_GET['export'] === 'excel') {
+    if (!can_admin_export()) {
+        die("<div style='color:#ef4444; font-family:sans-serif; text-align:center; margin-top:50px; padding:20px; border:1px solid #fca5a5; background:#fef2f2; border-radius:12px; max-width:500px; margin-left:auto; margin-right:auto;'><h3>Access Denied</h3><p>You do not have permission to export data.</p></div>");
+    }
+    try {
+        $stmt_export = $pdo->prepare("
+            SELECT u.user_id, u.name, u.email, u.whatsapp_country_code, u.whatsapp_number,
+                   u.pepp_course, u.pepp_academic_year, u.student_status, u.onboarding_status,
+                   u.payment_plan, u.course_duration_date, u.joined_date, u.created_at
+            FROM users u
+            WHERE $where_clause
+            $order_by
+        ");
+        $stmt_export->execute($params);
+        $rows = $stmt_export->fetchAll(PDO::FETCH_ASSOC);
+
+        log_admin_activity($pdo, $admin_username, 'data_export', "Exported student list (" . count($rows) . ' rows) from All Students page');
+
+        header('Content-Type: text/csv; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="pepp-students-' . date('Y-m-d-Hi') . '.csv"');
+        $out = fopen('php://output', 'w');
+        fputs($out, "\xEF\xBB\xBF"); // UTF-8 BOM
+        fputcsv($out, ['Student ID', 'Name', 'Email', 'WhatsApp', 'Course', 'Academic Year', 'Payment Plan', 'Status', 'Onboarding', 'Joined Date', 'Access Ends']);
+        
+        foreach ($rows as $r) {
+            $wa = trim(($r['whatsapp_country_code'] ?? '') . ' ' . ($r['whatsapp_number'] ?? ''));
+            fputcsv($out, [
+                $r['user_id'],
+                $r['name'],
+                $r['email'],
+                $wa,
+                $r['pepp_course'],
+                $r['pepp_academic_year'],
+                $r['payment_plan'] ?: 'One Time',
+                ucfirst($r['student_status'] ?: 'active'),
+                ucfirst($r['onboarding_status'] ?: 'pending'),
+                $r['joined_date'] ? date('d M Y', strtotime($r['joined_date'])) : '-',
+                $r['course_duration_date'] ? date('d M Y', strtotime($r['course_duration_date'])) : '-'
+            ]);
+        }
+        fclose($out);
+        exit();
+    } catch (Exception $e) {
+        die("Export failed: " . htmlspecialchars($e->getMessage()));
+    }
+}
+
 $page     = max(1, (int)($_GET['page'] ?? 1));
 $per_page = 20;
 $offset   = ($page - 1) * $per_page;
@@ -352,7 +400,10 @@ include 'includes/admin_nav.php';
     <div class="panel-head">
         <span class="head-icon"><i class="fas fa-users"></i></span>
         <h2>Students (<?php echo number_format($total_students); ?>)</h2>
-        <div class="head-right">
+        <div class="head-right" style="display:flex; gap:8px; align-items:center;">
+            <?php if (can_admin_export()): ?>
+                <a class="btn btn-sm btn-soft-green" href="?<?php echo htmlspecialchars(http_build_query(array_merge($_GET, ['export' => 'excel']))); ?>"><i class="fas fa-file-excel"></i> Export to Excel</a>
+            <?php endif; ?>
             <a class="btn btn-sm btn-soft-violet" href="add-student.php"><i class="fas fa-user-plus"></i> Add Student</a>
         </div>
     </div>
@@ -385,7 +436,7 @@ include 'includes/admin_nav.php';
                                         <span class="badge amber" title="Has Remarks/Notes (<?php echo (int)$s['remarks_count']; ?>)" style="font-size:0.62rem; padding:1px 4px; display:inline-flex; align-items:center; gap:2px; cursor:pointer;" onclick="openRemarksModal('<?php echo e($s['user_id']); ?>')"><i class="fas fa-clipboard"></i> Remark</span>
                                     <?php endif; ?>
                                 </div>
-                                <div class="cell-sub"><?php echo e($s['user_id']); ?> &middot; <?php echo format_credential($s['email'], 'email'); ?></div>
+                                <div class="cell-sub"><?php echo trim(($s['whatsapp_country_code'] ?? '') . ' ' . format_credential($s['whatsapp_number'], 'phone')); ?> &middot; <?php echo format_credential($s['email'], 'email'); ?></div>
                             </div>
                         </div>
                     </td>
