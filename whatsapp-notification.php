@@ -70,14 +70,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             // 10-digit Indian numbers → add 91 automatically
             if (strlen($phone) === 10) $phone = '91' . $phone;
+            
+            $dispatchMode = $_POST['dispatch_mode'] ?? 'meta_api';
+            $uid = trim($_POST['picked_user_id'] ?? '');
+
             try {
-                $stmt = $pdo->prepare("INSERT INTO whatsapp_notifications (phone, message, student_name, sent_by, status) VALUES (?, ?, ?, ?, 'sent')");
-                $stmt->execute([substr($phone, -15), $message, $name ?: null, $admin_username]);
+                require_once 'includes/communication/CommunicationEngine.php';
+                $engine = CommunicationEngine::getInstance($pdo);
+                
+                if ($dispatchMode === 'meta_api') {
+                    // Queue for Meta API dispatch
+                    $queueId = $engine->queueMessage(
+                        'whatsapp',
+                        $phone,
+                        $name ?: null,
+                        'Manual Admin Message',
+                        $message,
+                        $message,
+                        [],
+                        [],
+                        $admin_username,
+                        null,
+                        $uid ?: null
+                    );
+                    $success_message = 'Message enqueued successfully for automated dispatch via Meta Cloud API!';
+                } else {
+                    // Legacy manual mode: log and build wa.me link
+                    $stmt = $pdo->prepare("INSERT INTO whatsapp_notifications (phone, message, student_name, sent_by, status) VALUES (?, ?, ?, ?, 'sent')");
+                    $stmt->execute([substr($phone, -15), $message, $name ?: null, $admin_username]);
+                    $whatsapp_url = 'https://wa.me/' . $phone . '?text=' . rawurlencode($message);
+                    $success_message = 'Message logged - WhatsApp is opening in a new tab.' . ($name ? " (to {$name})" : '');
+                }
             } catch (Exception $e) {
                 error_log('wa log: ' . $e->getMessage());
+                $error_message = 'Failed to send message: ' . $e->getMessage();
             }
-            $whatsapp_url = 'https://wa.me/' . $phone . '?text=' . rawurlencode($message);
-            $success_message = 'Message ready - WhatsApp is opening in a new tab.' . ($name ? " (to {$name})" : '');
             // keep values so the admin can resend / adjust
             $prefill_phone = $phone; $prefill_name = $name; $prefill_message = $message;
         }
@@ -163,6 +190,13 @@ include 'includes/admin_nav.php';
                     <label>Student name</label>
                     <input type="text" name="student_name" id="wa-name" value="<?php echo e($prefill_name); ?>" placeholder="For the log">
                 </div>
+                <div class="field">
+                    <label>Dispatch Mode</label>
+                    <select name="dispatch_mode" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:0.85rem;">
+                        <option value="meta_api" selected>Queue via Meta API (Automated)</option>
+                        <option value="wa_web">Open WhatsApp Web (Manual)</option>
+                    </select>
+                </div>
                 <div class="field full">
                     <label>Template (optional)</label>
                     <select id="template-pick" onchange="pickTemplate(this)">
@@ -178,9 +212,9 @@ include 'includes/admin_nav.php';
                     <div class="help">All {variables} ({name}, {PEPP course}, {access_end}, {balance}, {collected}…) are auto-fetched from the database when a student is picked - see Settings for the full list</div>
                 </div>
             </div>
-            <div style="display:flex; justify-content:flex-end; margin-top:14px;">
-                <button type="submit" class="btn btn-whatsapp"><i class="fab fa-whatsapp"></i> Open WhatsApp &amp; Log</button>
-            </div>
+             <div style="display:flex; justify-content:flex-end; margin-top:14px;">
+                 <button type="submit" class="btn btn-whatsapp"><i class="fab fa-whatsapp"></i> Send / Queue Message</button>
+             </div>
         </form>
     </div>
 </div>

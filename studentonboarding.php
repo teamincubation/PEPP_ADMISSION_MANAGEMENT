@@ -106,10 +106,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $msg   = fill_student_template($pdo, $template, $student);
             $phone = preg_replace('/\D/', '', $student['whatsapp_country_code'] . $student['whatsapp_number']);
 
-            // Log notification (matches whatsapp_notifications schema)
+            // Queue onboarding notification via Centralized Communication Engine
             try {
-                $stmt = $pdo->prepare("INSERT INTO whatsapp_notifications (phone, message, student_name, sent_by, status) VALUES (?, ?, ?, ?, 'sent')");
-                $stmt->execute([substr($phone, -15), $msg, $student['name'], $admin_username]);
+                require_once 'includes/communication/CommunicationEngine.php';
+                $engine = CommunicationEngine::getInstance($pdo);
+                $engine->queueMessage(
+                    'whatsapp',
+                    $phone,
+                    $student['name'],
+                    'Student Onboarding: ' . ucfirst($type),
+                    $msg,
+                    $msg,
+                    [],
+                    [],
+                    $admin_username,
+                    null,
+                    $student['user_id']
+                );
             } catch (Exception $ex) { error_log('wa log: ' . $ex->getMessage()); }
 
             echo json_encode([

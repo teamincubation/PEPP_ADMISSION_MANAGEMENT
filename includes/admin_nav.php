@@ -187,6 +187,9 @@ function render_nav_item($key, $active_page, $nav_data) {
         case 'invoices':
             echo '<a class="nav-item ' . nav_active('invoices', $active_page) . '" href="invoices.php"><i class="fas fa-file-invoice"></i> Invoices</a>';
             break;
+        case 'communication':
+            echo '<a class="nav-item ' . nav_active('communication', $active_page) . '" href="communication-dashboard.php"><i class="fas fa-network-wired"></i> Communication Engine</a>';
+            break;
         case 'whatsapp':
             echo '<a class="nav-item ' . nav_active('whatsapp', $active_page) . '" href="whatsapp-notification.php"><i class="fab fa-whatsapp"></i> WhatsApp Messages</a>';
             break;
@@ -259,7 +262,7 @@ $default_sidebar = [
         'id' => 'payments',
         'title' => 'Payments',
         'icon' => 'fas fa-money-bill-wave',
-        'items' => ['installments', 'invoices', 'whatsapp']
+        'items' => ['installments', 'invoices', 'communication', 'whatsapp']
     ],
     [
         'id' => 'academics',
