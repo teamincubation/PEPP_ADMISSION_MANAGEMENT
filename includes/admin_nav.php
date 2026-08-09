@@ -300,14 +300,6 @@ try {
                     )));
                 }
             }
-
-            // Restore any missing default categories (self-healing database layout corruption)
-            foreach ($default_sidebar as $def_sec) {
-                $def_id = $def_sec['id'];
-                if (!isset($unique_sections[$def_id])) {
-                    $unique_sections[$def_id] = $def_sec;
-                }
-            }
             $decoded = array_values($unique_sections);
 
             // Keep category icons if not set in DB
@@ -336,6 +328,23 @@ try {
                         if (!is_array($dec_sec['items'])) $dec_sec['items'] = [];
                         $dec_sec['items'][] = 'communication';
                         $found_comm = true;
+                        break;
+                    }
+                }
+            }
+
+            // Self-healing check: Ensure 'system' category is present in layout items
+            $found_system = false;
+            foreach ($decoded as $dec_sec) {
+                if (isset($dec_sec['items']) && is_array($dec_sec['items']) && in_array('settings', $dec_sec['items'], true)) {
+                    $found_system = true;
+                    break;
+                }
+            }
+            if (!$found_system) {
+                foreach ($default_sidebar as $def_sec) {
+                    if ($def_sec['id'] === 'system') {
+                        $decoded[] = $def_sec;
                         break;
                     }
                 }
