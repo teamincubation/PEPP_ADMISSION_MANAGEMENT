@@ -278,7 +278,7 @@ $default_sidebar = [
     ]
 ];
 
-// Load layout from database
+// Load layout from database with complete self-healing normalization & deduplication
 $sidebar_menu = $default_sidebar;
 try {
     $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'sidebar_menu_config' LIMIT 1");
@@ -287,78 +287,81 @@ try {
     if ($config_json) {
         $decoded = json_decode($config_json, true);
         if (is_array($decoded) && !empty($decoded)) {
-            // Deduplicate sections by id to prevent duplicate rendering of categories
-            $unique_sections = [];
+            // Map sections by unique ID (eliminating duplicate section IDs like duplicate Payments)
+            $section_map = [];
             foreach ($decoded as $sec) {
                 $sid = $sec['id'] ?? '';
-                if ($sid && !isset($unique_sections[$sid])) {
-                    $unique_sections[$sid] = $sec;
-                } else if ($sid) {
-                    $unique_sections[$sid]['items'] = array_values(array_unique(array_merge(
-                        $unique_sections[$sid]['items'] ?? [],
-                        $sec['items'] ?? []
-                    )));
+                if ($sid) {
+                    if (!isset($section_map[$sid])) {
+                        $section_map[$sid] = $sec;
+                    } else {
+                        // Merge items from duplicate section into the first section entry
+                        $section_map[$sid]['items'] = array_values(array_unique(array_merge(
+                            $section_map[$sid]['items'] ?? [],
+                            $sec['items'] ?? []
+                        )));
+                    }
                 }
             }
-            $decoded = array_values($unique_sections);
 
-            // Keep category icons if not set in DB
-            foreach ($decoded as &$dec_sec) {
-                if (empty($dec_sec['icon'])) {
-                    foreach ($default_sidebar as $def_sec) {
-                        if ($def_sec['id'] === $dec_sec['id']) {
-                            $dec_sec['icon'] = $def_sec['icon'];
-                            break;
+            // Build normalized layout following the master blueprint order of $default_sidebar
+            $normalized = [];
+            foreach ($default_sidebar as $def_sec) {
+                $sid = $def_sec['id'];
+                if (isset($section_map[$sid])) {
+                    $sec = $section_map[$sid];
+                    if (empty($sec['icon'])) {
+                        $sec['icon'] = $def_sec['icon'];
+                    }
+                    if (empty($sec['title'])) {
+                        $sec['title'] = $def_sec['title'];
+                    }
+                    $normalized[] = $sec;
+                    unset($section_map[$sid]);
+                } else {
+                    // Restore missing standard category (e.g. academics, system)
+                    $normalized[] = $def_sec;
+                }
+            }
+
+            // Append any custom user-added categories remaining in section_map
+            foreach ($section_map as $custom_sec) {
+                $normalized[] = $custom_sec;
+            }
+
+            // Ensure all standard items from $default_sidebar exist in the normalized layout
+            $all_current_items = [];
+            foreach ($normalized as $sec) {
+                foreach ($sec['items'] ?? [] as $it) {
+                    $all_current_items[] = $it;
+                }
+            }
+
+            foreach ($default_sidebar as $def_sec) {
+                foreach ($def_sec['items'] as $def_item) {
+                    if (!in_array($def_item, $all_current_items, true)) {
+                        // Add missing item back to its default category
+                        foreach ($normalized as &$norm_sec) {
+                            if ($norm_sec['id'] === $def_sec['id']) {
+                                $norm_sec['items'][] = $def_item;
+                                $all_current_items[] = $def_item;
+                                break;
+                            }
                         }
                     }
                 }
             }
 
-            // Self-healing check: Ensure 'communication' is present in layout items
-            $found_comm = false;
-            foreach ($decoded as $dec_sec) {
-                if (isset($dec_sec['items']) && is_array($dec_sec['items']) && in_array('communication', $dec_sec['items'], true)) {
-                    $found_comm = true;
-                    break;
-                }
-            }
-            if (!$found_comm) {
-                foreach ($decoded as &$dec_sec) {
-                    if (($dec_sec['id'] ?? '') === 'payments') {
-                        if (!is_array($dec_sec['items'])) $dec_sec['items'] = [];
-                        $dec_sec['items'][] = 'communication';
-                        $found_comm = true;
-                        break;
-                    }
-                }
-            }
-
-            // Self-healing check: Ensure 'system' category is present in layout items
-            $found_system = false;
-            foreach ($decoded as $dec_sec) {
-                if (isset($dec_sec['items']) && is_array($dec_sec['items']) && in_array('settings', $dec_sec['items'], true)) {
-                    $found_system = true;
-                    break;
-                }
-            }
-            if (!$found_system) {
-                foreach ($default_sidebar as $def_sec) {
-                    if ($def_sec['id'] === 'system') {
-                        $decoded[] = $def_sec;
-                        break;
-                    }
-                }
-            }
-
-            // Save the cleaned/deduplicated version back to database if it changed
-            if (json_encode($decoded) !== $config_json) {
+            // Save the cleaned, normalized version back to database to permanently fix the setting
+            $new_config_json = json_encode($normalized);
+            if ($new_config_json !== $config_json) {
                 try {
                     $save_stmt = $pdo->prepare("UPDATE admin_settings SET setting_value = ? WHERE setting_name = 'sidebar_menu_config'");
-                    $save_stmt->execute([json_encode($decoded)]);
+                    $save_stmt->execute([$new_config_json]);
                 } catch (Exception $ex) {}
             }
 
-            $sidebar_menu = $decoded;
+            $sidebar_menu = $normalized;
         }
     }
 } catch (Exception $e) {}
