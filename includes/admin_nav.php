@@ -352,6 +352,20 @@ try {
                 }
             }
 
+            // Strict Global Item Deduplication across all sections
+            $seen_global_items = [];
+            foreach ($normalized as &$norm_sec) {
+                $clean_items = [];
+                foreach ($norm_sec['items'] ?? [] as $it) {
+                    if (!in_array($it, $seen_global_items, true)) {
+                        $clean_items[] = $it;
+                        $seen_global_items[] = $it;
+                    }
+                }
+                $norm_sec['items'] = $clean_items;
+            }
+            unset($norm_sec);
+
             // Save the cleaned, normalized version back to database to permanently fix the setting
             $new_config_json = json_encode($normalized);
             if ($new_config_json !== $config_json) {
