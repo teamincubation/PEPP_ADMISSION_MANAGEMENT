@@ -98,18 +98,18 @@ if ($has_eq_table) {
     $sub_queries[] = "
         SELECT 
             eq.id as unique_id,
-            'email_campaigns' as module_type,
-            'Bulk Email Campaign' as module_label,
-            COALESCE(ec.subject, 'Marketing Campaign') as campaign_title,
-            eq.recipient_email,
-            eq.recipient_name,
-            eq.subject,
-            eq.body as body_preview,
-            eq.status,
-            eq.error_message,
+            'email_campaigns' COLLATE utf8mb4_unicode_ci as module_type,
+            'Bulk Email Campaign' COLLATE utf8mb4_unicode_ci as module_label,
+            CAST(COALESCE(ec.subject, 'Marketing Campaign') AS CHAR) COLLATE utf8mb4_unicode_ci as campaign_title,
+            CAST(eq.recipient_email AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_email,
+            CAST(COALESCE(eq.recipient_name, '') AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_name,
+            CAST(eq.subject AS CHAR) COLLATE utf8mb4_unicode_ci as subject,
+            CAST(COALESCE(eq.body, '') AS CHAR) COLLATE utf8mb4_unicode_ci as body_preview,
+            CAST(eq.status AS CHAR) COLLATE utf8mb4_unicode_ci as status,
+            CAST(COALESCE(eq.error_message, '') AS CHAR) COLLATE utf8mb4_unicode_ci as error_message,
             COALESCE(eq.sent_at, eq.created_at) as dispatched_at,
             eq.created_at,
-            COALESCE(ec.created_by, 'System') as admin_username
+            CAST(COALESCE(ec.created_by, 'System') AS CHAR) COLLATE utf8mb4_unicode_ci as admin_username
         FROM email_queue eq
         LEFT JOIN email_campaigns ec ON eq.campaign_id = ec.id
     ";
@@ -125,18 +125,18 @@ if ($has_comm_table) {
     $sub_queries[] = "
         SELECT 
             cq.id as unique_id,
-            'communication_engine' as module_type,
-            'Communication Engine' as module_label,
-            COALESCE(cq.template_name, 'Direct Dispatch') as campaign_title,
-            cq.recipient as recipient_email,
-            cq.recipient_name,
-            COALESCE(cq.subject, 'Notification') as subject,
-            COALESCE(cq.body_html, cq.body_text) as body_preview,
-            cq.status,
-            cq.error_message,
+            'communication_engine' COLLATE utf8mb4_unicode_ci as module_type,
+            'Communication Engine' COLLATE utf8mb4_unicode_ci as module_label,
+            CAST(COALESCE(cq.template_name, 'Direct Dispatch') AS CHAR) COLLATE utf8mb4_unicode_ci as campaign_title,
+            CAST(cq.recipient AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_email,
+            CAST(COALESCE(cq.recipient_name, '') AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_name,
+            CAST(COALESCE(cq.subject, 'Notification') AS CHAR) COLLATE utf8mb4_unicode_ci as subject,
+            CAST(COALESCE(cq.body_html, cq.body_text, '') AS CHAR) COLLATE utf8mb4_unicode_ci as body_preview,
+            CAST(cq.status AS CHAR) COLLATE utf8mb4_unicode_ci as status,
+            CAST(COALESCE(cq.error_message, '') AS CHAR) COLLATE utf8mb4_unicode_ci as error_message,
             COALESCE(cq.updated_at, cq.created_at) as dispatched_at,
             cq.created_at,
-            COALESCE(cq.sent_by, 'System') as admin_username
+            CAST(COALESCE(cq.sent_by, 'System') AS CHAR) COLLATE utf8mb4_unicode_ci as admin_username
         FROM communication_queue cq
         WHERE cq.channel = 'email'
     ";
@@ -155,18 +155,18 @@ if ($has_inv_col) {
     $sub_queries[] = "
         SELECT 
             inv.id as unique_id,
-            'invoices' as module_type,
-            'Invoices & Billing' as module_label,
-            CONCAT('Invoice #', COALESCE(inv.invoice_no, inv.id)) as campaign_title,
-            inv.email as recipient_email,
-            inv.student_name as recipient_name,
-            CONCAT('Invoice #', COALESCE(inv.invoice_no, inv.id), ' - PEPP Learning') as subject,
-            CONCAT('Invoice notification dispatched for ', inv.student_name) as body_preview,
-            CASE WHEN inv.email_status = 'sent' THEN 'sent' WHEN inv.email_status = 'failed' THEN 'failed' ELSE 'pending' END as status,
-            NULL as error_message,
+            'invoices' COLLATE utf8mb4_unicode_ci as module_type,
+            'Invoices & Billing' COLLATE utf8mb4_unicode_ci as module_label,
+            CAST(CONCAT('Invoice #', COALESCE(inv.invoice_no, inv.id)) AS CHAR) COLLATE utf8mb4_unicode_ci as campaign_title,
+            CAST(inv.email AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_email,
+            CAST(COALESCE(inv.student_name, '') AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_name,
+            CAST(CONCAT('Invoice #', COALESCE(inv.invoice_no, inv.id), ' - PEPP Learning') AS CHAR) COLLATE utf8mb4_unicode_ci as subject,
+            CAST(CONCAT('Invoice notification dispatched for ', COALESCE(inv.student_name, '')) AS CHAR) COLLATE utf8mb4_unicode_ci as body_preview,
+            CAST(CASE WHEN inv.email_status = 'sent' THEN 'sent' WHEN inv.email_status = 'failed' THEN 'failed' ELSE 'pending' END AS CHAR) COLLATE utf8mb4_unicode_ci as status,
+            CAST('' AS CHAR) COLLATE utf8mb4_unicode_ci as error_message,
             COALESCE(inv.paid_date, inv.created_at) as dispatched_at,
             inv.created_at,
-            COALESCE(inv.generated_by, 'System') as admin_username
+            CAST(COALESCE(inv.generated_by, 'System') AS CHAR) COLLATE utf8mb4_unicode_ci as admin_username
         FROM invoices inv
         WHERE inv.email_status IS NOT NULL AND inv.email_status != ''
     ";
