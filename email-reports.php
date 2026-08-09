@@ -95,24 +95,31 @@ if ($date_range === 'today') {
 $sub_queries = [];
 
 // 1. Marketing Email Campaigns Queue
-$sub_queries[] = "
-    SELECT 
-        eq.id as unique_id,
-        'email_campaigns' as module_type,
-        'Bulk Email Campaign' as module_label,
-        COALESCE(ec.subject, 'Marketing Campaign') as campaign_title,
-        eq.recipient_email,
-        eq.recipient_name,
-        eq.subject,
-        eq.body as body_preview,
-        eq.status,
-        eq.error_message,
-        COALESCE(eq.sent_at, eq.created_at) as dispatched_at,
-        eq.created_at,
-        COALESCE(ec.created_by, 'System') as admin_username
-    FROM email_queue eq
-    LEFT JOIN email_campaigns ec ON eq.campaign_id = ec.id
-";
+$has_eq_table = false;
+try {
+    $has_eq_table = (bool)$pdo->query("SHOW TABLES LIKE 'email_queue'")->fetchColumn();
+} catch (Throwable $e) {}
+
+if ($has_eq_table) {
+    $sub_queries[] = "
+        SELECT 
+            eq.id as unique_id,
+            'email_campaigns' as module_type,
+            'Bulk Email Campaign' as module_label,
+            COALESCE(ec.subject, 'Marketing Campaign') as campaign_title,
+            eq.recipient_email,
+            eq.recipient_name,
+            eq.subject,
+            eq.body as body_preview,
+            eq.status,
+            eq.error_message,
+            COALESCE(eq.sent_at, eq.created_at) as dispatched_at,
+            eq.created_at,
+            COALESCE(ec.created_by, 'System') as admin_username
+        FROM email_queue eq
+        LEFT JOIN email_campaigns ec ON eq.campaign_id = ec.id
+    ";
+}
 
 // 2. Communication Engine Queue (channel = 'email')
 $has_comm_table = false;
@@ -149,6 +156,7 @@ try {
         $has_inv_col = (bool)$pdo->query("SHOW COLUMNS FROM invoices LIKE 'email_status'")->fetch();
     }
 } catch (Throwable $e) {}
+
 if ($has_inv_col) {
     $sub_queries[] = "
         SELECT 
@@ -170,7 +178,11 @@ if ($has_inv_col) {
     ";
 }
 
-$unified_sql = "SELECT * FROM (" . implode(" UNION ALL ", $sub_queries) . ") AS aggregated_emails WHERE 1=1";
+if (!empty($sub_queries)) {
+    $unified_sql = "SELECT * FROM (" . implode(" UNION ALL ", $sub_queries) . ") AS aggregated_emails WHERE 1=1";
+} else {
+    $unified_sql = "SELECT 1 as unique_id, 'none' as module_type, 'System' as module_label, 'None' as campaign_title, '' as recipient_email, '' as recipient_name, '' as subject, '' as body_preview, 'none' as status, '' as error_message, NOW() as dispatched_at, NOW() as created_at, 'System' as admin_username WHERE 1=0";
+}
 $params = [];
 
 if ($filter_module !== '') {
