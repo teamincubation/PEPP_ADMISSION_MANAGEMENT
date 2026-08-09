@@ -276,6 +276,9 @@ function is_super_admin() {
 }
 function can_access($page_key) {
     global $admin_perms;
+    if ($page_key === 'communication') {
+        return is_super_admin();
+    }
     if (is_super_admin()) return true;
     if (trim($admin_perms) === 'ALL') return true;
     return in_array($page_key, array_map('trim', explode(',', $admin_perms)), true);

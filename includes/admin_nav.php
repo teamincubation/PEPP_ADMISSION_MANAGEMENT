@@ -304,27 +304,44 @@ try {
                 }
             }
 
-            // Build normalized layout following the master blueprint order of $default_sidebar
+            // Build normalized layout while preserving the category order saved in $decoded
             $normalized = [];
-            foreach ($default_sidebar as $def_sec) {
-                $sid = $def_sec['id'];
-                if (isset($section_map[$sid])) {
+            $seen_ids = [];
+            foreach ($decoded as $dec_sec) {
+                $sid = $dec_sec['id'] ?? '';
+                if ($sid && !in_array($sid, $seen_ids, true) && isset($section_map[$sid])) {
                     $sec = $section_map[$sid];
                     if (empty($sec['icon'])) {
-                        $sec['icon'] = $def_sec['icon'];
+                        foreach ($default_sidebar as $def_sec) {
+                            if ($def_sec['id'] === $sid) {
+                                $sec['icon'] = $def_sec['icon'];
+                                break;
+                            }
+                        }
                     }
                     if (empty($sec['title'])) {
-                        $sec['title'] = $def_sec['title'];
+                        foreach ($default_sidebar as $def_sec) {
+                            if ($def_sec['id'] === $sid) {
+                                $sec['title'] = $def_sec['title'];
+                                break;
+                            }
+                        }
                     }
                     $normalized[] = $sec;
+                    $seen_ids[] = $sid;
                     unset($section_map[$sid]);
-                } else {
-                    // Restore missing standard category (e.g. academics, system)
-                    $normalized[] = $def_sec;
                 }
             }
 
-            // Append any custom user-added categories remaining in section_map
+            // Restore any missing standard categories from $default_sidebar
+            foreach ($default_sidebar as $def_sec) {
+                if (!in_array($def_sec['id'], $seen_ids, true)) {
+                    $normalized[] = $def_sec;
+                    $seen_ids[] = $def_sec['id'];
+                }
+            }
+
+            // Append any remaining custom user-added categories
             foreach ($section_map as $custom_sec) {
                 $normalized[] = $custom_sec;
             }
@@ -379,6 +396,17 @@ try {
         }
     }
 } catch (Exception $e) {}
+
+// Load sidebar auto-collapse setting (default '1')
+$sidebar_auto_collapse = '1';
+try {
+    $st_ac = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'sidebar_auto_collapse' LIMIT 1");
+    $st_ac->execute();
+    $val_ac = $st_ac->fetchColumn();
+    if ($val_ac !== false && $val_ac !== null && $val_ac !== '') {
+        $sidebar_auto_collapse = (string)$val_ac;
+    }
+} catch (Exception $ex) {}
 
 // Gather nav counts
 $nav_data = [
@@ -744,7 +772,7 @@ $nav_data = [
         <?php foreach ($sidebar_menu as $section): ?>
             <?php
             $has_access = false;
-            $is_collapsed = 'collapsed';
+            $is_collapsed = ($sidebar_auto_collapse === '0') ? '' : 'collapsed';
             foreach ($section['items'] as $item) {
                 if (can_access($item)) {
                     $has_access = true;
