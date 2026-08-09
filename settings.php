@@ -186,6 +186,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 log_admin_activity($pdo, $admin_username, 'invoice_settings_changed',
                     'GST series ' . $pairs['inv_gst_prefix'] . '/' . $pairs['inv_gst_fy'] . ' (next #' . $gst_seq . '), account id ' . $pairs['inv_gst_account_id']);
                 $success_message = 'Invoice settings saved.';
+            } elseif ($action === 'save_smtp_settings') {
+                $stmt = $pdo->prepare("
+                    INSERT INTO admin_settings (setting_name, setting_value, created_at, updated_at)
+                    VALUES (?, ?, NOW(), NOW())
+                    ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()
+                ");
+                $pairs = [
+                    'smtp_enabled'    => isset($_POST['smtp_enabled']) ? '1' : '0',
+                    'smtp_host'       => trim($_POST['smtp_host'] ?? ''),
+                    'smtp_port'       => (string)(int)($_POST['smtp_port'] ?? 465),
+                    'smtp_secure'     => in_array($_POST['smtp_secure'] ?? '', ['ssl', 'tls', 'none'], true) ? $_POST['smtp_secure'] : 'ssl',
+                    'smtp_user'       => trim($_POST['smtp_user'] ?? ''),
+                    'smtp_pass'       => trim($_POST['smtp_pass'] ?? ''),
+                    'smtp_from_email' => trim($_POST['smtp_from_email'] ?? ''),
+                    'smtp_from_name'  => trim($_POST['smtp_from_name'] ?? 'PEPP Learning'),
+                ];
+                foreach ($pairs as $k => $v) $stmt->execute([$k, $v]);
+                log_admin_activity($pdo, $admin_username, 'smtp_settings_changed', 'Updated SMTP Configuration Settings');
+                $success_message = 'SMTP Mailer settings saved.';
             } elseif ($action === 'save_sidebar_config') {
                 if (!is_super_admin()) {
                     $error_message = 'Only the Super Admin can change these settings.';
@@ -558,6 +577,57 @@ $nongst_preview = ($current_settings['inv_nongst_prefix'] ?? 'INV') . '/' . date
             </div>
             <div style="display:flex; justify-content:flex-end; margin-top:14px;">
                 <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save Invoice Settings</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── SMTP MAIL CONFIGURATION ── -->
+<div class="panel">
+    <div class="panel-head"><span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-envelope-open-text"></i></span><h2>SMTP Mail Settings</h2></div>
+    <div class="panel-body">
+        <form method="POST">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="save_smtp_settings">
+            
+            <div style="margin-bottom: 15px;">
+                <label style="display:flex; align-items:center; gap:8px; font-weight:700; cursor:pointer;">
+                    <input type="checkbox" name="smtp_enabled" value="1" <?php echo $ivs('smtp_enabled', '0') === '1' ? 'checked' : ''; ?>>
+                    Enable Authenticated SMTP Mailer (Overrides php mail())
+                </label>
+                <div class="help" style="margin-left: 24px;">Check this to route all dispatches via external SMTP server. If unchecked, local server mail() fallback is used.</div>
+            </div>
+
+            <div class="form-grid">
+                <div class="field"><label>SMTP Host</label>
+                    <input type="text" name="smtp_host" value="<?php echo e($ivs('smtp_host', 'smtp.hostinger.com')); ?>" placeholder="e.g. smtp.hostinger.com"></div>
+                
+                <div class="field"><label>SMTP Port</label>
+                    <input type="number" name="smtp_port" value="<?php echo e($ivs('smtp_port', '465')); ?>" placeholder="465 or 587"></div>
+
+                <div class="field"><label>Encryption / Security</label>
+                    <select name="smtp_secure">
+                        <option value="ssl" <?php echo $ivs('smtp_secure', 'ssl') === 'ssl' ? 'selected' : ''; ?>>SSL (Port 465)</option>
+                        <option value="tls" <?php echo $ivs('smtp_secure', 'ssl') === 'tls' ? 'selected' : ''; ?>>TLS / STARTTLS (Port 587)</option>
+                        <option value="none" <?php echo $ivs('smtp_secure', 'ssl') === 'none' ? 'selected' : ''; ?>>None</option>
+                    </select>
+                </div>
+
+                <div class="field"><label>SMTP Username (Full Email)</label>
+                    <input type="email" name="smtp_user" value="<?php echo e($ivs('smtp_user', 'noreply@pepplearning.in')); ?>" placeholder="noreply@pepplearning.in"></div>
+
+                <div class="field"><label>SMTP Password</label>
+                    <input type="password" name="smtp_pass" value="<?php echo e($ivs('smtp_pass', '')); ?>" placeholder="Enter SMTP password"></div>
+
+                <div class="field"><label>Sender From Email</label>
+                    <input type="email" name="smtp_from_email" value="<?php echo e($ivs('smtp_from_email', 'noreply@pepplearning.in')); ?>" placeholder="noreply@pepplearning.in"></div>
+
+                <div class="field full"><label>Sender Display Name</label>
+                    <input type="text" name="smtp_from_name" value="<?php echo e($ivs('smtp_from_name', 'PEPP Learning')); ?>" placeholder="PEPP Learning"></div>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; margin-top:14px;">
+                <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save SMTP Settings</button>
             </div>
         </form>
     </div>

@@ -95,23 +95,8 @@ function send_custom_email($to, $subject, $body_html, $body_text = '') {
         $body_text = strip_tags(str_replace(['<br>', '<br/>', '<br />', '<p>', '</p>'], ["\n", "\n", "\n", "\n", "\n"], $body_html));
     }
     
-    $subjectEnc = '=?UTF-8?B?' . base64_encode($subject) . '?=';
-    $bAlt = 'alt_' . md5(uniqid('', true));
-    $headers = "From: PEPP Learning <noreply@pepplearning.in>\r\n"
-             . "Reply-To: noreply@pepplearning.in\r\n"
-             . "MIME-Version: 1.0\r\n"
-             . "Content-Type: multipart/alternative; boundary=\"{$bAlt}\"";
-             
-    $body  = "--{$bAlt}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" . $body_text . "\r\n\r\n";
-    $body .= "--{$bAlt}\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" . $body_html . "\r\n\r\n";
-    $body .= "--{$bAlt}--";
-    
-    try {
-        return @mail($to, $subjectEnc, $body, $headers);
-    } catch (Exception $e) {
-        error_log('Custom campaign email send failed to ' . $to . ': ' . $e->getMessage());
-        return false;
-    }
+    require_once __DIR__ . '/mailer.php';
+    return pepp_mail($to, $subject, $body_html, $body_text, [], 'noreply@pepplearning.in', 'PEPP Learning');
 }
 
 function build_campaign_email_html($custom_body) {

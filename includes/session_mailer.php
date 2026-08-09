@@ -49,7 +49,7 @@ function notify_session_learners($pdo, $session, $window, $by = 'system') {
         'start'  => 'Your session is starting now!',
     ][$window] ?? 'Reminder for your upcoming session.';
 
-    $subject = '=?UTF-8?B?' . base64_encode(($window === 'start' ? 'Starting now: ' : 'Reminder: ') . $session['topic'] . ' | PEPP Learning') . '?=';
+    $subject = ($window === 'start' ? 'Starting now: ' : 'Reminder: ') . $session['topic'] . ' | PEPP Learning';
 
     $btn = $join
         ? '<a href="' . htmlspecialchars($join) . '" style="display:inline-block;background:#E8980C;color:#fff;text-decoration:none;font-weight:700;font-size:15px;border-radius:10px;padding:13px 30px;">Join the Session</a>'
@@ -83,13 +83,12 @@ function notify_session_learners($pdo, $session, $window, $by = 'system') {
           . ($faculty ? "Faculty: " . strip_tags($faculty) . "\n" : '')
           . ($join ? "Join: {$join}\n" : '') . ($venue ? "Venue: " . strip_tags($venue) . "\n" : '');
 
+    require_once __DIR__ . '/mailer.php';
     $sent = 0;
     foreach ($learners as $email => $name) {
-        $bAlt = 'a' . md5(uniqid('', true));
-        $headers = "From: PEPP Learning <noreply@pepplearning.in>\r\nReply-To: noreply@pepplearning.in\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"$bAlt\"";
-        $body  = "--$bAlt\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n$text\r\n\r\n";
-        $body .= "--$bAlt\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n$html\r\n\r\n--$bAlt--";
-        if (@mail($email, $subject, $body, $headers)) $sent++;
+        if (pepp_mail($email, $subject, $html, $text, [], 'noreply@pepplearning.in', 'PEPP Learning')) {
+            $sent++;
+        }
     }
 
     // Record the window so automatic sends fire only once

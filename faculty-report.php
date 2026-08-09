@@ -82,18 +82,17 @@ $bytes = $pdf->output();
 $fname = 'faculty-statement-' . preg_replace('/[^A-Za-z0-9]/', '-', $f['name']) . '.pdf';
 
 if (isset($_GET['email']) && $f['email'] && filter_var($f['email'], FILTER_VALIDATE_EMAIL)) {
-    $bAlt = 'a' . md5(uniqid('', true)); $bMix = 'm' . md5(uniqid('', true));
-    $subject = '=?UTF-8?B?' . base64_encode('Your Payment Statement | PEPP Learning') . '?=';
-    $html = '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#374151;">'
-          . '<p>Dear ' . htmlspecialchars($f['name']) . ',</p>'
-          . '<p>Please find attached your payment statement.</p>'
-          . '<p>Completed sessions: <b>' . $completed . '</b><br>Total earned: <b>Rs. ' . number_format($earned, 2) . '</b>'
-          . '<br>Total paid: <b>Rs. ' . number_format($paid, 2) . '</b><br>Balance due: <b>Rs. ' . number_format($due, 2) . '</b></p>'
-          . '<p style="color:#9ca3af;font-size:12px;">PEPP Learning - Labinc Education Pvt. Ltd. This mailbox is not monitored.</p></div>';
-    $headers = "From: PEPP Learning <noreply@pepplearning.in>\r\nReply-To: noreply@pepplearning.in\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"$bMix\"";
-    $body  = "--$bMix\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n$html\r\n\r\n";
-    $body .= "--$bMix\r\nContent-Type: application/pdf; name=\"$fname\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"$fname\"\r\n\r\n" . chunk_split(base64_encode($bytes)) . "\r\n--$bMix--";
-    $ok = @mail($f['email'], $subject, $body, $headers);
+    $fname = str_replace(['/', '\\'], '-', $fname); // safe file name
+    $attachments = [
+        [
+            'name'  => $fname,
+            'bytes' => $bytes,
+            'type'  => 'application/pdf'
+        ]
+    ];
+
+    require_once __DIR__ . '/includes/mailer.php';
+    $ok = pepp_mail($f['email'], 'Your Payment Statement | PEPP Learning', $html, '', $attachments, 'noreply@pepplearning.in', 'PEPP Learning');
     log_admin_activity($pdo, $admin_username, 'faculty_statement_emailed', "Statement emailed to {$f['name']} ({$f['email']})" . ($ok ? '' : ' [FAILED]'));
     header('Location: faculties.php?view=' . $id . '&msg=' . ($ok ? 'mailed' : 'mailfail'));
     exit();

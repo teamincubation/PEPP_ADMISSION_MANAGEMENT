@@ -87,38 +87,15 @@ function send_invoice_email(array $inv, $pdfBytes) {
           . "PEPP Learning - Labinc Education Pvt. Ltd.\n"
           . "office@pepplearning.com | 7025000444";
 
-    /* ── Multipart MIME: alternative(text+html) + PDF attachment ── */
-    $bMix = 'mix_' . md5(uniqid('', true));
-    $bAlt = 'alt_' . md5(uniqid('', true));
     $fname = str_replace(['/', '\\'], '-', $inv['invoice_no']) . '.pdf';
+    $attachments = [
+        [
+            'name'  => $fname,
+            'bytes' => $pdfBytes,
+            'type'  => 'application/pdf'
+        ]
+    ];
 
-    $headers = "From: PEPP Learning Payments <noreply@pepplearning.in>\r\n"
-             . "Reply-To: noreply@pepplearning.in\r\n"
-             . "MIME-Version: 1.0\r\n"
-             . "X-Mailer: PEPP-Admin\r\n"
-             . "Content-Type: multipart/mixed; boundary=\"{$bMix}\"";
-
-    $body  = "--{$bMix}\r\n";
-    $body .= "Content-Type: multipart/alternative; boundary=\"{$bAlt}\"\r\n\r\n";
-    $body .= "--{$bAlt}\r\n";
-    $body .= "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
-    $body .= $text . "\r\n\r\n";
-    $body .= "--{$bAlt}\r\n";
-    $body .= "Content-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
-    $body .= $html . "\r\n\r\n";
-    $body .= "--{$bAlt}--\r\n\r\n";
-    $body .= "--{$bMix}\r\n";
-    $body .= "Content-Type: application/pdf; name=\"{$fname}\"\r\n";
-    $body .= "Content-Transfer-Encoding: base64\r\n";
-    $body .= "Content-Disposition: attachment; filename=\"{$fname}\"\r\n\r\n";
-    $body .= chunk_split(base64_encode($pdfBytes)) . "\r\n";
-    $body .= "--{$bMix}--";
-
-    $subjectEnc = '=?UTF-8?B?' . base64_encode($subject) . '?=';
-    try {
-        return @mail($to, $subjectEnc, $body, $headers);
-    } catch (Exception $e) {
-        error_log('Invoice mail: ' . $e->getMessage());
-        return false;
-    }
+    require_once __DIR__ . '/includes/mailer.php';
+    return pepp_mail($to, $subject, $html, $text, $attachments, 'noreply@pepplearning.in', 'PEPP Learning Payments');
 }

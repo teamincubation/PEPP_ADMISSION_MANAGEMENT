@@ -113,9 +113,8 @@ function send_peppkit_email($student_name, $to_email, $status, $address_combined
             require_once __DIR__ . '/includes/peppian_notify.php';
             peppian_send_email($to_email, $subject, $heading, $body, false);
         } else {
-            $headers = "From: PEPP Learning <noreply@pepplearning.in>\r\nReply-To: noreply@pepplearning.in\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8";
-            $subject_encoded = '=?UTF-8?B?' . base64_encode($subject . ' | PEPP Learning') . '?=';
-            @mail($to_email, $subject_encoded, $body, $headers);
+            require_once __DIR__ . '/includes/mailer.php';
+            @pepp_mail($to_email, $subject, $body, '', [], 'noreply@pepplearning.in', 'PEPP Learning');
         }
     }
 }
