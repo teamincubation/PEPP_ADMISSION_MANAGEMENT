@@ -28,6 +28,7 @@ $GLOBALS['ADMIN_PAGES'] = [
     'whatsapp'      => ['WhatsApp Messages',       'fa-comment'],
     'invoices'      => ['Invoices',                'fa-file-invoice'],
     'communication' => ['Communication Engine',    'fa-network-wired'],
+    'email-reports' => ['Email Reports',           'fa-envelope-open-text'],
     'courses'       => ['Course Management',       'fa-book-open'],
     'faculties'     => ['Faculties',               'fa-chalkboard-user'],
     'sessions'      => ['Sessions',                'fa-video'],
@@ -276,7 +277,7 @@ function is_super_admin() {
 }
 function can_access($page_key) {
     global $admin_perms;
-    if ($page_key === 'communication') {
+    if ($page_key === 'communication' || $page_key === 'email-reports') {
         return is_super_admin();
     }
     if (is_super_admin()) return true;
@@ -306,6 +307,7 @@ function get_first_accessible_page_url() {
         'installments'  => 'phpinstalmentpaymentupdate.php',
         'invoices'      => 'invoices.php',
         'communication' => 'communication-dashboard.php',
+        'email-reports' => 'email-reports.php',
         'whatsapp'      => 'whatsapp-notification.php',
         'courses'       => 'course-management.php',
         'faculties'     => 'faculties.php',

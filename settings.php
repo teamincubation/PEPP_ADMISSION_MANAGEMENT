@@ -671,6 +671,7 @@ $sub_item_labels = [
     'settings' => 'Settings',
     'admin-management' => 'Admin Management',
     'admin-activity' => 'Activity Log',
+    'email-reports' => 'Email Reports',
     'reports' => 'Reports & Export'
 ];
 // Load sidebar auto-collapse setting

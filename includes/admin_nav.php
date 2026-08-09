@@ -223,6 +223,11 @@ function render_nav_item($key, $active_page, $nav_data) {
                 echo '<a class="nav-item ' . nav_active('reports', $active_page) . '" href="reports.php"><i class="fas fa-chart-pie"></i> Reports &amp; Export</a>';
             }
             break;
+        case 'email-reports':
+            if (is_super_admin()) {
+                echo '<a class="nav-item ' . nav_active('email-reports', $active_page) . '" href="email-reports.php"><i class="fas fa-envelope-open-text"></i> Email Reports</a>';
+            }
+            break;
     }
 }
 
@@ -274,7 +279,7 @@ $default_sidebar = [
         'id' => 'system',
         'title' => 'System',
         'icon' => 'fas fa-gears',
-        'items' => ['settings', 'admin-management', 'admin-activity', 'reports']
+        'items' => ['settings', 'admin-management', 'admin-activity', 'email-reports', 'reports']
     ]
 ];
 
