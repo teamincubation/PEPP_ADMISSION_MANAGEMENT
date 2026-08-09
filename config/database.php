@@ -12,6 +12,51 @@ define('DB_NAME', 'u361910773_peppadmin');
 define('DB_USER', 'u361910773_admindash');
 define('DB_PASS', 'PL@AdmInc2025#');
 
+if (isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true') {
+    try {
+        $pdo = new PDO("sqlite::memory:");
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $conn = $pdo;
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS admin_settings (
+                setting_name TEXT PRIMARY KEY,
+                setting_value TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS communication_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel TEXT,
+                recipient TEXT,
+                status TEXT,
+                retry_count INTEGER DEFAULT 0,
+                message_id TEXT,
+                error_message TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS communication_webhook_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT,
+                event_type TEXT,
+                payload TEXT,
+                processed INTEGER DEFAULT 0,
+                created_at TEXT,
+                processed_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS whatsapp_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phone TEXT,
+                status TEXT,
+                updated_at TEXT
+            );
+            INSERT OR REPLACE INTO admin_settings (setting_name, setting_value) VALUES ('whatsapp_webhook_verify_token', 'test_verify_token');
+            INSERT OR REPLACE INTO admin_settings (setting_name, setting_value) VALUES ('whatsapp_app_secret', 'test_app_secret');
+        ");
+        return;
+    } catch (Exception $e) {
+        die("Testing mock DB error: " . $e->getMessage());
+    }
+}
+
 try {
     $pdo = new PDO(
         "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4",

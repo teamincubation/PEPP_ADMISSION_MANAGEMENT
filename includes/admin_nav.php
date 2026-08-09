@@ -287,6 +287,21 @@ try {
     if ($config_json) {
         $decoded = json_decode($config_json, true);
         if (is_array($decoded) && !empty($decoded)) {
+            // Deduplicate sections by id to prevent duplicate rendering of categories
+            $unique_sections = [];
+            foreach ($decoded as $sec) {
+                $sid = $sec['id'] ?? '';
+                if ($sid && !isset($unique_sections[$sid])) {
+                    $unique_sections[$sid] = $sec;
+                } else if ($sid) {
+                    $unique_sections[$sid]['items'] = array_values(array_unique(array_merge(
+                        $unique_sections[$sid]['items'] ?? [],
+                        $sec['items'] ?? []
+                    )));
+                }
+            }
+            $decoded = array_values($unique_sections);
+
             // Keep category icons if not set in DB
             foreach ($decoded as &$dec_sec) {
                 if (empty($dec_sec['icon'])) {
@@ -316,12 +331,14 @@ try {
                         break;
                     }
                 }
-                if ($found_comm) {
-                    try {
-                        $save_stmt = $pdo->prepare("UPDATE admin_settings SET setting_value = ? WHERE setting_name = 'sidebar_menu_config'");
-                        $save_stmt->execute([json_encode($decoded)]);
-                    } catch (Exception $ex) {}
-                }
+            }
+
+            // Save the cleaned/deduplicated version back to database if it changed
+            if (json_encode($decoded) !== $config_json) {
+                try {
+                    $save_stmt = $pdo->prepare("UPDATE admin_settings SET setting_value = ? WHERE setting_name = 'sidebar_menu_config'");
+                    $save_stmt->execute([json_encode($decoded)]);
+                } catch (Exception $ex) {}
             }
 
             $sidebar_menu = $decoded;
