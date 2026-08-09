@@ -115,7 +115,11 @@ $sub_queries[] = "
 ";
 
 // 2. Communication Engine Queue (channel = 'email')
-$has_comm_table = (bool)$pdo->query("SHOW TABLES LIKE 'communication_queue'")->fetchColumn();
+$has_comm_table = false;
+try {
+    $has_comm_table = (bool)$pdo->query("SHOW TABLES LIKE 'communication_queue'")->fetchColumn();
+} catch (Throwable $e) {}
+
 if ($has_comm_table) {
     $sub_queries[] = "
         SELECT 
@@ -138,7 +142,13 @@ if ($has_comm_table) {
 }
 
 // 3. Invoice Email Dispatches
-$has_inv_col = (bool)$pdo->query("SHOW COLUMNS FROM invoices LIKE 'email_status'")->fetch();
+$has_inv_col = false;
+try {
+    $has_inv_table = (bool)$pdo->query("SHOW TABLES LIKE 'invoices'")->fetchColumn();
+    if ($has_inv_table) {
+        $has_inv_col = (bool)$pdo->query("SHOW COLUMNS FROM invoices LIKE 'email_status'")->fetch();
+    }
+} catch (Throwable $e) {}
 if ($has_inv_col) {
     $sub_queries[] = "
         SELECT 
