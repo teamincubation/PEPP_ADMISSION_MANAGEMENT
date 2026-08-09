@@ -120,12 +120,12 @@ function reminders_email($recipients, $r) {
     $text = "Reminder Due - PEPP Learning\n\n{$r['title']}\nScheduled: {$when}\n\n" . ($r['notes'] ?? '') . "\n\nOpen the admin console to manage this reminder.";
 
     $bAlt = 'alt_' . md5(uniqid('', true));
-    $headers = "From: PEPP Learning <noreply@pepplearning.in>\n"
-             . "Reply-To: noreply@pepplearning.in\n"
-             . "MIME-Version: 1.0\n"
+    $headers = "From: PEPP Learning <noreply@pepplearning.in>\r\n"
+             . "Reply-To: noreply@pepplearning.in\r\n"
+             . "MIME-Version: 1.0\r\n"
              . "Content-Type: multipart/alternative; boundary=\"{$bAlt}\"";
-    $body  = "--{$bAlt}\nContent-Type: text/plain; charset=UTF-8\nContent-Transfer-Encoding: 8bit\n\n" . $text . "\n\n";
-    $body .= "--{$bAlt}\nContent-Type: text/html; charset=UTF-8\nContent-Transfer-Encoding: 8bit\n\n" . $html . "\n\n";
-    $body .= "--{$bAlt}--";
-    try { @mail($to, $subject, $body, $headers, "-fnoreply@pepplearning.in"); } catch (Exception $e) { error_log('reminder mail: ' . $e->getMessage()); }
+     $body  = "--{$bAlt}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" . $text . "\r\n\r\n";
+     $body .= "--{$bAlt}\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" . $html . "\r\n\r\n";
+     $body .= "--{$bAlt}--";
+     try { @mail($to, $subject, $body, $headers); } catch (Exception $e) { error_log('reminder mail: ' . $e->getMessage()); }
 }

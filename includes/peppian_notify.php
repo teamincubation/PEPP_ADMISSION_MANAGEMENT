@@ -85,19 +85,18 @@ function peppian_send_email($to_email, $subject_text, $heading, $body_html, $cc_
 
     $text = strip_tags(str_replace(['<br>', '</p>', '</div>'], "\n", $heading . "\n\n" . $body_html));
     $bAlt = 'a' . md5(uniqid('', true));
-    $headers = "From: PEPP Learning <noreply@pepplearning.in>\nReply-To: noreply@pepplearning.in\n";
-    if ($cc_admin) $headers .= "Cc: " . PEPP_ADMIN_NOTIFY_EMAIL . "\n";
-    $headers .= "MIME-Version: 1.0\nContent-Type: multipart/alternative; boundary=\"$bAlt\"";
-    $body  = "--$bAlt\nContent-Type: text/plain; charset=UTF-8\n\n$text\n\n";
-    $body .= "--$bAlt\nContent-Type: text/html; charset=UTF-8\n\n$html\n\n--$bAlt--";
+    $headers = "From: PEPP Learning <noreply@pepplearning.in>\r\nReply-To: noreply@pepplearning.in\r\n";
+    if ($cc_admin) $headers .= "Cc: " . PEPP_ADMIN_NOTIFY_EMAIL . "\r\n";
+    $headers .= "MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"$bAlt\"";
+    $body  = "--$bAlt\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n$text\r\n\r\n";
+    $body .= "--$bAlt\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n$html\r\n\r\n--$bAlt--";
 
     try {
         if ($to_email) {
-            $headers = str_replace("\r\n", "\n", $headers);
-            @mail($to_email, $subject, $body, $headers, "-fnoreply@pepplearning.in");
+            @mail($to_email, $subject, $body, $headers);
         } else {
-            $headers_admin = "From: PEPP Learning <noreply@pepplearning.in>\nMIME-Version: 1.0\nContent-Type: text/html; charset=UTF-8";
-            @mail(PEPP_ADMIN_NOTIFY_EMAIL, $subject, $body, $headers_admin, "-fnoreply@pepplearning.in");
+            $headers_admin = "From: PEPP Learning <noreply@pepplearning.in>\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8";
+            @mail(PEPP_ADMIN_NOTIFY_EMAIL, $subject, $body, $headers_admin);
         }
     } catch (Exception $e) { error_log('peppian_send_email: ' . $e->getMessage()); }
 }
@@ -129,15 +128,14 @@ function peppian_send_email_general($to_email, $subject_text, $heading, $body_ht
 
     $text = strip_tags(str_replace(['<br>', '</p>', '</div>'], "\n", $heading . "\n\n" . $body_html));
     $bAlt = 'a' . md5(uniqid('', true));
-    $headers = "From: PEPP Learning <noreply@pepplearning.in>\nReply-To: noreply@pepplearning.in\n";
-    if ($cc_admin) $headers .= "Cc: " . PEPP_ADMIN_NOTIFY_EMAIL . "\n";
-    $headers .= "MIME-Version: 1.0\nContent-Type: multipart/alternative; boundary=\"$bAlt\"";
-    $body  = "--$bAlt\nContent-Type: text/plain; charset=UTF-8\n\n$text\n\n";
-    $body .= "--$bAlt\nContent-Type: text/html; charset=UTF-8\n\n$html\n\n--$bAlt--";
+    $headers = "From: PEPP Learning <noreply@pepplearning.in>\r\nReply-To: noreply@pepplearning.in\r\n";
+    if ($cc_admin) $headers .= "Cc: " . PEPP_ADMIN_NOTIFY_EMAIL . "\r\n";
+    $headers .= "MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"$bAlt\"";
+    $body  = "--$bAlt\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n$text\r\n\r\n";
+    $body .= "--$bAlt\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n$html\r\n\r\n--$bAlt--";
 
     try {
-        $headers = str_replace("\r\n", "\n", $headers);
-        return @mail($to_email, $subject, $body, $headers, "-fnoreply@pepplearning.in");
+        return @mail($to_email, $subject, $body, $headers);
     } catch (Exception $e) {
         error_log('peppian_send_email_general: ' . $e->getMessage());
         return false;
