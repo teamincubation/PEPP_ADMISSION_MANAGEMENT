@@ -5,14 +5,8 @@
  */
 
 require_once 'includes/auth.php';
-require_once 'config/database.php';
+require_permission('email-reports');
 require_once 'includes/email_campaigns_helper.php';
-
-// Strict Super Admin Access Enforcement
-if (!is_super_admin()) {
-    http_response_code(403);
-    die("<div style='color:#ef4444; font-family:sans-serif; text-align:center; margin-top:50px; padding:20px; border:1px solid #fca5a5; background:#fef2f2; border-radius:12px; max-width:500px; margin-left:auto; margin-right:auto;'><h3>Access Denied</h3><p>Email Dispatch Reports are restricted exclusively to Super Administrators.</p><a href='dashboard.php' style='display:inline-block; margin-top:10px; color:#7c3aed; font-weight:600;'>Return to Dashboard</a></div>");
-}
 
 check_and_create_email_campaign_tables($pdo);
 
