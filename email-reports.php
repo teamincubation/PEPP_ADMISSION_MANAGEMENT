@@ -145,14 +145,14 @@ if ($has_inv_col) {
             inv.id as unique_id,
             'invoices' as module_type,
             'Invoices & Billing' as module_label,
-            CONCAT('Invoice #', inv.invoice_number) as campaign_title,
+            CONCAT('Invoice #', COALESCE(inv.invoice_no, inv.id)) as campaign_title,
             inv.email as recipient_email,
             inv.student_name as recipient_name,
-            CONCAT('Invoice #', inv.invoice_number, ' - PEPP Learning') as subject,
+            CONCAT('Invoice #', COALESCE(inv.invoice_no, inv.id), ' - PEPP Learning') as subject,
             CONCAT('Invoice notification dispatched for ', inv.student_name) as body_preview,
             CASE WHEN inv.email_status = 'sent' THEN 'sent' WHEN inv.email_status = 'failed' THEN 'failed' ELSE 'pending' END as status,
             NULL as error_message,
-            COALESCE(inv.sent_date, inv.created_at) as dispatched_at,
+            COALESCE(inv.paid_date, inv.created_at) as dispatched_at,
             inv.created_at,
             COALESCE(inv.generated_by, 'System') as admin_username
         FROM invoices inv
