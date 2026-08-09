@@ -268,6 +268,7 @@ include 'includes/admin_nav.php';
                     </td>
                     <td style="text-align:right; white-space:nowrap;">
                         <a class="btn btn-sm btn-primary" href="invoice-pdf.php?id=<?php echo (int)$inv['id']; ?>" title="Download PDF"><i class="fas fa-file-pdf"></i> PDF</a>
+                        <!-- Resend email form with verified parameters -->
                         <form method="POST" style="display:inline;">
                             <?php echo csrf_field(); ?>
                             <input type="hidden" name="action" value="resend_email">
