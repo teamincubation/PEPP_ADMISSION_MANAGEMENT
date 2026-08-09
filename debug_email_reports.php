@@ -33,10 +33,12 @@ try {
     echo "FAILED: " . $e->getMessage() . "<br>";
 }
 
+require_once 'includes/invoice_helper.php';
+
 try {
-    echo "4. Checking invoices table... ";
-    $cnt4 = $pdo->query("SELECT COUNT(*) FROM invoices")->fetchColumn();
-    echo "OK ($cnt4 rows)<br>";
+    echo "4. Checking invoices table via invoices_table_exists()... ";
+    $cnt4 = invoices_table_exists($pdo) ? 'EXISTS' : 'DOES NOT EXIST';
+    echo "OK ($cnt4)<br>";
 } catch (Throwable $e) {
     echo "FAILED: " . $e->getMessage() . "<br>";
 }
