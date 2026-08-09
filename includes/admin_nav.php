@@ -300,6 +300,14 @@ try {
                     )));
                 }
             }
+
+            // Restore any missing default categories (self-healing database layout corruption)
+            foreach ($default_sidebar as $def_sec) {
+                $def_id = $def_sec['id'];
+                if (!isset($unique_sections[$def_id])) {
+                    $unique_sections[$def_id] = $def_sec;
+                }
+            }
             $decoded = array_values($unique_sections);
 
             // Keep category icons if not set in DB
