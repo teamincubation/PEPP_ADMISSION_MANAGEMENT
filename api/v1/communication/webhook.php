@@ -5,7 +5,7 @@
  * logs events, and synchronizes callbacks to the database messaging queue.
  */
 
-require_once dirname(dirname(dirname(dirname(__DIR__)))) . '/config/database.php';
+require_once dirname(dirname(dirname(__DIR__))) . '/config/database.php';
 
 // Fetch verification token and secrets
 $stmt = $pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%'");
@@ -35,9 +35,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $rawPayload = file_get_contents('php://input');
     
-    // Validate Signature
-    $headers = array_change_key_case(getallheaders(), CASE_LOWER);
-    $signatureHeader = $headers['x-hub-signature-256'] ?? '';
+    // Validate Signature (supporting Apache, LiteSpeed, Nginx CGI/FastCGI environments)
+    $signatureHeader = '';
+    if (function_exists('getallheaders')) {
+        $headers = array_change_key_case(getallheaders(), CASE_LOWER);
+        $signatureHeader = $headers['x-hub-signature-256'] ?? '';
+    }
+    if (!$signatureHeader) {
+        $signatureHeader = $_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? '';
+    }
 
     if ($appSecret && $signatureHeader) {
         $expected = 'sha256=' . hash_hmac('sha256', $rawPayload, $appSecret);
@@ -50,6 +56,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $payload = json_decode($rawPayload, true);
+    if (!is_array($payload)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid JSON payload']);
+        exit;
+    }
     
     // Log the incoming event
     try {
