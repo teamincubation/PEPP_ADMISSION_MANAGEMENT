@@ -298,6 +298,32 @@ try {
                     }
                 }
             }
+
+            // Self-healing check: Ensure 'communication' is present in layout items
+            $found_comm = false;
+            foreach ($decoded as $dec_sec) {
+                if (isset($dec_sec['items']) && is_array($dec_sec['items']) && in_array('communication', $dec_sec['items'], true)) {
+                    $found_comm = true;
+                    break;
+                }
+            }
+            if (!$found_comm) {
+                foreach ($decoded as &$dec_sec) {
+                    if (($dec_sec['id'] ?? '') === 'payments') {
+                        if (!is_array($dec_sec['items'])) $dec_sec['items'] = [];
+                        $dec_sec['items'][] = 'communication';
+                        $found_comm = true;
+                        break;
+                    }
+                }
+                if ($found_comm) {
+                    try {
+                        $save_stmt = $pdo->prepare("UPDATE admin_settings SET setting_value = ? WHERE setting_name = 'sidebar_menu_config'");
+                        $save_stmt->execute([json_encode($decoded)]);
+                    } catch (Exception $ex) {}
+                }
+            }
+
             $sidebar_menu = $decoded;
         }
     }

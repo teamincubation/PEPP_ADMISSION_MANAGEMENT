@@ -652,6 +652,7 @@ $sub_item_labels = [
     'email-campaigns' => 'Email Campaigns',
     'installments' => 'Installments',
     'invoices' => 'Invoices',
+    'communication' => 'Communication Engine',
     'whatsapp' => 'WhatsApp Messages',
     'courses' => 'Courses',
     'faculties' => 'Faculties',
