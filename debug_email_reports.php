@@ -13,7 +13,7 @@ try {
     echo "1. Checking email_queue table... ";
     $cnt1 = $pdo->query("SELECT COUNT(*) FROM email_queue")->fetchColumn();
     echo "OK ($cnt1 rows)<br>";
-} catch (Exception $e) {
+} catch (Throwable $e) {
     echo "FAILED: " . $e->getMessage() . "<br>";
 }
 
@@ -21,7 +21,7 @@ try {
     echo "2. Checking email_campaigns table... ";
     $cnt2 = $pdo->query("SELECT COUNT(*) FROM email_campaigns")->fetchColumn();
     echo "OK ($cnt2 rows)<br>";
-} catch (Exception $e) {
+} catch (Throwable $e) {
     echo "FAILED: " . $e->getMessage() . "<br>";
 }
 
@@ -29,7 +29,7 @@ try {
     echo "3. Checking communication_queue table... ";
     $cnt3 = $pdo->query("SELECT COUNT(*) FROM communication_queue")->fetchColumn();
     echo "OK ($cnt3 rows)<br>";
-} catch (Exception $e) {
+} catch (Throwable $e) {
     echo "FAILED: " . $e->getMessage() . "<br>";
 }
 
@@ -37,7 +37,7 @@ try {
     echo "4. Checking invoices table... ";
     $cnt4 = $pdo->query("SELECT COUNT(*) FROM invoices")->fetchColumn();
     echo "OK ($cnt4 rows)<br>";
-} catch (Exception $e) {
+} catch (Throwable $e) {
     echo "FAILED: " . $e->getMessage() . "<br>";
 }
 
@@ -61,7 +61,7 @@ try {
     LEFT JOIN email_campaigns ec ON eq.campaign_id = ec.id";
     $r1 = $pdo->query($sql1)->fetchAll();
     echo "OK (" . count($r1) . " rows)<br>";
-} catch (Exception $e) {
+} catch (Throwable $e) {
     echo "FAILED: " . $e->getMessage() . "<br>";
 }
 
@@ -85,7 +85,7 @@ try {
     WHERE cq.channel = 'email'";
     $r2 = $pdo->query($sql2)->fetchAll();
     echo "OK (" . count($r2) . " rows)<br>";
-} catch (Exception $e) {
+} catch (Throwable $e) {
     echo "FAILED: " . $e->getMessage() . "<br>";
 }
 
@@ -109,7 +109,7 @@ try {
     WHERE inv.email_status IS NOT NULL AND inv.email_status != ''";
     $r3 = $pdo->query($sql3)->fetchAll();
     echo "OK (" . count($r3) . " rows)<br>";
-} catch (Exception $e) {
+} catch (Throwable $e) {
     echo "FAILED: " . $e->getMessage() . "<br>";
 }
 
