@@ -5,7 +5,6 @@
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-require_once 'includes/auth.php';
 require_once 'config/database.php';
 
 echo "<h2>Email Reports Debug Trace</h2>";
