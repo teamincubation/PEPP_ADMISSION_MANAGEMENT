@@ -229,6 +229,7 @@ include 'includes/admin_nav.php';
     justify-content: center;
     box-sizing: border-box;
     white-space: nowrap;
+    transform-origin: center center;
 }
 .canvas-element.selected {
     outline: 2px dashed var(--accent);
@@ -248,9 +249,61 @@ include 'includes/admin_nav.php';
     justify-content: center;
     font-size: 0.65rem;
     cursor: pointer;
+    z-index: 101;
 }
 .canvas-element.selected .delete-handle {
     display: flex;
+}
+.canvas-element .resize-handle {
+    position: absolute;
+    width: 9px;
+    height: 9px;
+    background: #ffffff;
+    border: 2px solid var(--accent, #7c3aed);
+    border-radius: 50%;
+    z-index: 100;
+    display: none;
+    pointer-events: auto;
+}
+.canvas-element.selected .resize-handle {
+    display: block;
+}
+.canvas-element .resize-handle.nw { top: -5px; left: -5px; cursor: nwse-resize; }
+.canvas-element .resize-handle.n  { top: -5px; left: calc(50% - 5px); cursor: ns-resize; }
+.canvas-element .resize-handle.ne { top: -5px; right: -5px; cursor: nesw-resize; }
+.canvas-element .resize-handle.e  { top: calc(50% - 5px); right: -5px; cursor: ew-resize; }
+.canvas-element .resize-handle.se { bottom: -5px; right: -5px; cursor: nwse-resize; }
+.canvas-element .resize-handle.s  { bottom: -5px; left: calc(50% - 5px); cursor: ns-resize; }
+.canvas-element .resize-handle.sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
+.canvas-element .resize-handle.w  { top: calc(50% - 5px); left: -5px; cursor: ew-resize; }
+
+.canvas-element .rotate-line {
+    position: absolute;
+    top: -18px;
+    left: 50%;
+    width: 1.5px;
+    height: 18px;
+    background: var(--accent, #7c3aed);
+    z-index: 99;
+    display: none;
+}
+.canvas-element .rotate-handle {
+    position: absolute;
+    top: -26px;
+    left: calc(50% - 7px);
+    width: 12px;
+    height: 12px;
+    background: var(--accent, #7c3aed);
+    border: 2px solid #ffffff;
+    border-radius: 50%;
+    z-index: 100;
+    display: none;
+    cursor: grab;
+    pointer-events: auto;
+}
+.canvas-element.selected .rotate-line,
+.canvas-element.selected .rotate-handle {
+    display: block;
 }
 .layer-row {
     display: flex;
@@ -1249,6 +1302,34 @@ include 'includes/admin_nav.php';
             });
             div.appendChild(del);
             
+            // Add interactive rotation and 8 resize handles for selected element
+            if (activeId === el.id) {
+                var rLine = document.createElement('div');
+                rLine.className = 'rotate-line';
+                div.appendChild(rLine);
+
+                var rHandle = document.createElement('div');
+                rHandle.className = 'rotate-handle';
+                rHandle.title = 'Drag to rotate element';
+                rHandle.addEventListener('mousedown', function(e) {
+                    e.stopPropagation();
+                    rotateStart(e, div, el);
+                });
+                div.appendChild(rHandle);
+
+                ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].forEach(function(handleDir) {
+                    var h = document.createElement('div');
+                    h.className = 'resize-handle ' + handleDir;
+                    h.dataset.handle = handleDir;
+                    h.title = 'Drag to resize (' + handleDir.toUpperCase() + ')';
+                    h.addEventListener('mousedown', function(e) {
+                        e.stopPropagation();
+                        resizeStart(e, handleDir, div, el);
+                    });
+                    div.appendChild(h);
+                });
+            }
+            
             // Selection event
             div.addEventListener('mousedown', function(e) {
                 e.stopPropagation();
@@ -1554,6 +1635,140 @@ include 'includes/admin_nav.php';
         
         window.addEventListener('mousemove', dragMove);
         window.addEventListener('mouseup', dragEnd);
+    }
+
+    function resizeStart(e, dir, div, el) {
+        pushState();
+        var startX = e.clientX;
+        var startY = e.clientY;
+        
+        var initLeftPct = el.left;
+        var initTopPct = el.top;
+        var initWidthPct = el.width;
+        var initHeightPct = el.height;
+        var initFontSize = el.fontSize || 24;
+
+        var initLeftPx = (initLeftPct / 100) * bgW;
+        var initTopPx = (initTopPct / 100) * bgH;
+        var initWidthPx = (initWidthPct / 100) * bgW;
+        var initHeightPx = (initHeightPct / 100) * bgH;
+
+        var rotDeg = el.rotate || 0;
+        var rad = (rotDeg * Math.PI) / 180;
+
+        function resizeMove(ev) {
+            var dxScreen = ev.clientX - startX;
+            var dyScreen = ev.clientY - startY;
+            
+            var canvasElem = document.getElementById('editor-canvas');
+            var scale = 1;
+            if (canvasElem && canvasElem.style.transform) {
+                var match = canvasElem.style.transform.match(/scale\(([^)]+)\)/);
+                if (match) scale = parseFloat(match[1]) || 1;
+            }
+
+            var dxScaled = dxScreen / scale;
+            var dyScaled = dyScreen / scale;
+
+            var localDx = dxScaled * Math.cos(-rad) - dyScaled * Math.sin(-rad);
+            var localDy = dxScaled * Math.sin(-rad) + dyScaled * Math.cos(-rad);
+
+            var newWidthPx = initWidthPx;
+            var newHeightPx = initHeightPx;
+            var deltaXLocal = 0;
+            var deltaYLocal = 0;
+
+            if (dir.includes('e')) {
+                newWidthPx = Math.max(15, initWidthPx + localDx);
+            }
+            if (dir.includes('w')) {
+                newWidthPx = Math.max(15, initWidthPx - localDx);
+                deltaXLocal = initWidthPx - newWidthPx;
+            }
+            if (dir.includes('s')) {
+                newHeightPx = Math.max(15, initHeightPx + localDy);
+            }
+            if (dir.includes('n')) {
+                newHeightPx = Math.max(15, initHeightPx - localDy);
+                deltaYLocal = initHeightPx - newHeightPx;
+            }
+
+            var worldDeltaX = deltaXLocal * Math.cos(rad) - deltaYLocal * Math.sin(rad);
+            var worldDeltaY = deltaXLocal * Math.sin(rad) + deltaYLocal * Math.cos(rad);
+
+            var newLeftPx = initLeftPx + worldDeltaX;
+            var newTopPx = initTopPx + worldDeltaY;
+
+            var pctLeft = (newLeftPx / bgW) * 100;
+            var pctTop = (newTopPx / bgH) * 100;
+            var pctWidth = (newWidthPx / bgW) * 100;
+            var pctHeight = (newHeightPx / bgH) * 100;
+
+            el.left = parseFloat(pctLeft.toFixed(1));
+            el.top = parseFloat(pctTop.toFixed(1));
+            el.width = parseFloat(pctWidth.toFixed(1));
+            el.height = parseFloat(pctHeight.toFixed(1));
+
+            if (el.type === 'text' && ['nw', 'ne', 'sw', 'se'].includes(dir)) {
+                var scaleRatio = newWidthPx / initWidthPx;
+                el.fontSize = Math.max(8, Math.round(initFontSize * scaleRatio));
+                div.style.fontSize = el.fontSize + 'px';
+                var fontSizeInput = document.getElementById('prop-font-size');
+                if (fontSizeInput) fontSizeInput.value = el.fontSize;
+            }
+
+            div.style.left = el.left + '%';
+            div.style.top = el.top + '%';
+            div.style.width = el.width + '%';
+            div.style.height = el.height + '%';
+
+            var pW = document.getElementById('prop-width');  if (pW) pW.value = el.width;
+            var pH = document.getElementById('prop-height'); if (pH) pH.value = el.height;
+            var pL = document.getElementById('prop-left');   if (pL) pL.value = el.left;
+            var pT = document.getElementById('prop-top');    if (pT) pT.value = el.top;
+        }
+
+        function resizeEnd() {
+            window.removeEventListener('mousemove', resizeMove);
+            window.removeEventListener('mouseup', resizeEnd);
+            drawElements();
+            selectElement(el.id);
+        }
+
+        window.addEventListener('mousemove', resizeMove);
+        window.addEventListener('mouseup', resizeEnd);
+    }
+
+    function rotateStart(e, div, el) {
+        pushState();
+        var rect = div.getBoundingClientRect();
+        var cx = rect.left + rect.width / 2;
+        var cy = rect.top + rect.height / 2;
+
+        function rotateMove(ev) {
+            var dx = ev.clientX - cx;
+            var dy = ev.clientY - cy;
+            var rad = Math.atan2(dy, dx);
+            var deg = Math.round(rad * (180 / Math.PI) - 90);
+            
+            deg = ((deg + 180) % 360) - 180;
+            
+            el.rotate = deg;
+            div.style.transform = 'rotate(' + el.rotate + 'deg)';
+            
+            var pRot = document.getElementById('prop-rotate');
+            if (pRot) pRot.value = el.rotate;
+        }
+
+        function rotateEnd() {
+            window.removeEventListener('mousemove', rotateMove);
+            window.removeEventListener('mouseup', rotateEnd);
+            drawElements();
+            selectElement(el.id);
+        }
+
+        window.addEventListener('mousemove', rotateMove);
+        window.addEventListener('mouseup', rotateEnd);
     }
 
     function openCanvasResize() {
