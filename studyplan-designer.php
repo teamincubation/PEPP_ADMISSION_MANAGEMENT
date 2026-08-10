@@ -469,6 +469,19 @@ include 'includes/admin_nav.php';
             <!-- Tab Content: Settings -->
             <div id="tab-settings" class="designer-tab-content">
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div class="field full" style="margin-bottom: 8px;">
+                        <label style="font-weight: 700; display: block; margin-bottom: 6px;">Study Plan Status</label>
+                        <div style="display:inline-flex; background:#e2e8f0; padding:4px; border-radius:10px; gap:4px;">
+                            <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-weight:700; font-size:0.8rem; padding:6px 16px; border-radius:8px; margin:0; transition:all 0.2s;" id="label-status-draft">
+                                <input type="radio" name="plan_status" value="draft" id="status-draft" onchange="updateStatusToggle()" style="display:none;" <?php echo ($plan['status'] ?? 'draft') === 'draft' ? 'checked' : ''; ?>>
+                                <i class="fas fa-file-signature"></i> Draft
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-weight:700; font-size:0.8rem; padding:6px 16px; border-radius:8px; margin:0; transition:all 0.2s;" id="label-status-published">
+                                <input type="radio" name="plan_status" value="published" id="status-published" onchange="updateStatusToggle()" style="display:none;" <?php echo ($plan['status'] ?? '') === 'published' ? 'checked' : ''; ?>>
+                                <i class="fas fa-circle-check"></i> Publish
+                            </label>
+                        </div>
+                    </div>
                     <div class="field full">
                         <label>Study Plan Title <span class="req">*</span></label>
                         <input type="text" id="plan-title" value="<?php echo htmlspecialchars($plan['title'] ?? 'Psychology Exam Crack Plan'); ?>" oninput="updateLivePreview()">
@@ -776,6 +789,24 @@ include 'includes/admin_nav.php';
         <?php endforeach; ?>
     };
 
+    function updateStatusToggle() {
+        var isDraft = document.getElementById('status-draft').checked;
+        var lblDraft = document.getElementById('label-status-draft');
+        var lblPublished = document.getElementById('label-status-published');
+        
+        if (isDraft) {
+            lblDraft.style.background = '#64748b';
+            lblDraft.style.color = '#ffffff';
+            lblPublished.style.background = 'transparent';
+            lblPublished.style.color = '#64748b';
+        } else {
+            lblDraft.style.background = 'transparent';
+            lblDraft.style.color = '#64748b';
+            lblPublished.style.background = '#10b981';
+            lblPublished.style.color = '#ffffff';
+        }
+    }
+
     function populateChapterDatalist() {
         var selectedCourseIds = [];
         document.querySelectorAll('input[name="access_courses[]"]:checked').forEach(function(el) {
@@ -814,10 +845,19 @@ include 'includes/admin_nav.php';
             } else {
                 document.getElementById('type-date-wise').checked = true;
             }
+
+            // Set status state
+            var pStatus = "<?php echo $plan['status'] ?? 'draft'; ?>";
+            if (pStatus === 'published') {
+                document.getElementById('status-published').checked = true;
+            } else {
+                document.getElementById('status-draft').checked = true;
+            }
         }
         
         togglePlanTypeView();
         populateChapterDatalist();
+        updateStatusToggle();
         
         // Bind change listeners to detect unsaved settings changes
         ['plan-title', 'plan-desc', 'plan-quote'].forEach(id => {
@@ -827,6 +867,14 @@ include 'includes/admin_nav.php';
         ['plan-year', 'plan-course', 'plan-theme', 'plan-layout', 'plan-template', 'plan-start', 'plan-end'].forEach(id => {
             var el = document.getElementById(id);
             if (el) el.addEventListener('change', markUnsavedChanges);
+        });
+
+        // Bind status radio buttons to detect unsaved settings changes
+        document.querySelectorAll('input[name="plan_status"]').forEach(r => {
+            r.addEventListener('change', function() {
+                markUnsavedChanges();
+                updateStatusToggle();
+            });
         });
 
         // Bind access courses change listeners to update chapters and mark unsaved
@@ -1304,7 +1352,7 @@ include 'includes/admin_nav.php';
             start_date: startInput,
             end_date: endInput,
             is_template: document.getElementById('plan-template').checked ? 1 : 0,
-            status: studyPlanId > 0 ? 'published' : 'draft', // defaults
+            status: document.getElementById('status-published').checked ? 'published' : 'draft',
             assignments: assignments,
             custom_settings: {
                 quote: document.getElementById('plan-quote').value
