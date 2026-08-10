@@ -614,26 +614,6 @@ include 'includes/admin_nav.php';
 <script>
 function switchEntryTab(mode) {
     document.getElementById('entry-mode-input').value = mode;
-    document.querySelectorAll('.tab-toggle-btn').forEach(btn => {
-        btn.classList.remove('active');
-        btn.style.borderBottom = '3px solid transparent';
-        btn.style.color = '#64748b';
-    });
-    if (mode === 'manual') {
-        document.getElementById('tab-btn-manual').classList.add('active');
-        document.getElementById('tab-btn-manual').style.borderBottom = '3px solid var(--accent)';
-        document.getElementById('tab-btn-manual').style.color = 'var(--accent)';
-        document.getElementById('panel-manual').style.display = 'block';
-        document.getElementById('panel-csv').style.display = 'none';
-    } else {
-        document.getElementById('tab-btn-csv').classList.add('active');
-        document.getElementById('tab-btn-csv').style.borderBottom = '3px solid var(--accent)';
-        document.getElementById('tab-btn-csv').style.color = 'var(--accent)';
-        document.getElementById('panel-manual').style.display = 'none';
-        document.getElementById('panel-csv').style.display = 'block';
-    }
-function switchEntryTab(mode) {
-    document.getElementById('entry-mode-input').value = mode;
     document.querySelectorAll('.tab-switcher button').forEach(btn => btn.classList.remove('active'));
     
     if (mode === 'manual') {
