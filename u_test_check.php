@@ -1,10 +1,11 @@
 <?php
 require_once 'config/database.php';
 try {
-    $stmt = $pdo->query("SELECT id, username, full_name, role, status FROM admins");
-    $rows = $stmt->fetchAll();
-    header('Content-Type: application/json');
-    echo json_encode($rows, JSON_PRETTY_PRINT);
+    $stmt = $pdo->prepare("SELECT password_hash FROM admins WHERE username = 'superadmin'");
+    $stmt->execute();
+    $hash = $stmt->fetchColumn();
+    header('Content-Type: text/plain');
+    echo "Match default: " . (password_verify('admin123@pepp', $hash) ? 'YES' : 'NO') . "\n";
 } catch (Exception $e) {
-    echo json_encode(['error' => $e->getMessage()]);
+    echo "Error: " . $e->getMessage();
 }
