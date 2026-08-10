@@ -8,11 +8,12 @@ if (isset($_GET['download_sample_csv'])) {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="sample_study_plan_chapters.csv"');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['chapter_name', 'chapter_code', 'subject_name', 'description']);
-    fputcsv($out, ['Introduction to Psychology', 'CH-01', 'Psychology', 'Foundational concepts, history, and major schools of thought']);
-    fputcsv($out, ['Cognitive Neuroscience & Brain', 'CH-02', 'Neuroscience', 'Neural structures, perception, and cognitive processes']);
-    fputcsv($out, ['Memory Systems & Learning', 'CH-03', 'Cognitive Psychology', 'Encoding, storage, retrieval, and learning theories']);
-    fputcsv($out, ['Clinical Diagnosis & DSM-5', 'CH-04', 'Clinical Psychology', 'Diagnostic criteria, classification systems, and assessment']);
+    fputcsv($out, ['chapter_name']);
+    fputcsv($out, ['Introduction to Psychology']);
+    fputcsv($out, ['Cognitive Neuroscience & Brain']);
+    fputcsv($out, ['Memory Systems & Learning']);
+    fputcsv($out, ['Clinical Diagnosis & Assessment']);
+    fputcsv($out, ['Developmental Psychology']);
     fclose($out);
     exit;
 }
@@ -43,7 +44,7 @@ try {
     $error_msg = 'Error loading courses: ' . $e->getMessage();
 }
 
-// ── Form Actions: Delete Single / Bulk Delete ──
+// ── Form Actions: Delete Single / Bulk Delete / Save Chapters ──
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if (!csrf_verify()) {
         $error_msg = 'CSRF verification failed. Please try again.';
@@ -80,11 +81,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         $header = fgetcsv($handle, 1000, ",");
                         while (($data = fgetcsv($handle, 1000, ",")) !== FALSE) {
                             if (count($data) >= 1 && !empty(trim($data[0]))) {
+                                $c_name = trim($data[0]);
+                                // Check if second column is provided as code, else auto
+                                $c_code = (count($data) >= 2 && !empty(trim($data[1]))) ? trim($data[1]) : '';
                                 $chapters_to_insert[] = [
-                                    'chapter_name' => trim($data[0]),
-                                    'chapter_code' => trim($data[1] ?? ''),
-                                    'subject_name' => trim($data[2] ?? ''),
-                                    'description'  => trim($data[3] ?? '')
+                                    'chapter_name' => $c_name,
+                                    'chapter_code' => $c_code
                                 ];
                             }
                         }
@@ -96,17 +98,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     // Manual entry mode
                     $names = $_POST['chap_name'] ?? [];
                     $codes = $_POST['chap_code'] ?? [];
-                    $subs  = $_POST['chap_subject'] ?? [];
-                    $descs = $_POST['chap_desc'] ?? [];
 
                     foreach ($names as $idx => $raw_name) {
                         $name = trim($raw_name);
                         if (!empty($name)) {
                             $chapters_to_insert[] = [
                                 'chapter_name' => $name,
-                                'chapter_code' => trim($codes[$idx] ?? ''),
-                                'subject_name' => trim($subs[$idx] ?? ''),
-                                'description'  => trim($descs[$idx] ?? '')
+                                'chapter_code' => trim($codes[$idx] ?? '')
                             ];
                         }
                     }
@@ -118,7 +116,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     } else {
                         $inserted_count = 0;
                         $stmt_check = $pdo->prepare("SELECT id FROM study_plan_chapters WHERE academic_year = ? AND course_id = ? AND chapter_name = ?");
-                        $stmt_ins = $pdo->prepare("INSERT INTO study_plan_chapters (academic_year, course_id, chapter_name, chapter_code, subject_name, description, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                        $stmt_count = $pdo->prepare("SELECT COUNT(*) FROM study_plan_chapters WHERE academic_year = ? AND course_id = ?");
+                        $stmt_ins = $pdo->prepare("INSERT INTO study_plan_chapters (academic_year, course_id, chapter_name, chapter_code, created_by) VALUES (?, ?, ?, ?, ?)");
 
                         $admin_user = $_SESSION['admin_username'] ?? 'System';
 
@@ -126,16 +125,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             $cid = (int)$cid_raw;
                             if ($cid <= 0) continue;
 
+                            // Get current total chapters for course to auto-generate codes CH-01, CH-02...
+                            $stmt_count->execute([$acad_year, $cid]);
+                            $curr_count = (int)$stmt_count->fetchColumn();
+
                             foreach ($chapters_to_insert as $chap) {
                                 $stmt_check->execute([$acad_year, $cid, $chap['chapter_name']]);
                                 if (!$stmt_check->fetch()) {
+                                    $curr_count++;
+                                    $final_code = !empty($chap['chapter_code']) ? $chap['chapter_code'] : ('CH-' . str_pad($curr_count, 2, '0', STR_PAD_LEFT));
+
                                     $stmt_ins->execute([
                                         $acad_year,
                                         $cid,
                                         $chap['chapter_name'],
-                                        $chap['chapter_code'],
-                                        $chap['subject_name'],
-                                        $chap['description'],
+                                        $final_code,
                                         $admin_user
                                     ]);
                                     $inserted_count++;
@@ -484,26 +488,20 @@ include 'includes/admin_nav.php';
                     <table class="modern-entry-table" id="manual-chapters-table">
                         <thead>
                             <tr>
-                                <th style="width:32%;">Chapter Name <span style="color:#ef4444;">*</span></th>
-                                <th style="width:15%;">Code / No.</th>
-                                <th style="width:20%;">Subject</th>
-                                <th style="width:28%;">Description / Details</th>
-                                <th style="width:5%; text-align:center;">Action</th>
+                                <th style="width:18%;">Auto Code</th>
+                                <th style="width:72%;">Chapter Name <span style="color:#ef4444;">*</span></th>
+                                <th style="width:10%; text-align:center;">Action</th>
                             </tr>
                         </thead>
                         <tbody id="manual-rows-body">
                             <tr>
-                                <td><input type="text" name="chap_name[]" class="modern-input" style="height:38px;" placeholder="e.g. Cognitive Psychology" required></td>
-                                <td><input type="text" name="chap_code[]" class="modern-input" style="height:38px;" placeholder="e.g. CH-01"></td>
-                                <td><input type="text" name="chap_subject[]" class="modern-input" style="height:38px;" placeholder="e.g. Psychology"></td>
-                                <td><input type="text" name="chap_desc[]" class="modern-input" style="height:38px;" placeholder="Overview notes..."></td>
+                                <td style="vertical-align:middle;"><span class="badge row-code-badge" style="background:#f1f5f9; color:#64748b; font-weight:700; border:1px solid #cbd5e1; font-size:0.78rem; padding:6px 10px; border-radius:6px;">Auto (CH-01)</span></td>
+                                <td><input type="text" name="chap_name[]" class="modern-input" style="height:38px;" placeholder="e.g. Introduction to Cognitive Psychology" required></td>
                                 <td style="text-align:center;"><button type="button" class="btn btn-xs btn-soft-red" style="border-radius:8px; padding:6px 10px;" onclick="removeChapterRow(this)"><i class="fas fa-trash"></i></button></td>
                             </tr>
                             <tr>
-                                <td><input type="text" name="chap_name[]" class="modern-input" style="height:38px;" placeholder="e.g. Neurobiology & Memory" required></td>
-                                <td><input type="text" name="chap_code[]" class="modern-input" style="height:38px;" placeholder="e.g. CH-02"></td>
-                                <td><input type="text" name="chap_subject[]" class="modern-input" style="height:38px;" placeholder="e.g. Neuroscience"></td>
-                                <td><input type="text" name="chap_desc[]" class="modern-input" style="height:38px;" placeholder="Overview notes..."></td>
+                                <td style="vertical-align:middle;"><span class="badge row-code-badge" style="background:#f1f5f9; color:#64748b; font-weight:700; border:1px solid #cbd5e1; font-size:0.78rem; padding:6px 10px; border-radius:6px;">Auto (CH-02)</span></td>
+                                <td><input type="text" name="chap_name[]" class="modern-input" style="height:38px;" placeholder="e.g. Neurobiology & Brain Structures" required></td>
                                 <td style="text-align:center;"><button type="button" class="btn btn-xs btn-soft-red" style="border-radius:8px; padding:6px 10px;" onclick="removeChapterRow(this)"><i class="fas fa-trash"></i></button></td>
                             </tr>
                         </tbody>
@@ -520,7 +518,7 @@ include 'includes/admin_nav.php';
                     <i class="fas fa-cloud-arrow-up"></i>
                 </div>
                 <h4 style="font-size:1.05rem; font-weight:800; color:#0f172a; margin:0 0 6px 0;">Upload Chapters CSV File</h4>
-                <p style="font-size:0.83rem; color:#64748b; margin-bottom:1.25rem;">Ensure CSV file contains headers: <code>chapter_name, chapter_code, subject_name, description</code>.</p>
+                <p style="font-size:0.83rem; color:#64748b; margin-bottom:1.25rem;">Ensure CSV file contains single column header: <code>chapter_name</code>. Chapter codes will be auto-generated sequentially!</p>
                 <input type="file" name="csv_file" accept=".csv" class="modern-input" style="max-width:340px; margin:0 auto 12px auto; display:block; padding:6px 12px; height:auto;">
                 <a href="studyplan-chapters.php?download_sample_csv=1" style="font-size:0.82rem; color:#8b5cf6; font-weight:700; text-decoration:none;"><i class="fas fa-download"></i> Download Sample CSV Template</a>
             </div>
@@ -581,10 +579,9 @@ include 'includes/admin_nav.php';
                     <thead>
                         <tr>
                             <th style="width:35px;"><input type="checkbox" onclick="toggleAllTableCbs(this)"></th>
-                            <th>Chapter Code</th>
+                            <th style="width:120px;">Chapter Code</th>
                             <th>Chapter Name</th>
                             <th>Course Name</th>
-                            <th>Subject</th>
                             <th>Academic Year</th>
                             <th style="text-align:right;">Actions</th>
                         </tr>
@@ -593,15 +590,9 @@ include 'includes/admin_nav.php';
                         <?php foreach ($existing_chapters as $ch): ?>
                             <tr>
                                 <td><input type="checkbox" name="chapter_ids[]" value="<?php echo $ch['id']; ?>" class="table-cb"></td>
-                                <td><span class="badge" style="background:#f1f5f9; color:#475569; font-weight:700; border:1px solid #cbd5e1; font-size:0.75rem; padding:4px 8px; border-radius:6px;"><?php echo htmlspecialchars($ch['chapter_code'] ?: '-'); ?></span></td>
-                                <td>
-                                    <strong style="color:#0f172a; font-size:0.9rem;"><?php echo htmlspecialchars($ch['chapter_name']); ?></strong>
-                                    <?php if ($ch['description']): ?>
-                                        <div style="font-size:0.76rem; color:#64748b; margin-top:2px;"><?php echo htmlspecialchars($ch['description']); ?></div>
-                                    <?php endif; ?>
-                                </td>
+                                <td><span class="badge" style="background:#f1f5f9; color:#475569; font-weight:700; border:1px solid #cbd5e1; font-size:0.78rem; padding:4px 10px; border-radius:6px;"><?php echo htmlspecialchars($ch['chapter_code'] ?: '-'); ?></span></td>
+                                <td><strong style="color:#0f172a; font-size:0.92rem;"><?php echo htmlspecialchars($ch['chapter_name']); ?></strong></td>
                                 <td><strong style="color:#334155;"><?php echo htmlspecialchars($ch['course_name'] ?: 'Course #' . $ch['course_id']); ?></strong></td>
-                                <td><span style="font-size:0.83rem; color:#475569; font-weight:500;"><?php echo htmlspecialchars($ch['subject_name'] ?: '-'); ?></span></td>
                                 <td><span class="badge badge-info" style="font-size:0.75rem; font-weight:700; padding:4px 8px; border-radius:6px;"><?php echo htmlspecialchars($ch['academic_year']); ?></span></td>
                                 <td style="text-align:right;">
                                     <form method="POST" style="display:inline-block;" onsubmit="return confirm('Delete this chapter?')">
@@ -688,21 +679,35 @@ function filterCourseCheckboxes(q) {
     });
 }
 
+function updateRowBadges() {
+    var rows = document.querySelectorAll('#manual-rows-body tr');
+    rows.forEach((tr, index) => {
+        var num = (index + 1).toString().padStart(2, '0');
+        var badge = tr.querySelector('.row-code-badge');
+        if (badge) {
+            badge.textContent = 'Auto (CH-' + num + ')';
+        }
+    });
+}
+
 function addChapterRow() {
     var tbody = document.getElementById('manual-rows-body');
+    var nextCount = tbody.children.length + 1;
+    var numStr = nextCount.toString().padStart(2, '0');
+    
     var tr = document.createElement('tr');
-    tr.innerHTML = '<td><input type="text" name="chap_name[]" class="modern-input" style="height:38px;" placeholder="e.g. Chapter Name" required></td>' +
-                   '<td><input type="text" name="chap_code[]" class="modern-input" style="height:38px;" placeholder="e.g. CH-03"></td>' +
-                   '<td><input type="text" name="chap_subject[]" class="modern-input" style="height:38px;" placeholder="e.g. Subject"></td>' +
-                   '<td><input type="text" name="chap_desc[]" class="modern-input" style="height:38px;" placeholder="Overview notes..."></td>' +
+    tr.innerHTML = '<td style="vertical-align:middle;"><span class="badge row-code-badge" style="background:#f1f5f9; color:#64748b; font-weight:700; border:1px solid #cbd5e1; font-size:0.78rem; padding:6px 10px; border-radius:6px;">Auto (CH-' + numStr + ')</span></td>' +
+                   '<td><input type="text" name="chap_name[]" class="modern-input" style="height:38px;" placeholder="e.g. Chapter Name" required></td>' +
                    '<td style="text-align:center;"><button type="button" class="btn btn-xs btn-soft-red" style="border-radius:8px; padding:6px 10px;" onclick="removeChapterRow(this)"><i class="fas fa-trash"></i></button></td>';
     tbody.appendChild(tr);
+    updateRowBadges();
 }
 
 function removeChapterRow(btn) {
     var tbody = document.getElementById('manual-rows-body');
     if (tbody.children.length > 1) {
         btn.closest('tr').remove();
+        updateRowBadges();
     } else {
         alert('At least one chapter row must remain.');
     }
