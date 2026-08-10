@@ -401,6 +401,23 @@ try {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `study_plan_chapters` (
+              `id` INT AUTO_INCREMENT PRIMARY KEY,
+              `academic_year` VARCHAR(50) NOT NULL,
+              `course_id` INT NOT NULL,
+              `chapter_name` VARCHAR(255) NOT NULL,
+              `chapter_code` VARCHAR(50) DEFAULT NULL,
+              `subject_name` VARCHAR(255) DEFAULT NULL,
+              `description` TEXT DEFAULT NULL,
+              `created_by` VARCHAR(100) DEFAULT 'System',
+              `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+              `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              KEY `idx_spc_acad_course` (`academic_year`, `course_id`),
+              KEY `idx_spc_course` (`course_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
         try {
             $pdo->exec("ALTER TABLE study_plan_assignments MODIFY COLUMN assignment_type ENUM('all','course','batch','student','form') NOT NULL");
         } catch (Exception $e) {}

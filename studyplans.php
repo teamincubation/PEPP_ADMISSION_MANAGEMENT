@@ -105,7 +105,10 @@ include 'includes/admin_nav.php';
         <a href="studyplans.php" class="btn btn-outline">Reset</a>
     </form>
     
-    <a href="studyplan-designer.php" class="btn btn-primary"><i class="fas fa-plus"></i> Create Study Plan</a>
+    <div style="display:flex; gap:10px; align-items:center;">
+        <a href="studyplan-chapters.php" class="btn btn-outline" style="border-color:#8b5cf6; color:#8b5cf6; background:#f5f3ff;"><i class="fas fa-book-bookmark"></i> Add Chapters</a>
+        <a href="studyplan-designer.php" class="btn btn-primary"><i class="fas fa-plus"></i> Create Study Plan</a>
+    </div>
 </div>
 
 <!-- Main Table List of Study Plans -->

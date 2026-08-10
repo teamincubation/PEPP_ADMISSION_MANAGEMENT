@@ -68,6 +68,17 @@ foreach ($custom_types as $ct) {
     $all_types[$ct['name']] = ['icon' => $ct['icon'], 'color' => $ct['color'], 'badge' => $ct['badge'] ?: $ct['name']];
 }
 
+// Fetch pre-set chapters for datalist suggestion
+$preset_chapters = [];
+try {
+    $preset_chapters = $pdo->query("
+        SELECT spc.*, pc.course_name 
+        FROM study_plan_chapters spc
+        LEFT JOIN pepp_courses pc ON spc.course_id = pc.id
+        ORDER BY spc.chapter_code ASC, spc.chapter_name ASC
+    ")->fetchAll();
+} catch (Exception $e) {}
+
 $page_title = $plan_id > 0 ? "Visual Study Plan Designer" : "Create Study Plan";
 $page_sub = "Visually design, schedule, theme, and assign study plans with real-time preview";
 $active_page = 'studyplans';
@@ -686,7 +697,14 @@ include 'includes/admin_nav.php';
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
                 <div class="field">
                     <label>Chapter</label>
-                    <input type="text" id="act-chapter" placeholder="e.g. Cognitive Psychology">
+                    <input type="text" id="act-chapter" list="preset-chapters-list" placeholder="Select pre-set chapter or type new..." autocomplete="off">
+                    <datalist id="preset-chapters-list">
+                        <?php foreach ($preset_chapters as $pc): ?>
+                            <option value="<?php echo htmlspecialchars($pc['chapter_name']); ?>">
+                                <?php echo htmlspecialchars(($pc['chapter_code'] ? '[' . $pc['chapter_code'] . '] ' : '') . $pc['chapter_name'] . ($pc['course_name'] ? ' (' . $pc['course_name'] . ')' : '')); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </datalist>
                 </div>
                 <div class="field">
                     <label>Subject</label>
