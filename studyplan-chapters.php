@@ -417,7 +417,7 @@ include 'includes/admin_nav.php';
     </div>
 
     <form method="POST" enctype="multipart/form-data">
-        <?php csrf_field(); ?>
+        <?php echo csrf_field(); ?>
         <input type="hidden" name="action" value="save_chapters">
 
         <!-- Step 1: Academic Year & Target Courses -->
@@ -567,7 +567,7 @@ include 'includes/admin_nav.php';
         </div>
     <?php else: ?>
         <form method="POST" id="bulk-delete-form">
-            <?php csrf_field(); ?>
+            <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="bulk_delete">
             
             <div style="margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
@@ -596,7 +596,7 @@ include 'includes/admin_nav.php';
                                 <td><span class="badge badge-info" style="font-size:0.75rem; font-weight:700; padding:4px 8px; border-radius:6px;"><?php echo htmlspecialchars($ch['academic_year']); ?></span></td>
                                 <td style="text-align:right;">
                                     <form method="POST" style="display:inline-block;" onsubmit="return confirm('Delete this chapter?')">
-                                        <?php csrf_field(); ?>
+                                        <?php echo csrf_field(); ?>
                                         <input type="hidden" name="action" value="delete_chapter">
                                         <input type="hidden" name="chapter_id" value="<?php echo $ch['id']; ?>">
                                         <button type="submit" class="btn btn-soft-red btn-xs" style="border-radius:6px;" title="Delete chapter"><i class="fas fa-trash"></i></button>
