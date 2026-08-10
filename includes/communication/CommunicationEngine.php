@@ -187,6 +187,30 @@ class CommunicationEngine {
             $attachments = $item['attachments'] ? json_decode($item['attachments'], true) : [];
             $templateData = $item['template_data'] ? json_decode($item['template_data'], true) : [];
 
+            // Template status and parameters validation before sending
+            if ($channel === 'whatsapp' && !empty($item['template_name'])) {
+                $stmtTpl = $this->pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
+                $stmtTpl->execute([$item['template_name']]);
+                $template = $stmtTpl->fetch();
+                if (!$template) {
+                    throw new Exception("Template '{$item['template_name']}' not found in database.");
+                }
+                if (strtolower($template['status']) !== 'approved') {
+                    throw new Exception("Template '{$item['template_name']}' status is '{$template['status']}' (not approved). Dispatch cancelled.");
+                }
+                
+                // Count placeholders in template BODY
+                $meta = json_decode($template['meta_data'], true) ?: [];
+                $bodyTpl = $meta['body_text'] ?? '';
+                preg_match_all('/\{\{(\d+)\}\}/', $bodyTpl, $matches);
+                $expectedParamsCount = !empty($matches[1]) ? max(array_map('intval', $matches[1])) : 0;
+                
+                $providedParams = $templateData['parameters'] ?? [];
+                if (count($providedParams) < $expectedParamsCount) {
+                    throw new Exception("Parameter count mismatch: Template expects {$expectedParamsCount} parameters, only " . count($providedParams) . " provided.");
+                }
+            }
+
             $provider = $this->getProvider($channel);
             $res = $provider->sendMessage($recipient, $subject, $bodyHtml, $bodyText, $attachments, $templateData);
 
@@ -253,6 +277,139 @@ class CommunicationEngine {
 
             error_log("Communication Queue Dispatch Failed for ID {$queueId}: {$errMsg}");
             return false;
+        }
+    }
+
+    /**
+     * Resolves mapped parameters for a given event, student ID, and custom context data.
+     *
+     * @param string $eventName
+     * @param string|null $studentUid
+     * @param array $contextData
+     * @return array|null Array containing 'name', 'language', and 'parameters', or null if not mapped
+     */
+    public function resolveEventTemplate($eventName, $studentUid = null, array $contextData = []) {
+        $stmt = $this->pdo->prepare("SELECT * FROM communication_event_mappings WHERE event_name = ? LIMIT 1");
+        $stmt->execute([$eventName]);
+        $mapping = $stmt->fetch();
+        
+        if (!$mapping || empty($mapping['template_name'])) {
+            return null; // Event not mapped or mapping is disabled
+        }
+        
+        $templateName = $mapping['template_name'];
+        
+        $stmtTpl = $this->pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
+        $stmtTpl->execute([$templateName]);
+        $template = $stmtTpl->fetch();
+        
+        if (!$template) {
+            throw new Exception("Mapped template '{$templateName}' not found in database.");
+        }
+        
+        if (strtolower($template['status']) !== 'approved') {
+            throw new Exception("Mapped template '{$templateName}' status is '{$template['status']}' (not approved).");
+        }
+        
+        $langCode = $template['language'] ?? 'en';
+        
+        // Fetch student details from ERP if studentUid is provided
+        $student = null;
+        if ($studentUid) {
+            $stmtStud = $this->pdo->prepare("SELECT * FROM users WHERE user_id = ? LIMIT 1");
+            $stmtStud->execute([$studentUid]);
+            $student = $stmtStud->fetch();
+        }
+        
+        $parameterMappings = json_decode($mapping['parameter_mappings'], true) ?: [];
+        $resolvedParameters = [];
+        
+        // Sort keys numerically to match template parameter indexes (e.g. 1, 2, 3...)
+        ksort($parameterMappings);
+        
+        foreach ($parameterMappings as $idx => $mapInfo) {
+            $type = $mapInfo['type'] ?? 'variable';
+            $val = $mapInfo['value'] ?? '';
+            
+            if ($type === 'custom') {
+                $resolvedParameters[] = $val;
+            } else {
+                $resolvedVal = '';
+                if (isset($contextData[$val])) {
+                    $resolvedVal = $contextData[$val];
+                } elseif ($student) {
+                    if ($val === 'student_name') {
+                        $resolvedVal = $student['name'] ?? '';
+                    } elseif ($val === 'application_id') {
+                        $resolvedVal = $student['user_id'] ?? '';
+                    } elseif ($val === 'course_name') {
+                        $resolvedVal = $student['pepp_course'] ?? '';
+                    } elseif ($val === 'student_phone') {
+                        $resolvedVal = ($student['whatsapp_country_code'] ?? '') . ($student['whatsapp_number'] ?? '');
+                    } elseif ($val === 'student_email') {
+                        $resolvedVal = $student['email'] ?? '';
+                    }
+                }
+                
+                // Fallbacks
+                if ($resolvedVal === '') {
+                    if ($val === 'current_datetime') {
+                        $resolvedVal = date('d M Y h:i A');
+                    }
+                }
+                
+                $resolvedParameters[] = $resolvedVal;
+            }
+        }
+        
+        return [
+            'name' => $templateName,
+            'language' => $langCode,
+            'parameters' => $resolvedParameters
+        ];
+    }
+
+    /**
+     * Resolves event mapping and queues the resolved WhatsApp template message.
+     *
+     * @param string $eventName
+     * @param string $recipient Phone number
+     * @param array $contextData Variable values or context e.g. ['student_uid' => '123', 'payment_amount' => 500]
+     * @param string $sentBy Admin user triggering the event
+     * @param string|null $scheduledAt
+     * @return int|null Queue ID, or null if mapping is disabled/not found
+     */
+    public function sendEventNotification($eventName, $recipient, array $contextData = [], $sentBy = 'system', $scheduledAt = null) {
+        $studentUid = $contextData['student_uid'] ?? null;
+        
+        try {
+            $resolved = $this->resolveEventTemplate($eventName, $studentUid, $contextData);
+            if (!$resolved) {
+                return null;
+            }
+            
+            // Build simple fallback text representation
+            $bodyText = "WhatsApp Template: " . $resolved['name'] . "\nParameters:\n";
+            foreach ($resolved['parameters'] as $i => $p) {
+                $bodyText .= "Param " . ($i + 1) . ": " . $p . "\n";
+            }
+            
+            return $this->queueMessage(
+                'whatsapp',
+                $recipient,
+                $contextData['student_name'] ?? null,
+                "Event Notification: {$eventName}",
+                $bodyText,
+                $bodyText,
+                [], // attachments
+                $resolved, // templateData
+                $sentBy,
+                $scheduledAt,
+                $studentUid
+            );
+        } catch (Exception $e) {
+            error_log("Failed to sendEventNotification for event {$eventName}: " . $e->getMessage());
+            return null;
         }
     }
 }

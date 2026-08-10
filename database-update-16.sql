@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS `communication_templates` (
   `language` VARCHAR(10) NOT NULL DEFAULT 'en',
   `status` VARCHAR(20) NOT NULL DEFAULT 'approved',
   `category` VARCHAR(50) DEFAULT NULL,
+  `quality_status` VARCHAR(50) DEFAULT NULL,
+  `rejection_reason` TEXT DEFAULT NULL,
   `meta_data` LONGTEXT DEFAULT NULL, -- JSON mapping metadata
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -75,4 +77,12 @@ CREATE TABLE IF NOT EXISTS `communication_webhook_events` (
   `error_message` TEXT DEFAULT NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY `idx_cwe_processed` (`processed`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `communication_event_mappings` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `event_name` VARCHAR(100) NOT NULL UNIQUE,
+  `template_name` VARCHAR(100) DEFAULT NULL,
+  `parameter_mappings` LONGTEXT DEFAULT NULL, -- JSON mapping metadata
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

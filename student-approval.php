@@ -146,7 +146,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'paid_date' => $student['paid_date'] ?: date('Y-m-d'),
                     'generated_by' => $admin_username, 'send_email' => true,
                 ]);
-                $inv_note = $inv_ok && $inv_no ? " Invoice {$inv_no} generated and emailed." : '';
+            }
+
+            // Queue student approval WhatsApp template notification
+            try {
+                $wa_phone = preg_replace('/\D/', '', ($student['whatsapp_country_code'] ?? '') . ($student['whatsapp_number'] ?? ''));
+                if (strlen($wa_phone) === 10) {
+                    $wa_phone = '91' . $wa_phone;
+                }
+                
+                if (!empty($wa_phone)) {
+                    require_once 'includes/communication/CommunicationEngine.php';
+                    $commEngine = CommunicationEngine::getInstance($pdo);
+                    
+                    $context = [
+                        'student_uid' => $user_id,
+                        'student_name' => $student['name'] ?? '',
+                        'application_id' => $user_id,
+                        'course_name' => $student['pepp_course'] ?? '',
+                        'payment_amount' => $student['paid_amount'] ?? 0,
+                        'invoice_number' => $inv_no ?? ''
+                    ];
+                    
+                    $commEngine->sendEventNotification('student_approval', $wa_phone, $context, $admin_username);
+                }
+            } catch (Exception $ex) {
+                error_log("Failed to send student approval WhatsApp: " . $ex->getMessage());
             }
 
             echo json_encode(['success' => true, 'message' => 'Student approved successfully!' . $inv_note]);

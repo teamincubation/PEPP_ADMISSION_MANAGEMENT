@@ -110,19 +110,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 require_once 'includes/communication/CommunicationEngine.php';
                 $engine = CommunicationEngine::getInstance($pdo);
-                $engine->queueMessage(
-                    'whatsapp',
-                    $phone,
-                    $student['name'],
-                    'Student Onboarding: ' . ucfirst($type),
-                    $msg,
-                    $msg,
-                    [],
-                    [],
-                    $admin_username,
-                    null,
-                    $student['user_id']
-                );
+                
+                $context = [
+                    'student_uid' => $student['user_id'],
+                    'student_name' => $student['name'] ?? '',
+                    'application_id' => $student['user_id'],
+                    'course_name' => $student['pepp_course'] ?? ''
+                ];
+                
+                $qId = $engine->sendEventNotification('student_registration', $phone, $context, $admin_username);
+                if (!$qId) {
+                    // Fallback to manual text message
+                    $engine->queueMessage(
+                        'whatsapp',
+                        $phone,
+                        $student['name'],
+                        'Student Onboarding: ' . ucfirst($type),
+                        $msg,
+                        $msg,
+                        [],
+                        [],
+                        $admin_username,
+                        null,
+                        $student['user_id']
+                    );
+                }
             } catch (Exception $ex) { error_log('wa log: ' . $ex->getMessage()); }
 
             echo json_encode([

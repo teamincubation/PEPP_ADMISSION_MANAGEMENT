@@ -65,7 +65,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Log the incoming event
     try {
         $eventType = 'unknown';
-        if (isset($payload['entry'][0]['changes'][0]['value']['statuses'][0])) {
+        $field = $payload['entry'][0]['changes'][0]['field'] ?? '';
+        if ($field === 'message_template_status_update') {
+            $eventType = 'templates.status_update';
+        } elseif (isset($payload['entry'][0]['changes'][0]['value']['statuses'][0])) {
             $eventType = 'messages.status';
         } elseif (isset($payload['entry'][0]['changes'][0]['value']['messages'][0])) {
             $eventType = 'messages.receive';
@@ -120,6 +123,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } catch (Exception $ex) {
                     error_log("Webhook database update failed: " . $ex->getMessage());
                 }
+            }
+        }
+    }
+
+    // Process template status updates
+    if (isset($payload['entry'][0]['changes'][0]['field']) && $payload['entry'][0]['changes'][0]['field'] === 'message_template_status_update') {
+        $value = $payload['entry'][0]['changes'][0]['value'] ?? [];
+        $tplName = $value['message_template_name'] ?? '';
+        $newStatus = strtolower($value['event'] ?? ''); // APPROVED, REJECTED, PENDING, etc.
+        $reason = $value['reason'] ?? null;
+        
+        if ($tplName && $newStatus) {
+            try {
+                $stmtTpl = $pdo->prepare("
+                    UPDATE communication_templates 
+                    SET status = ?, rejection_reason = COALESCE(?, rejection_reason), updated_at = NOW() 
+                    WHERE template_name = ?
+                ");
+                $stmtTpl->execute([$newStatus, $reason, $tplName]);
+            } catch (Exception $ex) {
+                error_log("Webhook template status update failed: " . $ex->getMessage());
             }
         }
     }

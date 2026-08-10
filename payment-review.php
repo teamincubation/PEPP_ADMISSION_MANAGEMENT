@@ -155,19 +155,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 try {
                     require_once 'includes/communication/CommunicationEngine.php';
                     $engine = CommunicationEngine::getInstance($pdo);
-                    $engine->queueMessage(
-                        'whatsapp',
-                        $wa_phone,
-                        $req['student_name'],
-                        'Installment Payment Approved',
-                        $msg,
-                        $msg,
-                        [],
-                        [],
-                        $admin_username,
-                        null,
-                        $req['user_id']
-                    );
+                    
+                    $context = [
+                        'student_uid' => $req['user_id'],
+                        'student_name' => $req['student_name'] ?? '',
+                        'application_id' => $req['user_id'],
+                        'payment_amount' => $received_amount,
+                        'invoice_number' => $inv_no ?? '',
+                        'balance_amount' => $remaining ?? 0
+                    ];
+                    
+                    $qId = $engine->sendEventNotification('payment_receipt', $wa_phone, $context, $admin_username);
+                    if (!$qId) {
+                        // Fallback to manual text message
+                        $engine->queueMessage(
+                            'whatsapp',
+                            $wa_phone,
+                            $req['student_name'],
+                            'Installment Payment Approved',
+                            $msg,
+                            $msg,
+                            [],
+                            [],
+                            $admin_username,
+                            null,
+                            $req['user_id']
+                        );
+                    }
                 } catch (Exception $ex) { error_log('wa log: ' . $ex->getMessage()); }
                 $whatsapp_url = 'https://wa.me/' . $wa_phone . '?text=' . rawurlencode($msg);
 
