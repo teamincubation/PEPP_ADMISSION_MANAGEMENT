@@ -430,6 +430,132 @@ $extra_head = '
     .layout-magazine .activity-item:last-child {
         border-bottom: none;
     }
+    /* ── Modern Visibility & Access Rules Select Boxes ── */
+    .access-rules-container {
+        border: 1.5px solid #e2e8f0 !important;
+        padding: 20px !important;
+        border-radius: 16px !important;
+        margin-top: 14px !important;
+        background: #ffffff !important;
+        box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.04) !important;
+    }
+    .access-rules-card {
+        background: #ffffff !important;
+        border: 1.5px solid #e2e8f0 !important;
+        border-radius: 14px !important;
+        padding: 14px !important;
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.02) !important;
+        transition: all 0.2s ease-in-out !important;
+    }
+    .access-rules-card:hover {
+        border-color: #cbd5e1 !important;
+        box-shadow: 0 6px 16px rgba(15, 23, 42, 0.04) !important;
+    }
+    .access-rules-header {
+        display: flex !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+        margin-bottom: 12px !important;
+        padding-bottom: 8px !important;
+        border-bottom: 1.5px solid #f1f5f9 !important;
+    }
+    .access-rules-title {
+        font-size: 0.8rem !important;
+        font-weight: 700 !important;
+        color: #1e293b !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+        margin: 0 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.4px !important;
+    }
+    .access-rules-title i {
+        color: #4f46e5 !important;
+        font-size: 0.9rem !important;
+    }
+    .access-rules-badge {
+        font-size: 0.72rem !important;
+        font-weight: 700 !important;
+        padding: 3px 10px !important;
+        border-radius: 20px !important;
+        background: #f1f5f9 !important;
+        color: #64748b !important;
+        border: 1px solid #e2e8f0 !important;
+        transition: all 0.2s ease !important;
+    }
+    .modern-scroll-box {
+        max-height: 150px !important;
+        overflow-y: auto !important;
+        padding-right: 4px !important;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 6px !important;
+    }
+    .modern-scroll-box::-webkit-scrollbar {
+        width: 5px !important;
+    }
+    .modern-scroll-box::-webkit-scrollbar-track {
+        background: #f1f5f9 !important;
+        border-radius: 10px !important;
+    }
+    .modern-scroll-box::-webkit-scrollbar-thumb {
+        background: #cbd5e1 !important;
+        border-radius: 10px !important;
+    }
+    .modern-scroll-box::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8 !important;
+    }
+    .modern-check-item {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 10px !important;
+        padding: 9px 12px !important;
+        border-radius: 10px !important;
+        border: 1.5px solid #f1f5f9 !important;
+        background: #f8fafc !important;
+        cursor: pointer !important;
+        transition: all 0.2s ease !important;
+        margin: 0 !important;
+        text-align: left !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+        position: relative !important;
+    }
+    .modern-check-item:hover {
+        background: #f1f5f9 !important;
+        border-color: #cbd5e1 !important;
+        transform: translateY(-1px);
+    }
+    .modern-check-item.active {
+        background: #eff6ff !important;
+        border-color: #93c5fd !important;
+        box-shadow: 0 2px 8px rgba(59, 130, 246, 0.08) !important;
+    }
+    .modern-check-item input[type="checkbox"] {
+        width: 16px !important;
+        height: 16px !important;
+        accent-color: #2563eb !important;
+        cursor: pointer !important;
+        margin: 0 !important;
+        flex-shrink: 0 !important;
+    }
+    .modern-check-text {
+        font-size: 0.82rem !important;
+        font-weight: 600 !important;
+        color: #334155 !important;
+        text-align: left !important;
+        margin: 0 !important;
+        text-transform: none !important;
+        line-height: 1.3 !important;
+        flex: 1 !important;
+        user-select: none !important;
+    }
+    .modern-check-item.active .modern-check-text {
+        color: #1e40af !important;
+        font-weight: 700 !important;
+    }
     @media (max-width: 1024px) {
         .designer-container {
             grid-template-columns: 1fr;
@@ -557,14 +683,17 @@ include 'includes/admin_nav.php';
                     <input type="text" id="plan-quote" placeholder="e.g. Success is the sum of small efforts repeated day in and day out!" value="Commit to your dreams and execute every day!" oninput="updateLivePreview()">
                 </div>
 
-                <div class="field full" style="border: 1px solid var(--border); padding: 16px; border-radius: 12px; margin-top: 10px; background: rgba(0,0,0,0.01);">
-                    <label style="font-weight: 700; display: block; margin-bottom: 8px;"><i class="fas fa-lock" style="color:var(--accent);"></i> Visibility &amp; Access Rules</label>
-                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4;">Select who can access this study plan via the public link. They will authenticate using their registered email.</p>
+                <div class="field full access-rules-container">
+                    <label style="font-weight: 800; font-size: 0.95rem; color: #0f172a; display: flex; align-items: center; gap: 8px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px;"><i class="fas fa-lock" style="color:#4f46e5;"></i> Visibility &amp; Access Rules</label>
+                    <p style="font-size: 0.8rem; color: #64748b; margin-bottom: 16px; line-height: 1.4;">Select who can access this study plan via the public link. They will authenticate using their registered email.</p>
                     
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
-                        <div>
-                            <label style="font-size: 0.8rem; font-weight: 700; color: var(--text-main); margin-bottom: 4px; display: block;"><i class="fas fa-book"></i> Enrolled Courses (PEPP Students)</label>
-                            <div style="max-height: 120px; overflow-y: auto; border: 1.5px solid var(--border); border-radius: 8px; padding: 6px; background:#fff;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                        <div class="access-rules-card">
+                            <div class="access-rules-header">
+                                <span class="access-rules-title"><i class="fas fa-graduation-cap"></i> Enrolled Courses (PEPP Students)</span>
+                                <span class="access-rules-badge" id="courses-count-badge">0 Selected</span>
+                            </div>
+                            <div class="modern-scroll-box">
                                 <?php foreach ($courses as $c): 
                                     $isChecked = false;
                                     foreach ($assigned as $a) {
@@ -573,17 +702,20 @@ include 'includes/admin_nav.php';
                                         }
                                     }
                                 ?>
-                                    <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
-                                        <input type="checkbox" name="access_courses[]" value="<?php echo htmlspecialchars($c['course_name']); ?>" id="ac-<?php echo $c['id']; ?>" <?php echo $isChecked ? 'checked' : ''; ?>>
-                                        <label for="ac-<?php echo $c['id']; ?>" style="font-size: 0.8rem; cursor:pointer; font-weight:normal; margin:0; text-transform:none;"><?php echo htmlspecialchars($c['course_name']); ?></label>
-                                    </div>
+                                    <label for="ac-<?php echo $c['id']; ?>" class="modern-check-item <?php echo $isChecked ? 'active' : ''; ?>">
+                                        <input type="checkbox" name="access_courses[]" value="<?php echo htmlspecialchars($c['course_name']); ?>" id="ac-<?php echo $c['id']; ?>" <?php echo $isChecked ? 'checked' : ''; ?> onchange="toggleCheckItemStyle(this)">
+                                        <span class="modern-check-text"><?php echo htmlspecialchars($c['course_name']); ?></span>
+                                    </label>
                                 <?php endforeach; ?>
                             </div>
                         </div>
                         
-                        <div>
-                            <label style="font-size: 0.8rem; font-weight: 700; color: var(--text-main); margin-bottom: 4px; display: block;"><i class="fab fa-wpforms"></i> Registered in Custom Forms</label>
-                            <div style="max-height: 120px; overflow-y: auto; border: 1.5px solid var(--border); border-radius: 8px; padding: 6px; background:#fff;">
+                        <div class="access-rules-card">
+                            <div class="access-rules-header">
+                                <span class="access-rules-title"><i class="fab fa-wpforms"></i> Registered in Custom Forms</span>
+                                <span class="access-rules-badge" id="forms-count-badge">0 Selected</span>
+                            </div>
+                            <div class="modern-scroll-box">
                                 <?php foreach ($campaign_forms as $f): 
                                     $isChecked = false;
                                     foreach ($assigned as $a) {
@@ -592,10 +724,10 @@ include 'includes/admin_nav.php';
                                         }
                                     }
                                 ?>
-                                    <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
-                                        <input type="checkbox" name="access_forms[]" value="<?php echo htmlspecialchars($f['id']); ?>" id="af-<?php echo $f['id']; ?>" <?php echo $isChecked ? 'checked' : ''; ?>>
-                                        <label for="af-<?php echo $f['id']; ?>" style="font-size: 0.8rem; cursor:pointer; font-weight:normal; margin:0; text-transform:none;"><?php echo htmlspecialchars($f['title']); ?></label>
-                                    </div>
+                                    <label for="af-<?php echo $f['id']; ?>" class="modern-check-item <?php echo $isChecked ? 'active' : ''; ?>">
+                                        <input type="checkbox" name="access_forms[]" value="<?php echo htmlspecialchars($f['id']); ?>" id="af-<?php echo $f['id']; ?>" <?php echo $isChecked ? 'checked' : ''; ?> onchange="toggleCheckItemStyle(this)">
+                                        <span class="modern-check-text"><?php echo htmlspecialchars($f['title']); ?></span>
+                                    </label>
                                 <?php endforeach; ?>
                             </div>
                         </div>
@@ -832,6 +964,51 @@ include 'includes/admin_nav.php';
         });
     }
 
+    function toggleCheckItemStyle(cb) {
+        var label = cb.closest('.modern-check-item');
+        if (label) {
+            if (cb.checked) {
+                label.classList.add('active');
+            } else {
+                label.classList.remove('active');
+            }
+        }
+        updateAccessCounts();
+    }
+
+    function updateAccessCounts() {
+        var coursesCount = document.querySelectorAll('input[name="access_courses[]"]:checked').length;
+        var formsCount = document.querySelectorAll('input[name="access_forms[]"]:checked').length;
+        
+        var cBadge = document.getElementById('courses-count-badge');
+        if (cBadge) {
+            cBadge.textContent = coursesCount + ' Selected';
+            if (coursesCount > 0) {
+                cBadge.style.background = '#e0e7ff';
+                cBadge.style.color = '#3730a3';
+                cBadge.style.borderColor = '#c7d2fe';
+            } else {
+                cBadge.style.background = '#f1f5f9';
+                cBadge.style.color = '#64748b';
+                cBadge.style.borderColor = '#e2e8f0';
+            }
+        }
+        
+        var fBadge = document.getElementById('forms-count-badge');
+        if (fBadge) {
+            fBadge.textContent = formsCount + ' Selected';
+            if (formsCount > 0) {
+                fBadge.style.background = '#e0e7ff';
+                fBadge.style.color = '#3730a3';
+                fBadge.style.borderColor = '#c7d2fe';
+            } else {
+                fBadge.style.background = '#f1f5f9';
+                fBadge.style.color = '#64748b';
+                fBadge.style.borderColor = '#e2e8f0';
+            }
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', function() {
         if (studyPlanId > 0) {
             // Pre-select theme/layout
@@ -858,6 +1035,7 @@ include 'includes/admin_nav.php';
         togglePlanTypeView();
         populateChapterDatalist();
         updateStatusToggle();
+        updateAccessCounts();
         
         // Bind change listeners to detect unsaved settings changes
         ['plan-title', 'plan-desc', 'plan-quote'].forEach(id => {
