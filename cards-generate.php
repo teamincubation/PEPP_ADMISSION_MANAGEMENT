@@ -135,50 +135,61 @@ include 'includes/admin_nav.php';
 }
 .canvas-element .resize-handle {
     position: absolute;
-    width: 9px;
-    height: 9px;
+    width: 14px;
+    height: 14px;
     background: #ffffff;
-    border: 2px solid var(--accent, #7c3aed);
+    border: 2.5px solid var(--accent, #7c3aed);
     border-radius: 50%;
     z-index: 100;
     display: none;
     pointer-events: auto;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    transition: transform 0.15s ease, background-color 0.15s ease;
+}
+.canvas-element .resize-handle:hover {
+    transform: scale(1.3);
+    background: var(--accent, #7c3aed);
 }
 .canvas-element.selected .resize-handle {
     display: block;
 }
-.canvas-element .resize-handle.nw { top: -5px; left: -5px; cursor: nwse-resize; }
-.canvas-element .resize-handle.n  { top: -5px; left: calc(50% - 5px); cursor: ns-resize; }
-.canvas-element .resize-handle.ne { top: -5px; right: -5px; cursor: nesw-resize; }
-.canvas-element .resize-handle.e  { top: calc(50% - 5px); right: -5px; cursor: ew-resize; }
-.canvas-element .resize-handle.se { bottom: -5px; right: -5px; cursor: nwse-resize; }
-.canvas-element .resize-handle.s  { bottom: -5px; left: calc(50% - 5px); cursor: ns-resize; }
-.canvas-element .resize-handle.sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
-.canvas-element .resize-handle.w  { top: calc(50% - 5px); left: -5px; cursor: ew-resize; }
+.canvas-element .resize-handle.nw { top: -7px; left: -7px; cursor: nwse-resize; }
+.canvas-element .resize-handle.n  { top: -7px; left: calc(50% - 7px); cursor: ns-resize; }
+.canvas-element .resize-handle.ne { top: -7px; right: -7px; cursor: nesw-resize; }
+.canvas-element .resize-handle.e  { top: calc(50% - 7px); right: -7px; cursor: ew-resize; }
+.canvas-element .resize-handle.se { bottom: -7px; right: -7px; cursor: nwse-resize; }
+.canvas-element .resize-handle.s  { bottom: -7px; left: calc(50% - 7px); cursor: ns-resize; }
+.canvas-element .resize-handle.sw { bottom: -7px; left: -7px; cursor: nesw-resize; }
+.canvas-element .resize-handle.w  { top: calc(50% - 7px); left: -7px; cursor: ew-resize; }
 
 .canvas-element .rotate-line {
     position: absolute;
-    top: -18px;
+    top: -22px;
     left: 50%;
-    width: 1.5px;
-    height: 18px;
+    width: 2px;
+    height: 22px;
     background: var(--accent, #7c3aed);
     z-index: 99;
     display: none;
 }
 .canvas-element .rotate-handle {
     position: absolute;
-    top: -26px;
-    left: calc(50% - 7px);
-    width: 12px;
-    height: 12px;
+    top: -30px;
+    left: calc(50% - 8px);
+    width: 16px;
+    height: 16px;
     background: var(--accent, #7c3aed);
-    border: 2px solid #ffffff;
+    border: 2.5px solid #ffffff;
     border-radius: 50%;
     z-index: 100;
     display: none;
     cursor: grab;
     pointer-events: auto;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    transition: transform 0.15s ease;
+}
+.canvas-element .rotate-handle:hover {
+    transform: scale(1.25);
 }
 .canvas-element.selected .rotate-line,
 .canvas-element.selected .rotate-handle {
@@ -949,20 +960,37 @@ function drawElements() {
                 div.style.justifyContent = 'center';
             }
         } else if (el.type === 'photo' || el.type === 'image' || el.type === 'clipart') {
-            div.style.border = (el.borderWidth || 0) + 'px solid ' + (el.borderColor || '#000');
-            div.style.overflow = 'hidden';
+            div.style.overflow = 'visible';
             
+            var imgWrapper = document.createElement('div');
+            imgWrapper.className = 'canvas-element-inner';
+            imgWrapper.style.position = 'absolute';
+            imgWrapper.style.top = '0';
+            imgWrapper.style.left = '0';
+            imgWrapper.style.width = '100%';
+            imgWrapper.style.height = '100%';
+            imgWrapper.style.overflow = 'hidden';
+            imgWrapper.style.pointerEvents = 'none';
+            imgWrapper.style.border = (el.borderWidth || 0) + 'px solid ' + (el.borderColor || '#000');
+            imgWrapper.style.boxSizing = 'border-box';
+            
+            // Mask shapes applied to inner wrapper
+            if (el.mask === 'circle') { imgWrapper.style.borderRadius = '50%'; imgWrapper.style.clipPath = 'none'; }
+            else if (el.mask === 'oval') { imgWrapper.style.borderRadius = '50%'; imgWrapper.style.clipPath = 'none'; }
+            else if (el.mask === 'hexagon') { imgWrapper.style.clipPath = 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)'; imgWrapper.style.borderRadius = '0'; }
+            else if (el.mask === 'diamond') { imgWrapper.style.clipPath = 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)'; imgWrapper.style.borderRadius = '0'; }
+            else if (el.mask === 'rounded') { imgWrapper.style.clipPath = 'none'; imgWrapper.style.borderRadius = '10%'; }
+            else { imgWrapper.style.borderRadius = '0'; imgWrapper.style.clipPath = 'none'; }
+
             if (el.type === 'image' && el.imageSrc) {
-                div.innerHTML = '';
                 var img = document.createElement('img');
                 img.src = el.imageSrc;
                 img.style.width = '100%';
                 img.style.height = '100%';
                 img.style.objectFit = 'contain';
                 img.style.pointerEvents = 'none';
-                div.appendChild(img);
+                imgWrapper.appendChild(img);
             } else if (photos[el.id]) {
-                div.innerHTML = '';
                 var img = document.createElement('img');
                 img.src = photos[el.id];
                 img.style.width = '100%';
@@ -974,19 +1002,13 @@ function drawElements() {
                 var zoomVal = (settings.zoom || 100) / 100;
                 img.style.transform = 'scale(' + zoomVal + ') translate(' + settings.panX + '%, ' + settings.panY + '%)';
                 img.style.transformOrigin = 'center center';
-                div.appendChild(img);
+                imgWrapper.appendChild(img);
             } else {
-                div.style.background = '#e2e8f0 url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' width=\'24\' height=\'24\'%3E%3Cpath fill=\'%2364748b\' d=\'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z\'/%3E%3C/svg%3E") no-repeat center';
-                div.style.backgroundSize = '40px';
+                imgWrapper.style.background = '#e2e8f0 url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' width=\'24\' height=\'24\'%3E%3Cpath fill=\'%2364748b\' d=\'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z\'/%3E%3C/svg%3E") no-repeat center';
+                imgWrapper.style.backgroundSize = '40px';
             }
             
-            // Mask shapes
-            if (el.mask === 'circle') { div.style.borderRadius = '50%'; div.style.clipPath = 'none'; }
-            else if (el.mask === 'oval') { div.style.borderRadius = '50%'; div.style.clipPath = 'none'; }
-            else if (el.mask === 'hexagon') { div.style.clipPath = 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)'; div.style.borderRadius = '0'; }
-            else if (el.mask === 'diamond') { div.style.clipPath = 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)'; div.style.borderRadius = '0'; }
-            else if (el.mask === 'rounded') { div.style.clipPath = 'none'; div.style.borderRadius = '10%'; }
-            else { div.style.borderRadius = '0'; div.style.clipPath = 'none'; }
+            div.appendChild(imgWrapper);
         } else if (el.type === 'dynamic_bg') {
             var bgVal = el.bgValue || 'linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%)';
             if (bgVal.includes('gradient')) {
