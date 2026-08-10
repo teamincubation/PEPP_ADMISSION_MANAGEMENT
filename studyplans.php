@@ -19,8 +19,15 @@ if ($status_filter !== '') {
     $params[] = $status_filter;
 }
 if ($course_filter !== '') {
-    $where[] = "course_id = ?";
-    $params[] = (int)$course_filter;
+    $c_stmt = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
+    $c_stmt->execute([(int)$course_filter]);
+    $filter_course_name = $c_stmt->fetchColumn();
+    if ($filter_course_name) {
+        $where[] = "sp.id IN (SELECT study_plan_id FROM study_plan_assignments WHERE assignment_type = 'course' AND assigned_value = ?)";
+        $params[] = $filter_course_name;
+    } else {
+        $where[] = "1=0";
+    }
 }
 
 $where_clause = implode(' AND ', $where);
@@ -28,9 +35,11 @@ $where_clause = implode(' AND ', $where);
 // Fetch study plans
 try {
     $stmt = $pdo->prepare("
-        SELECT sp.*, pc.course_name 
+        SELECT sp.*, 
+               (SELECT GROUP_CONCAT(assigned_value SEPARATOR ', ') 
+                FROM study_plan_assignments 
+                WHERE study_plan_id = sp.id AND assignment_type = 'course') as course_name
         FROM study_plans sp
-        LEFT JOIN pepp_courses pc ON sp.course_id = pc.id
         WHERE {$where_clause}
         ORDER BY sp.created_at DESC
     ");

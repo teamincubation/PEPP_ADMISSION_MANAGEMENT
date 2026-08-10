@@ -108,42 +108,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             ];
                         }
                     }
-                }
-
-                if (empty($error_msg)) {
+                }                if (empty($error_msg)) {
                     if (empty($chapters_to_insert)) {
                         $error_msg = 'No valid chapters provided to save. Please enter at least one chapter name.';
                     } else {
                         $inserted_count = 0;
-                        $stmt_check = $pdo->prepare("SELECT id FROM study_plan_chapters WHERE academic_year = ? AND course_id = ? AND chapter_name = ?");
-                        $stmt_count = $pdo->prepare("SELECT COUNT(*) FROM study_plan_chapters WHERE academic_year = ? AND course_id = ?");
+                        $clean_target_cids = array_unique(array_filter(array_map('intval', $target_courses)));
+                        sort($clean_target_cids);
+                        $course_ids_str = implode(',', $clean_target_cids);
+
+                        $stmt_check = $pdo->prepare("SELECT id, course_id FROM study_plan_chapters WHERE academic_year = ? AND chapter_name = ?");
+                        $stmt_count = $pdo->prepare("SELECT COUNT(*) FROM study_plan_chapters WHERE academic_year = ? AND FIND_IN_SET(?, course_id)");
                         $stmt_ins = $pdo->prepare("INSERT INTO study_plan_chapters (academic_year, course_id, chapter_name, chapter_code, created_by) VALUES (?, ?, ?, ?, ?)");
+                        $stmt_upd = $pdo->prepare("UPDATE study_plan_chapters SET course_id = ? WHERE id = ?");
 
                         $admin_user = $_SESSION['admin_username'] ?? 'System';
 
-                        foreach ($target_courses as $cid_raw) {
-                            $cid = (int)$cid_raw;
-                            if ($cid <= 0) continue;
-
-                            // Get current total chapters for course to auto-generate codes CH-01, CH-02...
-                            $stmt_count->execute([$acad_year, $cid]);
-                            $curr_count = (int)$stmt_count->fetchColumn();
-
-                            foreach ($chapters_to_insert as $chap) {
-                                $stmt_check->execute([$acad_year, $cid, $chap['chapter_name']]);
-                                if (!$stmt_check->fetch()) {
-                                    $curr_count++;
-                                    $final_code = !empty($chap['chapter_code']) ? $chap['chapter_code'] : ('CH-' . str_pad($curr_count, 2, '0', STR_PAD_LEFT));
-
-                                    $stmt_ins->execute([
-                                        $acad_year,
-                                        $cid,
-                                        $chap['chapter_name'],
-                                        $final_code,
-                                        $admin_user
-                                    ]);
-                                    $inserted_count++;
+                        foreach ($chapters_to_insert as $chap) {
+                            $stmt_check->execute([$acad_year, $chap['chapter_name']]);
+                            $existing = $stmt_check->fetch();
+                            
+                            if ($existing) {
+                                // Merge course IDs to prevent duplicate rows for the same chapter name
+                                $existing_cids = explode(',', $existing['course_id']);
+                                $merged_cids = array_unique(array_merge($existing_cids, $clean_target_cids));
+                                sort($merged_cids);
+                                $updated_course_ids_str = implode(',', $merged_cids);
+                                
+                                $stmt_upd->execute([$updated_course_ids_str, $existing['id']]);
+                                $inserted_count++;
+                            } else {
+                                // Get current max count among all selected courses to generate next sequential code
+                                $max_curr_count = 0;
+                                foreach ($clean_target_cids as $cid) {
+                                    $stmt_count->execute([$acad_year, $cid]);
+                                    $count = (int)$stmt_count->fetchColumn();
+                                    if ($count > $max_curr_count) {
+                                        $max_curr_count = $count;
+                                    }
                                 }
+                                $next_num = $max_curr_count + 1;
+                                $final_code = !empty($chap['chapter_code']) ? $chap['chapter_code'] : ('CH-' . str_pad($next_num, 2, '0', STR_PAD_LEFT));
+
+                                $stmt_ins->execute([
+                                    $acad_year,
+                                    $course_ids_str,
+                                    $chap['chapter_name'],
+                                    $final_code,
+                                    $admin_user
+                                ]);
+                                $inserted_count++;
                             }
                         }
 
@@ -164,12 +178,11 @@ if ($selected_year !== '') {
     $ch_params[] = $selected_year;
 }
 if ($selected_course_filter > 0) {
-    $ch_where[] = "spc.course_id = ?";
+    $ch_where[] = "FIND_IN_SET(?, spc.course_id)";
     $ch_params[] = $selected_course_filter;
 }
 if ($search_query !== '') {
-    $ch_where[] = "(spc.chapter_name LIKE ? OR spc.chapter_code LIKE ? OR spc.subject_name LIKE ?)";
-    $ch_params[] = "%$search_query%";
+    $ch_where[] = "(spc.chapter_name LIKE ? OR spc.chapter_code LIKE ?)";
     $ch_params[] = "%$search_query%";
     $ch_params[] = "%$search_query%";
 }
@@ -179,9 +192,8 @@ $ch_where_sql = implode(' AND ', $ch_where);
 $existing_chapters = [];
 try {
     $ch_stmt = $pdo->prepare("
-        SELECT spc.*, pc.course_name, pc.course_code
+        SELECT spc.*
         FROM study_plan_chapters spc
-        LEFT JOIN pepp_courses pc ON spc.course_id = pc.id
         WHERE {$ch_where_sql}
         ORDER BY spc.created_at DESC, spc.chapter_code ASC
     ");
@@ -189,6 +201,11 @@ try {
     $existing_chapters = $ch_stmt->fetchAll();
 } catch (Exception $e) {
     error_log("Error fetching chapters: " . $e->getMessage());
+}
+
+$courses_map = [];
+foreach ($courses as $c) {
+    $courses_map[$c['id']] = $c['course_name'];
 }
 
 $page_title = 'Pre-set Study Plan Chapters';
@@ -587,20 +604,29 @@ include 'includes/admin_nav.php';
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($existing_chapters as $ch): ?>
+                        <?php foreach ($existing_chapters as $ch): 
+                            $assigned_cids = explode(',', $ch['course_id']);
+                            $assigned_names = [];
+                            foreach ($assigned_cids as $cid) {
+                                if (isset($courses_map[$cid])) {
+                                    $assigned_names[] = $courses_map[$cid];
+                                }
+                            }
+                            $course_display = implode(', ', $assigned_names);
+                            if (empty($course_display)) {
+                                $course_display = 'Course #' . $ch['course_id'];
+                            }
+                        ?>
                             <tr>
                                 <td><input type="checkbox" name="chapter_ids[]" value="<?php echo $ch['id']; ?>" class="table-cb"></td>
                                 <td><span class="badge" style="background:#f1f5f9; color:#475569; font-weight:700; border:1px solid #cbd5e1; font-size:0.78rem; padding:4px 10px; border-radius:6px;"><?php echo htmlspecialchars($ch['chapter_code'] ?: '-'); ?></span></td>
                                 <td><strong style="color:#0f172a; font-size:0.92rem;"><?php echo htmlspecialchars($ch['chapter_name']); ?></strong></td>
-                                <td><strong style="color:#334155;"><?php echo htmlspecialchars($ch['course_name'] ?: 'Course #' . $ch['course_id']); ?></strong></td>
+                                <td><strong style="color:#334155;"><?php echo htmlspecialchars($course_display); ?></strong></td>
                                 <td><span class="badge badge-info" style="font-size:0.75rem; font-weight:700; padding:4px 8px; border-radius:6px;"><?php echo htmlspecialchars($ch['academic_year']); ?></span></td>
                                 <td style="text-align:right;">
-                                    <form method="POST" style="display:inline-block;" onsubmit="return confirm('Delete this chapter?')">
-                                        <?php echo csrf_field(); ?>
-                                        <input type="hidden" name="action" value="delete_chapter">
-                                        <input type="hidden" name="chapter_id" value="<?php echo $ch['id']; ?>">
-                                        <button type="submit" class="btn btn-soft-red btn-xs" style="border-radius:6px;" title="Delete chapter"><i class="fas fa-trash"></i></button>
-                                    </form>
+                                    <button type="button" class="btn btn-soft-red btn-xs" style="border-radius:6px;" title="Delete chapter" onclick="deleteSingleChapter(<?php echo $ch['id']; ?>)">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -690,6 +716,35 @@ function removeChapterRow(btn) {
         updateRowBadges();
     } else {
         alert('At least one chapter row must remain.');
+    }
+}
+
+function deleteSingleChapter(id) {
+    if (confirm('Delete this chapter?')) {
+        var form = document.createElement('form');
+        form.method = 'POST';
+        form.style.display = 'none';
+        
+        var actInput = document.createElement('input');
+        actInput.type = 'hidden';
+        actInput.name = 'action';
+        actInput.value = 'delete_chapter';
+        
+        var idInput = document.createElement('input');
+        idInput.type = 'hidden';
+        idInput.name = 'chapter_id';
+        idInput.value = id;
+        
+        var csrfInput = document.createElement('input');
+        csrfInput.type = 'hidden';
+        csrfInput.name = 'csrf_token';
+        csrfInput.value = '<?php echo csrf_token(); ?>';
+        
+        form.appendChild(actInput);
+        form.appendChild(idInput);
+        form.appendChild(csrfInput);
+        document.body.appendChild(form);
+        form.submit();
     }
 }
 

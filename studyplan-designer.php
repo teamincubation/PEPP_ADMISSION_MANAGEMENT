@@ -72,10 +72,8 @@ foreach ($custom_types as $ct) {
 $preset_chapters = [];
 try {
     $preset_chapters = $pdo->query("
-        SELECT spc.*, pc.course_name 
-        FROM study_plan_chapters spc
-        LEFT JOIN pepp_courses pc ON spc.course_id = pc.id
-        ORDER BY spc.chapter_code ASC, spc.chapter_name ASC
+        SELECT * FROM study_plan_chapters 
+        ORDER BY chapter_code ASC, chapter_name ASC
     ")->fetchAll();
 } catch (Exception $e) {}
 
@@ -475,7 +473,7 @@ include 'includes/admin_nav.php';
                         <label>Study Plan Title <span class="req">*</span></label>
                         <input type="text" id="plan-title" value="<?php echo htmlspecialchars($plan['title'] ?? 'Psychology Exam Crack Plan'); ?>" oninput="updateLivePreview()">
                     </div>
-                    <div class="field">
+                    <div class="field full">
                         <label>Academic Year <span class="req">*</span></label>
                         <select id="plan-year" onchange="updateLivePreview()">
                             <option value="">- Choose Year -</option>
@@ -483,15 +481,7 @@ include 'includes/admin_nav.php';
                                 <option value="<?php echo $y; ?>" <?php echo ($plan['academic_year'] ?? '') === $y ? 'selected' : ''; ?>><?php echo $y; ?></option>
                             <?php endforeach; ?>
                         </select>
-                    </div>
-                    <div class="field">
-                        <label>Target PEPP Course</label>
-                        <select id="plan-course" onchange="updateLivePreview()">
-                            <option value="">- Optional (Choose Course) -</option>
-                            <?php foreach ($courses as $c): ?>
-                                <option value="<?php echo $c['id']; ?>" data-name="<?php echo htmlspecialchars($c['course_name']); ?>" <?php echo ($plan['course_id'] ?? '') == $c['id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($c['course_name']); ?></option>
-                            <?php endforeach; ?>
-                        </select>
+                        <input type="hidden" id="plan-course" value="">
                     </div>
                     <div class="field" style="grid-column: span 2; margin-bottom: 8px;">
                         <label style="font-weight: 700; display: block; margin-bottom: 6px;">Plan Scheduling Type</label>
@@ -779,6 +769,37 @@ include 'includes/admin_nav.php';
     var studyPlanId = <?php echo $plan_id; ?>;
     var activities = <?php echo $activities_json; ?>;
     var predefinedTypes = <?php echo json_encode($all_types); ?>;
+    var allChapters = <?php echo json_encode($preset_chapters); ?>;
+    var courseNameToIdMap = {
+        <?php foreach ($courses as $c): ?>
+            <?php echo json_encode($c['course_name']); ?>: <?php echo $c['id']; ?>,
+        <?php endforeach; ?>
+    };
+
+    function populateChapterDatalist() {
+        var selectedCourseIds = [];
+        document.querySelectorAll('input[name="access_courses[]"]:checked').forEach(function(el) {
+            var cid = courseNameToIdMap[el.value];
+            if (cid) selectedCourseIds.push(String(cid));
+        });
+        
+        var datalist = document.getElementById('preset-chapters-list');
+        if (!datalist) return;
+        datalist.innerHTML = '';
+        
+        var addedNames = new Set();
+        allChapters.forEach(function(ch) {
+            var chCourseIds = ch.course_id ? ch.course_id.split(',') : [];
+            var matches = chCourseIds.some(id => selectedCourseIds.includes(id));
+            if (matches && !addedNames.has(ch.chapter_name)) {
+                addedNames.add(ch.chapter_name);
+                var opt = document.createElement('option');
+                opt.value = ch.chapter_name;
+                opt.textContent = (ch.chapter_code ? '[' + ch.chapter_code + '] ' : '') + ch.chapter_name;
+                datalist.appendChild(opt);
+            }
+        });
+    }
 
     document.addEventListener('DOMContentLoaded', function() {
         if (studyPlanId > 0) {
@@ -796,6 +817,7 @@ include 'includes/admin_nav.php';
         }
         
         togglePlanTypeView();
+        populateChapterDatalist();
         
         // Bind change listeners to detect unsaved settings changes
         ['plan-title', 'plan-desc', 'plan-quote'].forEach(id => {
@@ -805,6 +827,14 @@ include 'includes/admin_nav.php';
         ['plan-year', 'plan-course', 'plan-theme', 'plan-layout', 'plan-template', 'plan-start', 'plan-end'].forEach(id => {
             var el = document.getElementById(id);
             if (el) el.addEventListener('change', markUnsavedChanges);
+        });
+
+        // Bind access courses change listeners to update chapters and mark unsaved
+        document.querySelectorAll('input[name="access_courses[]"]').forEach(cb => {
+            cb.addEventListener('change', function() {
+                markUnsavedChanges();
+                populateChapterDatalist();
+            });
         });
     });
 
