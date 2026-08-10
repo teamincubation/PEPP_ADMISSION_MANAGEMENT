@@ -2,7 +2,7 @@
 session_start();
 header('Content-Type: text/plain');
 
-require_once 'config/database.php';
+require_once '../config/database.php';
 
 try {
     // Modify course_id in study_plan_chapters to be VARCHAR(255)
