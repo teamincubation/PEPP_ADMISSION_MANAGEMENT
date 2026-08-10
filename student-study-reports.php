@@ -224,7 +224,7 @@ if (isset($_GET['action'])) {
                 $processed_plan_ids[] = $p['id'];
 
                 $tot = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ?", [$p['id']]);
-                $comp = db_count($pdo, "SELECT COUNT(DISTINCT activity_id) FROM study_plan_analytics WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity'", [$email, $p['id']]);
+                $comp = db_count($pdo, "SELECT COUNT(DISTINCT an.activity_id) FROM study_plan_analytics an JOIN study_plan_activities act ON an.activity_id = act.id WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity'", [$email, $p['id']]);
                 
                 $total_tasks += $tot;
                 $completed_tasks += $comp;
@@ -593,7 +593,7 @@ if (isset($_GET['action'])) {
                 $total_completed_tasks_sum = 0;
 
                 foreach ($stds as $email) {
-                    $comp = db_count($pdo, "SELECT COUNT(DISTINCT activity_id) FROM study_plan_analytics WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity'", [$email, $p['id']]);
+                    $comp = db_count($pdo, "SELECT COUNT(DISTINCT an.activity_id) FROM study_plan_analytics an JOIN study_plan_activities act ON an.activity_id = act.id WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity'", [$email, $p['id']]);
                     $total_completed_tasks_sum += $comp;
                     if ($tasks_cnt > 0 && $comp === $tasks_cnt) {
                         $completed_std_cnt++;
@@ -1750,7 +1750,7 @@ if (isset($_GET['action'])) {
                         if (!empty($pids)) {
                             $in = implode(',', array_fill(0, count($pids), '?'));
                             $total = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in)", $pids);
-                            $comp = db_count($pdo, "SELECT COUNT(DISTINCT activity_id) FROM study_plan_analytics WHERE student_email = ? AND action_type = 'complete_activity' AND study_plan_id IN ($in)", array_merge([$std['email']], $pids));
+                            $comp = db_count($pdo, "SELECT COUNT(DISTINCT an.activity_id) FROM study_plan_analytics an JOIN study_plan_activities act ON an.activity_id = act.id WHERE an.student_email = ? AND an.action_type = 'complete_activity' AND an.study_plan_id IN ($in)", array_merge([$std['email']], $pids));
                         }
                         
                         $pct = $total > 0 ? round(($comp / $total) * 100) : 0;
@@ -1959,8 +1959,8 @@ if ($source === 'courses') {
         'total_custom_forms' => db_count($pdo, "SELECT COUNT(*) FROM campaign_forms WHERE status = 'published'"),
         'total_submissions' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions s JOIN users u ON s.respondent_identifier = u.email WHERE s.is_deleted = 0 AND u.status = 'approved' AND $assigned_plans_subquery"),
         'total_assignments' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_assignments"),
-        'learning_started' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM users u JOIN study_plan_analytics an ON u.email = an.student_email WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND $assigned_plans_subquery"),
-        'total_checklist_completions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND $assigned_plans_subquery"),
+        'learning_started' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM users u JOIN study_plan_analytics an ON u.email = an.student_email JOIN study_plan_activities act ON an.activity_id = act.id WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND $assigned_plans_subquery"),
+        'total_checklist_completions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email JOIN study_plan_activities act ON an.activity_id = act.id WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND $assigned_plans_subquery"),
         'total_views' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'view' AND $assigned_plans_subquery"),
         'total_downloads' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'download' AND $assigned_plans_subquery"),
         'active_today' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND DATE(an.created_at) = CURDATE() AND $assigned_plans_subquery"),

@@ -281,7 +281,12 @@ if ($is_logged_in && $selected_plan_id > 0) {
             $activities = $stmt->fetchAll();
             
             // Fetch completions
-            $stmt_comp = $pdo->prepare("SELECT activity_id, created_at FROM study_plan_analytics WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity'");
+            $stmt_comp = $pdo->prepare("
+                SELECT an.activity_id, an.created_at 
+                FROM study_plan_analytics an 
+                JOIN study_plan_activities act ON an.activity_id = act.id 
+                WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity'
+            ");
             $stmt_comp->execute([$email, $selected_plan_id]);
             $completions = $stmt_comp->fetchAll(PDO::FETCH_KEY_PAIR);
         }
@@ -1013,7 +1018,12 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             <?php else: 
                 // Calculate percentage stats
                 $total_tasks = count($activities);
-                $completed_tasks = count($completions);
+                $completed_tasks = 0;
+                foreach ($activities as $act) {
+                    if (isset($completions[$act['id']])) {
+                        $completed_tasks++;
+                    }
+                }
                 $pending_tasks = $total_tasks - $completed_tasks;
                 $completed_pct = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
                 $pending_pct = $total_tasks > 0 ? 100 - $completed_pct : 0;
