@@ -194,34 +194,222 @@ $active_page = 'studyplans';
 include 'includes/admin_nav.php';
 ?>
 
+<style>
+/* ── Modern Design System for Pre-set Chapters ── */
+.modern-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 18px;
+    padding: 1.75rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 10px 30px -5px rgba(15, 23, 42, 0.04), 0 4px 12px -2px rgba(15, 23, 42, 0.02);
+}
+.modern-input {
+    width: 100%;
+    height: 42px;
+    padding: 8px 14px;
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: #1e293b;
+    background: #ffffff;
+    border: 1.5px solid #cbd5e1;
+    border-radius: 10px;
+    outline: none;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    box-sizing: border-box;
+}
+.modern-input:hover {
+    border-color: #94a3b8;
+}
+.modern-input:focus {
+    border-color: #8b5cf6;
+    box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.15);
+    background: #ffffff;
+}
+.modern-select {
+    width: 100%;
+    height: 42px;
+    padding: 8px 36px 8px 14px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: #1e293b;
+    background: #ffffff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2364748b' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E") no-repeat right 12px center / 16px;
+    border: 1.5px solid #cbd5e1;
+    border-radius: 10px;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-sizing: border-box;
+}
+.modern-select:hover {
+    border-color: #94a3b8;
+}
+.modern-select:focus {
+    border-color: #8b5cf6;
+    box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.15);
+}
+
+/* Course Pill Checkboxes */
+.course-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 10px;
+    max-height: 220px;
+    overflow-y: auto;
+    padding: 8px;
+    background: #f8fafc;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 12px;
+}
+.course-card-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: #ffffff;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 10px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.2s ease;
+}
+.course-card-item:hover {
+    border-color: #cbd5e1;
+    transform: translateY(-1px);
+    box-shadow: 0 3px 10px rgba(0,0,0,0.03);
+}
+.course-card-item.checked {
+    background: #f5f3ff;
+    border-color: #8b5cf6;
+    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.12);
+}
+.course-card-item input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: #8b5cf6;
+    cursor: pointer;
+}
+.course-code-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 5px;
+    background: #e0e7ff;
+    color: #4338ca;
+}
+
+/* Modern Tab Switcher */
+.tab-switcher {
+    display: inline-flex;
+    background: #f1f5f9;
+    padding: 4px;
+    border-radius: 12px;
+    gap: 4px;
+    margin-bottom: 1.25rem;
+}
+.tab-switcher button {
+    padding: 9px 20px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    border: none;
+    border-radius: 9px;
+    background: transparent;
+    color: #64748b;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.tab-switcher button.active {
+    background: #ffffff;
+    color: #7c3aed;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+/* Modern Entry Table */
+.modern-table-wrap {
+    border: 1.5px solid #e2e8f0;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #ffffff;
+}
+.modern-entry-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.modern-entry-table th {
+    background: #f8fafc;
+    padding: 12px 14px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1.5px solid #e2e8f0;
+}
+.modern-entry-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #f1f5f9;
+}
+.modern-entry-table tr:last-child td {
+    border-bottom: none;
+}
+.modern-btn-primary {
+    background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+    color: #ffffff;
+    font-weight: 700;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 24px;
+    font-size: 0.9rem;
+    box-shadow: 0 4px 14px rgba(109, 40, 217, 0.35);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+.modern-btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(109, 40, 217, 0.45);
+}
+</style>
+
 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:1.5rem;">
     <div>
-        <a href="studyplans.php" class="btn btn-outline btn-sm"><i class="fas fa-arrow-left"></i> Back to Study Plans</a>
+        <a href="studyplans.php" class="btn btn-outline btn-sm" style="border-radius:10px;"><i class="fas fa-arrow-left"></i> Back to Study Plans</a>
     </div>
     <div style="display:flex; gap:10px;">
-        <a href="studyplan-chapters.php?download_sample_csv=1" class="btn btn-secondary btn-sm"><i class="fas fa-file-csv"></i> Download Sample CSV</a>
+        <a href="studyplan-chapters.php?download_sample_csv=1" class="btn btn-secondary btn-sm" style="border-radius:10px; font-weight:600;"><i class="fas fa-file-csv"></i> Download Sample CSV</a>
     </div>
 </div>
 
 <?php if ($success_msg): ?>
-    <div class="alert alert-success" style="background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; padding:12px 16px; border-radius:12px; margin-bottom:1.5rem; display:flex; align-items:center; gap:10px;">
-        <i class="fas fa-circle-check" style="font-size:1.2rem; color:#10b981;"></i>
-        <div><?php echo htmlspecialchars($success_msg); ?></div>
+    <div class="alert alert-success" style="background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; padding:14px 18px; border-radius:14px; margin-bottom:1.5rem; display:flex; align-items:center; gap:12px; box-shadow:0 4px 12px rgba(16,185,129,0.1);">
+        <i class="fas fa-circle-check" style="font-size:1.3rem; color:#10b981;"></i>
+        <div style="font-weight:600;"><?php echo htmlspecialchars($success_msg); ?></div>
     </div>
 <?php endif; ?>
 
 <?php if ($error_msg): ?>
-    <div class="alert alert-danger" style="background:#fef2f2; border:1px solid #fca5a5; color:#991b1b; padding:12px 16px; border-radius:12px; margin-bottom:1.5rem; display:flex; align-items:center; gap:10px;">
-        <i class="fas fa-circle-exclamation" style="font-size:1.2rem; color:#ef4444;"></i>
-        <div><?php echo htmlspecialchars($error_msg); ?></div>
+    <div class="alert alert-danger" style="background:#fef2f2; border:1px solid #fca5a5; color:#991b1b; padding:14px 18px; border-radius:14px; margin-bottom:1.5rem; display:flex; align-items:center; gap:12px; box-shadow:0 4px 12px rgba(239,68,68,0.1);">
+        <i class="fas fa-circle-exclamation" style="font-size:1.3rem; color:#ef4444;"></i>
+        <div style="font-weight:600;"><?php echo htmlspecialchars($error_msg); ?></div>
     </div>
 <?php endif; ?>
 
 <!-- ── Main Card: Pre-set Chapters Creation Form ── -->
-<div class="panel" style="background:var(--card-bg); border:1px solid var(--border); border-radius:16px; padding:1.5rem; margin-bottom:2rem; box-shadow:0 4px 20px rgba(0,0,0,0.03);">
-    <div style="border-bottom:1px solid var(--border); padding-bottom:1rem; margin-bottom:1.25rem;">
-        <h3 style="font-size:1.1rem; font-weight:700; color:var(--text-main); margin:0 0 4px 0;"><i class="fas fa-folder-plus" style="color:var(--accent);"></i> Add Pre-set Chapters</h3>
-        <p style="font-size:0.82rem; color:var(--text-muted); margin:0;">Select target academic year and courses, then enter or upload chapters to make them auto-selectable during study plan creation.</p>
+<div class="modern-card">
+    <div style="border-bottom:1px solid #f1f5f9; padding-bottom:1rem; margin-bottom:1.5rem; display:flex; justify-content:space-between; align-items:center;">
+        <div>
+            <h3 style="font-size:1.15rem; font-weight:800; color:#0f172a; margin:0 0 4px 0; display:flex; align-items:center; gap:8px;">
+                <i class="fas fa-folder-plus" style="color:#8b5cf6;"></i> Add Pre-set Chapters
+            </h3>
+            <p style="font-size:0.84rem; color:#64748b; margin:0;">Select academic year and courses, then enter or upload chapters to make them auto-selectable during study plan creation.</p>
+        </div>
     </div>
 
     <form method="POST" enctype="multipart/form-data">
@@ -229,13 +417,13 @@ include 'includes/admin_nav.php';
         <input type="hidden" name="action" value="save_chapters">
 
         <!-- Step 1: Academic Year & Target Courses -->
-        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:1.2rem; margin-bottom:1.5rem;">
-            <div style="display:grid; grid-template-columns: 240px 1fr; gap:1.5rem; align-items:start;">
+        <div style="background:#f8fafc; border:1.5px solid #e2e8f0; border-radius:14px; padding:1.4rem; margin-bottom:1.5rem;">
+            <div style="display:grid; grid-template-columns: 260px 1fr; gap:1.75rem; align-items:start;">
                 <div>
-                    <label style="font-size:0.8rem; font-weight:700; color:#334155; text-transform:uppercase; display:block; margin-bottom:6px;">
+                    <label style="font-size:0.78rem; font-weight:800; color:#475569; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:8px;">
                         1. Select Academic Year <span style="color:#ef4444;">*</span>
                     </label>
-                    <select name="academic_year" id="form-academic-year" class="form-input" style="width:100%; font-weight:600;" onchange="filterCoursesByYear(this.value)">
+                    <select name="academic_year" id="form-academic-year" class="modern-select" onchange="filterCoursesByYear(this.value)">
                         <?php foreach ($academic_years as $yr): ?>
                             <option value="<?php echo htmlspecialchars($yr); ?>" <?php echo $selected_year === $yr ? 'selected' : ''; ?>>
                                 Academic Year <?php echo htmlspecialchars($yr); ?>
@@ -245,26 +433,32 @@ include 'includes/admin_nav.php';
                 </div>
 
                 <div>
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                        <label style="font-size:0.8rem; font-weight:700; color:#334155; text-transform:uppercase; margin:0;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                        <label style="font-size:0.78rem; font-weight:800; color:#475569; text-transform:uppercase; letter-spacing:0.5px; margin:0;">
                             2. Choose One or Multiple Courses <span style="color:#ef4444;">*</span>
                         </label>
                         <div style="display:flex; gap:8px;">
-                            <button type="button" class="btn btn-xs btn-outline" onclick="selectAllCourses(true)" style="font-size:0.7rem; padding:2px 8px;">Select All</button>
-                            <button type="button" class="btn btn-xs btn-outline" onclick="selectAllCourses(false)" style="font-size:0.7rem; padding:2px 8px;">Deselect All</button>
+                            <button type="button" class="btn btn-xs btn-outline" onclick="selectAllCourses(true)" style="font-size:0.72rem; font-weight:700; padding:3px 10px; border-radius:6px;">Select All</button>
+                            <button type="button" class="btn btn-xs btn-outline" onclick="selectAllCourses(false)" style="font-size:0.72rem; font-weight:700; padding:3px 10px; border-radius:6px;">Deselect All</button>
                         </div>
                     </div>
 
-                    <!-- Course Search & Selection Box -->
-                    <div style="margin-bottom:8px;">
-                        <input type="text" id="course-search-input" class="form-input" placeholder="Search courses..." style="font-size:0.8rem; padding:6px 10px; margin:0;" oninput="filterCourseCheckboxes(this.value)">
+                    <!-- Course Search Box -->
+                    <div style="position:relative; margin-bottom:10px;">
+                        <i class="fas fa-magnifying-glass" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:#94a3b8; font-size:0.85rem;"></i>
+                        <input type="text" id="course-search-input" class="modern-input" placeholder="Search course by name or code..." style="padding-left:34px; height:38px; font-size:0.83rem;" oninput="filterCourseCheckboxes(this.value)">
                     </div>
 
-                    <div id="course-checkbox-list" style="background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; max-height:160px; overflow-y:auto; padding:8px 12px; display:grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap:6px;">
+                    <div id="course-checkbox-list" class="course-card-grid">
                         <?php foreach ($courses as $c): ?>
-                            <label class="course-cb-item" data-name="<?php echo htmlspecialchars(strtolower($c['course_name'] . ' ' . $c['course_code'])); ?>" style="display:flex; align-items:center; gap:8px; font-size:0.82rem; cursor:pointer; padding:4px 6px; border-radius:4px; transition:background 0.15s;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">
-                                <input type="checkbox" name="target_courses[]" value="<?php echo $c['id']; ?>" class="course-cb">
-                                <span><strong><?php echo htmlspecialchars($c['course_name']); ?></strong> <?php echo $c['course_code'] ? '<small style="color:#64748b;">(' . htmlspecialchars($c['course_code']) . ')</small>' : ''; ?></span>
+                            <label class="course-card-item" data-name="<?php echo htmlspecialchars(strtolower($c['course_name'] . ' ' . $c['course_code'])); ?>" onclick="toggleCourseCardStyle(this)">
+                                <input type="checkbox" name="target_courses[]" value="<?php echo $c['id']; ?>" class="course-cb" onchange="toggleCourseCardStyle(this.closest('label'))">
+                                <span style="flex:1; font-size:0.84rem; color:#1e293b;">
+                                    <strong style="display:block; line-height:1.2;"><?php echo htmlspecialchars($c['course_name']); ?></strong>
+                                    <?php if ($c['course_code']): ?>
+                                        <span class="course-code-badge" style="margin-top:2px; display:inline-block;"><?php echo htmlspecialchars($c['course_code']); ?></span>
+                                    <?php endif; ?>
+                                </span>
                             </label>
                         <?php endforeach; ?>
                     </div>
@@ -273,114 +467,120 @@ include 'includes/admin_nav.php';
         </div>
 
         <!-- Step 2: Entry Mode Selection (Manual vs CSV Import) -->
-        <div style="margin-bottom:1rem;">
-            <div style="display:flex; gap:12px; border-bottom:2px solid #e2e8f0; margin-bottom:1.2rem;">
-                <button type="button" id="tab-btn-manual" class="tab-toggle-btn active" onclick="switchEntryTab('manual')" style="padding:8px 16px; font-weight:700; font-size:0.88rem; border:none; background:none; border-bottom:3px solid var(--accent); color:var(--accent); cursor:pointer;">
-                    <i class="fas fa-list-check"></i> Manual Entry
+        <div>
+            <div class="tab-switcher">
+                <button type="button" id="tab-btn-manual" class="active" onclick="switchEntryTab('manual')">
+                    <i class="fas fa-pen-to-square"></i> Manual Entry
                 </button>
-                <button type="button" id="tab-btn-csv" class="tab-toggle-btn" onclick="switchEntryTab('csv')" style="padding:8px 16px; font-weight:600; font-size:0.88rem; border:none; background:none; border-bottom:3px solid transparent; color:#64748b; cursor:pointer;">
-                    <i class="fas fa-file-csv"></i> Import via CSV / Excel
+                <button type="button" id="tab-btn-csv" onclick="switchEntryTab('csv')">
+                    <i class="fas fa-file-excel"></i> Import via CSV / Excel
                 </button>
             </div>
             <input type="hidden" name="entry_mode" id="entry-mode-input" value="manual">
 
             <!-- Manual Entry Panel -->
             <div id="panel-manual">
-                <table class="data-table" id="manual-chapters-table" style="width:100%; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">
-                    <thead>
-                        <tr style="background:#f8fafc; text-align:left;">
-                            <th style="width:30%;">Chapter Name <span style="color:#ef4444;">*</span></th>
-                            <th style="width:15%;">Code / No.</th>
-                            <th style="width:20%;">Subject</th>
-                            <th style="width:30%;">Description / Details</th>
-                            <th style="width:5%; text-align:center;">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody id="manual-rows-body">
-                        <tr>
-                            <td><input type="text" name="chap_name[]" class="form-input" style="margin:0;" placeholder="e.g. Cognitive Psychology" required></td>
-                            <td><input type="text" name="chap_code[]" class="form-input" style="margin:0;" placeholder="e.g. CH-01"></td>
-                            <td><input type="text" name="chap_subject[]" class="form-input" style="margin:0;" placeholder="e.g. Psychology"></td>
-                            <td><input type="text" name="chap_desc[]" class="form-input" style="margin:0;" placeholder="Overview notes..."></td>
-                            <td style="text-align:center;"><button type="button" class="btn btn-xs btn-soft-red" onclick="removeChapterRow(this)"><i class="fas fa-trash"></i></button></td>
-                        </tr>
-                        <tr>
-                            <td><input type="text" name="chap_name[]" class="form-input" style="margin:0;" placeholder="e.g. Neurobiology & Memory"></td>
-                            <td><input type="text" name="chap_code[]" class="form-input" style="margin:0;" placeholder="e.g. CH-02"></td>
-                            <td><input type="text" name="chap_subject[]" class="form-input" style="margin:0;" placeholder="e.g. Neuroscience"></td>
-                            <td><input type="text" name="chap_desc[]" class="form-input" style="margin:0;" placeholder="Overview notes..."></td>
-                            <td style="text-align:center;"><button type="button" class="btn btn-xs btn-soft-red" onclick="removeChapterRow(this)"><i class="fas fa-trash"></i></button></td>
-                        </tr>
-                    </tbody>
-                </table>
-                <div style="margin-top:10px;">
-                    <button type="button" class="btn btn-outline btn-sm" onclick="addChapterRow()"><i class="fas fa-plus"></i> Add Another Row</button>
+                <div class="modern-table-wrap">
+                    <table class="modern-entry-table" id="manual-chapters-table">
+                        <thead>
+                            <tr>
+                                <th style="width:32%;">Chapter Name <span style="color:#ef4444;">*</span></th>
+                                <th style="width:15%;">Code / No.</th>
+                                <th style="width:20%;">Subject</th>
+                                <th style="width:28%;">Description / Details</th>
+                                <th style="width:5%; text-align:center;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="manual-rows-body">
+                            <tr>
+                                <td><input type="text" name="chap_name[]" class="modern-input" style="height:38px;" placeholder="e.g. Cognitive Psychology" required></td>
+                                <td><input type="text" name="chap_code[]" class="modern-input" style="height:38px;" placeholder="e.g. CH-01"></td>
+                                <td><input type="text" name="chap_subject[]" class="modern-input" style="height:38px;" placeholder="e.g. Psychology"></td>
+                                <td><input type="text" name="chap_desc[]" class="modern-input" style="height:38px;" placeholder="Overview notes..."></td>
+                                <td style="text-align:center;"><button type="button" class="btn btn-xs btn-soft-red" style="border-radius:8px; padding:6px 10px;" onclick="removeChapterRow(this)"><i class="fas fa-trash"></i></button></td>
+                            </tr>
+                            <tr>
+                                <td><input type="text" name="chap_name[]" class="modern-input" style="height:38px;" placeholder="e.g. Neurobiology & Memory" required></td>
+                                <td><input type="text" name="chap_code[]" class="modern-input" style="height:38px;" placeholder="e.g. CH-02"></td>
+                                <td><input type="text" name="chap_subject[]" class="modern-input" style="height:38px;" placeholder="e.g. Neuroscience"></td>
+                                <td><input type="text" name="chap_desc[]" class="modern-input" style="height:38px;" placeholder="Overview notes..."></td>
+                                <td style="text-align:center;"><button type="button" class="btn btn-xs btn-soft-red" style="border-radius:8px; padding:6px 10px;" onclick="removeChapterRow(this)"><i class="fas fa-trash"></i></button></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div style="margin-top:12px;">
+                    <button type="button" class="btn btn-outline btn-sm" style="border-radius:10px; font-weight:700;" onclick="addChapterRow()"><i class="fas fa-plus"></i> Add Another Chapter Row</button>
                 </div>
             </div>
 
             <!-- CSV Import Panel -->
-            <div id="panel-csv" style="display:none; background:#f8fafc; border:2px dashed #cbd5e1; border-radius:12px; padding:2rem; text-align:center;">
-                <i class="fas fa-file-arrow-up" style="font-size:2.5rem; color:#8b5cf6; margin-bottom:12px;"></i>
-                <h4 style="font-size:1rem; font-weight:700; margin:0 0 6px 0;">Upload CSV File</h4>
-                <p style="font-size:0.8rem; color:#64748b; margin-bottom:1rem;">CSV file must contain columns: <code>chapter_name, chapter_code, subject_name, description</code>.</p>
-                <input type="file" name="csv_file" accept=".csv" class="form-input" style="max-width:320px; margin:0 auto 12px auto; display:block;">
-                <a href="studyplan-chapters.php?download_sample_csv=1" style="font-size:0.8rem; color:#8b5cf6; font-weight:600;"><i class="fas fa-download"></i> Download Sample CSV File</a>
+            <div id="panel-csv" style="display:none; background:#f8fafc; border:2px dashed #cbd5e1; border-radius:14px; padding:2.5rem; text-align:center;">
+                <div style="width:60px; height:60px; background:#f3e8ff; color:#8b5cf6; border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto 12px auto; font-size:1.5rem;">
+                    <i class="fas fa-cloud-arrow-up"></i>
+                </div>
+                <h4 style="font-size:1.05rem; font-weight:800; color:#0f172a; margin:0 0 6px 0;">Upload Chapters CSV File</h4>
+                <p style="font-size:0.83rem; color:#64748b; margin-bottom:1.25rem;">Ensure CSV file contains headers: <code>chapter_name, chapter_code, subject_name, description</code>.</p>
+                <input type="file" name="csv_file" accept=".csv" class="modern-input" style="max-width:340px; margin:0 auto 12px auto; display:block; padding:6px 12px; height:auto;">
+                <a href="studyplan-chapters.php?download_sample_csv=1" style="font-size:0.82rem; color:#8b5cf6; font-weight:700; text-decoration:none;"><i class="fas fa-download"></i> Download Sample CSV Template</a>
             </div>
         </div>
 
-        <div style="margin-top:1.5rem; text-align:right;">
-            <button type="submit" class="btn btn-primary btn-lg" style="padding:10px 24px; font-weight:700;"><i class="fas fa-save"></i> Save Pre-set Chapters</button>
+        <div style="margin-top:2rem; text-align:right;">
+            <button type="submit" class="modern-btn-primary"><i class="fas fa-floppy-disk"></i> Save Pre-set Chapters</button>
         </div>
     </form>
 </div>
 
 <!-- ── Data Table: Existing Pre-set Chapters List ── -->
-<div class="panel" style="background:var(--card-bg); border:1px solid var(--border); border-radius:16px; padding:1.5rem; box-shadow:0 4px 20px rgba(0,0,0,0.03);">
-    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:1.2rem;">
+<div class="modern-card">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; margin-bottom:1.5rem;">
         <div>
-            <h3 style="font-size:1.1rem; font-weight:700; color:var(--text-main); margin:0 0 4px 0;"><i class="fas fa-book-open" style="color:#10b981;"></i> Existing Pre-set Chapters</h3>
-            <p style="font-size:0.8rem; color:var(--text-muted); margin:0;">Total <?php echo count($existing_chapters); ?> chapter(s) saved for selected filters.</p>
+            <h3 style="font-size:1.15rem; font-weight:800; color:#0f172a; margin:0 0 4px 0; display:flex; align-items:center; gap:8px;">
+                <i class="fas fa-book-open" style="color:#10b981;"></i> Existing Pre-set Chapters
+            </h3>
+            <p style="font-size:0.84rem; color:#64748b; margin:0;">Total <?php echo count($existing_chapters); ?> chapter(s) saved in curriculum.</p>
         </div>
 
         <form method="GET" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0;">
-            <select name="academic_year" class="form-input" style="margin:0; width:160px;" onchange="this.form.submit()">
+            <select name="academic_year" class="modern-select" style="margin:0; width:160px; height:38px; font-size:0.82rem;" onchange="this.form.submit()">
                 <?php foreach ($academic_years as $yr): ?>
                     <option value="<?php echo htmlspecialchars($yr); ?>" <?php echo $selected_year === $yr ? 'selected' : ''; ?>>Year: <?php echo htmlspecialchars($yr); ?></option>
                 <?php endforeach; ?>
             </select>
 
-            <select name="course_filter" class="form-input" style="margin:0; width:180px;" onchange="this.form.submit()">
+            <select name="course_filter" class="modern-select" style="margin:0; width:180px; height:38px; font-size:0.82rem;" onchange="this.form.submit()">
                 <option value="0">All Courses</option>
                 <?php foreach ($courses as $c): ?>
                     <option value="<?php echo $c['id']; ?>" <?php echo $selected_course_filter == $c['id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($c['course_name']); ?></option>
                 <?php endforeach; ?>
             </select>
 
-            <input type="text" name="search" class="form-input" placeholder="Search chapters..." style="margin:0; width:180px;" value="<?php echo htmlspecialchars($search_query); ?>">
-            <button type="submit" class="btn btn-secondary btn-sm"><i class="fas fa-filter"></i> Filter</button>
-            <a href="studyplan-chapters.php" class="btn btn-outline btn-sm">Reset</a>
+            <input type="text" name="search" class="modern-input" placeholder="Search chapters..." style="margin:0; width:180px; height:38px; font-size:0.82rem;" value="<?php echo htmlspecialchars($search_query); ?>">
+            <button type="submit" class="btn btn-secondary btn-sm" style="border-radius:8px; height:38px;"><i class="fas fa-filter"></i> Filter</button>
+            <a href="studyplan-chapters.php" class="btn btn-outline btn-sm" style="border-radius:8px; height:38px; display:inline-flex; align-items:center;">Reset</a>
         </form>
     </div>
 
     <?php if (empty($existing_chapters)): ?>
-        <div style="text-align:center; padding:3rem; color:var(--text-muted);">
-            <i class="fas fa-book-bookmark" style="font-size:2.5rem; margin-bottom:10px; display:block; opacity:0.5;"></i>
-            <p style="margin:0;">No pre-set chapters found for the selected filter criteria.</p>
+        <div style="text-align:center; padding:3.5rem 1rem; color:#94a3b8; background:#f8fafc; border-radius:14px; border:1.5px dashed #e2e8f0;">
+            <i class="fas fa-book-bookmark" style="font-size:2.8rem; margin-bottom:12px; display:block; color:#cbd5e1;"></i>
+            <p style="margin:0; font-weight:600; font-size:0.9rem; color:#64748b;">No pre-set chapters found matching the selected filters.</p>
         </div>
     <?php else: ?>
         <form method="POST" id="bulk-delete-form">
             <?php csrf_field(); ?>
             <input type="hidden" name="action" value="bulk_delete">
             
-            <div style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
-                <button type="submit" class="btn btn-soft-red btn-xs" onclick="return confirm('Are you sure you want to delete selected chapters?')" style="font-size:0.75rem;"><i class="fas fa-trash"></i> Delete Selected</button>
+            <div style="margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
+                <button type="submit" class="btn btn-soft-red btn-xs" onclick="return confirm('Are you sure you want to delete selected chapters?')" style="font-size:0.75rem; border-radius:6px; font-weight:700;"><i class="fas fa-trash"></i> Delete Selected</button>
             </div>
 
-            <div class="table-wrap">
+            <div class="modern-table-wrap">
                 <table class="data-table" style="width:100%;">
                     <thead>
                         <tr>
-                            <th style="width:30px;"><input type="checkbox" onclick="toggleAllTableCbs(this)"></th>
+                            <th style="width:35px;"><input type="checkbox" onclick="toggleAllTableCbs(this)"></th>
                             <th>Chapter Code</th>
                             <th>Chapter Name</th>
                             <th>Course Name</th>
@@ -393,22 +593,22 @@ include 'includes/admin_nav.php';
                         <?php foreach ($existing_chapters as $ch): ?>
                             <tr>
                                 <td><input type="checkbox" name="chapter_ids[]" value="<?php echo $ch['id']; ?>" class="table-cb"></td>
-                                <td><span class="badge" style="background:#f1f5f9; color:#475569; font-weight:700; border:1px solid #cbd5e1;"><?php echo htmlspecialchars($ch['chapter_code'] ?: '-'); ?></span></td>
+                                <td><span class="badge" style="background:#f1f5f9; color:#475569; font-weight:700; border:1px solid #cbd5e1; font-size:0.75rem; padding:4px 8px; border-radius:6px;"><?php echo htmlspecialchars($ch['chapter_code'] ?: '-'); ?></span></td>
                                 <td>
-                                    <strong style="color:var(--text-main); font-size:0.9rem;"><?php echo htmlspecialchars($ch['chapter_name']); ?></strong>
+                                    <strong style="color:#0f172a; font-size:0.9rem;"><?php echo htmlspecialchars($ch['chapter_name']); ?></strong>
                                     <?php if ($ch['description']): ?>
-                                        <div style="font-size:0.75rem; color:var(--text-muted);"><?php echo htmlspecialchars($ch['description']); ?></div>
+                                        <div style="font-size:0.76rem; color:#64748b; margin-top:2px;"><?php echo htmlspecialchars($ch['description']); ?></div>
                                     <?php endif; ?>
                                 </td>
-                                <td><strong><?php echo htmlspecialchars($ch['course_name'] ?: 'Course #' . $ch['course_id']); ?></strong></td>
-                                <td><?php echo htmlspecialchars($ch['subject_name'] ?: '-'); ?></td>
-                                <td><span class="badge badge-info"><?php echo htmlspecialchars($ch['academic_year']); ?></span></td>
+                                <td><strong style="color:#334155;"><?php echo htmlspecialchars($ch['course_name'] ?: 'Course #' . $ch['course_id']); ?></strong></td>
+                                <td><span style="font-size:0.83rem; color:#475569; font-weight:500;"><?php echo htmlspecialchars($ch['subject_name'] ?: '-'); ?></span></td>
+                                <td><span class="badge badge-info" style="font-size:0.75rem; font-weight:700; padding:4px 8px; border-radius:6px;"><?php echo htmlspecialchars($ch['academic_year']); ?></span></td>
                                 <td style="text-align:right;">
                                     <form method="POST" style="display:inline-block;" onsubmit="return confirm('Delete this chapter?')">
                                         <?php csrf_field(); ?>
                                         <input type="hidden" name="action" value="delete_chapter">
                                         <input type="hidden" name="chapter_id" value="<?php echo $ch['id']; ?>">
-                                        <button type="submit" class="btn btn-soft-red btn-xs" title="Delete chapter"><i class="fas fa-trash"></i></button>
+                                        <button type="submit" class="btn btn-soft-red btn-xs" style="border-radius:6px;" title="Delete chapter"><i class="fas fa-trash"></i></button>
                                     </form>
                                 </td>
                             </tr>
@@ -441,19 +641,44 @@ function switchEntryTab(mode) {
         document.getElementById('panel-manual').style.display = 'none';
         document.getElementById('panel-csv').style.display = 'block';
     }
+function switchEntryTab(mode) {
+    document.getElementById('entry-mode-input').value = mode;
+    document.querySelectorAll('.tab-switcher button').forEach(btn => btn.classList.remove('active'));
+    
+    if (mode === 'manual') {
+        document.getElementById('tab-btn-manual').classList.add('active');
+        document.getElementById('panel-manual').style.display = 'block';
+        document.getElementById('panel-csv').style.display = 'none';
+    } else {
+        document.getElementById('tab-btn-csv').classList.add('active');
+        document.getElementById('panel-manual').style.display = 'none';
+        document.getElementById('panel-csv').style.display = 'block';
+    }
+}
+
+function toggleCourseCardStyle(label) {
+    if (!label) return;
+    var cb = label.querySelector('.course-cb');
+    if (cb && cb.checked) {
+        label.classList.add('checked');
+    } else {
+        label.classList.remove('checked');
+    }
 }
 
 function selectAllCourses(select) {
     document.querySelectorAll('.course-cb').forEach(cb => {
-        if (cb.offsetParent !== null) { // Only affect visible checkboxes
+        var label = cb.closest('label');
+        if (label && label.style.display !== 'none') {
             cb.checked = select;
+            toggleCourseCardStyle(label);
         }
     });
 }
 
 function filterCourseCheckboxes(q) {
     q = q.toLowerCase().trim();
-    document.querySelectorAll('.course-cb-item').forEach(item => {
+    document.querySelectorAll('.course-card-item').forEach(item => {
         var name = item.dataset.name || '';
         if (!q || name.indexOf(q) !== -1) {
             item.style.display = 'flex';
@@ -466,11 +691,11 @@ function filterCourseCheckboxes(q) {
 function addChapterRow() {
     var tbody = document.getElementById('manual-rows-body');
     var tr = document.createElement('tr');
-    tr.innerHTML = '<td><input type="text" name="chap_name[]" class="form-input" style="margin:0;" placeholder="e.g. Chapter Name" required></td>' +
-                   '<td><input type="text" name="chap_code[]" class="form-input" style="margin:0;" placeholder="e.g. CH-03"></td>' +
-                   '<td><input type="text" name="chap_subject[]" class="form-input" style="margin:0;" placeholder="e.g. Subject"></td>' +
-                   '<td><input type="text" name="chap_desc[]" class="form-input" style="margin:0;" placeholder="Overview notes..."></td>' +
-                   '<td style="text-align:center;"><button type="button" class="btn btn-xs btn-soft-red" onclick="removeChapterRow(this)"><i class="fas fa-trash"></i></button></td>';
+    tr.innerHTML = '<td><input type="text" name="chap_name[]" class="modern-input" style="height:38px;" placeholder="e.g. Chapter Name" required></td>' +
+                   '<td><input type="text" name="chap_code[]" class="modern-input" style="height:38px;" placeholder="e.g. CH-03"></td>' +
+                   '<td><input type="text" name="chap_subject[]" class="modern-input" style="height:38px;" placeholder="e.g. Subject"></td>' +
+                   '<td><input type="text" name="chap_desc[]" class="modern-input" style="height:38px;" placeholder="Overview notes..."></td>' +
+                   '<td style="text-align:center;"><button type="button" class="btn btn-xs btn-soft-red" style="border-radius:8px; padding:6px 10px;" onclick="removeChapterRow(this)"><i class="fas fa-trash"></i></button></td>';
     tbody.appendChild(tr);
 }
 
@@ -479,13 +704,18 @@ function removeChapterRow(btn) {
     if (tbody.children.length > 1) {
         btn.closest('tr').remove();
     } else {
-        alert('At least one row must remain.');
+        alert('At least one chapter row must remain.');
     }
 }
 
 function toggleAllTableCbs(master) {
     document.querySelectorAll('.table-cb').forEach(cb => cb.checked = master.checked);
 }
+
+// Initial card highlight check
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.course-card-item').forEach(label => toggleCourseCardStyle(label));
+});
 </script>
 
 <?php include 'includes/footer.php'; ?>
