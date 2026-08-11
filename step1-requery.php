@@ -1,32 +1,71 @@
 <?php
 require_once 'config/database.php';
 header('Content-Type: text/plain; charset=utf-8');
-echo "=== STEP 1: RE-QUERY PENDING RECORDS ===\n";
+echo "=== STEP 1: CANCEL LEGACY PENDING RECORDS ===\n";
 echo "Time: " . date('Y-m-d H:i:s T') . "\n\n";
 
-// 1. Get ALL current pending records
-$stmt = $pdo->query("SELECT id, status, event_name, template_name, student_uid, recipient_name, subject, created_at FROM communication_queue WHERE status = 'pending' ORDER BY id ASC");
-$rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-echo "Total pending: " . count($rows) . "\n\n";
+// Explicit list of the 33 confirmed legacy pending IDs
+$legacyIds = [12,13,14,15,16,17,18,19,20,21,22,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,48,68];
+echo "Target IDs (" . count($legacyIds) . "): " . implode(', ', $legacyIds) . "\n\n";
 
-$ids = [];
-foreach ($rows as $r) {
-    $ids[] = (int)$r['id'];
-    echo "ID=" . $r['id'] . " | " . $r['created_at'] . " | " . ($r['event_name'] ?: '-') . " | " . ($r['template_name'] ?: '-') . " | " . $r['recipient_name'] . " | " . $r['subject'] . "\n";
-}
+// Verify all are still pending before cancellation
+$placeholders = implode(',', array_fill(0, count($legacyIds), '?'));
+$verifyStmt = $pdo->prepare("SELECT id, status FROM communication_queue WHERE id IN ($placeholders) ORDER BY id");
+$verifyStmt->execute($legacyIds);
+$verified = $verifyStmt->fetchAll(PDO::FETCH_ASSOC);
 
-echo "\nPending IDs: " . implode(', ', $ids) . "\n";
-
-// 2. Check if any NEW records were created after the mode architecture deployment (commit dd729fa was Aug 11 ~21:00 IST = ~20:57)
-$cutoff = '2026-08-11 22:30:00'; // safe buffer after the last known pre-toggle record (ID 68 at 22:22)
-$newRecords = $pdo->query("SELECT id, status, created_at, subject FROM communication_queue WHERE created_at >= '{$cutoff}' ORDER BY id ASC")->fetchAll(PDO::FETCH_ASSOC);
-echo "\nRecords created after {$cutoff}:\n";
-if (empty($newRecords)) {
-    echo "  (none)\n";
-} else {
-    foreach ($newRecords as $nr) {
-        echo "  ID=" . $nr['id'] . " status=" . $nr['status'] . " created=" . $nr['created_at'] . " subject=" . $nr['subject'] . "\n";
+$notPending = [];
+$confirmedPending = [];
+foreach ($verified as $v) {
+    if ($v['status'] !== 'pending') {
+        $notPending[] = $v['id'] . '(' . $v['status'] . ')';
+    } else {
+        $confirmedPending[] = (int)$v['id'];
     }
 }
 
-echo "\n=== DONE ===\n";
+echo "Confirmed pending: " . count($confirmedPending) . "\n";
+if (!empty($notPending)) {
+    echo "NOT pending (SKIPPED): " . implode(', ', $notPending) . "\n";
+}
+
+if (count($confirmedPending) === 0) {
+    echo "\nNo records to cancel.\n";
+    exit;
+}
+
+// Cancel only confirmed pending records
+$cancelPlaceholders = implode(',', array_fill(0, count($confirmedPending), '?'));
+$cancelStmt = $pdo->prepare("
+    UPDATE communication_queue 
+    SET status = 'cancelled', 
+        error_message = CONCAT(IFNULL(error_message, ''), ' | cancelled:pre_mode_toggle_cleanup_2026-08-12'), 
+        updated_at = NOW() 
+    WHERE id IN ($cancelPlaceholders) 
+      AND status = 'pending'
+");
+$cancelStmt->execute($confirmedPending);
+$affected = $cancelStmt->rowCount();
+
+echo "\nCancelled: " . $affected . " records\n";
+
+// Post-cancellation verification
+$remainingStmt = $pdo->query("SELECT id, status FROM communication_queue WHERE status = 'pending' ORDER BY id");
+$remaining = $remainingStmt->fetchAll(PDO::FETCH_ASSOC);
+echo "\nRemaining pending after cleanup: " . count($remaining) . "\n";
+if (!empty($remaining)) {
+    foreach ($remaining as $r) {
+        echo "  ID=" . $r['id'] . " status=" . $r['status'] . "\n";
+    }
+}
+
+// Verify cancelled records
+$cancelledVerify = $pdo->prepare("SELECT id, status, error_message FROM communication_queue WHERE id IN ($cancelPlaceholders) ORDER BY id");
+$cancelledVerify->execute($confirmedPending);
+$cancelledRows = $cancelledVerify->fetchAll(PDO::FETCH_ASSOC);
+echo "\nVerification of cancelled records (sample first 3):\n";
+foreach (array_slice($cancelledRows, 0, 3) as $cr) {
+    echo "  ID=" . $cr['id'] . " status=" . $cr['status'] . " error=" . $cr['error_message'] . "\n";
+}
+
+echo "\n=== STEP 1 COMPLETE ===\n";
