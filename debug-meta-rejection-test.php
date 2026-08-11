@@ -8,7 +8,7 @@ try {
     $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
     
     $accessToken    = $settings['whatsapp_access_token'] ?? '';
-    $phoneNumberId  = $settings['whatsapp_phone_number_id'] ?? '';
+    $phoneNumberId  = $settings['whatsapp_phone_id'] ?? '';
     $apiVersion     = $settings['whatsapp_api_version'] ?? 'v20.0';
     
     $url = "https://graph.facebook.com/{$apiVersion}/{$phoneNumberId}/messages";
