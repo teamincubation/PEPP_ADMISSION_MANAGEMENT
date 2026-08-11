@@ -12,15 +12,15 @@ try {
         echo "Status: " . $row['status'] . " - Count: " . $row['c'] . "\n";
     }
     
-    echo "\n--- Recent 15 items order by priority/created ---\n";
+    echo "\n--- All Pending Queue Items ---\n";
     $stmt = $pdo->query("
-        SELECT id, channel, recipient, status, retry_count, next_attempt_at, created_at, updated_at, error_message, event_name, template_name
+        SELECT id, channel, recipient, status, retry_count, next_attempt_at, created_at, updated_at, error_message, event_name, template_name, priority
         FROM communication_queue 
-        ORDER BY id DESC
-        LIMIT 15
+        WHERE status = 'pending'
+        ORDER BY priority DESC, created_at ASC
     ");
     while ($row = $stmt->fetch()) {
-        echo "#{$row['id']}: Status = {$row['status']}, Template = {$row['template_name']}, Recipient = {$row['recipient']}, Retries = {$row['retry_count']}/3, NextAttempt = {$row['next_attempt_at']}, Updated = {$row['updated_at']}, Error = " . ($row['error_message'] ?? '-') . "\n";
+        echo "#{$row['id']}: Priority = {$row['priority']}, Recipient = {$row['recipient']}, Template = {$row['template_name']}, Retries = {$row['retry_count']}/3, NextAttempt = {$row['next_attempt_at']}, Created = {$row['created_at']}, Error = " . ($row['error_message'] ?? '-') . "\n";
     }
     
     echo "\n--- Check MySQL Server time details ---\n";
