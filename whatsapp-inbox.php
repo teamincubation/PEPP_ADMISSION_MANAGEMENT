@@ -306,9 +306,27 @@ function renderMessages(messages, isBackground) {
         const dateObj = new Date(m.created_at);
         const timeStr = dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
 
+        let interactiveBtnHtml = '';
+        if (m.message_type === 'interactive' || (m.raw_payload && m.raw_payload.includes('interactive_button_text'))) {
+            try {
+                const payloadObj = typeof m.raw_payload === 'string' ? JSON.parse(m.raw_payload) : m.raw_payload;
+                const btnText = payloadObj.interactive_button_text || 'Message Here';
+                const btnUrl = payloadObj.interactive_button_url || 'https://wa.me/917025000444';
+                
+                interactiveBtnHtml = `
+                    <div style="margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.1); padding-top: 6px;">
+                        <a href="${escapeHtml(btnUrl)}" target="_blank" style="font-size:0.75rem; padding:4px 10px; border-radius:6px; background:#ffffff; display:inline-flex; align-items:center; gap:6px; border:1px solid #cbd5e1; color:#0f172a; text-decoration:none; font-weight:600; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                            <i class="fas fa-arrow-up-right-from-square" style="font-size:0.7rem; color:#2563eb;"></i> ${escapeHtml(btnText)}
+                        </a>
+                    </div>
+                `;
+            } catch(e) {}
+        }
+
         html += `
             <div class="bubble ${bubbleClass}">
                 <div style="white-space: pre-wrap;">${escapeHtml(m.message_text)}</div>
+                ${interactiveBtnHtml}
                 <div style="display: flex; justify-content: flex-end; align-items: center; font-size: 0.65rem; color: #64748b; margin-top: 4px;">
                     <span>${timeStr}</span>
                     ${statusTick}

@@ -328,11 +328,13 @@ class CommunicationEngine {
                         }
 
                         // Insert outbound message with status 'sent'
+                        $msgType = (isset($templateData['type']) && $templateData['type'] === 'interactive') ? 'interactive' : 'text';
+                        $rawPayloadJson = !empty($item['template_data']) ? $item['template_data'] : null;
                         $insMsg = $this->pdo->prepare("
-                            INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, status, created_at, sent_at)
-                            VALUES (?, ?, 'outbound', 'text', ?, 'sent', NOW(), NOW())
+                            INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, status, raw_payload, created_at, sent_at)
+                            VALUES (?, ?, 'outbound', ?, ?, 'sent', ?, NOW(), NOW())
                         ");
-                        $insMsg->execute([$convId, $msgId, $bodyText]);
+                        $insMsg->execute([$convId, $msgId, $msgType, $bodyText, $rawPayloadJson]);
 
                         $this->pdo->commit();
                     } catch (Exception $e) {

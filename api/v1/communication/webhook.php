@@ -298,6 +298,73 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]);
 
                 $pdo->commit();
+
+                // ── AUTOMATED INTERACTIVE AUTO-RESPONSE TRIGGER ──
+                try {
+                    $metadata = $payload['entry'][0]['changes'][0]['value']['metadata'] ?? [];
+                    $displayNumber = preg_replace('/\D/', '', $metadata['display_phone_number'] ?? '');
+                    
+                    // Verify recipient WABA display number (916282563209)
+                    if (empty($displayNumber) || $displayNumber === '916282563209') {
+                        $cooldown = 3600; // 1 hour default cooldown
+                        try {
+                            $stmtCd = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_auto_response_cooldown' LIMIT 1");
+                            $stmtCd->execute();
+                            $cdVal = $stmtCd->fetchColumn();
+                            if ($cdVal !== false && $cdVal !== null && $cdVal !== '') {
+                                $cooldown = (int)$cdVal;
+                            }
+                        } catch (Exception $cdEx) {}
+
+                        // Check if auto-response was already sent within the cooldown window
+                        $stmtRecent = $pdo->prepare("
+                            SELECT COUNT(*) 
+                            FROM whatsapp_messages 
+                            WHERE conversation_id = ? 
+                              AND direction = 'outbound' 
+                              AND message_text LIKE '%Thank you for contacting PEPP Learning%'
+                              AND created_at >= DATE_SUB(NOW(), INTERVAL ? SECOND)
+                        ");
+                        $stmtRecent->execute([$convId, $cooldown]);
+                        $recentCount = (int)$stmtRecent->fetchColumn();
+
+                        if ($recentCount === 0) {
+                            require_once __DIR__ . '/../../../includes/communication/CommunicationEngine.php';
+                            $engine = CommunicationEngine::getInstance($pdo);
+
+                            $autoText = "Thank you for contacting PEPP Learning.\n\nIf you have any query or need assistance, please contact our support team.";
+
+                            $templateData = [
+                                'type' => 'interactive',
+                                'interactive_type' => 'cta_url',
+                                'interactive_body' => $autoText,
+                                'interactive_button_text' => 'Message Here',
+                                'interactive_button_url' => 'https://wa.me/917025000444'
+                            ];
+
+                            $queueId = $engine->queueMessage(
+                                'whatsapp',
+                                $cleanFrom,
+                                $contactName,
+                                'Auto Response',
+                                $autoText,
+                                $autoText,
+                                [],
+                                $templateData,
+                                'system_auto_response',
+                                null,
+                                $studentUid,
+                                'auto_response'
+                            );
+
+                            if ($queueId) {
+                                $engine->dispatchQueueItemAsync($queueId);
+                            }
+                        }
+                    }
+                } catch (Exception $autoEx) {
+                    error_log("WhatsApp Auto-Response trigger error: " . $autoEx->getMessage());
+                }
             } catch (Exception $e) {
                 if ($pdo->inTransaction()) {
                     $pdo->rollBack();

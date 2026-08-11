@@ -105,6 +105,32 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
             if (!empty($components)) {
                 $payload['template']['components'] = $components;
             }
+        } else if (($templateData['type'] ?? '') === 'interactive') {
+            $payload['type'] = 'interactive';
+            $payload['interactive'] = [
+                'type' => $templateData['interactive_type'] ?? 'cta_url',
+                'body' => [
+                    'text' => $templateData['interactive_body'] ?? ($bodyText ?: strip_tags($bodyHtml))
+                ],
+                'action' => [
+                    'name' => $templateData['interactive_type'] ?? 'cta_url',
+                    'parameters' => [
+                        'display_text' => $templateData['interactive_button_text'] ?? 'Click Here',
+                        'url' => $templateData['interactive_button_url'] ?? ''
+                    ]
+                ]
+            ];
+            if (!empty($templateData['interactive_header'])) {
+                $payload['interactive']['header'] = [
+                    'type' => 'text',
+                    'text' => $templateData['interactive_header']
+                ];
+            }
+            if (!empty($templateData['interactive_footer'])) {
+                $payload['interactive']['footer'] = [
+                    'text' => $templateData['interactive_footer']
+                ];
+            }
         } else {
             // Send as simple free-form text message (for customer responses / status updates within 24h window)
             $payload['type'] = 'text';
