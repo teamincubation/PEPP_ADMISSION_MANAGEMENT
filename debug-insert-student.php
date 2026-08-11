@@ -17,6 +17,8 @@ try {
     file_put_contents('uploads/payments/mock-screenshot.jpg', 'mock_data');
     file_put_contents('uploads/photos/mock-photo.jpg', 'mock_data');
 
+    $pdo->prepare("DELETE FROM users WHERE email = ?")->execute(['adnanmongam@gmail.com']);
+
     $stmt = $pdo->prepare("
         INSERT INTO users (
             name, gender, date_of_birth, whatsapp_country_code, whatsapp_number, 
