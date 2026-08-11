@@ -380,6 +380,7 @@ include 'includes/admin_nav.php';
                                                 <!-- Variable selector -->
                                                 <select name="mappings[<?php echo htmlspecialchars($eventName); ?>][parameters][<?php echo $i; ?>][value]" class="form-control value-field-variable" id="val-var-<?php echo htmlspecialchars($eventName); ?>-<?php echo $i; ?>" style="flex:1; font-size:0.75rem; display: <?php echo $mType === 'variable' ? 'inline-block' : 'none'; ?>;">
                                                     <option value="student_name" <?php echo $mVal === 'student_name' ? 'selected' : ''; ?>>Student Name</option>
+                                                    <option value="student_email" <?php echo $mVal === 'student_email' ? 'selected' : ''; ?>>Student Email</option>
                                                     <option value="application_id" <?php echo $mVal === 'application_id' ? 'selected' : ''; ?>>Application ID / Roll No</option>
                                                     <option value="course_name" <?php echo $mVal === 'course_name' ? 'selected' : ''; ?>>Course Name</option>
                                                     <option value="academic_year" <?php echo $mVal === 'academic_year' ? 'selected' : ''; ?>>Academic Year</option>
@@ -621,6 +622,7 @@ function onMappingTemplateChange(eventName, selectedTemplateName) {
                 </select>
                 <select name="mappings[${eventName}][parameters][${i}][value]" class="form-control value-field-variable" id="val-var-${eventName}-${i}" style="flex:1; font-size:0.75rem;">
                     <option value="student_name" selected>Student Name</option>
+                    <option value="student_email">Student Email</option>
                     <option value="application_id">Application ID / Roll No</option>
                     <option value="course_name">Course Name</option>
                     <option value="academic_year">Academic Year</option>
@@ -633,13 +635,17 @@ function onMappingTemplateChange(eventName, selectedTemplateName) {
                     <option value="total_payable">Total Payable</option>
                     <option value="total_paid">Total Paid / Collected</option>
                     <option value="balance_amount">Balance Amount</option>
+                    <option value="installment_number">Installment Count / Installment Number</option>
+                    <option value="installment_amount">Installment Amount</option>
                     <option value="installment_due_date">Installment Due Date</option>
                     <option value="next_due_date">Next Due Date</option>
+                    <option value="banking_details">Banking Details</option>
                     <option value="invoice_number">Invoice Number</option>
                     <option value="invoice_link">Secure Invoice Link</option>
                     <option value="session_date">Session Date</option>
                     <option value="trainer_name">Trainer Name</option>
                     <option value="meeting_link">Meeting Link</option>
+                    <option value="rejection_reason">Rejection Reason</option>
                     <option value="current_datetime">Current Date/Time</option>
                 </select>
 
