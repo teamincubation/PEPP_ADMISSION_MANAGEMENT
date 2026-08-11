@@ -8,24 +8,17 @@ try {
     
     if ($meta_json) {
         $meta = json_decode($meta_json, true);
-        $found = false;
+        $buttons = [];
         foreach ($meta['components'] ?? [] as $comp) {
-            if (($comp['type'] ?? '') === 'BUTTONS' && isset($comp['buttons']) && is_array($comp['buttons'])) {
-                foreach ($comp['buttons'] as $btn) {
-                    if (($btn['type'] ?? '') === 'URL') {
-                        echo "URL IS: " . ($btn['url'] ?? 'NOT_FOUND') . "\n";
-                        $found = true;
-                    }
-                }
+            if (($comp['type'] ?? '') === 'BUTTONS') {
+                $buttons[] = $comp;
             }
         }
-        if (!$found) {
-            echo "URL NOT FOUND IN BUTTONS COMPONENT\n";
-        }
+        echo base64_encode(json_encode($buttons));
     } else {
-        echo "TEMPLATE NOT FOUND IN DB\n";
+        echo "TEMPLATE NOT FOUND";
     }
 } catch (Exception $e) {
-    echo "ERROR: " . $e->getMessage() . "\n";
+    echo "ERROR: " . base64_encode($e->getMessage());
 }
 
