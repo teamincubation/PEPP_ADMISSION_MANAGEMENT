@@ -1,12 +1,8 @@
 <?php
 require_once 'config/database.php';
-
-header('Content-Type: application/json');
-
-try {
-    $stmt = $pdo->query("SELECT template_name, status, category FROM communication_templates");
-    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    echo json_encode($rows);
-} catch (Exception $e) {
-    echo json_encode(["error" => $e->getMessage()]);
+$stmt = $pdo->query("SELECT template_name, meta_data FROM communication_templates");
+foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+    echo "Template: " . $row['template_name'] . "\n";
+    echo "Meta: " . $row['meta_data'] . "\n\n";
 }
+exit;
