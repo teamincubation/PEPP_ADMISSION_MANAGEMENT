@@ -197,7 +197,7 @@ function render_nav_item($key, $active_page, $nav_data) {
             echo '<a class="nav-item ' . nav_active('communication', $active_page) . '" href="communication-dashboard.php"><i class="fas fa-network-wired"></i> Communication Engine</a>';
             break;
         case 'whatsapp':
-            echo '<a class="nav-item ' . nav_active('whatsapp', $active_page) . '" href="whatsapp-notification.php"><i class="fab fa-whatsapp"></i> WhatsApp Messages</a>';
+            echo '<a class="nav-item ' . nav_active('whatsapp', $active_page) . '" href="whatsapp-notification.php"><i class="fab fa-whatsapp"></i> Manual WP Log</a>';
             break;
         case 'whatsapp-inbox':
             echo '<a class="nav-item ' . nav_active('whatsapp-inbox', $active_page) . '" href="whatsapp-inbox.php"><i class="fab fa-whatsapp"></i> WhatsApp Inbox';

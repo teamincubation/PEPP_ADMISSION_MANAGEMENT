@@ -141,7 +141,7 @@ $template_labels = [
 ];
 
 $active_page = 'whatsapp';
-$page_title  = 'WhatsApp Messages';
+$page_title  = 'Manual WP Log';
 $page_sub    = 'Send a direct message and keep the log';
 include 'includes/admin_nav.php';
 ?>
