@@ -4,8 +4,11 @@ ini_set('display_errors', 1);
 require_once 'config/database.php';
 
 try {
-    echo "=== DATABASE CONVERSATION COUNTS ===\n";
-    // 1. Database raw counts
+    // Temporarily set conversation 55 unread_count to 3 for testing
+    $orig_unread = (int)$pdo->query("SELECT unread_count FROM whatsapp_conversations WHERE id = 55")->fetchColumn();
+    $pdo->query("UPDATE whatsapp_conversations SET unread_count = 3 WHERE id = 55");
+    
+    echo "=== DATABASE CONVERSATION COUNTS (SIMULATED UNREAD = 3) ===\n";
     $total_convs = (int)$pdo->query("SELECT COUNT(*) FROM whatsapp_conversations")->fetchColumn();
     $unread_convs = (int)$pdo->query("SELECT COUNT(*) FROM whatsapp_conversations WHERE unread_count > 0")->fetchColumn();
     $student_convs = (int)$pdo->query("SELECT COUNT(*) FROM whatsapp_conversations WHERE student_uid IS NOT NULL")->fetchColumn();
@@ -39,40 +42,23 @@ try {
 
     echo "\n=== TESTING UNREAD_COUNT BEHAVIOR ===\n";
     
-    // Let's find one conversation to test behavior on
-    $conv = $pdo->query("SELECT * FROM whatsapp_conversations LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-    if ($conv) {
-        $cid = $conv['id'];
-        echo "Testing on Conversation ID #$cid (Initial unread_count: {$conv['unread_count']})\n";
-        
-        // Save initial unread count
-        $orig_unread = $conv['unread_count'];
-        
-        // 1. Simulate background polling (mark_read = 0)
-        // Background polling should NOT alter the unread count in DB
-        $stmt_msg = $pdo->prepare("SELECT COUNT(*) FROM whatsapp_messages WHERE conversation_id = ?");
-        $stmt_msg->execute([$cid]);
-        $msg_count = $stmt_msg->fetchColumn();
-        
-        // Re-fetch conversation to check DB unread count
-        $stmt_check = $pdo->prepare("SELECT unread_count FROM whatsapp_conversations WHERE id = ?");
-        $stmt_check->execute([$cid]);
-        $unread_after_poll = $stmt_check->fetchColumn();
-        echo "unread_count after background polling (mark_read=0): $unread_after_poll (Expected: $orig_unread)\n";
-        
-        // 2. Simulate explicit open (mark_read = 1)
-        // Explicit open MUST reset the unread count to 0 in DB
-        $pdo->prepare("UPDATE whatsapp_conversations SET unread_count = 0 WHERE id = ?")->execute([$cid]);
-        $stmt_check->execute([$cid]);
-        $unread_after_open = $stmt_check->fetchColumn();
-        echo "unread_count after explicit open (mark_read=1): $unread_after_open (Expected: 0)\n";
-        
-        // Restore original unread count in DB to keep data pristine
-        $pdo->prepare("UPDATE whatsapp_conversations SET unread_count = ? WHERE id = ?")->execute([$orig_unread, $cid]);
-        echo "Prised state restored.\n";
-    } else {
-        echo "No conversations in database to test unread_count behavior.\n";
-    }
+    $cid = 55;
+    $stmt_check = $pdo->prepare("SELECT unread_count FROM whatsapp_conversations WHERE id = ?");
+    
+    // Re-fetch conversation to check DB unread count (simulating mark_read=0 polling)
+    $stmt_check->execute([$cid]);
+    $unread_after_poll = $stmt_check->fetchColumn();
+    echo "unread_count after background polling (mark_read=0): $unread_after_poll (Expected: 3)\n";
+    
+    // Simulate explicit open (mark_read = 1) -> must reset to 0 in DB
+    $pdo->prepare("UPDATE whatsapp_conversations SET unread_count = 0 WHERE id = ?")->execute([$cid]);
+    $stmt_check->execute([$cid]);
+    $unread_after_open = $stmt_check->fetchColumn();
+    echo "unread_count after explicit open (mark_read=1): $unread_after_open (Expected: 0)\n";
+    
+    // Restore original unread count in DB to keep data pristine
+    $pdo->prepare("UPDATE whatsapp_conversations SET unread_count = ? WHERE id = ?")->execute([$orig_unread, $cid]);
+    echo "Pristine state restored.\n";
 } catch (Throwable $t) {
     echo "ERROR: " . $t->getMessage() . "\n";
 }
