@@ -16,17 +16,8 @@ try {
     $user_id = $student['user_id'];
     echo "Found student User ID: {$user_id}\n";
     
-    // 2. Setup the account ADNAN
-    $accStmt = $pdo->prepare("SELECT id FROM accounts WHERE name = ? LIMIT 1");
-    $accStmt->execute(['ADNAN']);
-    $payment_account_id = $accStmt->fetchColumn();
-    if (!$payment_account_id) {
-        $pdo->prepare("INSERT INTO accounts (name, status) VALUES (?, 'active')")->execute(['ADNAN']);
-        $payment_account_id = $pdo->lastInsertId();
-        echo "Created Payment Account 'ADNAN' with ID: {$payment_account_id}\n";
-    } else {
-        echo "Found Payment Account 'ADNAN' with ID: {$payment_account_id}\n";
-    }
+    // 2. Set payment_account_id to null since accounts module is not installed
+    $payment_account_id = null;
     
     // 3. Setup PEPP course fee record to match total
     $cStmt = $pdo->prepare("SELECT COUNT(*) FROM pepp_courses WHERE course_name = ?");
