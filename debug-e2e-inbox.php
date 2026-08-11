@@ -324,6 +324,7 @@ try {
 
     $stmtConv->execute([$testPhone]);
     $convWeird = $stmtConv->fetch(PDO::FETCH_ASSOC);
+    echo "   Fetched convWeird: " . json_encode($convWeird) . "\n";
     if ($convWeird && $convWeird['student_uid'] === 'PEPP2026INBOX') {
         echo "   PASSED: Successfully matched student even with weird phone formatting in database.\n\n";
     } else {
