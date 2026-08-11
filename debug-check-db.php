@@ -6,8 +6,8 @@ try {
     // Restore test student to clean formatting
     $pdo->prepare("UPDATE users SET whatsapp_country_code = '+91', whatsapp_number = '6282563209' WHERE user_id = 'PEPP2026INBOX'")->execute();
     
-    echo "TEST STUDENT STATUS AFTER RESTORE:\n";
-    $stmt = $pdo->prepare("SELECT id, user_id, whatsapp_country_code, whatsapp_number, status FROM users WHERE user_id = 'PEPP2026INBOX'");
+    echo "WHATSAPP SETTINGS:\n";
+    $stmt = $pdo->prepare("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%'");
     $stmt->execute();
     print_r($stmt->fetchAll());
 } catch (Throwable $t) {
