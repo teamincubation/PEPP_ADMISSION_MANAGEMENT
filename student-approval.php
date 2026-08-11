@@ -171,37 +171,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             // Queue student approval WhatsApp template notification
-            try {
-                $wa_phone = preg_replace('/\D/', '', ($student['whatsapp_country_code'] ?? '') . ($student['whatsapp_number'] ?? ''));
-                if (strlen($wa_phone) === 10) {
-                    $wa_phone = '91' . $wa_phone;
-                }
-                
-                if (!empty($wa_phone)) {
+            $has_invoice_error = false;
+            if ((float)$student['paid_amount'] > 0 && empty($inv_id)) {
+                error_log("WhatsApp notification skipped: Student {$user_id} has paid amount > 0 but invoice ID is empty.");
+                $has_invoice_error = true;
+            }
+
+            if (!$has_invoice_error) {
+                try {
+                    $wa_phone = preg_replace('/\D/', '', ($student['whatsapp_country_code'] ?? '') . ($student['whatsapp_number'] ?? ''));
+                    if (strlen($wa_phone) === 10) {
+                        $wa_phone = '91' . $wa_phone;
+                    }
+                    
                     require_once 'includes/communication/CommunicationEngine.php';
                     $commEngine = CommunicationEngine::getInstance($pdo);
                     
-                    $inv_link = '';
-                    if ($inv_id && $inv_no) {
-                        $token = hash_hmac('sha256', (string)$inv_id, DB_PASS);
-                        $inv_link = "https://pepplearning.in/admissions/invoice-pdf.php?id={$inv_id}&token={$token}&view=1";
-                    }
-                    
                     $context = [
                         'student_uid' => $user_id,
-                        'student_name' => $student['name'] ?? '',
-                        'application_id' => $user_id,
-                        'course_name' => $student['pepp_course'] ?? '',
-                        'payment_amount' => $student['paid_amount'] ?? 0,
-                        'invoice_number' => $inv_no ?? '',
-                        'invoice_link' => $inv_link
+                        'invoice_id' => $inv_id
                     ];
                     
                     $commEngine->sendEventNotification('student_approval', $wa_phone, $context, $admin_username);
+                } catch (Exception $ex) {
+                    error_log("Failed to send student approval WhatsApp: " . $ex->getMessage());
                 }
-            } catch (Exception $ex) {
-                error_log("Failed to send student approval WhatsApp: " . $ex->getMessage());
             }
+
 
             echo json_encode(['success' => true, 'message' => 'Student approved successfully!' . $inv_note]);
             exit;

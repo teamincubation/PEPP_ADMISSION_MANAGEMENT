@@ -48,13 +48,23 @@ class CommunicationEngine {
      * @param string|null $studentUid Associated student user_id for placeholder replacement
      * @return int Queue Item ID
      */
-    public function queueMessage($channel, $recipient, $recipientName, $subject, $bodyHtml, $bodyText = '', array $attachments = [], array $templateData = [], $sentBy = 'system', $scheduledAt = null, $studentUid = null) {
+    public function queueMessage($channel, $recipient, $recipientName, $subject, $bodyHtml, $bodyText = '', array $attachments = [], array $templateData = [], $sentBy = 'system', $scheduledAt = null, $studentUid = null, $eventName = null, $invoiceId = null) {
         $status = 'pending';
         $nextAttempt = date('Y-m-d H:i:s');
+        $errorMsg = null;
+        $retryCount = 0;
 
         if ($scheduledAt && strtotime($scheduledAt) > time()) {
             $status = 'scheduled';
             $nextAttempt = date('Y-m-d H:i:s', strtotime($scheduledAt));
+        }
+
+        // Validate recipient phone number (must be numeric and >= 10 digits for WhatsApp)
+        $cleanPhone = preg_replace('/\D/', '', $recipient);
+        if ($channel === 'whatsapp' && (empty($cleanPhone) || strlen($cleanPhone) < 10)) {
+            $status = 'failed';
+            $errorMsg = 'Invalid or missing phone number: ' . $recipient;
+            $retryCount = 3; // Block auto-retries for invalid phone numbers
         }
 
         // Auto-resolve placeholders if student UID is provided and text is raw
@@ -78,8 +88,8 @@ class CommunicationEngine {
 
         $stmt = $this->pdo->prepare("
             INSERT INTO communication_queue 
-            (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, created_at, updated_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+            (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ");
 
         $templateJson = !empty($templateData) ? json_encode($templateData) : null;
@@ -97,7 +107,12 @@ class CommunicationEngine {
             $attachmentsJson,
             $status,
             $nextAttempt,
-            $sentBy
+            $sentBy,
+            $studentUid,
+            $eventName,
+            $invoiceId,
+            $errorMsg,
+            $retryCount
         ]);
 
         $queueId = (int)$this->pdo->lastInsertId();
@@ -108,20 +123,23 @@ class CommunicationEngine {
                 $legacyPhone = substr(preg_replace('/\D/', '', $recipient), -15);
                 $legacyStmt = $this->pdo->prepare("
                     INSERT INTO whatsapp_notifications (phone, message, student_name, sent_by, status, created_at, updated_at) 
-                    VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ");
                 $legacyStmt->execute([
                     $legacyPhone,
                     $bodyText ?: strip_tags($bodyHtml),
                     $recipientName,
                     $sentBy,
-                    $status === 'scheduled' ? 'pending' : 'pending' // starts in pending
+                    $status === 'failed' ? 'failed' : 'pending'
                 ]);
                 $legacyId = (int)$this->pdo->lastInsertId();
                 
                 // Store legacy ID mapping inside our queue data
                 $updateStmt = $this->pdo->prepare("UPDATE communication_queue SET error_message = ? WHERE id = ?");
-                $updateStmt->execute(['legacy_id:' . $legacyId, $queueId]);
+                $updateStmt->execute([
+                    ($errorMsg ? $errorMsg . ' (legacy_id:' . $legacyId . ')' : 'legacy_id:' . $legacyId),
+                    $queueId
+                ]);
             } catch (Exception $ex) {
                 error_log('Legacy parallel write failed: ' . $ex->getMessage());
             }
@@ -326,6 +344,36 @@ class CommunicationEngine {
         
         // Sort keys numerically to match template parameter indexes (e.g. 1, 2, 3...)
         ksort($parameterMappings);
+
+        // Pre-fetch installment details for calculations if student context exists
+        $collected = 0.0;
+        $nextDueDate = 'N/A';
+        if ($student) {
+            $collected = (float)($student['paid_amount'] ?? 0);
+            try {
+                $instStmt = $this->pdo->prepare("
+                    SELECT COALESCE(SUM(COALESCE(paid_amount, amount)), 0)
+                    FROM instalment_details 
+                    WHERE user_id = ? AND status IN ('approved', 'paid')
+                ");
+                $instStmt->execute([$student['user_id']]);
+                $instPaid = (float)$instStmt->fetchColumn();
+                $collected += $instPaid;
+            } catch (Exception $e) {}
+            
+            try {
+                $dueStmt = $this->pdo->prepare("
+                    SELECT due_date FROM instalment_details 
+                    WHERE user_id = ? AND status = 'pending' AND due_date >= CURRENT_DATE
+                    ORDER BY instalment_number ASC LIMIT 1
+                ");
+                $dueStmt->execute([$student['user_id']]);
+                $dueDateVal = $dueStmt->fetchColumn();
+                if ($dueDateVal) {
+                    $nextDueDate = date('d M Y', strtotime($dueDateVal));
+                }
+            } catch (Exception $e) {}
+        }
         
         foreach ($parameterMappings as $idx => $mapInfo) {
             $type = $mapInfo['type'] ?? 'variable';
@@ -348,6 +396,30 @@ class CommunicationEngine {
                         $resolvedVal = ($student['whatsapp_country_code'] ?? '') . ($student['whatsapp_number'] ?? '');
                     } elseif ($val === 'student_email') {
                         $resolvedVal = $student['email'] ?? '';
+                    } elseif ($val === 'academic_year') {
+                        $resolvedVal = $student['pepp_academic_year'] ?? '';
+                    } elseif ($val === 'payment_amount' || $val === 'paid_amount') {
+                        $resolvedVal = number_format((float)($student['paid_amount'] ?? 0));
+                    } elseif ($val === 'paid_date') {
+                        $resolvedVal = !empty($student['paid_date']) ? date('d M Y', strtotime($student['paid_date'])) : '';
+                    } elseif ($val === 'payment_plan') {
+                        $resolvedVal = $student['payment_plan'] ?? '';
+                    } elseif ($val === 'payment_mode') {
+                        $resolvedVal = $student['payment_mode'] ?? '';
+                    } elseif ($val === 'course_fee') {
+                        $courseFee = (float)($student['total_fee'] ?? 0) + (float)($student['discount_amount'] ?? 0);
+                        $resolvedVal = number_format($courseFee);
+                    } elseif ($val === 'discount_amount') {
+                        $resolvedVal = number_format((float)($student['discount_amount'] ?? 0));
+                    } elseif ($val === 'total_payable') {
+                        $resolvedVal = number_format((float)($student['total_fee'] ?? 0));
+                    } elseif ($val === 'total_paid') {
+                        $resolvedVal = number_format($collected);
+                    } elseif ($val === 'balance_amount') {
+                        $balance = max(0, (float)($student['total_fee'] ?? 0) - $collected);
+                        $resolvedVal = number_format($balance);
+                    } elseif ($val === 'next_due_date' || $val === 'installment_due_date') {
+                        $resolvedVal = $nextDueDate;
                     }
                 }
                 
@@ -362,11 +434,49 @@ class CommunicationEngine {
             }
         }
         
-        return [
+        $result = [
             'name' => $templateName,
             'language' => $langCode,
             'parameters' => $resolvedParameters
         ];
+
+        // Inspect template components to check if there is a URL button ending in ?token={{1}}
+        $meta = json_decode($template['meta_data'], true) ?: [];
+        $hasUrlButton = false;
+        if (isset($meta['components']) && is_array($meta['components'])) {
+            foreach ($meta['components'] as $comp) {
+                if (($comp['type'] ?? '') === 'BUTTONS' && isset($comp['buttons']) && is_array($comp['buttons'])) {
+                    foreach ($comp['buttons'] as $btn) {
+                        if (($btn['type'] ?? '') === 'URL' && strpos($btn['url'] ?? '', 'token={{1}}') !== false) {
+                            $hasUrlButton = true;
+                            break 2;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Retrieve invoice ID for generating dynamic URL token
+        $invoiceId = $contextData['invoice_id'] ?? null;
+        if ($hasUrlButton) {
+            if (!$invoiceId && $student) {
+                try {
+                    $invStmt = $this->pdo->prepare("
+                        SELECT id FROM invoices 
+                        WHERE user_id = ? AND source = 'registration' 
+                        ORDER BY id DESC LIMIT 1
+                    ");
+                    $invStmt->execute([$student['user_id']]);
+                    $invoiceId = $invStmt->fetchColumn();
+                } catch (Exception $e) {}
+            }
+            if ($invoiceId) {
+                $hmac = hash_hmac('sha256', (string)$invoiceId, INVOICE_HMAC_SECRET);
+                $result['button_parameters'] = [$invoiceId . '-' . $hmac];
+            }
+        }
+
+        return $result;
     }
 
     /**
@@ -381,11 +491,27 @@ class CommunicationEngine {
      */
     public function sendEventNotification($eventName, $recipient, array $contextData = [], $sentBy = 'system', $scheduledAt = null) {
         $studentUid = $contextData['student_uid'] ?? null;
+        $invoiceId = $contextData['invoice_id'] ?? null;
         
         try {
             $resolved = $this->resolveEventTemplate($eventName, $studentUid, $contextData);
             if (!$resolved) {
                 return null;
+            }
+
+            // Strict duplicate notification check based on student_uid + event_name + template_name
+            if ($studentUid && $eventName && $resolved['name']) {
+                $dupStmt = $this->pdo->prepare("
+                    SELECT COUNT(*) FROM communication_queue 
+                    WHERE student_uid = ? AND event_name = ? AND template_name = ? 
+                    AND status IN ('pending', 'processing', 'sent', 'delivered', 'read')
+                ");
+                $dupStmt->execute([$studentUid, $eventName, $resolved['name']]);
+                $exists = (int)$dupStmt->fetchColumn();
+                if ($exists > 0) {
+                    error_log("Duplicate prevention blocked enqueuing for student: {$studentUid}, event: {$eventName}, template: {$resolved['name']}");
+                    return null;
+                }
             }
             
             // Build simple fallback text representation
@@ -405,7 +531,9 @@ class CommunicationEngine {
                 $resolved, // templateData
                 $sentBy,
                 $scheduledAt,
-                $studentUid
+                $studentUid,
+                $eventName,
+                $invoiceId
             );
         } catch (Exception $e) {
             error_log("Failed to sendEventNotification for event {$eventName}: " . $e->getMessage());

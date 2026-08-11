@@ -11,6 +11,7 @@ define('DB_HOST', 'localhost');
 define('DB_NAME', 'u361910773_peppadmin');
 define('DB_USER', 'u361910773_admindash');
 define('DB_PASS', 'PL@AdmInc2025#');
+define('INVOICE_HMAC_SECRET', 'PEPP_InvoiceSecret_2026_Key_Secure_Rand');
 
 if (isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true') {
     try {
@@ -442,6 +443,25 @@ try {
                 $pdo->exec("ALTER TABLE study_plans ADD COLUMN `plan_type` ENUM('date_wise', 'day_wise') NOT NULL DEFAULT 'date_wise', ADD COLUMN `total_days` INT DEFAULT NULL");
             }
         } catch (Exception $e) {}
+
+        // Self-healing columns for communication_queue table
+        try {
+            if ($pdo->query("SHOW TABLES LIKE 'communication_queue'")->fetchColumn()) {
+                $cols = $pdo->query("SHOW COLUMNS FROM communication_queue LIKE 'student_uid'")->fetch();
+                if (!$cols) {
+                    $pdo->exec("ALTER TABLE communication_queue ADD COLUMN student_uid VARCHAR(50) DEFAULT NULL AFTER recipient_name");
+                }
+                $cols = $pdo->query("SHOW COLUMNS FROM communication_queue LIKE 'event_name'")->fetch();
+                if (!$cols) {
+                    $pdo->exec("ALTER TABLE communication_queue ADD COLUMN event_name VARCHAR(100) DEFAULT NULL AFTER template_name");
+                }
+                $cols = $pdo->query("SHOW COLUMNS FROM communication_queue LIKE 'invoice_id'")->fetch();
+                if (!$cols) {
+                    $pdo->exec("ALTER TABLE communication_queue ADD COLUMN invoice_id INT DEFAULT NULL AFTER attachments");
+                }
+            }
+        } catch (Exception $e) {}
+
 
     } catch (Exception $dbEx) {
         error_log("PEPP self-healing DB check failed: " . $dbEx->getMessage());

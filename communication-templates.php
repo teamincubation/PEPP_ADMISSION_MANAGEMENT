@@ -380,15 +380,25 @@ include 'includes/admin_nav.php';
                                                     <option value="student_name" <?php echo $mVal === 'student_name' ? 'selected' : ''; ?>>Student Name</option>
                                                     <option value="application_id" <?php echo $mVal === 'application_id' ? 'selected' : ''; ?>>Application ID / Roll No</option>
                                                     <option value="course_name" <?php echo $mVal === 'course_name' ? 'selected' : ''; ?>>Course Name</option>
+                                                    <option value="academic_year" <?php echo $mVal === 'academic_year' ? 'selected' : ''; ?>>Academic Year</option>
                                                     <option value="payment_amount" <?php echo $mVal === 'payment_amount' ? 'selected' : ''; ?>>Payment Amount</option>
-                                                    <option value="invoice_number" <?php echo $mVal === 'invoice_number' ? 'selected' : ''; ?>>Invoice Number</option>
-                                                    <option value="invoice_link" <?php echo $mVal === 'invoice_link' ? 'selected' : ''; ?>>Secure Invoice Link</option>
+                                                    <option value="paid_date" <?php echo $mVal === 'paid_date' ? 'selected' : ''; ?>>Payment Date</option>
+                                                    <option value="payment_plan" <?php echo $mVal === 'payment_plan' ? 'selected' : ''; ?>>Payment Plan</option>
+                                                    <option value="payment_mode" <?php echo $mVal === 'payment_mode' ? 'selected' : ''; ?>>Payment Mode</option>
+                                                    <option value="course_fee" <?php echo $mVal === 'course_fee' ? 'selected' : ''; ?>>Course Fee</option>
+                                                    <option value="discount_amount" <?php echo $mVal === 'discount_amount' ? 'selected' : ''; ?>>Discount Amount</option>
+                                                    <option value="total_payable" <?php echo $mVal === 'total_payable' ? 'selected' : ''; ?>>Total Payable</option>
+                                                    <option value="total_paid" <?php echo $mVal === 'total_paid' ? 'selected' : ''; ?>>Total Paid / Collected</option>
                                                     <option value="balance_amount" <?php echo $mVal === 'balance_amount' ? 'selected' : ''; ?>>Balance Amount</option>
                                                     <option value="installment_due_date" <?php echo $mVal === 'installment_due_date' ? 'selected' : ''; ?>>Installment Due Date</option>
+                                                    <option value="next_due_date" <?php echo $mVal === 'next_due_date' ? 'selected' : ''; ?>>Next Due Date</option>
+                                                    <option value="invoice_number" <?php echo $mVal === 'invoice_number' ? 'selected' : ''; ?>>Invoice Number</option>
+                                                    <option value="invoice_link" <?php echo $mVal === 'invoice_link' ? 'selected' : ''; ?>>Secure Invoice Link</option>
                                                     <option value="session_date" <?php echo $mVal === 'session_date' ? 'selected' : ''; ?>>Session Date</option>
                                                     <option value="trainer_name" <?php echo $mVal === 'trainer_name' ? 'selected' : ''; ?>>Trainer Name</option>
                                                     <option value="meeting_link" <?php echo $mVal === 'meeting_link' ? 'selected' : ''; ?>>Meeting Link</option>
                                                     <option value="current_datetime" <?php echo $mVal === 'current_datetime' ? 'selected' : ''; ?>>Current Date/Time</option>
+
                                                 </select>
                                                 
                                                 <!-- Custom string input -->
@@ -607,16 +617,26 @@ function onMappingTemplateChange(eventName, selectedTemplateName) {
                     <option value="student_name" selected>Student Name</option>
                     <option value="application_id">Application ID / Roll No</option>
                     <option value="course_name">Course Name</option>
+                    <option value="academic_year">Academic Year</option>
                     <option value="payment_amount">Payment Amount</option>
-                    <option value="invoice_number">Invoice Number</option>
-                    <option value="invoice_link">Secure Invoice Link</option>
+                    <option value="paid_date">Payment Date</option>
+                    <option value="payment_plan">Payment Plan</option>
+                    <option value="payment_mode">Payment Mode</option>
+                    <option value="course_fee">Course Fee</option>
+                    <option value="discount_amount">Discount Amount</option>
+                    <option value="total_payable">Total Payable</option>
+                    <option value="total_paid">Total Paid / Collected</option>
                     <option value="balance_amount">Balance Amount</option>
                     <option value="installment_due_date">Installment Due Date</option>
+                    <option value="next_due_date">Next Due Date</option>
+                    <option value="invoice_number">Invoice Number</option>
+                    <option value="invoice_link">Secure Invoice Link</option>
                     <option value="session_date">Session Date</option>
                     <option value="trainer_name">Trainer Name</option>
                     <option value="meeting_link">Meeting Link</option>
                     <option value="current_datetime">Current Date/Time</option>
                 </select>
+
                 <input type="text" name="mappings[${eventName}][parameters][${i}][value]" class="form-control value-field-custom" id="val-cust-${eventName}-${i}" placeholder="Enter custom value..." style="flex:1; font-size:0.75rem; display:none;" disabled>
             `;
             paramList.appendChild(row);

@@ -75,7 +75,27 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
                 }
             }
 
+            // Build Button parameters (dynamic URL suffixes)
+            if (isset($templateData['button_parameters']) && is_array($templateData['button_parameters'])) {
+                $btnIndex = 0;
+                foreach ($templateData['button_parameters'] as $val) {
+                    $components[] = [
+                        'type' => 'button',
+                        'sub_type' => 'url',
+                        'index' => (string)$btnIndex,
+                        'parameters' => [
+                            [
+                                'type' => 'text',
+                                'text' => (string)$val
+                            ]
+                        ]
+                    ];
+                    $btnIndex++;
+                }
+            }
+
             $payload['type'] = 'template';
+
             $payload['template'] = [
                 'name' => $templateName,
                 'language' => [

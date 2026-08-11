@@ -5,10 +5,7 @@ if (session_status() === PHP_SESSION_NONE) {
 
 require_once 'config/database.php';
 
-$id = (int)($_GET['id'] ?? 0);
-$token = $_GET['token'] ?? '';
-$view = (int)($_GET['view'] ?? 0);
-
+$id = 0;
 $authorized = false;
 $admin_username = 'system';
 
@@ -18,21 +15,31 @@ if (isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true
     require_permission('invoices');
     $authorized = true;
     $admin_username = $_SESSION['admin_username'] ?? 'admin';
+    $id = (int)($_GET['id'] ?? 0);
 } else {
-    // Check if secure token is valid
-    if ($id > 0 && !empty($token)) {
-        $expected_token = hash_hmac('sha256', (string)$id, DB_PASS);
-        if (hash_equals($expected_token, $token)) {
-            $authorized = true;
-            $admin_username = 'student_secure_link';
+    // Check if secure token is valid (must be in format ID-HMAC using INVOICE_HMAC_SECRET)
+    $tokenParam = $_GET['token'] ?? '';
+    if (!empty($tokenParam) && strpos($tokenParam, '-') !== false) {
+        $parts = explode('-', $tokenParam, 2);
+        $tempId = (int)$parts[0];
+        $hmac = $parts[1];
+        
+        if ($tempId > 0 && !empty($hmac)) {
+            $expected_hmac = hash_hmac('sha256', (string)$tempId, INVOICE_HMAC_SECRET);
+            if (hash_equals($expected_hmac, $hmac)) {
+                $authorized = true;
+                $admin_username = 'student_secure_link';
+                $id = $tempId;
+            }
         }
     }
 }
 
-if (!$authorized) {
+if (!$authorized || $id <= 0) {
     http_response_code(403);
     exit('Access denied. You are not authorized to view this invoice.');
 }
+
 
 if (!file_exists(__DIR__ . '/includes/pdf_invoice.php')) {
     http_response_code(503);

@@ -137,11 +137,12 @@ try {
 $recentLogs = [];
 try {
     $recentLogs = $pdo->query("
-        SELECT id, channel, recipient, status, retry_count, next_attempt_at, error_message, updated_at 
+        SELECT id, channel, recipient, recipient_name, status, retry_count, next_attempt_at, error_message, updated_at, student_uid, event_name, invoice_id
         FROM communication_queue 
         ORDER BY id DESC LIMIT 10
     ")->fetchAll();
 } catch (Exception $ex) {}
+
 
 include 'includes/admin_nav.php';
 ?>
@@ -311,9 +312,9 @@ include 'includes/admin_nav.php';
                 <tr style="background:#f9fafb; text-align:left; border-bottom:1px solid #e5e7eb;">
                     <th style="padding:12px; font-weight:600; color:#374151;">Queue ID</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Recipient</th>
-                    <th style="padding:12px; font-weight:600; color:#374151;">Channel</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Channel / Event</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Updated At</th>
-                    <th style="padding:12px; font-weight:600; color:#374151;">Retries</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Invoice</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Status</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Meta Delivery Log</th>
                 </tr>
@@ -327,10 +328,38 @@ include 'includes/admin_nav.php';
                     <?php foreach ($recentLogs as $log): ?>
                         <tr style="border-bottom:1px solid #f3f4f6;">
                             <td style="padding:12px; font-weight:600;">#<?php echo $log['id']; ?></td>
-                            <td style="padding:12px; font-weight:600;"><?php echo htmlspecialchars($log['recipient']); ?></td>
-                            <td style="padding:12px;"><span class="badge blue" style="font-size:0.7rem; font-weight:700;"><?php echo strtoupper($log['channel']); ?></span></td>
+                            <td style="padding:12px; font-weight:600;">
+                                <?php if (!empty($log['student_uid'])): ?>
+                                    <a href="student-details.php?user_id=<?php echo urlencode($log['student_uid']); ?>" style="color:#2563eb; text-decoration:underline; font-weight:700;" target="_blank">
+                                        <?php echo htmlspecialchars($log['recipient_name'] ?: $log['student_uid']); ?>
+                                    </a>
+                                <?php else: ?>
+                                    <?php echo htmlspecialchars($log['recipient_name'] ?: '-'); ?>
+                                <?php endif; ?>
+                                <br>
+                                <span style="font-size:0.75rem; color:#6b7280; font-weight:normal;"><?php echo htmlspecialchars($log['recipient']); ?></span>
+                            </td>
+                            <td style="padding:12px;">
+                                <span class="badge blue" style="font-size:0.7rem; font-weight:700;"><?php echo strtoupper($log['channel']); ?></span>
+                                <?php if (!empty($log['event_name'])): ?>
+                                    <br>
+                                    <span style="font-size:0.7rem; color:#4b5563; font-weight:600;">Event: <?php echo htmlspecialchars($log['event_name']); ?></span>
+                                <?php endif; ?>
+                            </td>
                             <td style="padding:12px; color:#6b7280;"><?php echo date('d M Y, h:i A', strtotime($log['updated_at'])); ?></td>
-                            <td style="padding:12px; font-weight:600;"><?php echo $log['retry_count']; ?>/3</td>
+                            <td style="padding:12px; font-weight:600;">
+                                <?php if ($log['invoice_id']): ?>
+                                    <?php 
+                                    $inv_hmac = hash_hmac('sha256', (string)$log['invoice_id'], INVOICE_HMAC_SECRET);
+                                    $secure_inv_link = "invoice-pdf.php?token=" . urlencode($log['invoice_id'] . '-' . $inv_hmac);
+                                    ?>
+                                    <a href="<?php echo htmlspecialchars($secure_inv_link); ?>" target="_blank" style="color:#059669; text-decoration:none; font-size:0.8rem; font-weight:700;" title="View Secure PDF Invoice">
+                                        <i class="fas fa-file-invoice"></i> Inv #<?php echo $log['invoice_id']; ?>
+                                    </a>
+                                <?php else: ?>
+                                    <span style="color:#9ca3af;">-</span>
+                                <?php endif; ?>
+                            </td>
                             <td style="padding:12px;">
                                 <span class="badge <?php 
                                     echo $log['status'] === 'read' || $log['status'] === 'delivered' || $log['status'] === 'sent' ? 'green' : 
