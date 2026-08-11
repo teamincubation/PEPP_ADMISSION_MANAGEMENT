@@ -32,6 +32,7 @@ try {
     ");
     $stmtUser->execute();
     $studentId = $pdo->lastInsertId();
+    try { $pdo->query("COMMIT"); } catch(Exception $e) {}
     echo "1. Set up test student 'PEPP E2E Test Student'. Database ID: {$studentId}, UID: PEPP2026INBOX\n\n";
 
     // Query app secret for webhook signature simulation
@@ -312,6 +313,7 @@ try {
     echo "9. Simulating matching with weirdly formatted student phone number...\n";
     // Update student number in DB to weird format
     $pdo->prepare("UPDATE users SET whatsapp_country_code = ' +91 ', whatsapp_number = '  6282563209  ' WHERE user_id = 'PEPP2026INBOX'")->execute();
+    try { $pdo->query("COMMIT"); } catch(Exception $e) {}
 
     // Check what is in the DB right now in this connection
     $stmtCheck = $pdo->prepare("SELECT id, user_id, whatsapp_country_code, whatsapp_number, status FROM users WHERE status = 'approved' AND whatsapp_number LIKE ?");
