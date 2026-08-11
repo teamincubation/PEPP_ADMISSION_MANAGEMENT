@@ -313,6 +313,12 @@ try {
     // Update student number in DB to weird format
     $pdo->prepare("UPDATE users SET whatsapp_country_code = ' +91 ', whatsapp_number = '  6282563209  ' WHERE user_id = 'PEPP2026INBOX'")->execute();
 
+    // Check what is in the DB right now in this connection
+    $stmtCheck = $pdo->prepare("SELECT id, user_id, whatsapp_country_code, whatsapp_number, status FROM users WHERE status = 'approved' AND whatsapp_number LIKE ?");
+    $stmtCheck->execute(['%' . $last10]);
+    $chk = $stmtCheck->fetchAll();
+    echo "   Local connection query returned: " . json_encode($chk) . "\n";
+
     $weirdPayload = $inboundPayload;
     $weirdPayload['entry'][0]['changes'][0]['value']['messages'][0]['id'] = 'wamid_test_weird_1';
 
