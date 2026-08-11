@@ -22,7 +22,8 @@ try {
 
     // Clear previous test data
     $pdo->prepare("DELETE FROM users WHERE whatsapp_number = '6282563209' OR user_id = 'PEPP2026INBOX'")->execute();
-    $pdo->prepare("DELETE FROM whatsapp_conversations WHERE wa_phone_number IN ('916282563209', '918888888888')")->execute();
+    $pdo->prepare("DELETE FROM whatsapp_messages WHERE wa_message_id LIKE 'wamid_test_%'")->execute();
+    $pdo->prepare("DELETE FROM whatsapp_conversations WHERE wa_phone_number IN ('916282563209', '918888888888', '919567276458')")->execute();
 
     // Setup test student
     $stmtUser = $pdo->prepare("
