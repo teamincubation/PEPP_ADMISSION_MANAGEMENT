@@ -131,7 +131,7 @@ try {
     // Start a session and save admin details to get a valid PHPSESSID cookie
     session_start();
     $_SESSION['admin_logged_in'] = true;
-    $_SESSION['admin_username'] = 'peppadmin';
+    $_SESSION['admin_username'] = 'tempadmin';
     $_SESSION['admin_role'] = 'super_admin';
     $_SESSION['csrf_token'] = 'pepp_inbox_csrf_test';
     $_SESSION['last_activity'] = time();
