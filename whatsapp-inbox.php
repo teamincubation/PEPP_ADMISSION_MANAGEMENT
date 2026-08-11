@@ -361,11 +361,11 @@ function renderMessages(messages, isBackground) {
         if (isOut) {
             if (m.status === 'read') {
                 statusTick = '<i class="fas fa-check-double status-tick read" title="Read"></i>';
-            } elseif (m.status === 'delivered') {
+            } else if (m.status === 'delivered') {
                 statusTick = '<i class="fas fa-check-double status-tick" title="Delivered"></i>';
-            } elseif (m.status === 'sent') {
+            } else if (m.status === 'sent') {
                 statusTick = '<i class="fas fa-check status-tick" title="Sent"></i>';
-            } elseif (m.status === 'failed') {
+            } else if (m.status === 'failed') {
                 statusTick = '<i class="fas fa-circle-exclamation status-tick failed" title="Failed"></i>';
             } else {
                 statusTick = '<i class="fas fa-clock status-tick" title="Pending"></i>';
