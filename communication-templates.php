@@ -382,6 +382,7 @@ include 'includes/admin_nav.php';
                                                     <option value="course_name" <?php echo $mVal === 'course_name' ? 'selected' : ''; ?>>Course Name</option>
                                                     <option value="payment_amount" <?php echo $mVal === 'payment_amount' ? 'selected' : ''; ?>>Payment Amount</option>
                                                     <option value="invoice_number" <?php echo $mVal === 'invoice_number' ? 'selected' : ''; ?>>Invoice Number</option>
+                                                    <option value="invoice_link" <?php echo $mVal === 'invoice_link' ? 'selected' : ''; ?>>Secure Invoice Link</option>
                                                     <option value="balance_amount" <?php echo $mVal === 'balance_amount' ? 'selected' : ''; ?>>Balance Amount</option>
                                                     <option value="installment_due_date" <?php echo $mVal === 'installment_due_date' ? 'selected' : ''; ?>>Installment Due Date</option>
                                                     <option value="session_date" <?php echo $mVal === 'session_date' ? 'selected' : ''; ?>>Session Date</option>
@@ -608,6 +609,7 @@ function onMappingTemplateChange(eventName, selectedTemplateName) {
                     <option value="course_name">Course Name</option>
                     <option value="payment_amount">Payment Amount</option>
                     <option value="invoice_number">Invoice Number</option>
+                    <option value="invoice_link">Secure Invoice Link</option>
                     <option value="balance_amount">Balance Amount</option>
                     <option value="installment_due_date">Installment Due Date</option>
                     <option value="session_date">Session Date</option>

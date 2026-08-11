@@ -41,6 +41,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($action === 'approve') {
 
+            if ($student['status'] === 'approved') {
+                echo json_encode(['success' => false, 'message' => 'This student application has already been approved.']);
+                exit;
+            }
+
             $course_duration_date = $_POST['course_duration_date'] ?? '';
             $payment_mode    = $_POST['payment_mode'] ?? 'Online';
             $payment_account = !empty($_POST['payment_account_id']) ? (int)$_POST['payment_account_id'] : null;
@@ -138,6 +143,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             // ── Automatic invoice for the registration payment ────
             $inv_note = '';
+            $inv_id = null;
+            $inv_no = null;
             if ((float)$student['paid_amount'] > 0) {
                 [$inv_ok, $inv_msg, $inv_id, $inv_no] = generate_payment_invoice($pdo, [
                     'source' => 'registration', 'source_ref' => $student['id'], 'user_id' => $user_id,
@@ -146,6 +153,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'paid_date' => $student['paid_date'] ?: date('Y-m-d'),
                     'generated_by' => $admin_username, 'send_email' => true,
                 ]);
+                
+                if ($inv_ok && $inv_no) {
+                    $inv_note = " Invoice {$inv_no} generated.";
+                    try {
+                        $updHist = $pdo->prepare("
+                            UPDATE student_approval_history
+                            SET notes = CONCAT(notes, ?)
+                            WHERE user_id = ? AND action = 'approved'
+                            ORDER BY approval_date DESC LIMIT 1
+                        ");
+                        $updHist->execute([". Invoice {$inv_no} generated.", $user_id]);
+                    } catch (Exception $ex) {
+                        error_log("Failed to update approval history with invoice details: " . $ex->getMessage());
+                    }
+                }
             }
 
             // Queue student approval WhatsApp template notification
@@ -159,13 +181,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     require_once 'includes/communication/CommunicationEngine.php';
                     $commEngine = CommunicationEngine::getInstance($pdo);
                     
+                    $inv_link = '';
+                    if ($inv_id && $inv_no) {
+                        $token = hash_hmac('sha256', (string)$inv_id, DB_PASS);
+                        $inv_link = "https://pepplearning.in/admissions/invoice-pdf.php?id={$inv_id}&token={$token}&view=1";
+                    }
+                    
                     $context = [
                         'student_uid' => $user_id,
                         'student_name' => $student['name'] ?? '',
                         'application_id' => $user_id,
                         'course_name' => $student['pepp_course'] ?? '',
                         'payment_amount' => $student['paid_amount'] ?? 0,
-                        'invoice_number' => $inv_no ?? ''
+                        'invoice_number' => $inv_no ?? '',
+                        'invoice_link' => $inv_link
                     ];
                     
                     $commEngine->sendEventNotification('student_approval', $wa_phone, $context, $admin_username);

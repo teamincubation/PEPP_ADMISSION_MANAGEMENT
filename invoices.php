@@ -267,6 +267,7 @@ include 'includes/admin_nav.php';
                         </span>
                     </td>
                     <td style="text-align:right; white-space:nowrap;">
+                        <a class="btn btn-sm btn-outline" href="invoice-pdf.php?id=<?php echo (int)$inv['id']; ?>&view=1" target="_blank" title="View Invoice"><i class="fas fa-eye"></i> View</a>
                         <a class="btn btn-sm btn-primary" href="invoice-pdf.php?id=<?php echo (int)$inv['id']; ?>" title="Download PDF"><i class="fas fa-file-pdf"></i> PDF</a>
                         <!-- Resend email form with verified parameters -->
                         <form method="POST" style="display:inline;">
