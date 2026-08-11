@@ -10,16 +10,20 @@ try {
     
     if ($meta_json) {
         $meta = json_decode($meta_json, true);
+        $buttons = [];
+        foreach ($meta['components'] ?? [] as $comp) {
+            if (($comp['type'] ?? '') === 'BUTTONS') {
+                $buttons[] = $comp;
+            }
+        }
         echo json_encode([
             'success' => true,
-            'template_name' => 'pepp_admission_approved',
-            'components' => $meta['components'] ?? [],
-            'body_text' => $meta['body_text'] ?? ''
+            'buttons' => $buttons
         ], JSON_PRETTY_PRINT);
     } else {
         echo json_encode([
             'success' => false,
-            'message' => 'Template pepp_admission_approved not found in database.'
+            'message' => 'Template pepp_admission_approved not found.'
         ]);
     }
 } catch (Exception $e) {
@@ -28,3 +32,4 @@ try {
         'error' => $e->getMessage()
     ]);
 }
+
