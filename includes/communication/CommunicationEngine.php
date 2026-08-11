@@ -206,7 +206,60 @@ class CommunicationEngine {
             
             $this->pdo->commit();
 
+            // ── MODE-ERA GUARD: Prevent stale/mode-incompatible WhatsApp dispatches ──
             $channel = $item['channel'];
+            if ($channel === 'whatsapp') {
+                // Read current outbound mode
+                $waMode = 'manual';
+                if (function_exists('whatsapp_outbound_mode')) {
+                    $waMode = whatsapp_outbound_mode($this->pdo);
+                } else {
+                    try {
+                        $modeStmt = $this->pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_outbound_mode' LIMIT 1");
+                        $modeStmt->execute();
+                        $waMode = $modeStmt->fetchColumn() ?: 'manual';
+                    } catch (Exception $e) {}
+                }
+
+                $cancelReason = null;
+
+                if ($waMode === 'manual') {
+                    // Mode A: MANUAL mode — automated WhatsApp queue items must not dispatch
+                    $cancelReason = 'cancelled:mode_guard_manual_active';
+                } else {
+                    // Mode B: META API — check if item predates the current META activation
+                    try {
+                        $eraStmt = $this->pdo->prepare("
+                            SELECT changed_at FROM whatsapp_mode_audit 
+                            WHERE new_mode = 'meta_api' 
+                            ORDER BY id DESC LIMIT 1
+                        ");
+                        $eraStmt->execute();
+                        $metaActivatedAt = $eraStmt->fetchColumn();
+
+                        if ($metaActivatedAt && $item['created_at'] < $metaActivatedAt) {
+                            $cancelReason = 'cancelled:stale_pre_meta_activation_' . $metaActivatedAt;
+                        }
+                    } catch (Exception $e) {
+                        // If audit table unavailable, allow dispatch (fail-open for meta mode)
+                        error_log('Mode-era guard: audit query failed: ' . $e->getMessage());
+                    }
+                }
+
+                if ($cancelReason !== null) {
+                    $cancelStmt = $this->pdo->prepare("
+                        UPDATE communication_queue 
+                        SET status = 'cancelled', 
+                            error_message = CONCAT(IFNULL(error_message, ''), ' | ', ?), 
+                            updated_at = NOW() 
+                        WHERE id = ?
+                    ");
+                    $cancelStmt->execute([$cancelReason, $queueId]);
+                    error_log("Queue item #{$queueId} cancelled by mode-era guard: {$cancelReason}");
+                    return false;
+                }
+            }
+
             $recipient = $item['recipient'];
             $subject = $item['subject'];
             $bodyHtml = $item['body_html'];

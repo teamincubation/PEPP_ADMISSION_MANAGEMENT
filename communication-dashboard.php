@@ -122,6 +122,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($old_mode === $new_mode) {
                         $error_message = 'Already in ' . strtoupper(str_replace('_', ' ', $new_mode)) . ' mode.';
                     } else {
+                        // Transactional mode switch: audit + settings as a single atomic operation
+                        $pdo->beginTransaction();
+
                         // Insert audit record
                         $auditStmt = $pdo->prepare("INSERT INTO whatsapp_mode_audit (old_mode, new_mode, changed_by, changed_at) VALUES (?, ?, ?, NOW())");
                         $auditStmt->execute([$old_mode, $new_mode, $admin_username]);
@@ -134,14 +137,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         ");
                         $updateStmt->execute([$new_mode]);
 
+                        $pdo->commit();
+
                         // Reset the static cache so the page reflects the new mode
-                        // (whatsapp_outbound_mode uses static cache — reload settings)
                         $settings['whatsapp_outbound_mode'] = $new_mode;
 
                         $mode_label = $new_mode === 'meta_api' ? 'META API' : 'MANUAL';
                         $success_message = "Outbound WhatsApp mode switched to {$mode_label}.";
                     }
                 } catch (Exception $e) {
+                    if ($pdo->inTransaction()) {
+                        $pdo->rollBack();
+                    }
                     $error_message = 'Failed to switch mode: ' . $e->getMessage();
                 }
             }
