@@ -208,7 +208,9 @@ try {
         
         // Process the queue item using the existing CLI worker process (Safeguard 4)
         echo "   Processing queue item via CLI worker...\n";
-        @exec("php cron-queue.php {$qId}");
+        require_once 'includes/communication/CommunicationEngine.php';
+        $engine = CommunicationEngine::getInstance($pdo);
+        $engine->processQueueItem($qId);
         
         // Fetch stored outbound message
         $stmtOut = $pdo->prepare("SELECT * FROM whatsapp_messages WHERE conversation_id = ? AND direction = 'outbound' ORDER BY id DESC LIMIT 1");
