@@ -5,9 +5,9 @@
 
 require_once 'includes/auth.php';
 require_once 'config/database.php';
-require_permission('communication');
+require_permission('whatsapp-inbox');
 
-$active_page = 'communication';
+$active_page = 'whatsapp-inbox';
 $page_title  = 'WhatsApp Inbox';
 $page_sub    = 'Read and reply to student incoming WhatsApp messages';
 

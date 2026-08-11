@@ -70,6 +70,7 @@ $nav_pending_onboarding = 0;
 $nav_due_within_10_days = 0;
 $nav_active_forms_count = 0;
 $nav_unread_submissions_count = 0;
+$nav_unread_inbox_count = 0;
 try {
     $nav_pending_approvals  = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE status = 'pending'")->fetchColumn();
     $nav_pending_payments   = (int)$pdo->query("SELECT COUNT(*) FROM instalment_details WHERE status = 'pending' AND paid_date IS NOT NULL")->fetchColumn();
@@ -77,6 +78,9 @@ try {
     $nav_due_within_10_days = (int)$pdo->query("SELECT COUNT(*) FROM instalment_details WHERE status = 'pending' AND paid_date IS NULL AND rejected_at IS NULL AND due_date <= DATE_ADD(CURDATE(), INTERVAL 10 DAY)")->fetchColumn();
     $nav_active_forms_count = (int)$pdo->query("SELECT COUNT(*) FROM campaign_forms WHERE status = 'published'")->fetchColumn();
     $nav_unread_submissions_count = (int)$pdo->query("SELECT COUNT(*) FROM campaign_form_submissions WHERE is_read = 0 AND is_deleted = 0")->fetchColumn();
+    
+    // Efficiently sum the unread count from conversations
+    $nav_unread_inbox_count = (int)$pdo->query("SELECT IFNULL(SUM(unread_count), 0) FROM whatsapp_conversations")->fetchColumn();
 } catch (Exception $navEx) { /* sidebar still renders */ }
 
 function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
@@ -95,6 +99,7 @@ function render_nav_item($key, $active_page, $nav_data) {
     $nav_mkt = $nav_data['mkt'] ?? [];
     $nav_pending_payments = $nav_data['pending_payments'] ?? 0;
     $nav_due_within_10_days = $nav_data['due_within_10_days'] ?? 0;
+    $nav_unread_inbox_count = $nav_data['unread_inbox_count'] ?? 0;
     
     switch ($key) {
         case 'dashboard':
@@ -194,6 +199,13 @@ function render_nav_item($key, $active_page, $nav_data) {
         case 'whatsapp':
             echo '<a class="nav-item ' . nav_active('whatsapp', $active_page) . '" href="whatsapp-notification.php"><i class="fab fa-whatsapp"></i> WhatsApp Messages</a>';
             break;
+        case 'whatsapp-inbox':
+            echo '<a class="nav-item ' . nav_active('whatsapp-inbox', $active_page) . '" href="whatsapp-inbox.php"><i class="fab fa-whatsapp"></i> WhatsApp Inbox';
+            if ($nav_unread_inbox_count > 0) {
+                echo '<span class="nav-badge" style="background:#ef4444; color:#fff;">' . $nav_unread_inbox_count . '</span>';
+            }
+            echo '</a>';
+            break;
         case 'courses':
             echo '<a class="nav-item ' . nav_active('courses', $active_page) . '" href="course-management.php"><i class="fas fa-book-open"></i> Courses</a>';
             break;
@@ -256,7 +268,7 @@ $default_sidebar = [
         'id' => 'crm',
         'title' => 'CRM',
         'icon' => 'fas fa-handshake',
-        'items' => ['leads', 'alumni', 'peppkit', 'cards', 'card-templates', 'accounts']
+        'items' => ['leads', 'alumni', 'peppkit', 'cards', 'card-templates', 'accounts', 'whatsapp-inbox']
     ],
     [
         'id' => 'campaigns',
@@ -423,7 +435,8 @@ $nav_data = [
     'unread_submissions_count' => $nav_unread_submissions_count ?? 0,
     'mkt' => $nav_mkt ?? [],
     'pending_payments' => $nav_pending_payments ?? 0,
-    'due_within_10_days' => $nav_due_within_10_days ?? 0
+    'due_within_10_days' => $nav_due_within_10_days ?? 0,
+    'unread_inbox_count' => $nav_unread_inbox_count ?? 0
 ];
 ?>
 <!DOCTYPE html>

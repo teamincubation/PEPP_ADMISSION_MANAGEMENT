@@ -26,6 +26,7 @@ $GLOBALS['ADMIN_PAGES'] = [
     'onboarding'    => ['Student Onboarding',      'fa-handshake'],
     'installments'  => ['Installment Payments',    'fa-money-bill-wave'],
     'whatsapp'      => ['WhatsApp Messages',       'fa-comment'],
+    'whatsapp-inbox'=> ['WhatsApp Inbox',          'fa-whatsapp'],
     'invoices'      => ['Invoices',                'fa-file-invoice'],
     'communication' => ['Communication Engine',    'fa-network-wired'],
     'email-reports' => ['Email Reports',           'fa-envelope-open-text'],
@@ -282,7 +283,12 @@ function can_access($page_key) {
     }
     if (is_super_admin()) return true;
     if (trim($admin_perms) === 'ALL') return true;
-    return in_array($page_key, array_map('trim', explode(',', $admin_perms)), true);
+    
+    $perms = array_map('trim', explode(',', $admin_perms));
+    if ($page_key === 'whatsapp-inbox' && in_array('communication', $perms, true)) {
+        return true;
+    }
+    return in_array($page_key, $perms, true);
 }
 function get_first_accessible_page_url() {
     global $admin_perms;
@@ -309,6 +315,7 @@ function get_first_accessible_page_url() {
         'communication' => 'communication-dashboard.php',
         'email-reports' => 'email-reports.php',
         'whatsapp'      => 'whatsapp-notification.php',
+        'whatsapp-inbox'=> 'whatsapp-inbox.php',
         'courses'       => 'course-management.php',
         'faculties'     => 'faculties.php',
         'studyplans'    => 'studyplans.php',
