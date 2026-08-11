@@ -391,8 +391,11 @@ include 'includes/admin_nav.php';
                                                     <option value="total_payable" <?php echo $mVal === 'total_payable' ? 'selected' : ''; ?>>Total Payable</option>
                                                     <option value="total_paid" <?php echo $mVal === 'total_paid' ? 'selected' : ''; ?>>Total Paid / Collected</option>
                                                     <option value="balance_amount" <?php echo $mVal === 'balance_amount' ? 'selected' : ''; ?>>Balance Amount</option>
+                                                    <option value="installment_number" <?php echo $mVal === 'installment_number' ? 'selected' : ''; ?>>Installment Count / Installment Number</option>
+                                                    <option value="installment_amount" <?php echo $mVal === 'installment_amount' ? 'selected' : ''; ?>>Installment Amount</option>
                                                     <option value="installment_due_date" <?php echo $mVal === 'installment_due_date' ? 'selected' : ''; ?>>Installment Due Date</option>
                                                     <option value="next_due_date" <?php echo $mVal === 'next_due_date' ? 'selected' : ''; ?>>Next Due Date</option>
+                                                    <option value="banking_details" <?php echo $mVal === 'banking_details' ? 'selected' : ''; ?>>Banking Details</option>
                                                     <option value="invoice_number" <?php echo $mVal === 'invoice_number' ? 'selected' : ''; ?>>Invoice Number</option>
                                                     <option value="invoice_link" <?php echo $mVal === 'invoice_link' ? 'selected' : ''; ?>>Secure Invoice Link</option>
                                                     <option value="session_date" <?php echo $mVal === 'session_date' ? 'selected' : ''; ?>>Session Date</option>

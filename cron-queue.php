@@ -15,6 +15,14 @@ try {
         $success = $engine->processQueueItem($queueId);
         echo "Queue item #{$queueId} processed: " . ($success ? "Success" : "Failed") . "\n";
     } else {
+        // Run installment reminder scheduler as the primary trigger
+        if (file_exists(__DIR__ . '/includes/session_cron.php')) {
+            require_once __DIR__ . '/includes/session_cron.php';
+            if (function_exists('installments_dispatch_whatsapp_reminders')) {
+                installments_dispatch_whatsapp_reminders($pdo);
+            }
+        }
+
         $processor = new QueueProcessor($pdo, 25);
         $processed = $processor->execute();
         echo "Queue processed successfully. Items dispatched: " . $processed . "\n";

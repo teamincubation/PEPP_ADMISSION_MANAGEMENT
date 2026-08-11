@@ -223,3 +223,142 @@ function send_installment_reminder_email($pdo, $inst, $window) {
     }
     return false;
 }
+
+/** Automatic installment payment reminder dispatcher via WhatsApp */
+function installments_dispatch_whatsapp_reminders($pdo) {
+    static $ran = false;
+    if ($ran) return; $ran = true;
+
+    // 1) Verify current time is between 08:00 AM and 09:00 AM IST
+    $tz = new DateTimeZone('Asia/Kolkata');
+    $now = new DateTime('now', $tz);
+    $hour = (int)$now->format('H');
+    if ($hour !== 8 && !defined('FORCE_INSTALLMENT_REMINDER_TEST')) {
+        return; // Only dispatch during the 08:00-09:00 AM IST window
+    }
+
+    $kolkataDate = $now->format('Y-m-d');
+    $date3d = date('Y-m-d', strtotime('+3 days', strtotime($kolkataDate)));
+    $date7d = date('Y-m-d', strtotime('+7 days', strtotime($kolkataDate)));
+
+    try {
+        // 2) Fetch pending installments due today, in 3 days, or in 7 days
+        $stmt = $pdo->prepare("
+            SELECT i.id, i.user_id, i.instalment_number, i.amount, i.due_date,
+                   u.name AS student_name, u.pepp_course, u.pepp_academic_year,
+                   u.whatsapp_country_code, u.whatsapp_number
+            FROM instalment_details i
+            INNER JOIN users u ON u.user_id = i.user_id
+            WHERE i.status NOT IN ('approved', 'paid')
+              AND i.paid_date IS NULL
+              AND u.status = 'approved'
+              AND i.due_date IN (?, ?, ?)
+        ");
+        $stmt->execute([$kolkataDate, $date3d, $date7d]);
+        $installments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        if (!$installments) return;
+
+        // Fetch active public banking details
+        $public_banking_details = '';
+        try {
+            $public_accs = $pdo->query("SELECT account_name, banking_details FROM payment_accounts WHERE is_public = 1 AND status = 'active' LIMIT 2")->fetchAll(PDO::FETCH_ASSOC);
+            $details_arr = [];
+            foreach ($public_accs as $pa) {
+                $details_arr[] = $pa['account_name'] . ($pa['banking_details'] ? " (" . $pa['banking_details'] . ")" : "");
+            }
+            $public_banking_details = implode(" or ", $details_arr);
+        } catch (Exception $e) {}
+
+        require_once __DIR__ . '/communication/CommunicationEngine.php';
+        $commEngine = CommunicationEngine::getInstance($pdo);
+
+        foreach ($installments as $inst) {
+            $due_time = strtotime($inst['due_date']);
+            $today_time = strtotime($kolkataDate);
+            $days_diff = (int)round(($due_time - $today_time) / 86400);
+
+            $stage = '';
+            if ($days_diff === 7) {
+                $stage = '7d';
+            } elseif ($days_diff === 3) {
+                $stage = '3d';
+            } elseif ($days_diff === 0) {
+                $stage = '0d';
+            }
+
+            if ($stage === '') {
+                continue;
+            }
+
+            try {
+                $pdo->beginTransaction();
+
+                // Check existing tracking status
+                $stmtCheck = $pdo->prepare("SELECT status FROM installment_whatsapp_reminders WHERE installment_id = ? AND reminder_stage = ?");
+                $stmtCheck->execute([$inst['id'], $stage]);
+                $existingStatus = $stmtCheck->fetchColumn();
+
+                if ($existingStatus === 'sent' || $existingStatus === 'queued') {
+                    $pdo->rollBack();
+                    continue; // Skip already successfully queued or sent reminders
+                }
+
+                // If doesn't exist, insert as 'queued'. If 'failed', update to 'queued'.
+                if ($existingStatus === false) {
+                    $stmtTrack = $pdo->prepare("INSERT INTO installment_whatsapp_reminders (installment_id, reminder_stage, status, last_attempted_at) VALUES (?, ?, 'queued', NOW())");
+                    $stmtTrack->execute([$inst['id'], $stage]);
+                } else {
+                    $stmtTrack = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued', last_attempted_at = NOW() WHERE installment_id = ? AND reminder_stage = ?");
+                    $stmtTrack->execute([$inst['id'], $stage]);
+                }
+
+                // Normalize recipient phone number
+                $wa_phone = preg_replace('/\D/', '', $inst['whatsapp_country_code'] . $inst['whatsapp_number']);
+                if (empty($wa_phone)) {
+                    $pdo->rollBack();
+                    continue;
+                }
+
+                $ord = (int)$inst['instalment_number'];
+                if ($ord === 1) $ordStr = "1st";
+                elseif ($ord === 2) $ordStr = "2nd";
+                elseif ($ord === 3) $ordStr = "3rd";
+                else $ordStr = $ord . "th";
+
+                $context = [
+                    'student_name' => $inst['student_name'] ?? '',
+                    'course_name' => $inst['pepp_course'] ?? '',
+                    'academic_year' => $inst['pepp_academic_year'] ?? '',
+                    'installment_number' => $ordStr,
+                    'installment_amount' => number_format((float)$inst['amount']),
+                    'installment_due_date' => date('d M Y', strtotime($inst['due_date'])),
+                    'banking_details' => $public_banking_details
+                ];
+
+                $queueId = $commEngine->sendEventNotification(
+                    'installment_reminder',
+                    $wa_phone,
+                    $context,
+                    'system_scheduler'
+                );
+
+                if ($queueId) {
+                    // Update tracking row with queueId
+                    $stmtUpd = $pdo->prepare("UPDATE installment_whatsapp_reminders SET queue_id = ? WHERE installment_id = ? AND reminder_stage = ?");
+                    $stmtUpd->execute([$queueId, $inst['id'], $stage]);
+                    $pdo->commit();
+                } else {
+                    $pdo->rollBack();
+                }
+
+            } catch (Exception $ex) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                error_log("Failed to queue installment reminder for {$inst['id']}: " . $ex->getMessage());
+            }
+        }
+    } catch (Exception $e) {
+        error_log('installments_dispatch_whatsapp_reminders error: ' . $e->getMessage());
+    }
+}

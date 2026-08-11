@@ -262,6 +262,12 @@ class CommunicationEngine {
                 ");
                 $doneStmt->execute([$msgId, $queueId]);
 
+                // Update installment reminder tracking table to 'sent'
+                try {
+                    $updRemStmt = $this->pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'sent' WHERE queue_id = ?");
+                    $updRemStmt->execute([$queueId]);
+                } catch (Exception $remEx) {}
+
                 // Sync status to legacy log table if applicable
                 if ($channel === 'whatsapp' && strpos((string)$item['error_message'], 'legacy_id:') === 0) {
                     $legacyId = (int)substr((string)$item['error_message'], 10);
@@ -317,6 +323,14 @@ class CommunicationEngine {
                 $errMsg,
                 $queueId
             ]);
+
+            // If the status is final 'failed' (max retries reached), update tracking row to 'failed'
+            if ($status === 'failed' && $retryCount >= $maxRetries) {
+                try {
+                    $updRemStmt = $this->pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'failed' WHERE queue_id = ?");
+                    $updRemStmt->execute([$queueId]);
+                } catch (Exception $remEx) {}
+            }
 
             // Sync status to legacy log table if applicable
             if ($chan === 'whatsapp' && strpos($legacyErr, 'legacy_id:') === 0) {
@@ -452,6 +466,30 @@ class CommunicationEngine {
                         $resolvedVal = number_format($balance);
                     } elseif ($val === 'next_due_date' || $val === 'installment_due_date') {
                         $resolvedVal = $nextDueDate;
+                    } elseif ($val === 'installment_number') {
+                        $instStmt = $this->pdo->prepare("SELECT instalment_number FROM instalment_details WHERE user_id = ? AND status = 'pending' AND paid_date IS NULL ORDER BY instalment_number ASC LIMIT 1");
+                        $instStmt->execute([$student['user_id']]);
+                        $rawNum = $instStmt->fetchColumn() ?: '1';
+                        $ord = (int)$rawNum;
+                        if ($ord === 1) $resolvedVal = "1st";
+                        elseif ($ord === 2) $resolvedVal = "2nd";
+                        elseif ($ord === 3) $resolvedVal = "3rd";
+                        else $resolvedVal = $ord . "th";
+                    } elseif ($val === 'installment_amount') {
+                        $instStmt = $this->pdo->prepare("SELECT amount FROM instalment_details WHERE user_id = ? AND status = 'pending' AND paid_date IS NULL ORDER BY instalment_number ASC LIMIT 1");
+                        $instStmt->execute([$student['user_id']]);
+                        $resolvedVal = number_format((float)($instStmt->fetchColumn() ?: 0));
+                    } elseif ($val === 'banking_details') {
+                        try {
+                            $public_accs = $this->pdo->query("SELECT account_name, banking_details FROM payment_accounts WHERE is_public = 1 AND status = 'active' LIMIT 2")->fetchAll();
+                            $details_arr = [];
+                            foreach ($public_accs as $pa) {
+                                $details_arr[] = $pa['account_name'] . ($pa['banking_details'] ? " (" . $pa['banking_details'] . ")" : "");
+                            }
+                            $resolvedVal = implode(" or ", $details_arr);
+                        } catch (Exception $e) {
+                            $resolvedVal = '';
+                        }
                     }
                 }
                 

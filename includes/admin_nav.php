@@ -51,6 +51,7 @@ if (file_exists(__DIR__ . '/session_cron.php')) {
     try {
         if (function_exists('sessions_dispatch_due')) sessions_dispatch_due($pdo);
         if (function_exists('installments_dispatch_reminders')) installments_dispatch_reminders($pdo);
+        if (function_exists('installments_dispatch_whatsapp_reminders')) installments_dispatch_whatsapp_reminders($pdo);
     }
     catch (Exception $e) { error_log('nav session/installment cron: ' . $e->getMessage()); }
 }
