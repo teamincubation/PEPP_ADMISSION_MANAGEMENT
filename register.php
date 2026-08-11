@@ -302,6 +302,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             unset($_SESSION['temp_payment_screenshot_path']);
             unset($_SESSION['temp_photo_upload_path']);
 
+            // Queue and immediately dispatch Student Registration WhatsApp notification
+            try {
+                require_once 'includes/communication/CommunicationEngine.php';
+                $engine = CommunicationEngine::getInstance($pdo);
+                
+                $phone = preg_replace('/\D/', '', $form_data['whatsapp_country_code'] . $form_data['whatsapp_number']);
+                $context = [
+                    'student_uid' => $user_id,
+                    'student_name' => $form_data['name'],
+                    'application_id' => $user_id,
+                    'course_name' => $form_data['pepp_course']
+                ];
+                
+                $engine->sendEventNotification('student_registration', $phone, $context, 'system_registration');
+            } catch (Exception $ex) {
+                error_log('Registration notification trigger failed: ' . $ex->getMessage());
+            }
+
             // Redirect to success page with the record ID
             header("Location: success.php?id=" . $inserted_id);
             exit;
