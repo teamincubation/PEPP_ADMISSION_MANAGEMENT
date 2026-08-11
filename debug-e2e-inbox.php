@@ -21,7 +21,7 @@ try {
     $testPhoneWeird = " +91 62825-63209 ";
 
     // Clear previous test data
-    $pdo->prepare("DELETE FROM users WHERE whatsapp_number = '6282563209'")->execute();
+    $pdo->prepare("DELETE FROM users WHERE whatsapp_number = '6282563209' OR user_id = 'PEPP2026INBOX'")->execute();
     $pdo->prepare("DELETE FROM whatsapp_conversations WHERE wa_phone_number IN ('916282563209', '918888888888')")->execute();
 
     // Setup test student
