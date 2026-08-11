@@ -112,6 +112,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $error_message = 'Execution error: ' . $e->getMessage();
                 }
             }
+        } elseif ($action === 'switch_whatsapp_mode') {
+            $new_mode = $_POST['new_mode'] ?? '';
+            if (!in_array($new_mode, ['meta_api', 'manual'], true)) {
+                $error_message = 'Invalid mode specified.';
+            } else {
+                try {
+                    $old_mode = whatsapp_outbound_mode($pdo);
+                    if ($old_mode === $new_mode) {
+                        $error_message = 'Already in ' . strtoupper(str_replace('_', ' ', $new_mode)) . ' mode.';
+                    } else {
+                        // Insert audit record
+                        $auditStmt = $pdo->prepare("INSERT INTO whatsapp_mode_audit (old_mode, new_mode, changed_by, changed_at) VALUES (?, ?, ?, NOW())");
+                        $auditStmt->execute([$old_mode, $new_mode, $admin_username]);
+
+                        // Update the setting
+                        $updateStmt = $pdo->prepare("
+                            INSERT INTO admin_settings (setting_name, setting_value, updated_at) 
+                            VALUES ('whatsapp_outbound_mode', ?, NOW()) 
+                            ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()
+                        ");
+                        $updateStmt->execute([$new_mode]);
+
+                        // Reset the static cache so the page reflects the new mode
+                        // (whatsapp_outbound_mode uses static cache — reload settings)
+                        $settings['whatsapp_outbound_mode'] = $new_mode;
+
+                        $mode_label = $new_mode === 'meta_api' ? 'META API' : 'MANUAL';
+                        $success_message = "Outbound WhatsApp mode switched to {$mode_label}.";
+                    }
+                } catch (Exception $e) {
+                    $error_message = 'Failed to switch mode: ' . $e->getMessage();
+                }
+            }
         }
     }
 }
@@ -143,6 +176,14 @@ try {
     ")->fetchAll();
 } catch (Exception $ex) {}
 
+// Fetch current outbound mode (re-read from DB to reflect any switch made above)
+$current_mode = $settings['whatsapp_outbound_mode'] ?? whatsapp_outbound_mode($pdo);
+
+// Fetch mode audit log (last 5)
+$modeAuditLog = [];
+try {
+    $modeAuditLog = $pdo->query("SELECT * FROM whatsapp_mode_audit ORDER BY id DESC LIMIT 5")->fetchAll();
+} catch (Exception $ex) {}
 
 include 'includes/admin_nav.php';
 ?>
@@ -159,6 +200,108 @@ include 'includes/admin_nav.php';
             <i class="fas fa-circle-xmark"></i> <?php echo htmlspecialchars($error_message); ?>
         </div>
     <?php endif; ?>
+
+    <!-- ── OUTBOUND WHATSAPP MODE TOGGLE ── -->
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; overflow:hidden; margin-bottom:24px;">
+        <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px; display:flex; justify-content:space-between; align-items:center;">
+            <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;"><i class="fas fa-toggle-on" style="color:#8b5cf6; margin-right:4px;"></i> Outbound WhatsApp Messaging Mode</h3>
+            <span class="badge <?php echo $current_mode === 'meta_api' ? 'green' : 'amber'; ?>" style="font-size:0.8rem; font-weight:700;">
+                <?php echo $current_mode === 'meta_api' ? 'META API' : 'MANUAL'; ?>
+            </span>
+        </div>
+        <div style="padding:20px;">
+            <div style="display:flex; gap:12px; margin-bottom:16px;">
+                <!-- META API Option -->
+                <form method="POST" style="flex:1;" id="form-switch-meta">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="action" value="switch_whatsapp_mode">
+                    <input type="hidden" name="new_mode" value="meta_api">
+                    <button type="button" onclick="confirmModeSwitch('meta_api')" style="width:100%; padding:16px; border-radius:12px; cursor:pointer; font-weight:700; font-size:0.9rem; transition:all 0.2s;
+                        <?php if ($current_mode === 'meta_api'): ?>
+                            background:linear-gradient(135deg, #dcfce7, #bbf7d0); border:2px solid #22c55e; color:#166534;
+                        <?php else: ?>
+                            background:#f9fafb; border:2px solid #e5e7eb; color:#6b7280;
+                        <?php endif; ?>">
+                        <i class="fas fa-robot" style="margin-right:4px;"></i> META API
+                        <?php if ($current_mode === 'meta_api'): ?>
+                            <span style="display:block; font-size:0.75rem; font-weight:500; margin-top:4px;">✓ Active — Automated outbound via Meta Cloud API</span>
+                        <?php else: ?>
+                            <span style="display:block; font-size:0.75rem; font-weight:500; margin-top:4px;">Click to enable automated Meta messaging</span>
+                        <?php endif; ?>
+                    </button>
+                </form>
+
+                <!-- MANUAL Option -->
+                <form method="POST" style="flex:1;" id="form-switch-manual">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="action" value="switch_whatsapp_mode">
+                    <input type="hidden" name="new_mode" value="manual">
+                    <button type="button" onclick="confirmModeSwitch('manual')" style="width:100%; padding:16px; border-radius:12px; cursor:pointer; font-weight:700; font-size:0.9rem; transition:all 0.2s;
+                        <?php if ($current_mode === 'manual'): ?>
+                            background:linear-gradient(135deg, #fef3c7, #fde68a); border:2px solid #f59e0b; color:#92400e;
+                        <?php else: ?>
+                            background:#f9fafb; border:2px solid #e5e7eb; color:#6b7280;
+                        <?php endif; ?>">
+                        <i class="fas fa-hand" style="margin-right:4px;"></i> MANUAL
+                        <?php if ($current_mode === 'manual'): ?>
+                            <span style="display:block; font-size:0.75rem; font-weight:500; margin-top:4px;">✓ Active — Manual wa.me links for outbound messaging</span>
+                        <?php else: ?>
+                            <span style="display:block; font-size:0.75rem; font-weight:500; margin-top:4px;">Click to switch to manual messaging</span>
+                        <?php endif; ?>
+                    </button>
+                </form>
+            </div>
+
+            <div style="background:#f1f5f9; border-radius:8px; padding:10px 14px; font-size:0.78rem; color:#475569; margin-bottom:12px;">
+                <i class="fas fa-circle-info" style="color:#3b82f6;"></i>
+                <strong>META API</strong>: Automated outbound via CommunicationEngine + Meta Cloud API. Manual wa.me buttons hidden.
+                <strong>MANUAL</strong>: Existing manual wa.me workflows. Automated Meta outbound disabled.
+                <br><em>Inbound messages, WhatsApp Inbox, webhook, and auto-response CTA are always active regardless of mode.</em>
+            </div>
+
+            <?php if (!empty($modeAuditLog)): ?>
+            <div style="font-size:0.8rem;">
+                <div style="font-weight:700; color:#374151; margin-bottom:6px;"><i class="fas fa-clock-rotate-left"></i> Mode Change History</div>
+                <table style="width:100%; border-collapse:collapse; font-size:0.78rem;">
+                    <thead><tr style="background:#f9fafb; border-bottom:1px solid #e5e7eb;">
+                        <th style="padding:6px 10px; text-align:left; color:#6b7280; font-weight:600;">Date</th>
+                        <th style="padding:6px 10px; text-align:left; color:#6b7280; font-weight:600;">Change</th>
+                        <th style="padding:6px 10px; text-align:left; color:#6b7280; font-weight:600;">By</th>
+                    </tr></thead>
+                    <tbody>
+                    <?php foreach ($modeAuditLog as $alog): ?>
+                        <tr style="border-bottom:1px solid #f3f4f6;">
+                            <td style="padding:6px 10px; color:#6b7280;"><?php echo date('d M Y, h:i A', strtotime($alog['changed_at'])); ?></td>
+                            <td style="padding:6px 10px;">
+                                <span class="badge <?php echo $alog['old_mode'] === 'meta_api' ? 'green' : 'amber'; ?>" style="font-size:0.65rem;"><?php echo strtoupper(str_replace('_', ' ', $alog['old_mode'])); ?></span>
+                                <i class="fas fa-arrow-right" style="color:#9ca3af; font-size:0.6rem; margin:0 4px;"></i>
+                                <span class="badge <?php echo $alog['new_mode'] === 'meta_api' ? 'green' : 'amber'; ?>" style="font-size:0.65rem;"><?php echo strtoupper(str_replace('_', ' ', $alog['new_mode'])); ?></span>
+                            </td>
+                            <td style="padding:6px 10px; font-weight:600; color:#374151;"><?php echo htmlspecialchars($alog['changed_by']); ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <script>
+    function confirmModeSwitch(mode) {
+        var currentMode = '<?php echo $current_mode; ?>';
+        if (mode === currentMode) { return; }
+        var msg = '';
+        if (mode === 'manual') {
+            msg = 'Switching to MANUAL mode will stop all automated outbound WhatsApp messages through Meta Cloud API.\n\nInbound messages and the WhatsApp Inbox will continue working.\n\nAre you sure?';
+        } else {
+            msg = 'Switching to META API mode will enable automated outbound WhatsApp through Meta Cloud API.\n\nManual wa.me links will be hidden where automated messaging is available.\n\nAre you sure?';
+        }
+        if (confirm(msg)) {
+            document.getElementById('form-switch-' + mode).submit();
+        }
+    }
+    </script>
 
     <!-- ── KPI METRICS GRID ── -->
     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:16px; margin-bottom:24px;">

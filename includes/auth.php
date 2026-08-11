@@ -124,6 +124,24 @@ function can_admin_export() {
     return isset($admin_row['can_export']) ? (int)$admin_row['can_export'] === 1 : true;
 }
 
+/**
+ * Returns the global outbound WhatsApp messaging mode: 'meta_api' or 'manual'.
+ * Cached per-request. Defaults to 'manual' for safety.
+ */
+function whatsapp_outbound_mode($pdo) {
+    static $mode = null;
+    if ($mode === null) {
+        try {
+            $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_outbound_mode' LIMIT 1");
+            $stmt->execute();
+            $mode = $stmt->fetchColumn() ?: 'manual';
+        } catch (Exception $e) {
+            $mode = 'manual';
+        }
+    }
+    return $mode;
+}
+
 /* ── Activity logging (logins, logouts, exports, admin events) ──────────── */
 function log_admin_activity($pdo, $admin, $type, $details = '', $ip = null, $location = null) {
     try {

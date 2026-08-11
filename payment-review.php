@@ -144,7 +144,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 track_record($pdo, $req['user_id'], 'installment_approved',
                     "Installment #{$req['instalment_number']} (₹" . number_format($received_amount, 2) . ") approved; course access extended to {$new_access_end}", $admin_username);
 
-                // 4. Queue message via Centralized Communication Engine (retaining wa.me manual fallback URL)
+                // 4. Queue message via Communication Engine (mode-aware, no plain-text fallback)
                 $formatted_amount = '₹' . number_format($received_amount, 0);
                 $formatted_date = date('d M Y', strtotime($new_access_end));
                 $msg = "*Installment Payment Approved!*\n"
@@ -152,38 +152,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                      . "Your course access is extended until *{$formatted_date}*. Refresh your app to get continued access.\n\n"
                      . "Thank you!\n"
                      . "`PEPP Learning`";
-                try {
-                    require_once 'includes/communication/CommunicationEngine.php';
-                    $engine = CommunicationEngine::getInstance($pdo);
-                    
-                    $context = [
-                        'student_uid' => $req['user_id'],
-                        'student_name' => $req['student_name'] ?? '',
-                        'application_id' => $req['user_id'],
-                        'payment_amount' => $received_amount,
-                        'invoice_number' => $inv_no ?? '',
-                        'balance_amount' => $remaining ?? 0
-                    ];
-                    
-                    $qId = $engine->sendEventNotification('payment_receipt', $wa_phone, $context, $admin_username);
-                    if (!$qId) {
-                        // Fallback to manual text message
-                        $engine->queueMessage(
-                            'whatsapp',
-                            $wa_phone,
-                            $req['student_name'],
-                            'Installment Payment Approved',
-                            $msg,
-                            $msg,
-                            [],
-                            [],
-                            $admin_username,
-                            null,
-                            $req['user_id']
-                        );
-                    }
-                } catch (Exception $ex) { error_log('wa log: ' . $ex->getMessage()); }
-                $whatsapp_url = 'https://wa.me/' . $wa_phone . '?text=' . rawurlencode($msg);
+
+                if (whatsapp_outbound_mode($pdo) === 'meta_api') {
+                    // META API mode: attempt template dispatch, no fallback
+                    try {
+                        require_once 'includes/communication/CommunicationEngine.php';
+                        $engine = CommunicationEngine::getInstance($pdo);
+                        
+                        $context = [
+                            'student_uid' => $req['user_id'],
+                            'student_name' => $req['student_name'] ?? '',
+                            'application_id' => $req['user_id'],
+                            'payment_amount' => $received_amount,
+                            'invoice_number' => $inv_no ?? '',
+                            'balance_amount' => $remaining ?? 0
+                        ];
+                        
+                        $qId = $engine->sendEventNotification('payment_receipt', $wa_phone, $context, $admin_username);
+                        if (!$qId) {
+                            error_log("Payment approval WhatsApp skipped: payment_receipt template not configured for student {$req['user_id']}");
+                        }
+                    } catch (Exception $ex) { error_log('Payment approval WA: ' . $ex->getMessage()); }
+                    // No wa.me redirect in META mode
+                } else {
+                    // MANUAL mode: wa.me redirect only, no engine calls
+                    $whatsapp_url = 'https://wa.me/' . $wa_phone . '?text=' . rawurlencode($msg);
+                }
 
                 // Send approval email
                 if (file_exists('includes/peppian_notify.php')) {
@@ -258,26 +252,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 track_record($pdo, $req['user_id'], 'installment_rejected',
                     "Installment #{$req['instalment_number']} rejected: {$admin_remarks}. Student can re-submit.", $admin_username);
 
-                // Queue rejection message via Centralized Communication Engine
+                // Queue rejection message (mode-aware, no plain-text fallback in META mode)
                 $msg = "Installment payment request rejected due to: {$admin_remarks}. Please submit the payment again after addressing the issue. - PEPP Learning";
-                try {
-                    require_once 'includes/communication/CommunicationEngine.php';
-                    $engine = CommunicationEngine::getInstance($pdo);
-                    $engine->queueMessage(
-                        'whatsapp',
-                        $wa_phone,
-                        $req['student_name'],
-                        'Payment Request Rejected',
-                        $msg,
-                        $msg,
-                        [],
-                        [],
-                        $admin_username,
-                        null,
-                        $req['user_id']
-                    );
-                } catch (Exception $ex) { error_log('wa log: ' . $ex->getMessage()); }
-                $whatsapp_url = 'https://wa.me/' . $wa_phone . '?text=' . rawurlencode($msg);
+
+                if (whatsapp_outbound_mode($pdo) === 'meta_api') {
+                    // META API mode: no template for payment_rejection yet, skip sending
+                    error_log("Payment rejection WhatsApp skipped: payment_rejection template not configured for student {$req['user_id']}");
+                    // No wa.me redirect in META mode
+                } else {
+                    // MANUAL mode: wa.me redirect only, no engine calls
+                    $whatsapp_url = 'https://wa.me/' . $wa_phone . '?text=' . rawurlencode($msg);
+                }
 
                 $success_message = "Installment #{$req['instalment_number']} rejected. The student can submit the payment again.";
                 $req = load_request($pdo, $request_id);

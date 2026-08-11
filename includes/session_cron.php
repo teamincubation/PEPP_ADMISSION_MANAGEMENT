@@ -229,6 +229,21 @@ function installments_dispatch_whatsapp_reminders($pdo) {
     static $ran = false;
     if ($ran) return; $ran = true;
 
+    // Global outbound mode guard: automated WhatsApp reminders only run in META API mode
+    $waMode = 'manual';
+    if (function_exists('whatsapp_outbound_mode')) {
+        $waMode = whatsapp_outbound_mode($pdo);
+    } else {
+        try {
+            $mStmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_outbound_mode' LIMIT 1");
+            $mStmt->execute();
+            $waMode = $mStmt->fetchColumn() ?: 'manual';
+        } catch (Exception $e) {}
+    }
+    if ($waMode !== 'meta_api') {
+        return; // Automated WhatsApp reminders only dispatch in META API mode
+    }
+
     // 1) Verify current time is between 08:00 AM and 09:00 AM IST
     $tz = new DateTimeZone('Asia/Kolkata');
     $now = new DateTime('now', $tz);

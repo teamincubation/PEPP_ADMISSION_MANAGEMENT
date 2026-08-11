@@ -192,15 +192,19 @@ include 'includes/admin_nav.php';
                     </td>
                     <td style="text-align:right; white-space:nowrap;">
                         <?php if ($tab === 'upcoming'): ?>
-                            <button class="btn btn-sm btn-whatsapp" onclick='sendReminder(<?php echo json_encode([
-                                "name" => $r["student_name"],
-                                "whatsapp_country_code" => $r["whatsapp_country_code"],
-                                "whatsapp_number" => $r["whatsapp_number"],
-                                "pepp_course" => $r["pepp_course"],
-                                "instalment_number" => (int)$r["instalment_number"],
-                                "amount" => (float)$r["amount"],
-                                "due_date" => date("d M Y", strtotime($r["due_date"]))
-                            ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)' title="Send WhatsApp Reminder"><i class="fab fa-whatsapp"></i> Reminder</button>
+                            <?php if (whatsapp_outbound_mode($pdo) === 'meta_api'): ?>
+                                <span class="badge blue" style="font-size:0.65rem;" title="Automated reminders via Meta API"><i class="fas fa-robot"></i> Auto</span>
+                            <?php else: ?>
+                                <button class="btn btn-sm btn-whatsapp" onclick='sendReminder(<?php echo json_encode([
+                                    "name" => $r["student_name"],
+                                    "whatsapp_country_code" => $r["whatsapp_country_code"],
+                                    "whatsapp_number" => $r["whatsapp_number"],
+                                    "pepp_course" => $r["pepp_course"],
+                                    "instalment_number" => (int)$r["instalment_number"],
+                                    "amount" => (float)$r["amount"],
+                                    "due_date" => date("d M Y", strtotime($r["due_date"]))
+                                ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)' title="Send WhatsApp Reminder"><i class="fab fa-whatsapp"></i> Reminder</button>
+                            <?php endif; ?>
                         <?php endif; ?>
                         <?php if ($st === 'pending' && $r['paid_date']): ?>
                             <a class="btn btn-sm btn-primary" href="payment-review.php?id=<?php echo (int)$r['id']; ?>"><i class="fas fa-magnifying-glass"></i> Review</a>

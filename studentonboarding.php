@@ -80,12 +80,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             track_record($pdo, $user_id, 'onboarding_completed',
                 "App access: $app, Contacts: $sav, WhatsApp groups: $wa, Semester guide: $sem", $admin_username);
 
-            echo json_encode(['success' => true, 'message' => 'Onboarding completed for ' . $student['name'] . '.']);
+            // Auto-queue App Access WhatsApp notification in META API mode
+            $wp_status = null;
+            if (whatsapp_outbound_mode($pdo) === 'meta_api' && $app === 'Yes') {
+                try {
+                    require_once 'includes/communication/CommunicationEngine.php';
+                    $engine = CommunicationEngine::getInstance($pdo);
+
+                    $phone = preg_replace('/\D/', '', $student['whatsapp_country_code'] . $student['whatsapp_number']);
+                    if (strlen($phone) === 10) $phone = '91' . $phone;
+
+                    $context = [
+                        'student_uid' => $student['user_id'],
+                        'student_name' => $student['name'] ?? '',
+                        'student_email' => $student['email'] ?? '',
+                        'application_id' => $student['user_id'],
+                        'course_name' => $student['pepp_course'] ?? ''
+                    ];
+
+                    $qId = $engine->sendEventNotification('onboarding_app_access', $phone, $context, $admin_username);
+                    if ($qId) {
+                        $wp_status = 'queued';
+                    } else {
+                        $wp_status = 'template_unavailable';
+                        error_log("Onboarding App Access: template unavailable for student {$user_id}");
+                    }
+                } catch (Exception $ex) {
+                    $wp_status = 'failed';
+                    error_log('Onboarding App Access dispatch error: ' . $ex->getMessage());
+                }
+            }
+
+            $response = ['success' => true, 'message' => 'Onboarding completed for ' . $student['name'] . '.'];
+            if ($wp_status !== null) {
+                $response['wp_status'] = $wp_status;
+            }
+            echo json_encode($response);
             exit;
         }
 
         if ($action === 'get_message') {
-            // Builds a wa.me link from a stored template
+            // META API mode: manual messaging disabled
+            if (whatsapp_outbound_mode($pdo) === 'meta_api') {
+                echo json_encode(['success' => false, 'message' => 'Meta API mode is active. Use automated messaging.', 'mode' => 'meta_api']);
+                exit;
+            }
+
+            // MANUAL mode: builds a wa.me link from a stored template (no Meta queue calls)
             $type = $_POST['type'] ?? '';
             $allowed = [
                 'welcome'      => 'onboarding_wp_message',
@@ -105,37 +146,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $msg   = fill_student_template($pdo, $template, $student);
             $phone = preg_replace('/\D/', '', $student['whatsapp_country_code'] . $student['whatsapp_number']);
-
-            // Queue onboarding notification via Centralized Communication Engine
-            try {
-                require_once 'includes/communication/CommunicationEngine.php';
-                $engine = CommunicationEngine::getInstance($pdo);
-                
-                $context = [
-                    'student_uid' => $student['user_id'],
-                    'student_name' => $student['name'] ?? '',
-                    'application_id' => $student['user_id'],
-                    'course_name' => $student['pepp_course'] ?? ''
-                ];
-                
-                $qId = $engine->sendEventNotification('student_registration', $phone, $context, $admin_username);
-                if (!$qId) {
-                    // Fallback to manual text message
-                    $engine->queueMessage(
-                        'whatsapp',
-                        $phone,
-                        $student['name'],
-                        'Student Onboarding: ' . ucfirst($type),
-                        $msg,
-                        $msg,
-                        [],
-                        [],
-                        $admin_username,
-                        null,
-                        $student['user_id']
-                    );
-                }
-            } catch (Exception $ex) { error_log('wa log: ' . $ex->getMessage()); }
 
             echo json_encode([
                 'success' => true,
@@ -178,6 +188,43 @@ $completed_count = 0;
 try {
     $completed_count = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE status = 'approved' AND onboarding_status = 'completed'")->fetchColumn();
 } catch (Exception $e) {}
+
+// Determine current WhatsApp outbound mode
+$wa_mode = whatsapp_outbound_mode($pdo);
+
+// If META API mode, fetch communication queue statuses for each student's events
+$student_wp_statuses = [];
+if ($wa_mode === 'meta_api' && !empty($students)) {
+    try {
+        $uids = array_column($students, 'user_id');
+        $placeholders = implode(',', array_fill(0, count($uids), '?'));
+        $statusStmt = $pdo->prepare("
+            SELECT student_uid, event_name, status, error_message
+            FROM communication_queue
+            WHERE student_uid IN ($placeholders)
+              AND event_name IN ('student_registration', 'student_approval', 'onboarding_app_access')
+            ORDER BY id DESC
+        ");
+        $statusStmt->execute($uids);
+        $allStatuses = $statusStmt->fetchAll();
+        foreach ($allStatuses as $row) {
+            $key = $row['student_uid'] . '|' . $row['event_name'];
+            if (!isset($student_wp_statuses[$key])) {
+                $student_wp_statuses[$key] = $row;
+            }
+        }
+    } catch (Exception $ex) {
+        error_log('Onboarding WP status query: ' . $ex->getMessage());
+    }
+
+    // Check which events have templates configured
+    try {
+        require_once 'includes/communication/CommunicationEngine.php';
+        $engine = CommunicationEngine::getInstance($pdo);
+    } catch (Exception $ex) {
+        $engine = null;
+    }
+}
 
 $active_page = 'onboarding';
 $page_title  = 'Student Onboarding';
@@ -238,9 +285,54 @@ include 'includes/admin_nav.php';
                     </td>
                     <td class="cell-sub"><?php echo $s['approval_date'] ? date('d M Y', strtotime($s['approval_date'])) : '-'; ?></td>
                     <td style="white-space:nowrap;">
-                        <button class="btn btn-sm btn-whatsapp" onclick="sendMessage('<?php echo e($s['user_id']); ?>', 'welcome')"><i class="fab fa-whatsapp"></i> Welcome</button>
-                        <button class="btn btn-sm btn-soft-green" onclick="sendMessage('<?php echo e($s['user_id']); ?>', 'confirmation')"><i class="fas fa-circle-check"></i> Confirmation</button>
-                        <button class="btn btn-sm btn-soft-blue" onclick="sendMessage('<?php echo e($s['user_id']); ?>', 'app_access')"><i class="fas fa-mobile-screen"></i> App Access</button>
+                        <?php if ($wa_mode === 'meta_api'): ?>
+                            <?php
+                            // Show status badges for each event
+                            $events = [
+                                'student_registration' => ['Welcome', 'fa-paper-plane'],
+                                'student_approval' => ['Confirmation', 'fa-circle-check'],
+                                'onboarding_app_access' => ['App Access', 'fa-mobile-screen'],
+                            ];
+                            foreach ($events as $evt_name => $evt_info):
+                                $statusKey = $s['user_id'] . '|' . $evt_name;
+                                $queueRow = $student_wp_statuses[$statusKey] ?? null;
+
+                                // Determine display status
+                                if ($queueRow) {
+                                    $st = $queueRow['status'];
+                                    if ($st === 'read') { $badgeClass = 'green'; $badgeText = 'Read ✓✓'; }
+                                    elseif ($st === 'delivered') { $badgeClass = 'green'; $badgeText = 'Delivered ✓✓'; }
+                                    elseif ($st === 'sent') { $badgeClass = 'blue'; $badgeText = 'Sent ✓'; }
+                                    elseif ($st === 'processing' || $st === 'pending') { $badgeClass = 'amber'; $badgeText = 'Queued ⏳'; }
+                                    elseif ($st === 'failed') { $badgeClass = 'red'; $badgeText = 'Failed ✗'; }
+                                    else { $badgeClass = 'gray'; $badgeText = ucfirst($st); }
+                                } else {
+                                    // No queue record — check if template is configured
+                                    $tplAvailable = false;
+                                    if (isset($engine)) {
+                                        try {
+                                            $resolved = $engine->resolveEventTemplate($evt_name);
+                                            $tplAvailable = ($resolved !== null);
+                                        } catch (Exception $e) {
+                                            $tplAvailable = false;
+                                        }
+                                    }
+                                    if (!$tplAvailable && $evt_name === 'onboarding_app_access') {
+                                        $badgeClass = 'amber'; $badgeText = 'Template N/A';
+                                    } else {
+                                        $badgeClass = 'gray'; $badgeText = 'Not Sent';
+                                    }
+                                }
+                            ?>
+                                <span class="badge <?php echo $badgeClass; ?>" style="font-size:0.65rem; margin-right:3px;" title="<?php echo e($evt_info[0]); ?>">
+                                    <i class="fas <?php echo $evt_info[1]; ?>"></i> <?php echo $badgeText; ?>
+                                </span>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <button class="btn btn-sm btn-whatsapp" onclick="sendMessage('<?php echo e($s['user_id']); ?>', 'welcome')"><i class="fab fa-whatsapp"></i> Welcome</button>
+                            <button class="btn btn-sm btn-soft-green" onclick="sendMessage('<?php echo e($s['user_id']); ?>', 'confirmation')"><i class="fas fa-circle-check"></i> Confirmation</button>
+                            <button class="btn btn-sm btn-soft-blue" onclick="sendMessage('<?php echo e($s['user_id']); ?>', 'app_access')"><i class="fas fa-mobile-screen"></i> App Access</button>
+                        <?php endif; ?>
                     </td>
                     <td style="text-align:right;">
                         <button class="btn btn-sm btn-primary" onclick='openOnboardModal(<?php echo json_encode([
