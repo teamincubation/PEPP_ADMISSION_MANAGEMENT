@@ -21,21 +21,7 @@ try {
         echo "Updated At: " . $log['updated_at'] . "\n\n";
         
         $data = json_decode($log['template_data'], true) ?: [];
-        echo "--- Resolved Variables (Parameters) ---\n";
-        $labels = [
-            1 => 'Student Name', 2 => 'Course Name', 3 => 'Academic Year',
-            4 => 'Paid Amount', 5 => 'Payment Date', 6 => 'Payment Plan',
-            7 => 'Payment Mode', 8 => 'Course Fee', 9 => 'Discount Amount',
-            10 => 'Total Payable', 11 => 'Total Paid', 12 => 'Balance Amount',
-            13 => 'Next Due Date'
-        ];
-        
-        foreach ($data['parameters'] ?? [] as $idx => $p) {
-            $paramIdx = $idx + 1;
-            echo "Parameter {{#{$paramIdx}}} ({$labels[$paramIdx]}): " . $p . "\n";
-        }
-        
-        echo "\n--- Button Parameters (URL Token) ---\n";
+        echo "--- Button Parameters (URL Token) ---\n";
         $btnParam = $data['button_parameters'][0] ?? '';
         echo "Button Param {{1}}: " . $btnParam . "\n";
         
