@@ -596,6 +596,8 @@ class CommunicationEngine {
                         $resolvedVal = number_format($balance);
                     } elseif ($val === 'next_due_date' || $val === 'installment_due_date') {
                         $resolvedVal = $nextDueDate;
+                    } elseif ($val === 'new_access_end' || $val === 'course_duration_date' || $val === 'access_end') {
+                        $resolvedVal = !empty($student['course_duration_date']) ? date('d M Y', strtotime($student['course_duration_date'])) : '';
                     } elseif ($val === 'installment_number') {
                         $instStmt = $this->pdo->prepare("SELECT instalment_number FROM instalment_details WHERE user_id = ? AND status = 'pending' AND paid_date IS NULL ORDER BY instalment_number ASC LIMIT 1");
                         $instStmt->execute([$student['user_id']]);

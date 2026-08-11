@@ -144,7 +144,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 track_record($pdo, $req['user_id'], 'installment_approved',
                     "Installment #{$req['instalment_number']} (₹" . number_format($received_amount, 2) . ") approved; course access extended to {$new_access_end}", $admin_username);
 
-                // 4. Queue message via Communication Engine (mode-aware, no plain-text fallback)
+                // ── 1. Automatic invoice generation (REUSE EXISTING ENGINE) ────────
+                $inv_ok = false;
+                $inv_msg = '';
+                $inv_id = null;
+                $inv_no = null;
+                try {
+                    [$inv_ok, $inv_msg, $inv_id, $inv_no] = generate_payment_invoice($pdo, [
+                        'source' => 'installment', 'source_ref' => $request_id, 'user_id' => $req['user_id'],
+                        'amount' => $received_amount, 'account_id' => $payment_account,
+                        'payment_mode' => $payment_mode,
+                        'paid_date' => $req['paid_date'] ?: date('Y-m-d'),
+                        'instalment_number' => $req['instalment_number'],
+                        'generated_by' => $admin_username, 'send_email' => true,
+                    ]);
+                } catch (Exception $invEx) {
+                    error_log("Installment invoice generation error: " . $invEx->getMessage());
+                }
+
+                $inv_note = ($inv_ok && $inv_no)
+                    ? ' Invoice ' . $inv_no . ' generated and emailed - <a href="invoice-pdf.php?id=' . (int)$inv_id . '">download PDF</a>.'
+                    : '';
+
+                // ── 2. Queue message via Communication Engine (Only AFTER valid invoice) ────────
                 $formatted_amount = '₹' . number_format($received_amount, 0);
                 $formatted_date = date('d M Y', strtotime($new_access_end));
                 $msg = "*Installment Payment Approved!*\n"
@@ -154,25 +176,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                      . "`PEPP Learning`";
 
                 if (whatsapp_outbound_mode($pdo) === 'meta_api') {
-                    // META API mode: attempt template dispatch, no fallback
-                    try {
-                        require_once 'includes/communication/CommunicationEngine.php';
-                        $engine = CommunicationEngine::getInstance($pdo);
-                        
-                        $context = [
-                            'student_uid' => $req['user_id'],
-                            'student_name' => $req['student_name'] ?? '',
-                            'application_id' => $req['user_id'],
-                            'payment_amount' => $received_amount,
-                            'invoice_number' => $inv_no ?? '',
-                            'balance_amount' => $remaining ?? 0
-                        ];
-                        
-                        $qId = $engine->sendEventNotification('payment_receipt', $wa_phone, $context, $admin_username);
-                        if (!$qId) {
-                            error_log("Payment approval WhatsApp skipped: payment_receipt template not configured for student {$req['user_id']}");
-                        }
-                    } catch (Exception $ex) { error_log('Payment approval WA: ' . $ex->getMessage()); }
+                    // META API mode: dispatch WhatsApp notification only if invoice was successfully generated/retrieved
+                    if ($inv_ok && !empty($inv_id)) {
+                        try {
+                            require_once 'includes/communication/CommunicationEngine.php';
+                            $engine = CommunicationEngine::getInstance($pdo);
+                            
+                            $inst_num_raw = (int)($req['instalment_number'] ?? 1);
+                            $inst_num_str = ($inst_num_raw === 1) ? '1st' : (($inst_num_raw === 2) ? '2nd' : (($inst_num_raw === 3) ? '3rd' : ($inst_num_raw . 'th')));
+
+                            $context = [
+                                'student_uid'        => $req['user_id'],
+                                'student_name'       => $req['student_name'] ?? '',
+                                'application_id'     => $req['user_id'],
+                                'payment_amount'     => number_format($received_amount),
+                                'invoice_number'     => $inv_no,
+                                'invoice_id'         => $inv_id,
+                                'installment_number' => $inst_num_str,
+                                'paid_date'          => !empty($req['paid_date']) ? date('d M Y', strtotime($req['paid_date'])) : date('d M Y'),
+                                'new_access_end'     => !empty($new_access_end) ? date('d M Y', strtotime($new_access_end)) : '',
+                                'course_name'        => $req['pepp_course'] ?? '',
+                                'balance_amount'     => $remaining ?? 0
+                            ];
+                            
+                            $qId = $engine->sendEventNotification('payment_receipt', $wa_phone, $context, $admin_username);
+                            if (!$qId) {
+                                error_log("Payment approval WhatsApp skipped: payment_receipt template not configured for student {$req['user_id']}");
+                            }
+                        } catch (Exception $ex) { error_log('Payment approval WA error: ' . $ex->getMessage()); }
+                    } else {
+                        error_log("Payment approval WhatsApp skipped for student {$req['user_id']}: Invoice generation failed or returned empty ID.");
+                    }
                     // No wa.me redirect in META mode
                 } else {
                     // MANUAL mode: wa.me redirect only, no engine calls
@@ -203,19 +237,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         error_log("Failed to send installment approval email: " . $mailEx->getMessage());
                     }
                 }
-
-                // ── Automatic invoice for this installment ────────
-                [$inv_ok, $inv_msg, $inv_id, $inv_no] = generate_payment_invoice($pdo, [
-                    'source' => 'installment', 'source_ref' => $request_id, 'user_id' => $req['user_id'],
-                    'amount' => $received_amount, 'account_id' => $payment_account,
-                    'payment_mode' => $payment_mode,
-                    'paid_date' => $req['paid_date'] ?: date('Y-m-d'),
-                    'instalment_number' => $req['instalment_number'],
-                    'generated_by' => $admin_username, 'send_email' => true,
-                ]);
-                $inv_note = $inv_ok && $inv_no
-                    ? ' Invoice ' . $inv_no . ' generated and emailed - <a href="invoice-pdf.php?id=' . (int)$inv_id . '">download PDF</a>.'
-                    : '';
 
                 $success_message = "Installment #{$req['instalment_number']} approved. Course access extended to " . date('d M Y', strtotime($new_access_end)) . '.' . $inv_note;
                 $req = load_request($pdo, $request_id);
