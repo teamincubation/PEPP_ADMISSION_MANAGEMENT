@@ -23,7 +23,7 @@ foreach ($meta['components'] ?? [] as $comp) {
 }
 echo "1. Synced Template URL: " . ($urlFound ?: 'NOT FOUND') . "\n";
 if ($urlFound === 'https://pepplearning.in/admissions/invoice-pdf.php?token={{1}}') {
-    echo "   -> VERDICT: MATCHED (Safe URL structure) ✓\n";
+    echo "   -> VERDICT: MATCHED (Safe URL structure) [OK]\n";
 } else {
     echo "   -> VERDICT: MISMATCH (Warning: old or incorrect template structure)\n";
 }
@@ -57,13 +57,13 @@ if ($student && $realInvoice) {
             $paramIdx = $idx + 1;
             echo "   {{#{$paramIdx}}} ({$labels[$paramIdx]}): " . $p . "\n";
         }
-        echo "   -> VERDICT: ERP Variable Mapping Resolved successfully ✓\n";
+        echo "   -> VERDICT: ERP Variable Mapping Resolved successfully [OK]\n";
         
         // 3. Verify Dynamic Parameter format
         $buttonParam = $resolved['button_parameters'][0] ?? '';
         echo "\n3. Button parameter: " . $buttonParam . "\n";
         if (preg_match('/^\d+-[a-f0-9]{64}$/', $buttonParam)) {
-            echo "   -> VERDICT: VALID (Format is ID-HMAC using SHA256) ✓\n";
+            echo "   -> VERDICT: VALID (Format is ID-HMAC using SHA256) [OK]\n";
         } else {
             echo "   -> VERDICT: INVALID\n";
         }
@@ -81,7 +81,7 @@ if ($student && $realInvoice) {
         $isValid = hash_equals($expected_hmac, $hmac);
         echo "5. Internal validation check for generated token: " . ($isValid ? "VALID" : "INVALID") . "\n";
         if ($isValid && $tempId === (int)$realInvoice) {
-            echo "   -> VERDICT: SUCCESS (Token validated & matches invoice ID) ✓\n";
+            echo "   -> VERDICT: SUCCESS (Token validated & matches invoice ID) [OK]\n";
         } else {
             echo "   -> VERDICT: FAILED\n";
         }
@@ -108,7 +108,7 @@ if ($simulatedAdminLoggedIn) {
 }
 echo "\n6. Simulate unauthenticated numeric ID access (token parameter is empty):\n";
 if (!$authorizedSim) {
-    echo "   -> VERDICT: REJECTED (Access Denied / HTTP 403) ✓\n";
+    echo "   -> VERDICT: REJECTED (Access Denied / HTTP 403) [OK]\n";
 } else {
     echo "   -> VERDICT: ALLOWED (Security Risk)\n";
 }
@@ -122,7 +122,7 @@ $expected_hmacT = hash_hmac('sha256', (string)$tempIdT, INVOICE_HMAC_SECRET);
 $isValidT = hash_equals($expected_hmacT, $hmacT);
 echo "\n7. Simulate tampered token verification:\n";
 if (!$isValidT) {
-    echo "   -> VERDICT: REJECTED (Access Denied / HTTP 403) ✓\n";
+    echo "   -> VERDICT: REJECTED (Access Denied / HTTP 403) [OK]\n";
 } else {
     echo "   -> VERDICT: ALLOWED (Security Risk)\n";
 }
