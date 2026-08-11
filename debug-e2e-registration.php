@@ -8,6 +8,11 @@ $testName = "Adnan Reg Test {$rand}";
 $testEmail = "adnan.reg.test{$rand}@gmail.com";
 $waNumber = "9567276458"; // Test WhatsApp
 
+// Delete existing users with this number to bypass duplicate WhatsApp check
+require_once 'config/database.php';
+$pdo->prepare("DELETE FROM users WHERE whatsapp_number = ? AND pepp_course = 'MA/MSc Psychology (Standard)' AND pepp_academic_year = '2026-27'")
+    ->execute([$waNumber]);
+
 // Create dummy temporary upload files
 $screenshotFile = __DIR__ . '/test_screenshot.png';
 $photoFile = __DIR__ . '/test_photo.jpg';
@@ -88,8 +93,8 @@ if (preg_match('/Location:\s*success\.php\?id=(\d+)/i', $response, $matches)) {
     $successId = (int)$matches[1];
     echo "SUCCESS: Registration redirected successfully to success.php?id={$successId}\n\n";
 } else {
-    echo "WARNING: Could not parse success ID from response headers. Full response head:\n";
-    echo substr($response, 0, 500) . "\n\n";
+    echo "WARNING: Could not parse success ID from response headers. Full response:\n";
+    echo $response . "\n\n";
     exit;
 }
 
