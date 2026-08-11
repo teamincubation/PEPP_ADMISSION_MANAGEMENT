@@ -92,10 +92,21 @@ echo "   Student UID: {$studentUid}\n\n";
 // 2. Perform Rejection by Mocking POST & Session inside student-approval.php
 echo "2. Simulating administrator rejection action...\n";
 session_start();
-$_SESSION['user_id'] = 1;
-$_SESSION['username'] = 'admin_system_test';
-$_SESSION['role'] = 'admin';
-$_SESSION['permissions'] = ['approvals'];
+
+// Setup dummy admin in DB if admins table exists
+$hasAdmins = (bool)$pdo->query("SHOW TABLES LIKE 'admins'")->fetchColumn();
+if ($hasAdmins) {
+    $pdo->prepare("DELETE FROM admins WHERE username = 'admin_system_test'")->execute();
+    $pdo->prepare("
+        INSERT INTO admins (username, password, role, permissions, status)
+        VALUES ('admin_system_test', 'dummy', 'super_admin', 'ALL', 'active')
+    ")->execute();
+}
+
+$_SESSION['admin_logged_in'] = true;
+$_SESSION['admin_username'] = 'admin_system_test';
+$_SESSION['admin_role'] = 'super_admin';
+$_SESSION['last_activity'] = time();
 $_SESSION['csrf_token'] = 'test_csrf_token';
 
 $_SERVER['REQUEST_METHOD'] = 'POST';
@@ -109,6 +120,11 @@ $_POST = [
 ob_start();
 include 'student-approval.php';
 $rejResponse = ob_get_clean();
+
+// Clean up dummy admin from DB
+if ($hasAdmins) {
+    $pdo->prepare("DELETE FROM admins WHERE username = 'admin_system_test'")->execute();
+}
 
 echo "   Rejection Response: {$rejResponse}\n\n";
 
