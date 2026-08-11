@@ -3,42 +3,56 @@ error_reporting(E_ALL);
 ini_set('display_errors', 1);
 require_once 'config/database.php';
 
-echo "=== EVENT MAPPINGS ===\n";
+echo "=== INSTALMENT_DETAILS COLUMNS ===\n";
 try {
-    $stmt = $pdo->query("SELECT * FROM communication_event_mappings");
-    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-        echo "Event: {$row['event_name']} → Template: {$row['template_name']} | Status: " . ($row['is_active'] ?? 'N/A') . "\n";
-        echo "  Params: {$row['parameter_mappings']}\n\n";
+    $stmt = $pdo->query("DESCRIBE instalment_details");
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $col) {
+        echo "{$col['Field']} ({$col['Type']}) {$col['Key']} Default:{$col['Default']}\n";
     }
 } catch (Throwable $t) { echo "ERROR: " . $t->getMessage() . "\n"; }
 
-echo "\n=== WHATSAPP SETTINGS ===\n";
+echo "\n=== USERS TABLE (key columns) ===\n";
 try {
-    $stmt = $pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%' OR setting_name LIKE 'onboarding_%' OR setting_name LIKE '%_wp_message%' OR setting_name LIKE '%_app_access%'");
-    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-        $val = $row['setting_value'];
-        if (strlen($val) > 80) $val = substr($val, 0, 80) . '...';
-        // Mask sensitive tokens
-        if (strpos($row['setting_name'], 'token') !== false || strpos($row['setting_name'], 'secret') !== false) {
-            $val = '***MASKED***';
+    $stmt = $pdo->query("DESCRIBE users");
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $col) {
+        if (in_array($col['Field'], ['user_id','name','email','whatsapp_country_code','whatsapp_number','pepp_course','pepp_academic_year','status','onboarding_status','total_fee','paid_amount','payment_plan','course_duration_date','approval_date','approved_by','course_access_provided','discount_amount','payment_mode','paid_date'])) {
+            echo "{$col['Field']} ({$col['Type']}) {$col['Key']} Default:{$col['Default']}\n";
         }
-        echo "{$row['setting_name']}: $val\n";
     }
 } catch (Throwable $t) { echo "ERROR: " . $t->getMessage() . "\n"; }
 
-echo "\n=== COMMUNICATION QUEUE COLUMNS ===\n";
+echo "\n=== COMMUNICATION_TEMPLATES TABLE ===\n";
 try {
-    $stmt = $pdo->query("DESCRIBE communication_queue");
-    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $col) {
-        echo "{$col['Field']} ({$col['Type']})\n";
+    $stmt = $pdo->query("SELECT template_name, language, category, status FROM communication_templates");
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        echo "Template: {$row['template_name']} | Lang: {$row['language']} | Cat: {$row['category']} | Status: {$row['status']}\n";
     }
 } catch (Throwable $t) { echo "ERROR: " . $t->getMessage() . "\n"; }
 
-echo "\n=== STUDENT ONBOARDING TABLE COLUMNS ===\n";
+echo "\n=== INSTALLMENT_WHATSAPP_REMINDERS TABLE ===\n";
 try {
-    $stmt = $pdo->query("DESCRIBE student_onboarding");
+    $stmt = $pdo->query("DESCRIBE installment_whatsapp_reminders");
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $col) {
-        echo "{$col['Field']} ({$col['Type']})\n";
+        echo "{$col['Field']} ({$col['Type']}) {$col['Key']}\n";
     }
 } catch (Throwable $t) { echo "ERROR: " . $t->getMessage() . "\n"; }
+
+echo "\n=== WHATSAPP_CONVERSATIONS COLUMNS ===\n";
+try {
+    $stmt = $pdo->query("DESCRIBE whatsapp_conversations");
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $col) {
+        echo "{$col['Field']} ({$col['Type']}) {$col['Key']}\n";
+    }
+} catch (Throwable $t) { echo "ERROR: " . $t->getMessage() . "\n"; }
+
+echo "\n=== WHATSAPP_MESSAGES COLUMNS ===\n";
+try {
+    $stmt = $pdo->query("DESCRIBE whatsapp_messages");
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $col) {
+        echo "{$col['Field']} ({$col['Type']}) {$col['Key']}\n";
+    }
+} catch (Throwable $t) { echo "ERROR: " . $t->getMessage() . "\n"; }
+
+echo "\n=== SESSION_CRON INSTALLMENT LOGIC ===\n";
+echo "Checking includes/session_cron.php for installment_reminder event usage...\n";
 exit;
