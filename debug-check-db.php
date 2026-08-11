@@ -7,8 +7,8 @@ try {
     $stmt = $pdo->query("SHOW TABLES LIKE 'admins'");
     $exists = $stmt->fetchColumn();
     if ($exists) {
-        echo "ADMINS TABLE EXISTS. LISTING:\n";
-        $stmt = $pdo->prepare("SELECT * FROM admins");
+        echo "COMMUNICATION QUEUE:\n";
+        $stmt = $pdo->prepare("SELECT * FROM communication_queue ORDER BY id DESC LIMIT 5");
         $stmt->execute();
         print_r($stmt->fetchAll());
     } else {
