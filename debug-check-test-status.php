@@ -6,7 +6,7 @@ header('Content-Type: text/plain');
 try {
     echo "=== TEST RECORDS RUN STATUS REPORT ===\n\n";
     
-    $ids = [45, 46, 47];
+    $ids = [47];
     foreach ($ids as $id) {
         $stmt = $pdo->prepare("SELECT id, status, message_id, error_message, updated_at, retry_count FROM communication_queue WHERE id = ?");
         $stmt->execute([$id]);
