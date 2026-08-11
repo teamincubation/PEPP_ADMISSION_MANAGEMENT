@@ -7,8 +7,8 @@ try {
     $stmt = $pdo->query("SHOW TABLES LIKE 'admins'");
     $exists = $stmt->fetchColumn();
     if ($exists) {
-        echo "TEST STUDENT RECORDS:\n";
-        $stmt = $pdo->prepare("SELECT id, user_id, name, whatsapp_country_code, whatsapp_number, status FROM users WHERE user_id = 'PEPP2026INBOX'");
+        echo "MATCH QUERY RESULTS:\n";
+        $stmt = $pdo->prepare("SELECT id, user_id, whatsapp_country_code, whatsapp_number, status FROM users WHERE status = 'approved' AND whatsapp_number LIKE '%6282563209%'");
         $stmt->execute();
         print_r($stmt->fetchAll());
     } else {
