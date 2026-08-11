@@ -98,7 +98,7 @@ $hasAdmins = (bool)$pdo->query("SHOW TABLES LIKE 'admins'")->fetchColumn();
 if ($hasAdmins) {
     $pdo->prepare("DELETE FROM admins WHERE username = 'admin_system_test'")->execute();
     $pdo->prepare("
-        INSERT INTO admins (username, password, role, permissions, status)
+        INSERT INTO admins (username, password_hash, role, permissions, status)
         VALUES ('admin_system_test', 'dummy', 'super_admin', 'ALL', 'active')
     ")->execute();
 }
