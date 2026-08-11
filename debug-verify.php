@@ -1,10 +1,14 @@
 <?php
+error_reporting(E_ALL);
+ini_set('display_errors', '1');
+
 require_once 'config/database.php';
 require_once 'includes/communication/CommunicationEngine.php';
 
 header('Content-Type: text/plain');
 
 echo "=== PEPP LIVE PRODUCTION VERIFICATION ===\n\n";
+echo "INVOICE_HMAC_SECRET Defined: " . (defined('INVOICE_HMAC_SECRET') ? 'YES' : 'NO') . "\n";
 
 // 1. Verify Meta Template synchronized URL
 $stmt = $pdo->prepare("SELECT meta_data FROM communication_templates WHERE template_name = ? LIMIT 1");
