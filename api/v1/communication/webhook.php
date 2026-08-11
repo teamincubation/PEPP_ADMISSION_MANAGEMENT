@@ -103,10 +103,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // Update main communication queue status
                     $stmtQueue = $pdo->prepare("
                         UPDATE communication_queue 
-                        SET status = ?, error_message = COALESCE(?, error_message), updated_at = NOW() 
+                        SET status = ?, 
+                            error_message = COALESCE(?, error_message), 
+                            delivered_at = CASE WHEN ? IN ('delivered', 'read') AND delivered_at IS NULL THEN NOW() ELSE delivered_at END,
+                            updated_at = NOW() 
                         WHERE message_id = ?
                     ");
-                    $stmtQueue->execute([$status, $errMsg, $msgId]);
+                    $stmtQueue->execute([$status, $errMsg, $status, $msgId]);
 
                     // Sync back to legacy whatsapp_notifications table if relevant
                     $stmtFind = $pdo->prepare("SELECT error_message FROM communication_queue WHERE message_id = ? LIMIT 1");

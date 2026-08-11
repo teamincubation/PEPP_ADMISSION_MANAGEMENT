@@ -178,22 +178,32 @@ class CommunicationEngine {
      * Executes the dispatch logic of a specific queued message.
      */
     public function processQueueItem($queueId) {
+        $item = null;
         try {
-            // Lock queue item via SELECT FOR UPDATE to prevent race conditions
+            // Atomically lock and claim the queue item to prevent concurrency issues
             $this->pdo->beginTransaction();
             
-            $stmt = $this->pdo->prepare("SELECT * FROM communication_queue WHERE id = ? FOR UPDATE");
-            $stmt->execute([$queueId]);
-            $item = $stmt->fetch();
-
-            if (!$item || !in_array($item['status'], ['pending', 'scheduled', 'failed'], true)) {
+            $procStmt = $this->pdo->prepare("
+                UPDATE communication_queue 
+                SET status = 'processing', worker_started_at = NOW(), updated_at = NOW() 
+                WHERE id = ? 
+                  AND status IN ('pending', 'scheduled', 'failed')
+                  AND next_attempt_at <= NOW()
+                  AND retry_count < 3
+            ");
+            $procStmt->execute([$queueId]);
+            $affected = $procStmt->rowCount();
+            
+            if ($affected === 0) {
                 $this->pdo->rollBack();
                 return false;
             }
-
-            // Update state to processing to avoid double attempts
-            $procStmt = $this->pdo->prepare("UPDATE communication_queue SET status = 'processing', updated_at = NOW() WHERE id = ?");
-            $procStmt->execute([$queueId]);
+            
+            // Retrieve item details securely
+            $stmt = $this->pdo->prepare("SELECT * FROM communication_queue WHERE id = ?");
+            $stmt->execute([$queueId]);
+            $item = $stmt->fetch();
+            
             $this->pdo->commit();
 
             $channel = $item['channel'];
@@ -230,7 +240,16 @@ class CommunicationEngine {
             }
 
             $provider = $this->getProvider($channel);
+            
+            // Log API request time
+            $updReqStmt = $this->pdo->prepare("UPDATE communication_queue SET api_requested_at = NOW() WHERE id = ?");
+            $updReqStmt->execute([$queueId]);
+            
             $res = $provider->sendMessage($recipient, $subject, $bodyHtml, $bodyText, $attachments, $templateData);
+            
+            // Log API response time
+            $updRespStmt = $this->pdo->prepare("UPDATE communication_queue SET api_responded_at = NOW() WHERE id = ?");
+            $updRespStmt->execute([$queueId]);
 
             if ($res && isset($res['success']) && $res['success'] === true) {
                 // Sent successfully
@@ -260,9 +279,22 @@ class CommunicationEngine {
                 $this->pdo->rollBack();
             }
             
+            // Ensure api_responded_at is filled if the request was made but failed/threw exception
+            try {
+                $checkStmt = $this->pdo->prepare("SELECT api_requested_at, api_responded_at FROM communication_queue WHERE id = ?");
+                $checkStmt->execute([$queueId]);
+                $chk = $checkStmt->fetch();
+                if ($chk && $chk['api_requested_at'] && !$chk['api_responded_at']) {
+                    $updRespStmt = $this->pdo->prepare("UPDATE communication_queue SET api_responded_at = NOW() WHERE id = ?");
+                    $updRespStmt->execute([$queueId]);
+                }
+            } catch (Exception $ex_resp) {}
+            
             $errMsg = $e->getMessage();
-            $retryCount = ($item['retry_count'] ?? 0) + 1;
-            $maxRetries = ($item['channel'] === 'whatsapp') ? 3 : 5;
+            $retryCount = $item ? ((int)$item['retry_count'] + 1) : 1;
+            $maxRetries = ($item && $item['channel'] === 'whatsapp') ? 3 : 5;
+            $chan = $item ? $item['channel'] : 'whatsapp';
+            $legacyErr = $item ? (string)$item['error_message'] : '';
 
             if ($retryCount >= $maxRetries) {
                 $status = 'failed';
@@ -287,8 +319,8 @@ class CommunicationEngine {
             ]);
 
             // Sync status to legacy log table if applicable
-            if ($item['channel'] === 'whatsapp' && strpos((string)$item['error_message'], 'legacy_id:') === 0) {
-                $legacyId = (int)substr((string)$item['error_message'], 10);
+            if ($chan === 'whatsapp' && strpos($legacyErr, 'legacy_id:') === 0) {
+                $legacyId = (int)substr($legacyErr, 10);
                 $legStmt = $this->pdo->prepare("UPDATE whatsapp_notifications SET status = 'failed', updated_at = NOW() WHERE id = ?");
                 $legStmt->execute([$legacyId]);
             }
@@ -520,7 +552,7 @@ class CommunicationEngine {
                 $bodyText .= "Param " . ($i + 1) . ": " . $p . "\n";
             }
             
-            return $this->queueMessage(
+            $queueId = $this->queueMessage(
                 'whatsapp',
                 $recipient,
                 $contextData['student_name'] ?? null,
@@ -535,9 +567,59 @@ class CommunicationEngine {
                 $eventName,
                 $invoiceId
             );
+
+            if ($queueId) {
+                $this->dispatchQueueItemAsync($queueId);
+            }
+
+            return $queueId;
         } catch (Exception $e) {
             error_log("Failed to sendEventNotification for event {$eventName}: " . $e->getMessage());
             return null;
+        }
+    }
+
+    /**
+     * Spawns an immediate background process to execute cron-queue.php for a specific queue item.
+     * Uses proc_open CLI trigger (verified to be working and reliable on Hostinger production).
+     *
+     * @param int $queueId
+     * @return bool
+     */
+    public function dispatchQueueItemAsync($queueId) {
+        $phpBinary = 'php';
+        $cronScript = dirname(dirname(__DIR__)) . '/cron-queue.php';
+        
+        if (!file_exists($cronScript)) {
+            error_log("Async Dispatch Error: cron-queue.php not found at {$cronScript}");
+            return false;
+        }
+        
+        if (substr(php_uname(), 0, 7) === "Windows") {
+            $cmd = "start /B " . $phpBinary . " " . escapeshellarg($cronScript) . " " . (int)$queueId . " > NUL 2>&1";
+        } else {
+            $cmd = $phpBinary . " " . escapeshellarg($cronScript) . " " . (int)$queueId . " > /dev/null 2>&1 &";
+        }
+        
+        $descriptorspec = [
+            0 => ["pipe", "r"],
+            1 => ["file", "/dev/null", "w"],
+            2 => ["file", "/dev/null", "w"]
+        ];
+        
+        try {
+            $process = proc_open($cmd, $descriptorspec, $pipes);
+            if (is_resource($process)) {
+                fclose($pipes[0]);
+                proc_close($process);
+                return true;
+            } else {
+                error_log("Async Dispatch Error: proc_open failed to start background process for command: {$cmd}");
+                return false;
+            }
+        } catch (Exception $e) {
+            error_log("Async Dispatch Exception: " . $e->getMessage());
+            return false;
         }
     }
 }
