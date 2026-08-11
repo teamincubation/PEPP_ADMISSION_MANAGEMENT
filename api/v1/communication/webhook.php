@@ -232,15 +232,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmtMatch->execute(['%' . $last10]);
                 $allMatches = $stmtMatch->fetchAll(PDO::FETCH_ASSOC);
                 
+                $logData = "MATCH DEBUG: from=$from cleanFrom=$cleanFrom last10=$last10 rows=" . count($allMatches) . "\n";
                 foreach ($allMatches as $u) {
                     $uClean = preg_replace('/\D/', '', $u['whatsapp_country_code'] . $u['whatsapp_number']);
                     $uLast10 = substr(preg_replace('/\D/', '', $u['whatsapp_number']), -10);
+                    $logData .= "  LOOP: user_id={$u['user_id']} uClean=$uClean uLast10=$uLast10\n";
                     if ($uClean === $cleanFrom || $uLast10 === $last10) {
                         $studentMatch = $u;
                         break;
                     }
                 }
+                file_put_contents(__DIR__ . '/../../../webhook-debug.log', $logData, FILE_APPEND);
             } catch (Exception $e) {
+                file_put_contents(__DIR__ . '/../../../webhook-debug.log', "MATCH ERROR: " . $e->getMessage() . "\n", FILE_APPEND);
                 error_log("WhatsApp Webhook matching error: " . $e->getMessage());
             }
 
