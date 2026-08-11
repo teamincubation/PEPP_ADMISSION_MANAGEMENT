@@ -14,9 +14,9 @@ try {
     include 'includes/admin_nav.php';
     echo "<h1>NO ERRORS!</h1>";
     echo "<pre>FINAL SIDEBAR MENU ARRAY:\n";
-    $stmt = $pdo->prepare("SHOW TABLES");
+$stmt = $pdo->prepare("DESCRIBE whatsapp_conversations");
 $stmt->execute();
-print_r($stmt->fetchAll(PDO::FETCH_COLUMN));
+print_r($stmt->fetchAll());
 exit;
 } catch (Throwable $t) {
     echo "<h1>ERROR:</h1>";
