@@ -47,7 +47,7 @@ try {
     }
 
     // Seed default event mappings
-    $events = ['student_registration', 'student_approval', 'installment_reminder', 'payment_receipt', 'session_scheduled'];
+    $events = ['student_registration', 'student_approval', 'student_rejection', 'installment_reminder', 'payment_receipt', 'session_scheduled'];
     $stmtSeed = $pdo->prepare("INSERT IGNORE INTO communication_event_mappings (event_name) VALUES (?)");
     foreach ($events as $ev) {
         $stmtSeed->execute([$ev]);
@@ -298,6 +298,7 @@ include 'includes/admin_nav.php';
     $eventDescriptions = [
         'student_registration' => 'Triggered when a student initiates registration / onboarding starts.',
         'student_approval' => 'Triggered when student enrollment is approved by administrators.',
+        'student_rejection' => 'Triggered when student enrollment is rejected by administrators.',
         'installment_reminder' => 'Triggered when an installment payment is due (reminders).',
         'payment_receipt' => 'Triggered when a student payment is received and approved.',
         'session_scheduled' => 'Triggered when a live learning session or activity is scheduled.'
@@ -397,6 +398,7 @@ include 'includes/admin_nav.php';
                                                     <option value="session_date" <?php echo $mVal === 'session_date' ? 'selected' : ''; ?>>Session Date</option>
                                                     <option value="trainer_name" <?php echo $mVal === 'trainer_name' ? 'selected' : ''; ?>>Trainer Name</option>
                                                     <option value="meeting_link" <?php echo $mVal === 'meeting_link' ? 'selected' : ''; ?>>Meeting Link</option>
+                                                    <option value="rejection_reason" <?php echo $mVal === 'rejection_reason' ? 'selected' : ''; ?>>Rejection Reason</option>
                                                     <option value="current_datetime" <?php echo $mVal === 'current_datetime' ? 'selected' : ''; ?>>Current Date/Time</option>
 
                                                 </select>

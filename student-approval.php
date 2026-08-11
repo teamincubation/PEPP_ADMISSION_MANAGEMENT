@@ -227,6 +227,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             status_log($pdo, $user_id, 'pending', 'rejected', $reason, $admin_username);
             track_record($pdo, $user_id, 'student_rejected', $reason, $admin_username);
 
+            // Trigger Student Rejection WhatsApp Notification
+            try {
+                require_once 'includes/communication/CommunicationEngine.php';
+                $commEngine = CommunicationEngine::getInstance($pdo);
+                
+                $wa_phone = preg_replace('/\D/', '', $student['whatsapp_country_code'] . $student['whatsapp_number']);
+                $context = [
+                    'student_uid' => $user_id,
+                    'student_name' => $student['name'] ?? '',
+                    'course_name' => $student['pepp_course'] ?? '',
+                    'academic_year' => $student['pepp_academic_year'] ?? '',
+                    'rejection_reason' => $reason
+                ];
+                
+                $commEngine->sendEventNotification(
+                    'student_rejection',
+                    $wa_phone,
+                    $context,
+                    $admin_username
+                );
+            } catch (Exception $ex) {
+                error_log('Failed to trigger student_rejection notification: ' . $ex->getMessage());
+            }
+
             echo json_encode(['success' => true, 'message' => 'Student application rejected.']);
             exit;
 
