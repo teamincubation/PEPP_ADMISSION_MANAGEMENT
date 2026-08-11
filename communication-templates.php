@@ -404,6 +404,7 @@ include 'includes/admin_nav.php';
                                                     <option value="trainer_name" <?php echo $mVal === 'trainer_name' ? 'selected' : ''; ?>>Trainer Name</option>
                                                     <option value="meeting_link" <?php echo $mVal === 'meeting_link' ? 'selected' : ''; ?>>Meeting Link</option>
                                                     <option value="rejection_reason" <?php echo $mVal === 'rejection_reason' ? 'selected' : ''; ?>>Rejection Reason</option>
+                                                    <option value="new_access_end" <?php echo $mVal === 'new_access_end' ? 'selected' : ''; ?>>New Access End Date</option>
                                                     <option value="current_datetime" <?php echo $mVal === 'current_datetime' ? 'selected' : ''; ?>>Current Date/Time</option>
 
                                                 </select>
@@ -646,6 +647,7 @@ function onMappingTemplateChange(eventName, selectedTemplateName) {
                     <option value="trainer_name">Trainer Name</option>
                     <option value="meeting_link">Meeting Link</option>
                     <option value="rejection_reason">Rejection Reason</option>
+                    <option value="new_access_end">New Access End Date</option>
                     <option value="current_datetime">Current Date/Time</option>
                 </select>
 
