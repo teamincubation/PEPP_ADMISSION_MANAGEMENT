@@ -1,4 +1,5 @@
 <?php
+echo "HELLO_FROM_LOCAL"; exit;
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 try {
