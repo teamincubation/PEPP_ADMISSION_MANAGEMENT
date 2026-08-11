@@ -131,7 +131,7 @@ try {
     // Start a session and save admin details to get a valid PHPSESSID cookie
     session_start();
     $_SESSION['admin_logged_in'] = true;
-    $_SESSION['admin_username'] = 'admin_tester';
+    $_SESSION['admin_username'] = 'peppadmin';
     $_SESSION['admin_role'] = 'super_admin';
     $_SESSION['csrf_token'] = 'pepp_inbox_csrf_test';
     $_SESSION['last_activity'] = time();
@@ -144,13 +144,15 @@ try {
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_COOKIE, $cookieStr);
-    curl_exec($ch);
+    $resPoll = curl_exec($ch);
+    $httpCodePoll = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
+    echo "   Polling response status: $httpCodePoll, Content: " . trim($resPoll) . "\n";
 
     $stmtConv->execute([$testPhone]);
     $convPoll = $stmtConv->fetch(PDO::FETCH_ASSOC);
     echo "   Unread Count after polling: {$convPoll['unread_count']} (Should still be 1)\n";
-    if ((int)$convPoll['unread_count'] === 1) {
+    if ($convPoll && (int)$convPoll['unread_count'] === 1) {
         echo "   PASSED: Background polling did NOT reset unread count.\n";
     } else {
         echo "   FAILED: Background polling reset unread count.\n";
@@ -162,8 +164,10 @@ try {
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_COOKIE, $cookieStr);
-    curl_exec($ch);
+    $resOpen = curl_exec($ch);
+    $httpCodeOpen = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
+    echo "   Explicit open response status: $httpCodeOpen, Content: " . trim($resOpen) . "\n";
 
     $stmtConv->execute([$testPhone]);
     $convOpen = $stmtConv->fetch(PDO::FETCH_ASSOC);
@@ -192,10 +196,11 @@ try {
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     $resReply = curl_exec($ch);
+    $httpCodeReply = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
+    echo "   Reply response status: $httpCodeReply, Content: " . trim($resReply) . "\n";
 
     $replyRes = json_decode($resReply, true);
-    echo "   Reply response: " . json_encode($replyRes) . "\n";
 
     if ($replyRes && isset($replyRes['success'])) {
         $qId = $replyRes['queue_id'];
@@ -304,7 +309,7 @@ try {
     // G. Test Weird Phone Formatting Matching
     echo "9. Simulating matching with weirdly formatted student phone number...\n";
     // Update student number in DB to weird format
-    $pdo->prepare("UPDATE users SET whatsapp_country_code = ' +91 ', whatsapp_number = ' 62825-63209 ' WHERE user_id = 'PEPP2026INBOX'")->execute();
+    $pdo->prepare("UPDATE users SET whatsapp_country_code = ' +91 ', whatsapp_number = '  6282563209  ' WHERE user_id = 'PEPP2026INBOX'")->execute();
 
     $weirdPayload = $inboundPayload;
     $weirdPayload['entry'][0]['changes'][0]['value']['messages'][0]['id'] = 'wamid_test_weird_1';
