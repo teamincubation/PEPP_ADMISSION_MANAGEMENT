@@ -14,9 +14,12 @@ if ($convId <= 0) {
 }
 
 try {
-    // 1. Reset unread count inside the ERP (marks the thread as read)
-    $upd = $pdo->prepare("UPDATE whatsapp_conversations SET unread_count = 0, updated_at = NOW() WHERE id = ?");
-    $upd->execute([$convId]);
+    // 1. Reset unread count inside the ERP (marks the thread as read) only if explicitly requested
+    $markRead = isset($_GET['mark_read']) && $_GET['mark_read'] === '1';
+    if ($markRead) {
+        $upd = $pdo->prepare("UPDATE whatsapp_conversations SET unread_count = 0, updated_at = NOW() WHERE id = ?");
+        $upd->execute([$convId]);
+    }
 
     // 2. Fetch message history
     $stmt = $pdo->prepare("SELECT * FROM whatsapp_messages WHERE conversation_id = ? ORDER BY created_at ASC");

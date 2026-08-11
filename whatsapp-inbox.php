@@ -261,7 +261,8 @@ function selectConversation(id, studentUid, waPhone) {
 }
 
 function loadMessages(id, isBackground = false) {
-    fetch(`api/v1/communication/fetch-messages.php?conversation_id=${id}`)
+    const markRead = isBackground ? 0 : 1;
+    fetch(`api/v1/communication/fetch-messages.php?conversation_id=${id}&mark_read=${markRead}`)
         .then(r => r.json())
         .then(res => {
             if (res.success) {
