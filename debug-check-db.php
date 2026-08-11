@@ -7,8 +7,8 @@ try {
     $stmt = $pdo->query("SHOW TABLES LIKE 'admins'");
     $exists = $stmt->fetchColumn();
     if ($exists) {
-        echo "COMMUNICATION QUEUE:\n";
-        $stmt = $pdo->prepare("SELECT * FROM communication_queue ORDER BY id DESC LIMIT 5");
+        echo "TEST STUDENT RECORDS:\n";
+        $stmt = $pdo->prepare("SELECT id, user_id, name, whatsapp_country_code, whatsapp_number, status FROM users WHERE user_id = 'PEPP2026INBOX'");
         $stmt->execute();
         print_r($stmt->fetchAll());
     } else {
