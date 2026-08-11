@@ -89,7 +89,7 @@ if (!$studentUid) {
 }
 echo "   Student UID: {$studentUid}\n\n";
 
-// 2. Perform Rejection by Mocking POST & Session inside student-approval.php
+// 2. Perform Rejection by making a POST request using cURL and sharing the session
 echo "2. Simulating administrator rejection action...\n";
 session_start();
 
@@ -109,20 +109,34 @@ $_SESSION['admin_role'] = 'super_admin';
 $_SESSION['last_activity'] = time();
 $_SESSION['csrf_token'] = 'test_csrf_token';
 
-$_SERVER['REQUEST_METHOD'] = 'POST';
-$_POST = [
+// Write and close session so it is saved and unlocked
+$sessionId = session_id();
+session_write_close();
+
+// Make cURL POST request to student-approval.php
+$rejUrl = 'https://pepplearning.in/admissions/student-approval.php';
+$rejPost = [
     'action' => 'reject',
     'user_id' => $studentUid,
     'reason' => 'Incomplete documentation / test',
     'csrf_token' => 'test_csrf_token'
 ];
 
-ob_start();
-include 'student-approval.php';
-$rejResponse = ob_get_clean();
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, $rejUrl);
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($rejPost));
+curl_setopt($ch, CURLOPT_COOKIE, 'PHPSESSID=' . $sessionId);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+
+$rejResponse = curl_exec($ch);
+curl_close($ch);
 
 // Clean up dummy admin from DB
 if ($hasAdmins) {
+    // Re-open DB connection if needed, though $pdo is already active
     $pdo->prepare("DELETE FROM admins WHERE username = 'admin_system_test'")->execute();
 }
 
