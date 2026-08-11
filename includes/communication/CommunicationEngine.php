@@ -268,6 +268,81 @@ class CommunicationEngine {
                     $updRemStmt->execute([$queueId]);
                 } catch (Exception $remEx) {}
 
+                // Log outbound message in WhatsApp Inbox (Safeguard 1 & 2)
+                if ($channel === 'whatsapp' && !empty($msgId)) {
+                    try {
+                        $cleanPhone = preg_replace('/\D/', '', $recipient);
+                        $last10 = substr($cleanPhone, -10);
+
+                        $studentMatch = null;
+                        $stmtMatch = $this->pdo->prepare("
+                            SELECT id, user_id, name, whatsapp_country_code, whatsapp_number 
+                            FROM users 
+                            WHERE status = 'approved' 
+                              AND whatsapp_number LIKE ?
+                        ");
+                        $stmtMatch->execute(['%' . $last10]);
+                        $allMatches = $stmtMatch->fetchAll(PDO::FETCH_ASSOC);
+                        
+                        foreach ($allMatches as $u) {
+                            $uClean = preg_replace('/\D/', '', $u['whatsapp_country_code'] . $u['whatsapp_number']);
+                            $uLast10 = substr(preg_replace('/\D/', '', $u['whatsapp_number']), -10);
+                            if ($uClean === $cleanPhone || $uLast10 === $last10) {
+                                $studentMatch = $u;
+                                break;
+                            }
+                        }
+
+                        $contactName = $studentMatch['name'] ?? 'Unknown WhatsApp Contact';
+                        $studentUid = $studentMatch['user_id'] ?? null;
+                        $studentUserId = $studentMatch['id'] ?? null;
+                        
+                        $this->pdo->beginTransaction();
+
+                        // Find or create conversation
+                        $stmtConv = $this->pdo->prepare("SELECT id FROM whatsapp_conversations WHERE wa_phone_number = ? LIMIT 1");
+                        $stmtConv->execute([$cleanPhone]);
+                        $convId = $stmtConv->fetchColumn();
+
+                        $bodyText = $item['body_text'] ?? '';
+
+                        if (!$convId) {
+                            $insConv = $this->pdo->prepare("
+                                INSERT INTO whatsapp_conversations (wa_phone_number, student_uid, student_user_id, contact_name, last_message_text, last_message_at, unread_count, status, created_at, updated_at)
+                                VALUES (?, ?, ?, ?, ?, NOW(), 0, 'open', NOW(), NOW())
+                            ");
+                            $insConv->execute([$cleanPhone, $studentUid, $studentUserId, $contactName, $bodyText]);
+                            $convId = (int)$this->pdo->lastInsertId();
+                        } else {
+                            $updConv = $this->pdo->prepare("
+                                UPDATE whatsapp_conversations 
+                                SET student_uid = ?, 
+                                    student_user_id = ?, 
+                                    contact_name = ?, 
+                                    last_message_text = ?, 
+                                    last_message_at = NOW(), 
+                                    updated_at = NOW() 
+                                WHERE id = ?
+                            ");
+                            $updConv->execute([$studentUid, $studentUserId, $contactName, $bodyText, $convId]);
+                        }
+
+                        // Insert outbound message with status 'sent'
+                        $insMsg = $this->pdo->prepare("
+                            INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, status, created_at, sent_at)
+                            VALUES (?, ?, 'outbound', 'text', ?, 'sent', NOW(), NOW())
+                        ");
+                        $insMsg->execute([$convId, $msgId, $bodyText]);
+
+                        $this->pdo->commit();
+                    } catch (Exception $e) {
+                        if ($this->pdo->inTransaction()) {
+                            $this->pdo->rollBack();
+                        }
+                        error_log("WhatsApp Inbox log outbound message failed: " . $e->getMessage());
+                    }
+                }
+
                 // Sync status to legacy log table if applicable
                 if ($channel === 'whatsapp' && strpos((string)$item['error_message'], 'legacy_id:') === 0) {
                     $legacyId = (int)substr((string)$item['error_message'], 10);

@@ -111,6 +111,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ");
                     $stmtQueue->execute([$status, $errMsg, $status, $msgId]);
 
+                    // Update local message tracking status (Safeguard 1)
+                    $stmtMsgUpd = $pdo->prepare("
+                        UPDATE whatsapp_messages 
+                        SET status = ?, 
+                            delivered_at = CASE WHEN ? = 'delivered' AND delivered_at IS NULL THEN NOW() ELSE delivered_at END,
+                            read_at = CASE WHEN ? = 'read' AND read_at IS NULL THEN NOW() ELSE read_at END
+                        WHERE wa_message_id = ?
+                    ");
+                    $stmtMsgUpd->execute([$status, $status, $status, $msgId]);
+
                     // Sync back to legacy whatsapp_notifications table if relevant
                     $stmtFind = $pdo->prepare("SELECT error_message FROM communication_queue WHERE message_id = ? LIMIT 1");
                     $stmtFind->execute([$msgId]);
@@ -126,6 +136,173 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } catch (Exception $ex) {
                     error_log("Webhook database update failed: " . $ex->getMessage());
                 }
+            }
+        }
+    }
+
+    // Process incoming WhatsApp messages
+    if (isset($payload['entry'][0]['changes'][0]['value']['messages'])) {
+        $messages = $payload['entry'][0]['changes'][0]['value']['messages'];
+        $contacts = $payload['entry'][0]['changes'][0]['value']['contacts'] ?? [];
+        
+        $contactNames = [];
+        foreach ($contacts as $c) {
+            $waId = $c['wa_id'] ?? '';
+            $profileName = $c['profile']['name'] ?? '';
+            if ($waId) {
+                $contactNames[$waId] = $profileName;
+            }
+        }
+
+        foreach ($messages as $msg) {
+            $from = $msg['from'] ?? '';
+            $msgId = $msg['id'] ?? '';
+            $timestamp = $msg['timestamp'] ?? time();
+            $type = $msg['type'] ?? 'text';
+            
+            if (empty($msgId) || empty($from)) {
+                error_log("WhatsApp Webhook: Missing message ID or sender info in inbound message payload");
+                continue;
+            }
+            
+            // Check if message ID already exists to guarantee idempotency (Safeguard 2)
+            try {
+                $stmtCheck = $pdo->prepare("SELECT id FROM whatsapp_messages WHERE wa_message_id = ? LIMIT 1");
+                $stmtCheck->execute([$msgId]);
+                if ($stmtCheck->fetchColumn()) {
+                    continue; // Skip duplicate Meta webhook deliveries
+                }
+            } catch (Exception $e) {
+                error_log("WhatsApp Webhook idempotency check error: " . $e->getMessage());
+            }
+
+            $text = '';
+            $mediaId = null;
+            $mediaMime = null;
+            $mediaFilename = null;
+            $caption = null;
+            $replyToId = $msg['context']['message_id'] ?? null;
+            
+            if ($type === 'text') {
+                $text = $msg['text']['body'] ?? '';
+            } elseif ($type === 'button') {
+                $text = $msg['button']['text'] ?? '';
+            } elseif ($type === 'interactive') {
+                $intType = $msg['interactive']['type'] ?? '';
+                if ($intType === 'button_reply') {
+                    $text = $msg['interactive']['button_reply']['title'] ?? '';
+                } elseif ($intType === 'list_reply') {
+                    $text = $msg['interactive']['list_reply']['title'] ?? '';
+                }
+            } elseif ($type === 'image') {
+                $mediaId = $msg['image']['id'] ?? '';
+                $mediaMime = $msg['image']['mime_type'] ?? '';
+                $caption = $msg['image']['caption'] ?? '';
+                $text = '[Image]';
+            } elseif ($type === 'document') {
+                $mediaId = $msg['document']['id'] ?? '';
+                $mediaMime = $msg['document']['mime_type'] ?? '';
+                $mediaFilename = $msg['document']['filename'] ?? '';
+                $caption = $msg['document']['caption'] ?? '';
+                $text = '[Document]';
+            } elseif ($type === 'audio') {
+                $mediaId = $msg['audio']['id'] ?? '';
+                $mediaMime = $msg['audio']['mime_type'] ?? '';
+                $text = '[Audio]';
+            } elseif ($type === 'video') {
+                $mediaId = $msg['video']['id'] ?? '';
+                $mediaMime = $msg['video']['mime_type'] ?? '';
+                $text = '[Video]';
+            } else {
+                $text = "[Unsupported message type: {$type}]";
+            }
+
+            // Student matching by sender phone number (normalization logic)
+            $cleanFrom = preg_replace('/\D/', '', $from);
+            $last10 = substr($cleanFrom, -10);
+            
+            $studentMatch = null;
+            try {
+                $stmtMatch = $pdo->prepare("
+                    SELECT id, user_id, name, pepp_course, whatsapp_country_code, whatsapp_number 
+                    FROM users 
+                    WHERE status = 'approved' 
+                      AND whatsapp_number LIKE ?
+                ");
+                $stmtMatch->execute(['%' . $last10]);
+                $allMatches = $stmtMatch->fetchAll(PDO::FETCH_ASSOC);
+                
+                foreach ($allMatches as $u) {
+                    $uClean = preg_replace('/\D/', '', $u['whatsapp_country_code'] . $u['whatsapp_number']);
+                    $uLast10 = substr(preg_replace('/\D/', '', $u['whatsapp_number']), -10);
+                    if ($uClean === $cleanFrom || $uLast10 === $last10) {
+                        $studentMatch = $u;
+                        break;
+                    }
+                }
+            } catch (Exception $e) {
+                error_log("WhatsApp Webhook matching error: " . $e->getMessage());
+            }
+
+            $contactName = $contactNames[$from] ?? $studentMatch['name'] ?? 'Unknown WhatsApp Contact';
+            $studentUid = $studentMatch['user_id'] ?? null;
+            $studentUserId = $studentMatch['id'] ?? null;
+
+            try {
+                $pdo->beginTransaction();
+
+                // Find or create conversation
+                $stmtConv = $pdo->prepare("SELECT id FROM whatsapp_conversations WHERE wa_phone_number = ? LIMIT 1");
+                $stmtConv->execute([$cleanFrom]);
+                $convId = $stmtConv->fetchColumn();
+
+                if (!$convId) {
+                    $insConv = $pdo->prepare("
+                        INSERT INTO whatsapp_conversations (wa_phone_number, student_uid, student_user_id, contact_name, last_message_text, last_message_at, last_inbound_at, unread_count, status, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, NOW(), NOW(), 1, 'open', NOW(), NOW())
+                    ");
+                    $insConv->execute([$cleanFrom, $studentUid, $studentUserId, $contactName, $text]);
+                    $convId = (int)$pdo->lastInsertId();
+                } else {
+                    $updConv = $pdo->prepare("
+                        UPDATE whatsapp_conversations 
+                        SET student_uid = ?, 
+                            student_user_id = ?, 
+                            contact_name = ?, 
+                            last_message_text = ?, 
+                            last_message_at = NOW(), 
+                            last_inbound_at = NOW(), 
+                            unread_count = unread_count + 1, 
+                            updated_at = NOW() 
+                        WHERE id = ?
+                    ");
+                    $updConv->execute([$studentUid, $studentUserId, $contactName, $text, $convId]);
+                }
+
+                // Insert inbound message record
+                $insMsg = $pdo->prepare("
+                    INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, media_id, media_mime_type, media_filename, caption, reply_to_wa_message_id, status, raw_payload, sent_at, created_at)
+                    VALUES (?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, 'delivered', ?, NOW(), NOW())
+                ");
+                $insMsg->execute([
+                    $convId,
+                    $msgId,
+                    $type,
+                    $text,
+                    $mediaId,
+                    $mediaMime,
+                    $mediaFilename,
+                    $caption,
+                    $replyToId,
+                    $rawPayload
+                ]);
+
+                $pdo->commit();
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                error_log("WhatsApp Webhook conversation/message save failure: " . $e->getMessage());
             }
         }
     }

@@ -1,0 +1,73 @@
+<?php
+require_once '../../../includes/auth.php';
+require_once '../../../config/database.php';
+require_permission('communication');
+
+header('Content-Type: application/json');
+
+$studentUid = $_GET['student_uid'] ?? '';
+
+if (empty($studentUid)) {
+    http_response_code(400);
+    echo json_encode(['error' => 'Missing student_uid']);
+    exit;
+}
+
+try {
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE user_id = ? LIMIT 1");
+    $stmt->execute([$studentUid]);
+    $student = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$student) {
+        http_response_code(404);
+        echo json_encode(['error' => 'Student not found']);
+        exit;
+    }
+
+    $collected = (float)($student['paid_amount'] ?? 0);
+    try {
+        $instStmt = $pdo->prepare("
+            SELECT COALESCE(SUM(COALESCE(paid_amount, amount)), 0)
+            FROM instalment_details 
+            WHERE user_id = ? AND status IN ('approved', 'paid')
+        ");
+        $instStmt->execute([$student['user_id']]);
+        $collected += (float)$instStmt->fetchColumn();
+    } catch (Exception $e) {}
+
+    $nextDueDate = 'N/A';
+    try {
+        $dueStmt = $pdo->prepare("
+            SELECT due_date FROM instalment_details 
+            WHERE user_id = ? AND status = 'pending' AND due_date >= CURRENT_DATE
+            ORDER BY instalment_number ASC LIMIT 1
+        ");
+        $dueStmt->execute([$student['user_id']]);
+        $dueDateVal = $dueStmt->fetchColumn();
+        if ($dueDateVal) {
+            $nextDueDate = date('d M Y', strtotime($dueDateVal));
+        }
+    } catch (Exception $e) {}
+
+    $totalPayable = (float)($student['total_fee'] ?? 0);
+    $balance = max(0, $totalPayable - $collected);
+
+    echo json_encode([
+        'success' => true,
+        'student' => [
+            'id' => $student['id'],
+            'user_id' => $student['user_id'],
+            'name' => $student['name'],
+            'pepp_course' => $student['pepp_course'],
+            'pepp_academic_year' => $student['pepp_academic_year'],
+            'status' => $student['status'],
+            'total_fee' => number_format($totalPayable),
+            'total_paid' => number_format($collected),
+            'balance' => number_format($balance),
+            'next_due_date' => $nextDueDate
+        ]
+    ]);
+} catch (Exception $e) {
+    http_response_code(500);
+    echo json_encode(['error' => $e->getMessage()]);
+}
