@@ -319,7 +319,8 @@ try {
     // Clear old conversation to trigger match logic again
     $pdo->prepare("DELETE FROM whatsapp_conversations WHERE wa_phone_number = ?")->execute([$testPhone]);
 
-    sendWebhookPayload($weirdPayload, $appSecret);
+    $resWeird = sendWebhookPayload($weirdPayload, $appSecret);
+    echo "   Webhook response: " . trim($resWeird) . "\n";
 
     $stmtConv->execute([$testPhone]);
     $convWeird = $stmtConv->fetch(PDO::FETCH_ASSOC);
