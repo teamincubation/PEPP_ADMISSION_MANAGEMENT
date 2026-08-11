@@ -1,0 +1,40 @@
+CREATE TABLE IF NOT EXISTS `whatsapp_conversations` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `wa_phone_number` VARCHAR(30) NOT NULL UNIQUE,
+  `student_uid` VARCHAR(50) DEFAULT NULL,
+  `student_user_id` INT DEFAULT NULL,
+  `contact_name` VARCHAR(255) DEFAULT NULL,
+  `last_message_text` TEXT DEFAULT NULL,
+  `last_message_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `last_inbound_at` DATETIME DEFAULT NULL,
+  `unread_count` INT NOT NULL DEFAULT 0,
+  `status` VARCHAR(20) NOT NULL DEFAULT 'open',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY `idx_student_uid` (`student_uid`),
+  KEY `idx_last_message_at` (`last_message_at`),
+  KEY `idx_last_inbound_at` (`last_inbound_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `whatsapp_messages` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `conversation_id` INT NOT NULL,
+  `wa_message_id` VARCHAR(150) NOT NULL UNIQUE,
+  `direction` ENUM('inbound', 'outbound') NOT NULL,
+  `message_type` VARCHAR(30) NOT NULL DEFAULT 'text',
+  `message_text` TEXT DEFAULT NULL,
+  `media_id` VARCHAR(150) DEFAULT NULL,
+  `media_mime_type` VARCHAR(100) DEFAULT NULL,
+  `media_filename` VARCHAR(255) DEFAULT NULL,
+  `caption` TEXT DEFAULT NULL,
+  `reply_to_wa_message_id` VARCHAR(150) DEFAULT NULL,
+  `status` VARCHAR(30) DEFAULT NULL,
+  `raw_payload` LONGTEXT DEFAULT NULL,
+  `sent_at` DATETIME DEFAULT NULL,
+  `delivered_at` DATETIME DEFAULT NULL,
+  `read_at` DATETIME DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY `idx_conversation_id` (`conversation_id`),
+  KEY `idx_reply_to` (`reply_to_wa_message_id`),
+  FOREIGN KEY (`conversation_id`) REFERENCES `whatsapp_conversations` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
