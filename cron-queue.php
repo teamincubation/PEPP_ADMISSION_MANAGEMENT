@@ -21,6 +21,9 @@ try {
             if (function_exists('installments_dispatch_whatsapp_reminders')) {
                 installments_dispatch_whatsapp_reminders($pdo);
             }
+            if (function_exists('installments_dispatch_whatsapp_overdue_reminders')) {
+                installments_dispatch_whatsapp_overdue_reminders($pdo);
+            }
         }
 
         $processor = new QueueProcessor($pdo, 25);

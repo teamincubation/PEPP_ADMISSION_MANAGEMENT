@@ -277,8 +277,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $msg = "Installment payment request rejected due to: {$admin_remarks}. Please submit the payment again after addressing the issue. - PEPP Learning";
 
                 if (whatsapp_outbound_mode($pdo) === 'meta_api') {
-                    // META API mode: no template for payment_rejection yet, skip sending
-                    error_log("Payment rejection WhatsApp skipped: payment_rejection template not configured for student {$req['user_id']}");
+                    try {
+                        require_once 'includes/communication/CommunicationEngine.php';
+                        $engine = CommunicationEngine::getInstance($pdo);
+
+                        $ord = (int)$req['instalment_number'];
+                        if ($ord === 1) $ordStr = "1st";
+                        elseif ($ord === 2) $ordStr = "2nd";
+                        elseif ($ord === 3) $ordStr = "3rd";
+                        else $ordStr = $ord . "th";
+
+                        $context = [
+                            'student_uid'        => $req['user_id'],
+                            'student_name'       => $req['student_name'] ?? '',
+                            'course_name'        => $req['pepp_course'] ?? '',
+                            'installment_number' => $ordStr,
+                            'payment_amount'     => number_format((float)($req['paid_amount'] ?: $req['amount'])),
+                            'paid_date'          => !empty($req['paid_date']) ? date('d M Y', strtotime($req['paid_date'])) : '',
+                            'rejection_reason'   => $admin_remarks,
+                            'invoice_id'         => $request_id // Store installment_id in invoice_id column for idempotency
+                        ];
+
+                        $qId = $engine->sendEventNotification('payment_rejection', $wa_phone, $context, $admin_username);
+                        if (!$qId) {
+                            error_log("Payment rejection WhatsApp skipped: payment_rejection template not configured for student {$req['user_id']}");
+                        }
+                    } catch (Exception $ex) {
+                        error_log('Payment rejection WA error: ' . $ex->getMessage());
+                    }
                     // No wa.me redirect in META mode
                 } else {
                     // MANUAL mode: wa.me redirect only, no engine calls

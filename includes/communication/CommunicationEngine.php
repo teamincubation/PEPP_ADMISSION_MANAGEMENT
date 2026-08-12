@@ -703,12 +703,29 @@ class CommunicationEngine {
 
             // Strict duplicate notification check based on student_uid + event_name + template_name
             if ($studentUid && $eventName && $resolved['name']) {
-                $dupStmt = $this->pdo->prepare("
-                    SELECT COUNT(*) FROM communication_queue 
-                    WHERE student_uid = ? AND event_name = ? AND template_name = ? 
-                    AND status IN ('pending', 'processing', 'sent', 'delivered', 'read')
-                ");
-                $dupStmt->execute([$studentUid, $eventName, $resolved['name']]);
+                if ($eventName === 'payment_receipt' && $invoiceId) {
+                    $dupStmt = $this->pdo->prepare("
+                        SELECT COUNT(*) FROM communication_queue 
+                        WHERE student_uid = ? AND event_name = ? AND template_name = ? AND invoice_id = ?
+                          AND status IN ('pending', 'processing', 'sent', 'delivered', 'read')
+                    ");
+                    $dupStmt->execute([$studentUid, $eventName, $resolved['name'], $invoiceId]);
+                } elseif ($eventName === 'payment_rejection' && $invoiceId) {
+                    // Tie duplicate check to the specific installment rejection request ID
+                    $dupStmt = $this->pdo->prepare("
+                        SELECT COUNT(*) FROM communication_queue 
+                        WHERE student_uid = ? AND event_name = ? AND template_name = ? AND invoice_id = ?
+                          AND status IN ('pending', 'processing')
+                    ");
+                    $dupStmt->execute([$studentUid, $eventName, $resolved['name'], $invoiceId]);
+                } else {
+                    $dupStmt = $this->pdo->prepare("
+                        SELECT COUNT(*) FROM communication_queue 
+                        WHERE student_uid = ? AND event_name = ? AND template_name = ? 
+                          AND status IN ('pending', 'processing', 'sent', 'delivered', 'read')
+                    ");
+                    $dupStmt->execute([$studentUid, $eventName, $resolved['name']]);
+                }
                 $exists = (int)$dupStmt->fetchColumn();
                 if ($exists > 0) {
                     error_log("Duplicate prevention blocked enqueuing for student: {$studentUid}, event: {$eventName}, template: {$resolved['name']}");

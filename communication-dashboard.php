@@ -499,7 +499,7 @@ include 'includes/admin_nav.php';
                             </td>
                             <td style="padding:12px; color:#6b7280;"><?php echo date('d M Y, h:i A', strtotime($log['updated_at'])); ?></td>
                             <td style="padding:12px; font-weight:600;">
-                                <?php if ($log['invoice_id']): ?>
+                                <?php if ($log['invoice_id'] && $log['event_name'] === 'payment_receipt'): ?>
                                     <?php 
                                     $inv_hmac = hash_hmac('sha256', (string)$log['invoice_id'], INVOICE_HMAC_SECRET);
                                     $secure_inv_link = "invoice-pdf.php?token=" . urlencode($log['invoice_id'] . '-' . $inv_hmac);

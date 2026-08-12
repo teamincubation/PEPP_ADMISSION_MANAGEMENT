@@ -47,7 +47,7 @@ try {
     }
 
     // Seed default event mappings
-    $events = ['student_registration', 'student_approval', 'student_rejection', 'installment_reminder', 'payment_receipt', 'session_scheduled'];
+    $events = ['student_registration', 'student_approval', 'student_rejection', 'installment_reminder', 'payment_receipt', 'session_scheduled', 'payment_rejection', 'installment_overdue'];
     $stmtSeed = $pdo->prepare("INSERT IGNORE INTO communication_event_mappings (event_name) VALUES (?)");
     foreach ($events as $ev) {
         $stmtSeed->execute([$ev]);
@@ -302,7 +302,9 @@ include 'includes/admin_nav.php';
         'student_rejection' => 'Triggered when student enrollment is rejected by administrators.',
         'installment_reminder' => 'Triggered when an installment payment is due (reminders).',
         'payment_receipt' => 'Triggered when a student payment is received and approved.',
-        'session_scheduled' => 'Triggered when a live learning session or activity is scheduled.'
+        'session_scheduled' => 'Triggered when a live learning session or activity is scheduled.',
+        'payment_rejection' => 'Triggered when a student payment proof is rejected by accounts.',
+        'installment_overdue' => 'Triggered when a student installment payment due date has passed (overdue reminder).'
     ];
 
     // Build array of approved templates for JS
