@@ -252,26 +252,9 @@ function installments_dispatch_whatsapp_reminders($pdo) {
         return; // Only dispatch during the 08:00-09:00 AM IST window
     }
 
-    $kolkataDate = $now->format('Y-m-d');
-    $date3d = date('Y-m-d', strtotime('+3 days', strtotime($kolkataDate)));
-    $date7d = date('Y-m-d', strtotime('+7 days', strtotime($kolkataDate)));
-
     try {
-        // 2) Fetch pending installments due today, in 3 days, or in 7 days
-        $stmt = $pdo->prepare("
-            SELECT i.id, i.user_id, i.instalment_number, i.amount, i.due_date,
-                   u.name AS student_name, u.pepp_course, u.pepp_academic_year,
-                   u.whatsapp_country_code, u.whatsapp_number
-            FROM instalment_details i
-            INNER JOIN users u ON u.user_id = i.user_id
-            WHERE i.status NOT IN ('approved', 'paid')
-              AND i.paid_date IS NULL
-              AND u.status = 'approved'
-              AND i.due_date IN (?, ?, ?)
-        ");
-        $stmt->execute([$kolkataDate, $date3d, $date7d]);
-        $installments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        if (!$installments) return;
+        $eligible = get_eligible_whatsapp_reminders($pdo);
+        if (empty($eligible)) return;
 
         // Fetch active public banking details
         $public_banking_details = '';
@@ -287,30 +270,18 @@ function installments_dispatch_whatsapp_reminders($pdo) {
         require_once __DIR__ . '/communication/CommunicationEngine.php';
         $commEngine = CommunicationEngine::getInstance($pdo);
 
-        foreach ($installments as $inst) {
-            $due_time = strtotime($inst['due_date']);
-            $today_time = strtotime($kolkataDate);
-            $days_diff = (int)round(($due_time - $today_time) / 86400);
-
-            $stage = '';
-            if ($days_diff === 7) {
-                $stage = '7d';
-            } elseif ($days_diff === 3) {
-                $stage = '3d';
-            } elseif ($days_diff === 0) {
-                $stage = '0d';
+        foreach ($eligible as $inst) {
+            if ($inst['is_overdue']) {
+                continue; // Only process upcoming reminders in this function
             }
-
-            if ($stage === '') {
-                continue;
-            }
+            $stage = $inst['stage'];
 
             try {
                 $pdo->beginTransaction();
 
-                // Check existing tracking status
+                // Check existing tracking status to prevent race conditions
                 $stmtCheck = $pdo->prepare("SELECT status FROM installment_whatsapp_reminders WHERE installment_id = ? AND reminder_stage = ?");
-                $stmtCheck->execute([$inst['id'], $stage]);
+                $stmtCheck->execute([$inst['installment_id'], $stage]);
                 $existingStatus = $stmtCheck->fetchColumn();
 
                 if ($existingStatus === 'sent' || $existingStatus === 'queued') {
@@ -321,10 +292,14 @@ function installments_dispatch_whatsapp_reminders($pdo) {
                 // If doesn't exist, insert as 'queued'. If 'failed', update to 'queued'.
                 if ($existingStatus === false) {
                     $stmtTrack = $pdo->prepare("INSERT INTO installment_whatsapp_reminders (installment_id, reminder_stage, status, last_attempted_at) VALUES (?, ?, 'queued', NOW())");
-                    $stmtTrack->execute([$inst['id'], $stage]);
+                    $stmtTrack->execute([$inst['installment_id'], $stage]);
                 } else {
-                    $stmtTrack = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued', last_attempted_at = NOW() WHERE installment_id = ? AND reminder_stage = ?");
-                    $stmtTrack->execute([$inst['id'], $stage]);
+                    $stmtTrack = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued', last_attempted_at = NOW() WHERE installment_id = ? AND reminder_stage = ? AND status NOT IN ('queued', 'sent')");
+                    $stmtTrack->execute([$inst['installment_id'], $stage]);
+                    if ($stmtTrack->rowCount() === 0) {
+                        $pdo->rollBack();
+                        continue;
+                    }
                 }
 
                 // Normalize recipient phone number
@@ -360,7 +335,7 @@ function installments_dispatch_whatsapp_reminders($pdo) {
                 if ($queueId) {
                     // Update tracking row with queueId
                     $stmtUpd = $pdo->prepare("UPDATE installment_whatsapp_reminders SET queue_id = ? WHERE installment_id = ? AND reminder_stage = ?");
-                    $stmtUpd->execute([$queueId, $inst['id'], $stage]);
+                    $stmtUpd->execute([$queueId, $inst['installment_id'], $stage]);
                     $pdo->commit();
                 } else {
                     $pdo->rollBack();
@@ -370,7 +345,7 @@ function installments_dispatch_whatsapp_reminders($pdo) {
                 if ($pdo->inTransaction()) {
                     $pdo->rollBack();
                 }
-                error_log("Failed to queue installment reminder for {$inst['id']}: " . $ex->getMessage());
+                error_log("Failed to queue installment reminder for {$inst['installment_id']}: " . $ex->getMessage());
             }
         }
     } catch (Exception $e) {
@@ -406,53 +381,25 @@ function installments_dispatch_whatsapp_overdue_reminders($pdo) {
         return; // Only dispatch during the 08:00-09:00 AM IST window
     }
 
-    $kolkataDate = $now->format('Y-m-d');
-    $overdue3d = date('Y-m-d', strtotime('-3 days', strtotime($kolkataDate)));
-    $overdue7d = date('Y-m-d', strtotime('-7 days', strtotime($kolkataDate)));
-
     try {
-        // 2) Fetch pending installments overdue by exactly 3 or 7 days, excluding dropout students
-        $stmt = $pdo->prepare("
-            SELECT i.id, i.user_id, i.instalment_number, i.amount, i.due_date,
-                   u.name AS student_name, u.pepp_course, u.pepp_academic_year,
-                   u.whatsapp_country_code, u.whatsapp_number
-            FROM instalment_details i
-            INNER JOIN users u ON u.user_id = i.user_id
-            WHERE i.status NOT IN ('approved', 'paid')
-              AND i.paid_date IS NULL
-              AND u.status = 'approved'
-              AND (u.student_status IS NULL OR u.student_status <> 'dropout')
-              AND i.due_date IN (?, ?)
-        ");
-        $stmt->execute([$overdue3d, $overdue7d]);
-        $installments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        if (!$installments) return;
+        $eligible = get_eligible_whatsapp_reminders($pdo);
+        if (empty($eligible)) return;
 
         require_once __DIR__ . '/communication/CommunicationEngine.php';
         $commEngine = CommunicationEngine::getInstance($pdo);
 
-        foreach ($installments as $inst) {
-            $due_time = strtotime($inst['due_date']);
-            $today_time = strtotime($kolkataDate);
-            $days_diff = (int)round(($today_time - $due_time) / 86400);
-
-            $stage = '';
-            if ($days_diff === 3) {
-                $stage = 'overdue_3d';
-            } elseif ($days_diff === 7) {
-                $stage = 'overdue_7d';
+        foreach ($eligible as $inst) {
+            if (!$inst['is_overdue']) {
+                continue; // Only process overdue reminders in this function
             }
-
-            if ($stage === '') {
-                continue;
-            }
+            $stage = $inst['stage'];
 
             try {
                 $pdo->beginTransaction();
 
                 // Check existing tracking status
                 $stmtCheck = $pdo->prepare("SELECT status FROM installment_whatsapp_reminders WHERE installment_id = ? AND reminder_stage = ?");
-                $stmtCheck->execute([$inst['id'], $stage]);
+                $stmtCheck->execute([$inst['installment_id'], $stage]);
                 $existingStatus = $stmtCheck->fetchColumn();
 
                 if ($existingStatus === 'sent' || $existingStatus === 'queued') {
@@ -463,10 +410,14 @@ function installments_dispatch_whatsapp_overdue_reminders($pdo) {
                 // If doesn't exist, insert as 'queued'. If 'failed', update to 'queued'.
                 if ($existingStatus === false) {
                     $stmtTrack = $pdo->prepare("INSERT INTO installment_whatsapp_reminders (installment_id, reminder_stage, status, last_attempted_at) VALUES (?, ?, 'queued', NOW())");
-                    $stmtTrack->execute([$inst['id'], $stage]);
+                    $stmtTrack->execute([$inst['installment_id'], $stage]);
                 } else {
-                    $stmtTrack = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued', last_attempted_at = NOW() WHERE installment_id = ? AND reminder_stage = ?");
-                    $stmtTrack->execute([$inst['id'], $stage]);
+                    $stmtTrack = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued', last_attempted_at = NOW() WHERE installment_id = ? AND reminder_stage = ? AND status NOT IN ('queued', 'sent')");
+                    $stmtTrack->execute([$inst['installment_id'], $stage]);
+                    if ($stmtTrack->rowCount() === 0) {
+                        $pdo->rollBack();
+                        continue;
+                    }
                 }
 
                 // Normalize recipient phone number
@@ -502,7 +453,7 @@ function installments_dispatch_whatsapp_overdue_reminders($pdo) {
                 if ($queueId) {
                     // Update tracking row with queueId
                     $stmtUpd = $pdo->prepare("UPDATE installment_whatsapp_reminders SET queue_id = ? WHERE installment_id = ? AND reminder_stage = ?");
-                    $stmtUpd->execute([$queueId, $inst['id'], $stage]);
+                    $stmtUpd->execute([$queueId, $inst['installment_id'], $stage]);
                     $pdo->commit();
                 } else {
                     $pdo->rollBack();
@@ -512,11 +463,121 @@ function installments_dispatch_whatsapp_overdue_reminders($pdo) {
                 if ($pdo->inTransaction()) {
                     $pdo->rollBack();
                 }
-                error_log("Failed to queue installment overdue reminder for {$inst['id']}: " . $ex->getMessage());
+                error_log("Failed to queue installment overdue reminder for {$inst['installment_id']}: " . $ex->getMessage());
             }
         }
     } catch (Exception $e) {
         error_log('installments_dispatch_whatsapp_overdue_reminders error: ' . $e->getMessage());
+    }
+}
+
+/**
+ * Consolidates eligibility logic for both upcoming and overdue installment reminders.
+ * Returns an array of eligible installments with target stages.
+ *
+ * @param PDO $pdo
+ * @return array
+ */
+function get_eligible_whatsapp_reminders($pdo) {
+    $tz = new DateTimeZone('Asia/Kolkata');
+    $now = new DateTime('now', $tz);
+    $kolkataDate = $now->format('Y-m-d');
+
+    // Milestone target dates relative to Kolkata current date
+    $date3d = date('Y-m-d', strtotime('+3 days', strtotime($kolkataDate)));
+    $date7d = date('Y-m-d', strtotime('+7 days', strtotime($kolkataDate)));
+    $overdue3d = date('Y-m-d', strtotime('-3 days', strtotime($kolkataDate)));
+    $overdue7d = date('Y-m-d', strtotime('-7 days', strtotime($kolkataDate)));
+
+    try {
+        // Query installments due exactly on target dates
+        $stmt = $pdo->prepare("
+            SELECT i.id, i.user_id, i.instalment_number, i.amount, i.due_date,
+                   u.name AS student_name, u.pepp_course, u.pepp_academic_year,
+                   u.whatsapp_country_code, u.whatsapp_number, u.student_status
+            FROM instalment_details i
+            INNER JOIN users u ON u.user_id = i.user_id
+            WHERE i.status NOT IN ('approved', 'paid')
+              AND i.paid_date IS NULL
+              AND u.status = 'approved'
+              AND i.due_date IN (?, ?, ?, ?, ?)
+        ");
+        $stmt->execute([$kolkataDate, $date3d, $date7d, $overdue3d, $overdue7d]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        if (empty($rows)) {
+            return [];
+        }
+
+        // Fetch existing tracking statuses for idempotency check
+        $instIds = array_column($rows, 'id');
+        $inClause = implode(',', array_fill(0, count($instIds), '?'));
+        $trackStmt = $pdo->prepare("SELECT installment_id, reminder_stage, status FROM installment_whatsapp_reminders WHERE installment_id IN ($inClause)");
+        $trackStmt->execute($instIds);
+
+        $tracking = [];
+        foreach ($trackStmt->fetchAll(PDO::FETCH_ASSOC) as $track) {
+            $tracking[$track['installment_id']][$track['reminder_stage']] = $track['status'];
+        }
+
+        $eligible = [];
+        foreach ($rows as $r) {
+            $due_time = strtotime($r['due_date']);
+            $today_time = strtotime($kolkataDate);
+            $days_diff = (int)round(($due_time - $today_time) / 86400);
+
+            $stage = '';
+            $is_overdue = false;
+
+            if ($days_diff === 7) {
+                $stage = '7d';
+            } elseif ($days_diff === 3) {
+                $stage = '3d';
+            } elseif ($days_diff === 0) {
+                $stage = '0d';
+            } elseif ($days_diff === -3) {
+                $stage = 'overdue_3d';
+                $is_overdue = true;
+            } elseif ($days_diff === -7) {
+                $stage = 'overdue_7d';
+                $is_overdue = true;
+            }
+
+            if ($stage === '') {
+                continue;
+            }
+
+            // Dropout safety constraint for overdue milestones
+            if ($is_overdue && $r['student_status'] === 'dropout') {
+                continue;
+            }
+
+            // Check tracking to prevent duplicate dispatch
+            $existingStatus = $tracking[$r['id']][$stage] ?? null;
+            if ($existingStatus === 'sent' || $existingStatus === 'queued') {
+                continue;
+            }
+
+            $eligible[] = [
+                'installment_id'        => $r['id'],
+                'user_id'               => $r['user_id'],
+                'instalment_number'     => $r['instalment_number'],
+                'amount'                => $r['amount'],
+                'due_date'              => $r['due_date'],
+                'student_name'          => $r['student_name'],
+                'pepp_course'           => $r['pepp_course'],
+                'pepp_academic_year'    => $r['pepp_academic_year'],
+                'whatsapp_country_code' => $r['whatsapp_country_code'],
+                'whatsapp_number'       => $r['whatsapp_number'],
+                'stage'                 => $stage,
+                'is_overdue'            => $is_overdue
+            ];
+        }
+
+        return $eligible;
+
+    } catch (Exception $e) {
+        error_log('get_eligible_whatsapp_reminders error: ' . $e->getMessage());
+        return [];
     }
 }
 
