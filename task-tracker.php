@@ -616,14 +616,27 @@ function requestLocation(callback) {
         updateGeoUI();
         if (callback) callback(true);
     }, function(err) {
-        clientLatitude = null;
-        clientLongitude = null;
-        geoErrorMsg = "Location access is required to record this activity.";
-        updateGeoUI();
-        if (callback) callback(false);
+        // Fallback to low accuracy network-based location
+        navigator.geolocation.getCurrentPosition(function(pos2) {
+            clientLatitude = pos2.coords.latitude;
+            clientLongitude = pos2.coords.longitude;
+            geoErrorMsg = null;
+            updateGeoUI();
+            if (callback) callback(true);
+        }, function(err2) {
+            clientLatitude = null;
+            clientLongitude = null;
+            geoErrorMsg = "Location access is required to record this activity. Please allow site location permissions in your browser.";
+            updateGeoUI();
+            if (callback) callback(false);
+        }, {
+            enableHighAccuracy: false,
+            timeout: 10000,
+            maximumAge: 60000
+        });
     }, {
         enableHighAccuracy: true,
-        timeout: 8000,
+        timeout: 5000,
         maximumAge: 0
     });
 }
