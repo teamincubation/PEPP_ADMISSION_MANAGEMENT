@@ -218,6 +218,12 @@ function render_nav_item($key, $active_page, $nav_data) {
         case 'student-study-reports':
             echo '<a class="nav-item ' . nav_active('student-study-reports', $active_page) . '" href="student-study-reports.php"><i class="fas fa-chart-line"></i> Student Reports</a>';
             break;
+        case 'task-tracker':
+            echo '<a class="nav-item ' . nav_active('task-tracker', $active_page) . '" href="task-tracker.php"><i class="fas fa-list-check"></i> Task Tracker</a>';
+            break;
+        case 'ld-work-report':
+            echo '<a class="nav-item ' . nav_active('ld-work-report', $active_page) . '" href="ld-work-report.php"><i class="fas fa-chart-simple"></i> L&D Work Report</a>';
+            break;
         case 'settings':
             echo '<a class="nav-item ' . nav_active('settings', $active_page) . '" href="settings.php"><i class="fas fa-gear"></i> Settings</a>';
             break;
@@ -268,7 +274,7 @@ $default_sidebar = [
         'id' => 'crm',
         'title' => 'CRM',
         'icon' => 'fas fa-handshake',
-        'items' => ['leads', 'alumni', 'peppkit', 'cards', 'card-templates', 'accounts', 'whatsapp-inbox']
+        'items' => ['leads', 'alumni', 'peppkit', 'cards', 'card-templates', 'accounts', 'whatsapp-inbox', 'task-tracker', 'ld-work-report']
     ],
     [
         'id' => 'campaigns',

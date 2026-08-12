@@ -186,6 +186,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 log_admin_activity($pdo, $admin_username, 'invoice_settings_changed',
                     'GST series ' . $pairs['inv_gst_prefix'] . '/' . $pairs['inv_gst_fy'] . ' (next #' . $gst_seq . '), account id ' . $pairs['inv_gst_account_id']);
                 $success_message = 'Invoice settings saved.';
+            } elseif ($action === 'add_ld_course') {
+                $name  = trim($_POST['course_name'] ?? '');
+                $order = (int)($_POST['sort_order'] ?? 0);
+                if ($name !== '') {
+                    try {
+                        $pdo->prepare("INSERT INTO ld_work_courses (course_name, status, sort_order) VALUES (?, 'active', ?)")->execute([$name, $order]);
+                        $success_message = "L&D Work Course \"{$name}\" added.";
+                    } catch (Exception $e) { $error_message = 'L&D Work Course name already exists.'; }
+                }
+            } elseif ($action === 'edit_ld_course') {
+                $id    = (int)($_POST['course_id'] ?? 0);
+                $name  = trim($_POST['course_name'] ?? '');
+                $order = (int)($_POST['sort_order'] ?? 0);
+                $status = in_array($_POST['status'] ?? '', ['active','inactive'], true) ? $_POST['status'] : 'active';
+                if ($id > 0 && $name !== '') {
+                    try {
+                        $pdo->prepare("UPDATE ld_work_courses SET course_name = ?, status = ?, sort_order = ? WHERE id = ?")->execute([$name, $status, $order, $id]);
+                        $success_message = "L&D Work Course updated.";
+                    } catch (Exception $e) { $error_message = 'L&D Work Course name already exists.'; }
+                }
+            } elseif ($action === 'toggle_ld_course') {
+                $id = (int)($_POST['course_id'] ?? 0);
+                $pdo->prepare("UPDATE ld_work_courses SET status = IF(status='active','inactive','active') WHERE id = ?")->execute([$id]);
+                $success_message = 'L&D Work Course status updated.';
+            } elseif ($action === 'delete_ld_course') {
+                if (is_super_admin()) {
+                    $id = (int)($_POST['course_id'] ?? 0);
+                    $pdo->prepare("DELETE FROM ld_work_courses WHERE id = ?")->execute([$id]);
+                    $success_message = 'L&D Work Course deleted.';
+                }
+            } elseif ($action === 'add_ld_mode') {
+                $name  = trim($_POST['mode_name'] ?? '');
+                $order = (int)($_POST['sort_order'] ?? 0);
+                if ($name !== '') {
+                    try {
+                        $pdo->prepare("INSERT INTO ld_work_modes (mode_name, status, sort_order) VALUES (?, 'active', ?)")->execute([$name, $order]);
+                        $success_message = "L&D Work Mode \"{$name}\" added.";
+                    } catch (Exception $e) { $error_message = 'L&D Work Mode name already exists.'; }
+                }
+            } elseif ($action === 'edit_ld_mode') {
+                $id    = (int)($_POST['mode_id'] ?? 0);
+                $name  = trim($_POST['mode_name'] ?? '');
+                $order = (int)($_POST['sort_order'] ?? 0);
+                $status = in_array($_POST['status'] ?? '', ['active','inactive'], true) ? $_POST['status'] : 'active';
+                if ($id > 0 && $name !== '') {
+                    try {
+                        $pdo->prepare("UPDATE ld_work_modes SET mode_name = ?, status = ?, sort_order = ? WHERE id = ?")->execute([$name, $status, $order, $id]);
+                        $success_message = "L&D Work Mode updated.";
+                    } catch (Exception $e) { $error_message = 'L&D Work Mode name already exists.'; }
+                }
+            } elseif ($action === 'toggle_ld_mode') {
+                $id = (int)($_POST['mode_id'] ?? 0);
+                $pdo->prepare("UPDATE ld_work_modes SET status = IF(status='active','inactive','active') WHERE id = ?")->execute([$id]);
+                $success_message = 'L&D Work Mode status updated.';
+            } elseif ($action === 'delete_ld_mode') {
+                if (is_super_admin()) {
+                    $id = (int)($_POST['mode_id'] ?? 0);
+                    $pdo->prepare("DELETE FROM ld_work_modes WHERE id = ?")->execute([$id]);
+                    $success_message = 'L&D Work Mode deleted.';
+                }
             } elseif ($action === 'save_smtp_settings') {
                 $stmt = $pdo->prepare("
                     INSERT INTO admin_settings (setting_name, setting_value, created_at, updated_at)
@@ -329,6 +389,10 @@ try {
     $expense_types    = [];
     try { $expense_types = $pdo->query("SELECT * FROM expense_types ORDER BY name")->fetchAll(); } catch (Exception $e) {}
     $payment_accounts = $pdo->query("SELECT * FROM payment_accounts ORDER BY status ASC, account_name ASC")->fetchAll();
+    $ld_courses = [];
+    try { $ld_courses = $pdo->query("SELECT * FROM ld_work_courses ORDER BY sort_order ASC, course_name ASC")->fetchAll(); } catch (Exception $e) {}
+    $ld_modes = [];
+    try { $ld_modes = $pdo->query("SELECT * FROM ld_work_modes ORDER BY sort_order ASC, mode_name ASC")->fetchAll(); } catch (Exception $e) {}
 } catch (Exception $e) {
     error_log('Settings load: ' . $e->getMessage());
     $error_message = $error_message ?: 'Could not load settings.';
@@ -532,6 +596,84 @@ include 'includes/admin_nav.php';
             </tbody>
         </table></div>
         <?php else: ?><div class="cell-sub">No expense types yet - the standard list is seeded by database-update-7.sql.</div><?php endif; ?>
+    </div>
+</div>
+
+<!-- ── L&D WORK COURSES ── -->
+<div class="panel">
+    <div class="panel-head"><span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-book-open"></i></span><h2>L&D Work Courses</h2></div>
+    <div class="panel-body">
+        <form method="POST" class="filter-bar" style="margin-bottom:16px; display:flex; gap:12px; align-items:end;">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="add_ld_course">
+            <div class="field grow-2" style="margin:0;"><label>Course Name</label><input type="text" name="course_name" placeholder="e.g. MA/MSc Psychology" required></div>
+            <div class="field" style="margin:0; width:120px;"><label>Sort Order</label><input type="number" name="sort_order" value="0" required></div>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Add Course</button>
+        </form>
+        
+        <?php if (!empty($ld_courses)): ?>
+        <div class="table-wrap"><table class="data-table">
+            <thead><tr><th>Course Name</th><th>Sort Order</th><th>Status</th><th style="text-align:right;">Actions</th></tr></thead>
+            <tbody>
+            <?php foreach ($ld_courses as $c): ?>
+                <tr>
+                    <td class="cell-main"><?php echo e($c['course_name']); ?></td>
+                    <td><?php echo (int)$c['sort_order']; ?></td>
+                    <td><span class="badge <?php echo $c['status'] === 'active' ? 'green' : 'gray'; ?>"><?php echo ucfirst($c['status']); ?></span></td>
+                    <td style="text-align:right; white-space:nowrap;">
+                        <button type="button" class="btn btn-sm btn-outline" onclick='openEditLdCourse(<?php echo json_encode([
+                            "id" => (int)$c["id"],
+                            "course_name" => $c["course_name"],
+                            "sort_order" => (int)$c["sort_order"],
+                            "status" => $c["status"]
+                        ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
+                        <form method="POST" style="display:inline;"><?php echo csrf_field(); ?><input type="hidden" name="action" value="toggle_ld_course"><input type="hidden" name="course_id" value="<?php echo (int)$c['id']; ?>"><button type="submit" class="btn btn-sm btn-soft-amber" title="Toggle status"><i class="fas fa-power-off"></i></button></form>
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this L&D course?');"><?php echo csrf_field(); ?><input type="hidden" name="action" value="delete_ld_course"><input type="hidden" name="course_id" value="<?php echo (int)$c['id']; ?>"><button type="submit" class="btn btn-sm btn-soft-red" title="Delete"><i class="fas fa-trash"></i></button></form>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table></div>
+        <?php else: ?><div class="cell-sub">No L&D work courses defined yet.</div><?php endif; ?>
+    </div>
+</div>
+
+<!-- ── L&D WORK MODES ── -->
+<div class="panel">
+    <div class="panel-head"><span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-tags"></i></span><h2>L&D Work Modes</h2></div>
+    <div class="panel-body">
+        <form method="POST" class="filter-bar" style="margin-bottom:16px; display:flex; gap:12px; align-items:end;">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="add_ld_mode">
+            <div class="field grow-2" style="margin:0;"><label>Mode Name</label><input type="text" name="mode_name" placeholder="e.g. Tests" required></div>
+            <div class="field" style="margin:0; width:120px;"><label>Sort Order</label><input type="number" name="sort_order" value="0" required></div>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Add Mode</button>
+        </form>
+        
+        <?php if (!empty($ld_modes)): ?>
+        <div class="table-wrap"><table class="data-table">
+            <thead><tr><th>Mode Name</th><th>Sort Order</th><th>Status</th><th style="text-align:right;">Actions</th></tr></thead>
+            <tbody>
+            <?php foreach ($ld_modes as $m): ?>
+                <tr>
+                    <td class="cell-main"><?php echo e($m['mode_name']); ?></td>
+                    <td><?php echo (int)$m['sort_order']; ?></td>
+                    <td><span class="badge <?php echo $m['status'] === 'active' ? 'green' : 'gray'; ?>"><?php echo ucfirst($m['status']); ?></span></td>
+                    <td style="text-align:right; white-space:nowrap;">
+                        <button type="button" class="btn btn-sm btn-outline" onclick='openEditLdMode(<?php echo json_encode([
+                            "id" => (int)$m["id"],
+                            "mode_name" => $m["mode_name"],
+                            "sort_order" => (int)$m["sort_order"],
+                            "status" => $m["status"]
+                        ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
+                        <form method="POST" style="display:inline;"><?php echo csrf_field(); ?><input type="hidden" name="action" value="toggle_ld_mode"><input type="hidden" name="mode_id" value="<?php echo (int)$m['id']; ?>"><button type="submit" class="btn btn-sm btn-soft-amber" title="Toggle status"><i class="fas fa-power-off"></i></button></form>
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this L&D work mode?');"><?php echo csrf_field(); ?><input type="hidden" name="action" value="delete_ld_mode"><input type="hidden" name="mode_id" value="<?php echo (int)$m['id']; ?>"><button type="submit" class="btn btn-sm btn-soft-red" title="Delete"><i class="fas fa-trash"></i></button></form>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table></div>
+        <?php else: ?><div class="cell-sub">No L&D work modes defined yet.</div><?php endif; ?>
     </div>
 </div>
 
@@ -1061,6 +1203,79 @@ document.addEventListener('DOMContentLoaded', function() {
     renderEditor();
 });
 <?php endif; ?>
+</script>
+
+<!-- ── EDIT COURSE MODAL ── -->
+<div class="modal-backdrop" id="edit-ld-course-modal">
+    <div class="modal" style="max-width:450px;">
+        <div class="modal-head"><h3>Edit L&D Work Course</h3><button class="modal-close" onclick="closeModal('edit-ld-course-modal')"><i class="fas fa-xmark"></i></button></div>
+        <form method="POST">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="edit_ld_course">
+            <input type="hidden" name="course_id" id="edit-ld-course-id">
+            <div class="modal-body">
+                <div class="form-grid" style="grid-template-columns:1fr;">
+                    <div class="field"><label>Course Name</label><input type="text" name="course_name" id="edit-ld-course-name" required></div>
+                    <div class="field"><label>Sort Order</label><input type="number" name="sort_order" id="edit-ld-course-order" required></div>
+                    <div class="field"><label>Status</label>
+                        <select name="status" id="edit-ld-course-status">
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('edit-ld-course-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── EDIT MODE MODAL ── -->
+<div class="modal-backdrop" id="edit-ld-mode-modal">
+    <div class="modal" style="max-width:450px;">
+        <div class="modal-head"><h3>Edit L&D Work Mode</h3><button class="modal-close" onclick="closeModal('edit-ld-mode-modal')"><i class="fas fa-xmark"></i></button></div>
+        <form method="POST">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="edit_ld_mode">
+            <input type="hidden" name="mode_id" id="edit-ld-mode-id">
+            <div class="modal-body">
+                <div class="form-grid" style="grid-template-columns:1fr;">
+                    <div class="field"><label>Mode Name</label><input type="text" name="mode_name" id="edit-ld-mode-name" required></div>
+                    <div class="field"><label>Sort Order</label><input type="number" name="sort_order" id="edit-ld-mode-order" required></div>
+                    <div class="field"><label>Status</label>
+                        <select name="status" id="edit-ld-mode-status">
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('edit-ld-mode-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openEditLdCourse(data) {
+    document.getElementById('edit-ld-course-id').value = data.id;
+    document.getElementById('edit-ld-course-name').value = data.course_name;
+    document.getElementById('edit-ld-course-order').value = data.sort_order;
+    document.getElementById('edit-ld-course-status').value = data.status;
+    openModal('edit-ld-course-modal');
+}
+function openEditLdMode(data) {
+    document.getElementById('edit-ld-mode-id').value = data.id;
+    document.getElementById('edit-ld-mode-name').value = data.mode_name;
+    document.getElementById('edit-ld-mode-order').value = data.sort_order;
+    document.getElementById('edit-ld-mode-status').value = data.status;
+    openModal('edit-ld-mode-modal');
+}
 </script>
 
 <?php include 'includes/admin_footer.php'; ?>

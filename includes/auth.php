@@ -42,6 +42,8 @@ $GLOBALS['ADMIN_PAGES'] = [
     'card-templates'=> ['Create Card Templates',   'fa-id-card'],
     'campaigns'     => ['Campaign Forms',          'fa-wpforms'],
     'studyplans'    => ['Study Plans',             'fa-calendar-days'],
+    'task-tracker'  => ['L&D Task Tracker',        'fa-list-check'],
+    'ld-work-report'=> ['L&D Work Report',         'fa-chart-simple'],
     'settings'      => ['Settings',                'fa-gear'],
 ];
 
@@ -337,6 +339,8 @@ function get_first_accessible_page_url() {
         'courses'       => 'course-management.php',
         'faculties'     => 'faculties.php',
         'studyplans'    => 'studyplans.php',
+        'task-tracker'  => 'task-tracker.php',
+        'ld-work-report'=> 'ld-work-report.php',
         'settings'      => 'settings.php',
     ];
     $perms = array_map('trim', explode(',', $admin_perms));
