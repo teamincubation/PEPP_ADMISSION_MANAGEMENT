@@ -429,6 +429,33 @@ include 'includes/admin_nav.php';
     color: var(--destructive);
     background: rgba(220, 38, 38, 0.1);
 }
+.timeline-card-details {
+    display: none;
+    margin-top: 10px;
+    border-top: 1px dashed rgba(22, 78, 99, 0.15);
+    padding-top: 10px;
+}
+.timeline-card-details.expanded {
+    display: block;
+}
+.details-toggle-btn {
+    background: none;
+    border: none;
+    color: var(--primary);
+    font-weight: 600;
+    font-size: 0.82rem;
+    cursor: pointer;
+    padding: 6px 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    outline: none;
+}
+.details-toggle-btn:hover {
+    color: var(--primary-hover, #0e7490);
+    text-decoration: underline;
+}
 </style>
 
 <?php if ($success_message): ?><div class="alert alert-success"><i class="fas fa-circle-check"></i><span><?php echo e($success_message); ?></span></div><?php endif; ?>
@@ -527,14 +554,21 @@ include 'includes/admin_nav.php';
                                 <span class="badge blue"><?php echo count($topics); ?> topics</span>
                             </div>
 
-                            <ul class="timeline-topics">
-                                <?php foreach ($topics as $tp): ?>
-                                    <li><?php echo e($tp); ?></li>
-                                <?php endforeach; ?>
-                            </ul>
-
                             <div class="timeline-meta" style="margin-top:10px; border-top:1px solid rgba(22, 78, 99, 0.05); padding-top:8px;">
                                 <div><strong>Created:</strong> <?php echo date('d M Y, h:i A', strtotime($t['created_at'])); ?></div>
+                            </div>
+
+                            <button type="button" class="details-toggle-btn" id="toggle-btn-<?php echo (int)$t['id']; ?>" aria-expanded="false" onclick="toggleDetails(<?php echo (int)$t['id']; ?>)" aria-controls="details-<?php echo (int)$t['id']; ?>">
+                                <i class="fas fa-chevron-down"></i> View Details
+                            </button>
+
+                            <div class="timeline-card-details" id="details-<?php echo (int)$t['id']; ?>" role="region" aria-labelledby="toggle-btn-<?php echo (int)$t['id']; ?>">
+                                <div style="font-weight:600; font-size:0.8rem; color:var(--foreground); opacity:0.9; margin-bottom:6px;">Completed Topics</div>
+                                <ul class="timeline-topics" style="margin-top:0; padding-left:15px;">
+                                    <?php foreach ($topics as $tp): ?>
+                                        <li><?php echo e($tp); ?></li>
+                                    <?php endforeach; ?>
+                                </ul>
                             </div>
 
                             <div class="timeline-actions">
@@ -808,6 +842,21 @@ function validateDelete(e) {
         
         document.getElementById('delete-form').submit();
     });
+}
+
+function toggleDetails(taskId) {
+    var detailsEl = document.getElementById('details-' + taskId);
+    var btnEl = document.getElementById('toggle-btn-' + taskId);
+    
+    if (detailsEl.classList.contains('expanded')) {
+        detailsEl.classList.remove('expanded');
+        btnEl.setAttribute('aria-expanded', 'false');
+        btnEl.innerHTML = '<i class="fas fa-chevron-down"></i> View Details';
+    } else {
+        detailsEl.classList.add('expanded');
+        btnEl.setAttribute('aria-expanded', 'true');
+        btnEl.innerHTML = '<i class="fas fa-chevron-up"></i> Hide Details';
+    }
 }
 </script>
 

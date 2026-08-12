@@ -573,6 +573,53 @@ table.data-table { width: 100%; border-collapse: collapse; }
     .topbar { padding: 12px 14px; }
     .detail-list { grid-template-columns: 1fr; }
 }
+
+@media (max-width: 767px) {
+    .topbar {
+        padding: 8px 12px;
+        gap: 8px;
+    }
+    .topbar h1 {
+        font-size: 0.95rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 150px;
+        margin: 0;
+    }
+    .topbar .page-sub {
+        font-size: 0.68rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 180px;
+    }
+    .topbar-right {
+        gap: 6px;
+    }
+    .reminder-bell {
+        width: 32px;
+        height: 32px;
+        font-size: 0.85rem;
+        border-radius: 8px;
+        margin-right: 0;
+    }
+    .admin-chip {
+        padding: 0;
+        background: none;
+        box-shadow: none;
+        border: none;
+    }
+    .admin-chip > span:not(.avatar) {
+        display: none !important;
+    }
+    .admin-chip .avatar {
+        width: 32px;
+        height: 32px;
+        font-size: 0.85rem;
+        margin: 0;
+    }
+}
 .sidebar-overlay {
     display: none;
     position: fixed; inset: 0;
