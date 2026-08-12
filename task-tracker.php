@@ -499,9 +499,6 @@ include 'includes/admin_nav.php';
         <div class="panel-head">
             <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-clock-rotate-left"></i></span>
             <h2>My Work Report</h2>
-            <div class="head-right">
-                <a href="ld-work-report.php" class="btn btn-sm btn-outline"><i class="fas fa-chart-line"></i> Go to Full Report</a>
-            </div>
         </div>
         <div class="panel-body">
             <?php if (empty($my_tasks)): ?>
@@ -536,16 +533,8 @@ include 'includes/admin_nav.php';
                                 <?php endforeach; ?>
                             </ul>
 
-                            <div class="timeline-meta" style="margin-top:10px; border-top:1px solid rgba(22, 78, 99, 0.05); padding-top:8px; display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+                            <div class="timeline-meta" style="margin-top:10px; border-top:1px solid rgba(22, 78, 99, 0.05); padding-top:8px;">
                                 <div><strong>Created:</strong> <?php echo date('d M Y, h:i A', strtotime($t['created_at'])); ?></div>
-                                <div><strong>Last Action:</strong> <?php echo $t['updated_at'] ? 'Updated' : 'Logged'; ?></div>
-                                <?php if ($t['updated_at']): ?>
-                                    <div style="grid-column: span 2;"><strong>Updated:</strong> <?php echo date('d M Y, h:i A', strtotime($t['updated_at'])); ?></div>
-                                <?php endif; ?>
-                                <div style="grid-column: span 2; display:flex; align-items:center; gap:6px;">
-                                    <span>📍 Location:</span>
-                                    <a href="<?php echo e($t['maps_url']); ?>" target="_blank" class="btn btn-sm btn-soft-violet" style="padding:2px 8px; font-size:0.75rem;"><i class="fas fa-map-location-dot"></i> View Map</a>
-                                </div>
                             </div>
 
                             <div class="timeline-actions">
