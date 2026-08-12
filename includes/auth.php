@@ -575,3 +575,24 @@ function format_credential_text($value, $type, $scope = 'students') {
     
     return $value;
 }
+
+function ld_tables_exist($pdo) {
+    static $exists = null;
+    if ($exists === null) {
+        try {
+            $tables = ['ld_work_courses', 'ld_work_modes', 'ld_tasks', 'ld_task_topics', 'ld_task_audit'];
+            foreach ($tables as $tbl) {
+                $has = $pdo->query("SHOW TABLES LIKE '$tbl'")->fetchColumn();
+                if (!$has) {
+                    $exists = false;
+                    return false;
+                }
+            }
+            $exists = true;
+        } catch (Exception $e) {
+            $exists = false;
+        }
+    }
+    return $exists;
+}
+

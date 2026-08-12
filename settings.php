@@ -187,64 +187,96 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'GST series ' . $pairs['inv_gst_prefix'] . '/' . $pairs['inv_gst_fy'] . ' (next #' . $gst_seq . '), account id ' . $pairs['inv_gst_account_id']);
                 $success_message = 'Invoice settings saved.';
             } elseif ($action === 'add_ld_course') {
-                $name  = trim($_POST['course_name'] ?? '');
-                $order = (int)($_POST['sort_order'] ?? 0);
-                if ($name !== '') {
-                    try {
-                        $pdo->prepare("INSERT INTO ld_work_courses (course_name, status, sort_order) VALUES (?, 'active', ?)")->execute([$name, $order]);
-                        $success_message = "L&D Work Course \"{$name}\" added.";
-                    } catch (Exception $e) { $error_message = 'L&D Work Course name already exists.'; }
+                if (!ld_tables_exist($pdo)) {
+                    $error_message = 'L&D database tables are not installed yet. Please run database-update-21.sql first.';
+                } else {
+                    $name  = trim($_POST['course_name'] ?? '');
+                    $order = (int)($_POST['sort_order'] ?? 0);
+                    if ($name !== '') {
+                        try {
+                            $pdo->prepare("INSERT INTO ld_work_courses (course_name, status, sort_order) VALUES (?, 'active', ?)")->execute([$name, $order]);
+                            $success_message = "L&D Work Course \"{$name}\" added.";
+                        } catch (Exception $e) { $error_message = 'L&D Work Course name already exists.'; }
+                    }
                 }
             } elseif ($action === 'edit_ld_course') {
-                $id    = (int)($_POST['course_id'] ?? 0);
-                $name  = trim($_POST['course_name'] ?? '');
-                $order = (int)($_POST['sort_order'] ?? 0);
-                $status = in_array($_POST['status'] ?? '', ['active','inactive'], true) ? $_POST['status'] : 'active';
-                if ($id > 0 && $name !== '') {
-                    try {
-                        $pdo->prepare("UPDATE ld_work_courses SET course_name = ?, status = ?, sort_order = ? WHERE id = ?")->execute([$name, $status, $order, $id]);
-                        $success_message = "L&D Work Course updated.";
-                    } catch (Exception $e) { $error_message = 'L&D Work Course name already exists.'; }
+                if (!ld_tables_exist($pdo)) {
+                    $error_message = 'L&D database tables are not installed yet. Please run database-update-21.sql first.';
+                } else {
+                    $id    = (int)($_POST['course_id'] ?? 0);
+                    $name  = trim($_POST['course_name'] ?? '');
+                    $order = (int)($_POST['sort_order'] ?? 0);
+                    $status = in_array($_POST['status'] ?? '', ['active','inactive'], true) ? $_POST['status'] : 'active';
+                    if ($id > 0 && $name !== '') {
+                        try {
+                            $pdo->prepare("UPDATE ld_work_courses SET course_name = ?, status = ?, sort_order = ? WHERE id = ?")->execute([$name, $status, $order, $id]);
+                            $success_message = "L&D Work Course updated.";
+                        } catch (Exception $e) { $error_message = 'L&D Work Course name already exists.'; }
+                    }
                 }
             } elseif ($action === 'toggle_ld_course') {
-                $id = (int)($_POST['course_id'] ?? 0);
-                $pdo->prepare("UPDATE ld_work_courses SET status = IF(status='active','inactive','active') WHERE id = ?")->execute([$id]);
-                $success_message = 'L&D Work Course status updated.';
-            } elseif ($action === 'delete_ld_course') {
-                if (is_super_admin()) {
+                if (!ld_tables_exist($pdo)) {
+                    $error_message = 'L&D database tables are not installed yet. Please run database-update-21.sql first.';
+                } else {
                     $id = (int)($_POST['course_id'] ?? 0);
-                    $pdo->prepare("DELETE FROM ld_work_courses WHERE id = ?")->execute([$id]);
-                    $success_message = 'L&D Work Course deleted.';
+                    $pdo->prepare("UPDATE ld_work_courses SET status = IF(status='active','inactive','active') WHERE id = ?")->execute([$id]);
+                    $success_message = 'L&D Work Course status updated.';
+                }
+            } elseif ($action === 'delete_ld_course') {
+                if (!ld_tables_exist($pdo)) {
+                    $error_message = 'L&D database tables are not installed yet. Please run database-update-21.sql first.';
+                } else {
+                    if (is_super_admin()) {
+                        $id = (int)($_POST['course_id'] ?? 0);
+                        $pdo->prepare("DELETE FROM ld_work_courses WHERE id = ?")->execute([$id]);
+                        $success_message = 'L&D Work Course deleted.';
+                    }
                 }
             } elseif ($action === 'add_ld_mode') {
-                $name  = trim($_POST['mode_name'] ?? '');
-                $order = (int)($_POST['sort_order'] ?? 0);
-                if ($name !== '') {
-                    try {
-                        $pdo->prepare("INSERT INTO ld_work_modes (mode_name, status, sort_order) VALUES (?, 'active', ?)")->execute([$name, $order]);
-                        $success_message = "L&D Work Mode \"{$name}\" added.";
-                    } catch (Exception $e) { $error_message = 'L&D Work Mode name already exists.'; }
+                if (!ld_tables_exist($pdo)) {
+                    $error_message = 'L&D database tables are not installed yet. Please run database-update-21.sql first.';
+                } else {
+                    $name  = trim($_POST['mode_name'] ?? '');
+                    $order = (int)($_POST['sort_order'] ?? 0);
+                    if ($name !== '') {
+                        try {
+                            $pdo->prepare("INSERT INTO ld_work_modes (mode_name, status, sort_order) VALUES (?, 'active', ?)")->execute([$name, $order]);
+                            $success_message = "L&D Work Mode \"{$name}\" added.";
+                        } catch (Exception $e) { $error_message = 'L&D Work Mode name already exists.'; }
+                    }
                 }
             } elseif ($action === 'edit_ld_mode') {
-                $id    = (int)($_POST['mode_id'] ?? 0);
-                $name  = trim($_POST['mode_name'] ?? '');
-                $order = (int)($_POST['sort_order'] ?? 0);
-                $status = in_array($_POST['status'] ?? '', ['active','inactive'], true) ? $_POST['status'] : 'active';
-                if ($id > 0 && $name !== '') {
-                    try {
-                        $pdo->prepare("UPDATE ld_work_modes SET mode_name = ?, status = ?, sort_order = ? WHERE id = ?")->execute([$name, $status, $order, $id]);
-                        $success_message = "L&D Work Mode updated.";
-                    } catch (Exception $e) { $error_message = 'L&D Work Mode name already exists.'; }
+                if (!ld_tables_exist($pdo)) {
+                    $error_message = 'L&D database tables are not installed yet. Please run database-update-21.sql first.';
+                } else {
+                    $id    = (int)($_POST['mode_id'] ?? 0);
+                    $name  = trim($_POST['mode_name'] ?? '');
+                    $order = (int)($_POST['sort_order'] ?? 0);
+                    $status = in_array($_POST['status'] ?? '', ['active','inactive'], true) ? $_POST['status'] : 'active';
+                    if ($id > 0 && $name !== '') {
+                        try {
+                            $pdo->prepare("UPDATE ld_work_modes SET mode_name = ?, status = ?, sort_order = ? WHERE id = ?")->execute([$name, $status, $order, $id]);
+                            $success_message = "L&D Work Mode updated.";
+                        } catch (Exception $e) { $error_message = 'L&D Work Mode name already exists.'; }
+                    }
                 }
             } elseif ($action === 'toggle_ld_mode') {
-                $id = (int)($_POST['mode_id'] ?? 0);
-                $pdo->prepare("UPDATE ld_work_modes SET status = IF(status='active','inactive','active') WHERE id = ?")->execute([$id]);
-                $success_message = 'L&D Work Mode status updated.';
-            } elseif ($action === 'delete_ld_mode') {
-                if (is_super_admin()) {
+                if (!ld_tables_exist($pdo)) {
+                    $error_message = 'L&D database tables are not installed yet. Please run database-update-21.sql first.';
+                } else {
                     $id = (int)($_POST['mode_id'] ?? 0);
-                    $pdo->prepare("DELETE FROM ld_work_modes WHERE id = ?")->execute([$id]);
-                    $success_message = 'L&D Work Mode deleted.';
+                    $pdo->prepare("UPDATE ld_work_modes SET status = IF(status='active','inactive','active') WHERE id = ?")->execute([$id]);
+                    $success_message = 'L&D Work Mode status updated.';
+                }
+            } elseif ($action === 'delete_ld_mode') {
+                if (!ld_tables_exist($pdo)) {
+                    $error_message = 'L&D database tables are not installed yet. Please run database-update-21.sql first.';
+                } else {
+                    if (is_super_admin()) {
+                        $id = (int)($_POST['mode_id'] ?? 0);
+                        $pdo->prepare("DELETE FROM ld_work_modes WHERE id = ?")->execute([$id]);
+                        $success_message = 'L&D Work Mode deleted.';
+                    }
                 }
             } elseif ($action === 'save_smtp_settings') {
                 $stmt = $pdo->prepare("

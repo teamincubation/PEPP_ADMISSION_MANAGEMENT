@@ -3,6 +3,16 @@ require_once 'includes/auth.php';
 require_permission('task-tracker');
 require_once 'config/database.php';
 
+if (!ld_tables_exist($pdo)) {
+    $active_page = 'task-tracker';
+    $page_title  = 'L&D Task Tracker';
+    $page_sub    = '';
+    include 'includes/admin_nav.php';
+    echo '<div class="alert alert-warn"><i class="fas fa-triangle-exclamation"></i><span>L&D Task Tracker is not installed yet. Please run the required database migration (<strong>database-update-21.sql</strong>) before using this module.</span></div>';
+    include 'includes/admin_footer.php';
+    exit();
+}
+
 $success_message = '';
 $error_message = '';
 

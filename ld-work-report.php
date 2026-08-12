@@ -2,6 +2,17 @@
 require_once 'includes/auth.php';
 require_permission('ld-work-report');
 require_once 'config/database.php';
+
+if (!ld_tables_exist($pdo)) {
+    $active_page = 'ld-work-report';
+    $page_title  = 'L&D Work Report';
+    $page_sub    = '';
+    include 'includes/admin_nav.php';
+    echo '<div class="alert alert-warn"><i class="fas fa-triangle-exclamation"></i><span>L&D Work Report is not installed yet. Please run the required database migration (<strong>database-update-21.sql</strong>) before using this module.</span></div>';
+    include 'includes/admin_footer.php';
+    exit();
+}
+
 require_once 'includes/pdf_invoice.php'; // MiniPDF + helpers
 
 // Set time zone
