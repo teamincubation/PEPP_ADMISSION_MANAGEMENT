@@ -4,33 +4,33 @@ require_once 'config/database.php';
 header('Content-Type: text/plain');
 
 try {
-    echo "=== REMINDERS QUEUE ITEMS ===\n\n";
+    echo "=== SUMMARY ===\n";
+    $q = $pdo->query("SELECT COUNT(*) FROM communication_queue WHERE event_name IN ('installment_reminder', 'installment_overdue') AND created_at >= '2026-08-12 15:20:00'")->fetchColumn();
+    echo "Queue count since trigger: $q\n";
+
+    $t = $pdo->query("SELECT COUNT(*) FROM installment_whatsapp_reminders WHERE last_attempted_at >= '2026-08-12 15:20:00'")->fetchColumn();
+    echo "Tracking count since trigger: $t\n";
+
+    echo "\n=== QUEUE RECORDS ===\n";
     $stmt = $pdo->query("
-        SELECT id, event_name, template_name, recipient, recipient_name, status, template_data, created_at 
+        SELECT id, event_name, template_name, recipient, status, template_data 
         FROM communication_queue 
         WHERE event_name IN ('installment_reminder', 'installment_overdue')
-        ORDER BY id DESC LIMIT 15
+        ORDER BY id DESC LIMIT 10
     ");
-    $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($items as $item) {
-        echo "Queue ID #{$item['id']}:\n";
-        echo "  Event: {$item['event_name']}\n";
-        echo "  Template: {$item['template_name']}\n";
-        echo "  Recipient: {$item['recipient']}\n";
-        echo "  Status: {$item['status']}\n";
-        echo "  Template Data: {$item['template_data']}\n";
-        echo "  Created: {$item['created_at']}\n\n";
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $item) {
+        $params = json_decode($item['template_data'], true)['parameters'] ?? [];
+        echo "ID: {$item['id']} | Event: {$item['event_name']} | Tpl: {$item['template_name']} | Recipient: {$item['recipient']} | Status: {$item['status']} | Params: " . implode(', ', $params) . "\n";
     }
 
-    echo "=== TRACKING RECORDS ===\n\n";
+    echo "\n=== TRACKING RECORDS ===\n";
     $stmt = $pdo->query("
-        SELECT installment_id, reminder_stage, status, queue_id, last_attempted_at 
+        SELECT installment_id, reminder_stage, status, queue_id 
         FROM installment_whatsapp_reminders 
-        ORDER BY last_attempted_at DESC LIMIT 15
+        ORDER BY last_attempted_at DESC LIMIT 10
     ");
-    $tracks = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($tracks as $t) {
-        echo "Inst ID #{$t['installment_id']} | Stage: {$t['reminder_stage']} | Status: {$t['status']} | Queue ID: {$t['queue_id']} | Time: {$t['last_attempted_at']}\n";
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $track) {
+        echo "Inst ID: {$track['installment_id']} | Stage: {$track['reminder_stage']} | Status: {$track['status']} | Queue ID: {$track['queue_id']}\n";
     }
 
 } catch (Exception $e) {
