@@ -20,6 +20,7 @@ require_permission('dashboard');
    Run database-update.sql once so historical data follows these rules. */
 $stats_error = '';
 $total_students = $pending_approvals = $active_courses = $pending_payments = $pending_onboarding = 0;
+$today_reg = $today_inst = $today_total = 0.0;
 $month_reg = $month_inst = $total_reg = $total_inst = $outstanding_total = 0.0;
 $recent_applications = [];
 $recent_payments = [];
@@ -46,6 +47,19 @@ try {
     ")->fetchColumn();
     $total_reg = (float)$pdo->query("SELECT COALESCE(SUM(paid_amount), 0) FROM users WHERE status = 'approved'")->fetchColumn();
     $total_inst = (float)$pdo->query("SELECT COALESCE(SUM(COALESCE(paid_amount, amount)), 0) FROM instalment_details WHERE status IN ('approved','paid')")->fetchColumn();
+
+    // ── Collections: today ──────────────────────────────────────
+    $today_reg = (float)$pdo->query("
+        SELECT COALESCE(SUM(paid_amount), 0) FROM users
+        WHERE status = 'approved'
+          AND DATE(paid_date) = CURRENT_DATE()
+    ")->fetchColumn();
+    $today_inst = (float)$pdo->query("
+        SELECT COALESCE(SUM(COALESCE(paid_amount, amount)), 0) FROM instalment_details
+        WHERE status IN ('approved','paid')
+          AND DATE(paid_date) = CURRENT_DATE()
+    ")->fetchColumn();
+    $today_total = $today_reg + $today_inst;
 
     // ── Outstanding across active students ──────────────────────
     $outstanding_total = (float)$pdo->query("
@@ -176,6 +190,15 @@ include 'includes/admin_nav.php';
         </div>
         <div class="stat-value"><?php echo number_format($active_courses); ?></div>
         <div class="stat-hint"><a href="course-management.php">Manage courses</a></div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-top">
+            <span class="stat-label">Today's Revenue</span>
+            <span class="stat-icon green"><i class="fas fa-indian-rupee-sign"></i></span>
+        </div>
+        <div class="stat-value">₹<?php echo number_format($today_total, 0); ?></div>
+        <div class="stat-hint">Reg: ₹<?php echo number_format($today_reg, 0); ?> &middot; Inst: ₹<?php echo number_format($today_inst, 0); ?></div>
     </div>
 
     <div class="stat-card">
