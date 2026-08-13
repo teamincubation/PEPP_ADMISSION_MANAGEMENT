@@ -485,6 +485,10 @@ include 'includes/admin_nav.php';
     padding: 18px;
     border-radius: 12px;
     box-shadow: 0 4px 14px rgba(22, 78, 99, 0.05);
+    transition: transform 0.2s ease;
+}
+.stats-card:hover {
+    transform: translateY(-2px);
 }
 .stats-card h3 {
     margin: 0;
@@ -511,6 +515,23 @@ include 'includes/admin_nav.php';
 .mobile-view {
     display: none;
 }
+.chart-box {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+}
+.filter-bar.report-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: flex-end;
+}
+.filter-bar.report-filters .field {
+    margin: 0;
+}
+
 @media (max-width: 768px) {
     .desktop-view {
         display: none;
@@ -518,13 +539,64 @@ include 'includes/admin_nav.php';
     .mobile-view {
         display: block;
     }
+    .stats-card-list {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+    }
+    .stats-card {
+        padding: 12px;
+    }
+    .stats-card h3 {
+        font-size: 0.7rem;
+    }
+    .stats-card p {
+        font-size: 1.4rem;
+    }
+    .panel-head {
+        flex-direction: column;
+        align-items: flex-start !important;
+        gap: 12px;
+    }
+    .panel-head .head-right {
+        margin-left: 0 !important;
+        width: 100%;
+        justify-content: flex-start;
+    }
+    .panel-head h2 {
+        font-size: 0.95rem;
+    }
+    .filter-bar.report-filters {
+        display: grid !important;
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 12px !important;
+    }
+    .filter-bar.report-filters .field {
+        min-width: 0 !important;
+        width: 100% !important;
+    }
+    .filter-bar.report-filters .custom-period {
+        grid-column: span 1 !important;
+    }
+    .filter-bar.report-filters .filter-actions {
+        grid-column: span 2 !important;
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+    }
+    .filter-bar.report-filters .filter-actions button,
+    .filter-bar.report-filters .filter-actions a {
+        flex: 1;
+        justify-content: center;
+    }
 }
-.chart-box {
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 16px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+
+@media (max-width: 480px) {
+    .filter-bar.report-filters {
+        grid-template-columns: 1fr !important;
+    }
+    .filter-bar.report-filters .filter-actions {
+        grid-column: span 1 !important;
+    }
 }
 </style>
 
@@ -536,7 +608,7 @@ include 'includes/admin_nav.php';
             <h2>Filter Work Reports</h2>
         </div>
         <div class="panel-body">
-            <form method="GET" class="filter-bar" style="flex-wrap: wrap; gap: 14px; align-items: end;">
+            <form method="GET" class="filter-bar report-filters">
                 <div class="field" style="margin: 0; min-width: 140px;">
                     <label>Staff</label>
                     <select name="staff">
@@ -606,7 +678,7 @@ include 'includes/admin_nav.php';
                     </select>
                 </div>
 
-                <div style="display: flex; gap: 8px;">
+                <div class="filter-actions">
                     <button type="submit" class="btn btn-primary"><i class="fas fa-magnifying-glass"></i> Filter</button>
                     <a href="ld-work-report.php" class="btn btn-outline" title="Clear Filters"><i class="fas fa-rotate"></i></a>
                 </div>
