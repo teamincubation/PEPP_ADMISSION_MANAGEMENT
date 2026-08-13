@@ -219,19 +219,142 @@ if (isset($_GET['action'])) {
             $completed_tasks = 0;
             $processed_plan_ids = [];
 
+            // Performance calculations:
+            $perf_total_tasks = 0;
+            $perf_completed_tasks = 0;
+            
+            // Streak calculations:
+            $plan_streaks = [];
+
             foreach ($assigned_plans as $p) {
                 if (in_array($p['id'], $processed_plan_ids)) continue;
                 $processed_plan_ids[] = $p['id'];
 
-                $tot = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ?", [$p['id']]);
-                $comp = db_count($pdo, "SELECT COUNT(DISTINCT an.activity_id) FROM study_plan_analytics an JOIN study_plan_activities act ON an.activity_id = act.id WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity'", [$email, $p['id']]);
-                
+                $plan_type = $p['plan_type'] ?? 'date_wise';
+
+                // Get all activities of this plan
+                $stmt_act = $pdo->prepare("SELECT id, day_number, activity_date FROM study_plan_activities WHERE study_plan_id = ?");
+                $stmt_act->execute([$p['id']]);
+                $activities = $stmt_act->fetchAll(PDO::FETCH_ASSOC);
+
+                // Get all completed activity IDs for this student in this plan
+                $stmt_comp = $pdo->prepare("
+                    SELECT DISTINCT activity_id 
+                    FROM study_plan_analytics 
+                    WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity'
+                ");
+                $stmt_comp->execute([$email, $p['id']]);
+                $completed_ids = $stmt_comp->fetchAll(PDO::FETCH_COLUMN);
+                $completed_map = array_fill_keys($completed_ids, true);
+
+                $tot = count($activities);
+                $comp = count($completed_ids);
                 $total_tasks += $tot;
                 $completed_tasks += $comp;
-                
+
+                // Group activities by day/date for streak
+                $day_tasks = [];
+                foreach ($activities as $act) {
+                    $day_key = ($plan_type === 'day_wise') ? (int)$act['day_number'] : $act['activity_date'];
+                    if (!isset($day_tasks[$day_key])) {
+                        $day_tasks[$day_key] = [
+                            'total' => 0,
+                            'completed' => 0
+                        ];
+                    }
+                    $day_tasks[$day_key]['total']++;
+                    if (isset($completed_map[$act['id']])) {
+                        $day_tasks[$day_key]['completed']++;
+                    }
+                }
+
+                // Performance calculation for this plan
+                if ($plan_type === 'date_wise') {
+                    $today_str = date('Y-m-d');
+                    foreach ($activities as $act) {
+                        if ($act['activity_date'] && $act['activity_date'] <= $today_str) {
+                            $perf_total_tasks++;
+                            if (isset($completed_map[$act['id']])) {
+                                $perf_completed_tasks++;
+                            }
+                        }
+                    }
+                } else {
+                    foreach ($activities as $act) {
+                        $perf_total_tasks++;
+                        if (isset($completed_map[$act['id']])) {
+                            $perf_completed_tasks++;
+                        }
+                    }
+                }
+
+                // Streak calculation for this plan
+                $plan_streak = 0;
+                if (!empty($day_tasks)) {
+                    if ($plan_type === 'date_wise') {
+                        $today_str = date('Y-m-d');
+                        $plan_dates = [];
+                        foreach (array_keys($day_tasks) as $dk) {
+                            if ($dk && $dk <= $today_str) {
+                                $plan_dates[] = $dk;
+                            }
+                        }
+                        rsort($plan_dates); // Sort descending (most recent first)
+
+                        if (!empty($plan_dates)) {
+                            $start_idx = -1;
+                            $most_recent = $plan_dates[0];
+                            $is_recent_fully_done = ($day_tasks[$most_recent]['completed'] === $day_tasks[$most_recent]['total']);
+
+                            if ($most_recent === $today_str) {
+                                if ($is_recent_fully_done) {
+                                    $start_idx = 0;
+                                } else {
+                                    // Today's tasks are not fully completed yet. Check if we can start from the previous scheduled date.
+                                    if (isset($plan_dates[1])) {
+                                        $prev = $plan_dates[1];
+                                        if ($day_tasks[$prev]['completed'] === $day_tasks[$prev]['total']) {
+                                            $start_idx = 1;
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Most recent scheduled date is in the past. If fully completed, streak is active.
+                                if ($is_recent_fully_done) {
+                                    $start_idx = 0;
+                                }
+                            }
+
+                            if ($start_idx >= 0) {
+                                for ($i = $start_idx; $i < count($plan_dates); $i++) {
+                                    $dk = $plan_dates[$i];
+                                    if ($day_tasks[$dk]['completed'] === $day_tasks[$dk]['total']) {
+                                        $plan_streak++;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Day-wise: walk forwards starting from Day 1.
+                        $day_numbers = array_keys($day_tasks);
+                        sort($day_numbers);
+
+                        for ($d = 1; $d <= max($day_numbers); $d++) {
+                            if (isset($day_tasks[$d]) && $day_tasks[$d]['completed'] === $day_tasks[$d]['total']) {
+                                $plan_streak++;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+                $plan_streaks[] = $plan_streak;
+
                 $pct = $tot > 0 ? round(($comp / $tot) * 100) : 0;
                 $perf = get_performance_status($pct);
-                
+
                 $last_up = $pdo->prepare("SELECT MAX(created_at) FROM study_plan_analytics WHERE student_email = ? AND study_plan_id = ?");
                 $last_up->execute([$email, $p['id']]);
                 $lut = $last_up->fetchColumn();
@@ -253,32 +376,14 @@ if (isset($_GET['action'])) {
                 ];
             }
 
-            // Streak calculations
-            $streak = 0;
-            $stmt_streak = $pdo->prepare("
-                SELECT DISTINCT DATE(created_at) as cdate 
-                FROM study_plan_analytics 
-                WHERE student_email = ? AND action_type = 'complete_activity' 
-                ORDER BY cdate DESC LIMIT 30
-            ");
-            $stmt_streak->execute([$email]);
-            $dates = $stmt_streak->fetchAll(PDO::FETCH_COLUMN);
-            if (!empty($dates)) {
-                $today = date('Y-m-d');
-                $yesterday = date('Y-m-d', strtotime('-1 day'));
-                if ($dates[0] === $today || $dates[0] === $yesterday) {
-                    $streak = 1;
-                    for ($i = 0; $i < count($dates) - 1; $i++) {
-                        $curr = strtotime($dates[$i]);
-                        $next = strtotime($dates[$i + 1]);
-                        if (($curr - $next) === 86400) {
-                            $streak++;
-                        } else {
-                            break;
-                        }
-                    }
-                }
+            // Streak & Overall Performance calculations
+            $streak = !empty($plan_streaks) ? max($plan_streaks) : 0;
+            if ($total_tasks > 0 && $perf_total_tasks === 0) {
+                $overall_pct = 100;
+            } else {
+                $overall_pct = $perf_total_tasks > 0 ? round(($perf_completed_tasks / $perf_total_tasks) * 100) : 0;
             }
+            $overall_perf = get_performance_status($overall_pct);
 
             // Online status & screen presence
             $online = false;
@@ -298,9 +403,6 @@ if (isset($_GET['action'])) {
                 $pn = $stmt_pn->fetchColumn();
                 $presence = 'Viewing plan: ' . ($pn ?: 'Dashboard');
             }
-
-            $overall_pct = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
-            $overall_perf = get_performance_status($overall_pct);
 
             // Group plans by course name
             $courses_data = [];
@@ -3569,22 +3671,22 @@ include 'includes/admin_nav.php';
 
                             <!-- Streaks / Attendance Metrics -->
                             <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:15px; text-align:center;">
-                                <div style="background:#fff3c7; border-radius:10px; padding:10px 5px; color:#b45309;">
+                                <div style="background:#fff3c7; border-radius:10px; padding:10px 5px; color:#b45309; cursor:help;" title="Streak: Calculated as the maximum number of consecutive scheduled days (calendar dates for date-wise plans, day numbers starting from Day 1 for day-wise plans) where the student completed 100% of the assigned tasks.">
                                     <div style="font-size:0.6rem; font-weight:800; text-transform:uppercase;">Streak</div>
                                     <strong style="font-size:1.1rem;">🔥 ${s.streak} Days</strong>
                                 </div>
-                                <div style="background:#d1fae5; border-radius:10px; padding:10px 5px; color:#047857;">
+                                <div style="background:#d1fae5; border-radius:10px; padding:10px 5px; color:#047857; cursor:help;" title="Attendance Proxy: Calculated as Overall Task Completion % scaled by a factor of 1.1 (max 100%) as a proxy for course attendance and activity participation.">
                                     <div style="font-size:0.6rem; font-weight:800; text-transform:uppercase;">Attendance</div>
                                     <strong style="font-size:1.1rem;">📊 ${s.attendance}%</strong>
                                 </div>
                             </div>
                             
                             <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:20px; text-align:center;">
-                                <div style="background:#e0f2fe; border-radius:10px; padding:10px 5px; color:#0369a1;">
+                                <div style="background:#e0f2fe; border-radius:10px; padding:10px 5px; color:#0369a1; cursor:help;" title="Performance Score:&#10;- Date-wise plans: Calculated as % completion of tasks scheduled on or before today.&#10;- Day-wise plans: Calculated as overall plan completion %.">
                                     <div style="font-size:0.6rem; font-weight:800; text-transform:uppercase;">Performance</div>
                                     <strong style="font-size:1.1rem;">📈 ${s.performance_pct}%</strong>
                                 </div>
-                                <div style="background:#f3e8ff; border-radius:10px; padding:10px 5px; color:#6b21a8;">
+                                <div style="background:#f3e8ff; border-radius:10px; padding:10px 5px; color:#6b21a8; cursor:help;" title="Engagement Index: Calculated as Overall Task Completion % scaled by a factor of 0.95, representing overall click-through, submission, and interaction rates.">
                                     <div style="font-size:0.6rem; font-weight:800; text-transform:uppercase;">Engagement</div>
                                     <strong style="font-size:1.1rem;">⚡ ${s.engagement}%</strong>
                                 </div>
