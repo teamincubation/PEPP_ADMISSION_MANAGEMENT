@@ -60,12 +60,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $allow_copy_email = isset($_POST['allow_copy_email']) ? 1 : 0;
                         $allow_whatsapp_chat = isset($_POST['allow_whatsapp_chat']) ? 1 : 0;
                         
+                        $admin_type_val = in_array($_POST['admin_type'] ?? 'erp_admin', ['superadmin','erp_admin','employee','intern','faculty'], true) ? $_POST['admin_type'] : 'erp_admin';
+                        
                         $stmt = $pdo->prepare("
-                            INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, permissions, status, credential_visibility, credential_visibility_scopes, can_edit, can_delete, can_export, allow_copy_email, allow_whatsapp_chat, created_by, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                            INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, admin_type, permissions, status, credential_visibility, credential_visibility_scopes, can_edit, can_delete, can_export, allow_copy_email, allow_whatsapp_chat, created_by, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                         ");
-                        $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $perms, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $allow_copy_email, $allow_whatsapp_chat, $admin_username]);
-                        log_admin_activity($pdo, $admin_username, 'admin_created', "Created admin \"{$username}\" with access: {$perms}");
+                        $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $admin_type_val, $perms, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $allow_copy_email, $allow_whatsapp_chat, $admin_username]);
+                        log_admin_activity($pdo, $admin_username, 'admin_created', "Created admin \"{$username}\" ({$admin_type_val}) with access: {$perms}");
                         $success_message = "Admin \"{$username}\" created.";
                     }
                 }
@@ -92,6 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } else {
                         $scopes = implode(',', (array)($_POST['credential_visibility_scopes'] ?? []));
                         $cred_vis = in_array($_POST['credential_visibility'] ?? 'visible', ['visible', 'hide', 'mask'], true) ? $_POST['credential_visibility'] : 'visible';
+                        $admin_type_upd = in_array($_POST['admin_type'] ?? 'erp_admin', ['superadmin','erp_admin','employee','intern','faculty'], true) ? $_POST['admin_type'] : 'erp_admin';
                         $gemail = trim($_POST['google_email'] ?? '');
                         $can_edit = isset($_POST['can_edit']) ? 1 : 0;
                         $can_delete = isset($_POST['can_delete']) ? 1 : 0;
@@ -99,8 +102,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $allow_copy_email = isset($_POST['allow_copy_email']) ? 1 : 0;
                         $allow_whatsapp_chat = isset($_POST['allow_whatsapp_chat']) ? 1 : 0;
                         
-                        $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ?, credential_visibility = ?, credential_visibility_scopes = ?, can_edit = ?, can_delete = ?, can_export = ?, allow_copy_email = ?, allow_whatsapp_chat = ? WHERE id = ?")
-                            ->execute([$perms, $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $allow_copy_email, $allow_whatsapp_chat, $id]);
+                        $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ?, admin_type = ?, credential_visibility = ?, credential_visibility_scopes = ?, can_edit = ?, can_delete = ?, can_export = ?, allow_copy_email = ?, allow_whatsapp_chat = ? WHERE id = ?")
+                            ->execute([$perms, $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $admin_type_upd, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $allow_copy_email, $allow_whatsapp_chat, $id]);
                         log_admin_activity($pdo, $admin_username, 'permissions_changed', "Access and visibility for \"{$target['username']}\" updated.");
                         $success_message = "Access and visibility updated for {$target['username']}.";
                     }
@@ -219,6 +222,8 @@ include 'includes/admin_nav.php';
                     </td>
                     <td>
                         <span class="badge <?php echo $isSuper ? 'red' : 'blue'; ?>"><?php echo $isSuper ? 'Super Admin' : 'Admin'; ?></span>
+                        <?php $at = $a['admin_type'] ?? 'erp_admin'; $at_labels = ['superadmin'=>'Superadmin','erp_admin'=>'ERP Admin','employee'=>'Employee','intern'=>'Intern','faculty'=>'Faculty']; ?>
+                        <div style="margin-top:3px;"><span class="badge gray" style="font-size:0.62rem;"><?php echo $at_labels[$at] ?? ucfirst($at); ?></span></div>
                         <?php if (!$isSuper): ?>
                             <div style="margin-top:4px;">
                                 <span class="badge <?php echo ($a['credential_visibility'] ?? 'visible') === 'visible' ? 'green' : (($a['credential_visibility'] ?? 'visible') === 'hide' ? 'red' : 'amber'); ?>" style="font-size:0.65rem;">
@@ -262,6 +267,7 @@ include 'includes/admin_nav.php';
                                 "can_export" => (int)($a["can_export"] ?? 1),
                                 "allow_copy_email" => (int)($a["allow_copy_email"] ?? 1),
                                 "allow_whatsapp_chat" => (int)($a["allow_whatsapp_chat"] ?? 1),
+                                "admin_type" => (string)($a["admin_type"] ?? "erp_admin"),
                             ], JSON_HEX_APOS | JSON_HEX_QUOT); ?>)'><i class="fas fa-key"></i></button>
                             <button class="btn btn-sm btn-soft-blue" title="Reset password" onclick="resetPassword(<?php echo (int)$a['id']; ?>, '<?php echo e(addslashes($a['username'])); ?>')"><i class="fas fa-lock-open"></i></button>
                             <form method="POST" style="display:inline;">
@@ -307,6 +313,15 @@ include 'includes/admin_nav.php';
                     <div class="help">The Google account allowed to sign in as this admin</div></div>
                 <div class="field"><label>Phone</label>
                     <input type="text" name="phone" placeholder="Mobile number"></div>
+                <div class="field"><label>Admin Type</label>
+                    <select name="admin_type" required>
+                        <option value="erp_admin">ERP Admin</option>
+                        <option value="employee">Employee</option>
+                        <option value="faculty">Faculty</option>
+                        <option value="intern">Intern</option>
+                        <option value="superadmin">Superadmin</option>
+                    </select>
+                    <div class="help">Classification for this admin account</div></div>
                 <div class="field"><label>Credential Visibility</label>
                     <select name="credential_visibility" required>
                         <option value="visible">Visible</option>
@@ -401,6 +416,15 @@ include 'includes/admin_nav.php';
                     <div class="field"><label>Email</label><input type="email" name="email" id="pm-email" placeholder="admin@example.com"></div>
                     <div class="field"><label>Phone</label><input type="text" name="phone" id="pm-phone" placeholder="Mobile number"></div>
                     <div class="field"><label>Google sign-in email</label><input type="email" name="google_email" id="pm-gemail" placeholder="(defaults to email)"></div>
+                    <div class="field"><label>Admin Type</label>
+                        <select name="admin_type" id="pm-admin-type">
+                            <option value="erp_admin">ERP Admin</option>
+                            <option value="employee">Employee</option>
+                            <option value="faculty">Faculty</option>
+                            <option value="intern">Intern</option>
+                            <option value="superadmin">Superadmin</option>
+                        </select>
+                    </div>
                     <div class="field"><label>Credential Visibility</label>
                         <select name="credential_visibility" id="pm-cred-visibility">
                             <option value="visible">Visible</option>
@@ -502,6 +526,7 @@ function openPerms(a) {
     document.getElementById('pm-can-export').checked = (parseInt(a.can_export ?? 1) === 1);
     document.getElementById('pm-allow-copy-email').checked = (parseInt(a.allow_copy_email ?? 1) === 1);
     document.getElementById('pm-allow-whatsapp-chat').checked = (parseInt(a.allow_whatsapp_chat ?? 1) === 1);
+    document.getElementById('pm-admin-type').value = a.admin_type || 'erp_admin';
     document.getElementById('pm-username').textContent = a.username;
     const isAll = (a.perms === 'ALL');
     document.getElementById('pm-all').checked = isAll;

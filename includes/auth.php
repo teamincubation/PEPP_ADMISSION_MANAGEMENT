@@ -44,6 +44,8 @@ $GLOBALS['ADMIN_PAGES'] = [
     'studyplans'    => ['Study Plans',             'fa-calendar-days'],
     'task-tracker'  => ['L&D Task Tracker',        'fa-list-check'],
     'ld-work-report'=> ['L&D Work Report',         'fa-chart-simple'],
+    'employee-management' => ['Employee Management', 'fa-id-badge'],
+    'student-mentoring'   => ['Student Mentoring',   'fa-people-arrows'],
     'settings'      => ['Settings',                'fa-gear'],
 ];
 
@@ -298,7 +300,7 @@ function is_super_admin() {
 }
 function can_access($page_key) {
     global $admin_perms;
-    if ($page_key === 'communication' || $page_key === 'email-reports') {
+    if ($page_key === 'communication' || $page_key === 'email-reports' || $page_key === 'employee-management') {
         return is_super_admin();
     }
     if (is_super_admin()) return true;
@@ -341,6 +343,8 @@ function get_first_accessible_page_url() {
         'studyplans'    => 'studyplans.php',
         'task-tracker'  => 'task-tracker.php',
         'ld-work-report'=> 'ld-work-report.php',
+        'employee-management' => 'employee-management.php',
+        'student-mentoring'   => 'student-mentoring.php',
         'settings'      => 'settings.php',
     ];
     $perms = array_map('trim', explode(',', $admin_perms));
@@ -382,6 +386,36 @@ function require_super_admin() {
 }
 /* Only the Super Admin may delete data anywhere in the system. */
 function can_delete() { return is_super_admin(); }
+
+/** Get admin_type from the loaded admin row (defaults to 'erp_admin'). */
+function get_admin_type() {
+    global $admin_row;
+    return $admin_row['admin_type'] ?? 'erp_admin';
+}
+
+/** Get courses assigned to a mentor admin. Returns array of course_name strings. */
+function get_mentor_courses($pdo, $admin_id) {
+    try {
+        $stmt = $pdo->prepare("SELECT course_name FROM mentor_course_assignments WHERE admin_id = ? ORDER BY course_name");
+        $stmt->execute([$admin_id]);
+        return $stmt->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Exception $e) { return []; }
+}
+
+/** Get the active academic year in compact format (e.g. '2627'). */
+function get_active_academic_year_compact($pdo) {
+    try {
+        $stmt = $pdo->query("SELECT year FROM academic_years WHERE status = 'active' ORDER BY start_date DESC LIMIT 1");
+        $year = $stmt->fetchColumn();
+        if ($year) {
+            $parts = explode('-', $year);
+            if (count($parts) === 2) return substr($parts[0], 2) . $parts[1];
+        }
+    } catch (Exception $e) {}
+    $m = (int)date('n'); $y = (int)date('Y');
+    $start = ($m >= 6) ? $y : ($y - 1);
+    return substr((string)$start, 2) . substr((string)($start + 1), 2);
+}
 
 /* ── CSRF helpers ───────────────────────────────────────────────────────── */
 if (empty($_SESSION['csrf_token'])) {

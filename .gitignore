@@ -14,6 +14,9 @@ uploads/peppians/*
 uploads/photos/*
 !uploads/photos/.gitkeep
 
+# Sensitive secrets (encryption keys — never commit)
+config/secrets.php
+
 # Node dependencies
 node_modules/
 .next/

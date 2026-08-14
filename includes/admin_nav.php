@@ -232,6 +232,14 @@ function render_nav_item($key, $active_page, $nav_data) {
                 echo '<a class="nav-item ' . nav_active('admin-management', $active_page) . '" href="admin-management.php"><i class="fas fa-user-shield"></i> Admin Management</a>';
             }
             break;
+        case 'employee-management':
+            if (is_super_admin()) {
+                echo '<a class="nav-item ' . nav_active('employee-management', $active_page) . '" href="employee-management.php"><i class="fas fa-id-badge"></i> Employee Management</a>';
+            }
+            break;
+        case 'student-mentoring':
+            echo '<a class="nav-item ' . nav_active('student-mentoring', $active_page) . '" href="student-mentoring.php"><i class="fas fa-people-arrows"></i> Student Mentoring</a>';
+            break;
         case 'admin-activity':
             if (is_super_admin()) {
                 echo '<a class="nav-item ' . nav_active('admin-activity', $active_page) . '" href="admin-activity.php"><i class="fas fa-clock-rotate-left"></i> Activity Log</a>';
@@ -268,7 +276,7 @@ $default_sidebar = [
         'id' => 'students',
         'title' => 'Students',
         'icon' => 'fas fa-user-graduate',
-        'items' => ['students', 'onboarding', 'sessions']
+        'items' => ['students', 'onboarding', 'sessions', 'student-mentoring']
     ],
     [
         'id' => 'crm',
@@ -298,7 +306,7 @@ $default_sidebar = [
         'id' => 'system',
         'title' => 'System',
         'icon' => 'fas fa-gears',
-        'items' => ['settings', 'admin-management', 'admin-activity', 'email-reports', 'reports']
+        'items' => ['settings', 'admin-management', 'employee-management', 'admin-activity', 'email-reports', 'reports']
     ]
 ];
 
