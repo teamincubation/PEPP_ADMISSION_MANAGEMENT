@@ -17,6 +17,7 @@ $error_message = '';
 $admin_id = $admin_row['id'] ?? 0;
 
 // Check if mentoring tables exist
+// Check if mentoring tables exist
 function mentor_tables_exist($pdo) {
     static $ok = null;
     if ($ok === null) {
@@ -24,6 +25,168 @@ function mentor_tables_exist($pdo) {
         catch (Exception $e) { $ok = false; }
     }
     return $ok;
+}
+
+/** Get mentoring metrics (progress, attendance, streak, call and remark details) for a student. */
+function get_student_mentoring_details($pdo, $student) {
+    $email = $student['email'];
+    $user_id = $student['user_id'];
+    $course = $student['course'];
+    $year = $student['pepp_academic_year'];
+
+    // Fetch published plans assigned to the student
+    $stmt = $pdo->prepare("
+        SELECT sp.id, sp.title, sp.plan_type
+        FROM study_plans sp
+        JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
+        WHERE sp.status = 'published' AND (
+            sa.assignment_type = 'all' OR
+            (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
+            (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
+            (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
+            (sa.assignment_type = 'form' AND EXISTS (
+                SELECT 1 FROM campaign_form_submissions s 
+                WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
+            ))
+        )
+    ");
+    $stmt->execute([$course, $year, $user_id, $email]);
+    $plans = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $total_tasks = 0;
+    $completed_tasks = 0;
+    $max_streak = 0;
+    $total_streak_target = 0;
+
+    foreach ($plans as $p) {
+        // Fetch activities
+        $stmt_act = $pdo->prepare("SELECT id, day_number, activity_date FROM study_plan_activities WHERE study_plan_id = ?");
+        $stmt_act->execute([$p['id']]);
+        $activities = $stmt_act->fetchAll(PDO::FETCH_ASSOC);
+
+        // Fetch completed analytics
+        $stmt_comp = $pdo->prepare("
+            SELECT DISTINCT activity_id 
+            FROM study_plan_analytics 
+            WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity'
+        ");
+        $stmt_comp->execute([$email, $p['id']]);
+        $completed_ids = $stmt_comp->fetchAll(PDO::FETCH_COLUMN);
+        $completed_map = array_fill_keys($completed_ids, true);
+
+        $tot = count($activities);
+        $comp = count($completed_ids);
+        $total_tasks += $tot;
+        $completed_tasks += $comp;
+
+        // Group activities by day/date for streak
+        $day_tasks = [];
+        foreach ($activities as $act) {
+            $day_key = ($p['plan_type'] === 'day_wise') ? (int)$act['day_number'] : $act['activity_date'];
+            if (!isset($day_tasks[$day_key])) {
+                $day_tasks[$day_key] = ['total' => 0, 'completed' => 0];
+            }
+            $day_tasks[$day_key]['total']++;
+            if (isset($completed_map[$act['id']])) {
+                $day_tasks[$day_key]['completed']++;
+            }
+        }
+
+        $plan_streak = 0;
+        if (!empty($day_tasks)) {
+            if ($p['plan_type'] === 'date_wise') {
+                $today_str = date('Y-m-d');
+                $plan_dates = [];
+                foreach (array_keys($day_tasks) as $dk) {
+                    if ($dk && $dk <= $today_str) {
+                        $plan_dates[] = $dk;
+                    }
+                }
+                rsort($plan_dates);
+
+                if (!empty($plan_dates)) {
+                    $start_idx = -1;
+                    $most_recent = $plan_dates[0];
+                    $is_recent_fully_done = ($day_tasks[$most_recent]['completed'] === $day_tasks[$most_recent]['total']);
+
+                    if ($most_recent === $today_str) {
+                        if ($is_recent_fully_done) {
+                            $start_idx = 0;
+                        } else if (isset($plan_dates[1])) {
+                            $prev = $plan_dates[1];
+                            if ($day_tasks[$prev]['completed'] === $day_tasks[$prev]['total']) {
+                                $start_idx = 1;
+                            }
+                        }
+                    } else if ($is_recent_fully_done) {
+                        $start_idx = 0;
+                    }
+
+                    if ($start_idx >= 0) {
+                        for ($i = $start_idx; $i < count($plan_dates); $i++) {
+                            $dk = $plan_dates[$i];
+                            if ($day_tasks[$dk]['completed'] === $day_tasks[$dk]['total']) {
+                                $plan_streak++;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Day-wise
+                $day_numbers = array_keys($day_tasks);
+                sort($day_numbers);
+                for ($d = 1; $d <= max($day_numbers); $d++) {
+                    if (isset($day_tasks[$d]) && $day_tasks[$d]['completed'] === $day_tasks[$d]['total']) {
+                        $plan_streak++;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        if ($plan_streak > $max_streak) {
+            $max_streak = $plan_streak;
+        }
+        
+        $total_streak_target += count($day_tasks);
+    }
+
+    $progress = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
+    $attendance = min(100, round($progress * 1.1));
+
+    // Get last call details
+    $call_stmt = $pdo->prepare("SELECT call_timestamp FROM mentor_call_logs WHERE student_user_id = ? ORDER BY call_timestamp DESC LIMIT 1");
+    $call_stmt->execute([$user_id]);
+    $last_call_time = $call_stmt->fetchColumn();
+
+    $last_called_status = 'Never';
+    if ($last_call_time) {
+        $days = (int)floor((time() - strtotime($last_call_time)) / 86400);
+        if ($days === 0) {
+            $last_called_status = 'called today';
+        } else if ($days === 1) {
+            $last_called_status = 'called 1 day ago';
+        } else {
+            $last_called_status = "called {$days} days ago";
+        }
+    }
+
+    // Get count of remarks
+    $remark_stmt = $pdo->prepare("SELECT COUNT(*) FROM mentor_remarks WHERE student_user_id = ?");
+    $remark_stmt->execute([$user_id]);
+    $remarks_count = (int)$remark_stmt->fetchColumn();
+
+    return [
+        'progress' => $progress,
+        'attendance' => $attendance,
+        'streak' => $max_streak,
+        'streak_target' => $total_streak_target,
+        'last_call_time' => $last_call_time,
+        'last_called_status' => $last_called_status,
+        'remarks_count' => $remarks_count
+    ];
 }
 
 // ── POST Actions ──
@@ -90,6 +253,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
             } catch (Exception $e) { $error_message = 'Error: ' . $e->getMessage(); }
         }
     }
+
+    // Quick Mark as Called
+    elseif ($action === 'mark_called' && mentor_tables_exist($pdo)) {
+        $student_id = trim($_POST['student_user_id'] ?? '');
+        if ($student_id) {
+            try {
+                $pdo->prepare("INSERT INTO mentor_call_logs (student_user_id, admin_id, admin_username, call_timestamp, notes) VALUES (?,?,?,?,?)")
+                    ->execute([$student_id, $admin_id, $admin_username, date('Y-m-d H:i:s'), 'Quick status check call']);
+                log_admin_activity($pdo, $admin_username, 'mentor_call', "Marked called for student {$student_id}");
+                $success_message = 'Call logged successfully.';
+            } catch (Exception $e) { $error_message = 'Error: ' . $e->getMessage(); }
+        }
+    }
 }
 
 // ── Load Data ──
@@ -100,10 +276,64 @@ $call_logs = [];
 $remarks_list = [];
 $all_admins = [];
 $all_courses = [];
+$dropdown_courses = [];
+$selected_course_id = 0;
+$selected_course_name = '';
 
 if (mentor_tables_exist($pdo)) {
-    // Mentor's assigned courses
+    // Mentor's assigned courses names
     $my_courses = get_mentor_courses($pdo, $admin_id);
+
+    // Dropdown Courses mapping (id, course_name)
+    if (is_super_admin()) {
+        try {
+            $dropdown_courses = $pdo->query("SELECT id, course_name FROM pepp_courses WHERE status='active' ORDER BY course_name")->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {}
+    } else {
+        try {
+            $stmt = $pdo->prepare("
+                SELECT pc.id, pc.course_name 
+                FROM mentor_course_assignments mca 
+                JOIN pepp_courses pc ON mca.course_name = pc.course_name 
+                WHERE mca.admin_id = ? AND pc.status = 'active' 
+                ORDER BY pc.course_name
+            ");
+            $stmt->execute([$admin_id]);
+            $dropdown_courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {}
+    }
+
+    // Resolve course_id parameter & perform validation
+    $selected_course_id = isset($_GET['course_id']) ? (int)$_GET['course_id'] : 0;
+    if ($selected_course_id > 0) {
+        try {
+            $stmt = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ? AND status = 'active' LIMIT 1");
+            $stmt->execute([$selected_course_id]);
+            $selected_course_name = $stmt->fetchColumn();
+
+            if ($selected_course_name) {
+                $authorized = false;
+                if (is_super_admin()) {
+                    $authorized = true;
+                } else {
+                    $chk = $pdo->prepare("SELECT COUNT(*) FROM mentor_course_assignments WHERE admin_id = ? AND course_name = ?");
+                    $chk->execute([$admin_id, $selected_course_name]);
+                    if ($chk->fetchColumn() > 0) {
+                        $authorized = true;
+                    }
+                }
+                if (!$authorized) {
+                    $selected_course_id = 0;
+                    $selected_course_name = '';
+                    $error_message = 'Access Denied: You are not authorized to view this course.';
+                }
+            } else {
+                $selected_course_id = 0;
+            }
+        } catch (Exception $e) {
+            $selected_course_id = 0;
+        }
+    }
 
     // If super admin, show all assignments
     if (is_super_admin()) {
@@ -112,17 +342,19 @@ if (mentor_tables_exist($pdo)) {
         } catch (Exception $e) {}
     }
 
-    // Load students from assigned courses (or all for super admin)
-    try {
-        if (is_super_admin()) {
-            $students = $pdo->query("SELECT u.user_id, u.full_name, u.email, u.whatsapp, u.course, u.status, u.pepp_academic_year FROM users u WHERE u.status IN ('approved','active') ORDER BY u.full_name")->fetchAll(PDO::FETCH_ASSOC);
-        } elseif (!empty($my_courses)) {
-            $placeholders = implode(',', array_fill(0, count($my_courses), '?'));
-            $stmt = $pdo->prepare("SELECT u.user_id, u.full_name, u.email, u.whatsapp, u.course, u.status, u.pepp_academic_year FROM users u WHERE u.course IN ({$placeholders}) AND u.status IN ('approved','active') ORDER BY u.full_name");
-            $stmt->execute($my_courses);
+    // Load students only if course is selected
+    if ($selected_course_name !== '') {
+        try {
+            $stmt = $pdo->prepare("
+                SELECT u.user_id, u.name AS full_name, u.email, u.whatsapp_country_code, u.whatsapp_number, u.pepp_course AS course, u.status, u.pepp_academic_year 
+                FROM users u 
+                WHERE u.pepp_course = ? AND u.status IN ('approved','active') 
+                ORDER BY u.name
+            ");
+            $stmt->execute([$selected_course_name]);
             $students = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        }
-    } catch (Exception $e) {}
+        } catch (Exception $e) {}
+    }
 
     // Load recent call logs
     try {
@@ -176,7 +408,7 @@ include 'includes/admin_nav.php';
 <!-- Tabs -->
 <div class="panel" style="margin-bottom:1.2rem;">
     <div class="panel-head" style="gap:8px;flex-wrap:wrap;">
-        <a href="?tab=students" class="btn btn-sm <?php echo $tab==='students' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-users"></i> Students (<?php echo count($students); ?>)</a>
+        <a href="?tab=students<?= $selected_course_id ? '&course_id=' . $selected_course_id : '' ?>" class="btn btn-sm <?php echo $tab==='students' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-users"></i> Students (<?php echo count($students); ?>)</a>
         <a href="?tab=calls" class="btn btn-sm <?php echo $tab==='calls' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-phone"></i> Call Logs (<?php echo count($call_logs); ?>)</a>
         <a href="?tab=remarks" class="btn btn-sm <?php echo $tab==='remarks' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-comment-dots"></i> Remarks (<?php echo count($remarks_list); ?>)</a>
         <?php if (is_super_admin()): ?>
@@ -186,42 +418,157 @@ include 'includes/admin_nav.php';
 </div>
 
 <?php if ($tab === 'students'): ?>
-<!-- Students -->
-<div class="panel">
-    <div class="panel-head">
-        <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-users"></i></span>
-        <h2>My Students<?php if (!empty($my_courses) && !is_super_admin()): ?> <span class="badge gray" style="font-size:.7rem;"><?php echo implode(', ', $my_courses); ?></span><?php endif; ?></h2>
-    </div>
-    <div class="panel-body flush table-wrap">
-        <?php if (empty($students)): ?>
-            <div style="padding:2rem;text-align:center;color:var(--text-muted);">
-                <?php echo empty($my_courses) && !is_super_admin() ? 'No course assignments yet. Ask the Super Admin to assign you.' : 'No students found in your assigned courses.'; ?>
-            </div>
-        <?php else: ?>
-        <table class="data-table">
-            <thead><tr><th>Student</th><th>Course</th><th>Year</th><th>Status</th><th style="text-align:right;">Actions</th></tr></thead>
-            <tbody>
-            <?php foreach ($students as $s): ?>
-            <tr>
-                <td>
-                    <div class="cell-main"><?php echo e($s['full_name']); ?></div>
-                    <div class="cell-sub"><?php echo e($s['email']); ?> · <?php echo e($s['whatsapp'] ?? ''); ?></div>
-                </td>
-                <td><span class="badge gray" style="font-size:.7rem;"><?php echo e($s['course']); ?></span></td>
-                <td class="cell-sub"><?php echo e($s['pepp_academic_year'] ?? ''); ?></td>
-                <td><span class="badge <?php echo $s['status']==='approved' ? 'green' : 'blue'; ?>"><?php echo ucfirst($s['status']); ?></span></td>
-                <td style="text-align:right;white-space:nowrap;">
-                    <button class="btn btn-sm btn-outline" onclick="openCall('<?php echo e($s['user_id']); ?>', '<?php echo e($s['full_name']); ?>')" title="Log Call"><i class="fas fa-phone"></i></button>
-                    <button class="btn btn-sm btn-outline" onclick="openRemark('<?php echo e($s['user_id']); ?>', '<?php echo e($s['full_name']); ?>')" title="Add Remark"><i class="fas fa-comment-dots"></i></button>
-                    <a href="student-study-reports.php?user_id=<?php echo urlencode($s['user_id']); ?>" class="btn btn-sm btn-outline" title="Study Report"><i class="fas fa-chart-line"></i></a>
-                </td>
-            </tr>
+<!-- CSS styles for responsive mobile cards -->
+<style>
+.mentoring-table th {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+@media (max-width: 768px) {
+    .mentoring-table, .mentoring-table thead, .mentoring-table tbody, .mentoring-table tr, .mentoring-table td {
+        display: block;
+        width: 100%;
+    }
+    .mentoring-table thead {
+        display: none;
+    }
+    .mentoring-table tr {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px;
+        margin-bottom: 14px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+    }
+    .mentoring-table td {
+        text-align: left !important;
+        padding: 6px 0;
+        border: none;
+    }
+    .mentoring-table td:before {
+        content: attr(data-label);
+        display: block;
+        font-size: 0.65rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 2px;
+    }
+    .mentoring-table td.actions-cell {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 10px;
+        border-top: 1px solid var(--border);
+        padding-top: 12px;
+    }
+}
+</style>
+
+<!-- Course Selector Dropdown -->
+<div class="panel" style="margin-bottom:1.2rem; padding: 1.2rem;">
+    <form method="GET" id="course-filter-form" style="max-width:400px; width: 100%;">
+        <input type="hidden" name="tab" value="students">
+        <label for="course_id" style="display:block; font-size:.8rem; font-weight:600; margin-bottom:6px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">Course</label>
+        <select name="course_id" id="course_id" onchange="this.form.submit()" style="width:100%; padding:10px 14px; border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--text); font-size:.9rem; font-weight:600; cursor:pointer;">
+            <option value="">— Select a PEPP Course —</option>
+            <?php foreach ($dropdown_courses as $dc): ?>
+                <option value="<?= $dc['id'] ?>" <?= (int)$selected_course_id === (int)$dc['id'] ? 'selected' : '' ?>><?= e($dc['course_name']) ?></option>
             <?php endforeach; ?>
-            </tbody>
-        </table>
-        <?php endif; ?>
-    </div>
+        </select>
+        <div style="font-size:.7rem; color:var(--text-muted); margin-top:6px;">
+            <?= is_super_admin() ? 'Showing all active PEPP courses' : 'Showing courses assigned to you' ?>
+        </div>
+    </form>
 </div>
+
+<!-- State Rendering -->
+<?php if ($selected_course_id === 0): ?>
+    <!-- STATE A: No Course Selected -->
+    <div class="panel" style="padding: 2.5rem; text-align: center;">
+        <div style="font-size: 3rem; margin-bottom: 12px;">📚</div>
+        <h3 style="margin-bottom: 6px; color: var(--text);">Select a course to view students</h3>
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Choose a PEPP course above to view and manage your assigned students.</p>
+    </div>
+<?php elseif (empty($students)): ?>
+    <!-- STATE B: Course Selected but No Students -->
+    <div class="panel" style="padding: 2.5rem; text-align: center;">
+        <div style="font-size: 3rem; margin-bottom: 12px;">👥</div>
+        <h3 style="margin-bottom: 6px; color: var(--text);">No students found</h3>
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Students enrolled in this course will appear here.</p>
+    </div>
+<?php else: ?>
+    <!-- STATE C: Course Selected and Students Exist -->
+    <div class="panel">
+        <div class="panel-head">
+            <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-users"></i></span>
+            <h2>My Students (<?= e($selected_course_name) ?>)</h2>
+        </div>
+        <div class="panel-body flush table-wrap">
+            <table class="data-table mentoring-table">
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>Course</th>
+                        <th>Progress</th>
+                        <th>Streak</th>
+                        <th>Last Call</th>
+                        <th style="text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php 
+                foreach ($students as $s): 
+                    $m = get_student_mentoring_details($pdo, $s);
+                    $wa_phone = preg_replace('/\D/', '', ($s['whatsapp_country_code'] ?: '+91') . $s['whatsapp_number']);
+                ?>
+                <tr>
+                    <td data-label="Student">
+                        <div class="cell-main"><?= e($s['full_name']) ?></div>
+                        <div class="cell-sub"><?= e($s['email']) ?> · <?= e($s['whatsapp_country_code'] . ' ' . $s['whatsapp_number']) ?></div>
+                    </td>
+                    <td data-label="Course">
+                        <div class="cell-main"><?= e($s['course']) ?></div>
+                        <div class="cell-sub">Year: <?= e($s['pepp_academic_year'] ?? '') ?></div>
+                    </td>
+                    <td data-label="Progress">
+                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                            <div style="flex:1; background:var(--border); height:6px; border-radius:3px; overflow:hidden; min-width:60px;">
+                                <div style="background:var(--accent,#7c3aed); width:<?= $m['progress'] ?>%; height:100%;"></div>
+                            </div>
+                            <span style="font-size:0.75rem; font-weight:700;"><?= $m['progress'] ?>%</span>
+                        </div>
+                        <span class="badge green" style="font-size:0.65rem;"><i class="fas fa-chart-line"></i> Attendance: <?= $m['attendance'] ?>%</span>
+                    </td>
+                    <td data-label="Streak">
+                        <span style="font-weight:700; color:#b45309; font-size:0.85rem;">🔥 <?= $m['streak'] ?> / <?= $m['streak_target'] ?> Days</span>
+                    </td>
+                    <td data-label="Last Call">
+                        <div class="cell-sub" style="font-size:0.8rem;">
+                            <?= $m['last_call_time'] ? date('d M Y, h:i A', strtotime($m['last_call_time'])) : 'Never' ?><br>
+                            <span class="badge <?= $m['last_call_time'] ? 'blue' : 'gray' ?>" style="font-size:0.65rem; margin-top:2px; display:inline-block;"><?= $m['last_called_status'] ?></span>
+                        </div>
+                    </td>
+                    <td class="actions-cell" style="text-align:right; white-space:nowrap;">
+                        <a href="student-study-reports.php?user_id=<?= urlencode($s['user_id']) ?>" class="btn btn-sm btn-soft-violet" title="View Student Report"><i class="fas fa-chart-line"></i> Report</a>
+                        <button type="button" class="btn btn-sm btn-soft-blue" onclick="openCall('<?= e($s['user_id']) ?>', '<?= e($s['full_name']) ?>')" title="Log Call"><i class="fas fa-phone"></i> Log Call</button>
+                        <form method="POST" style="display:inline;">
+                            <?= csrf_field(); ?>
+                            <input type="hidden" name="action" value="mark_called">
+                            <input type="hidden" name="student_user_id" value="<?= e($s['user_id']) ?>">
+                            <button type="submit" class="btn btn-sm btn-soft-green" title="Mark as Called"><i class="fas fa-check-double"></i> Mark Called</button>
+                        </form>
+                        <a href="https://wa.me/<?= $wa_phone ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
+                        <button type="button" class="btn btn-sm btn-outline" onclick="openRemark('<?= e($s['user_id']) ?>', '<?= e($s['full_name']) ?>')" title="Add/View Remarks"><i class="fas fa-comment-dots"></i> Remarks (<?= $m['remarks_count'] ?>)</button>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+<?php endif; ?>
 
 <?php elseif ($tab === 'calls'): ?>
 <!-- Call Logs -->
