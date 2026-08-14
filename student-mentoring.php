@@ -359,8 +359,15 @@ if (mentor_tables_exist($pdo)) {
     // Load recent call logs
     try {
         $cl_query = is_super_admin()
-            ? "SELECT * FROM mentor_call_logs ORDER BY call_timestamp DESC LIMIT 100"
-            : "SELECT * FROM mentor_call_logs WHERE admin_id = ? ORDER BY call_timestamp DESC LIMIT 50";
+            ? "SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number 
+               FROM mentor_call_logs mcl 
+               LEFT JOIN users u ON mcl.student_user_id = u.user_id 
+               ORDER BY mcl.call_timestamp DESC LIMIT 100"
+            : "SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number 
+               FROM mentor_call_logs mcl 
+               LEFT JOIN users u ON mcl.student_user_id = u.user_id 
+               WHERE mcl.admin_id = ? 
+               ORDER BY mcl.call_timestamp DESC LIMIT 50";
         $stmt = $pdo->prepare($cl_query);
         is_super_admin() ? $stmt->execute() : $stmt->execute([$admin_id]);
         $call_logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -553,12 +560,6 @@ include 'includes/admin_nav.php';
                     <td class="actions-cell" style="text-align:right; white-space:nowrap;">
                         <a href="student-study-reports.php?source=courses&email=<?= urlencode($s['email']) ?>" class="btn btn-sm btn-soft-violet" title="View Student Report"><i class="fas fa-chart-line"></i> Report</a>
                         <button type="button" class="btn btn-sm btn-soft-blue" onclick="openCall('<?= e($s['user_id']) ?>', '<?= e($s['full_name']) ?>')" title="Log Call"><i class="fas fa-phone"></i> Log Call</button>
-                        <form method="POST" style="display:inline;">
-                            <?= csrf_field(); ?>
-                            <input type="hidden" name="action" value="mark_called">
-                            <input type="hidden" name="student_user_id" value="<?= e($s['user_id']) ?>">
-                            <button type="submit" class="btn btn-sm btn-soft-green" title="Mark as Called"><i class="fas fa-check-double"></i> Mark Called</button>
-                        </form>
                         <a href="https://wa.me/<?= $wa_phone ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
                         <button type="button" class="btn btn-sm btn-outline" onclick="openRemark('<?= e($s['user_id']) ?>', '<?= e($s['full_name']) ?>')" title="Add/View Remarks"><i class="fas fa-comment-dots"></i> Remarks (<?= $m['remarks_count'] ?>)</button>
                     </td>
@@ -582,14 +583,33 @@ include 'includes/admin_nav.php';
             <div style="padding:2rem;text-align:center;color:var(--text-muted);">No call logs yet.</div>
         <?php else: ?>
         <table class="data-table">
-            <thead><tr><th>Student ID</th><th>Called By</th><th>Time</th><th>Notes</th></tr></thead>
+            <thead>
+                <tr>
+                    <th>Student</th>
+                    <th>Called By</th>
+                    <th>Time</th>
+                    <th>Notes</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
             <tbody>
             <?php foreach ($call_logs as $cl): ?>
             <tr>
-                <td class="cell-main"><?php echo e($cl['student_user_id']); ?></td>
+                <td class="cell-main">
+                    <div class="cell-main"><?php echo e($cl['student_name'] ?: 'Unknown (' . $cl['student_user_id'] . ')'); ?></div>
+                    <div class="cell-sub"><?php echo e(($cl['whatsapp_country_code'] ?: '+91') . ' ' . $cl['whatsapp_number']); ?></div>
+                </td>
                 <td class="cell-sub"><?php echo e($cl['admin_username']); ?></td>
                 <td class="cell-sub"><?php echo date('d M Y, h:i A', strtotime($cl['call_timestamp'])); ?></td>
                 <td style="max-width:300px;"><?php echo e($cl['notes'] ?? '—'); ?></td>
+                <td style="text-align:right; white-space:nowrap;">
+                    <?php 
+                    $cl_wa = preg_replace('/\D/', '', ($cl['whatsapp_country_code'] ?: '+91') . $cl['whatsapp_number']); 
+                    if ($cl_wa):
+                    ?>
+                    <a href="https://wa.me/<?php echo $cl_wa; ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
+                    <?php endif; ?>
+                </td>
             </tr>
             <?php endforeach; ?>
             </tbody>
