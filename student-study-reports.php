@@ -290,62 +290,33 @@ if (isset($_GET['action'])) {
 
                 // Streak calculation for this plan
                 $plan_streak = 0;
+                $current_run = 0;
                 if (!empty($day_tasks)) {
                     if ($plan_type === 'date_wise') {
-                        $today_str = date('Y-m-d');
-                        $plan_dates = [];
-                        foreach (array_keys($day_tasks) as $dk) {
-                            if ($dk && $dk <= $today_str) {
-                                $plan_dates[] = $dk;
-                            }
-                        }
-                        rsort($plan_dates); // Sort descending (most recent first)
-
-                        if (!empty($plan_dates)) {
-                            $start_idx = -1;
-                            $most_recent = $plan_dates[0];
-                            $is_recent_fully_done = ($day_tasks[$most_recent]['completed'] === $day_tasks[$most_recent]['total']);
-
-                            if ($most_recent === $today_str) {
-                                if ($is_recent_fully_done) {
-                                    $start_idx = 0;
-                                } else {
-                                    // Today's tasks are not fully completed yet. Check if we can start from the previous scheduled date.
-                                    if (isset($plan_dates[1])) {
-                                        $prev = $plan_dates[1];
-                                        if ($day_tasks[$prev]['completed'] === $day_tasks[$prev]['total']) {
-                                            $start_idx = 1;
-                                        }
-                                    }
+                        $plan_dates = array_keys($day_tasks);
+                        sort($plan_dates); // Chronological order
+                        foreach ($plan_dates as $dk) {
+                            if ($day_tasks[$dk]['completed'] === $day_tasks[$dk]['total'] && $day_tasks[$dk]['total'] > 0) {
+                                $current_run++;
+                                if ($current_run > $plan_streak) {
+                                    $plan_streak = $current_run;
                                 }
                             } else {
-                                // Most recent scheduled date is in the past. If fully completed, streak is active.
-                                if ($is_recent_fully_done) {
-                                    $start_idx = 0;
-                                }
-                            }
-
-                            if ($start_idx >= 0) {
-                                for ($i = $start_idx; $i < count($plan_dates); $i++) {
-                                    $dk = $plan_dates[$i];
-                                    if ($day_tasks[$dk]['completed'] === $day_tasks[$dk]['total']) {
-                                        $plan_streak++;
-                                    } else {
-                                        break;
-                                    }
-                                }
+                                $current_run = 0;
                             }
                         }
                     } else {
-                        // Day-wise: walk forwards starting from Day 1.
+                        // Day-wise: walk forwards
                         $day_numbers = array_keys($day_tasks);
                         sort($day_numbers);
-
-                        for ($d = 1; $d <= max($day_numbers); $d++) {
-                            if (isset($day_tasks[$d]) && $day_tasks[$d]['completed'] === $day_tasks[$d]['total']) {
-                                $plan_streak++;
+                        foreach ($day_numbers as $d) {
+                            if ($day_tasks[$d]['completed'] === $day_tasks[$d]['total'] && $day_tasks[$d]['total'] > 0) {
+                                $current_run++;
+                                if ($current_run > $plan_streak) {
+                                    $plan_streak = $current_run;
+                                }
                             } else {
-                                break;
+                                $current_run = 0;
                             }
                         }
                     }
@@ -504,13 +475,38 @@ if (isset($_GET['action'])) {
         $email = trim($_GET['email'] ?? '');
         $plan_id = (int)($_GET['plan_id'] ?? 0);
         try {
+            // Get plan type first
+            $stmt_plan = $pdo->prepare("SELECT plan_type FROM study_plans WHERE id = ?");
+            $stmt_plan->execute([$plan_id]);
+            $plan_type = $stmt_plan->fetchColumn() ?: 'date_wise';
+
+            $order_by = ($plan_type === 'date_wise') 
+                ? "activity_date ASC, sort_order ASC, id ASC" 
+                : "day_number ASC, sort_order ASC, id ASC";
+
             $stmt_act = $pdo->prepare("
                 SELECT * FROM study_plan_activities 
                 WHERE study_plan_id = ? 
-                ORDER BY day_number ASC, activity_date ASC, sort_order ASC
+                ORDER BY $order_by
             ");
             $stmt_act->execute([$plan_id]);
             $activities = $stmt_act->fetchAll(PDO::FETCH_ASSOC);
+
+            // Create a mapping of dates to day numbers for date_wise plans
+            $date_to_day_map = [];
+            if ($plan_type === 'date_wise') {
+                $unique_dates = [];
+                foreach ($activities as $act) {
+                    if (!empty($act['activity_date'])) {
+                        $unique_dates[] = $act['activity_date'];
+                    }
+                }
+                $unique_dates = array_values(array_unique($unique_dates));
+                sort($unique_dates); // Chronological order
+                foreach ($unique_dates as $idx => $d) {
+                    $date_to_day_map[$d] = $idx + 1;
+                }
+            }
 
             $timeline = [];
             $subject_stats = [];
@@ -549,8 +545,13 @@ if (isset($_GET['action'])) {
                     }
                 }
 
+                $day_num = $a['day_number'];
+                if ($plan_type === 'date_wise' && !empty($a['activity_date'])) {
+                    $day_num = $date_to_day_map[$a['activity_date']] ?? 1;
+                }
+
                 $timeline[] = [
-                    'day' => $a['day_number'],
+                    'day' => $day_num,
                     'date' => $a['activity_date'] ? date('d M Y', strtotime($a['activity_date'])) : 'TBD',
                     'start_time' => $a['start_time'] ? date('h:i A', strtotime($a['start_time'])) : '',
                     'end_time' => $a['end_time'] ? date('h:i A', strtotime($a['end_time'])) : '',

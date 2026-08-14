@@ -93,55 +93,33 @@ function get_student_mentoring_details($pdo, $student) {
         }
 
         $plan_streak = 0;
+        $current_run = 0;
         if (!empty($day_tasks)) {
             if ($p['plan_type'] === 'date_wise') {
-                $today_str = date('Y-m-d');
-                $plan_dates = [];
-                foreach (array_keys($day_tasks) as $dk) {
-                    if ($dk && $dk <= $today_str) {
-                        $plan_dates[] = $dk;
-                    }
-                }
-                rsort($plan_dates);
-
-                if (!empty($plan_dates)) {
-                    $start_idx = -1;
-                    $most_recent = $plan_dates[0];
-                    $is_recent_fully_done = ($day_tasks[$most_recent]['completed'] === $day_tasks[$most_recent]['total']);
-
-                    if ($most_recent === $today_str) {
-                        if ($is_recent_fully_done) {
-                            $start_idx = 0;
-                        } else if (isset($plan_dates[1])) {
-                            $prev = $plan_dates[1];
-                            if ($day_tasks[$prev]['completed'] === $day_tasks[$prev]['total']) {
-                                $start_idx = 1;
-                            }
+                $plan_dates = array_keys($day_tasks);
+                sort($plan_dates); // Chronological order
+                foreach ($plan_dates as $dk) {
+                    if ($day_tasks[$dk]['completed'] === $day_tasks[$dk]['total'] && $day_tasks[$dk]['total'] > 0) {
+                        $current_run++;
+                        if ($current_run > $plan_streak) {
+                            $plan_streak = $current_run;
                         }
-                    } else if ($is_recent_fully_done) {
-                        $start_idx = 0;
-                    }
-
-                    if ($start_idx >= 0) {
-                        for ($i = $start_idx; $i < count($plan_dates); $i++) {
-                            $dk = $plan_dates[$i];
-                            if ($day_tasks[$dk]['completed'] === $day_tasks[$dk]['total']) {
-                                $plan_streak++;
-                            } else {
-                                break;
-                            }
-                        }
+                    } else {
+                        $current_run = 0;
                     }
                 }
             } else {
                 // Day-wise
                 $day_numbers = array_keys($day_tasks);
                 sort($day_numbers);
-                for ($d = 1; $d <= max($day_numbers); $d++) {
-                    if (isset($day_tasks[$d]) && $day_tasks[$d]['completed'] === $day_tasks[$d]['total']) {
-                        $plan_streak++;
+                foreach ($day_numbers as $d) {
+                    if ($day_tasks[$d]['completed'] === $day_tasks[$d]['total'] && $day_tasks[$d]['total'] > 0) {
+                        $current_run++;
+                        if ($current_run > $plan_streak) {
+                            $plan_streak = $current_run;
+                        }
                     } else {
-                        break;
+                        $current_run = 0;
                     }
                 }
             }
