@@ -65,11 +65,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
         $course = trim($_POST['course_name'] ?? '');
         if ($mentor_admin_id && $course) {
             try {
-                $pdo->prepare("INSERT IGNORE INTO mentor_course_assignments (admin_id, course_name, assigned_by) VALUES (?,?,?)")
-                    ->execute([$mentor_admin_id, $course, $admin_username]);
-                log_admin_activity($pdo, $admin_username, 'mentor_assigned', "Assigned admin #{$mentor_admin_id} to course: {$course}");
-                $success_message = 'Mentor assigned to course.';
-            } catch (Exception $e) { $error_message = 'Error: ' . $e->getMessage(); }
+                $check = $pdo->prepare("SELECT COUNT(*) FROM mentor_course_assignments WHERE admin_id = ? AND course_name = ?");
+                $check->execute([$mentor_admin_id, $course]);
+                if ($check->fetchColumn() > 0) {
+                    $error_message = 'This course is already assigned to this admin.';
+                } else {
+                    $pdo->prepare("INSERT INTO mentor_course_assignments (admin_id, course_name, assigned_by) VALUES (?,?,?)")
+                        ->execute([$mentor_admin_id, $course, $admin_username]);
+                    log_admin_activity($pdo, $admin_username, 'mentor_assigned', "Assigned admin #{$mentor_admin_id} to course: {$course}");
+                    $success_message = 'Mentor assigned to course.';
+                }
+            } catch (Exception $e) { $error_message = 'Error assigning mentor: ' . $e->getMessage(); }
         }
     }
 
@@ -142,11 +148,11 @@ if (mentor_tables_exist($pdo)) {
     if (is_super_admin()) {
         try {
             $all_admins = $pdo->query("SELECT id, username, full_name FROM admins WHERE status='active' ORDER BY username")->fetchAll(PDO::FETCH_ASSOC);
-            $all_courses = $pdo->query("SELECT DISTINCT course_name FROM course_offerings WHERE status='active' ORDER BY course_name")->fetchAll(PDO::FETCH_COLUMN);
+            $all_courses = $pdo->query("SELECT DISTINCT course_name FROM pepp_courses WHERE status='active' ORDER BY course_name")->fetchAll(PDO::FETCH_COLUMN);
         } catch (Exception $e) {
-            // If course_offerings doesn't exist, try unique courses from users
+            // Fallback to distinct course names from users
             try { $all_courses = $pdo->query("SELECT DISTINCT course FROM users WHERE course IS NOT NULL AND course != '' ORDER BY course")->fetchAll(PDO::FETCH_COLUMN); }
-            catch (Exception $e2) {}
+            catch (Exception $e2) { $all_courses = []; }
         }
     }
 }
@@ -280,7 +286,7 @@ include 'includes/admin_nav.php';
         <span class="head-icon" style="background:var(--red-soft);color:var(--red-ink);"><i class="fas fa-link"></i></span>
         <h2>Mentor ↔ Course Assignments</h2>
         <div class="head-right">
-            <button class="btn btn-sm btn-primary" onclick="document.getElementById('assignModal').style.display='flex'"><i class="fas fa-plus"></i> Assign Mentor</button>
+            <button class="btn btn-sm btn-primary" onclick="openModal('assignModal')"><i class="fas fa-plus"></i> Assign Mentor</button>
         </div>
     </div>
     <div class="panel-body flush table-wrap">
@@ -316,7 +322,7 @@ include 'includes/admin_nav.php';
 </div>
 
 <!-- Assign Modal -->
-<div id="assignModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:20px;">
+<div id="assignModal" class="modal-backdrop">
 <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.6rem;max-width:440px;width:100%;">
     <h3 style="margin-bottom:1rem;"><i class="fas fa-link"></i> Assign Mentor to Course</h3>
     <form method="POST">
@@ -339,9 +345,10 @@ include 'includes/admin_nav.php';
                 <option value="<?php echo e($c); ?>"><?php echo e($c); ?></option>
                 <?php endforeach; ?>
             </select>
+            <div style="font-size:.7rem;color:var(--text-muted);margin-top:4px;">Super Admin can assign any active PEPP course.</div>
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;">
-            <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('assignModal').style.display='none'">Cancel</button>
+            <button type="button" class="btn btn-sm btn-outline" onclick="closeModal('assignModal')">Cancel</button>
             <button type="submit" class="btn btn-sm btn-primary"><i class="fas fa-check"></i> Assign</button>
         </div>
     </form>
@@ -351,7 +358,7 @@ include 'includes/admin_nav.php';
 <?php endif; ?>
 
 <!-- Log Call Modal -->
-<div id="callModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:20px;">
+<div id="callModal" class="modal-backdrop">
 <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.6rem;max-width:440px;width:100%;">
     <h3 style="margin-bottom:1rem;"><i class="fas fa-phone" style="color:#22c55e;"></i> Log Call</h3>
     <p id="callStudentName" style="margin-bottom:1rem;color:var(--text-muted);font-size:.85rem;"></p>
@@ -368,7 +375,7 @@ include 'includes/admin_nav.php';
             <textarea name="call_notes" rows="3" placeholder="Call summary, follow-up needed, etc." style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);resize:vertical;"></textarea>
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;">
-            <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('callModal').style.display='none'">Cancel</button>
+            <button type="button" class="btn btn-sm btn-outline" onclick="closeModal('callModal')">Cancel</button>
             <button type="submit" class="btn btn-sm btn-primary" style="background:#22c55e;border-color:#22c55e;"><i class="fas fa-phone"></i> Log Call</button>
         </div>
     </form>
@@ -376,7 +383,7 @@ include 'includes/admin_nav.php';
 </div>
 
 <!-- Add Remark Modal -->
-<div id="remarkModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:20px;">
+<div id="remarkModal" class="modal-backdrop">
 <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.6rem;max-width:440px;width:100%;">
     <h3 style="margin-bottom:1rem;"><i class="fas fa-comment-dots" style="color:#f59e0b;"></i> Add Remark</h3>
     <p id="remarkStudentName" style="margin-bottom:1rem;color:var(--text-muted);font-size:.85rem;"></p>
@@ -389,7 +396,7 @@ include 'includes/admin_nav.php';
             <textarea name="remark_text" rows="4" required placeholder="Progress notes, concerns, praise, etc." style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);resize:vertical;"></textarea>
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;">
-            <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('remarkModal').style.display='none'">Cancel</button>
+            <button type="button" class="btn btn-sm btn-outline" onclick="closeModal('remarkModal')">Cancel</button>
             <button type="submit" class="btn btn-sm btn-primary" style="background:#f59e0b;border-color:#f59e0b;"><i class="fas fa-comment-dots"></i> Save Remark</button>
         </div>
     </form>
@@ -400,17 +407,23 @@ include 'includes/admin_nav.php';
 function openCall(id, name) {
     document.getElementById('callStudentId').value = id;
     document.getElementById('callStudentName').textContent = 'Student: ' + name + ' (' + id + ')';
-    document.getElementById('callModal').style.display = 'flex';
+    openModal('callModal');
 }
 function openRemark(id, name) {
     document.getElementById('remarkStudentId').value = id;
     document.getElementById('remarkStudentName').textContent = 'Student: ' + name + ' (' + id + ')';
-    document.getElementById('remarkModal').style.display = 'flex';
+    openModal('remarkModal');
 }
-// Close modals on backdrop
-['callModal','remarkModal','assignModal'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('click', function(e) { if (e.target === this) this.style.display = 'none'; });
+// Escape key to close open modals
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        ['callModal', 'remarkModal', 'assignModal'].forEach(id => {
+            const m = document.getElementById(id);
+            if (m && m.classList.contains('open')) {
+                closeModal(id);
+            }
+        });
+    }
 });
 </script>
 

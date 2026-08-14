@@ -72,16 +72,16 @@ CREATE TABLE IF NOT EXISTS employees (
 
 -- 3. employee_custom_fields — Extensible metadata definitions
 CREATE TABLE IF NOT EXISTS employee_custom_fields (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  field_name VARCHAR(100) NOT NULL,
-  field_type ENUM('text','number','date','dropdown','textarea') DEFAULT 'text',
-  is_required TINYINT(1) DEFAULT 0,
-  dropdown_options TEXT DEFAULT NULL,
-  sort_order INT DEFAULT 0,
-  status ENUM('active','inactive') DEFAULT 'active',
-  created_by VARCHAR(100) NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_ecf_name (field_name)
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    field_label VARCHAR(100) NOT NULL,
+    field_key VARCHAR(100) NOT NULL,
+    field_type ENUM('text','number','email','date','dropdown','textarea','phone') NOT NULL DEFAULT 'text',
+    is_required TINYINT(1) DEFAULT 0,
+    field_options TEXT DEFAULT NULL,
+    sort_order INT DEFAULT 0,
+    status ENUM('active','inactive') DEFAULT 'active',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_ecf_key (field_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 4. employee_custom_values — Custom field values per employee

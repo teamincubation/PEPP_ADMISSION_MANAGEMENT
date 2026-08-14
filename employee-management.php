@@ -43,19 +43,34 @@ if (isset($_GET['action']) && $_GET['action'] === 'appointment_pdf' && isset($_G
         $stmt = $pdo->prepare("SELECT appointment_snapshot, appointment_reference FROM {$table} WHERE id = ? LIMIT 1");
         $stmt->execute([(int)$_GET['id']]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($row && !empty($row['appointment_snapshot'])) {
-            require_once 'includes/appointment_pdf.php';
-            $pdf_bytes = render_appointment_pdf($row['appointment_snapshot']);
-            header('Content-Type: application/pdf');
-            header('Content-Disposition: inline; filename="Appointment_' . preg_replace('/[^A-Za-z0-9_-]/', '_', $row['appointment_reference']) . '.pdf"');
-            header('Content-Length: ' . strlen($pdf_bytes));
-            echo $pdf_bytes;
-            exit;
+        if (!$row) {
+            throw new RuntimeException("Employee/application record not found for ID: " . $_GET['id']);
         }
-    } catch (Exception $e) { error_log('appointment_pdf: ' . $e->getMessage()); }
-    http_response_code(404);
-    echo 'Appointment letter not available.';
-    exit;
+        if (empty($row['appointment_snapshot'])) {
+            throw new RuntimeException("Appointment snapshot is missing for ID: " . $_GET['id']);
+        }
+
+        require_once 'includes/appointment_pdf.php';
+        $pdf_bytes = render_appointment_pdf($row['appointment_snapshot']);
+
+        $d = json_decode($row['appointment_snapshot'], true);
+        $emp_id = $d['employee_id'] ?? 'UNKNOWN';
+        $filename = 'PEPP_Appointment_Letter_' . preg_replace('/[^A-Za-z0-9_-]/', '_', $emp_id) . '.pdf';
+
+        // Log the download event
+        log_admin_activity($pdo, $admin_username, 'appointment_letter_generated', 'Generated and downloaded appointment letter for Ref: ' . $row['appointment_reference']);
+
+        header('Content-Type: application/pdf');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Content-Length: ' . strlen($pdf_bytes));
+        echo $pdf_bytes;
+        exit;
+    } catch (Exception $e) {
+        error_log('appointment_pdf error: ' . $e->getMessage());
+        http_response_code(500);
+        echo 'Appointment letter could not be generated. Please try again or contact the system administrator.';
+        exit;
+    }
 }
 
 // ── AJAX: Load application details ──
@@ -536,7 +551,7 @@ include 'includes/admin_nav.php';
 <?php endif; ?>
 
 <!-- ═══ APPROVAL MODAL ═══ -->
-<div id="approvalModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:20px;">
+<div id="approvalModal" class="modal-backdrop">
 <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.6rem;max-width:560px;width:100%;max-height:90vh;overflow-y:auto;">
     <h3 style="margin-bottom:1rem;"><i class="fas fa-check-circle" style="color:#22c55e;"></i> Approve Application</h3>
     <p id="approvalName" style="margin-bottom:1rem;color:var(--text-muted);"></p>
@@ -587,7 +602,7 @@ include 'includes/admin_nav.php';
 </div>
 
 <!-- ═══ REJECT MODAL ═══ -->
-<div id="rejectModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:20px;">
+<div id="rejectModal" class="modal-backdrop">
 <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.6rem;max-width:460px;width:100%;">
     <h3 style="margin-bottom:1rem;"><i class="fas fa-times-circle" style="color:#ef4444;"></i> Reject Application</h3>
     <form method="POST">
@@ -607,18 +622,18 @@ include 'includes/admin_nav.php';
 </div>
 
 <!-- ═══ VIEW DETAIL MODAL ═══ -->
-<div id="viewModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:20px;">
+<div id="viewModal" class="modal-backdrop">
 <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.6rem;max-width:620px;width:100%;max-height:90vh;overflow-y:auto;">
     <h3 style="margin-bottom:1rem;"><i class="fas fa-eye"></i> Application Details</h3>
     <div id="viewContent" style="font-size:.85rem;line-height:1.6;color:var(--text-muted);">Loading…</div>
     <div style="margin-top:1rem;text-align:right;">
-        <button class="btn btn-sm btn-outline" onclick="closeModal('viewModal')">Close</button>
+        <button type="button" class="btn btn-sm btn-outline" onclick="closeModal('viewModal')">Close</button>
     </div>
 </div>
 </div>
 
 <!-- ═══ CUSTOM FIELD ADD/EDIT MODAL ═══ -->
-<div id="cfModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:20px;">
+<div id="cfModal" class="modal-backdrop">
 <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.6rem;max-width:500px;width:100%;max-height:90vh;overflow-y:auto;">
     <h3 id="cfModalTitle" style="margin-bottom:1rem;"><i class="fas fa-puzzle-piece" style="color:var(--accent,#7c3aed);"></i> Add Custom Field</h3>
     <form method="POST" id="cfForm">
@@ -691,7 +706,7 @@ function openCfModal(mode) {
     document.getElementById('cfModalTitle').innerHTML = '<i class="fas fa-puzzle-piece" style="color:var(--accent,#7c3aed);"></i> Add Custom Field';
     document.getElementById('cfSubmitBtn').innerHTML = '<i class="fas fa-check"></i> Add Field';
     cfTypeChanged();
-    document.getElementById('cfModal').style.display = 'flex';
+    openModal('cfModal');
 }
 function editCf(id) {
     openCfModal('edit');
@@ -724,15 +739,15 @@ function openApproval(id, name, type) {
         sel.innerHTML = '<option value="">— Select —</option>';
         depts.forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=d;sel.appendChild(o);});
     });
-    document.getElementById('approvalModal').style.display='flex';
+    openModal('approvalModal');
 }
 function openReject(id) {
     document.getElementById('rejectAppId').value = id;
-    document.getElementById('rejectModal').style.display='flex';
+    openModal('rejectModal');
 }
 function viewApp(id) {
     document.getElementById('viewContent').innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading…';
-    document.getElementById('viewModal').style.display='flex';
+    openModal('viewModal');
     fetch('?action=load_application&id='+id).then(r=>r.json()).then(d=>{
         if (d.error) { document.getElementById('viewContent').innerHTML = d.error; return; }
         let h = '<table style="width:100%;border-collapse:collapse;">';
@@ -764,10 +779,16 @@ function viewApp(id) {
         document.getElementById('viewContent').innerHTML = h;
     }).catch(()=>{document.getElementById('viewContent').innerHTML='Error loading details.';});
 }
-function closeModal(id){document.getElementById(id).style.display='none';}
-// Close on backdrop click
-['approvalModal','rejectModal','viewModal','cfModal'].forEach(id=>{
-    document.getElementById(id).addEventListener('click',function(e){if(e.target===this)closeModal(id);});
+// Escape key to close open modals
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        ['approvalModal', 'rejectModal', 'viewModal', 'cfModal'].forEach(id => {
+            const m = document.getElementById(id);
+            if (m && m.classList.contains('open')) {
+                closeModal(id);
+            }
+        });
+    }
 });
 </script>
 
