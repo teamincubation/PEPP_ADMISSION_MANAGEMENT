@@ -3343,6 +3343,13 @@ include 'includes/admin_nav.php';
             // Autocomplete Search Trigger
             const input = document.getElementById('global-student-search-input');
             const box = document.getElementById('search-autocomplete-box');
+
+            // Auto-load student report if email is in query params
+            const urlParams = new URLSearchParams(window.location.search);
+            const emailParam = urlParams.get('email');
+            if (emailParam) {
+                loadStudentIntelligenceDashboard(emailParam);
+            }
             
             input.addEventListener('input', function() {
                 const val = input.value.trim();
@@ -3641,6 +3648,10 @@ include 'includes/admin_nav.php';
                 const s = data.student;
                 currentSelectedStudentName = s.name;
                 currentSelectedStudentCourse = s.course;
+                const searchInput = document.getElementById('global-student-search-input');
+                if (searchInput) {
+                    searchInput.value = s.name;
+                }
                 const statusBadgeClass = s.status === 'active' ? 'green' : 'gray';
                 const profilePhotoSrc = s.photo ? '../' + s.photo : 'assets/img/default-avatar.svg';
 
