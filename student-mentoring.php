@@ -254,16 +254,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
         }
     }
 
-    // Quick Mark as Called
-    elseif ($action === 'mark_called' && mentor_tables_exist($pdo)) {
-        $student_id = trim($_POST['student_user_id'] ?? '');
-        if ($student_id) {
+    // Edit Call Log (Super Admin only)
+    elseif ($action === 'edit_call_log' && is_super_admin() && mentor_tables_exist($pdo)) {
+        $log_id = (int)($_POST['log_id'] ?? 0);
+        $notes = trim($_POST['call_notes'] ?? '');
+        $call_time = trim($_POST['call_timestamp'] ?? '');
+        if ($log_id && $call_time) {
             try {
-                $pdo->prepare("INSERT INTO mentor_call_logs (student_user_id, admin_id, admin_username, call_timestamp, notes) VALUES (?,?,?,?,?)")
-                    ->execute([$student_id, $admin_id, $admin_username, date('Y-m-d H:i:s'), 'Quick status check call']);
-                log_admin_activity($pdo, $admin_username, 'mentor_call', "Marked called for student {$student_id}");
-                $success_message = 'Call logged successfully.';
-            } catch (Exception $e) { $error_message = 'Error: ' . $e->getMessage(); }
+                $pdo->prepare("UPDATE mentor_call_logs SET call_timestamp = ?, notes = ? WHERE id = ?")
+                    ->execute([$call_time, $notes ?: null, $log_id]);
+                log_admin_activity($pdo, $admin_username, 'mentor_call_edit', "Edited call log #{$log_id}");
+                $success_message = 'Call log updated.';
+            } catch (Exception $e) { $error_message = 'Error updating call log: ' . $e->getMessage(); }
+        }
+    }
+
+    // Delete Call Log (Super Admin only)
+    elseif ($action === 'delete_call_log' && is_super_admin() && mentor_tables_exist($pdo)) {
+        $log_id = (int)($_POST['log_id'] ?? 0);
+        if ($log_id) {
+            try {
+                $pdo->prepare("DELETE FROM mentor_call_logs WHERE id = ?")->execute([$log_id]);
+                log_admin_activity($pdo, $admin_username, 'mentor_call_delete', "Deleted call log #{$log_id}");
+                $success_message = 'Call log deleted.';
+            } catch (Exception $e) { $error_message = 'Error deleting call log: ' . $e->getMessage(); }
         }
     }
 }
@@ -596,7 +610,15 @@ include 'includes/admin_nav.php';
             <?php foreach ($call_logs as $cl): ?>
             <tr>
                 <td class="cell-main">
-                    <div class="cell-main"><?php echo e($cl['student_name'] ?: 'Unknown (' . $cl['student_user_id'] . ')'); ?></div>
+                    <div class="cell-main">
+                        <?php if (!empty($cl['email'])): ?>
+                            <a href="student-study-reports.php?source=courses&email=<?php echo urlencode($cl['email']); ?>" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none;">
+                                <?php echo e($cl['student_name'] ?: 'Unknown (' . $cl['student_user_id'] . ')'); ?>
+                            </a>
+                        <?php else: ?>
+                            <?php echo e($cl['student_name'] ?: 'Unknown (' . $cl['student_user_id'] . ')'); ?>
+                        <?php endif; ?>
+                    </div>
                     <div class="cell-sub"><?php echo e(($cl['whatsapp_country_code'] ?: '+91') . ' ' . $cl['whatsapp_number']); ?></div>
                 </td>
                 <td class="cell-sub"><?php echo e($cl['admin_username']); ?></td>
@@ -608,6 +630,16 @@ include 'includes/admin_nav.php';
                     if ($cl_wa):
                     ?>
                     <a href="https://wa.me/<?php echo $cl_wa; ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
+                    <?php endif; ?>
+                    
+                    <?php if (is_super_admin()): ?>
+                    <button type="button" class="btn btn-sm btn-outline" style="color:var(--blue-ink); border-color:var(--blue-soft); padding: 4px 8px;" onclick="openEditCall('<?php echo $cl['id']; ?>', '<?php echo e($cl['student_name'] ?: $cl['student_user_id']); ?>', '<?php echo $cl['call_timestamp']; ?>', '<?php echo e($cl['notes']); ?>')" title="Edit Log"><i class="fas fa-edit"></i></button>
+                    <form method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete this call log?');">
+                        <?php echo csrf_field(); ?>
+                        <input type="hidden" name="action" value="delete_call_log">
+                        <input type="hidden" name="log_id" value="<?php echo $cl['id']; ?>">
+                        <button type="submit" class="btn btn-sm btn-outline" style="color:var(--red-ink); border-color:var(--red-soft); padding: 4px 8px;" title="Delete Log"><i class="fas fa-trash-can"></i></button>
+                    </form>
                     <?php endif; ?>
                 </td>
             </tr>
@@ -770,6 +802,31 @@ include 'includes/admin_nav.php';
 </div>
 </div>
 
+<!-- Edit Call Modal -->
+<div id="editCallModal" class="modal-backdrop">
+<div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.6rem;max-width:440px;width:100%;">
+    <h3 style="margin-bottom:1rem;"><i class="fas fa-edit" style="color:#3b82f6;"></i> Edit Call Log</h3>
+    <p id="editCallStudentName" style="margin-bottom:1rem;color:var(--text-muted);font-size:.85rem;"></p>
+    <form method="POST">
+        <?php echo csrf_field(); ?>
+        <input type="hidden" name="action" value="edit_call_log">
+        <input type="hidden" name="log_id" id="editCallLogId">
+        <div style="margin-bottom:12px;">
+            <label style="display:block;font-size:.8rem;font-weight:600;margin-bottom:4px;">Call Time</label>
+            <input type="datetime-local" name="call_timestamp" id="editCallTimestamp" required style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);">
+        </div>
+        <div style="margin-bottom:14px;">
+            <label style="display:block;font-size:.8rem;font-weight:600;margin-bottom:4px;">Notes</label>
+            <textarea name="call_notes" id="editCallNotes" rows="3" placeholder="Call summary, follow-up needed, etc." style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);resize:vertical;"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button type="button" class="btn btn-sm btn-outline" onclick="closeModal('editCallModal')">Cancel</button>
+            <button type="submit" class="btn btn-sm btn-primary" style="background:#3b82f6;border-color:#3b82f6;"><i class="fas fa-save"></i> Save Changes</button>
+        </div>
+    </form>
+</div>
+</div>
+
 <script>
 function openCall(id, name) {
     document.getElementById('callStudentId').value = id;
@@ -781,10 +838,17 @@ function openRemark(id, name) {
     document.getElementById('remarkStudentName').textContent = 'Student: ' + name + ' (' + id + ')';
     openModal('remarkModal');
 }
+function openEditCall(logId, studentName, timestamp, notes) {
+    document.getElementById('editCallLogId').value = logId;
+    document.getElementById('editCallStudentName').textContent = 'Student: ' + studentName;
+    document.getElementById('editCallTimestamp').value = timestamp.replace(' ', 'T').substring(0, 16);
+    document.getElementById('editCallNotes').value = notes;
+    openModal('editCallModal');
+}
 // Escape key to close open modals
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-        ['callModal', 'remarkModal', 'assignModal'].forEach(id => {
+        ['callModal', 'remarkModal', 'assignModal', 'editCallModal'].forEach(id => {
             const m = document.getElementById(id);
             if (m && m.classList.contains('open')) {
                 closeModal(id);
