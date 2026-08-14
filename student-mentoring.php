@@ -368,8 +368,15 @@ if (mentor_tables_exist($pdo)) {
     // Load recent remarks
     try {
         $rm_query = is_super_admin()
-            ? "SELECT * FROM mentor_remarks ORDER BY created_at DESC LIMIT 100"
-            : "SELECT * FROM mentor_remarks WHERE admin_id = ? ORDER BY created_at DESC LIMIT 50";
+            ? "SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number 
+               FROM mentor_remarks mr 
+               LEFT JOIN users u ON mr.student_user_id = u.user_id 
+               ORDER BY mr.created_at DESC LIMIT 100"
+            : "SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number 
+               FROM mentor_remarks mr 
+               LEFT JOIN users u ON mr.student_user_id = u.user_id 
+               WHERE mr.admin_id = ? 
+               ORDER BY mr.created_at DESC LIMIT 50";
         $stmt = $pdo->prepare($rm_query);
         is_super_admin() ? $stmt->execute() : $stmt->execute([$admin_id]);
         $remarks_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -640,14 +647,41 @@ include 'includes/admin_nav.php';
             <div style="padding:2rem;text-align:center;color:var(--text-muted);">No remarks yet.</div>
         <?php else: ?>
         <table class="data-table">
-            <thead><tr><th>Student ID</th><th>By</th><th>Remark</th><th>Date</th></tr></thead>
+            <thead>
+                <tr>
+                    <th>Student</th>
+                    <th>By</th>
+                    <th>Remark</th>
+                    <th>Date</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
             <tbody>
             <?php foreach ($remarks_list as $rm): ?>
             <tr>
-                <td class="cell-main"><?php echo e($rm['student_user_id']); ?></td>
+                <td class="cell-main">
+                    <div class="cell-main">
+                        <?php if (!empty($rm['email'])): ?>
+                            <a href="student-study-reports.php?source=courses&email=<?php echo urlencode($rm['email']); ?>" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none;">
+                                <?php echo e($rm['student_name'] ?: 'Unknown (' . $rm['student_user_id'] . ')'); ?>
+                            </a>
+                        <?php else: ?>
+                            <?php echo e($rm['student_name'] ?: 'Unknown (' . $rm['student_user_id'] . ')'); ?>
+                        <?php endif; ?>
+                    </div>
+                    <div class="cell-sub"><?php echo e(($rm['whatsapp_country_code'] ?: '+91') . ' ' . $rm['whatsapp_number']); ?></div>
+                </td>
                 <td class="cell-sub"><?php echo e($rm['admin_username']); ?></td>
                 <td style="max-width:350px;"><?php echo e($rm['remark']); ?></td>
                 <td class="cell-sub"><?php echo date('d M Y, h:i A', strtotime($rm['created_at'])); ?></td>
+                <td style="text-align:right; white-space:nowrap;">
+                    <?php 
+                    $rm_wa = preg_replace('/\D/', '', ($rm['whatsapp_country_code'] ?: '+91') . $rm['whatsapp_number']); 
+                    if ($rm_wa):
+                    ?>
+                    <a href="https://wa.me/<?php echo $rm_wa; ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
+                    <?php endif; ?>
+                </td>
             </tr>
             <?php endforeach; ?>
             </tbody>
