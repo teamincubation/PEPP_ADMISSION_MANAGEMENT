@@ -152,6 +152,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $error_message = 'Failed to switch mode: ' . $e->getMessage();
                 }
             }
+        } elseif ($action === 'process_queue') {
+            $currentTime = time();
+            $lastProcessed = $_SESSION['last_queue_process_at'] ?? 0;
+            if ($currentTime - $lastProcessed < 10) {
+                $error_message = 'Rate limit exceeded. Please wait at least 10 seconds between queue processing runs.';
+            } else {
+                $_SESSION['last_queue_process_at'] = $currentTime;
+                try {
+                    // Claim and identify the IDs we are about to process (max 25)
+                    $stmtIds = $pdo->prepare("
+                        SELECT id FROM communication_queue 
+                        WHERE status IN ('pending', 'failed') 
+                          AND next_attempt_at <= NOW() 
+                          AND retry_count < 3
+                        ORDER BY priority DESC, created_at ASC 
+                        LIMIT 25
+                    ");
+                    $stmtIds->execute();
+                    $eligibleIds = $stmtIds->fetchAll(PDO::FETCH_COLUMN);
+                    
+                    if (empty($eligibleIds)) {
+                        $success_message = "Processing completed.<br>"
+                                       . "• Processed: <strong>0</strong><br>"
+                                       . "• Delivered: <strong>0</strong><br>"
+                                       . "• Failed: <strong>0</strong><br>"
+                                       . "• Skipped/Stale: <strong>0</strong>";
+                    } else {
+                        require_once 'includes/communication/QueueProcessor.php';
+                        $processor = new QueueProcessor($pdo, 25);
+                        $processed = $processor->execute();
+                        
+                        // Query the final status of the processed items
+                        $inQuery = implode(',', array_map('intval', $eligibleIds));
+                        $stmtStatus = $pdo->query("SELECT status, COUNT(*) as c FROM communication_queue WHERE id IN ($inQuery) GROUP BY status");
+                        $results = $stmtStatus->fetchAll(PDO::FETCH_KEY_PAIR);
+                        
+                        $deliveredCount = ($results['delivered'] ?? 0) + ($results['sent'] ?? 0) + ($results['read'] ?? 0);
+                        $failedCount = $results['failed'] ?? 0;
+                        $cancelledCount = $results['cancelled'] ?? 0;
+                        $skippedCount = $results['pending'] ?? 0; // if still pending, it was skipped
+                        $processedCount = count($eligibleIds);
+                        
+                        // Log audit activity
+                        log_admin_activity($pdo, $admin_username, 'process_queue', "Manually processed pending queue batch. Attempted: {$processedCount}, Sent/Delivered: {$deliveredCount}, Failed: {$failedCount}, Cancelled: {$cancelledCount}");
+                        
+                        $success_message = "Processing completed.<br>"
+                                       . "• Processed: <strong>{$processedCount}</strong><br>"
+                                       . "• Delivered: <strong>{$deliveredCount}</strong><br>"
+                                       . "• Failed: <strong>{$failedCount}</strong><br>"
+                                       . "• Skipped/Stale: <strong>{$cancelledCount}</strong>";
+                    }
+                } catch (Exception $e) {
+                    $error_message = 'Queue processing error: ' . $e->getMessage();
+                }
+            }
         }
     }
 }
@@ -198,7 +253,7 @@ include 'includes/admin_nav.php';
 <div class="container-fluid" style="padding:20px;">
     <?php if ($success_message): ?>
         <div class="alert alert-success" style="background:#f0fdf4; border:1px solid #bbf7d0; color:#166534; padding:12px 18px; border-radius:12px; margin-bottom:20px;">
-            <i class="fas fa-circle-check"></i> <?php echo htmlspecialchars($success_message); ?>
+            <i class="fas fa-circle-check"></i> <?php echo $success_message; ?>
         </div>
     <?php endif; ?>
 
@@ -455,7 +510,14 @@ include 'includes/admin_nav.php';
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; overflow:hidden; margin-top:24px; margin-bottom:20px;">
         <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px; display:flex; justify-content:space-between; align-items:center;">
             <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;"><i class="fas fa-list-check" style="margin-right:4px;"></i> Recent Dispatches Queue Log (Top 10)</h3>
-            <span style="font-size:0.75rem; color:#6b7280;">Cron updates automatically every minute</span>
+            <div style="display:flex; align-items:center; gap:12px;">
+                <span style="font-size:0.75rem; color:#6b7280;">Cron updates automatically every minute</span>
+                <form method="POST" style="margin:0;">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="action" value="process_queue">
+                    <button type="submit" class="btn btn-sm btn-primary" style="border-radius:8px; background:linear-gradient(135deg, #8b5cf6, #7c3aed); border:none; font-weight:600;"><i class="fas fa-play" style="margin-right:4px;"></i> Process Pending Queue</button>
+                </form>
+            </div>
         </div>
         
         <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
