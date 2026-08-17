@@ -788,6 +788,11 @@ class CommunicationEngine {
             $cmd = $phpBinary . " " . escapeshellarg($cronScript) . " " . (int)$queueId . " > /dev/null 2>&1 &";
         }
         
+        if (!function_exists('proc_open')) {
+            error_log("Async Dispatch: proc_open is disabled. Falling back to synchronous execution for queue item #{$queueId}");
+            return $this->processQueueItem($queueId);
+        }
+
         $descriptorspec = [
             0 => ["pipe", "r"],
             1 => ["file", "/dev/null", "w"],
@@ -795,18 +800,18 @@ class CommunicationEngine {
         ];
         
         try {
-            $process = proc_open($cmd, $descriptorspec, $pipes);
+            $process = @proc_open($cmd, $descriptorspec, $pipes);
             if (is_resource($process)) {
                 fclose($pipes[0]);
                 proc_close($process);
                 return true;
             } else {
-                error_log("Async Dispatch Error: proc_open failed to start background process for command: {$cmd}");
-                return false;
+                error_log("Async Dispatch Error: proc_open failed. Falling back to synchronous execution for queue item #{$queueId}");
+                return $this->processQueueItem($queueId);
             }
-        } catch (Exception $e) {
-            error_log("Async Dispatch Exception: " . $e->getMessage());
-            return false;
+        } catch (\Throwable $e) {
+            error_log("Async Dispatch Throwable (proc_open disabled or failed): " . $e->getMessage() . ". Falling back to synchronous execution for queue item #{$queueId}");
+            return $this->processQueueItem($queueId);
         }
     }
 }

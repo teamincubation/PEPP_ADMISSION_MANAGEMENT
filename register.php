@@ -2098,6 +2098,18 @@ $country_codes = [
                 } else {
                     if (!el.value || el.value.trim() === '') {
                         isInvalid = true;
+                    } else if (el.type === 'email') {
+                        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                        if (!emailRegex.test(el.value.trim())) {
+                            isInvalid = true;
+                            labelText = 'Valid Email Address';
+                        }
+                    } else if (el.id === 'whatsapp' || el.id === 'mobile_number') {
+                        const phoneRegex = /^\d{10}$/;
+                        if (!phoneRegex.test(el.value.trim())) {
+                            isInvalid = true;
+                            labelText = el.id === 'whatsapp' ? '10-digit WhatsApp Number' : '10-digit Mobile Number';
+                        }
                     }
                 }
                 
@@ -2187,14 +2199,32 @@ $country_codes = [
             const email = emailInput.value.trim();
             const academicYear = academicYearSelect.value;
             const course = courseSelect ? courseSelect.value : '';
-            if (email && academicYear && course) {
+            const indicator = document.getElementById('email-indicator');
+            const message   = document.getElementById('email-message');
+            
+            if (!email) {
+                emailInput.classList.remove('error-field', 'success-field');
+                indicator.innerHTML = '';
+                message.innerHTML   = '';
+                return;
+            }
+            
+            // Format check
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                emailInput.classList.add('error-field');
+                emailInput.classList.remove('success-field');
+                indicator.innerHTML = '<i class="fas fa-times text-danger"></i>';
+                message.innerHTML   = '<div class="error-message"><i class="fas fa-exclamation-circle"></i>Invalid email format</div>';
+                return;
+            }
+            
+            if (academicYear && course) {
                 clearTimeout(emailTimeout);
                 emailTimeout = setTimeout(() => {
                     fetch('?ajax=check_email&email=' + encodeURIComponent(email) + '&academic_year=' + encodeURIComponent(academicYear) + '&course=' + encodeURIComponent(course))
                         .then(r => r.json())
                         .then(data => {
-                            const indicator = document.getElementById('email-indicator');
-                            const message   = document.getElementById('email-message');
                             if (data.exists) {
                                 emailInput.classList.add('error-field');
                                 emailInput.classList.remove('success-field');
@@ -2208,6 +2238,11 @@ $country_codes = [
                             }
                         });
                 }, 500);
+            } else {
+                emailInput.classList.remove('error-field');
+                emailInput.classList.remove('success-field');
+                indicator.innerHTML = '';
+                message.innerHTML = '';
             }
         }
         emailInput.addEventListener('input', checkEmail);
@@ -2221,14 +2256,32 @@ $country_codes = [
             const whatsapp = whatsappInput.value.trim();
             const academicYear = academicYearSelect.value;
             const course = courseSelect ? courseSelect.value : '';
-            if (whatsapp && academicYear && course) {
+            const indicator = document.getElementById('whatsapp-indicator');
+            const message   = document.getElementById('whatsapp-message');
+            
+            if (!whatsapp) {
+                whatsappInput.classList.remove('error-field', 'success-field');
+                indicator.innerHTML = '';
+                message.innerHTML   = '';
+                return;
+            }
+            
+            // Format check
+            const phoneRegex = /^\d{10}$/;
+            if (!phoneRegex.test(whatsapp)) {
+                whatsappInput.classList.add('error-field');
+                whatsappInput.classList.remove('success-field');
+                indicator.innerHTML = '<i class="fas fa-times text-danger"></i>';
+                message.innerHTML   = '<div class="error-message"><i class="fas fa-exclamation-circle"></i>WhatsApp number must be exactly 10 digits</div>';
+                return;
+            }
+            
+            if (academicYear && course) {
                 clearTimeout(whatsappTimeout);
                 whatsappTimeout = setTimeout(() => {
                     fetch('?ajax=check_whatsapp&whatsapp=' + encodeURIComponent(whatsapp) + '&academic_year=' + encodeURIComponent(academicYear) + '&course=' + encodeURIComponent(course))
                         .then(r => r.json())
                         .then(data => {
-                            const indicator = document.getElementById('whatsapp-indicator');
-                            const message   = document.getElementById('whatsapp-message');
                             if (data.exists) {
                                 whatsappInput.classList.add('error-field');
                                 whatsappInput.classList.remove('success-field');
@@ -2242,6 +2295,11 @@ $country_codes = [
                             }
                         });
                 }, 500);
+            } else {
+                whatsappInput.classList.remove('error-field');
+                whatsappInput.classList.remove('success-field');
+                indicator.innerHTML = '';
+                message.innerHTML = '';
             }
         }
         whatsappInput.addEventListener('input', checkWhatsApp);
