@@ -185,7 +185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
 
                 // ── Insert employee record ──
                 $stmt = $pdo->prepare("
-                    INSERT INTO employees (employee_id, full_name, gender, blood_group, date_of_birth,
+                    INSERT INTO employees (employee_id, photo, full_name, gender, blood_group, date_of_birth,
                         mobile_country_code, mobile_number, email, emergency_country_code, emergency_contact,
                         address, pincode, country, state, place_post_office,
                         aadhaar_encrypted, aadhaar_masked, bank_name, bank_account_encrypted, bank_account_masked,
@@ -193,10 +193,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
                         joining_date, probation_till, contract_validity_from, contract_validity_till, monthly_salary,
                         appointment_reference, appointment_snapshot, appointment_generated_at,
                         application_id, created_by, created_at)
-                    VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,NOW())
+                    VALUES (?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,NOW())
                 ");
                 $stmt->execute([
-                    $employee_id, $app['full_name'], $app['gender'], $app['blood_group'], $app['date_of_birth'],
+                    $employee_id, $app['photo'], $app['full_name'], $app['gender'], $app['blood_group'], $app['date_of_birth'],
                     $app['mobile_country_code'], $app['mobile_number'], $app['email'],
                     $app['emergency_country_code'], $app['emergency_contact'],
                     $app['address'], $app['pincode'], $app['country'], $app['state'], $app['place_post_office'],
@@ -750,7 +750,16 @@ function viewApp(id) {
     openModal('viewModal');
     fetch('?action=load_application&id='+id).then(r=>r.json()).then(d=>{
         if (d.error) { document.getElementById('viewContent').innerHTML = d.error; return; }
-        let h = '<table style="width:100%;border-collapse:collapse;">';
+        let h = '';
+        if (d.photo) {
+            h += '<div style="text-align:center; margin-bottom:1.5rem; display:flex; flex-direction:column; align-items:center; gap:8px;">';
+            h += '  <a href="../' + d.photo + '" target="_blank" rel="noopener">';
+            h += '    <img src="../' + d.photo + '" style="width:110px; height:110px; border-radius:50%; object-fit:cover; border:3px solid var(--accent,#7c3aed); box-shadow:0 4px 12px rgba(0,0,0,0.15);" alt="Staff Photo">';
+            h += '  </a>';
+            h += '  <span style="font-size:0.75rem; color:var(--text-muted);">Click photo to view full resolution</span>';
+            h += '</div>';
+        }
+        h += '<table style="width:100%;border-collapse:collapse;">';
         const fields = [
             ['Reference', d.application_reference], ['Name', d.full_name],
             ['Gender', d.gender], ['DOB', d.date_of_birth], ['Blood Group', d.blood_group],

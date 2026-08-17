@@ -11,6 +11,27 @@ date_default_timezone_set('Asia/Kolkata');
 session_start();
 require_once 'config/database.php';
 require_once 'includes/encryption_helper.php';
+require_once 'includes/file_helper.php';
+
+// Self-healing database structure for photo columns
+try {
+    $pdo->query("SELECT photo FROM staff_registration_requests LIMIT 1");
+} catch (Exception $e) {
+    try {
+        $pdo->exec("ALTER TABLE staff_registration_requests ADD COLUMN photo VARCHAR(255) DEFAULT NULL AFTER application_reference");
+    } catch (Exception $ex) {
+        error_log("Failed to add photo column to staff_registration_requests: " . $ex->getMessage());
+    }
+}
+try {
+    $pdo->query("SELECT photo FROM employees LIMIT 1");
+} catch (Exception $e) {
+    try {
+        $pdo->exec("ALTER TABLE employees ADD COLUMN photo VARCHAR(255) DEFAULT NULL AFTER employee_id");
+    } catch (Exception $ex) {
+        error_log("Failed to add photo column to employees: " . $ex->getMessage());
+    }
+}
 
 // ── AJAX: PIN Code Lookup (reuse existing register.php proxy pattern) ──
 if (isset($_GET['lookup_pin'])) {
@@ -105,6 +126,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         goto render;
     }
 
+    // Photo Upload Validation (Mandatory)
+    $uploaded_photo = $_SESSION['temp_staff_photo'] ?? '';
+    $photo_error = '';
+    if (isset($_FILES['photo_file']) && !empty($_FILES['photo_file']['name'])) {
+        if ($_FILES['photo_file']['error'] !== UPLOAD_ERR_OK) {
+            $photo_error = 'Photo file upload failed. Please try again.';
+        } else {
+            $new_path = handle_file_upload_with_replace('photo_file', 'photos', $uploaded_photo ?: null, ['jpg', 'jpeg', 'png', 'webp']);
+            if ($new_path) {
+                $uploaded_photo = $new_path;
+                $_SESSION['temp_staff_photo'] = $uploaded_photo;
+            } else {
+                $photo_error = 'Invalid photo file. Only images (JPG, PNG, WEBP) under 5MB are allowed.';
+            }
+        }
+    }
+
     // ─── Validation ───
     $full_name = trim($_POST['full_name'] ?? '');
     $gender = $_POST['gender'] ?? '';
@@ -147,6 +185,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!preg_match('/^[A-Z]{4}0[A-Z0-9]{6}$/', $ifsc)) $errors[] = 'Valid 11-character IFSC code is required.';
     if (!in_array($application_for, ['employee','faculty','intern'])) $errors[] = 'Select a valid application type.';
     if (!is_numeric($latitude) || !is_numeric($longitude)) $errors[] = 'Geolocation is required. Please allow location access.';
+
+    if ($photo_error) {
+        $errors[] = $photo_error;
+    }
+    if (empty($uploaded_photo)) {
+        $errors[] = 'Photo upload is required. Please upload your best quality photo.';
+    }
 
     // ─── Validate custom fields ───
     $custom_field_data = [];
@@ -226,15 +271,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Insert
         $stmt = $pdo->prepare("
             INSERT INTO staff_registration_requests
-            (application_reference, full_name, gender, date_of_birth, blood_group,
+            (application_reference, photo, full_name, gender, date_of_birth, blood_group,
              mobile_country_code, mobile_number, email, emergency_country_code, emergency_contact,
              address, pincode, country, state, place_post_office,
              aadhaar_encrypted, aadhaar_masked, bank_name, bank_account_encrypted, bank_account_masked, ifsc_code, upi_id,
              application_for, custom_field_values, latitude, longitude, maps_url, ip_address, user_agent, submitted_at)
-            VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?,?,?,NOW())
+            VALUES (?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?,?,?,NOW())
         ");
         $stmt->execute([
-            $app_ref, $full_name, $gender, $dob, $blood_group,
+            $app_ref, $uploaded_photo, $full_name, $gender, $dob, $blood_group,
             $mobile_cc, $mobile, $email, $emergency_cc, $emergency,
             $address, $pincode, $country, $state, $place,
             $aadhaar_enc, $aadhaar_mask, $bank_name, $bank_account_enc, $bank_account_mask, $ifsc, $upi_id,
@@ -242,7 +287,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]);
         $pdo->commit();
 
-        // Regenerate CSRF token
+        // Regenerate CSRF token and clear photo session
+        unset($_SESSION['temp_staff_photo']);
         $_SESSION['staff_csrf_token'] = bin2hex(random_bytes(32));
 
         // Redirect to success page
@@ -365,7 +411,7 @@ render:
         <div class="error-box"><i class="fas fa-exclamation-circle" style="margin-right:6px;"></i><?php echo htmlspecialchars($error_msg); ?></div>
     <?php endif; ?>
 
-    <form method="POST" id="staffRegForm" novalidate>
+    <form method="POST" id="staffRegForm" enctype="multipart/form-data" novalidate>
         <input type="hidden" name="staff_csrf_token" value="<?php echo htmlspecialchars($_SESSION['staff_csrf_token']); ?>">
         <input type="hidden" name="_ts" value="<?php echo time(); ?>">
         <input type="hidden" name="latitude" id="reg_lat" value="">
@@ -419,6 +465,18 @@ render:
                         <option value="<?php echo $bg; ?>" <?php echo ($_POST['blood_group'] ?? '') === $bg ? 'selected' : ''; ?>><?php echo $bg; ?></option>
                         <?php endforeach; ?>
                     </select>
+                </div>
+            </div>
+            <div class="row">
+                <div class="field full">
+                    <label>Upload Photo <span class="req">*</span> <span style="font-size:0.75rem; font-weight:normal; color:#94a3b8; display:block; margin-top:2px;">Please upload your best quality photo instead of a passport size photo. (Max 5MB, JPG/PNG/WEBP formats only)</span></label>
+                    <input type="file" name="photo_file" accept="image/*" <?php echo empty($uploaded_photo) ? 'required' : ''; ?>>
+                    <?php if ($uploaded_photo): ?>
+                        <div style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+                            <i class="fas fa-check-circle" style="color:#22c55e;"></i>
+                            <span style="font-size:0.8rem; color:#4ade80;">Photo uploaded successfully.</span>
+                        </div>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
