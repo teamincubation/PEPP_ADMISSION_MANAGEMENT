@@ -228,15 +228,44 @@ try {
     $webhookCount = (int)$pdo->query("SELECT COUNT(*) FROM communication_webhook_events")->fetchColumn();
 } catch (Exception $ex) {}
 
-// Load recent 10 logs
+// Load paginated logs
+$perPage = 50;
+$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+if ($page < 1) {
+    $page = 1;
+}
+
+$totalRecords = $stats['total'];
+$totalPages = ($totalRecords > 0) ? (int)ceil($totalRecords / $perPage) : 1;
+
+if ($page > $totalPages) {
+    $page = $totalPages;
+}
+
+$offset = ($page - 1) * $perPage;
+
 $recentLogs = [];
 try {
-    $recentLogs = $pdo->query("
+    $stmtLogs = $pdo->prepare("
         SELECT id, channel, recipient, recipient_name, status, retry_count, next_attempt_at, error_message, updated_at, student_uid, event_name, invoice_id
         FROM communication_queue 
-        ORDER BY id DESC LIMIT 10
-    ")->fetchAll();
-} catch (Exception $ex) {}
+        ORDER BY created_at DESC, id DESC
+        LIMIT :limit OFFSET :offset
+    ");
+    $stmtLogs->bindValue(':limit', (int)$perPage, PDO::PARAM_INT);
+    $stmtLogs->bindValue(':offset', (int)$offset, PDO::PARAM_INT);
+    $stmtLogs->execute();
+    $recentLogs = $stmtLogs->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $ex) {
+    error_log("Communication Dashboard Pagination Error: " . $ex->getMessage());
+}
+
+// Helper to preserve active query parameters in pagination URLs
+function getPageUrl($pageNum) {
+    $params = $_GET;
+    $params['page'] = $pageNum;
+    return '?' . http_build_query($params);
+}
 
 // Fetch current outbound mode (re-read from DB to reflect any switch made above)
 $current_mode = $settings['whatsapp_outbound_mode'] ?? whatsapp_outbound_mode($pdo);
@@ -509,7 +538,7 @@ include 'includes/admin_nav.php';
     <!-- ── RECENT DISPATCHES QUEUE LOGS ── -->
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; overflow:hidden; margin-top:24px; margin-bottom:20px;">
         <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px; display:flex; justify-content:space-between; align-items:center;">
-            <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;"><i class="fas fa-list-check" style="margin-right:4px;"></i> Recent Dispatches Queue Log (Top 10)</h3>
+            <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;"><i class="fas fa-list-check" style="margin-right:4px;"></i> Communication Queue (<?php echo number_format($totalRecords); ?> total records)</h3>
             <div style="display:flex; align-items:center; gap:12px;">
                 <span style="font-size:0.75rem; color:#6b7280;">Cron updates automatically every minute</span>
                 <form method="POST" style="margin:0;">
@@ -589,6 +618,63 @@ include 'includes/admin_nav.php';
                 <?php endif; ?>
             </tbody>
         </table>
+        
+        <!-- Pagination controls -->
+        <div style="padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e5e7eb; background: #f8fafc; flex-wrap: wrap; gap: 12px;">
+            <div style="font-size: 0.85rem; color: #475569; font-weight: 500;">
+                <?php if ($totalRecords > 0): ?>
+                    Showing <strong><?php echo $offset + 1; ?></strong> to <strong><?php echo min($offset + $perPage, $totalRecords); ?></strong> of <strong><?php echo number_format($totalRecords); ?></strong> records
+                <?php else: ?>
+                    No communication records found.
+                <?php endif; ?>
+            </div>
+            
+            <?php if ($totalPages > 1): ?>
+                <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+                    <!-- Previous Button -->
+                    <?php if ($page > 1): ?>
+                        <a href="<?php echo getPageUrl($page - 1); ?>" style="padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.85rem; background: #fff; color: #374151; font-weight: 600; text-decoration: none; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><i class="fas fa-chevron-left" style="font-size: 0.7rem; margin-right: 4px;"></i> Previous</a>
+                    <?php else: ?>
+                        <span style="padding: 6px 12px; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 0.85rem; background: #f9fafb; color: #9ca3af; font-weight: 600; cursor: not-allowed; box-shadow: none;"><i class="fas fa-chevron-left" style="font-size: 0.7rem; margin-right: 4px;"></i> Previous</span>
+                    <?php endif; ?>
+
+                    <!-- Page Numbers -->
+                    <?php
+                    $startPage = max(1, $page - 2);
+                    $endPage = min($totalPages, $page + 2);
+                    
+                    if ($startPage > 1) {
+                        echo '<a href="' . getPageUrl(1) . '" style="padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.85rem; background: #fff; color: #374151; font-weight: 600; text-decoration: none; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">1</a>';
+                        if ($startPage > 2) {
+                            echo '<span style="color: #9ca3af; padding: 0 4px; font-size: 0.85rem;">...</span>';
+                        }
+                    }
+
+                    for ($i = $startPage; $i <= $endPage; $i++) {
+                        if ($i === $page) {
+                            echo '<span style="padding: 6px 12px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); border: 1px solid #7c3aed; color: #fff; border-radius: 8px; font-size: 0.85rem; font-weight: 700; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">' . $i . '</span>';
+                        } else {
+                            echo '<a href="' . getPageUrl($i) . '" style="padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.85rem; background: #fff; color: #374151; font-weight: 600; text-decoration: none; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">' . $i . '</a>';
+                        }
+                    }
+
+                    if ($endPage < $totalPages) {
+                        if ($endPage < $totalPages - 1) {
+                            echo '<span style="color: #9ca3af; padding: 0 4px; font-size: 0.85rem;">...</span>';
+                        }
+                        echo '<a href="' . getPageUrl($totalPages) . '" style="padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.85rem; background: #fff; color: #374151; font-weight: 600; text-decoration: none; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">' . $totalPages . '</a>';
+                    }
+                    ?>
+
+                    <!-- Next Button -->
+                    <?php if ($page < $totalPages): ?>
+                        <a href="<?php echo getPageUrl($page + 1); ?>" style="padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.85rem; background: #fff; color: #374151; font-weight: 600; text-decoration: none; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">Next <i class="fas fa-chevron-right" style="font-size: 0.7rem; margin-left: 4px;"></i></a>
+                    <?php else: ?>
+                        <span style="padding: 6px 12px; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 0.85rem; background: #f9fafb; color: #9ca3af; font-weight: 600; cursor: not-allowed; box-shadow: none;">Next <i class="fas fa-chevron-right" style="font-size: 0.7rem; margin-left: 4px;"></i></span>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
+        </div>
     </div>
 </div>
 
