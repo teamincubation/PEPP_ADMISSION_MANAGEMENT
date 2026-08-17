@@ -466,6 +466,27 @@ $nav_data = [
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="assets/css/admin-theme.css" rel="stylesheet">
     <style>
+        /* Style for copy link button inside menu links */
+        .copy-link-btn {
+            margin-left: auto;
+            padding: 4px 6px;
+            cursor: pointer;
+            opacity: 0.5;
+            transition: all 0.2s ease;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .copy-link-btn:hover {
+            opacity: 1 !important;
+            background: rgba(148, 163, 184, 0.15);
+            transform: scale(1.05);
+        }
+        html.theme-dark .copy-link-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
         /* Selected/active sub-category menu styles: dark background with white icon & font */
         .nav-item.active {
             background: #0f172a !important;
@@ -837,11 +858,53 @@ $nav_data = [
         
         <div class="nav-section" style="padding-top:0;">
             <div class="nav-section-content">
-                <a class="nav-item" href="register.php" target="_blank">
-                    <i class="fas fa-arrow-up-right-from-square"></i> Registration Form
+                <a class="nav-item" href="register.php" target="_blank" style="display: flex; align-items: center; width: 100%;">
+                    <i class="fas fa-arrow-up-right-from-square"></i>
+                    <span>Registration Form</span>
+                    <span onclick="copyFormLink('register.php', this, event)" class="copy-link-btn" title="Copy Shareable Link">
+                        <i class="far fa-copy" style="font-size: 0.85rem; pointer-events: none;"></i>
+                    </span>
+                </a>
+                
+                <a class="nav-item" href="installmentpayment.php" target="_blank" style="display: flex; align-items: center; width: 100%;">
+                    <i class="fas fa-arrow-up-right-from-square"></i>
+                    <span>Installment Payment</span>
+                    <span onclick="copyFormLink('installmentpayment.php', this, event)" class="copy-link-btn" title="Copy Shareable Link">
+                        <i class="far fa-copy" style="font-size: 0.85rem; pointer-events: none;"></i>
+                    </span>
+                </a>
+                
+                <a class="nav-item" href="staff-registration.php" target="_blank" style="display: flex; align-items: center; width: 100%;">
+                    <i class="fas fa-arrow-up-right-from-square"></i>
+                    <span>Staff Registration</span>
+                    <span onclick="copyFormLink('staff-registration.php', this, event)" class="copy-link-btn" title="Copy Shareable Link">
+                        <i class="far fa-copy" style="font-size: 0.85rem; pointer-events: none;"></i>
+                    </span>
                 </a>
             </div>
         </div>
+
+        <script>
+        function copyFormLink(path, element, event) {
+            event.preventDefault();
+            event.stopPropagation();
+            
+            var link = window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/')) + '/' + path;
+            
+            navigator.clipboard.writeText(link).then(function() {
+                var icon = element.querySelector('i');
+                icon.className = 'fas fa-check';
+                icon.style.color = '#22c55e';
+                
+                setTimeout(function() {
+                    icon.className = 'far fa-copy';
+                    icon.style.color = '';
+                }, 1500);
+            }).catch(function(err) {
+                console.error('Could not copy link: ', err);
+            });
+        }
+        </script>
 
         <div class="sidebar-footer">
             <a class="nav-item" href="?logout=1" onclick="return confirm('Log out of the admin console?');">
