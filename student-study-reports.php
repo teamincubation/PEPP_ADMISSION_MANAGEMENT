@@ -360,34 +360,10 @@ if (isset($_GET['action'])) {
 
                 // Streak calculation for this plan
                 $plan_streak = 0;
-                $current_run = 0;
                 if (!empty($day_tasks)) {
-                    if ($plan_type === 'date_wise') {
-                        $plan_dates = array_keys($day_tasks);
-                        sort($plan_dates); // Chronological order
-                        foreach ($plan_dates as $dk) {
-                            if ($day_tasks[$dk]['completed'] === $day_tasks[$dk]['total'] && $day_tasks[$dk]['total'] > 0) {
-                                $current_run++;
-                                if ($current_run > $plan_streak) {
-                                    $plan_streak = $current_run;
-                                }
-                            } else {
-                                $current_run = 0;
-                            }
-                        }
-                    } else {
-                        // Day-wise: walk forwards
-                        $day_numbers = array_keys($day_tasks);
-                        sort($day_numbers);
-                        foreach ($day_numbers as $d) {
-                            if ($day_tasks[$d]['completed'] === $day_tasks[$d]['total'] && $day_tasks[$d]['total'] > 0) {
-                                $current_run++;
-                                if ($current_run > $plan_streak) {
-                                    $plan_streak = $current_run;
-                                }
-                            } else {
-                                $current_run = 0;
-                            }
+                    foreach ($day_tasks as $dk => $stats) {
+                        if ($stats['total'] > 0 && $stats['completed'] === $stats['total']) {
+                            $plan_streak++;
                         }
                     }
                 }
@@ -609,17 +585,22 @@ if (isset($_GET['action'])) {
                 $is_completed_now = ($log && ($log['completion_status'] ?? 'completed') === 'completed');
                 $is_cleared_now = ($log && ($log['completion_status'] ?? 'completed') === 'cleared');
 
+                $is_upcoming = false;
                 $status = 'Pending';
                 $status_class = 'gray';
                 if ($is_completed_now) {
                     $status = 'Completed';
                     $status_class = 'green';
                 } else {
-                    // Check if overdue
+                    // Check if overdue or upcoming
                     $today = date('Y-m-d');
-                    if ($a['activity_date'] && $a['activity_date'] < $today) {
-                        $status = 'Overdue';
-                        $status_class = 'red';
+                    if ($a['activity_date']) {
+                        if ($a['activity_date'] < $today) {
+                            $status = 'Overdue';
+                            $status_class = 'red';
+                        } else if ($a['activity_date'] > $today) {
+                            $is_upcoming = true;
+                        }
                     }
                 }
 
@@ -642,6 +623,7 @@ if (isset($_GET['action'])) {
                     'resource' => r_esc($a['resource_links'] ?: 'Standard Materials'),
                     'status' => $status,
                     'status_class' => $status_class,
+                    'is_upcoming' => $is_upcoming,
                     'analytics_id' => $log ? (int)$log['id'] : 0,
                     'completed_at' => $is_completed_now ? date('d M Y h:i A', strtotime($log['created_at'])) : '',
                     'ip' => $is_completed_now ? $log['ip_address'] : '',
@@ -4236,18 +4218,37 @@ include 'includes/admin_nav.php';
                 `;
             });
             
+            // Calculate day group status and colors based on task availability and completion
+            let groupStatus = 'Pending';
+            let groupColor = '#f59e0b'; // Gold/orange dot (Pending/Today)
+            let groupTextColor = '#d97706'; // Gold/orange text
+            
+            if (group.completed === group.total && group.total > 0) {
+                groupStatus = 'Completed';
+                groupColor = '#10b981'; // Green
+                groupTextColor = '#059669'; // Dark green
+            } else if (group.items.some(item => item.status === 'Overdue')) {
+                groupStatus = 'Overdue';
+                groupColor = '#ef4444'; // Red
+                groupTextColor = '#dc2626'; // Dark red
+            } else if (group.items.some(item => item.is_upcoming)) {
+                groupStatus = 'Upcoming';
+                groupColor = '#3b82f6'; // Blue
+                groupTextColor = '#2563eb'; // Dark blue
+            }
+            
             div.innerHTML = `
-                <!-- Dot Indicator (Always Orange/Gold as requested) -->
-                <span class="timeline-track-node" style="border-color:#f59e0b; background:#f59e0b; width:10px; height:10px; left:-21px; top:21px;"></span>
+                <!-- Dot Indicator (Dynamic Status Color) -->
+                <span class="timeline-track-node" style="border-color:${groupColor}; background:${groupColor}; width:10px; height:10px; left:-21px; top:21px;"></span>
                 
                 <div class="day-group-box" style="border: 1px solid #cbd5e1; border-radius:16px; background:#fff; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.02); transition: box-shadow 0.2s ease;">
                     <!-- Day/Date Header Button -->
                     <div class="day-group-header" onclick="toggleDayExpand(${groupIndex})" style="padding:15px 20px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; background:#fff; user-select:none;">
                         <div style="display:flex; align-items:center; gap:8px;">
-                            <span style="font-size:0.85rem; font-weight:700; color:#d97706; text-transform:uppercase;">${group.key}</span>
-                            <i id="day-expand-icon-${groupIndex}" class="fas fa-chevron-down" style="font-size:0.75rem; color:#d97706; transition: transform 0.2s ease;"></i>
+                            <span style="font-size:0.85rem; font-weight:700; color:${groupTextColor}; text-transform:uppercase;">${group.key}</span>
+                            <i id="day-expand-icon-${groupIndex}" class="fas fa-chevron-down" style="font-size:0.75rem; color:${groupTextColor}; transition: transform 0.2s ease;"></i>
                         </div>
-                        <span style="font-size:0.82rem; font-weight:700; color:#d97706;">(${group.completed}/${group.total})</span>
+                        <span style="font-size:0.82rem; font-weight:700; color:${groupTextColor};">(${group.completed}/${group.total})</span>
                     </div>
                     
                     <!-- Collapsible Day Checklist Container -->

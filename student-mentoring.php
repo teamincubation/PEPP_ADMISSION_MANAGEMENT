@@ -93,34 +93,10 @@ function get_student_mentoring_details($pdo, $student) {
         }
 
         $plan_streak = 0;
-        $current_run = 0;
         if (!empty($day_tasks)) {
-            if ($p['plan_type'] === 'date_wise') {
-                $plan_dates = array_keys($day_tasks);
-                sort($plan_dates); // Chronological order
-                foreach ($plan_dates as $dk) {
-                    if ($day_tasks[$dk]['completed'] === $day_tasks[$dk]['total'] && $day_tasks[$dk]['total'] > 0) {
-                        $current_run++;
-                        if ($current_run > $plan_streak) {
-                            $plan_streak = $current_run;
-                        }
-                    } else {
-                        $current_run = 0;
-                    }
-                }
-            } else {
-                // Day-wise
-                $day_numbers = array_keys($day_tasks);
-                sort($day_numbers);
-                foreach ($day_numbers as $d) {
-                    if ($day_tasks[$d]['completed'] === $day_tasks[$d]['total'] && $day_tasks[$d]['total'] > 0) {
-                        $current_run++;
-                        if ($current_run > $plan_streak) {
-                            $plan_streak = $current_run;
-                        }
-                    } else {
-                        $current_run = 0;
-                    }
+            foreach ($day_tasks as $dk => $stats) {
+                if ($stats['total'] > 0 && $stats['completed'] === $stats['total']) {
+                    $plan_streak++;
                 }
             }
         }
