@@ -398,6 +398,10 @@ try {
               `activity_id` INT NULL,
               `ip_address` VARCHAR(45) NOT NULL,
               `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              `completion_status` ENUM('completed', 'cleared') NOT NULL DEFAULT 'completed',
+              `cleared_by` VARCHAR(255) DEFAULT NULL,
+              `cleared_at` DATETIME DEFAULT NULL,
+              `clear_reason` TEXT DEFAULT NULL,
               KEY `idx_sp_anal_plan` (`study_plan_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");

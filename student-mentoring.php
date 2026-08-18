@@ -68,7 +68,7 @@ function get_student_mentoring_details($pdo, $student) {
         $stmt_comp = $pdo->prepare("
             SELECT DISTINCT activity_id 
             FROM study_plan_analytics 
-            WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity'
+            WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity' AND completion_status = 'completed'
         ");
         $stmt_comp->execute([$email, $p['id']]);
         $completed_ids = $stmt_comp->fetchAll(PDO::FETCH_COLUMN);

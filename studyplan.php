@@ -22,22 +22,74 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_completion') {
     }
     
     try {
-        $stmt = $pdo->prepare("SELECT id FROM study_plan_analytics WHERE student_email = ? AND activity_id = ? AND action_type = 'complete_activity' LIMIT 1");
-        $stmt->execute([$email, $activity_id]);
+        $pdo->beginTransaction();
+        
+        // 1. Lock the active completed record for update (student_email + activity_id + action_type = 'complete_activity' + completion_status = 'completed')
+        $stmt = $pdo->prepare("
+            SELECT id, created_at 
+            FROM study_plan_analytics 
+            WHERE student_email = ? AND study_plan_id = ? AND activity_id = ? 
+              AND action_type = 'complete_activity' AND completion_status = 'completed' 
+            LIMIT 1 FOR UPDATE
+        ");
+        $stmt->execute([$email, $plan_id, $activity_id]);
         $existing = $stmt->fetch();
         
         if ($existing) {
-            $stmt_del = $pdo->prepare("DELETE FROM study_plan_analytics WHERE id = ?");
-            $stmt_del->execute([$existing['id']]);
-            echo json_encode(['success' => true, 'completed' => false, 'timestamp' => null]);
+            $pdo->commit();
+            $completed_at = date('d M Y h:i A', strtotime($existing['created_at']));
+            echo json_encode([
+                'success' => true, 
+                'completed' => true, 
+                'already_completed' => true, 
+                'timestamp' => $completed_at
+            ]);
         } else {
-            $stmt_ins = $pdo->prepare("INSERT INTO study_plan_analytics (study_plan_id, student_email, action_type, activity_id, ip_address, latitude, longitude, created_at) VALUES (?, ?, 'complete_activity', ?, ?, ?, ?, NOW())");
-            $stmt_ins->execute([$plan_id, $email, $activity_id, $_SERVER['REMOTE_ADDR'], $latitude, $longitude]);
+            // 2. Insert new completion record with explicit Asia/Kolkata timezone timestamp
+            $stmt_ins = $pdo->prepare("
+                INSERT INTO study_plan_analytics 
+                (study_plan_id, student_email, action_type, activity_id, ip_address, latitude, longitude, completion_status, created_at) 
+                VALUES (?, ?, 'complete_activity', ?, ?, ?, ?, 'completed', ?)
+            ");
+            $stmt_ins->execute([$plan_id, $email, $activity_id, $_SERVER['REMOTE_ADDR'], $latitude, $longitude, date('Y-m-d H:i:s')]);
             
+            $pdo->commit();
             $completed_at = date('d M Y h:i A');
-            echo json_encode(['success' => true, 'completed' => true, 'timestamp' => $completed_at]);
+            echo json_encode([
+                'success' => true, 
+                'completed' => true, 
+                'already_completed' => false, 
+                'timestamp' => $completed_at
+            ]);
         }
     } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        
+        // Handle duplicate key violation (SQLSTATE 23000) gracefully
+        if ($e->getCode() == 23000 || strpos($e->getMessage(), '23000') !== false || strpos($e->getMessage(), 'Duplicate entry') !== false) {
+            try {
+                $stmt_existing = $pdo->prepare("
+                    SELECT created_at FROM study_plan_analytics 
+                    WHERE student_email = ? AND study_plan_id = ? AND activity_id = ? 
+                      AND action_type = 'complete_activity' AND completion_status = 'completed'
+                    LIMIT 1
+                ");
+                $stmt_existing->execute([$email, $plan_id, $activity_id]);
+                $ex_row = $stmt_existing->fetch();
+                $completed_at = $ex_row ? date('d M Y h:i A', strtotime($ex_row['created_at'])) : date('d M Y h:i A');
+            } catch (Exception $ex_inner) {
+                $completed_at = date('d M Y h:i A');
+            }
+            
+            echo json_encode([
+                'success' => true,
+                'completed' => true,
+                'already_completed' => true,
+                'timestamp' => $completed_at
+            ]);
+            exit();
+        }
+        
         echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
     }
     exit();
@@ -282,10 +334,13 @@ if ($is_logged_in && $selected_plan_id > 0) {
             
             // Fetch completions
             $stmt_comp = $pdo->prepare("
-                SELECT an.activity_id, an.created_at 
+                SELECT an.activity_id, MIN(an.created_at) as created_at 
                 FROM study_plan_analytics an 
                 JOIN study_plan_activities act ON an.activity_id = act.id 
-                WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity'
+                WHERE an.student_email = ? AND an.study_plan_id = ? 
+                  AND an.action_type = 'complete_activity' 
+                  AND an.completion_status = 'completed'
+                GROUP BY an.activity_id
             ");
             $stmt_comp->execute([$email, $selected_plan_id]);
             $completions = $stmt_comp->fetchAll(PDO::FETCH_KEY_PAIR);
@@ -1125,10 +1180,15 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                                         ?>
                                             <div class="activity-item" id="activity-row-<?php echo $it['id']; ?>" style="display: flex; align-items: center; justify-content: space-between; <?php echo $is_completed ? 'opacity: 0.75;' : ''; ?>">
                                                 <div style="display: flex; align-items: center; gap: 10px; flex: 1;">
-                                                    <!-- Check Circle to mark completion -->
-                                                    <div class="chk-circle-btn" onclick="toggleTaskCompletion(<?php echo $it['id']; ?>, <?php echo $selected_plan_id; ?>)" style="cursor: pointer; padding: 0 4px; font-size: 1.15rem; color: <?php echo $is_completed ? '#22c55e' : '#cbd5e1'; ?>; transition: color 0.2s;">
-                                                        <i class="fa-<?php echo $is_completed ? 'solid fa-circle-check' : 'regular fa-circle'; ?>"></i>
-                                                    </div>
+                                                    <?php if ($is_completed): ?>
+                                                        <div class="chk-circle-btn" style="padding: 0 4px; font-size: 1.15rem; color: #22c55e; cursor: default;">
+                                                            <i class="fa-solid fa-circle-check"></i>
+                                                        </div>
+                                                    <?php else: ?>
+                                                        <div class="chk-circle-btn" onclick="toggleTaskCompletion(<?php echo $it['id']; ?>, <?php echo $selected_plan_id; ?>)" style="cursor: pointer; padding: 0 4px; font-size: 1.15rem; color: #cbd5e1; transition: color 0.2s;">
+                                                            <i class="fa-regular fa-circle"></i>
+                                                        </div>
+                                                    <?php endif; ?>
                                                     
                                                     <div class="activity-icon-wrap" style="background:<?php echo $t_conf['color']; ?>; flex-shrink: 0;">
                                                         <i class="fas <?php echo $t_conf['icon']; ?>"></i>
@@ -1243,16 +1303,15 @@ function toggleTaskCompletion(activityId, planId) {
             if (data.completed) {
                 btn.className = 'fa-solid fa-circle-check';
                 btn.parentElement.style.color = '#22c55e';
+                btn.parentElement.style.cursor = 'default';
+                btn.parentElement.removeAttribute('onclick');
                 row.style.opacity = '0.75';
                 timeSpan.innerText = data.timestamp;
                 label.style.display = 'block';
-                completed++;
-            } else {
-                btn.className = 'fa-regular fa-circle';
-                btn.parentElement.style.color = '#cbd5e1';
-                row.style.opacity = '1';
-                label.style.display = 'none';
-                completed--;
+                
+                if (!data.already_completed) {
+                    completed++;
+                }
             }
 
             // Update Sticky Header Numbers

@@ -144,6 +144,76 @@ if (!function_exists('student_has_plans')) {
 if (isset($_GET['action'])) {
     header('Content-Type: application/json');
     
+    // Clear student completion (Super Admin only, CSRF-protected POST request)
+    if ($_GET['action'] === 'clear_student_activity_completion') {
+        if (!is_super_admin()) {
+            echo json_encode(['success' => false, 'message' => 'Unauthorized: Only Super Administrators can clear completions.']);
+            exit;
+        }
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !csrf_verify()) {
+            echo json_encode(['success' => false, 'message' => 'Security token mismatch. Please reload and try again.']);
+            exit;
+        }
+        
+        $analytics_id = (int)($_POST['analytics_id'] ?? 0);
+        $clear_reason = trim($_POST['clear_reason'] ?? '');
+        
+        if ($analytics_id <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Invalid completion ID.']);
+            exit;
+        }
+        if (empty($clear_reason)) {
+            echo json_encode(['success' => false, 'message' => 'Clear reason is required.']);
+            exit;
+        }
+        
+        try {
+            $stmt = $pdo->prepare("SELECT * FROM study_plan_analytics WHERE id = ? LIMIT 1");
+            $stmt->execute([$analytics_id]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$row) {
+                echo json_encode(['success' => false, 'message' => 'Completion record not found.']);
+                exit;
+            }
+            if ($row['action_type'] !== 'complete_activity') {
+                echo json_encode(['success' => false, 'message' => 'Only completion activities can be cleared.']);
+                exit;
+            }
+            if (($row['completion_status'] ?? 'completed') === 'cleared') {
+                echo json_encode(['success' => false, 'message' => 'This completion is already cleared.']);
+                exit;
+            }
+            
+            $pdo->beginTransaction();
+            
+            // Non-destructively set status to cleared with explicit Asia/Kolkata timezone timestamp
+            $stmt_up = $pdo->prepare("
+                UPDATE study_plan_analytics 
+                SET completion_status = 'cleared', 
+                    cleared_by = ?, 
+                    cleared_at = ?, 
+                    clear_reason = ? 
+                WHERE id = ?
+            ");
+            $stmt_up->execute([$_SESSION['admin_username'] ?? 'Super Admin', date('Y-m-d H:i:s'), $clear_reason, $analytics_id]);
+            
+            // Audit record using PEPP's existing activity log
+            log_admin_activity(
+                $pdo, 
+                $_SESSION['admin_username'] ?? 'Super Admin', 
+                'clear_study_plan_completion', 
+                "Cleared task completion ID {$analytics_id} (Student: {$row['student_email']}, Activity: {$row['activity_id']}). Reason: {$clear_reason}"
+            );
+            
+            $pdo->commit();
+            echo json_encode(['success' => true, 'message' => 'Completion cleared successfully.']);
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+        }
+        exit;
+    }
+    
     // 1. Global student autocomplete search
     if ($_GET['action'] === 'global_student_search') {
         $q = trim($_GET['q'] ?? '');
@@ -241,7 +311,7 @@ if (isset($_GET['action'])) {
                 $stmt_comp = $pdo->prepare("
                     SELECT DISTINCT activity_id 
                     FROM study_plan_analytics 
-                    WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity'
+                    WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity' AND completion_status = 'completed'
                 ");
                 $stmt_comp->execute([$email, $p['id']]);
                 $completed_ids = $stmt_comp->fetchAll(PDO::FETCH_COLUMN);
@@ -326,7 +396,7 @@ if (isset($_GET['action'])) {
                 $pct = $tot > 0 ? round(($comp / $tot) * 100) : 0;
                 $perf = get_performance_status($pct);
 
-                $last_up = $pdo->prepare("SELECT MAX(created_at) FROM study_plan_analytics WHERE student_email = ? AND study_plan_id = ?");
+                $last_up = $pdo->prepare("SELECT MAX(created_at) FROM study_plan_analytics WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity' AND completion_status = 'completed'");
                 $last_up->execute([$email, $p['id']]);
                 $lut = $last_up->fetchColumn();
 
@@ -516,24 +586,32 @@ if (isset($_GET['action'])) {
             foreach ($activities as $a) {
                 // Fetch logged actions safely
                 $anal_cols = get_table_columns_safe($pdo, 'study_plan_analytics');
-                $select_fields = ['created_at', 'ip_address'];
+                $select_fields = ['id', 'created_at', 'ip_address'];
                 if (in_array('latitude', $anal_cols)) $select_fields[] = 'latitude';
                 if (in_array('longitude', $anal_cols)) $select_fields[] = 'longitude';
                 if (in_array('resolved_place', $anal_cols)) $select_fields[] = 'resolved_place';
+                if (in_array('completion_status', $anal_cols)) $select_fields[] = 'completion_status';
+                if (in_array('cleared_by', $anal_cols)) $select_fields[] = 'cleared_by';
+                if (in_array('cleared_at', $anal_cols)) $select_fields[] = 'cleared_at';
+                if (in_array('clear_reason', $anal_cols)) $select_fields[] = 'clear_reason';
                 
                 $fields_str = implode(', ', $select_fields);
                 $stmt_log = $pdo->prepare("
                     SELECT $fields_str 
                     FROM study_plan_analytics 
                     WHERE student_email = ? AND study_plan_id = ? AND activity_id = ? AND action_type = 'complete_activity'
+                    ORDER BY id DESC
                     LIMIT 1
                 ");
                 $stmt_log->execute([$email, $plan_id, $a['id']]);
                 $log = $stmt_log->fetch(PDO::FETCH_ASSOC);
 
+                $is_completed_now = ($log && ($log['completion_status'] ?? 'completed') === 'completed');
+                $is_cleared_now = ($log && ($log['completion_status'] ?? 'completed') === 'cleared');
+
                 $status = 'Pending';
                 $status_class = 'gray';
-                if ($log) {
+                if ($is_completed_now) {
                     $status = 'Completed';
                     $status_class = 'green';
                 } else {
@@ -564,24 +642,31 @@ if (isset($_GET['action'])) {
                     'resource' => r_esc($a['resource_links'] ?: 'Standard Materials'),
                     'status' => $status,
                     'status_class' => $status_class,
-                    'completed_at' => $log ? date('d M Y h:i A', strtotime($log['created_at'])) : '',
-                    'ip' => $log ? $log['ip_address'] : '',
-                    'browser' => $log ? 'Chrome/Safari' : '',
-                    'device' => $log ? 'Web App' : '',
-                    'location' => $log ? (($log['latitude'] && $log['longitude']) ? ($log['latitude'] . ',' . $log['longitude']) : ($log['resolved_place'] ?? '')) : '',
-                    'duration' => $log ? '15 mins' : '' // Fallback mockup duration
+                    'analytics_id' => $log ? (int)$log['id'] : 0,
+                    'completed_at' => $is_completed_now ? date('d M Y h:i A', strtotime($log['created_at'])) : '',
+                    'ip' => $is_completed_now ? $log['ip_address'] : '',
+                    'browser' => $is_completed_now ? 'Chrome/Safari' : '',
+                    'device' => $is_completed_now ? 'Web App' : '',
+                    'location' => $is_completed_now ? (($log['latitude'] && $log['longitude']) ? ($log['latitude'] . ',' . $log['longitude']) : ($log['resolved_place'] ?? '')) : '',
+                    'duration' => $is_completed_now ? '15 mins' : '',
+                    
+                    // Cleared metadata fields
+                    'is_cleared' => $is_cleared_now,
+                    'cleared_by' => $is_cleared_now ? r_esc($log['cleared_by']) : '',
+                    'cleared_at' => $is_cleared_now && $log['cleared_at'] ? date('d M Y h:i A', strtotime($log['cleared_at'])) : '',
+                    'clear_reason' => $is_cleared_now ? r_esc($log['clear_reason']) : ''
                 ];
 
                 // Accumulate stats for subject/chapter/faculty completion graphs
                 $subj = $a['subject'] ?: 'Unspecified';
                 if (!isset($subject_stats[$subj])) $subject_stats[$subj] = ['total' => 0, 'comp' => 0];
                 $subject_stats[$subj]['total']++;
-                if ($log) $subject_stats[$subj]['comp']++;
+                if ($is_completed_now) $subject_stats[$subj]['comp']++;
 
                 $chap = $a['chapter'] ?: 'General';
                 if (!isset($chapter_stats[$chap])) $chapter_stats[$chap] = ['total' => 0, 'comp' => 0];
                 $chapter_stats[$chap]['total']++;
-                if ($log) $chapter_stats[$chap]['comp']++;
+                if ($is_completed_now) $chapter_stats[$chap]['comp']++;
 
                 $fac = $a['faculty'] ?: 'TBD';
                 if (!isset($faculty_stats[$fac])) $faculty_stats[$fac] = ['total' => 0, 'comp' => 0];
@@ -641,7 +726,7 @@ if (isset($_GET['action'])) {
                 SELECT COUNT(*) 
                 FROM study_plan_analytics an
                 JOIN users u ON an.student_email = u.email
-                WHERE u.pepp_course = ? AND u.status = 'approved' AND an.action_type = 'complete_activity'
+                WHERE u.pepp_course = ? AND u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed'
             ", [$course_name]);
 
             $avg_comp = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
@@ -696,7 +781,7 @@ if (isset($_GET['action'])) {
                 $total_completed_tasks_sum = 0;
 
                 foreach ($stds as $email) {
-                    $comp = db_count($pdo, "SELECT COUNT(DISTINCT an.activity_id) FROM study_plan_analytics an JOIN study_plan_activities act ON an.activity_id = act.id WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity'", [$email, $p['id']]);
+                    $comp = db_count($pdo, "SELECT COUNT(DISTINCT an.activity_id) FROM study_plan_analytics an JOIN study_plan_activities act ON an.activity_id = act.id WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed'", [$email, $p['id']]);
                     $total_completed_tasks_sum += $comp;
                     if ($tasks_cnt > 0 && $comp === $tasks_cnt) {
                         $completed_std_cnt++;
@@ -757,7 +842,7 @@ if (isset($_GET['action'])) {
                         SELECT COUNT(*) 
                         FROM study_plan_analytics an
                         JOIN users u ON an.student_email = u.email
-                        WHERE an.activity_id = ? AND an.action_type = 'complete_activity' AND u.pepp_course = ? AND u.status = 'approved'
+                        WHERE an.activity_id = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND u.pepp_course = ? AND u.status = 'approved'
                     ", [$t['id'], $course_name]);
                     $pending = $total_students - $comp;
                     
@@ -804,7 +889,7 @@ if (isset($_GET['action'])) {
                 SELECT u.name, u.email, {$select_str}
                 FROM study_plan_analytics an
                 JOIN users u ON an.student_email = u.email
-                WHERE an.activity_id = ? AND an.action_type = 'complete_activity' AND u.pepp_course = ? AND u.status = 'approved'
+                WHERE an.activity_id = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND u.pepp_course = ? AND u.status = 'approved'
                 ORDER BY an.created_at DESC
             ");
             $stmt->execute([$activity_id, $course_name]);
@@ -875,7 +960,7 @@ if (isset($_GET['action'])) {
 
             foreach ($students as $s) {
                 // Check if completed
-                $comp = db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE activity_id = ? AND student_email = ? AND action_type = 'complete_activity'", [$activity_id, $s['email']]);
+                $comp = db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE activity_id = ? AND student_email = ? AND action_type = 'complete_activity' AND completion_status = 'completed'", [$activity_id, $s['email']]);
                 if ($comp === 0) {
                     $data[] = [
                         'name' => r_esc($s['name']),
@@ -1046,6 +1131,7 @@ if (isset($_GET['action'])) {
                     WHERE student_email IN ($email_placeholders) 
                       AND study_plan_id IN ($plan_placeholders) 
                       AND action_type = 'complete_activity'
+                      AND completion_status = 'completed'
                 ");
                 $stmt_comp_cnt->execute(array_merge($student_emails, $pids));
                 $total_completed_tasks = (int)$stmt_comp_cnt->fetchColumn();
@@ -1154,7 +1240,7 @@ if (isset($_GET['action'])) {
                     $stmt_comp = $pdo->prepare("
                        SELECT COUNT(*) 
                        FROM study_plan_analytics 
-                       WHERE study_plan_id = ? AND student_email IN ($placeholders) AND action_type = 'complete_activity'
+                       WHERE study_plan_id = ? AND student_email IN ($placeholders) AND action_type = 'complete_activity' AND completion_status = 'completed'
                     ");
                     $stmt_comp->execute(array_merge([$p['id']], $assigned_students));
                     $completions_count = (int)$stmt_comp->fetchColumn();
@@ -1256,7 +1342,7 @@ if (isset($_GET['action'])) {
                     $stmt_comp = $pdo->prepare("
                         SELECT COUNT(*) 
                         FROM study_plan_analytics 
-                        WHERE student_email = ? AND study_plan_id IN ($in_clause) AND action_type = 'complete_activity'
+                        WHERE student_email = ? AND study_plan_id IN ($in_clause) AND action_type = 'complete_activity' AND completion_status = 'completed'
                     ");
                     $stmt_comp->execute(array_merge([$s['email']], $assigned_pids));
                     $comp = (int)$stmt_comp->fetchColumn();
@@ -1372,7 +1458,7 @@ if (isset($_GET['action'])) {
                         $stmt_comp = $pdo->prepare("
                             SELECT COUNT(*) 
                             FROM study_plan_analytics 
-                            WHERE activity_id = ? AND action_type = 'complete_activity' AND student_email IN ($placeholders)
+                            WHERE activity_id = ? AND action_type = 'complete_activity' AND completion_status = 'completed' AND student_email IN ($placeholders)
                         ");
                         $stmt_comp->execute(array_merge([$t['id']], $assigned_students));
                         $comp = (int)$stmt_comp->fetchColumn();
@@ -1431,6 +1517,7 @@ if (isset($_GET['action'])) {
                 )
                 WHERE an.activity_id = ? 
                   AND an.action_type = 'complete_activity' 
+                  AND an.completion_status = 'completed'
                   AND s.form_id = ? 
                   AND s.is_deleted = 0 
                   AND u.status = 'approved'
@@ -1508,7 +1595,7 @@ if (isset($_GET['action'])) {
 
             foreach ($students as $s) {
                 // Check if completed
-                $comp = db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE activity_id = ? AND student_email = ? AND action_type = 'complete_activity'", [$activity_id, $s['email']]);
+                $comp = db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE activity_id = ? AND student_email = ? AND action_type = 'complete_activity' AND completion_status = 'completed'", [$activity_id, $s['email']]);
                 if ($comp === 0) {
                     $data[] = [
                         'name' => r_esc($s['name']),
@@ -1804,7 +1891,7 @@ if (isset($_GET['action'])) {
                         JOIN users u ON an.student_email = u.email
                         JOIN study_plans sp ON an.study_plan_id = sp.id
                         JOIN study_plan_activities act ON an.activity_id = act.id
-                        WHERE u.status = 'approved' AND an.action_type = 'complete_activity'
+                        WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed'
                         ORDER BY an.created_at DESC LIMIT 30
                     ");
                     $rows = $stmt->fetchAll();
@@ -1853,7 +1940,7 @@ if (isset($_GET['action'])) {
                         if (!empty($pids)) {
                             $in = implode(',', array_fill(0, count($pids), '?'));
                             $total = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in)", $pids);
-                            $comp = db_count($pdo, "SELECT COUNT(DISTINCT an.activity_id) FROM study_plan_analytics an JOIN study_plan_activities act ON an.activity_id = act.id WHERE an.student_email = ? AND an.action_type = 'complete_activity' AND an.study_plan_id IN ($in)", array_merge([$std['email']], $pids));
+                            $comp = db_count($pdo, "SELECT COUNT(DISTINCT an.activity_id) FROM study_plan_analytics an JOIN study_plan_activities act ON an.activity_id = act.id WHERE an.student_email = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND an.study_plan_id IN ($in)", array_merge([$std['email']], $pids));
                         }
                         
                         $pct = $total > 0 ? round(($comp / $total) * 100) : 0;
@@ -1972,7 +2059,7 @@ if (isset($_GET['action'])) {
                         $stmt_comp = $pdo->prepare("
                             SELECT COUNT(DISTINCT activity_id), MAX(created_at) 
                             FROM study_plan_analytics 
-                            WHERE student_email = ? AND action_type = 'complete_activity' AND study_plan_id IN ($in_clause)
+                            WHERE student_email = ? AND action_type = 'complete_activity' AND completion_status = 'completed' AND study_plan_id IN ($in_clause)
                         ");
                         $stmt_comp->execute(array_merge([$std['email']], $plan_ids));
                         $res = $stmt_comp->fetch(PDO::FETCH_NUM);
@@ -2062,8 +2149,8 @@ if ($source === 'courses') {
         'total_custom_forms' => db_count($pdo, "SELECT COUNT(*) FROM campaign_forms WHERE status = 'published'"),
         'total_submissions' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions s JOIN users u ON s.respondent_identifier = u.email WHERE s.is_deleted = 0 AND u.status = 'approved' AND $assigned_plans_subquery"),
         'total_assignments' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_assignments"),
-        'learning_started' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM users u JOIN study_plan_analytics an ON u.email = an.student_email JOIN study_plan_activities act ON an.activity_id = act.id WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND $assigned_plans_subquery"),
-        'total_checklist_completions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email JOIN study_plan_activities act ON an.activity_id = act.id WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND $assigned_plans_subquery"),
+        'learning_started' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM users u JOIN study_plan_analytics an ON u.email = an.student_email JOIN study_plan_activities act ON an.activity_id = act.id WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND $assigned_plans_subquery"),
+        'total_checklist_completions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email JOIN study_plan_activities act ON an.activity_id = act.id WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND $assigned_plans_subquery"),
         'total_views' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'view' AND $assigned_plans_subquery"),
         'total_downloads' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'download' AND $assigned_plans_subquery"),
         'active_today' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND DATE(an.created_at) = CURDATE() AND $assigned_plans_subquery"),
@@ -2072,7 +2159,7 @@ if ($source === 'courses') {
         'logins_today' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'view' AND DATE(an.created_at) = CURDATE() AND $assigned_plans_subquery"),
         'leads_converted' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions s JOIN users u ON s.respondent_identifier = u.email WHERE s.is_converted_lead = 1 AND u.status = 'approved' AND $assigned_plans_subquery"),
         'total_faculty' => db_count($pdo, "SELECT COUNT(DISTINCT faculty) FROM study_plan_activities WHERE faculty IS NOT NULL AND faculty != ''"),
-        'pending_activities' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities a LEFT JOIN study_plan_analytics an ON a.id = an.activity_id AND an.action_type = 'complete_activity' WHERE an.id IS NULL"),
+        'pending_activities' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities a LEFT JOIN study_plan_analytics an ON a.id = an.activity_id AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' WHERE an.id IS NULL"),
         'upcoming_sessions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE activity_date >= CURDATE()")
     ];
 
@@ -2095,7 +2182,7 @@ if ($source === 'courses') {
         SELECT COUNT(*) 
         FROM study_plan_analytics an
         JOIN users u ON an.student_email = u.email
-        WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND $assigned_plans_subquery
+        WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND $assigned_plans_subquery
     ");
     
     $kpis['attendance_pct'] = $total_available_tasks > 0 ? round(($total_completed_tasks / $total_available_tasks) * 100) : 0;
@@ -3338,6 +3425,8 @@ include 'includes/admin_nav.php';
 <script>
     const adminUsername = '<?php echo addslashes($admin_username); ?>';
     const sourceVal = '<?php echo addslashes($source); ?>';
+    const isSuperAdmin = <?php echo is_super_admin() ? 'true' : 'false'; ?>;
+    const csrfToken = '<?php echo csrf_token(); ?>';
     
     document.addEventListener('DOMContentLoaded', function() {
         if (sourceVal === 'courses') {
@@ -3856,6 +3945,13 @@ include 'includes/admin_nav.php';
         const titleEl = document.getElementById('st-modal-title');
         const subtitleEl = document.getElementById('st-modal-subtitle');
         const timelineListContainer = document.getElementById('st-timeline-list');
+        const backdrop = document.getElementById('student-task-modal-backdrop');
+
+        backdrop.dataset.email = email;
+        backdrop.dataset.planId = planId;
+        backdrop.dataset.planTitle = planTitle;
+        backdrop.dataset.streakDays = streakDays;
+        backdrop.dataset.overallPerformance = overallPerformance;
 
         titleEl.innerHTML = `<i class="fas fa-folder-open" style="color:var(--accent);"></i> Checklist Audit: ${planTitle}`;
         subtitleEl.innerHTML = `Student: <strong>${currentSelectedStudentName}</strong> (${email}) &nbsp;|&nbsp; Course: <strong>${currentSelectedStudentCourse}</strong>`;
@@ -4067,6 +4163,21 @@ include 'includes/admin_nav.php';
                                 </div>
                                 <div><i class="fas fa-desktop"></i> IP Address: ${item.ip} | User Agent: ${item.browser} | Device: ${item.device}</div>
                                 ${mapLink ? `<div style="margin-top:4px;"><i class="fas fa-location-dot"></i> GPS Coordinates: ${item.location} ${mapLink}</div>` : ''}
+                                ${isSuperAdmin ? `
+                                    <div style="margin-top:8px; display:flex; justify-content:flex-end;">
+                                        <button type="button" class="btn btn-xs btn-soft-red" style="padding:4px 8px; font-size:0.7rem; border-radius:6px; font-weight:700;" onclick="clearCompletion(${item.analytics_id}, '${item.title.replace(/'/g, "\\'")}', '${currentSelectedStudentEmail}', event)">
+                                            <i class="fas fa-trash-can"></i> Clear Completion
+                                        </button>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        ` : ''}
+                        
+                        ${item.is_cleared ? `
+                            <div style="background:#fff5f5; border:1px solid #fee2e2; border-radius:8px; padding:10px 12px; margin-top:8px; font-size:0.72rem; color:#b91c1c; display:flex; flex-direction:column; gap:4px;">
+                                <div><i class="fas fa-ban"></i> Completion was <strong>Cleared</strong></div>
+                                <div>Cleared By: <strong>${item.cleared_by || 'Super Admin'}</strong> on <strong>${item.cleared_at}</strong></div>
+                                <div>Reason: <i>${item.clear_reason || 'No reason specified'}</i></div>
                             </div>
                         ` : ''}
                     </div>
@@ -5122,6 +5233,59 @@ include 'includes/admin_nav.php';
     function scrollToSearchSection() {
         const el = document.getElementById('global-student-search-input');
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    function clearCompletion(analyticsId, activityTitle, studentEmail, event) {
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+        
+        const confirmMsg = `Clear this completed activity?\n\n"${activityTitle}" for ${studentEmail}\n\nClearing this completion will remove it from the student's progress calculation while preserving the historical activity record.`;
+        const reason = prompt(confirmMsg + "\n\nPlease enter the reason for clearing:");
+        if (reason === null) return; // User cancelled
+        if (reason.trim() === '') {
+            alert('You must provide a reason to clear this completion.');
+            return;
+        }
+        
+        const fd = new FormData();
+        fd.append('analytics_id', analyticsId);
+        fd.append('clear_reason', reason.trim());
+        fd.append('csrf_token', csrfToken);
+        
+        fetch('?action=clear_student_activity_completion', {
+            method: 'POST',
+            body: fd
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                alert(data.message);
+                
+                // Refresh timeline checklist modal
+                const backdrop = document.getElementById('student-task-modal-backdrop');
+                const email = backdrop.dataset.email;
+                const planId = backdrop.dataset.planId;
+                const planTitle = backdrop.dataset.planTitle;
+                const streakDays = backdrop.dataset.streakDays;
+                const overallPerformance = backdrop.dataset.overallPerformance;
+                
+                if (email && planId) {
+                    openStudentTimeline(email, planId, planTitle, streakDays, overallPerformance);
+                    if (typeof loadStudentIntelligenceDashboard === 'function') {
+                        loadStudentIntelligenceDashboard(email);
+                    }
+                } else {
+                    location.reload();
+                }
+            } else {
+                alert(data.message || 'Error clearing completion.');
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Network error occurred.');
+        });
     }
 </script>
 </body>
