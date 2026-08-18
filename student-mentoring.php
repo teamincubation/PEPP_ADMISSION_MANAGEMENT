@@ -57,6 +57,7 @@ function get_student_mentoring_details($pdo, $student) {
     $completed_tasks = 0;
     $max_streak = 0;
     $total_streak_target = 0;
+    $overdue_tasks = 0;
 
     foreach ($plans as $p) {
         // Fetch activities
@@ -92,6 +93,18 @@ function get_student_mentoring_details($pdo, $student) {
             }
         }
 
+        // Calculate overdue tasks for this plan
+        $today_str = date('Y-m-d');
+        foreach ($activities as $act) {
+            if ($p['plan_type'] === 'date_wise') {
+                if ($act['activity_date'] && $act['activity_date'] < $today_str) {
+                    if (!isset($completed_map[$act['id']])) {
+                        $overdue_tasks++;
+                    }
+                }
+            }
+        }
+
         $plan_streak = 0;
         if (!empty($day_tasks)) {
             foreach ($day_tasks as $dk => $stats) {
@@ -110,18 +123,20 @@ function get_student_mentoring_details($pdo, $student) {
     $progress = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
     $attendance = min(100, round($progress * 1.1));
 
-    // Get last call details
+    // Get last call date & time
+    $last_call_time = null;
+    $last_called_status = 'Never Called';
     $call_stmt = $pdo->prepare("SELECT call_timestamp FROM mentor_call_logs WHERE student_user_id = ? ORDER BY call_timestamp DESC LIMIT 1");
     $call_stmt->execute([$user_id]);
-    $last_call_time = $call_stmt->fetchColumn();
-
-    $last_called_status = 'Never';
-    if ($last_call_time) {
-        $days = (int)floor((time() - strtotime($last_call_time)) / 86400);
+    $last_call = $call_stmt->fetch(PDO::FETCH_ASSOC);
+    if ($last_call) {
+        $last_call_time = $last_call['call_timestamp'];
+        $diff = time() - strtotime($last_call_time);
+        $days = round($diff / (60 * 60 * 24));
         if ($days === 0) {
             $last_called_status = 'called today';
-        } else if ($days === 1) {
-            $last_called_status = 'called 1 day ago';
+        } elseif ($days === 1) {
+            $last_called_status = 'called yesterday';
         } else {
             $last_called_status = "called {$days} days ago";
         }
@@ -139,7 +154,11 @@ function get_student_mentoring_details($pdo, $student) {
         'streak_target' => $total_streak_target,
         'last_call_time' => $last_call_time,
         'last_called_status' => $last_called_status,
-        'remarks_count' => $remarks_count
+        'remarks_count' => $remarks_count,
+        'total_tasks' => $total_tasks,
+        'completed_tasks' => $completed_tasks,
+        'pending_tasks' => $total_tasks - $completed_tasks,
+        'overdue_tasks' => $overdue_tasks
     ];
 }
 
@@ -320,7 +339,21 @@ if (mentor_tables_exist($pdo)) {
                 ORDER BY u.name
             ");
             $stmt->execute([$selected_course_name]);
-            $students = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $raw_students = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            $students_with_metrics = [];
+            foreach ($raw_students as $s) {
+                $m = get_student_mentoring_details($pdo, $s);
+                $s['metrics'] = $m;
+                $students_with_metrics[] = $s;
+            }
+            
+            // Sort by completion percentage (progress) descending
+            usort($students_with_metrics, function($a, $b) {
+                return $b['metrics']['progress'] <=> $a['metrics']['progress'];
+            });
+            
+            $students = $students_with_metrics;
         } catch (Exception $e) {}
     }
 
@@ -487,6 +520,54 @@ include 'includes/admin_nav.php';
             <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-users"></i></span>
             <h2>My Students (<?= e($selected_course_name) ?>)</h2>
         </div>
+        
+        <!-- Filters Toolbar for Student Search and Attributes -->
+        <div class="panel-body" style="padding:15px; border-bottom:1px solid var(--border); background:#f8fafc;">
+            <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+                <!-- Search Box -->
+                <div style="flex-grow:1; min-width:200px; position:relative;">
+                    <i class="fas fa-search" style="position:absolute; left:12px; top:12px; color:var(--text-muted); font-size:0.85rem;"></i>
+                    <input type="text" id="student-search-input" onkeyup="applyStudentFilters()" placeholder="Search name, email, mobile, ID..." style="width:100%; padding:8px 12px 8px 34px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text);">
+                </div>
+                <!-- Filters -->
+                <select id="filter-performance" onchange="applyStudentFilters()" style="padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+                    <option value="ALL">All Performance Statuses</option>
+                    <option value="EXCELLENT">Excellent (85%+)</option>
+                    <option value="GOOD">Good (70%-84%)</option>
+                    <option value="AVERAGE">Average (50%-69%)</option>
+                    <option value="NEEDS_IMPROVEMENT">Needs Improvement (<50%)</option>
+                </select>
+                <select id="filter-streak" onchange="applyStudentFilters()" style="padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+                    <option value="ALL">All Streak Counts</option>
+                    <option value="ACTIVE">Has Streak (>0 Days)</option>
+                    <option value="HIGH">High Streak (5+ Days)</option>
+                    <option value="NONE">No Streak (0 Days)</option>
+                </select>
+                <select id="filter-completed" onchange="applyStudentFilters()" style="padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+                    <option value="ALL">All Completed Tasks</option>
+                    <option value="HIGH">High (10+ completed)</option>
+                    <option value="SOME">Some (1-9 completed)</option>
+                    <option value="NONE">Zero completed</option>
+                </select>
+                <select id="filter-pending" onchange="applyStudentFilters()" style="padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+                    <option value="ALL">All Pending Tasks</option>
+                    <option value="YES">Has Pending Tasks (>0)</option>
+                    <option value="NONE">No Pending Tasks (0)</option>
+                </select>
+                <select id="filter-overdue" onchange="applyStudentFilters()" style="padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+                    <option value="ALL">All Overdue Tasks</option>
+                    <option value="YES">Has Overdue Tasks (>0)</option>
+                    <option value="NONE">No Overdue Tasks (0)</option>
+                </select>
+                <select id="filter-attendance" onchange="applyStudentFilters()" style="padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+                    <option value="ALL">All Attendance Rates</option>
+                    <option value="HIGH">High Attendance (75%+)</option>
+                    <option value="LOW">Low Attendance (<75%)</option>
+                </select>
+                <button type="button" class="btn btn-sm btn-outline" onclick="resetStudentFilters()" style="height:36px; padding:0 12px; border-radius:10px;"><i class="fas fa-arrows-rotate"></i> Reset</button>
+            </div>
+        </div>
+
         <div class="panel-body flush table-wrap">
             <table class="data-table mentoring-table">
                 <thead>
@@ -502,10 +583,20 @@ include 'includes/admin_nav.php';
                 <tbody>
                 <?php 
                 foreach ($students as $s): 
-                    $m = get_student_mentoring_details($pdo, $s);
+                    $m = $s['metrics'];
                     $wa_phone = preg_replace('/\D/', '', ($s['whatsapp_country_code'] ?: '+91') . $s['whatsapp_number']);
                 ?>
-                <tr>
+                <tr class="student-row" 
+                    data-name="<?= e(strtolower($s['full_name'])) ?>"
+                    data-email="<?= e(strtolower($s['email'])) ?>"
+                    data-mobile="<?= e($s['whatsapp_number']) ?>"
+                    data-user-id="<?= e(strtolower($s['user_id'])) ?>"
+                    data-progress="<?= (int)$m['progress'] ?>"
+                    data-streak="<?= (int)$m['streak'] ?>"
+                    data-completed="<?= (int)$m['completed_tasks'] ?>"
+                    data-pending="<?= (int)$m['pending_tasks'] ?>"
+                    data-overdue="<?= (int)$m['overdue_tasks'] ?>"
+                    data-attendance="<?= (int)$m['attendance'] ?>">
                     <td data-label="Student">
                         <div class="cell-main"><?= e($s['full_name']) ?></div>
                         <div class="cell-sub"><?= e($s['email']) ?> · <?= e($s['whatsapp_country_code'] . ' ' . $s['whatsapp_number']) ?></div>
@@ -844,6 +935,90 @@ document.addEventListener('keydown', function(e) {
         });
     }
 });
+
+function applyStudentFilters() {
+    const q = document.getElementById('student-search-input') ? document.getElementById('student-search-input').value.toLowerCase().trim() : '';
+    const perf = document.getElementById('filter-performance') ? document.getElementById('filter-performance').value : 'ALL';
+    const streak = document.getElementById('filter-streak') ? document.getElementById('filter-streak').value : 'ALL';
+    const completed = document.getElementById('filter-completed') ? document.getElementById('filter-completed').value : 'ALL';
+    const pending = document.getElementById('filter-pending') ? document.getElementById('filter-pending').value : 'ALL';
+    const overdue = document.getElementById('filter-overdue') ? document.getElementById('filter-overdue').value : 'ALL';
+    const attendance = document.getElementById('filter-attendance') ? document.getElementById('filter-attendance').value : 'ALL';
+    
+    const rows = document.querySelectorAll('.student-row');
+    rows.forEach(row => {
+        const name = row.dataset.name || '';
+        const email = row.dataset.email || '';
+        const mobile = row.dataset.mobile || '';
+        const userId = row.dataset.userId || '';
+        const progress = parseInt(row.dataset.progress) || 0;
+        const streakVal = parseInt(row.dataset.streak) || 0;
+        const completedVal = parseInt(row.dataset.completed) || 0;
+        const pendingVal = parseInt(row.dataset.pending) || 0;
+        const overdueVal = parseInt(row.dataset.overdue) || 0;
+        const attendanceVal = parseInt(row.dataset.attendance) || 0;
+        
+        let show = true;
+        
+        // Search filter
+        if (q && !name.includes(q) && !email.includes(q) && !mobile.includes(q) && !userId.includes(q)) {
+            show = false;
+        }
+        
+        // Performance filter
+        if (show && perf !== 'ALL') {
+            if (perf === 'EXCELLENT' && progress < 85) show = false;
+            else if (perf === 'GOOD' && (progress < 70 || progress >= 85)) show = false;
+            else if (perf === 'AVERAGE' && (progress < 50 || progress >= 70)) show = false;
+            else if (perf === 'NEEDS_IMPROVEMENT' && progress >= 50) show = false;
+        }
+        
+        // Streak filter
+        if (show && streak !== 'ALL') {
+            if (streak === 'ACTIVE' && streakVal <= 0) show = false;
+            else if (streak === 'HIGH' && streakVal < 5) show = false;
+            else if (streak === 'NONE' && streakVal > 0) show = false;
+        }
+        
+        // Completed Tasks filter
+        if (show && completed !== 'ALL') {
+            if (completed === 'HIGH' && completedVal < 10) show = false;
+            else if (completed === 'SOME' && (completedVal < 1 || completedVal >= 10)) show = false;
+            else if (completed === 'NONE' && completedVal > 0) show = false;
+        }
+        
+        // Pending Tasks filter
+        if (show && pending !== 'ALL') {
+            if (pending === 'YES' && pendingVal <= 0) show = false;
+            else if (pending === 'NONE' && pendingVal > 0) show = false;
+        }
+        
+        // Overdue Tasks filter
+        if (show && overdue !== 'ALL') {
+            if (overdue === 'YES' && overdueVal <= 0) show = false;
+            else if (overdue === 'NONE' && overdueVal > 0) show = false;
+        }
+        
+        // Attendance Rate filter
+        if (show && attendance !== 'ALL') {
+            if (attendance === 'HIGH' && attendanceVal < 75) show = false;
+            else if (attendance === 'LOW' && attendanceVal >= 75) show = false;
+        }
+        
+        row.style.display = show ? '' : 'none';
+    });
+}
+
+function resetStudentFilters() {
+    if (document.getElementById('student-search-input')) document.getElementById('student-search-input').value = '';
+    if (document.getElementById('filter-performance')) document.getElementById('filter-performance').value = 'ALL';
+    if (document.getElementById('filter-streak')) document.getElementById('filter-streak').value = 'ALL';
+    if (document.getElementById('filter-completed')) document.getElementById('filter-completed').value = 'ALL';
+    if (document.getElementById('filter-pending')) document.getElementById('filter-pending').value = 'ALL';
+    if (document.getElementById('filter-overdue')) document.getElementById('filter-overdue').value = 'ALL';
+    if (document.getElementById('filter-attendance')) document.getElementById('filter-attendance').value = 'ALL';
+    applyStudentFilters();
+}
 </script>
 
 <?php include 'includes/admin_footer.php'; ?>
