@@ -244,17 +244,36 @@ function installments_dispatch_whatsapp_reminders($pdo) {
         return; // Automated WhatsApp reminders only dispatch in META API mode
     }
 
-    // 1) Verify current time is between 08:00 AM and 09:00 AM IST
+    // 1) Verify current time is within safe daytime hours (08:00 AM - 08:00 PM IST)
     $tz = new DateTimeZone('Asia/Kolkata');
     $now = new DateTime('now', $tz);
     $hour = (int)$now->format('H');
-    if ($hour !== 8 && !defined('FORCE_INSTALLMENT_REMINDER_TEST')) {
-        return; // Only dispatch during the 08:00-09:00 AM IST window
+    if (($hour < 8 || $hour >= 20) && !defined('FORCE_INSTALLMENT_REMINDER_TEST')) {
+        return; // Only dispatch during the safe 08:00 AM - 08:00 PM IST window
+    }
+
+    // Performance Optimization: Skip scan on lazy admin page loads if already run today
+    if (php_sapi_name() !== 'cli' && !defined('FORCE_INSTALLMENT_REMINDER_TEST')) {
+        try {
+            $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'last_whatsapp_upcoming_reminder_run_date' LIMIT 1");
+            $stmt->execute();
+            $lastRun = $stmt->fetchColumn();
+            if ($lastRun === $now->format('Y-m-d')) {
+                return;
+            }
+        } catch (Exception $e) {}
     }
 
     try {
         $eligible = get_eligible_whatsapp_reminders($pdo);
-        if (empty($eligible)) return;
+        if (empty($eligible)) {
+            // Save run date even if no eligible items to avoid redundant checks today
+            if (php_sapi_name() !== 'cli' && !defined('FORCE_INSTALLMENT_REMINDER_TEST')) {
+                $stmt = $pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('last_whatsapp_upcoming_reminder_run_date', ?, NOW()) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()");
+                $stmt->execute([$now->format('Y-m-d')]);
+            }
+            return;
+        }
 
         // Fetch active public banking details
         $public_banking_details = '';
@@ -304,7 +323,7 @@ function installments_dispatch_whatsapp_reminders($pdo) {
 
                 // Normalize recipient phone number
                 $wa_phone = preg_replace('/\D/', '', $inst['whatsapp_country_code'] . $inst['whatsapp_number']);
-                if (empty($wa_phone)) {
+                if (empty($wa_phone) || strlen($wa_phone) < 10) {
                     $pdo->rollBack();
                     continue;
                 }
@@ -348,6 +367,12 @@ function installments_dispatch_whatsapp_reminders($pdo) {
                 error_log("Failed to queue installment reminder for {$inst['installment_id']}: " . $ex->getMessage());
             }
         }
+
+        // Save last run date on successful scan execution
+        if (php_sapi_name() !== 'cli' && !defined('FORCE_INSTALLMENT_REMINDER_TEST')) {
+            $stmt = $pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('last_whatsapp_upcoming_reminder_run_date', ?, NOW()) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()");
+            $stmt->execute([$now->format('Y-m-d')]);
+        }
     } catch (Exception $e) {
         error_log('installments_dispatch_whatsapp_reminders error: ' . $e->getMessage());
     }
@@ -373,17 +398,36 @@ function installments_dispatch_whatsapp_overdue_reminders($pdo) {
         return;
     }
 
-    // 1) Verify current time is between 08:00 AM and 09:00 AM IST
+    // 1) Verify current time is within safe daytime hours (08:00 AM - 08:00 PM IST)
     $tz = new DateTimeZone('Asia/Kolkata');
     $now = new DateTime('now', $tz);
     $hour = (int)$now->format('H');
-    if ($hour !== 8 && !defined('FORCE_INSTALLMENT_REMINDER_TEST')) {
-        return; // Only dispatch during the 08:00-09:00 AM IST window
+    if (($hour < 8 || $hour >= 20) && !defined('FORCE_INSTALLMENT_REMINDER_TEST')) {
+        return; // Only dispatch during the safe 08:00 AM - 08:00 PM IST window
+    }
+
+    // Performance Optimization: Skip scan on lazy admin page loads if already run today
+    if (php_sapi_name() !== 'cli' && !defined('FORCE_INSTALLMENT_REMINDER_TEST')) {
+        try {
+            $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'last_whatsapp_overdue_reminder_run_date' LIMIT 1");
+            $stmt->execute();
+            $lastRun = $stmt->fetchColumn();
+            if ($lastRun === $now->format('Y-m-d')) {
+                return;
+            }
+        } catch (Exception $e) {}
     }
 
     try {
         $eligible = get_eligible_whatsapp_reminders($pdo);
-        if (empty($eligible)) return;
+        if (empty($eligible)) {
+            // Save run date even if no eligible items to avoid redundant checks today
+            if (php_sapi_name() !== 'cli' && !defined('FORCE_INSTALLMENT_REMINDER_TEST')) {
+                $stmt = $pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('last_whatsapp_overdue_reminder_run_date', ?, NOW()) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()");
+                $stmt->execute([$now->format('Y-m-d')]);
+            }
+            return;
+        }
 
         require_once __DIR__ . '/communication/CommunicationEngine.php';
         $commEngine = CommunicationEngine::getInstance($pdo);
@@ -422,7 +466,7 @@ function installments_dispatch_whatsapp_overdue_reminders($pdo) {
 
                 // Normalize recipient phone number
                 $wa_phone = preg_replace('/\D/', '', $inst['whatsapp_country_code'] . $inst['whatsapp_number']);
-                if (empty($wa_phone)) {
+                if (empty($wa_phone) || strlen($wa_phone) < 10) {
                     $pdo->rollBack();
                     continue;
                 }
@@ -465,6 +509,12 @@ function installments_dispatch_whatsapp_overdue_reminders($pdo) {
                 }
                 error_log("Failed to queue installment overdue reminder for {$inst['installment_id']}: " . $ex->getMessage());
             }
+        }
+
+        // Save last run date on successful scan execution
+        if (php_sapi_name() !== 'cli' && !defined('FORCE_INSTALLMENT_REMINDER_TEST')) {
+            $stmt = $pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('last_whatsapp_overdue_reminder_run_date', ?, NOW()) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()");
+            $stmt->execute([$now->format('Y-m-d')]);
         }
     } catch (Exception $e) {
         error_log('installments_dispatch_whatsapp_overdue_reminders error: ' . $e->getMessage());
@@ -511,12 +561,15 @@ function get_eligible_whatsapp_reminders($pdo) {
         // Fetch existing tracking statuses for idempotency check
         $instIds = array_column($rows, 'id');
         $inClause = implode(',', array_fill(0, count($instIds), '?'));
-        $trackStmt = $pdo->prepare("SELECT installment_id, reminder_stage, status FROM installment_whatsapp_reminders WHERE installment_id IN ($inClause)");
+        $trackStmt = $pdo->prepare("SELECT installment_id, reminder_stage, status, last_attempted_at FROM installment_whatsapp_reminders WHERE installment_id IN ($inClause)");
         $trackStmt->execute($instIds);
 
         $tracking = [];
         foreach ($trackStmt->fetchAll(PDO::FETCH_ASSOC) as $track) {
-            $tracking[$track['installment_id']][$track['reminder_stage']] = $track['status'];
+            $tracking[$track['installment_id']][$track['reminder_stage']] = [
+                'status' => $track['status'],
+                'last_attempted_at' => $track['last_attempted_at']
+            ];
         }
 
         $eligible = [];
@@ -552,9 +605,19 @@ function get_eligible_whatsapp_reminders($pdo) {
             }
 
             // Check tracking to prevent duplicate dispatch
-            $existingStatus = $tracking[$r['id']][$stage] ?? null;
-            if ($existingStatus === 'sent' || $existingStatus === 'queued') {
-                continue;
+            $trackInfo = $tracking[$r['id']][$stage] ?? null;
+            if ($trackInfo) {
+                $status = $trackInfo['status'];
+                if ($status === 'sent' || $status === 'queued') {
+                    continue;
+                }
+                if ($status === 'failed') {
+                    // Retry failed items only if previous attempt was at least 4 hours ago
+                    $lastAttempt = $trackInfo['last_attempted_at'] ?? null;
+                    if ($lastAttempt && (time() - strtotime($lastAttempt)) < 4 * 3600) {
+                        continue;
+                    }
+                }
             }
 
             $eligible[] = [

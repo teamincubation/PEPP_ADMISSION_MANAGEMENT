@@ -255,6 +255,17 @@ class CommunicationEngine {
                         WHERE id = ?
                     ");
                     $cancelStmt->execute([$cancelReason, $queueId]);
+                    
+                    // UPDATE tracking status for installment reminders to failed (only if matching and currently queued)
+                    try {
+                        $updRemStmt = $this->pdo->prepare("
+                            UPDATE installment_whatsapp_reminders 
+                            SET status = 'failed' 
+                            WHERE queue_id = ? AND status = 'queued'
+                        ");
+                        $updRemStmt->execute([$queueId]);
+                    } catch (Exception $remEx) {}
+
                     error_log("Queue item #{$queueId} cancelled by mode-era guard: {$cancelReason}");
                     return false;
                 }
