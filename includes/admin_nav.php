@@ -866,6 +866,14 @@ $nav_data = [
                     </span>
                 </a>
                 
+                <a class="nav-item" href="studyplan.php" target="_blank" style="display: flex; align-items: center; width: 100%;">
+                    <i class="fas fa-arrow-up-right-from-square"></i>
+                    <span>Study Plan</span>
+                    <span onclick="copyFormLink('studyplan.php', this, event)" class="copy-link-btn" title="Copy Shareable Link">
+                        <i class="far fa-copy" style="font-size: 0.85rem; pointer-events: none;"></i>
+                    </span>
+                </a>
+                
                 <a class="nav-item" href="installmentpayment.php" target="_blank" style="display: flex; align-items: center; width: 100%;">
                     <i class="fas fa-arrow-up-right-from-square"></i>
                     <span>Installment Payment</span>
