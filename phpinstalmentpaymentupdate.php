@@ -43,12 +43,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
     }
 
     if ($ajax_action === 'send') {
-        $eligible = get_eligible_whatsapp_reminders($pdo);
+        $eligible = get_eligible_whatsapp_reminders($pdo, true);
         $up_7d_q = 0; $up_3d_q = 0; $up_0d_q = 0;
         $ov_3d_q = 0; $ov_7d_q = 0;
         
+        $sent_count = 0;
+        $queued_count = 0;
         $skipped = 0;
         $failed = 0;
+        $details = [];
 
         // Fetch active public banking details
         $public_banking_details = '';
@@ -66,10 +69,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
 
         foreach ($eligible as $inst) {
             $stage = $inst['stage'];
+            $studentName = $inst['student_name'] ?? 'Unknown Student';
+            $instNum = $inst['instalment_number'] ?? '';
+            $stageLabel = $inst['is_overdue'] ? "Overdue {$stage}" : "Upcoming {$stage}";
+            
             try {
                 $pdo->beginTransaction();
 
-                // Re-verify tracking to prevent concurrent race conditions
+                // Re-verify tracking to prevent concurrent duplicates
                 $stmtCheck = $pdo->prepare("SELECT status FROM installment_whatsapp_reminders WHERE installment_id = ? AND reminder_stage = ?");
                 $stmtCheck->execute([$inst['installment_id'], $stage]);
                 $existingStatus = $stmtCheck->fetchColumn();
@@ -77,6 +84,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
                 if ($existingStatus === 'sent' || $existingStatus === 'queued') {
                     $pdo->rollBack();
                     $skipped++;
+                    $details[] = [
+                        'student_name' => $studentName,
+                        'installment' => $instNum,
+                        'stage' => $stageLabel,
+                        'status' => 'already_processed',
+                        'reason' => 'Reminder already sent or queued.'
+                    ];
                     continue;
                 }
 
@@ -86,17 +100,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
                 } else {
                     $stmtTrack = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued', last_attempted_at = NOW() WHERE installment_id = ? AND reminder_stage = ? AND status NOT IN ('queued', 'sent')");
                     $stmtTrack->execute([$inst['installment_id'], $stage]);
-                    if ($stmtTrack->rowCount() === 0) {
-                        $pdo->rollBack();
-                        $skipped++;
-                        continue;
-                    }
                 }
 
                 $wa_phone = preg_replace('/\D/', '', $inst['whatsapp_country_code'] . $inst['whatsapp_number']);
-                if (empty($wa_phone)) {
+                if (empty($wa_phone) || strlen($wa_phone) < 10) {
                     $pdo->rollBack();
                     $failed++;
+                    $details[] = [
+                        'student_name' => $studentName,
+                        'installment' => $instNum,
+                        'stage' => $stageLabel,
+                        'status' => 'invalid',
+                        'reason' => 'Invalid phone number (must be at least 10 digits).'
+                    ];
+                    try {
+                        $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'failed' WHERE installment_id = ? AND reminder_stage = ?")
+                            ->execute([$inst['installment_id'], $stage]);
+                    } catch (Exception $e) {}
                     continue;
                 }
 
@@ -132,17 +152,84 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
                     $stmtUpd->execute([$queueId, $inst['installment_id'], $stage]);
                     $pdo->commit();
 
-                    if ($inst['is_overdue']) {
-                        if ($stage === 'overdue_3d') $ov_3d_q++;
-                        elseif ($stage === 'overdue_7d') $ov_7d_q++;
+                    // Now process the item synchronously AFTER transaction commits
+                    $dispatched = false;
+                    try {
+                        $dispatched = $commEngine->processQueueItem($queueId);
+                    } catch (Exception $procEx) {
+                        error_log("Manual dispatch processQueueItem failed for queue ID {$queueId}: " . $procEx->getMessage());
+                    }
+
+                    if ($dispatched) {
+                        $sent_count++;
+                        if ($inst['is_overdue']) {
+                            if ($stage === 'overdue_3d') $ov_3d_q++;
+                            elseif ($stage === 'overdue_7d') $ov_7d_q++;
+                        } else {
+                            if ($stage === '7d') $up_7d_q++;
+                            elseif ($stage === '3d') $up_3d_q++;
+                            elseif ($stage === '0d') $up_0d_q++;
+                        }
+                        $details[] = [
+                            'student_name' => $studentName,
+                            'installment' => $instNum,
+                            'stage' => $stageLabel,
+                            'status' => 'sent',
+                            'reason' => 'WhatsApp message sent successfully via Meta API.'
+                        ];
                     } else {
-                        if ($stage === '7d') $up_7d_q++;
-                        elseif ($stage === '3d') $up_3d_q++;
-                        elseif ($stage === '0d') $up_0d_q++;
+                        // Retrieve status and safe error log
+                        $qItem = $pdo->prepare("SELECT status, error_message FROM communication_queue WHERE id = ?");
+                        $qItem->execute([$queueId]);
+                        $qRow = $qItem->fetch();
+                        
+                        $failStatus = $qRow['status'] ?? 'failed';
+                        $errMsg = $qRow['error_message'] ?? 'Unknown Meta API or network failure.';
+                        
+                        if ($failStatus === 'cancelled') {
+                            $queued_count++;
+                            if ($inst['is_overdue']) {
+                                if ($stage === 'overdue_3d') $ov_3d_q++;
+                                elseif ($stage === 'overdue_7d') $ov_7d_q++;
+                            } else {
+                                if ($stage === '7d') $up_7d_q++;
+                                elseif ($stage === '3d') $up_3d_q++;
+                                elseif ($stage === '0d') $up_0d_q++;
+                            }
+                            $details[] = [
+                                'student_name' => $studentName,
+                                'installment' => $instNum,
+                                'stage' => $stageLabel,
+                                'status' => 'queued',
+                                'reason' => 'Added to communication queue; waiting for dispatcher (outbound mode is manual).'
+                            ];
+                        } else {
+                            $failed++;
+                            // Filter credentials and sensitive metadata from safe error message
+                            $safeErrMsg = preg_replace('/(Bearer|token|key|secret)[^\s]*/i', '***', $errMsg);
+                            $details[] = [
+                                'student_name' => $studentName,
+                                'installment' => $instNum,
+                                'stage' => $stageLabel,
+                                'status' => 'failed',
+                                'reason' => 'Meta API rejected request: ' . $safeErrMsg
+                            ];
+                        }
                     }
                 } else {
                     $pdo->rollBack();
                     $failed++;
+                    $details[] = [
+                        'student_name' => $studentName,
+                        'installment' => $instNum,
+                        'stage' => $stageLabel,
+                        'status' => 'failed',
+                        'reason' => $commEngine->lastError ?: 'Failed to resolve template or mapping is missing.'
+                    ];
+                    try {
+                        $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'failed' WHERE installment_id = ? AND reminder_stage = ?")
+                            ->execute([$inst['installment_id'], $stage]);
+                    } catch (Exception $e) {}
                 }
 
             } catch (Exception $ex) {
@@ -151,6 +238,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
                 }
                 error_log("Failed to manually queue reminder for {$inst['installment_id']}: " . $ex->getMessage());
                 $failed++;
+                $details[] = [
+                    'student_name' => $studentName,
+                    'installment' => $instNum,
+                    'stage' => $stageLabel,
+                    'status' => 'failed',
+                    'reason' => $ex->getMessage()
+                ];
+                try {
+                    $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'failed' WHERE installment_id = ? AND reminder_stage = ?")
+                        ->execute([$inst['installment_id'], $stage]);
+                } catch (Exception $e) {}
             }
         }
 
@@ -161,9 +259,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
             'up_0d_q' => $up_0d_q,
             'ov_3d_q' => $ov_3d_q,
             'ov_7d_q' => $ov_7d_q,
-            'total_queued' => ($up_7d_q + $up_3d_q + $up_0d_q + $ov_3d_q + $ov_7d_q),
+            'sent_count' => $sent_count,
+            'queued_count' => $queued_count,
             'skipped' => $skipped,
-            'failed' => $failed
+            'failed' => $failed,
+            'details' => $details
         ]);
         exit();
     }
@@ -543,47 +643,37 @@ function sendReminder(r) {
             </div>
 
             <!-- Result State -->
-            <div id="modal-result" style="display:none;">
-                <div style="text-align:center; margin-bottom:20px;">
-                    <span style="background:#dcfce4; color:#15803d; width:48px; height:48px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:1.5rem; margin-bottom:10px;"><i class="fas fa-check-circle"></i></span>
-                    <h4 style="margin:0; font-size:1.05rem; font-weight:700; color:#0f172a;">Reminder Dispatch Complete</h4>
-                    <p style="margin:0; font-size:0.8rem; color:#64748b;">The reminders have been successfully queued.</p>
+            <div id="modal-result" style="display:none; max-width: 100%;">
+                <div style="text-align:center; margin-bottom:15px;">
+                    <span style="background:#dcfce4; color:#15803d; width:44px; height:44px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:1.4rem; margin-bottom:8px;"><i class="fas fa-check-circle"></i></span>
+                    <h4 style="margin:0; font-size:1rem; font-weight:700; color:#0f172a;">Reminder Dispatch Complete</h4>
+                    <p style="margin:0; font-size:0.78rem; color:#64748b;">The manual reminders have been processed.</p>
                 </div>
                 
-                <div style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #f1f5f9; font-size:0.9rem; margin-bottom:20px;">
-                    <div style="display:flex; justify-content:between; width:100%; align-items:center;">
-                        <span>Upcoming 7-day queued:</span>
-                        <strong style="margin-left:auto;" id="result-up-7d">0</strong>
+                <div style="display:flex; flex-direction:column; gap:6px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #f1f5f9; font-size:0.85rem; margin-bottom:15px;">
+                    <div style="display:flex; justify-content:between; width:100%; align-items:center; font-weight:700; color:#15803d;">
+                        <span>Successfully Sent (Meta WhatsApp):</span>
+                        <strong style="margin-left:auto;" id="result-sent">0</strong>
                     </div>
-                    <div style="display:flex; justify-content:between; width:100%; align-items:center;">
-                        <span>Upcoming 3-day queued:</span>
-                        <strong style="margin-left:auto;" id="result-up-3d">0</strong>
-                    </div>
-                    <div style="display:flex; justify-content:between; width:100%; align-items:center;">
-                        <span>Due today queued:</span>
-                        <strong style="margin-left:auto;" id="result-up-0d">0</strong>
-                    </div>
-                    <div style="display:flex; justify-content:between; width:100%; align-items:center; color:#991b1b;">
-                        <span>Overdue 3-day queued:</span>
-                        <strong style="margin-left:auto;" id="result-ov-3d">0</strong>
-                    </div>
-                    <div style="display:flex; justify-content:between; width:100%; align-items:center; color:#991b1b;">
-                        <span>Overdue 7-day queued:</span>
-                        <strong style="margin-left:auto;" id="result-ov-7d">0</strong>
-                    </div>
-                    <hr style="border:0; border-top:1px solid #e2e8f0; margin:6px 0;">
-                    <div style="display:flex; justify-content:between; width:100%; align-items:center; font-weight:700;">
-                        <span>Total successfully queued:</span>
-                        <strong style="margin-left:auto; color:#15803d;" id="result-total">0</strong>
+                    <div style="display:flex; justify-content:between; width:100%; align-items:center; font-weight:700; color:#4b5563;">
+                        <span>Successfully Queued (Manual Mode):</span>
+                        <strong style="margin-left:auto;" id="result-queued">0</strong>
                     </div>
                     <div style="display:flex; justify-content:between; width:100%; align-items:center; color:#64748b;">
-                        <span>Already processed/skipped:</span>
+                        <span>Already Processed (Skipped):</span>
                         <strong style="margin-left:auto;" id="result-skipped">0</strong>
                     </div>
-                    <div style="display:flex; justify-content:between; width:100%; align-items:center; color:#ef4444;">
-                        <span>Ineligible/Failed:</span>
+                    <div style="display:flex; justify-content:between; width:100%; align-items:center; color:#ef4444; font-weight:600;">
+                        <span>Failed / Ineligible:</span>
                         <strong style="margin-left:auto;" id="result-failed">0</strong>
                     </div>
+                </div>
+
+                <div id="result-details-container" style="max-height: 180px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; font-size: 0.78rem; background: #fafafb; display: none;">
+                    <h5 style="margin: 0 0 8px 0; font-weight: 700; color: #475569; border-bottom: 1px solid #f1f5f9; padding-bottom: 4px; display: flex; align-items: center; gap: 4px;">
+                        <i class="fas fa-list-ul"></i> Outcome Details
+                    </h5>
+                    <div id="result-details-list" style="display: flex; flex-direction: column; gap: 6px;"></div>
                 </div>
             </div>
         </div>
@@ -696,14 +786,51 @@ document.addEventListener('DOMContentLoaded', function() {
                 loadingState.style.display = 'none';
                 if (data.ok) {
                     resultState.style.display = 'block';
-                    document.getElementById('result-up-7d').innerText = data.up_7d_q;
-                    document.getElementById('result-up-3d').innerText = data.up_3d_q;
-                    document.getElementById('result-up-0d').innerText = data.up_0d_q;
-                    document.getElementById('result-ov-3d').innerText = data.ov_3d_q;
-                    document.getElementById('result-ov-7d').innerText = data.ov_7d_q;
-                    document.getElementById('result-total').innerText = data.total_queued;
+                    document.getElementById('result-sent').innerText = data.sent_count;
+                    document.getElementById('result-queued').innerText = data.queued_count;
                     document.getElementById('result-skipped').innerText = data.skipped;
                     document.getElementById('result-failed').innerText = data.failed;
+                    
+                    const detailsContainer = document.getElementById('result-details-container');
+                    const detailsList = document.getElementById('result-details-list');
+                    detailsList.innerHTML = '';
+                    
+                    if (data.details && data.details.length > 0) {
+                        data.details.forEach(item => {
+                            let badgeColor = '';
+                            let badgeText = '';
+                            if (item.status === 'sent') {
+                                badgeColor = 'background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0;';
+                                badgeText = 'Sent';
+                            } else if (item.status === 'queued') {
+                                badgeColor = 'background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb;';
+                                badgeText = 'Queued';
+                            } else if (item.status === 'already_processed') {
+                                badgeColor = 'background: #eff6ff; color: #1d4ed8; border: 1px solid #dbeafe;';
+                                badgeText = 'Skipped';
+                            } else {
+                                badgeColor = 'background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca;';
+                                badgeText = 'Failed';
+                            }
+                            
+                            const div = document.createElement('div');
+                            div.style.cssText = 'padding: 6px; border-bottom: 1px solid #f1f5f9; display: flex; flex-direction: column; gap: 2px; text-align: left;';
+                            div.innerHTML = `
+                                <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                                    <span style="font-size: 0.65rem; font-weight: 700; padding: 1px 5px; border-radius: 4px; ${badgeColor}">${badgeText}</span>
+                                    <strong style="color: #1e293b;">${item.student_name}</strong>
+                                    <span style="color: #64748b; font-size: 0.72rem; margin-left: auto;">Inst: #${item.installment} (${item.stage})</span>
+                                </div>
+                                <div style="color: #475569; font-size: 0.72rem; padding-left: 4px; margin-top: 1px; word-break: break-word;">
+                                    ${item.reason}
+                                </div>
+                            `;
+                            detailsList.appendChild(div);
+                        });
+                        detailsContainer.style.display = 'block';
+                    } else {
+                        detailsContainer.style.display = 'none';
+                    }
                     
                     btnClose.style.display = 'block';
                 } else {

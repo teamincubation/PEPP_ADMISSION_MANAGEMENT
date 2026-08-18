@@ -528,7 +528,7 @@ function installments_dispatch_whatsapp_overdue_reminders($pdo) {
  * @param PDO $pdo
  * @return array
  */
-function get_eligible_whatsapp_reminders($pdo) {
+function get_eligible_whatsapp_reminders($pdo, $isManual = false) {
     $tz = new DateTimeZone('Asia/Kolkata');
     $now = new DateTime('now', $tz);
     $kolkataDate = $now->format('Y-m-d');
@@ -612,9 +612,9 @@ function get_eligible_whatsapp_reminders($pdo) {
                     continue;
                 }
                 if ($status === 'failed') {
-                    // Retry failed items only if previous attempt was at least 4 hours ago
+                    // Retry failed items only if previous attempt was at least 4 hours ago (bypassed on manual trigger)
                     $lastAttempt = $trackInfo['last_attempted_at'] ?? null;
-                    if ($lastAttempt && (time() - strtotime($lastAttempt)) < 4 * 3600) {
+                    if (!$isManual && $lastAttempt && (time() - strtotime($lastAttempt)) < 4 * 3600) {
                         continue;
                     }
                 }

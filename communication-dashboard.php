@@ -212,14 +212,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // Stats & Metrics Queries
+$view = $_GET['view'] ?? 'all';
+if ($view !== 'installments') $view = 'all';
+
 $stats = [
     'pending' => 0, 'processing' => 0, 'sent' => 0, 'delivered' => 0, 'read' => 0, 'failed' => 0, 'total' => 0
 ];
 try {
-    foreach ($pdo->query("SELECT status, COUNT(*) c FROM communication_queue GROUP BY status")->fetchAll() as $row) {
-        $stats[$row['status']] = (int)$row['c'];
+    if ($view === 'installments') {
+        $stmtStats = $pdo->prepare("
+            SELECT cq.status, COUNT(*) c 
+            FROM communication_queue cq 
+            INNER JOIN installment_whatsapp_reminders r ON r.queue_id = cq.id 
+            GROUP BY cq.status
+        ");
+        $stmtStats->execute();
+        foreach ($stmtStats->fetchAll() as $row) {
+            $stats[$row['status']] = (int)$row['c'];
+        }
+        $stats['total'] = (int)$pdo->query("SELECT COUNT(*) FROM communication_queue cq INNER JOIN installment_whatsapp_reminders r ON r.queue_id = cq.id")->fetchColumn();
+    } else {
+        foreach ($pdo->query("SELECT status, COUNT(*) c FROM communication_queue GROUP BY status")->fetchAll() as $row) {
+            $stats[$row['status']] = (int)$row['c'];
+        }
+        $stats['total'] = (int)$pdo->query("SELECT COUNT(*) FROM communication_queue")->fetchColumn();
     }
-    $stats['total'] = (int)$pdo->query("SELECT COUNT(*) FROM communication_queue")->fetchColumn();
 } catch (Exception $ex) {}
 
 // Webhook log count
@@ -246,12 +263,39 @@ $offset = ($page - 1) * $perPage;
 
 $recentLogs = [];
 try {
-    $stmtLogs = $pdo->prepare("
-        SELECT id, channel, recipient, recipient_name, status, retry_count, next_attempt_at, error_message, updated_at, student_uid, event_name, invoice_id
-        FROM communication_queue 
-        ORDER BY created_at DESC, id DESC
-        LIMIT :limit OFFSET :offset
-    ");
+    if ($view === 'installments') {
+        $stmtLogs = $pdo->prepare("
+            SELECT cq.id AS queue_id,
+                   cq.recipient,
+                   cq.recipient_name,
+                   cq.status AS queue_status,
+                   cq.retry_count,
+                   cq.error_message,
+                   cq.updated_at,
+                   cq.message_id,
+                   r.reminder_stage,
+                   r.status AS tracking_status,
+                   r.last_attempted_at,
+                   inst.instalment_number,
+                   inst.amount AS installment_amount,
+                   inst.due_date AS installment_due_date,
+                   u.name AS student_name,
+                   u.user_id AS student_uid
+            FROM communication_queue cq
+            INNER JOIN installment_whatsapp_reminders r ON r.queue_id = cq.id
+            LEFT JOIN instalment_details inst ON inst.id = r.installment_id
+            LEFT JOIN users u ON u.user_id = inst.user_id
+            ORDER BY cq.created_at DESC, cq.id DESC
+            LIMIT :limit OFFSET :offset
+        ");
+    } else {
+        $stmtLogs = $pdo->prepare("
+            SELECT id, channel, recipient, recipient_name, status, retry_count, next_attempt_at, error_message, updated_at, student_uid, event_name, invoice_id, message_id
+            FROM communication_queue 
+            ORDER BY created_at DESC, id DESC
+            LIMIT :limit OFFSET :offset
+        ");
+    }
     $stmtLogs->bindValue(':limit', (int)$perPage, PDO::PARAM_INT);
     $stmtLogs->bindValue(':offset', (int)$offset, PDO::PARAM_INT);
     $stmtLogs->execute();
@@ -535,10 +579,20 @@ include 'includes/admin_nav.php';
         </div>
     </div>
 
+    <!-- View Switcher -->
+    <div style="margin-top:20px; display:flex; gap:10px; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px;">
+        <a href="?view=all" style="padding: 8px 16px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; transition: all 0.2s; <?php echo $view === 'all' ? 'background: #7c3aed; color: #fff; box-shadow: 0 4px 6px -1px rgba(124, 58, 237, 0.2);' : 'background: #fff; color: #4b5563; border: 1px solid #d1d5db;'; ?>">
+            <i class="fas fa-list-ul"></i> All Queue Logs
+        </a>
+        <a href="?view=installments" style="padding: 8px 16px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; transition: all 0.2s; <?php echo $view === 'installments' ? 'background: #7c3aed; color: #fff; box-shadow: 0 4px 6px -1px rgba(124, 58, 237, 0.2);' : 'background: #fff; color: #4b5563; border: 1px solid #d1d5db;'; ?>">
+            <i class="fab fa-whatsapp"></i> Installment WhatsApp Reminders
+        </a>
+    </div>
+
     <!-- ── RECENT DISPATCHES QUEUE LOGS ── -->
-    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; overflow:hidden; margin-top:24px; margin-bottom:20px;">
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; overflow:hidden; margin-top:20px; margin-bottom:20px;">
         <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px; display:flex; justify-content:space-between; align-items:center;">
-            <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;"><i class="fas fa-list-check" style="margin-right:4px;"></i> Communication Queue (<?php echo number_format($totalRecords); ?> total records)</h3>
+            <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;"><i class="fas fa-list-check" style="margin-right:4px;"></i> <?php echo $view === 'installments' ? 'Installment Reminders Log' : 'Communication Queue'; ?> (<?php echo number_format($totalRecords); ?> total records)</h3>
             <div style="display:flex; align-items:center; gap:12px;">
                 <span style="font-size:0.75rem; color:#6b7280;">Cron updates automatically every minute</span>
                 <form method="POST" style="margin:0;">
@@ -552,6 +606,16 @@ include 'includes/admin_nav.php';
         <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
             <thead>
                 <tr style="background:#f9fafb; text-align:left; border-bottom:1px solid #e5e7eb;">
+                <?php if ($view === 'installments'): ?>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Queue ID</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Student</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Recipient</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Installment Details</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Amount / Due Date</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Queue Status</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Reminder Status</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Meta Message ID / Logs</th>
+                <?php else: ?>
                     <th style="padding:12px; font-weight:600; color:#374151;">Queue ID</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Recipient</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Channel / Event</th>
@@ -559,61 +623,125 @@ include 'includes/admin_nav.php';
                     <th style="padding:12px; font-weight:600; color:#374151;">Invoice</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Status</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Meta Delivery Log</th>
+                <?php endif; ?>
                 </tr>
             </thead>
             <tbody>
                 <?php if (empty($recentLogs)): ?>
                     <tr>
-                        <td colspan="7" style="padding:20px; text-align:center; color:#9ca3af;">No messages have been enqueued yet.</td>
+                        <td colspan="<?php echo $view === 'installments' ? 8 : 7; ?>" style="padding:20px; text-align:center; color:#9ca3af;">No messages have been enqueued yet.</td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($recentLogs as $log): ?>
-                        <tr style="border-bottom:1px solid #f3f4f6;">
-                            <td style="padding:12px; font-weight:600;">#<?php echo $log['id']; ?></td>
-                            <td style="padding:12px; font-weight:600;">
-                                <?php if (!empty($log['student_uid'])): ?>
-                                    <a href="student-details.php?user_id=<?php echo urlencode($log['student_uid']); ?>" style="color:#2563eb; text-decoration:underline; font-weight:700;" target="_blank">
-                                        <?php echo htmlspecialchars($log['recipient_name'] ?: $log['student_uid']); ?>
-                                    </a>
-                                <?php else: ?>
-                                    <?php echo htmlspecialchars($log['recipient_name'] ?: '-'); ?>
-                                <?php endif; ?>
-                                <br>
-                                <span style="font-size:0.75rem; color:#6b7280; font-weight:normal;"><?php echo htmlspecialchars($log['recipient']); ?></span>
-                            </td>
-                            <td style="padding:12px;">
-                                <span class="badge blue" style="font-size:0.7rem; font-weight:700;"><?php echo strtoupper($log['channel']); ?></span>
-                                <?php if (!empty($log['event_name'])): ?>
+                        <?php if ($view === 'installments'): ?>
+                            <tr style="border-bottom:1px solid #f3f4f6;">
+                                <td style="padding:12px; font-weight:600;">#<?php echo $log['queue_id']; ?></td>
+                                <td style="padding:12px; font-weight:600;">
+                                    <?php if (!empty($log['student_uid'])): ?>
+                                        <a href="student-details.php?user_id=<?php echo urlencode($log['student_uid']); ?>" style="color:#2563eb; text-decoration:underline; font-weight:700;" target="_blank">
+                                            <?php echo htmlspecialchars($log['student_name'] ?: $log['recipient_name'] ?: $log['student_uid']); ?>
+                                        </a>
+                                    <?php else: ?>
+                                        <?php echo htmlspecialchars($log['recipient_name'] ?: '-'); ?>
+                                    <?php endif; ?>
                                     <br>
-                                    <span style="font-size:0.7rem; color:#4b5563; font-weight:600;">Event: <?php echo htmlspecialchars($log['event_name']); ?></span>
-                                <?php endif; ?>
-                            </td>
-                            <td style="padding:12px; color:#6b7280;"><?php echo date('d M Y, h:i A', strtotime($log['updated_at'])); ?></td>
-                            <td style="padding:12px; font-weight:600;">
-                                <?php if ($log['invoice_id'] && $log['event_name'] === 'payment_receipt'): ?>
-                                    <?php 
-                                    $inv_hmac = hash_hmac('sha256', (string)$log['invoice_id'], INVOICE_HMAC_SECRET);
-                                    $secure_inv_link = "invoice-pdf.php?token=" . urlencode($log['invoice_id'] . '-' . $inv_hmac);
-                                    ?>
-                                    <a href="<?php echo htmlspecialchars($secure_inv_link); ?>" target="_blank" style="color:#059669; text-decoration:none; font-size:0.8rem; font-weight:700;" title="View Secure PDF Invoice">
-                                        <i class="fas fa-file-invoice"></i> Inv #<?php echo $log['invoice_id']; ?>
-                                    </a>
-                                <?php else: ?>
-                                    <span style="color:#9ca3af;">-</span>
-                                <?php endif; ?>
-                            </td>
-                            <td style="padding:12px;">
-                                <span class="badge <?php 
-                                    echo $log['status'] === 'read' || $log['status'] === 'delivered' || $log['status'] === 'sent' ? 'green' : 
-                                         ($log['status'] === 'failed' ? 'red' : 'amber'); 
-                                ?>">
-                                    <?php echo strtoupper($log['status']); ?>
-                                </span>
-                            </td>
-                            <td style="padding:12px; color:#ef4444; max-width:320px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="<?php echo htmlspecialchars($log['error_message'] ?? ''); ?>">
-                                <?php echo $log['error_message'] ? htmlspecialchars($log['error_message']) : '<span style="color:#9ca3af;">-</span>'; ?>
-                            </td>
-                        </tr>
+                                    <span style="font-size:0.75rem; color:#6b7280; font-weight:normal;">UID: <?php echo htmlspecialchars($log['student_uid'] ?: '-'); ?></span>
+                                </td>
+                                <td style="padding:12px; color:#374151; font-weight:500;">
+                                    <?php echo htmlspecialchars($log['recipient']); ?>
+                                </td>
+                                <td style="padding:12px;">
+                                    <span style="font-weight:600; color:#4b5563;">Installment #<?php echo htmlspecialchars($log['instalment_number'] ?: '-'); ?></span>
+                                    <br>
+                                    <span style="font-size:0.75rem; color:#8b5cf6; font-weight:700;"><?php echo strtoupper(str_replace('_', ' ', $log['reminder_stage'] ?? '')); ?></span>
+                                </td>
+                                <td style="padding:12px; font-weight:600; color:#374151;">
+                                    <?php echo $log['installment_amount'] ? '₹' . number_format((float)$log['installment_amount']) : '-'; ?>
+                                    <br>
+                                    <span style="font-size:0.75rem; color:#6b7280; font-weight:normal;">Due: <?php echo $log['installment_due_date'] ? date('d M Y', strtotime($log['installment_due_date'])) : '-'; ?></span>
+                                </td>
+                                <td style="padding:12px;">
+                                    <span class="badge <?php 
+                                        echo $log['queue_status'] === 'read' || $log['queue_status'] === 'delivered' || $log['queue_status'] === 'sent' ? 'green' : 
+                                             ($log['queue_status'] === 'failed' ? 'red' : 'amber'); 
+                                    ?>">
+                                        <?php echo strtoupper($log['queue_status']); ?>
+                                    </span>
+                                    <br>
+                                    <span style="font-size:0.7rem; color:#6b7280; font-weight:normal;">Retries: <?php echo $log['retry_count']; ?></span>
+                                </td>
+                                <td style="padding:12px;">
+                                    <span class="badge <?php 
+                                        echo $log['tracking_status'] === 'sent' ? 'green' : 
+                                             ($log['tracking_status'] === 'failed' ? 'red' : 'amber'); 
+                                    ?>">
+                                        <?php echo strtoupper($log['tracking_status'] ?? 'UNKNOWN'); ?>
+                                    </span>
+                                    <?php if (!empty($log['last_attempted_at'])): ?>
+                                        <br>
+                                        <span style="font-size:0.7rem; color:#6b7280; font-weight:normal;">Try: <?php echo date('d M h:i A', strtotime($log['last_attempted_at'])); ?></span>
+                                    <?php endif; ?>
+                                </td>
+                                <td style="padding:12px; max-width:320px;" title="<?php echo htmlspecialchars($log['error_message'] ?? ''); ?>">
+                                    <?php if ($log['message_id'] && $log['message_id'] !== 'NONE'): ?>
+                                        <span style="font-size:0.75rem; font-weight:700; color:#059669; font-family:monospace;"><?php echo htmlspecialchars($log['message_id']); ?></span>
+                                    <?php endif; ?>
+                                    <?php if ($log['error_message']): ?>
+                                        <?php if ($log['message_id'] && $log['message_id'] !== 'NONE') echo '<br>'; ?>
+                                        <span style="font-size:0.72rem; color:#ef4444; word-break:break-all;"><?php echo htmlspecialchars(preg_replace('/(Bearer|token|key|secret)[^\s]*/i', '***', $log['error_message'])); ?></span>
+                                    <?php elseif (!$log['message_id'] || $log['message_id'] === 'NONE'): ?>
+                                        <span style="color:#9ca3af;">-</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php else: ?>
+                            <tr style="border-bottom:1px solid #f3f4f6;">
+                                <td style="padding:12px; font-weight:600;">#<?php echo $log['id']; ?></td>
+                                <td style="padding:12px; font-weight:600;">
+                                    <?php if (!empty($log['student_uid'])): ?>
+                                        <a href="student-details.php?user_id=<?php echo urlencode($log['student_uid']); ?>" style="color:#2563eb; text-decoration:underline; font-weight:700;" target="_blank">
+                                            <?php echo htmlspecialchars($log['recipient_name'] ?: $log['student_uid']); ?>
+                                        </a>
+                                    <?php else: ?>
+                                        <?php echo htmlspecialchars($log['recipient_name'] ?: '-'); ?>
+                                    <?php endif; ?>
+                                    <br>
+                                    <span style="font-size:0.75rem; color:#6b7280; font-weight:normal;"><?php echo htmlspecialchars($log['recipient']); ?></span>
+                                </td>
+                                <td style="padding:12px;">
+                                    <span class="badge blue" style="font-size:0.7rem; font-weight:700;"><?php echo strtoupper($log['channel']); ?></span>
+                                    <?php if (!empty($log['event_name'])): ?>
+                                        <br>
+                                        <span style="font-size:0.7rem; color:#4b5563; font-weight:600;">Event: <?php echo htmlspecialchars($log['event_name']); ?></span>
+                                    <?php endif; ?>
+                                </td>
+                                <td style="padding:12px; color:#6b7280;"><?php echo date('d M Y, h:i A', strtotime($log['updated_at'])); ?></td>
+                                <td style="padding:12px; font-weight:600;">
+                                    <?php if ($log['invoice_id'] && $log['event_name'] === 'payment_receipt'): ?>
+                                        <?php 
+                                        $inv_hmac = hash_hmac('sha256', (string)$log['invoice_id'], INVOICE_HMAC_SECRET);
+                                        $secure_inv_link = "invoice-pdf.php?token=" . urlencode($log['invoice_id'] . '-' . $inv_hmac);
+                                        ?>
+                                        <a href="<?php echo htmlspecialchars($secure_inv_link); ?>" target="_blank" style="color:#059669; text-decoration:none; font-size:0.8rem; font-weight:700;" title="View Secure PDF Invoice">
+                                            <i class="fas fa-file-invoice"></i> Inv #<?php echo $log['invoice_id']; ?>
+                                        </a>
+                                    <?php else: ?>
+                                        <span style="color:#9ca3af;">-</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td style="padding:12px;">
+                                    <span class="badge <?php 
+                                        echo $log['status'] === 'read' || $log['status'] === 'delivered' || $log['status'] === 'sent' ? 'green' : 
+                                             ($log['status'] === 'failed' ? 'red' : 'amber'); 
+                                    ?>">
+                                        <?php echo strtoupper($log['status']); ?>
+                                    </span>
+                                </td>
+                                <td style="padding:12px; color:#ef4444; max-width:320px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="<?php echo htmlspecialchars($log['error_message'] ?? ''); ?>">
+                                    <?php echo $log['error_message'] ? htmlspecialchars(preg_replace('/(Bearer|token|key|secret)[^\s]*/i', '***', $log['error_message'])) : '<span style="color:#9ca3af;">-</span>'; ?>
+                                </td>
+                            </tr>
+                        <?php endif; ?>
                     <?php endforeach; ?>
                 <?php endif; ?>
             </tbody>

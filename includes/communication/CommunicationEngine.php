@@ -16,6 +16,7 @@ if (file_exists(dirname(dirname(__DIR__)) . '/includes/template_helper.php')) {
 class CommunicationEngine {
     private static $instance = null;
     private $pdo;
+    public $lastError = null;
 
     private function __construct($pdo) {
         $this->pdo = $pdo;
@@ -703,12 +704,14 @@ class CommunicationEngine {
      * @return int|null Queue ID, or null if mapping is disabled/not found
      */
     public function sendEventNotification($eventName, $recipient, array $contextData = [], $sentBy = 'system', $scheduledAt = null) {
+        $this->lastError = null;
         $studentUid = $contextData['student_uid'] ?? null;
         $invoiceId = $contextData['invoice_id'] ?? null;
         
         try {
             $resolved = $this->resolveEventTemplate($eventName, $studentUid, $contextData);
             if (!$resolved) {
+                $this->lastError = "Event '{$eventName}' not mapped to a template or mapping is disabled.";
                 return null;
             }
 
@@ -739,6 +742,7 @@ class CommunicationEngine {
                 }
                 $exists = (int)$dupStmt->fetchColumn();
                 if ($exists > 0) {
+                    $this->lastError = "Duplicate prevention blocked enqueuing (already sent or queued).";
                     error_log("Duplicate prevention blocked enqueuing for student: {$studentUid}, event: {$eventName}, template: {$resolved['name']}");
                     return null;
                 }
@@ -772,6 +776,7 @@ class CommunicationEngine {
 
             return $queueId;
         } catch (Exception $e) {
+            $this->lastError = $e->getMessage();
             error_log("Failed to sendEventNotification for event {$eventName}: " . $e->getMessage());
             return null;
         }
@@ -785,6 +790,11 @@ class CommunicationEngine {
      * @return bool
      */
     public function dispatchQueueItemAsync($queueId) {
+        if ($this->pdo->inTransaction()) {
+            // Defer dispatch to background cron to prevent nested transactions and unsafe external API calls during transaction
+            return true;
+        }
+
         $phpBinary = 'php';
         $cronScript = dirname(dirname(__DIR__)) . '/cron-queue.php';
         
