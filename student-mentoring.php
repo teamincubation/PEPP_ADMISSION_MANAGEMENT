@@ -322,14 +322,32 @@ if (mentor_tables_exist($pdo)) {
         }
     }
 
+    // Initialize default empty values
+    $students = [];
+    $call_logs = [];
+    $remarks_list = [];
+    $assignments = [];
+
     // If super admin, show all assignments
     if (is_super_admin()) {
         try {
-            $assignments = $pdo->query("SELECT mca.*, a.username, a.full_name FROM mentor_course_assignments mca LEFT JOIN admins a ON mca.admin_id = a.id ORDER BY mca.course_name, a.username")->fetchAll(PDO::FETCH_ASSOC);
+            if ($selected_course_name !== '') {
+                $stmt = $pdo->prepare("
+                    SELECT mca.*, a.username, a.full_name 
+                    FROM mentor_course_assignments mca 
+                    LEFT JOIN admins a ON mca.admin_id = a.id 
+                    WHERE mca.course_name = ?
+                    ORDER BY mca.course_name, a.username
+                ");
+                $stmt->execute([$selected_course_name]);
+                $assignments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            } else {
+                $assignments = $pdo->query("SELECT mca.*, a.username, a.full_name FROM mentor_course_assignments mca LEFT JOIN admins a ON mca.admin_id = a.id ORDER BY mca.course_name, a.username")->fetchAll(PDO::FETCH_ASSOC);
+            }
         } catch (Exception $e) {}
     }
 
-    // Load students only if course is selected
+    // Load data only if course is selected
     if ($selected_course_name !== '') {
         try {
             $stmt = $pdo->prepare("
@@ -355,41 +373,55 @@ if (mentor_tables_exist($pdo)) {
             
             $students = $students_with_metrics;
         } catch (Exception $e) {}
+
+        // Load call logs for selected course
+        try {
+            if (is_super_admin()) {
+                $stmt = $pdo->prepare("
+                    SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number, u.email 
+                    FROM mentor_call_logs mcl 
+                    JOIN users u ON mcl.student_user_id = u.user_id 
+                    WHERE u.pepp_course = ?
+                    ORDER BY mcl.call_timestamp DESC LIMIT 100
+                ");
+                $stmt->execute([$selected_course_name]);
+            } else {
+                $stmt = $pdo->prepare("
+                    SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number, u.email 
+                    FROM mentor_call_logs mcl 
+                    JOIN users u ON mcl.student_user_id = u.user_id 
+                    WHERE u.pepp_course = ? AND mcl.admin_id = ?
+                    ORDER BY mcl.call_timestamp DESC LIMIT 50
+                ");
+                $stmt->execute([$selected_course_name, $admin_id]);
+            }
+            $call_logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {}
+
+        // Load remarks for selected course
+        try {
+            if (is_super_admin()) {
+                $stmt = $pdo->prepare("
+                    SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number 
+                    FROM mentor_remarks mr 
+                    JOIN users u ON mr.student_user_id = u.user_id 
+                    WHERE u.pepp_course = ? 
+                    ORDER BY mr.created_at DESC LIMIT 100
+                ");
+                $stmt->execute([$selected_course_name]);
+            } else {
+                $stmt = $pdo->prepare("
+                    SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number 
+                    FROM mentor_remarks mr 
+                    JOIN users u ON mr.student_user_id = u.user_id 
+                    WHERE u.pepp_course = ? AND mr.admin_id = ? 
+                    ORDER BY mr.created_at DESC LIMIT 50
+                ");
+                $stmt->execute([$selected_course_name, $admin_id]);
+            }
+            $remarks_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {}
     }
-
-    // Load recent call logs
-    try {
-        $cl_query = is_super_admin()
-            ? "SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number 
-               FROM mentor_call_logs mcl 
-               LEFT JOIN users u ON mcl.student_user_id = u.user_id 
-               ORDER BY mcl.call_timestamp DESC LIMIT 100"
-            : "SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number 
-               FROM mentor_call_logs mcl 
-               LEFT JOIN users u ON mcl.student_user_id = u.user_id 
-               WHERE mcl.admin_id = ? 
-               ORDER BY mcl.call_timestamp DESC LIMIT 50";
-        $stmt = $pdo->prepare($cl_query);
-        is_super_admin() ? $stmt->execute() : $stmt->execute([$admin_id]);
-        $call_logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Exception $e) {}
-
-    // Load recent remarks
-    try {
-        $rm_query = is_super_admin()
-            ? "SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number 
-               FROM mentor_remarks mr 
-               LEFT JOIN users u ON mr.student_user_id = u.user_id 
-               ORDER BY mr.created_at DESC LIMIT 100"
-            : "SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number 
-               FROM mentor_remarks mr 
-               LEFT JOIN users u ON mr.student_user_id = u.user_id 
-               WHERE mr.admin_id = ? 
-               ORDER BY mr.created_at DESC LIMIT 50";
-        $stmt = $pdo->prepare($rm_query);
-        is_super_admin() ? $stmt->execute() : $stmt->execute([$admin_id]);
-        $remarks_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Exception $e) {}
 
     // For super admin: all admins and courses for assignment
     if (is_super_admin()) {
@@ -420,17 +452,7 @@ include 'includes/admin_nav.php';
 <div class="alert alert-warn"><i class="fas fa-triangle-exclamation"></i><span>Mentoring tables not installed. Run <strong>database-update-22.sql</strong>.</span></div>
 <?php else: ?>
 
-<!-- Tabs -->
-<div class="panel" style="margin-bottom:1.2rem;">
-    <div class="panel-head" style="gap:8px;flex-wrap:wrap;">
-        <a href="?tab=students<?= $selected_course_id ? '&course_id=' . $selected_course_id : '' ?>" class="btn btn-sm <?php echo $tab==='students' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-users"></i> Students (<?php echo count($students); ?>)</a>
-        <a href="?tab=calls" class="btn btn-sm <?php echo $tab==='calls' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-phone"></i> Call Logs (<?php echo count($call_logs); ?>)</a>
-        <a href="?tab=remarks" class="btn btn-sm <?php echo $tab==='remarks' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-comment-dots"></i> Remarks (<?php echo count($remarks_list); ?>)</a>
-        <?php if (is_super_admin()): ?>
-        <a href="?tab=assignments" class="btn btn-sm <?php echo $tab==='assignments' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-link"></i> Assignments (<?php echo count($assignments); ?>)</a>
-        <?php endif; ?>
-    </div>
-</div>
+
 
 <?php if ($tab === 'students'): ?>
 <!-- CSS styles for responsive mobile cards -->
@@ -484,7 +506,7 @@ include 'includes/admin_nav.php';
 <!-- Course Selector Dropdown -->
 <div class="panel" style="margin-bottom:1.2rem; padding: 1.2rem;">
     <form method="GET" id="course-filter-form" style="max-width:400px; width: 100%;">
-        <input type="hidden" name="tab" value="students">
+        <input type="hidden" name="tab" value="<?= e($tab) ?>">
         <label for="course_id" style="display:block; font-size:.8rem; font-weight:600; margin-bottom:6px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">Course</label>
         <select name="course_id" id="course_id" onchange="this.form.submit()" style="width:100%; padding:10px 14px; border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--text); font-size:.9rem; font-weight:600; cursor:pointer;">
             <option value="">— Select a PEPP Course —</option>
@@ -496,6 +518,18 @@ include 'includes/admin_nav.php';
             <?= is_super_admin() ? 'Showing all active PEPP courses' : 'Showing courses assigned to you' ?>
         </div>
     </form>
+</div>
+
+<!-- Tabs (Moved below Course Selector) -->
+<div class="panel" style="margin-bottom:1.2rem;">
+    <div class="panel-head" style="gap:8px;flex-wrap:wrap;">
+        <a href="?tab=students<?= $selected_course_id ? '&course_id=' . $selected_course_id : '' ?>" class="btn btn-sm <?php echo $tab==='students' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-users"></i> Students (<?php echo count($students); ?>)</a>
+        <a href="?tab=calls<?= $selected_course_id ? '&course_id=' . $selected_course_id : '' ?>" class="btn btn-sm <?php echo $tab==='calls' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-phone"></i> Call Logs (<?php echo count($call_logs); ?>)</a>
+        <a href="?tab=remarks<?= $selected_course_id ? '&course_id=' . $selected_course_id : '' ?>" class="btn btn-sm <?php echo $tab==='remarks' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-comment-dots"></i> Remarks (<?php echo count($remarks_list); ?>)</a>
+        <?php if (is_super_admin()): ?>
+        <a href="?tab=assignments<?= $selected_course_id ? '&course_id=' . $selected_course_id : '' ?>" class="btn btn-sm <?php echo $tab==='assignments' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-link"></i> Assignments (<?php echo count($assignments); ?>)</a>
+        <?php endif; ?>
+    </div>
 </div>
 
 <!-- State Rendering -->
