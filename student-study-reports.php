@@ -630,7 +630,7 @@ if (isset($_GET['action'])) {
 
                 $timeline[] = [
                     'day' => $day_num,
-                    'date' => $a['activity_date'] ? date('d M Y', strtotime($a['activity_date'])) : 'TBD',
+                    'date' => $a['activity_date'] ? strtoupper(date('d M Y (D)', strtotime($a['activity_date']))) : 'TBD',
                     'start_time' => $a['start_time'] ? date('h:i A', strtotime($a['start_time'])) : '',
                     'end_time' => $a['end_time'] ? date('h:i A', strtotime($a['end_time'])) : '',
                     'chapter' => r_esc($a['chapter']),
@@ -4111,6 +4111,10 @@ include 'includes/admin_nav.php';
     }
 
     // ── CHRONOLOGICAL RENDERER ──
+    // Group index counter for expanding/collapsing days and tasks uniquely
+    let groupIndex = 0;
+
+    // ── CHRONOLOGICAL RENDERER WITH DAY-GROUPING ──
     function renderTimelineList(list) {
         const container = document.getElementById('st-timeline-list');
         container.innerHTML = '';
@@ -4120,77 +4124,165 @@ include 'includes/admin_nav.php';
             return;
         }
         
-        list.forEach((item, idx) => {
-            const badgeClass = item.status === 'Completed' ? 'green' : item.status === 'Overdue' ? 'red' : 'gray';
-            const mapLink = item.location ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(item.location)}" target="_blank" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size: 0.7rem; border-color:#3b82f6; color:#3b82f6;"><i class="fas fa-location-dot"></i> Maps Location</a>` : '';
-            const resourceBtn = item.resource ? `<a href="${item.resource}" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:underline;">View Resource</a>` : 'Standard Materials';
-            
+        // Group items by Day/Date
+        const groups = {};
+        const groupOrder = [];
+        
+        list.forEach((item) => {
+            const key = item.date !== 'TBD' ? item.date : `Day ${item.day}`;
+            if (!groups[key]) {
+                groups[key] = {
+                    key: key,
+                    items: [],
+                    completed: 0,
+                    total: 0
+                };
+                groupOrder.push(key);
+            }
+            groups[key].items.push(item);
+            groups[key].total++;
+            if (item.status === 'Completed') {
+                groups[key].completed++;
+            }
+        });
+        
+        // Reset index counter for unique element targeting
+        groupIndex = 0;
+        
+        groupOrder.forEach((key) => {
+            const group = groups[key];
             const div = document.createElement('div');
             div.className = 'timeline-track-item';
             
-            div.innerHTML = `
-                <!-- Dot Indicator -->
-                <span class="timeline-track-node ${item.status.toLowerCase()}"></span>
+            // Generate HTML for each task in this group
+            let tasksHtml = '';
+            group.items.forEach((item, taskIdx) => {
+                const uniqueTaskIdx = `${groupIndex}_${taskIdx}`;
+                const badgeClass = item.status === 'Completed' ? 'green' : item.status === 'Overdue' ? 'red' : 'gray';
+                const mapLink = item.location ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(item.location)}" target="_blank" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size: 0.7rem; border-color:#3b82f6; color:#3b82f6;"><i class="fas fa-location-dot"></i> Maps Location</a>` : '';
+                const resourceBtn = item.resource ? `<a href="${item.resource}" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:underline;">View Resource</a>` : 'Standard Materials';
                 
-                <div class="widget-card" style="padding:15px; margin:0; border: 1px solid var(--border); border-radius:12px; background:#fff; cursor:pointer;" onclick="toggleTaskExpand(${idx})">
-                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-                        <div>
-                            <span style="font-size:0.7rem; color:var(--text-muted); font-weight:800; text-transform:uppercase;">Day ${item.day} · ${item.date} ${item.start_time ? `(${item.start_time} - ${item.end_time})` : ''}</span>
-                            <h6 style="font-size:0.9rem; font-weight:800; color:var(--text-main); margin:3px 0 0 0;">${item.title}</h6>
+                // Determine icon configuration based on activity type
+                let activityIcon = 'fa-book-open';
+                let activityColor = '#3b82f6';
+                const typeLower = (item.type || '').toLowerCase();
+                if (typeLower.includes('test') || typeLower.includes('exam')) {
+                    activityIcon = 'fa-file-signature';
+                    activityColor = '#ef4444';
+                } else if (typeLower.includes('video') || typeLower.includes('class')) {
+                    activityIcon = 'fa-video';
+                    activityColor = '#10b981';
+                } else if (typeLower.includes('assignment') || typeLower.includes('task')) {
+                    activityIcon = 'fa-list-check';
+                    activityColor = '#f59e0b';
+                }
+                
+                tasksHtml += `
+                    <div class="task-row-container" style="border-bottom: 1px solid #f1f5f9; padding: 12px 4px;">
+                        <div class="task-row-header" style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="toggleSubTaskExpand('${uniqueTaskIdx}', event)">
+                            <div style="display:flex; align-items:center; gap:10px; flex:1;">
+                                <div style="width:28px; height:28px; border-radius:50%; background:${activityColor}15; color:${activityColor}; display:flex; align-items:center; justify-content:center; font-size:0.8rem; flex-shrink:0;">
+                                    <i class="fas ${activityIcon}"></i>
+                                </div>
+                                <div style="flex:1;">
+                                    <h6 style="font-size:0.85rem; font-weight:700; color:var(--text-main); margin:0;">${item.title}</h6>
+                                    <span style="font-size:0.68rem; color:var(--text-muted);">${item.subject || 'General'} · ${item.topic || 'N/A'} ${item.start_time ? `(${item.start_time} - ${item.end_time})` : ''}</span>
+                                </div>
+                            </div>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span class="badge ${badgeClass}" style="font-size:0.62rem; text-transform:uppercase; padding:3px 6px;">${item.status}</span>
+                                <i id="subtask-expand-icon-${uniqueTaskIdx}" class="fas fa-chevron-down" style="font-size:0.7rem; color:var(--text-muted); transition: transform 0.2s ease;"></i>
+                            </div>
                         </div>
-                        <div style="display:flex; align-items:center; gap:8px;">
-                            <span class="badge ${badgeClass}" style="font-size:0.65rem; text-transform:uppercase;">${item.status}</span>
-                            <i id="task-expand-icon-${idx}" class="fas fa-chevron-down" style="font-size:0.75rem; color:var(--text-muted); transition: transform 0.2s ease;"></i>
+                        
+                        <!-- Collapsible Task Details -->
+                        <div id="subtask-expand-body-${uniqueTaskIdx}" style="display:none; margin-top:10px; padding:10px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; font-size:0.75rem; color:var(--text-muted);">
+                            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; margin-bottom:8px;">
+                                <div><strong>Subject:</strong> ${item.subject || 'N/A'}</div>
+                                <div><strong>Chapter:</strong> ${item.chapter || 'N/A'}</div>
+                                <div><strong>Topic:</strong> ${item.topic || 'N/A'}</div>
+                                <div><strong>Activity Type:</strong> ${item.type || 'Reading'}</div>
+                                <div><strong>Faculty:</strong> ${item.faculty || 'N/A'}</div>
+                                <div><strong>Resource Link:</strong> ${resourceBtn}</div>
+                            </div>
+                            
+                            ${item.status === 'Completed' ? `
+                                <div style="border-top:1px dashed #e2e8f0; margin-top:8px; padding-top:8px; display:flex; flex-direction:column; gap:4px; font-size:0.7rem;">
+                                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+                                        <span><i class="fas fa-circle-check" style="color:#10b981; margin-right:4px;"></i> Completed: <strong>${item.completed_at}</strong></span>
+                                        <span>Duration: <strong>15 mins</strong></span>
+                                    </div>
+                                    <div><i class="fas fa-desktop"></i> IP: ${item.ip} | User Agent: ${item.browser} | Device: ${item.device}</div>
+                                    ${mapLink ? `<div style="margin-top:4px;"><i class="fas fa-location-dot"></i> GPS Coordinates: ${item.location} ${mapLink}</div>` : ''}
+                                    ${isSuperAdmin ? `
+                                        <div style="margin-top:8px; display:flex; justify-content:flex-end;">
+                                            <button type="button" class="btn btn-xs btn-soft-red" style="padding:4px 8px; font-size:0.68rem; border-radius:6px; font-weight:700;" onclick="clearCompletion(${item.analytics_id}, '${item.title.replace(/'/g, "\\'")}', '${currentSelectedStudentEmail}', event)">
+                                                <i class="fas fa-trash-can"></i> Clear Completion
+                                            </button>
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            ` : ''}
+                            
+                            ${item.is_cleared ? `
+                                <div style="background:#fff5f5; border:1px solid #fee2e2; border-radius:8px; padding:8px 10px; margin-top:8px; font-size:0.7rem; color:#b91c1c; display:flex; flex-direction:column; gap:4px;">
+                                    <div><i class="fas fa-ban"></i> Completion was <strong>Cleared</strong></div>
+                                    <div>Cleared By: <strong>${item.cleared_by || 'Super Admin'}</strong> on <strong>${item.cleared_at}</strong></div>
+                                    <div>Reason: <i>${item.clear_reason || 'No reason specified'}</i></div>
+                                </div>
+                            ` : ''}
                         </div>
                     </div>
-                    
-                    <!-- Expandable Details Area -->
-                    <div id="task-expand-body-${idx}" style="display:none; border-top:1px dashed #e2e8f0; margin-top:10px; padding-top:10px; font-size:0.8rem; color:var(--text-muted);">
-                        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:10px; margin-bottom:8px;">
-                            <div><strong>Subject:</strong> ${item.subject || 'N/A'}</div>
-                            <div><strong>Chapter:</strong> ${item.chapter || 'N/A'}</div>
-                            <div><strong>Topic:</strong> ${item.topic || 'N/A'}</div>
-                            <div><strong>Activity Type:</strong> ${item.type || 'Reading'}</div>
-                            <div><strong>Faculty:</strong> ${item.faculty || 'N/A'}</div>
-                            <div><strong>Resource Link:</strong> ${resourceBtn}</div>
+                `;
+            });
+            
+            div.innerHTML = `
+                <!-- Dot Indicator (Always Orange/Gold as requested) -->
+                <span class="timeline-track-node" style="border-color:#f59e0b; background:#f59e0b; width:10px; height:10px; left:-21px; top:21px;"></span>
+                
+                <div class="day-group-box" style="border: 1px solid #cbd5e1; border-radius:16px; background:#fff; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.02); transition: box-shadow 0.2s ease;">
+                    <!-- Day/Date Header Button -->
+                    <div class="day-group-header" onclick="toggleDayExpand(${groupIndex})" style="padding:15px 20px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; background:#fff; user-select:none;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-size:0.85rem; font-weight:700; color:#d97706; text-transform:uppercase;">${group.key}</span>
+                            <i id="day-expand-icon-${groupIndex}" class="fas fa-chevron-down" style="font-size:0.75rem; color:#d97706; transition: transform 0.2s ease;"></i>
                         </div>
-                        
-                        ${item.status === 'Completed' ? `
-                            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; margin-top:8px; font-size:0.72rem; display:flex; flex-direction:column; gap:4px;">
-                                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
-                                    <span><i class="fas fa-circle-check" style="color:#10b981; margin-right:4px;"></i> Completed Date &amp; Time: <strong>${item.completed_at}</strong></span>
-                                    <span>Study Duration: <strong>15 mins</strong></span>
-                                </div>
-                                <div><i class="fas fa-desktop"></i> IP Address: ${item.ip} | User Agent: ${item.browser} | Device: ${item.device}</div>
-                                ${mapLink ? `<div style="margin-top:4px;"><i class="fas fa-location-dot"></i> GPS Coordinates: ${item.location} ${mapLink}</div>` : ''}
-                                ${isSuperAdmin ? `
-                                    <div style="margin-top:8px; display:flex; justify-content:flex-end;">
-                                        <button type="button" class="btn btn-xs btn-soft-red" style="padding:4px 8px; font-size:0.7rem; border-radius:6px; font-weight:700;" onclick="clearCompletion(${item.analytics_id}, '${item.title.replace(/'/g, "\\'")}', '${currentSelectedStudentEmail}', event)">
-                                            <i class="fas fa-trash-can"></i> Clear Completion
-                                        </button>
-                                    </div>
-                                ` : ''}
-                            </div>
-                        ` : ''}
-                        
-                        ${item.is_cleared ? `
-                            <div style="background:#fff5f5; border:1px solid #fee2e2; border-radius:8px; padding:10px 12px; margin-top:8px; font-size:0.72rem; color:#b91c1c; display:flex; flex-direction:column; gap:4px;">
-                                <div><i class="fas fa-ban"></i> Completion was <strong>Cleared</strong></div>
-                                <div>Cleared By: <strong>${item.cleared_by || 'Super Admin'}</strong> on <strong>${item.cleared_at}</strong></div>
-                                <div>Reason: <i>${item.clear_reason || 'No reason specified'}</i></div>
-                            </div>
-                        ` : ''}
+                        <span style="font-size:0.82rem; font-weight:700; color:#d97706;">(${group.completed}/${group.total})</span>
+                    </div>
+                    
+                    <!-- Collapsible Day Checklist Container -->
+                    <div id="day-expand-body-${groupIndex}" style="display:none; border-top:1px solid #f1f5f9; padding:0 16px 8px 16px; background:#fff;">
+                        ${tasksHtml}
                     </div>
                 </div>
             `;
             
             container.appendChild(div);
+            groupIndex++;
         });
     }
     
-    function toggleTaskExpand(idx) {
-        const body = document.getElementById(`task-expand-body-${idx}`);
-        const icon = document.getElementById(`task-expand-icon-${idx}`);
+    function toggleDayExpand(gIdx) {
+        const body = document.getElementById(`day-expand-body-${gIdx}`);
+        const icon = document.getElementById(`day-expand-icon-${gIdx}`);
+        if (!body) return;
+        
+        if (body.style.display === 'none') {
+            body.style.display = 'block';
+            icon.style.transform = 'rotate(180deg)';
+        } else {
+            body.style.display = 'none';
+            icon.style.transform = 'rotate(0deg)';
+        }
+    }
+    
+    function toggleSubTaskExpand(uniqueIdx, event) {
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+        const body = document.getElementById(`subtask-expand-body-${uniqueIdx}`);
+        const icon = document.getElementById(`subtask-expand-icon-${uniqueIdx}`);
         if (!body) return;
         
         if (body.style.display === 'none') {
