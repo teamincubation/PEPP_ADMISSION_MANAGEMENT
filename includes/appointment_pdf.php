@@ -62,109 +62,103 @@ function render_appointment_pdf(string $snapshot_json): string {
     $usable = $rm - $lm;
 
     // Start body contents below header area
-    $y = 120;
+    $y = 140;
 
     // Date & Reference
-    $appt_date = isset($d['approved_at']) ? date('d F Y', strtotime($d['approved_at'])) : date('d F Y');
-    $pdf->text($lm, $y, 9.5, 'Date: ' . $appt_date);
-    $pdf->text($lm, $y + 14, 9.5, 'Ref.: ' . ($d['appointment_ref'] ?? '-'));
-    $y += 38;
+    $appt_date = isset($d['approved_at']) ? date('d M Y', strtotime($d['approved_at'])) : date('d M Y');
+    $pdf->text($lm, $y, 10, 'Date: ' . $appt_date, true);
+    $pdf->text($lm, $y + 15, 10, 'Ref. ' . ($d['appointment_ref'] ?? '-'), true);
+    $y += 45;
 
     // Title
     $pdf->text($lm, $y, 14, 'APPOINTMENT LETTER', true, 'C', $usable);
-    $y += 24;
+    $y += 30;
 
     // Salutation
     $pdf->text($lm, $y, 10, 'Dear ' . ($d['employee_name'] ?? 'Candidate') . ',', true);
-    $y += 18;
+    $y += 20;
 
     // Opening Paragraph
     $designation = $d['designation'] ?? 'staff';
     $department = $d['department'] ?? 'assigned department';
-    $joining_date = isset($d['joining_date']) ? date('d F Y', strtotime($d['joining_date'])) : '-';
-    $opening_text = 'We are pleased to formally appoint you as ' . $designation . ' under the ' . $department . ' department at PEPP Learning, effective from ' . $joining_date . '.';
-    draw_paragraph($pdf, $lm, $y, 10, $opening_text, 14, $usable);
+    $joining_date = isset($d['joining_date']) ? date('d M Y', strtotime($d['joining_date'])) : '-';
+    
+    $opening_text = 'We are pleased to formally appoint you as ' . $designation . ' under ' . $department . ' at PEPP Learning, effective from ' . $joining_date . '.';
+    draw_paragraph($pdf, $lm, $y, 10, $opening_text, 15, $usable);
     $y += 12;
 
-    // Employment Details Box
-    $pdf->text($lm, $y, 10, 'EMPLOYMENT SUMMARY:', true);
-    $y += 15;
+    // Intro terms
+    $intro_terms = 'Your appointment will be subject to the terms and conditions outlined below:';
+    draw_paragraph($pdf, $lm, $y, 10, $intro_terms, 15, $usable);
+    $y += 12;
+
+    // Dynamic probation calculation
+    $probation_period = '';
+    if (!empty($d['probation_till']) && !empty($d['joining_date'])) {
+        try {
+            $start = new DateTime($d['joining_date']);
+            $end = new DateTime($d['probation_till']);
+            $diff = $start->diff($end);
+            $months = (($diff->y) * 12) + ($diff->m);
+            if ($diff->d > 15) $months++; // round up if partial month
+            if ($months > 0) {
+                $probation_period = $months . ' Month' . ($months > 1 ? 's' : '');
+            } else {
+                $probation_period = date('d M Y', strtotime($d['probation_till']));
+            }
+        } catch (Exception $e) {
+            $probation_period = date('d M Y', strtotime($d['probation_till']));
+        }
+    } elseif (!empty($d['probation_till'])) {
+        $probation_period = date('d M Y', strtotime($d['probation_till']));
+    } else {
+        $probation_period = 'N/A';
+    }
 
     $salary_val = (float)($d['monthly_salary'] ?? 0);
-    $salary_formatted = 'Rs. ' . number_format($salary_val, 2);
-
-    $details = [
-        ['Employee ID', ': ' . ($d['employee_id'] ?? '-')],
-        ['Designation', ': ' . $designation],
-        ['Department', ': ' . $department],
-        ['Application Type', ': ' . (ucfirst($d['application_for'] ?? 'employee'))],
-        ['Joining Date', ': ' . $joining_date],
-    ];
-    if (!empty($d['probation_till'])) {
-        $details[] = ['Probation Period', ': Till ' . date('d F Y', strtotime($d['probation_till']))];
-    } else {
-        $details[] = ['Probation Period', ': N/A'];
-    }
-    
-    $contract_from = isset($d['contract_from']) ? date('d F Y', strtotime($d['contract_from'])) : '-';
-    $contract_till = isset($d['contract_till']) ? date('d F Y', strtotime($d['contract_till'])) : '-';
-    $details[] = ['Contract Validity', ': ' . $contract_from . ' to ' . $contract_till];
-    $details[] = ['Monthly Salary', ': ' . $salary_formatted];
-
-    $col_width = 120;
-    foreach ($details as $item) {
-        $pdf->text($lm + 12, $y, 9.5, $item[0], true);
-        $pdf->text($lm + 12 + $col_width, $y, 9.5, $item[1]);
-        $y += 13;
-    }
-    $y += 12;
+    $salary_formatted = 'Rs. ' . number_format($salary_val) . '/- per month';
 
     // Terms
-    $pdf->text($lm, $y, 10, 'Terms and Conditions of Appointment:', true);
-    $y += 16;
-
-    $probation_text = !empty($d['probation_till']) 
-        ? 'until ' . date('d F Y', strtotime($d['probation_till'])) 
-        : 'as per the PEPP Learning HR policies';
-
     $terms = [
-        '1. Designation and Reporting: You will be appointed as ' . $designation . ' and will report to the designated officer of the department.',
-        '2. General Duties: Your duties and responsibilities will be as defined in the General Duties (GD) document provided by the department.',
-        '3. Remuneration: You will receive a monthly salary of ' . $salary_formatted . '.',
-        '4. Working Hours, Attendance, Holidays and Leave: You will follow the working hours, attendance policies, holidays, and leave rules applicable to PEPP Learning staff.',
-        '5. Confidentiality: You shall maintain strict confidentiality regarding all official information, student records, and company proprietary data.',
-        '6. Probationary Period: You will be on probation ' . $probation_text . ' from the date of joining.',
-        '7. Notice Period: This appointment can be terminated by either party by giving a 30-day written notice or salary in lieu thereof.'
+        '1. You will serve as ' . $designation . ' and report to the person/department assigned by the management.',
+        '2. Your duties and responsibilities will be communicated separately through the General Duties (GD) document and may be revised based on organisational requirements.',
+        '3. Your remuneration will be ' . $salary_formatted . ', along with any applicable incentives or benefits as communicated by management.',
+        '4. Your working hours, attendance, holidays, and leave will be governed by the applicable policies of PEPP Learning.',
+        '5. You are required to maintain confidentiality regarding all organisational, student, staff, academic, financial, technical, and other proprietary information accessed during your employment. You are expected to comply with all applicable rules, policies, procedures, and professional standards of PEPP Learning.',
+        '6. Your appointment will be subject to a probationary period of ' . $probation_period . ', if applicable, after which your employment may be confirmed based on satisfactory performance.',
+        '7. Either party may terminate the employment by providing 30 days of notice period or salary in lieu of notice, subject to applicable policies and law.'
     ];
 
     foreach ($terms as $t) {
-        draw_paragraph($pdf, $lm, $y, 9.5, $t, 13, $usable);
-        $y += 5; // spacing between terms
+        draw_paragraph($pdf, $lm, $y, 10, $t, 14, $usable);
+        $y += 6; // spacing between bullets
     }
     $y += 10;
 
-    // Closing Paragraph
-    $closing_text = 'This appointment is subject to verification of the information/documents provided and applicable PEPP Learning policies. We welcome you to PEPP Learning and wish you a successful career with us.';
-    draw_paragraph($pdf, $lm, $y, 9.5, $closing_text, 13, $usable);
-    $y += 20;
+    // Closing Statement
+    $closing_text = 'This appointment is subject to the verification of the information and documents provided by you and the applicable policies of PEPP Learning.';
+    draw_paragraph($pdf, $lm, $y, 10, $closing_text, 14, $usable);
+    $y += 12;
+
+    $closing_text2 = 'We welcome you to PEPP Learning and look forward to your valuable contribution to the organisation.';
+    draw_paragraph($pdf, $lm, $y, 10, $closing_text2, 14, $usable);
+    $y += 24;
 
     // Signatory block
-    $pdf->text($lm, $y, 9.5, 'Authorized Signatory', true);
+    $pdf->text($lm, $y, 10, 'Authorized Signatory', true);
     
     // Embed Official PEPP Seal
-    $seal = __DIR__ . '/../assets/img/pepp-seal.jpg';
-    if (file_exists($seal)) {
-        $pdf->image($seal, 420, $y - 30, 75, 75);
+    $seal = __DIR__ . '/../assets/img/pepp-seal.png';
+    if (!file_exists($seal)) {
+        $seal = __DIR__ . '/../assets/img/pepp-seal.jpg';
     }
-
-    $y += 20;
-    $pdf->text($lm, $y, 9.5, 'Authorized by: ' . ($d['approved_by_name'] ?? 'Super Administrator'));
-    $y += 12;
-    $pdf->text($lm, $y, 9, 'PEPP Learning - HR Department');
+    if (file_exists($seal)) {
+        $pdf->image($seal, 440, $y - 45, 65, 65);
+    }
     $y += 20;
 
     // System generated notice
-    $pdf->text($lm, $y, 8, 'This is a system-generated appointment letter and does not require a physical signature.', false, 'C', $usable);
+    $pdf->text($lm, $y, 8.5, 'This is a system-generated appointment letter and does not require a physical signature.');
 
     return $pdf->output();
 }
