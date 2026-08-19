@@ -551,6 +551,53 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
         exit;
     }
 
+    // Delete result batch (Super Admin only)
+    if ($ajax_action === 'delete_batch') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !csrf_verify()) {
+            echo json_encode(['success' => false, 'message' => 'Security token mismatch.']);
+            exit;
+        }
+        if (!is_super_admin()) {
+            echo json_encode(['success' => false, 'message' => 'Permission denied. Only Super Administrators can delete assessment results.']);
+            exit;
+        }
+        $batch_id = (int)($_POST['batch_id'] ?? 0);
+        if ($batch_id <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Invalid batch ID.']);
+            exit;
+        }
+        try {
+            $pdo->beginTransaction();
+            
+            // Get batch details for activity log
+            $bs = $pdo->prepare("SELECT * FROM assessment_result_batches WHERE id = ?");
+            $bs->execute([$batch_id]);
+            $batch = $bs->fetch(PDO::FETCH_ASSOC);
+            if (!$batch) {
+                $pdo->rollBack();
+                echo json_encode(['success' => false, 'message' => 'Batch not found.']);
+                exit;
+            }
+            
+            // Delete result rows
+            $del_res = $pdo->prepare("DELETE FROM assessment_results WHERE batch_id = ?");
+            $del_res->execute([$batch_id]);
+            
+            // Delete batch row
+            $del_batch = $pdo->prepare("DELETE FROM assessment_result_batches WHERE id = ?");
+            $del_batch->execute([$batch_id]);
+            
+            log_admin_activity($pdo, $admin_username, 'assessment_result_deleted', "Deleted assessment result batch #{$batch_id} ('{$batch['activity_title_snapshot']}', Course: '{$batch['course_name']}', Year: '{$batch['academic_year']}', Version: {$batch['version']})");
+            
+            $pdo->commit();
+            echo json_encode(['success' => true, 'message' => 'Assessment results deleted successfully.']);
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            echo json_encode(['success' => false, 'message' => 'Failed to delete results: ' . $e->getMessage()]);
+        }
+        exit;
+    }
+
     echo json_encode(['success'=>false,'message'=>'Unknown action.']);
     exit;
 }
@@ -805,6 +852,7 @@ include 'includes/admin_nav.php';
 
 <script>
 const CSRF = '<?php echo csrf_token(); ?>';
+const isSuperAdmin = <?php echo is_super_admin() ? 'true' : 'false'; ?>;
 let arSelectedYear = '', arSelectedCourseId = 0, arSelectedCourseName = '', arSelectedPlanId = 0, arSelectedActivityId = 0;
 let arPreviewData = null;
 
@@ -1129,11 +1177,42 @@ function arLoadBatches() {
                 h += '<td><div class="ar-actions">';
                 h += '<button class="ar-btn secondary" style="padding:4px 10px;font-size:.75rem" onclick="arViewBatch('+b.id+')"><i class="fas fa-eye"></i> View</button>';
                 h += '<a class="ar-btn secondary" style="padding:4px 10px;font-size:.75rem;text-decoration:none" href="assessment-results.php?action=export_results&batch_id='+b.id+'"><i class="fas fa-download"></i> Export</a>';
+                if (isSuperAdmin) {
+                    h += '<button class="ar-btn danger" style="padding:4px 10px;font-size:.75rem" onclick="arDeleteBatch('+b.id+')"><i class="fas fa-trash"></i> Delete</button>';
+                }
                 h += '</div></td></tr>';
             });
             h += '</tbody></table></div>';
             wrap.innerHTML = h;
         });
+}
+
+function arDeleteBatch(batchId) {
+    if (!confirm('Are you absolutely sure you want to delete this assessment result batch? This will permanently delete all student scores and rankings associated with this batch. This action cannot be undone.')) {
+        return;
+    }
+    const fd = new FormData();
+    fd.append('csrf_token', CSRF);
+    fd.append('action', 'delete_batch');
+    fd.append('batch_id', batchId);
+
+    fetch('assessment-results.php?action=delete_batch', {
+        method: 'POST',
+        body: fd,
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            arToast(data.message, 'success');
+            arLoadBatches();
+        } else {
+            arToast(data.message, 'error');
+        }
+    })
+    .catch(err => {
+        arToast('Delete failed: ' + err.message, 'error');
+    });
 }
 
 // ── View Batch Detail ──
