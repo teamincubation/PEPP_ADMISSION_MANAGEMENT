@@ -1,0 +1,33 @@
+# ----------------------------------------------------------------------
+# Force HTTPS redirect (resolves unsecure HTTP blocks/resets by ISPs)
+# ----------------------------------------------------------------------
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{HTTPS} off
+    RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+</IfModule>
+
+# ----------------------------------------------------------------------
+# Security headers (prevents corporate/network firewall blocking)
+# ----------------------------------------------------------------------
+<IfModule mod_headers.c>
+    # Enforce HTTPS on the browser side for 1 year (HSTS)
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    
+    # Avoid MIME type sniffing
+    Header always set X-Content-Type-Options "nosniff"
+    
+    # Prevent clickjacking / framing
+    Header always set X-Frame-Options "SAMEORIGIN"
+    
+    # XSS Protection
+    Header always set X-XSS-Protection "1; mode=block"
+    
+    # Referrer Policy
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+# ----------------------------------------------------------------------
+# Directory browsing protection
+# ----------------------------------------------------------------------
+Options -Indexes
