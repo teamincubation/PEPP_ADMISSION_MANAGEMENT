@@ -466,6 +466,79 @@ try {
             }
         } catch (Exception $e) {}
 
+        // ── Assessment Results tables (fresh-install only, CREATE IF NOT EXISTS) ──
+        // Migration #24 is the authoritative production schema.
+        // This block only ensures the tables exist on fresh installs.
+        // Does NOT ALTER existing tables. Does NOT touch study_plan_analytics.
+        try {
+            $pdo->exec("
+                CREATE TABLE IF NOT EXISTS `assessment_result_batches` (
+                    `id` INT AUTO_INCREMENT PRIMARY KEY,
+                    `activity_id` INT NOT NULL,
+                    `study_plan_id` INT NOT NULL,
+                    `academic_year` VARCHAR(50) NOT NULL,
+                    `course_id` INT NOT NULL,
+                    `course_name` VARCHAR(255) NOT NULL,
+                    `activity_title_snapshot` VARCHAR(255) NOT NULL,
+                    `activity_type_snapshot` VARCHAR(100) NOT NULL,
+                    `activity_date_snapshot` DATE NULL,
+                    `chapter_snapshot` VARCHAR(255) NULL,
+                    `version` INT NOT NULL DEFAULT 1,
+                    `status` ENUM('draft','published','replaced') NOT NULL DEFAULT 'draft',
+                    `source_filename` VARCHAR(255) NULL,
+                    `total_rows` INT NOT NULL DEFAULT 0,
+                    `matched_students` INT NOT NULL DEFAULT 0,
+                    `unmatched_emails` INT NOT NULL DEFAULT 0,
+                    `attended_count` INT NOT NULL DEFAULT 0,
+                    `not_attended_count` INT NOT NULL DEFAULT 0,
+                    `in_progress_count` INT NOT NULL DEFAULT 0,
+                    `review_required_count` INT NOT NULL DEFAULT 0,
+                    `uploaded_by` VARCHAR(100) NOT NULL,
+                    `published_by` VARCHAR(100) NULL,
+                    `published_at` DATETIME NULL,
+                    `replaced_by_batch_id` INT NULL,
+                    `replace_reason` TEXT NULL,
+                    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+                    KEY `idx_arb_activity` (`activity_id`),
+                    KEY `idx_arb_status` (`status`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            ");
+            $pdo->exec("
+                CREATE TABLE IF NOT EXISTS `assessment_results` (
+                    `id` INT AUTO_INCREMENT PRIMARY KEY,
+                    `batch_id` INT NOT NULL,
+                    `student_email` VARCHAR(255) NOT NULL,
+                    `user_id` VARCHAR(50) NULL,
+                    `attendance_status` ENUM('attended','not_attended','in_progress','review_required') NOT NULL,
+                    `src_learner_details` VARCHAR(255) NULL,
+                    `src_name` VARCHAR(255) NULL,
+                    `src_mobile` VARCHAR(100) NULL,
+                    `src_attempt` VARCHAR(100) NULL,
+                    `src_status` VARCHAR(100) NULL,
+                    `src_evaluation` VARCHAR(100) NULL,
+                    `src_submitted_on` VARCHAR(100) NULL,
+                    `src_answered` VARCHAR(50) NULL,
+                    `score` DECIMAL(10,2) NULL,
+                    `total_score` DECIMAL(10,2) NULL,
+                    `src_accuracy` VARCHAR(50) NULL,
+                    `accuracy_numeric` DECIMAL(8,4) NULL,
+                    `src_avg_q_per_hr` VARCHAR(50) NULL,
+                    `avg_q_per_hr_numeric` INT NULL,
+                    `correct` INT NULL,
+                    `wrong` INT NULL,
+                    `skipped` INT NULL,
+                    `src_time_spent` VARCHAR(100) NULL,
+                    `time_spent_seconds` INT NULL,
+                    `src_export` TEXT NULL,
+                    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    KEY `idx_ar_batch` (`batch_id`),
+                    KEY `idx_ar_email` (`student_email`(191)),
+                    UNIQUE KEY `uq_ar_batch_email` (`batch_id`, `student_email`(191))
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            ");
+        } catch (Exception $e) {}
+
 
     } catch (Exception $dbEx) {
         error_log("PEPP self-healing DB check failed: " . $dbEx->getMessage());

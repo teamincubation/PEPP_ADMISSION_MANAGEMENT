@@ -46,6 +46,7 @@ $GLOBALS['ADMIN_PAGES'] = [
     'ld-work-report'=> ['L&D Work Report',         'fa-chart-simple'],
     'employee-management' => ['Employee Management', 'fa-id-badge'],
     'student-mentoring'   => ['Student Mentoring',   'fa-people-arrows'],
+    'assessment-results'  => ['Assessment Results',  'fa-chart-column'],
     'settings'      => ['Settings',                'fa-gear'],
 ];
 
@@ -341,6 +342,7 @@ function get_first_accessible_page_url() {
         'courses'       => 'course-management.php',
         'faculties'     => 'faculties.php',
         'studyplans'    => 'studyplans.php',
+        'assessment-results' => 'assessment-results.php',
         'task-tracker'  => 'task-tracker.php',
         'ld-work-report'=> 'ld-work-report.php',
         'employee-management' => 'employee-management.php',

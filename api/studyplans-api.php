@@ -241,6 +241,29 @@ try {
         $stmt->execute([$id]);
         $title = $stmt->fetchColumn() ?: 'Plan #' . $id;
         
+        // ── ASSESSMENT RESULT PROTECTION ──────────────────────────────────
+        // Block deletion if published assessment results exist for this plan.
+        // Assessment data must never be automatically deleted.
+        try {
+            $arb_del_check = $pdo->prepare("
+                SELECT COUNT(*) as cnt,
+                       GROUP_CONCAT(DISTINCT activity_title_snapshot SEPARATOR ', ') as titles
+                FROM assessment_result_batches
+                WHERE study_plan_id = ? AND status IN ('published','replaced')
+            ");
+            $arb_del_check->execute([$id]);
+            $arb_del_row = $arb_del_check->fetch(PDO::FETCH_ASSOC);
+            if ($arb_del_row && (int)$arb_del_row['cnt'] > 0) {
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Cannot delete this Study Plan because it has ' . (int)$arb_del_row['cnt'] . ' assessment result batch(es) linked to it (' . $arb_del_row['titles'] . '). Please manage or archive the assessment results first before deleting the Study Plan.'
+                ]);
+                exit();
+            }
+        } catch (Exception $e) {
+            // If assessment tables don't exist, proceed normally
+        }
+        
         $stmt = $pdo->prepare("DELETE FROM study_plans WHERE id = ?");
         $stmt->execute([$id]);
         
@@ -264,6 +287,49 @@ try {
         }
         
         $pdo->beginTransaction();
+        
+        // ── ASSESSMENT RESULT PROTECTION ──────────────────────────────────
+        // Check if any published assessment results reference activities in
+        // this study plan. If so, warn admin before allowing the delete-and-
+        // recreate operation. Assessment batch snapshots are preserved
+        // regardless — they contain frozen copies of activity metadata.
+        $confirm_replace = !empty($data['confirm_activity_replace']);
+        try {
+            $arb_check = $pdo->prepare("
+                SELECT COUNT(*) as cnt,
+                       GROUP_CONCAT(DISTINCT activity_title_snapshot SEPARATOR ', ') as titles
+                FROM assessment_result_batches
+                WHERE study_plan_id = ? AND status = 'published'
+            ");
+            $arb_check->execute([$plan_id]);
+            $arb_row = $arb_check->fetch(PDO::FETCH_ASSOC);
+            if ($arb_row && (int)$arb_row['cnt'] > 0 && !$confirm_replace) {
+                $pdo->rollBack();
+                echo json_encode([
+                    'success' => false,
+                    'requires_assessment_confirm' => true,
+                    'published_count' => (int)$arb_row['cnt'],
+                    'affected_tests' => $arb_row['titles'],
+                    'message' => 'This Study Plan has ' . (int)$arb_row['cnt'] . ' published assessment result(s) linked to activities: ' . $arb_row['titles'] . '. Re-saving will delete and recreate all activity IDs, which may break the link to these results. The original assessment data (scores, rankings) will be preserved through frozen snapshots. Do you want to proceed?'
+                ]);
+                exit();
+            }
+        } catch (Exception $e) {
+            // If assessment tables don't exist yet, proceed safely
+        }
+        
+        // If confirmed with published results, log the explicit override
+        if ($confirm_replace) {
+            try {
+                $arb_count_stmt = $pdo->prepare("SELECT COUNT(*) FROM assessment_result_batches WHERE study_plan_id = ? AND status = 'published'");
+                $arb_count_stmt->execute([$plan_id]);
+                $arb_count_val = (int)$arb_count_stmt->fetchColumn();
+                if ($arb_count_val > 0) {
+                    log_admin_activity($pdo, $admin_username, 'studyplan_activities_resaved_with_assessment_results',
+                        "Admin confirmed re-save of activities for Study Plan #{$plan_id} despite {$arb_count_val} published assessment result batch(es). Assessment snapshots preserved.");
+                }
+            } catch (Exception $e) {}
+        }
         
         // Delete all current activities and insert fresh updated listing
         // This makes updating, dragging-and-dropping and reordering completely synchronized!

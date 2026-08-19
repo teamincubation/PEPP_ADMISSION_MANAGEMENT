@@ -1562,6 +1562,17 @@ include 'includes/admin_nav.php';
                         hasUnsavedChanges = false;
                         alert('Study Plan & all schedules saved successfully!');
                         window.location.href = 'studyplans.php';
+                    } else if (data2.requires_assessment_confirm) {
+                        if (confirm('⚠️ Assessment Results Warning\n\n' + data2.message + '\n\nClick OK to proceed or Cancel to abort.')) {
+                            fetch('api/studyplans-api.php?action=save_activities', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ study_plan_id: newPlanId, activities: activities, confirm_activity_replace: true })
+                            }).then(r3 => r3.json()).then(data3 => {
+                                if (data3.success) { hasUnsavedChanges = false; alert('Study Plan & all schedules saved successfully!'); window.location.href = 'studyplans.php'; }
+                                else { alert('Failed to save activities: ' + data3.message); }
+                            });
+                        }
                     } else {
                         alert('Failed to save activities: ' + data2.message);
                     }
@@ -1619,6 +1630,17 @@ include 'includes/admin_nav.php';
                     }, 3000);
                 }
                 hasUnsavedChanges = false;
+            } else if (data.requires_assessment_confirm) {
+                if (indicator) { indicator.innerHTML = '<i class="fas fa-triangle-exclamation"></i> Confirmation needed'; indicator.style.color = '#f59e0b'; }
+                if (confirm('⚠️ Assessment Results Warning\n\n' + data.message + '\n\nClick OK to proceed or Cancel to abort.')) {
+                    fetch('api/studyplans-api.php?action=save_activities', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ study_plan_id: studyPlanId, activities: activities, confirm_activity_replace: true })
+                    }).then(r2 => r2.json()).then(d2 => {
+                        if (d2.success) { if (indicator) { indicator.innerHTML = '<i class="fas fa-circle-check"></i> Changes saved'; indicator.style.color = '#10b981'; } hasUnsavedChanges = false; }
+                        else { if (indicator) { indicator.innerHTML = '<i class="fas fa-circle-xmark"></i> Save failed'; indicator.style.color = '#ef4444'; } }
+                    });
+                } else { if (indicator) { indicator.innerHTML = '<i class="fas fa-ban"></i> Save cancelled'; indicator.style.color = '#ef4444'; } }
             } else {
                 if (indicator) {
                     indicator.innerHTML = '<i class="fas fa-circle-xmark"></i> Save failed';

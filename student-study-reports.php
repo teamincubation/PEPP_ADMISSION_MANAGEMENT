@@ -3795,11 +3795,27 @@ include 'includes/admin_nav.php';
                                     <!-- Populated dynamically by course list -->
                                 </div>
                             </div>
+
+                            <!-- Assessment Results Section (separate from study plan completion) -->
+                            <div class="chart-card" style="padding:1.5rem; margin-top:1.5rem;">
+                                <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.2rem; color:var(--text-main); margin-bottom:15px; border-bottom:1.5px solid var(--border); padding-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+                                    <span><i class="fas fa-chart-column" style="color:var(--accent); margin-right:6px;"></i>Assessment Results</span>
+                                    <span style="font-size:0.75rem; color:var(--text-muted); font-weight:normal;">Published test/quiz scores</span>
+                                </h4>
+                                <div id="std-assessment-results-container">
+                                    <div style="text-align:center; padding:1rem; color:var(--text-muted); font-size:0.85rem;">
+                                        <i class="fas fa-spinner fa-spin"></i> Loading assessment results...
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 `;
                 
                 container.innerHTML = html;
+
+                // Load Assessment Results for this student
+                loadStudentAssessmentResults(email);
 
                 // Populate Enrolled Courses list
                 const coursesContainer = document.getElementById('std-intelligence-courses-list');
@@ -3908,6 +3924,74 @@ include 'includes/admin_nav.php';
                 if (data.courses.length > 0) {
                     toggleCourseAccordion(0);
                 }
+            });
+    }
+
+    // ── LOAD STUDENT ASSESSMENT RESULTS ──
+    function loadStudentAssessmentResults(email) {
+        const container = document.getElementById('std-assessment-results-container');
+        if (!container) return;
+        fetch('assessment-results.php?action=get_student_results&email=' + encodeURIComponent(email))
+            .then(r => r.json())
+            .then(results => {
+                if (!results || results.length === 0) {
+                    container.innerHTML = `<div style="text-align:center; padding:2rem; border:2px dashed var(--border); border-radius:12px; color:var(--text-muted);"><i class="fas fa-chart-column" style="font-size:2rem; margin-bottom:8px;"></i><p style="margin:0; font-weight:700;">No Published Assessment Results</p><p style="font-size:0.75rem; margin:4px 0 0 0;">Assessment results will appear here when published by administrators.</p></div>`;
+                    return;
+                }
+                let h = '<div style="overflow-x:auto; border:1px solid var(--border); border-radius:10px;"><table style="width:100%; border-collapse:collapse; font-size:0.78rem;"><thead><tr style="background:var(--accent-soft);">';
+                h += '<th style="padding:8px 10px; text-align:left; font-weight:700; white-space:nowrap;">Rank</th>';
+                h += '<th style="padding:8px 10px; text-align:left; font-weight:700;">Test</th>';
+                h += '<th style="padding:8px 10px; text-align:left; font-weight:700;">Type</th>';
+                h += '<th style="padding:8px 10px; text-align:left; font-weight:700;">Chapter</th>';
+                h += '<th style="padding:8px 10px; text-align:left; font-weight:700;">Date</th>';
+                h += '<th style="padding:8px 10px; text-align:center; font-weight:700;">Score</th>';
+                h += '<th style="padding:8px 10px; text-align:center; font-weight:700;">%</th>';
+                h += '<th style="padding:8px 10px; text-align:center; font-weight:700;">Accuracy</th>';
+                h += '<th style="padding:8px 10px; text-align:center; font-weight:700;">Correct</th>';
+                h += '<th style="padding:8px 10px; text-align:center; font-weight:700;">Wrong</th>';
+                h += '<th style="padding:8px 10px; text-align:center; font-weight:700;">Skipped</th>';
+                h += '<th style="padding:8px 10px; text-align:center; font-weight:700;">Time</th>';
+                h += '<th style="padding:8px 10px; text-align:center; font-weight:700;">Status</th>';
+                h += '</tr></thead><tbody>';
+                results.forEach(r => {
+                    const rankDisplay = r.rank !== null ? `<strong style="color:${r.rank <= 3 ? 'var(--accent)' : 'var(--text-main)'}; font-size:0.9rem;">${r.rank}</strong><span style="font-size:0.65rem; color:var(--text-muted);">/${r.total_ranked}</span>` : '—';
+                    const pct = r.percentage ? r.percentage + '%' : '—';
+                    const statusMap = {'attended': '<span style="background:rgba(34,197,94,.1); color:#16a34a; padding:2px 8px; border-radius:12px; font-size:0.7rem; font-weight:600;">Attended</span>', 'not_attended': '<span style="background:rgba(239,68,68,.08); color:#dc2626; padding:2px 8px; border-radius:12px; font-size:0.7rem; font-weight:600;">Not Attended</span>', 'in_progress': '<span style="background:rgba(245,158,11,.1); color:#d97706; padding:2px 8px; border-radius:12px; font-size:0.7rem; font-weight:600;">In Progress</span>', 'review_required': '<span style="background:rgba(139,92,246,.1); color:#6d28d9; padding:2px 8px; border-radius:12px; font-size:0.7rem; font-weight:600;">Review</span>'};
+                    const actDate = r.activity_date_snapshot ? new Date(r.activity_date_snapshot).toLocaleDateString('en-IN', {day:'2-digit', month:'short', year:'numeric'}) : '—';
+                    h += `<tr style="border-top:1px solid var(--border);">`;
+                    h += `<td style="padding:6px 10px;">${rankDisplay}</td>`;
+                    h += `<td style="padding:6px 10px; font-weight:600;">${r.activity_title_snapshot || '—'}</td>`;
+                    h += `<td style="padding:6px 10px;">${r.activity_type_snapshot || '—'}</td>`;
+                    h += `<td style="padding:6px 10px;">${r.chapter_snapshot || '—'}</td>`;
+                    h += `<td style="padding:6px 10px; white-space:nowrap;">${actDate}</td>`;
+                    h += `<td style="padding:6px 10px; text-align:center; font-weight:700;">${r.score !== null ? r.score + '/' + (r.total_score || '—') : '—'}</td>`;
+                    h += `<td style="padding:6px 10px; text-align:center;">${pct}</td>`;
+                    h += `<td style="padding:6px 10px; text-align:center;">${r.src_accuracy || '—'}</td>`;
+                    h += `<td style="padding:6px 10px; text-align:center;">${r.correct !== null ? r.correct : '—'}</td>`;
+                    h += `<td style="padding:6px 10px; text-align:center;">${r.wrong !== null ? r.wrong : '—'}</td>`;
+                    h += `<td style="padding:6px 10px; text-align:center;">${r.skipped !== null ? r.skipped : '—'}</td>`;
+                    h += `<td style="padding:6px 10px; text-align:center;">${r.src_time_spent || '—'}</td>`;
+                    h += `<td style="padding:6px 10px; text-align:center;">${statusMap[r.attendance_status] || r.attendance_status}</td>`;
+                    h += `</tr>`;
+                });
+                h += '</tbody></table></div>';
+                // Summary stats
+                const attended = results.filter(r => r.attendance_status === 'attended');
+                if (attended.length > 0) {
+                    const avgScore = (attended.reduce((s,r) => s + (parseFloat(r.score)||0), 0) / attended.length).toFixed(1);
+                    const avgPct = attended.filter(r=>r.percentage).length > 0 ? (attended.filter(r=>r.percentage).reduce((s,r) => s + r.percentage, 0) / attended.filter(r=>r.percentage).length).toFixed(1) : '—';
+                    const avgRank = attended.filter(r=>r.rank).length > 0 ? (attended.filter(r=>r.rank).reduce((s,r) => s + r.rank, 0) / attended.filter(r=>r.rank).length).toFixed(1) : '—';
+                    h += `<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(110px,1fr)); gap:8px; margin-top:12px;">`;
+                    h += `<div style="background:#f0fdf4; border-radius:10px; padding:8px; text-align:center;"><div style="font-size:0.6rem; font-weight:700; color:#047857; text-transform:uppercase;">Tests Taken</div><strong style="font-size:1rem; color:#047857;">${attended.length}/${results.length}</strong></div>`;
+                    h += `<div style="background:#eff6ff; border-radius:10px; padding:8px; text-align:center;"><div style="font-size:0.6rem; font-weight:700; color:#1d4ed8; text-transform:uppercase;">Avg Score</div><strong style="font-size:1rem; color:#1d4ed8;">${avgScore}</strong></div>`;
+                    h += `<div style="background:#faf5ff; border-radius:10px; padding:8px; text-align:center;"><div style="font-size:0.6rem; font-weight:700; color:#6d28d9; text-transform:uppercase;">Avg %</div><strong style="font-size:1rem; color:#6d28d9;">${avgPct}%</strong></div>`;
+                    h += `<div style="background:#fefce8; border-radius:10px; padding:8px; text-align:center;"><div style="font-size:0.6rem; font-weight:700; color:#a16207; text-transform:uppercase;">Avg Rank</div><strong style="font-size:1rem; color:#a16207;">${avgRank}</strong></div>`;
+                    h += `</div>`;
+                }
+                container.innerHTML = h;
+            })
+            .catch(err => {
+                container.innerHTML = `<div style="text-align:center; padding:1rem; color:#ef4444; font-size:0.85rem;"><i class="fas fa-circle-exclamation"></i> Failed to load assessment results.</div>`;
             });
     }
 

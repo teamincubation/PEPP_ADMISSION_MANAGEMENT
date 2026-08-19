@@ -218,6 +218,9 @@ function render_nav_item($key, $active_page, $nav_data) {
         case 'student-study-reports':
             echo '<a class="nav-item ' . nav_active('student-study-reports', $active_page) . '" href="student-study-reports.php"><i class="fas fa-chart-line"></i> Student Reports</a>';
             break;
+        case 'assessment-results':
+            echo '<a class="nav-item ' . nav_active('assessment-results', $active_page) . '" href="assessment-results.php"><i class="fas fa-chart-column"></i> Assessment Results</a>';
+            break;
         case 'task-tracker':
             echo '<a class="nav-item ' . nav_active('task-tracker', $active_page) . '" href="task-tracker.php"><i class="fas fa-list-check"></i> Task Tracker</a>';
             break;
@@ -300,7 +303,7 @@ $default_sidebar = [
         'id' => 'academics',
         'title' => 'Academics',
         'icon' => 'fas fa-graduation-cap',
-        'items' => ['courses', 'faculties', 'studyplans', 'student-study-reports']
+        'items' => ['courses', 'faculties', 'studyplans', 'student-study-reports', 'assessment-results']
     ],
     [
         'id' => 'system',
