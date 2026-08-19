@@ -115,7 +115,8 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
 
     if ($ajax_action === 'get_tests') {
         $plan_id = (int)($_GET['plan_id'] ?? 0);
-        if ($plan_id <= 0) { echo json_encode([]); exit; }
+        $course_id = (int)($_GET['course_id'] ?? 0);
+        if ($plan_id <= 0 || $course_id <= 0) { echo json_encode([]); exit; }
         $test_types = ['Attend Mock Test','Attend Mega Test','Attend Weekly Test','Practice Test','Previous Year Questions','Daily Quiz','Self-Assessment'];
         try {
             $custom_stmt = $pdo->query("SELECT name FROM study_plan_custom_types ORDER BY name ASC");
@@ -130,8 +131,8 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             $stmt->execute(array_merge([$plan_id], array_values($all_test_types)));
             $activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
             foreach ($activities as &$act) {
-                $bs = $pdo->prepare("SELECT id, version, status, published_at, published_by FROM assessment_result_batches WHERE activity_id = ? AND status = 'published' LIMIT 1");
-                $bs->execute([$act['id']]);
+                $bs = $pdo->prepare("SELECT id, version, status, published_at, published_by FROM assessment_result_batches WHERE activity_id = ? AND course_id = ? AND status = 'published' LIMIT 1");
+                $bs->execute([$act['id'], $course_id]);
                 $batch = $bs->fetch(PDO::FETCH_ASSOC);
                 $act['has_published_result'] = $batch ? true : false;
                 $act['published_version'] = $batch ? (int)$batch['version'] : 0;
@@ -295,8 +296,8 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
         $highest = !empty($att_scores) ? max($att_scores) : null;
         $lowest = !empty($att_scores) ? min($att_scores) : null;
         $avg = !empty($att_scores) ? round(array_sum($att_scores)/count($att_scores),2) : null;
-        $existing_stmt = $pdo->prepare("SELECT id, version, published_at FROM assessment_result_batches WHERE activity_id = ? AND status = 'published' LIMIT 1");
-        $existing_stmt->execute([$activity_id]);
+        $existing_stmt = $pdo->prepare("SELECT id, version, published_at FROM assessment_result_batches WHERE activity_id = ? AND course_id = ? AND status = 'published' LIMIT 1");
+        $existing_stmt->execute([$activity_id, $course_id]);
         $existing_batch = $existing_stmt->fetch(PDO::FETCH_ASSOC);
         $_SESSION['ar_preview'] = [
             'activity_id'=>$activity_id, 'plan_id'=>$plan_id, 'course_id'=>$course_id,
@@ -358,8 +359,8 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             // Use SELECT FOR UPDATE to lock any existing published batch for this activity.
             // This prevents two concurrent first-time publications from both succeeding,
             // and ensures replacement logic remains safe.
-            $concurrent_check = $pdo->prepare("SELECT id, status, version FROM assessment_result_batches WHERE activity_id = ? AND status = 'published' FOR UPDATE");
-            $concurrent_check->execute([$preview['activity_id']]);
+            $concurrent_check = $pdo->prepare("SELECT id, status, version FROM assessment_result_batches WHERE activity_id = ? AND course_id = ? AND status = 'published' FOR UPDATE");
+            $concurrent_check->execute([$preview['activity_id'], $preview['course_id']]);
             $existing_published = $concurrent_check->fetch(PDO::FETCH_ASSOC);
             
             if ($is_replacement) {
@@ -864,7 +865,7 @@ function arSelectPlan(planId) {
     arUpdateSteps(4);
     tc.style.display = 'block';
     tg.innerHTML = '<div class="ar-loading"><div class="spinner"></div> Loading tests...</div>';
-    fetch('assessment-results.php?action=get_tests&plan_id='+arSelectedPlanId)
+    fetch('assessment-results.php?action=get_tests&plan_id='+arSelectedPlanId+'&course_id='+arSelectedCourseId)
         .then(r => r.json()).then(tests => {
             if (!tests.length) { tg.innerHTML = '<div class="ar-empty"><i class="fas fa-flask-vial"></i><p>No test/assessment activities found in this Study Plan.</p></div>'; return; }
             tg.innerHTML = '';
