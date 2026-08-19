@@ -218,7 +218,11 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
         $eligible_students = [];
         while ($row = $stmt_elig->fetch(PDO::FETCH_ASSOC)) { $eligible_students[$row['email']] = $row; }
         // Parse data rows
-        $parsed_rows = []; $duplicate_emails = []; $invalid_emails = []; $email_set = []; $row_num = 1;
+        $parsed_rows = [];
+        $excluded_emails = [];
+        $invalid_emails = [];
+        $email_set = [];
+        $row_num = 1;
         foreach ($lines as $line) {
             $row_num++;
             $cols = str_getcsv($line);
@@ -229,11 +233,22 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
                 $invalid_emails[] = ['row' => $row_num, 'value' => $learner];
                 continue;
             }
+            $src_name = trim($cols[$col_map['name']] ?? '');
+            // Check if the student belongs to the selected Course and Academic Year
+            if (!isset($eligible_students[$email])) {
+                $excluded_emails[] = ['email' => $email, 'name' => $src_name];
+                continue;
+            }
+            // Check if student email is duplicate in the matched roster subset
             if (isset($email_set[$email])) {
-                $duplicate_emails[] = ['email' => $email, 'rows' => [$email_set[$email], $row_num]];
+                if (!is_array($email_set[$email])) {
+                    $email_set[$email] = [$email_set[$email]];
+                }
+                $email_set[$email][] = $row_num;
                 continue;
             }
             $email_set[$email] = $row_num;
+            
             $src_status = trim($cols[$col_map['status']] ?? '');
             $src_evaluation = trim($cols[$col_map['evaluation']] ?? '');
             $s_lower = strtolower($src_status); $e_lower = strtolower($src_evaluation);
@@ -241,9 +256,9 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             elseif ($s_lower === 'in progress' || $e_lower === 'unassigned') { $attendance = 'in_progress'; }
             else { $attendance = 'review_required'; }
             $parsed_rows[] = [
-                'student_email'=>$email, 'user_id'=>$eligible_students[$email]['user_id'] ?? null,
-                'matched'=>isset($eligible_students[$email]), 'attendance_status'=>$attendance,
-                'src_learner_details'=>$learner, 'src_name'=>trim($cols[$col_map['name']] ?? ''),
+                'student_email'=>$email, 'user_id'=>$eligible_students[$email]['user_id'],
+                'matched'=>true, 'attendance_status'=>$attendance,
+                'src_learner_details'=>$learner, 'src_name'=>$src_name,
                 'src_mobile'=>trim($cols[$col_map['mobile']] ?? ''),
                 'src_attempt'=>trim($cols[$col_map['attempt']] ?? ''),
                 'src_status'=>$src_status, 'src_evaluation'=>$src_evaluation,
@@ -263,10 +278,16 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
                 'src_export'=>trim($cols[$col_map['export']] ?? ''),
             ];
         }
+        $duplicate_emails = [];
+        foreach ($email_set as $eml => $rows) {
+            if (is_array($rows)) {
+                $duplicate_emails[] = ['email' => $eml, 'rows' => $rows];
+            }
+        }
         if (!empty($duplicate_emails)) {
             $dm = [];
             foreach ($duplicate_emails as $d) { $dm[] = $d['email'] . ' (rows ' . implode(', ', $d['rows']) . ')'; }
-            echo json_encode(['success'=>false, 'message'=>'Duplicate emails detected. Please correct the source file: '.implode('; ', $dm)]);
+            echo json_encode(['success'=>false, 'message'=>'Duplicate student emails detected in the uploaded file: '.implode('; ', $dm)]);
             exit;
         }
         $csv_emails = array_column($parsed_rows, 'student_email');
@@ -287,11 +308,12 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             }
         }
         $all_results = array_merge($parsed_rows, $not_attended);
+        $total_csv_rows = count($lines);
         $attended_count = count(array_filter($parsed_rows, fn($r) => $r['attendance_status'] === 'attended'));
         $in_progress_count = count(array_filter($parsed_rows, fn($r) => $r['attendance_status'] === 'in_progress'));
         $review_required_count = count(array_filter($parsed_rows, fn($r) => $r['attendance_status'] === 'review_required'));
-        $unmatched_count = count(array_filter($parsed_rows, fn($r) => !$r['matched']));
-        $matched_count = count(array_filter($parsed_rows, fn($r) => $r['matched']));
+        $unmatched_count = count($excluded_emails);
+        $matched_count = count($parsed_rows);
         $att_scores = array_filter(array_map(fn($r)=>$r['score'], array_filter($all_results, fn($r)=>$r['attendance_status']==='attended' && $r['score']!==null)));
         $highest = !empty($att_scores) ? max($att_scores) : null;
         $lowest = !empty($att_scores) ? min($att_scores) : null;
@@ -303,7 +325,7 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             'activity_id'=>$activity_id, 'plan_id'=>$plan_id, 'course_id'=>$course_id,
             'course_name'=>$course_name, 'academic_year'=>$year, 'activity'=>$activity,
             'results'=>$all_results, 'filename'=>$file['name'],
-            'stats'=>['total_rows'=>count($parsed_rows),'attended'=>$attended_count,
+            'stats'=>['total_rows'=>$total_csv_rows,'attended'=>$attended_count,
                 'in_progress'=>$in_progress_count,'not_attended'=>count($not_attended),
                 'review_required'=>$review_required_count,'unmatched'=>$unmatched_count,
                 'matched'=>$matched_count,'invalid_emails'=>$invalid_emails,
@@ -333,6 +355,7 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             'activity_type'=>$activity['activity_type'],
             'activity_date'=>$activity['activity_date'],
             'chapter'=>$activity['chapter'] ?? '',
+            'excluded_emails'=>$excluded_emails,
         ]);
         exit;
     }
@@ -969,11 +992,12 @@ function arShowPreview(data) {
     }
     h += '<div class="ar-preview-stats">';
     h += arStatCard(s.total_rows, 'CSV Rows', 'blue');
+    h += arStatCard(s.matched + s.not_attended, 'Course Students', 'purple');
     h += arStatCard(s.attended, 'Attended', 'green');
     h += arStatCard(s.in_progress, 'In Progress', 'orange');
     h += arStatCard(s.not_attended, 'Not Attended', 'red');
     if (s.review_required > 0) h += arStatCard(s.review_required, 'Review Required', 'purple');
-    h += arStatCard(s.unmatched, 'Unmatched Emails', s.unmatched > 0 ? 'red' : 'blue');
+    h += arStatCard(s.unmatched, 'Excluded Emails', s.unmatched > 0 ? 'orange' : 'blue');
     h += arStatCard(s.ranked_students, 'Ranked Students', 'purple');
     if (s.highest !== null) h += arStatCard(s.highest, 'Highest Score', 'green');
     if (s.lowest !== null) h += arStatCard(s.lowest, 'Lowest Score', 'orange');
@@ -983,6 +1007,15 @@ function arShowPreview(data) {
         h += '<div style="background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);border-radius:8px;padding:12px;margin-bottom:16px;font-size:.82rem"><strong><i class="fas fa-circle-exclamation" style="color:#ef4444"></i> Invalid emails skipped:</strong><ul style="margin:6px 0 0 16px">';
         s.invalid_emails.forEach(ie => { h += '<li>Row '+ie.row+': "'+escH(ie.value)+'"</li>'; });
         h += '</ul></div>';
+    }
+    if (data.excluded_emails && data.excluded_emails.length > 0) {
+        h += '<details style="background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.2);border-radius:8px;padding:12px;margin-bottom:16px;font-size:.82rem">';
+        h += '<summary style="cursor:pointer;font-weight:700;"><i class="fas fa-triangle-exclamation" style="color:#f59e0b"></i> Excluded Emails — Other Course / Not Enrolled ('+data.excluded_emails.length+')</summary>';
+        h += '<ul style="margin:8px 0 0 16px;max-height:150px;overflow-y:auto;padding-left:12px;">';
+        data.excluded_emails.forEach(x => {
+            h += '<li>' + escH(x.email) + (x.name ? ' ('+escH(x.name)+')' : '') + '</li>';
+        });
+        h += '</ul></details>';
     }
     // Preview table
     h += '<div class="ar-table-wrap" style="max-height:400px;overflow-y:auto"><table class="ar-table"><thead><tr>';
