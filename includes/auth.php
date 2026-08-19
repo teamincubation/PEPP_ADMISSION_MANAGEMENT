@@ -151,15 +151,19 @@ function whatsapp_outbound_mode($pdo) {
 function log_admin_activity($pdo, $admin, $type, $details = '', $ip = null, $location = null) {
     try {
         if (!admins_table_exists($pdo)) return; // table ships with the same migration
+        $lat = isset($_COOKIE['pepp_lat']) && is_numeric($_COOKIE['pepp_lat']) ? (float)$_COOKIE['pepp_lat'] : null;
+        $lng = isset($_COOKIE['pepp_lng']) && is_numeric($_COOKIE['pepp_lng']) ? (float)$_COOKIE['pepp_lng'] : null;
+        $meta = $_COOKIE['pepp_meta'] ?? null;
         $stmt = $pdo->prepare("
-            INSERT INTO admin_activity_log (admin_username, action_type, details, ip_address, location, user_agent, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, NOW())
+            INSERT INTO admin_activity_log (admin_username, action_type, details, ip_address, location, user_agent, latitude, longitude, metadata, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ");
         $stmt->execute([
             $admin, $type, $details,
             $ip ?? ($_SERVER['REMOTE_ADDR'] ?? null),
             $location ?? ($_SESSION['admin_location'] ?? null),
-            substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 255)
+            substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 255),
+            $lat, $lng, $meta
         ]);
     } catch (Exception $e) { error_log('admin activity log: ' . $e->getMessage()); }
 }
@@ -476,8 +480,11 @@ function render_photo_box($path, $size = 110) {
 /* ── Audit helper (correct track_records schema) ────────────────────────── */
 function track_record($pdo, $user_id, $action_type, $details, $admin) {
     try {
-        $stmt = $pdo->prepare("INSERT INTO track_records (user_id, action_type, action_details, performed_by, performed_at) VALUES (?, ?, ?, ?, NOW())");
-        $stmt->execute([$user_id, $action_type, $details, $admin]);
+        $lat = isset($_COOKIE['pepp_lat']) && is_numeric($_COOKIE['pepp_lat']) ? (float)$_COOKIE['pepp_lat'] : null;
+        $lng = isset($_COOKIE['pepp_lng']) && is_numeric($_COOKIE['pepp_lng']) ? (float)$_COOKIE['pepp_lng'] : null;
+        $meta = $_COOKIE['pepp_meta'] ?? null;
+        $stmt = $pdo->prepare("INSERT INTO track_records (user_id, action_type, action_details, performed_by, latitude, longitude, metadata, performed_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())");
+        $stmt->execute([$user_id, $action_type, $details, $admin, $lat, $lng, $meta]);
     } catch (Exception $ex) { error_log('track_record: ' . $ex->getMessage()); }
 }
 

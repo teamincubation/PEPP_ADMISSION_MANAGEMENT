@@ -122,16 +122,22 @@ class CommunicationEngine {
         if ($channel === 'whatsapp') {
             try {
                 $legacyPhone = substr(preg_replace('/\D/', '', $recipient), -15);
+                $lat = isset($_COOKIE['pepp_lat']) && is_numeric($_COOKIE['pepp_lat']) ? (float)$_COOKIE['pepp_lat'] : null;
+                $lng = isset($_COOKIE['pepp_lng']) && is_numeric($_COOKIE['pepp_lng']) ? (float)$_COOKIE['pepp_lng'] : null;
+                $meta = $_COOKIE['pepp_meta'] ?? null;
                 $legacyStmt = $this->pdo->prepare("
-                    INSERT INTO whatsapp_notifications (phone, message, student_name, sent_by, status, created_at, updated_at) 
-                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    INSERT INTO whatsapp_notifications (phone, message, student_name, sent_by, status, latitude, longitude, metadata, created_at, updated_at) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ");
                 $legacyStmt->execute([
                     $legacyPhone,
                     $bodyText ?: strip_tags($bodyHtml),
                     $recipientName,
                     $sentBy,
-                    $status === 'failed' ? 'failed' : 'pending'
+                    $status === 'failed' ? 'failed' : 'pending',
+                    $lat,
+                    $lng,
+                    $meta
                 ]);
                 $legacyId = (int)$this->pdo->lastInsertId();
                 

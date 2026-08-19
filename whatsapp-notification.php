@@ -96,8 +96,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $success_message = 'Message enqueued successfully for automated dispatch via Meta Cloud API!';
                 } else {
                     // Legacy manual mode: log and build wa.me link
-                    $stmt = $pdo->prepare("INSERT INTO whatsapp_notifications (phone, message, student_name, sent_by, status) VALUES (?, ?, ?, ?, 'sent')");
-                    $stmt->execute([substr($phone, -15), $message, $name ?: null, $admin_username]);
+                    $lat = isset($_COOKIE['pepp_lat']) && is_numeric($_COOKIE['pepp_lat']) ? (float)$_COOKIE['pepp_lat'] : null;
+                    $lng = isset($_COOKIE['pepp_lng']) && is_numeric($_COOKIE['pepp_lng']) ? (float)$_COOKIE['pepp_lng'] : null;
+                    $meta = $_COOKIE['pepp_meta'] ?? null;
+                    $stmt = $pdo->prepare("INSERT INTO whatsapp_notifications (phone, message, student_name, sent_by, status, latitude, longitude, metadata) VALUES (?, ?, ?, ?, 'sent', ?, ?, ?)");
+                    $stmt->execute([substr($phone, -15), $message, $name ?: null, $admin_username, $lat, $lng, $meta]);
                     $whatsapp_url = 'https://wa.me/' . $phone . '?text=' . rawurlencode($message);
                     $success_message = 'Message logged - WhatsApp is opening in a new tab.' . ($name ? " (to {$name})" : '');
                 }

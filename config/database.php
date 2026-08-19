@@ -539,6 +539,39 @@ try {
             ");
         } catch (Exception $e) {}
 
+        // Self-healing columns for Admin Geolocation and Metadata tracking
+        try {
+            // 1. admin_activity_log
+            if ($pdo->query("SHOW TABLES LIKE 'admin_activity_log'")->fetchColumn()) {
+                $cols = $pdo->query("SHOW COLUMNS FROM admin_activity_log LIKE 'latitude'")->fetch();
+                if (!$cols) {
+                    $pdo->exec("ALTER TABLE admin_activity_log 
+                        ADD COLUMN latitude DECIMAL(10, 8) DEFAULT NULL, 
+                        ADD COLUMN longitude DECIMAL(11, 8) DEFAULT NULL, 
+                        ADD COLUMN metadata TEXT DEFAULT NULL");
+                }
+            }
+            // 2. track_records
+            if ($pdo->query("SHOW TABLES LIKE 'track_records'")->fetchColumn()) {
+                $cols = $pdo->query("SHOW COLUMNS FROM track_records LIKE 'latitude'")->fetch();
+                if (!$cols) {
+                    $pdo->exec("ALTER TABLE track_records 
+                        ADD COLUMN latitude DECIMAL(10, 8) DEFAULT NULL, 
+                        ADD COLUMN longitude DECIMAL(11, 8) DEFAULT NULL, 
+                        ADD COLUMN metadata TEXT DEFAULT NULL");
+                }
+            }
+            // 3. whatsapp_notifications
+            if ($pdo->query("SHOW TABLES LIKE 'whatsapp_notifications'")->fetchColumn()) {
+                $cols = $pdo->query("SHOW COLUMNS FROM whatsapp_notifications LIKE 'latitude'")->fetch();
+                if (!$cols) {
+                    $pdo->exec("ALTER TABLE whatsapp_notifications 
+                        ADD COLUMN latitude DECIMAL(10, 8) DEFAULT NULL, 
+                        ADD COLUMN longitude DECIMAL(11, 8) DEFAULT NULL, 
+                        ADD COLUMN metadata TEXT DEFAULT NULL");
+                }
+            }
+        } catch (Exception $e) {}
 
     } catch (Exception $dbEx) {
         error_log("PEPP self-healing DB check failed: " . $dbEx->getMessage());

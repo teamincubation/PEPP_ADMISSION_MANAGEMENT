@@ -45,13 +45,14 @@ function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $limit 
             if ($f_from  !== '') { $w[] = "created_at >= ?";    $p[] = $f_from . ' 00:00:00'; }
             if ($f_to    !== '') { $w[] = "created_at <= ?";    $p[] = $f_to . ' 23:59:59'; }
             if ($like)           { $w[] = "(details LIKE ? OR action_type LIKE ?)"; $p[] = $like; $p[] = $like; }
-            $stmt = $pdo->prepare("SELECT id, created_at, admin_username, action_type, details, ip_address, location
+            $stmt = $pdo->prepare("SELECT id, created_at, admin_username, action_type, details, ip_address, location, latitude, longitude, metadata
                                    FROM admin_activity_log WHERE " . implode(' AND ', $w) . " ORDER BY created_at DESC LIMIT $limit");
             $stmt->execute($p);
             foreach ($stmt->fetchAll() as $r) {
                 $all[] = ['source' => 'admin_activity_log', 'source_id' => (int)$r['id'], 'at_time' => $r['created_at'],
                           'admin_name' => $r['admin_username'], 'act' => $r['action_type'], 'details' => $r['details'],
-                          'ip' => $r['ip_address'], 'loc' => $r['location'], 'student' => null];
+                          'ip' => $r['ip_address'], 'loc' => $r['location'], 'student' => null,
+                          'lat' => $r['latitude'] ?? null, 'lng' => $r['longitude'] ?? null, 'meta' => $r['metadata'] ?? null];
             }
         } catch (Exception $e) { error_log('activity admin_log: ' . $e->getMessage()); }
     }
@@ -63,13 +64,14 @@ function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $limit 
             if ($f_from  !== '') { $w[] = "performed_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
             if ($f_to    !== '') { $w[] = "performed_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
             if ($like)           { $w[] = "(action_details LIKE ? OR action_type LIKE ? OR user_id LIKE ?)"; $p[] = $like; $p[] = $like; $p[] = $like; }
-            $stmt = $pdo->prepare("SELECT id, performed_at, performed_by, action_type, action_details, user_id
+            $stmt = $pdo->prepare("SELECT id, performed_at, performed_by, action_type, action_details, user_id, latitude, longitude, metadata
                                    FROM track_records WHERE " . implode(' AND ', $w) . " ORDER BY performed_at DESC LIMIT $limit");
             $stmt->execute($p);
             foreach ($stmt->fetchAll() as $r) {
                 $all[] = ['source' => 'track_records', 'source_id' => (int)$r['id'], 'at_time' => $r['performed_at'],
                           'admin_name' => $r['performed_by'], 'act' => $r['action_type'], 'details' => $r['action_details'],
-                          'ip' => null, 'loc' => null, 'student' => $r['user_id']];
+                          'ip' => null, 'loc' => null, 'student' => $r['user_id'],
+                          'lat' => $r['latitude'] ?? null, 'lng' => $r['longitude'] ?? null, 'meta' => $r['metadata'] ?? null];
             }
         } catch (Exception $e) { error_log('activity track: ' . $e->getMessage()); }
     }
@@ -79,16 +81,17 @@ function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $limit 
             $w = ['1=1']; $p = [];
             if ($f_admin !== '') { $w[] = "sent_by = ?"; $p[] = $f_admin; }
             if ($f_from  !== '') { $w[] = "created_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
-            if ($f_to    !== '') { $w[] = "created_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+            if ($f_to    !== '') { $w[] = "created_at <= ?";    $p[] = $f_to . ' 23:59:59'; }
             if ($like)           { $w[] = "(message LIKE ? OR student_name LIKE ? OR phone LIKE ?)"; $p[] = $like; $p[] = $like; $p[] = $like; }
-            $stmt = $pdo->prepare("SELECT id, created_at, sent_by, student_name, phone, message
+            $stmt = $pdo->prepare("SELECT id, created_at, sent_by, student_name, phone, message, latitude, longitude, metadata
                                    FROM whatsapp_notifications WHERE " . implode(' AND ', $w) . " ORDER BY created_at DESC LIMIT $limit");
             $stmt->execute($p);
             foreach ($stmt->fetchAll() as $r) {
                 $detail = 'To ' . ($r['student_name'] ?: $r['phone']) . ': ' . mb_substr((string)$r['message'], 0, 160);
                 $all[] = ['source' => 'whatsapp_notifications', 'source_id' => (int)$r['id'], 'at_time' => $r['created_at'],
                           'admin_name' => $r['sent_by'], 'act' => 'whatsapp_message', 'details' => $detail,
-                          'ip' => null, 'loc' => null, 'student' => null];
+                          'ip' => null, 'loc' => null, 'student' => null,
+                          'lat' => $r['latitude'] ?? null, 'lng' => $r['longitude'] ?? null, 'meta' => $r['metadata'] ?? null];
             }
         } catch (Exception $e) { error_log('activity whatsapp: ' . $e->getMessage()); }
     }
@@ -152,9 +155,9 @@ if (isset($_GET['export'])) {
     header('Content-Disposition: attachment; filename="admin-activity-' . date('Y-m-d-Hi') . '.csv"');
     $out = fopen('php://output', 'w');
     fputs($out, "\xEF\xBB\xBF");
-    fputcsv($out, ['Date & Time', 'Admin', 'Action', 'Details', 'Student ID', 'IP Address', 'Location']);
+    fputcsv($out, ['Date & Time', 'Admin', 'Action', 'Details', 'Student ID', 'IP Address', 'Location', 'Latitude', 'Longitude', 'Metadata']);
     foreach ($rows as $r) {
-        fputcsv($out, [$r['at_time'], $r['admin_name'], $r['act'], $r['details'], $r['student'], $r['ip'], $r['loc']]);
+        fputcsv($out, [$r['at_time'], $r['admin_name'], $r['act'], $r['details'], $r['student'], $r['ip'], $r['loc'], $r['lat'] ?? '', $r['lng'] ?? '', $r['meta'] ?? '']);
     }
     fclose($out);
     exit();
@@ -281,10 +284,24 @@ include 'includes/admin_nav.php';
                             · <a href="student-details.php?user_id=<?php echo urlencode($r['student']); ?>"><?php echo e($r['student']); ?></a>
                         <?php endif; ?>
                     </td>
-                    <td class="cell-sub">
-                        <?php if ($r['ip']): ?>
-                            <?php echo e($r['ip']); ?><br><span style="font-size:.7rem;"><?php echo e($r['loc'] ?: ''); ?></span>
-                        <?php else: ?>-<?php endif; ?>
+                    <td class="cell-sub" style="vertical-align: middle;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <?php if (!empty($r['lat']) && !empty($r['lng'])): ?>
+                                <a href="https://www.google.com/maps?q=<?php echo urlencode($r['lat'] . ',' . $r['lng']); ?>" target="_blank" class="btn btn-sm btn-soft-red" style="padding: 4px 8px; font-size: 0.8rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; text-decoration: none;" title="View Exact Google Map Location">
+                                    <i class="fas fa-location-dot"></i> Map
+                                </a>
+                            <?php endif; ?>
+                            <?php if (!empty($r['meta'])): ?>
+                                <button type="button" class="btn btn-sm btn-soft-blue" style="padding: 4px 8px; font-size: 0.8rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; border: none; cursor: pointer;" onclick='showMetadata(<?php echo json_encode($r['meta']); ?>)' title="View Audit Metadata">
+                                    <i class="fas fa-circle-info"></i> Meta
+                                </button>
+                            <?php endif; ?>
+                        </div>
+                        <div style="margin-top: 4px;">
+                            <?php if ($r['ip']): ?>
+                                <?php echo e($r['ip']); ?><?php if ($r['loc']): ?> · <span style="font-size:.72rem; color:var(--muted-foreground);"><?php echo e($r['loc']); ?></span><?php endif; ?>
+                            <?php else: ?>-<?php endif; ?>
+                        </div>
                     </td>
                     <td style="text-align:right;">
                         <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this activity record?');">
@@ -313,6 +330,18 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<div class="modal-backdrop" id="meta-modal">
+    <div class="modal-content" style="max-width:550px;">
+        <div class="modal-head">
+            <h3 style="font-family:'Space Grotesk',sans-serif;font-weight:700;margin:0;"><i class="fas fa-circle-info"></i> Browser &amp; Device Audit Metadata</h3>
+            <button class="modal-close" onclick="closeModal('meta-modal')">&times;</button>
+        </div>
+        <div class="modal-body" id="meta-modal-body" style="padding:20px; font-size:0.85rem; line-height:1.6;">
+            <!-- Metadata table gets rendered here -->
+        </div>
+    </div>
+</div>
+
 <?php
 $extra_scripts = "<script>
 function confirmClear() {
@@ -320,6 +349,49 @@ function confirmClear() {
         ? "return confirm('Delete ALL " . (int)$total . " activity records matching the current filter? This cannot be undone.');"
         : "return confirm('Delete the ENTIRE activity log (" . (int)$total . " records)? This cannot be undone.');") . "
 }
+
+function showMetadata(metaStr) {
+    try {
+        const meta = typeof metaStr === 'string' ? JSON.parse(metaStr) : metaStr;
+        let h = '<table class=\"data-table\" style=\"width:100%; border-collapse:collapse; margin-top:10px;\">';
+        h += '<thead><tr><th style=\"padding:8px; text-align:left; border-bottom:2px solid var(--border);\">Property</th><th style=\"padding:8px; text-align:left; border-bottom:2px solid var(--border);\">Value</th></tr></thead>';
+        h += '<tbody>';
+        
+        const labels = {
+            user_agent: 'User Agent',
+            platform: 'Platform / OS',
+            screen_width: 'Screen Width',
+            screen_height: 'Screen Height',
+            viewport_width: 'Viewport Width',
+            viewport_height: 'Viewport Height',
+            device_pixel_ratio: 'Device Pixel Ratio',
+            timezone: 'Timezone',
+            language: 'Language',
+            accuracy: 'GPS Accuracy',
+            connection: 'Network Connection'
+        };
+
+        for (const k in meta) {
+            let val = meta[k];
+            if (k === 'accuracy' && typeof val === 'number') {
+                val = val.toFixed(2) + ' meters';
+            }
+            h += `<tr>
+                <td style=\"padding:8px; border-bottom:1px solid var(--border); font-weight:600; color:var(--muted-foreground);\">\${labels[k] || k}</td>
+                <td style=\"padding:8px; border-bottom:1px solid var(--border); word-break:break-all;\">\${escH(String(val))}</td>
+            </tr>`;
+        }
+        h += '</tbody></table>';
+        document.getElementById('meta-modal-body').innerHTML = h;
+        openModal('meta-modal');
+    } catch (e) {
+        alert('Failed to parse metadata: ' + e.message);
+    }
+}
+function escH(s) {
+    return s.replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\").replace(/>/g, \"&gt;\").replace(/\"/g, \"&quot;\").replace(/'/g, \"&#039;\");
+}
 </script>";
 include 'includes/admin_footer.php';
 ?>
+

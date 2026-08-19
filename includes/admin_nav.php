@@ -915,6 +915,124 @@ $nav_data = [
                 console.error('Could not copy link: ', err);
             });
         }
+
+        // ── MANDATORY GEOLOCATION & METADATA AUDITING ──
+        function setPeppCookie(name, value, days) {
+            var expires = "";
+            if (days) {
+                var date = new Date();
+                date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+                expires = "; expires=" + date.toUTCString();
+            }
+            document.cookie = name + "=" + encodeURIComponent(value || "") + expires + "; path=/; SameSite=Lax";
+        }
+        function getPeppCookie(name) {
+            var nameEQ = name + "=";
+            var ca = document.cookie.split(';');
+            for (var i = 0; i < ca.length; i++) {
+                var c = ca[i];
+                while (c.charAt(0) == ' ') c = c.substring(1);
+                if (c.indexOf(nameEQ) == 0) return decodeURIComponent(c.substring(nameEQ.length));
+            }
+            return null;
+        }
+
+        function showPeppLocationOverlay() {
+            var overlay = document.getElementById('pepp-location-overlay');
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = 'pepp-location-overlay';
+                overlay.style = "position:fixed; top:0; left:0; width:100%; height:100%; background:#0f172a; color:#fff; z-index:999999; display:flex; flex-direction:column; align-items:center; justify-content:center; font-family:'Space Grotesk',sans-serif; padding:20px; text-align:center;";
+                overlay.innerHTML = `
+                    <div style="max-width:500px; background:#1e293b; padding:40px; border-radius:16px; box-shadow:0 10px 25px rgba(0,0,0,0.5); border:1px solid #334155;">
+                        <div style="width:80px; height:80px; background:rgba(239,68,68,0.1); border:2px solid #ef4444; border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto 24px auto; color:#ef4444; font-size:32px;">
+                            <i class="fas fa-location-dot"></i>
+                        </div>
+                        <h2 style="font-size:24px; font-weight:700; margin-bottom:16px; color:#fff; font-family:'Space Grotesk',sans-serif;">Location Access Mandatory</h2>
+                        <p id="pepp-location-message" style="color:#94a3b8; font-size:15px; line-height:1.6; margin-bottom:24px; font-family:'DM Sans',sans-serif;">
+                            PEPP ERP requires active, exact GPS tracking for security compliance, audit trails, and administrative action logging. You must share your location to use this platform.
+                        </p>
+                        <button onclick="requestPeppLocation()" style="background:#4f46e5; color:#fff; border:none; padding:12px 32px; font-size:15px; font-weight:600; border-radius:8px; cursor:pointer; transition:all 0.15s; width:100%; display:flex; align-items:center; justify-content:center; gap:8px; font-family:'Space Grotesk',sans-serif;">
+                            <i class="fas fa-location-crosshairs"></i> Share My Location
+                        </button>
+                    </div>
+                `;
+                document.body.appendChild(overlay);
+            } else {
+                overlay.style.display = 'flex';
+            }
+        }
+
+        function requestPeppLocation() {
+            if (!navigator.geolocation) {
+                alert('Geolocation is not supported by your browser. You cannot use PEPP ERP without a browser supporting geolocation.');
+                return;
+            }
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    var lat = position.coords.latitude;
+                    var lng = position.coords.longitude;
+                    var accuracy = position.coords.accuracy;
+                    var connectionType = 'unknown';
+                    if (navigator.connection && navigator.connection.effectiveType) {
+                        connectionType = navigator.connection.effectiveType;
+                    }
+                    
+                    var meta = {
+                        user_agent: navigator.userAgent,
+                        platform: navigator.platform,
+                        screen_width: window.screen.width,
+                        screen_height: window.screen.height,
+                        viewport_width: window.innerWidth,
+                        viewport_height: window.innerHeight,
+                        device_pixel_ratio: window.devicePixelRatio,
+                        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                        language: navigator.language,
+                        accuracy: accuracy,
+                        connection: connectionType
+                    };
+
+                    setPeppCookie('pepp_lat', lat, 1);
+                    setPeppCookie('pepp_lng', lng, 1);
+                    setPeppCookie('pepp_meta', JSON.stringify(meta), 1);
+
+                    var overlay = document.getElementById('pepp-location-overlay');
+                    if (overlay) {
+                        overlay.remove();
+                    }
+                },
+                function(error) {
+                    var msg = "Location access is required to use PEPP ERP. Please enable location services and try again.";
+                    if (error.code === error.PERMISSION_DENIED) {
+                        msg = "Location permission denied. Access to PEPP ERP is blocked until location sharing is enabled in browser settings.";
+                    } else if (error.code === error.POSITION_UNAVAILABLE) {
+                        msg = "GPS/Location position is unavailable. Please check your system/device location settings.";
+                    } else if (error.code === error.TIMEOUT) {
+                        msg = "Location request timed out. Please try sharing location again.";
+                    }
+                    showPeppLocationOverlay();
+                    document.getElementById('pepp-location-message').textContent = msg;
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 0
+                }
+            );
+        }
+
+        // Run check on page load
+        (function() {
+            var lat = getPeppCookie('pepp_lat');
+            var lng = getPeppCookie('pepp_lng');
+            if (!lat || !lng) {
+                showPeppLocationOverlay();
+                requestPeppLocation();
+            } else {
+                // Periodically verify / refresh in background
+                setTimeout(requestPeppLocation, 1000);
+            }
+        })();
         </script>
 
         <div class="sidebar-footer">
