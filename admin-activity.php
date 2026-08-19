@@ -207,6 +207,28 @@ function act_badge($act) {
     return ['blue', 'fa-pen', ucwords(str_replace('_', ' ', $act))];
 }
 
+$online_list = [];
+try {
+    if (table_exists($pdo, 'admin_presence')) {
+        // Online if active in the last 5 minutes (300 seconds)
+        $stmt_on = $pdo->query("SELECT * FROM admin_presence WHERE last_seen >= DATE_SUB(NOW(), INTERVAL 5 MINUTE) ORDER BY last_seen DESC");
+        while ($r = $stmt_on->fetch(PDO::FETCH_ASSOC)) {
+            $duration_secs = time() - strtotime($r['login_time']);
+            if ($duration_secs < 60) {
+                $dur = 'Just logged in';
+            } elseif ($duration_secs < 3600) {
+                $dur = round($duration_secs / 60) . ' mins';
+            } else {
+                $hrs = floor($duration_secs / 3600);
+                $mins = round(($duration_secs % 3600) / 60);
+                $dur = $hrs . ' hr ' . $mins . ' mins';
+            }
+            $r['active_duration'] = $dur;
+            $online_list[] = $r;
+        }
+    }
+} catch (Exception $e) { error_log('Online query error: ' . $e->getMessage()); }
+
 $active_page = 'admin-activity';
 $page_title  = 'Activity Log';
 $page_sub    = 'Every admin action, login & message - Super Admin only';
@@ -245,6 +267,59 @@ include 'includes/admin_nav.php';
             <a href="admin-activity.php" class="btn btn-outline">Reset</a>
             <a href="<?php echo e(aqs(['export' => 1])); ?>" class="btn btn-soft-green"><i class="fas fa-file-excel"></i> Export Excel</a>
         </form>
+    </div>
+</div>
+
+<div class="panel" style="margin-bottom: 24px;">
+    <div class="panel-head" style="border-bottom: 1px solid var(--border);">
+        <span class="head-icon" style="background:rgba(16,185,129,0.1);color:#10b981;"><i class="fas fa-circle-nodes"></i></span>
+        <h2>Online Admins (<?php echo count($online_list); ?> active now)</h2>
+    </div>
+    <div class="panel-body flush table-wrap">
+        <?php if (empty($online_list)): ?>
+            <div class="empty-state" style="padding: 24px;"><i class="fas fa-users-slash"></i>
+                <p>No other admins are online right now.</p>
+            </div>
+        <?php else: ?>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Admin</th>
+                    <th>Current Section</th>
+                    <th>Current Page</th>
+                    <th>IP / Location</th>
+                    <th>Active Duration</th>
+                    <th>Last Seen</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($online_list as $oa): ?>
+                <tr>
+                    <td class="cell-main" style="font-weight: 600;">
+                        <span style="width: 8px; height: 8px; border-radius: 50%; background: #10b981; display: inline-block; margin-right: 8px; vertical-align: middle; box-shadow: 0 0 8px #10b981;"></span>
+                        <?php echo e($oa['username']); ?>
+                    </td>
+                    <td><span class="badge blue" style="font-size:0.75rem; padding: 4px 8px; font-weight: 600;"><i class="fas fa-folder-open" style="margin-right: 4px;"></i><?php echo e($oa['current_section']); ?></span></td>
+                    <td class="cell-sub"><code><?php echo e($oa['current_page']); ?></code></td>
+                    <td class="cell-sub" style="vertical-align: middle;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <?php if (!empty($oa['latitude']) && !empty($oa['longitude'])): ?>
+                                <a href="https://www.google.com/maps?q=<?php echo urlencode($oa['latitude'] . ',' . $oa['longitude']); ?>" target="_blank" class="btn btn-sm btn-soft-red" style="padding: 4px 8px; font-size: 0.8rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; text-decoration: none;" title="View Exact Google Map Location">
+                                    <i class="fas fa-location-dot"></i> Map
+                                </a>
+                            <?php endif; ?>
+                            <?php if ($oa['ip_address']): ?>
+                                <span><?php echo e($oa['ip_address']); ?></span>
+                            <?php else: ?>-<?php endif; ?>
+                        </div>
+                    </td>
+                    <td class="cell-main" style="font-weight: 500;"><?php echo e($oa['active_duration']); ?></td>
+                    <td class="cell-sub" style="color: var(--muted-foreground);"><?php echo date('h:i:s A', strtotime($oa['last_seen'])); ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
     </div>
 </div>
 

@@ -217,6 +217,57 @@ if (admins_table_exists($pdo)) {
 }
 $_SESSION['admin_role'] = $admin_role;
 
+// Update admin presence for real-time tracking
+try {
+    if (empty($_SESSION['login_time'])) {
+        $stmt_ll = $pdo->prepare("SELECT last_login_at FROM admins WHERE username = ? LIMIT 1");
+        $stmt_ll->execute([$admin_username]);
+        $ll = $stmt_ll->fetchColumn();
+        $_SESSION['login_time'] = $ll ? strtotime($ll) : time();
+    }
+    
+    $cur_page = basename($_SERVER['SCRIPT_NAME']);
+    $login_dt = date('Y-m-d H:i:s', $_SESSION['login_time']);
+    
+    // Resolve section
+    $cur_sec = 'Other';
+    $low_page = strtolower(trim($cur_page));
+    if (in_array($low_page, ['dashboard.php'], true)) $cur_sec = 'Overview';
+    elseif (in_array($low_page, ['student-approval.php', 'add-student.php'], true)) $cur_sec = 'Registrations';
+    elseif (in_array($low_page, ['studentpage.php', 'studentonboarding.php', 'student-details.php'], true)) $cur_sec = 'Students';
+    elseif (in_array($low_page, ['sessions.php', 'lead-management.php', 'student-mentoring.php'], true)) $cur_sec = 'Leads & Mentoring';
+    elseif (in_array($low_page, ['whatsapp-notification.php', 'whatsapp-inbox.php', 'communication-dashboard.php', 'communication-campaigns.php'], true)) $cur_sec = 'Communication';
+    elseif (in_array($low_page, ['course-management.php', 'faculties.php', 'studyplans.php', 'student-study-reports.php', 'assessment-results.php', 'studyplan-designer.php', 'studyplan-chapters.php'], true)) $cur_sec = 'Academics';
+    elseif (in_array($low_page, ['settings.php'], true)) $cur_sec = 'Settings';
+    elseif (in_array($low_page, ['admin-management.php', 'employee-management.php', 'admin-activity.php', 'reports.php', 'email-reports.php'], true)) $cur_sec = 'Admin Panel';
+
+    $lat = isset($_COOKIE['pepp_lat']) && is_numeric($_COOKIE['pepp_lat']) ? (float)$_COOKIE['pepp_lat'] : null;
+    $lng = isset($_COOKIE['pepp_lng']) && is_numeric($_COOKIE['pepp_lng']) ? (float)$_COOKIE['pepp_lng'] : null;
+    
+    $stmt_pres = $pdo->prepare("
+        INSERT INTO admin_presence (username, current_page, current_section, last_seen, login_time, latitude, longitude, ip_address)
+        VALUES (?, ?, ?, NOW(), ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE 
+            current_page = VALUES(current_page),
+            current_section = VALUES(current_section),
+            last_seen = NOW(),
+            latitude = VALUES(latitude),
+            longitude = VALUES(longitude),
+            ip_address = VALUES(ip_address)
+    ");
+    $stmt_pres->execute([
+        $admin_username, 
+        $cur_page, 
+        $cur_sec, 
+        $login_dt, 
+        $lat, 
+        $lng, 
+        $_SERVER['REMOTE_ADDR'] ?? null
+    ]);
+} catch (Exception $e) {
+    error_log('admin presence log failed: ' . $e->getMessage());
+}
+
 /* ── Inactivity timeout: 20 min for admins, 2 h for the Super Admin ─────── */
 $timeout = ($admin_role === 'super_admin') ? 2 * 60 * 60 : 20 * 60;
 if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity']) > $timeout) {
