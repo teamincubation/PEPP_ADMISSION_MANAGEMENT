@@ -698,7 +698,7 @@ include 'includes/admin_nav.php';
                         </div>
                     </td>
                     <td class="actions-cell" style="text-align:right; white-space:nowrap;">
-                        <a href="student-study-reports.php?source=courses&email=<?= urlencode($s['email']) ?>" class="btn btn-sm btn-soft-violet" title="View Student Report"><i class="fas fa-chart-line"></i> Report</a>
+                        <a href="student-study-reports.php?source=courses&email=<?= urlencode($s['email']) ?>" target="_blank" class="btn btn-sm btn-soft-violet" title="View Student Report"><i class="fas fa-chart-line"></i> Report</a>
                         <button type="button" class="btn btn-sm btn-soft-blue" onclick="openCall('<?= e($s['user_id']) ?>', '<?= e($s['full_name']) ?>')" title="Log Call"><i class="fas fa-phone"></i> Log Call</button>
                         <a href="https://wa.me/<?= $wa_phone ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
                         <button type="button" class="btn btn-sm btn-outline" onclick="openRemark('<?= e($s['user_id']) ?>', '<?= e($s['full_name']) ?>')" title="Add/View Remarks"><i class="fas fa-comment-dots"></i> Remarks (<?= $m['remarks_count'] ?>)</button>
