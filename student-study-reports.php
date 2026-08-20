@@ -213,6 +213,46 @@ if (isset($_GET['action'])) {
         }
         exit;
     }
+
+    // Fetch call logs for student
+    if ($_GET['action'] === 'get_student_call_logs') {
+        $student_user_id = trim($_GET['student_user_id'] ?? '');
+        $results = [];
+        if ($student_user_id !== '') {
+            try {
+                $stmt = $pdo->prepare("
+                    SELECT id, admin_username, call_timestamp, notes 
+                    FROM mentor_call_logs 
+                    WHERE student_user_id = ? 
+                    ORDER BY call_timestamp DESC
+                ");
+                $stmt->execute([$student_user_id]);
+                $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Exception $ex) {}
+        }
+        echo json_encode($results);
+        exit;
+    }
+
+    // Fetch remarks for student
+    if ($_GET['action'] === 'get_student_remarks') {
+        $student_user_id = trim($_GET['student_user_id'] ?? '');
+        $results = [];
+        if ($student_user_id !== '') {
+            try {
+                $stmt = $pdo->prepare("
+                    SELECT id, admin_username, remark, created_at 
+                    FROM mentor_remarks 
+                    WHERE student_user_id = ? 
+                    ORDER BY created_at DESC
+                ");
+                $stmt->execute([$student_user_id]);
+                $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Exception $ex) {}
+        }
+        echo json_encode($results);
+        exit;
+    }
     
     // 1. Global student autocomplete search
     if ($_GET['action'] === 'global_student_search') {
@@ -3808,6 +3848,32 @@ include 'includes/admin_nav.php';
                                     </div>
                                 </div>
                             </div>
+
+                            <!-- Call Logs Section -->
+                            <div class="chart-card" style="padding:1.5rem; margin-top:1.5rem;">
+                                <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.2rem; color:var(--text-main); margin-bottom:15px; border-bottom:1.5px solid var(--border); padding-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+                                    <span><i class="fas fa-phone" style="color:#10b981; margin-right:6px;"></i>Call Logs</span>
+                                    <span style="font-size:0.75rem; color:var(--text-muted); font-weight:normal;">Logged calls with student</span>
+                                </h4>
+                                <div id="std-call-logs-container">
+                                    <div style="text-align:center; padding:1rem; color:var(--text-muted); font-size:0.85rem;">
+                                        <i class="fas fa-spinner fa-spin"></i> Loading call logs...
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Remarks Section -->
+                            <div class="chart-card" style="padding:1.5rem; margin-top:1.5rem;">
+                                <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.2rem; color:var(--text-main); margin-bottom:15px; border-bottom:1.5px solid var(--border); padding-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+                                    <span><i class="fas fa-comment-dots" style="color:#f59e0b; margin-right:6px;"></i>Student Remarks</span>
+                                    <span style="font-size:0.75rem; color:var(--text-muted); font-weight:normal;">Mentor feedback & remarks</span>
+                                </h4>
+                                <div id="std-remarks-container">
+                                    <div style="text-align:center; padding:1rem; color:var(--text-muted); font-size:0.85rem;">
+                                        <i class="fas fa-spinner fa-spin"></i> Loading remarks...
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 `;
@@ -3816,6 +3882,8 @@ include 'includes/admin_nav.php';
 
                 // Load Assessment Results for this student
                 loadStudentAssessmentResults(email);
+                loadStudentCallLogs(s.user_id);
+                loadStudentRemarks(s.user_id);
 
                 // Populate Enrolled Courses list
                 const coursesContainer = document.getElementById('std-intelligence-courses-list');
@@ -3993,6 +4061,80 @@ include 'includes/admin_nav.php';
             .catch(err => {
                 container.innerHTML = `<div style="text-align:center; padding:1rem; color:#ef4444; font-size:0.85rem;"><i class="fas fa-circle-exclamation"></i> Failed to load assessment results.</div>`;
             });
+    }
+
+    // ── LOAD STUDENT CALL LOGS ──
+    function loadStudentCallLogs(studentUserId) {
+        const container = document.getElementById('std-call-logs-container');
+        if (!container) return;
+        fetch('student-study-reports.php?action=get_student_call_logs&student_user_id=' + encodeURIComponent(studentUserId))
+            .then(r => r.json())
+            .then(results => {
+                if (!results || results.length === 0) {
+                    container.innerHTML = `<div style="text-align:center; padding:1.5rem; border:2px dashed var(--border); border-radius:12px; color:var(--text-muted); font-size:0.8rem;"><i class="fas fa-phone-slash" style="font-size:1.5rem; margin-bottom:6px; color:#cbd5e1;"></i><p style="margin:0; font-weight:600;">No call logs yet</p></div>`;
+                    return;
+                }
+                let h = '<div style="overflow-x:auto; border:1px solid var(--border); border-radius:10px;"><table style="width:100%; border-collapse:collapse; font-size:0.78rem;"><thead><tr style="background:var(--accent-soft);">';
+                h += '<th style="padding:8px 10px; text-align:left; font-weight:700;">Called By</th>';
+                h += '<th style="padding:8px 10px; text-align:left; font-weight:700;">Time</th>';
+                h += '<th style="padding:8px 10px; text-align:left; font-weight:700;">Notes</th>';
+                h += '</tr></thead><tbody>';
+                results.forEach(r => {
+                    const callDate = new Date(r.call_timestamp).toLocaleString('en-IN', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:true});
+                    h += `<tr style="border-top:1px solid var(--border);">`;
+                    h += `<td style="padding:6px 10px; font-weight:600; white-space:nowrap;">${r_esc_js(r.admin_username)}</td>`;
+                    h += `<td style="padding:6px 10px; white-space:nowrap;">${callDate}</td>`;
+                    h += `<td style="padding:6px 10px; color:var(--text-main); max-width:300px; word-break:break-word;">${r_esc_js(r.notes || '—')}</td>`;
+                    h += `</tr>`;
+                });
+                h += '</tbody></table></div>';
+                container.innerHTML = h;
+            })
+            .catch(err => {
+                container.innerHTML = `<div style="text-align:center; padding:1rem; color:#ef4444; font-size:0.85rem;"><i class="fas fa-circle-exclamation"></i> Failed to load call logs.</div>`;
+            });
+    }
+
+    // ── LOAD STUDENT REMARKS ──
+    function loadStudentRemarks(studentUserId) {
+        const container = document.getElementById('std-remarks-container');
+        if (!container) return;
+        fetch('student-study-reports.php?action=get_student_remarks&student_user_id=' + encodeURIComponent(studentUserId))
+            .then(r => r.json())
+            .then(results => {
+                if (!results || results.length === 0) {
+                    container.innerHTML = `<div style="text-align:center; padding:1.5rem; border:2px dashed var(--border); border-radius:12px; color:var(--text-muted); font-size:0.8rem;"><i class="fas fa-comment-slash" style="font-size:1.5rem; margin-bottom:6px; color:#cbd5e1;"></i><p style="margin:0; font-weight:600;">No remarks yet</p></div>`;
+                    return;
+                }
+                let h = '<div style="overflow-x:auto; border:1px solid var(--border); border-radius:10px;"><table style="width:100%; border-collapse:collapse; font-size:0.78rem;"><thead><tr style="background:var(--accent-soft);">';
+                h += '<th style="padding:8px 10px; text-align:left; font-weight:700;">Added By</th>';
+                h += '<th style="padding:8px 10px; text-align:left; font-weight:700;">Date</th>';
+                h += '<th style="padding:8px 10px; text-align:left; font-weight:700;">Remark</th>';
+                h += '</tr></thead><tbody>';
+                results.forEach(r => {
+                    const remarkDate = new Date(r.created_at).toLocaleString('en-IN', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:true});
+                    h += `<tr style="border-top:1px solid var(--border);">`;
+                    h += `<td style="padding:6px 10px; font-weight:600; white-space:nowrap;">${r_esc_js(r.admin_username)}</td>`;
+                    h += `<td style="padding:6px 10px; white-space:nowrap;">${remarkDate}</td>`;
+                    h += `<td style="padding:6px 10px; color:var(--text-main); max-width:300px; word-break:break-word;">${r_esc_js(r.remark || '—')}</td>`;
+                    h += `</tr>`;
+                });
+                h += '</tbody></table></div>';
+                container.innerHTML = h;
+            })
+            .catch(err => {
+                container.innerHTML = `<div style="text-align:center; padding:1rem; color:#ef4444; font-size:0.85rem;"><i class="fas fa-circle-exclamation"></i> Failed to load remarks.</div>`;
+            });
+    }
+
+    function r_esc_js(text) {
+        if (!text) return '';
+        return text.toString()
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
     }
 
     // ── TIMELINE DIALOG MODAL OPEN/CLOSE ──
