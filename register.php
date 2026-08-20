@@ -1424,7 +1424,7 @@ $country_codes = [
                     if ($field === 'pepp_course') $field_name = 'PEPP Course Selection';
                     if ($field === 'pepp_academic_year') $field_name = 'PEPP Academic Year';
                 ?>
-                    <li><strong><?php echo e($field_name); ?></strong>: <?php echo e($err_msg); ?></li>
+                    <li><strong><?php echo htmlspecialchars($field_name, ENT_QUOTES, 'UTF-8'); ?></strong>: <?php echo htmlspecialchars($err_msg, ENT_QUOTES, 'UTF-8'); ?></li>
                 <?php endforeach; ?>
             </ul>
         </div>
