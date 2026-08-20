@@ -34,6 +34,53 @@ try {
     $stmt->execute($params);
     $conversations = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // Resolve legacy technical parameter dumps for sidebar snippet preview
+    foreach ($conversations as &$c) {
+        if (strpos($c['last_message_text'] ?? '', 'WhatsApp Template: ') === 0) {
+            $stmtLastMsg = $pdo->prepare("SELECT message_text, raw_payload, created_at FROM whatsapp_messages WHERE conversation_id = ? AND direction = 'outbound' ORDER BY created_at DESC LIMIT 1");
+            $stmtLastMsg->execute([$c['id']]);
+            $lastMsg = $stmtLastMsg->fetch(PDO::FETCH_ASSOC);
+            if ($lastMsg) {
+                $rawPayload = json_decode($lastMsg['raw_payload'] ?? '', true);
+                if ($rawPayload && isset($rawPayload['name']) && isset($rawPayload['parameters'])) {
+                    $tplName = $rawPayload['name'];
+                    $paramsList = $rawPayload['parameters'];
+                    
+                    static $tplCache = [];
+                    if (!isset($tplCache[$tplName])) {
+                        $stmtTpl = $pdo->prepare("SELECT meta_data, updated_at FROM communication_templates WHERE template_name = ? LIMIT 1");
+                        $stmtTpl->execute([$tplName]);
+                        $tpl = $stmtTpl->fetch(PDO::FETCH_ASSOC);
+                        $tplCache[$tplName] = $tpl ?: false;
+                    }
+                    
+                    $tpl = $tplCache[$tplName];
+                    if ($tpl) {
+                        $msgTime = strtotime($lastMsg['created_at']);
+                        $tplUpdateTime = strtotime($tpl['updated_at']);
+                        if ($tplUpdateTime <= $msgTime) {
+                            $meta = json_decode($tpl['meta_data'] ?? '', true) ?: [];
+                            $bodyText = $meta['body_text'] ?? '';
+                            if (!empty($bodyText)) {
+                                preg_match_all('/\{\{(\d+)\}\}/', $bodyText, $matches);
+                                $expectedParamsCount = !empty($matches[1]) ? max(array_map('intval', $matches[1])) : 0;
+                                if (count($paramsList) >= $expectedParamsCount) {
+                                    $compiled = $bodyText;
+                                    foreach ($paramsList as $idx => $val) {
+                                        $placeholder = '{{' . ($idx + 1) . '}}';
+                                        $compiled = str_replace($placeholder, $val, $compiled);
+                                    }
+                                    $c['last_message_text'] = $compiled;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    unset($c);
+
     echo json_encode(['success' => true, 'conversations' => $conversations]);
 } catch (Exception $e) {
     http_response_code(500);

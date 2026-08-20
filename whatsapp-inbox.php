@@ -114,6 +114,17 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- Lightbox Modal -->
+<div id="image-lightbox-modal" style="display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.9); z-index: 9999; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);">
+    <div style="position: relative; max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+        <button onclick="closeImageLightbox()" style="position: absolute; top: -45px; right: 0; background: none; border: none; color: #fff; font-size: 2rem; cursor: pointer; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'" title="Close (Esc)"><i class="fas fa-times"></i></button>
+        <img id="lightbox-image" src="" alt="Lightbox View" style="max-width: 100%; max-height: 80vh; object-fit: contain; border-radius: 12px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); border: 1px solid rgba(255,255,255,0.1);">
+        <div style="margin-top: 16px;">
+            <a id="lightbox-download" href="" target="_blank" class="btn btn-primary" style="padding: 8px 18px; border-radius: 8px; font-size: 0.8rem; display: inline-flex; align-items: center; gap: 8px; background: #6366f1; border-color: #6366f1; color: #fff; text-decoration: none; font-weight: 600; box-shadow: 0 4px 6px -1px rgba(99, 102, 241, 0.2);"><i class="fas fa-download"></i> Download Full Image</a>
+        </div>
+    </div>
+</div>
+
 <style>
 .tab-btn.active {
     background: #fff !important;
@@ -327,9 +338,27 @@ function renderMessages(messages, isBackground) {
             } catch(e) {}
         }
 
+        let messageContentHtml = `<div style="white-space: pre-wrap;">${escapeHtml(m.message_text)}</div>`;
+        if (m.message_type === 'image' && m.media_id) {
+            const mediaUrl = `api/v1/communication/media.php?id=${m.id}`;
+            const downloadUrl = `api/v1/communication/media.php?id=${m.id}&download=1`;
+            const captionHtml = m.caption ? `<div style="font-size: 0.8rem; margin-top: 6px; white-space: pre-wrap; color: #334155;">${escapeHtml(m.caption)}</div>` : '';
+            messageContentHtml = `
+                <div style="display: flex; flex-direction: column; gap: 6px; max-width: 250px;">
+                    <img src="${mediaUrl}" alt="Inbound Image" style="width: 100%; max-height: 180px; object-fit: cover; border-radius: 8px; cursor: pointer; border: 1px solid #cbd5e1; background: #f1f5f9;" onclick="openImageLightbox('${mediaUrl}')" onerror="this.onerror=null; this.parentNode.innerHTML='<div style=\'padding: 10px; color: #ef4444; font-size: 0.8rem; font-weight: 600; border: 1px solid #fee2e2; background: #fef2f2; border-radius: 8px; display: flex; align-items: center; gap: 6px;\'><i class=\'fas fa-circle-exclamation\'></i> Image unavailable</div>';">
+                    ${captionHtml}
+                    <div style="display: flex; gap: 8px; margin-top: 4px; font-size: 0.75rem; border-top: 1px dashed rgba(0,0,0,0.08); padding-top: 4px;">
+                        <button class="btn-link" style="color: #6366f1; border: none; background: none; cursor: pointer; padding: 0; font-weight: 600; font-size: 0.75rem; display: inline-flex; align-items: center; gap: 4px;" onclick="openImageLightbox('${mediaUrl}')"><i class="fas fa-expand"></i> View Full Image</button>
+                        <span style="color: #cbd5e1;">|</span>
+                        <a href="${downloadUrl}" target="_blank" style="color: #6366f1; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 4px;"><i class="fas fa-download"></i> Download</a>
+                    </div>
+                </div>
+            `;
+        }
+
         html += `
             <div class="bubble ${bubbleClass}">
-                <div style="white-space: pre-wrap;">${escapeHtml(m.message_text)}</div>
+                ${messageContentHtml}
                 ${interactiveBtnHtml}
                 <div style="display: flex; justify-content: flex-end; align-items: center; font-size: 0.65rem; color: #64748b; margin-top: 4px;">
                     <span>${dateTimeStr}</span>
@@ -508,6 +537,21 @@ function escapeHtml(text) {
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
 }
+
+function openImageLightbox(url) {
+    document.getElementById('lightbox-image').src = url;
+    document.getElementById('lightbox-download').href = url + '&download=1';
+    document.getElementById('image-lightbox-modal').style.display = 'flex';
+}
+function closeImageLightbox() {
+    document.getElementById('image-lightbox-modal').style.display = 'none';
+    document.getElementById('lightbox-image').src = '';
+}
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closeImageLightbox();
+    }
+});
 </script>
 
 <?php include 'includes/admin_footer.php'; ?>

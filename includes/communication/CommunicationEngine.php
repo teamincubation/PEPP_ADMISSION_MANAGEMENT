@@ -376,13 +376,44 @@ class CommunicationEngine {
                         $convId = $stmtConv->fetchColumn();
 
                         $bodyText = $item['body_text'] ?? '';
+                        $renderedText = null;
+                        
+                        if (!empty($item['template_name'])) {
+                            try {
+                                $tplData = json_decode($item['template_data'] ?? '', true) ?: [];
+                                $params = $tplData['parameters'] ?? [];
+                                
+                                // Fetch template definition
+                                $stmtTpl = $this->pdo->prepare("SELECT meta_data FROM communication_templates WHERE template_name = ? LIMIT 1");
+                                $stmtTpl->execute([$item['template_name']]);
+                                $tplRec = $stmtTpl->fetch(PDO::FETCH_ASSOC);
+                                if ($tplRec) {
+                                    $meta = json_decode($tplRec['meta_data'] ?? '', true) ?: [];
+                                    $bodyTpl = $meta['body_text'] ?? '';
+                                    if (!empty($bodyTpl)) {
+                                        $compiled = $bodyTpl;
+                                        foreach ($params as $idx => $val) {
+                                            $placeholder = '{{' . ($idx + 1) . '}}';
+                                            $compiled = str_replace($placeholder, $val, $compiled);
+                                        }
+                                        $renderedText = $compiled;
+                                    }
+                                }
+                            } catch (Exception $tplEx) {
+                                error_log("Failed to render template message at send time: " . $tplEx->getMessage());
+                            }
+                        }
+                        
+                        if ($renderedText === null) {
+                            $renderedText = $bodyText;
+                        }
 
                         if (!$convId) {
                             $insConv = $this->pdo->prepare("
                                 INSERT INTO whatsapp_conversations (wa_phone_number, student_uid, student_user_id, contact_name, last_message_text, last_message_at, unread_count, status, created_at, updated_at)
                                 VALUES (?, ?, ?, ?, ?, NOW(), 0, 'open', NOW(), NOW())
                             ");
-                            $insConv->execute([$cleanPhone, $studentUid, $studentUserId, $contactName, $bodyText]);
+                            $insConv->execute([$cleanPhone, $studentUid, $studentUserId, $contactName, $renderedText]);
                             $convId = (int)$this->pdo->lastInsertId();
                         } else {
                             $updConv = $this->pdo->prepare("
@@ -395,7 +426,7 @@ class CommunicationEngine {
                                     updated_at = NOW() 
                                 WHERE id = ?
                             ");
-                            $updConv->execute([$studentUid, $studentUserId, $contactName, $bodyText, $convId]);
+                            $updConv->execute([$studentUid, $studentUserId, $contactName, $renderedText, $convId]);
                         }
 
                         // Insert outbound message with status 'sent'
@@ -405,7 +436,7 @@ class CommunicationEngine {
                             INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, status, raw_payload, created_at, sent_at)
                             VALUES (?, ?, 'outbound', ?, ?, 'sent', ?, NOW(), NOW())
                         ");
-                        $insMsg->execute([$convId, $msgId, $msgType, $bodyText, $rawPayloadJson]);
+                        $insMsg->execute([$convId, $msgId, $msgType, $renderedText, $rawPayloadJson]);
 
                         $this->pdo->commit();
                     } catch (Exception $e) {

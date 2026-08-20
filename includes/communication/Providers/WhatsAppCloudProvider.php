@@ -180,6 +180,69 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
         }
     }
 
+    public function downloadMedia($mediaId) {
+        $url = "https://graph.facebook.com/{$this->apiVersion}/{$mediaId}";
+        
+        $headers = [
+            "Authorization: Bearer {$this->accessToken}"
+        ];
+        
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+        
+        if ($err) {
+            $this->lastError = "CURL Error: " . $err;
+            return false;
+        }
+        
+        $data = json_decode($response, true);
+        if ($httpCode !== 200 || !isset($data['url'])) {
+            $this->lastError = "Meta Media API Error: " . ($data['error']['message'] ?? 'Unknown Error');
+            return false;
+        }
+        
+        $mediaUrl = $data['url'];
+        $mimeType = $data['mime_type'] ?? 'image/jpeg';
+        
+        // Download the actual file binary
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $mediaUrl);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        
+        $binary = curl_exec($ch);
+        $binaryHttpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $binaryErr = curl_error($ch);
+        curl_close($ch);
+        
+        if ($binaryErr) {
+            $this->lastError = "Media Download CURL Error: " . $binaryErr;
+            return false;
+        }
+        
+        if ($binaryHttpCode !== 200) {
+            $this->lastError = "Media Download HTTP Error: " . $binaryHttpCode;
+            return false;
+        }
+        
+        return [
+            'mime_type' => $mimeType,
+            'data' => $binary
+        ];
+    }
+
     public function getLastError() {
         return $this->lastError;
     }
