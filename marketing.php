@@ -322,9 +322,42 @@ try {
     $an['user_benefit'] = (float)$pdo->query("SELECT COALESCE(SUM(coupon_discount),0) FROM users WHERE referral_code IS NOT NULL AND referral_code <> ''")->fetchColumn();
 } catch (Exception $e) {}
 
-// Coupons
+// Coupons & Redemptions
 $coupons = [];
-try { $coupons = $pdo->query("SELECT * FROM coupons ORDER BY status='active' DESC, id DESC")->fetchAll(); } catch (Exception $e) {}
+$coupon_stats = ['total_coupons' => 0, 'active_coupons' => 0, 'total_redemptions' => 0, 'total_discount_given' => 0.0];
+$coupon_redemptions_list = [];
+$search_coupon_usage = trim($_GET['search_coupon_usage'] ?? '');
+
+try { 
+    $coupons = $pdo->query("SELECT * FROM coupons ORDER BY status='active' DESC, id DESC")->fetchAll(); 
+    $coupon_stats['total_coupons'] = count($coupons);
+    foreach ($coupons as $c) {
+        if (($c['status'] ?? '') === 'active') {
+            $coupon_stats['active_coupons']++;
+        }
+    }
+    $coupon_stats['total_redemptions'] = (int)$pdo->query("SELECT COUNT(*) FROM coupon_redemptions")->fetchColumn();
+    $coupon_stats['total_discount_given'] = (float)$pdo->query("SELECT COALESCE(SUM(discount_applied), 0) FROM coupon_redemptions")->fetchColumn();
+    
+    // Fetch redemptions with user details
+    $redemption_sql = "
+        SELECT cr.*, u.name AS student_name, u.phone AS student_phone, u.pepp_course, u.pepp_academic_year, u.status AS student_status
+        FROM coupon_redemptions cr
+        LEFT JOIN users u ON (cr.user_id IS NOT NULL AND u.user_id = cr.user_id) OR (cr.user_id IS NULL AND u.email = cr.email)
+    ";
+    $redemption_params = [];
+    if ($search_coupon_usage !== '') {
+        $redemption_sql .= " WHERE (cr.coupon_code LIKE ? OR cr.user_id LIKE ? OR cr.email LIKE ? OR u.name LIKE ?) ";
+        $like_term = "%$search_coupon_usage%";
+        $redemption_params = [$like_term, $like_term, $like_term, $like_term];
+    }
+    $redemption_sql .= " ORDER BY cr.redeemed_at DESC LIMIT 100";
+    $redemption_stmt = $pdo->prepare($redemption_sql);
+    $redemption_stmt->execute($redemption_params);
+    $coupon_redemptions_list = $redemption_stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    error_log('coupons_data: ' . $e->getMessage());
+}
 
 $active_page = 'marketing';
 $page_title  = 'Marketing';
@@ -702,6 +735,31 @@ include 'includes/admin_footer.php';
 ?>
 
 <?php else: /* ════ COUPONS ════ */ ?>
+
+<!-- ════ COUPONS STATS CARDS ════ -->
+<div class="stats-grid" style="margin-bottom: 20px;">
+    <div class="stat-card">
+        <div class="stat-top"><span class="stat-label">Total Coupons</span><span class="stat-icon violet"><i class="fas fa-ticket"></i></span></div>
+        <div class="stat-value"><?php echo $coupon_stats['total_coupons']; ?></div>
+        <div class="stat-hint"><?php echo $coupon_stats['active_coupons']; ?> Active Campaigns</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-top"><span class="stat-label">Active Coupons</span><span class="stat-icon green"><i class="fas fa-circle-check"></i></span></div>
+        <div class="stat-value"><?php echo $coupon_stats['active_coupons']; ?></div>
+        <div class="stat-hint">Ready for checkout</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-top"><span class="stat-label">Total Redemptions</span><span class="stat-icon blue"><i class="fas fa-tags"></i></span></div>
+        <div class="stat-value"><?php echo number_format($coupon_stats['total_redemptions']); ?></div>
+        <div class="stat-hint">Times coupons used</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-top"><span class="stat-label">Discounts Given</span><span class="stat-icon amber"><i class="fas fa-indian-rupee-sign"></i></span></div>
+        <div class="stat-value">₹<?php echo number_format($coupon_stats['total_discount_given'], 0); ?></div>
+        <div class="stat-hint">Total student savings</div>
+    </div>
+</div>
+
 <div class="panel">
     <div class="panel-head"><span class="head-icon" style="background:var(--accent-soft);color:var(--accent-dark);"><i class="fas fa-ticket"></i></span><h2>Discount Coupons</h2>
         <div class="head-right"><button class="btn btn-sm btn-primary" onclick="openCoupon()"><i class="fas fa-plus"></i> New Coupon</button></div>
@@ -734,6 +792,93 @@ include 'includes/admin_footer.php';
                         <?php if (can_delete()): ?>
                         <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this coupon?');"><?php echo csrf_field(); ?><input type="hidden" name="action" value="delete_coupon"><input type="hidden" name="coupon_id" value="<?php echo (int)$c['id']; ?>"><button class="btn btn-sm btn-soft-red"><i class="fas fa-trash"></i></button></form>
                         <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+    </div>
+</div>
+
+<!-- ════ COUPON USAGE & REDEMPTION HISTORY REPORT ════ -->
+<div class="panel" style="margin-top: 24px;">
+    <div class="panel-head" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+            <span class="head-icon" style="background:rgba(59,130,246,0.1); color:#3b82f6;"><i class="fas fa-clock-rotate-left"></i></span>
+            <h2>Coupon Usage &amp; Redemption History (<?php echo count($coupon_redemptions_list); ?>)</h2>
+        </div>
+    </div>
+    
+    <div style="padding:0.8rem 1.2rem; background:var(--card-sub, #f8fafc); border-bottom:1px solid var(--border);">
+        <form method="GET" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <input type="hidden" name="tab" value="coupons">
+            <div style="position:relative; flex-grow:1; max-width:400px;">
+                <input type="text" name="search_coupon_usage" value="<?php echo e($search_coupon_usage); ?>" placeholder="Search by coupon code, student name, email, or ID..." style="width:100%; padding:8px 12px 8px 34px; border-radius:8px; border:1px solid var(--border); font-size:0.85rem; background:var(--card);">
+                <i class="fas fa-search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:0.8rem;"></i>
+            </div>
+            <button type="submit" class="btn btn-sm btn-primary"><i class="fas fa-filter"></i> Filter</button>
+            <?php if ($search_coupon_usage !== ''): ?>
+                <a href="?tab=coupons" class="btn btn-sm btn-outline" style="text-decoration:none;"><i class="fas fa-xmark"></i> Clear</a>
+            <?php endif; ?>
+        </form>
+    </div>
+
+    <div class="panel-body flush table-wrap">
+        <?php if (empty($coupon_redemptions_list)): ?>
+            <div class="empty-state" style="padding: 2.5rem; text-align: center;">
+                <i class="fas fa-ticket-simple" style="font-size:2.5rem; color:var(--text-muted); margin-bottom:10px;"></i>
+                <p style="margin:0; font-weight:600; color:var(--text-muted);">No coupon redemptions recorded yet.</p>
+                <span style="font-size:0.75rem; color:var(--text-muted);">When students apply coupon codes during enrollment, their usage reports will appear here.</span>
+            </div>
+        <?php else: ?>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Student / Learner</th>
+                    <th>Coupon Applied</th>
+                    <th>Discount Savings</th>
+                    <th>Program / Course</th>
+                    <th>Redeemed Date &amp; Time</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($coupon_redemptions_list as $cr): ?>
+                <tr>
+                    <td>
+                        <div class="cell-main" style="font-weight:700;"><?php echo e($cr['student_name'] ?: ($cr['user_id'] ?: 'Guest Student')); ?></div>
+                        <div class="cell-sub" style="font-size:0.75rem; color:var(--text-muted);">
+                            <?php echo e($cr['email']); ?>
+                            <?php if ($cr['user_id']): ?>
+                                &bull; <strong style="color:var(--text-main);"><?php echo e($cr['user_id']); ?></strong>
+                            <?php endif; ?>
+                        </div>
+                    </td>
+                    <td>
+                        <span class="badge violet" style="font-size:0.75rem; font-weight:700; letter-spacing:0.5px;">
+                            <i class="fas fa-ticket" style="margin-right:4px;"></i><?php echo e($cr['coupon_code']); ?>
+                        </span>
+                    </td>
+                    <td>
+                        <strong style="color:#10b981; font-size:0.9rem;">₹<?php echo number_format($cr['discount_applied'], 2); ?></strong>
+                    </td>
+                    <td class="cell-sub">
+                        <?php if (!empty($cr['pepp_course'])): ?>
+                            <strong style="color:var(--text-main);"><?php echo e($cr['pepp_course']); ?></strong>
+                            <?php if (!empty($cr['pepp_academic_year'])): ?>
+                                <br><span style="font-size:0.7rem; color:var(--text-muted);">Year: <?php echo e($cr['pepp_academic_year']); ?></span>
+                            <?php endif; ?>
+                        <?php else: ?>
+                            <span style="color:var(--text-muted);">—</span>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <div style="font-size:0.8rem; font-weight:600; color:var(--text-main);">
+                            <?php echo date('d M Y', strtotime($cr['redeemed_at'])); ?>
+                        </div>
+                        <div style="font-size:0.7rem; color:var(--text-muted);">
+                            <?php echo date('h:i A', strtotime($cr['redeemed_at'])); ?>
+                        </div>
                     </td>
                 </tr>
             <?php endforeach; ?>
