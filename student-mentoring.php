@@ -8,6 +8,21 @@
 require_once 'includes/auth.php';
 require_permission('student-mentoring');
 
+// AJAX call to fetch remarks for a specific student
+if (isset($_GET['get_remarks_student_user_id'])) {
+    header('Content-Type: application/json');
+    $student_user_id = trim($_GET['get_remarks_student_user_id']);
+    try {
+        $stmt = $pdo->prepare("SELECT remark, admin_username, created_at FROM mentor_remarks WHERE student_user_id = ? ORDER BY created_at DESC");
+        $stmt->execute([$student_user_id]);
+        $remarks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        echo json_encode(['success' => true, 'remarks' => $remarks]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
 $active_page = 'student-mentoring';
 $page_title  = 'Student Mentoring';
 $page_sub    = 'Track, mentor and support your assigned students';
@@ -963,6 +978,7 @@ include 'includes/admin_nav.php';
             <button type="submit" class="btn btn-sm btn-primary" style="background:#f59e0b;border-color:#f59e0b;"><i class="fas fa-comment-dots"></i> Save Remark</button>
         </div>
     </form>
+    <div id="previousRemarksList"></div>
 </div>
 </div>
 
@@ -1021,6 +1037,44 @@ function openCall(id, name) {
 function openRemark(id, name) {
     document.getElementById('remarkStudentId').value = id;
     document.getElementById('remarkStudentName').textContent = 'Student: ' + name + ' (' + id + ')';
+    
+    const remarksContainer = document.getElementById('previousRemarksList');
+    if (remarksContainer) {
+        remarksContainer.innerHTML = '<div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:8px;"><i class="fas fa-spinner fa-spin"></i> Loading previous remarks...</div>';
+    }
+    
+    fetch(`student-mentoring.php?get_remarks_student_user_id=${encodeURIComponent(id)}`)
+        .then(r => r.json())
+        .then(res => {
+            if (remarksContainer) {
+                if (res.success && res.remarks && res.remarks.length > 0) {
+                    let html = '<div style="margin-top:12px; border-top:1px solid var(--border); padding-top:12px; max-height:200px; overflow-y:auto; display:flex; flex-direction:column; gap:8px;">';
+                    html += '<h5 style="margin:0 0 6px; font-weight:600; font-size:0.75rem; color:var(--text);">Previous Remarks (' + res.remarks.length + ')</h5>';
+                    res.remarks.forEach(r => {
+                        const dateStr = new Date(r.created_at).toLocaleString([], {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
+                        html += `
+                            <div style="background:var(--card-sub, #f8fafc); border:1px solid var(--border); border-radius:8px; padding:8px; font-size:0.75rem; border-left:3px solid var(--amber-soft, #f59e0b); text-align:left;">
+                                <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:0.7rem; color:var(--text-muted);">
+                                    <strong>By: ${escapeHtmlJS(r.admin_username)}</strong>
+                                    <span>${dateStr}</span>
+                                </div>
+                                <div style="white-space:pre-wrap; color:var(--text);">${escapeHtmlJS(r.remark)}</div>
+                            </div>
+                        `;
+                    });
+                    html += '</div>';
+                    remarksContainer.innerHTML = html;
+                } else {
+                    remarksContainer.innerHTML = '<div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:8px; margin-top:12px; border-top:1px solid var(--border);">No previous remarks.</div>';
+                }
+            }
+        })
+        .catch(err => {
+            if (remarksContainer) {
+                remarksContainer.innerHTML = '<div style="font-size:0.75rem; color:var(--red-ink); text-align:center; padding:8px; margin-top:12px; border-top:1px solid var(--border);">Failed to load remarks.</div>';
+            }
+        });
+
     openModal('remarkModal');
 }
 function openEditCall(logId, studentName, timestamp, notes) {
@@ -1130,6 +1184,16 @@ function resetStudentFilters() {
     if (document.getElementById('filter-overdue')) document.getElementById('filter-overdue').value = 'ALL';
     if (document.getElementById('filter-attendance')) document.getElementById('filter-attendance').value = 'ALL';
     applyStudentFilters();
+}
+
+function escapeHtmlJS(text) {
+    if (!text) return '';
+    return text.toString()
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
 }
 </script>
 
