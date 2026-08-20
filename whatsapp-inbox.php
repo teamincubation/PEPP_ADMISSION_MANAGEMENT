@@ -225,7 +225,9 @@ function renderConversations(isBackground) {
         if (lastMsgSnippet.length > 35) lastMsgSnippet = lastMsgSnippet.substring(0, 35) + '...';
         
         const dateObj = new Date(c.last_message_at);
+        const dateStr = dateObj.toLocaleDateString([], {day:'2-digit', month:'short'});
         const timeStr = dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        const dateTimeStr = dateStr + ', ' + timeStr;
         
         html += `
             <div class="conv-item ${isActive}" onclick="selectConversation(${c.id}, '${c.student_uid}', '${c.wa_phone_number}')">
@@ -234,7 +236,7 @@ function renderConversations(isBackground) {
                     <div style="flex: 1; min-width: 0;">
                         <div style="display:flex; justify-content:space-between; align-items:center; gap:4px;">
                             <span style="font-weight: 700; color: #1e293b; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${c.contact_name || 'Unknown Contact'}</span>
-                            <span style="font-size: 0.65rem; color: #94a3b8; white-space: nowrap;">${timeStr}</span>
+                            <span style="font-size: 0.65rem; color: #94a3b8; white-space: nowrap;">${dateTimeStr}</span>
                         </div>
                         <div style="display: flex; align-items: center; justify-content: space-between; gap:4px; margin-top: 2px;">
                             <span style="font-size: 0.75rem; color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${lastMsgSnippet}</span>
@@ -304,7 +306,9 @@ function renderMessages(messages, isBackground) {
         }
         
         const dateObj = new Date(m.created_at);
+        const dateStr = dateObj.toLocaleDateString([], {day:'2-digit', month:'short'});
         const timeStr = dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        const dateTimeStr = dateStr + ', ' + timeStr;
 
         let interactiveBtnHtml = '';
         if (m.message_type === 'interactive' || (m.raw_payload && m.raw_payload.includes('interactive_button_text'))) {
@@ -328,7 +332,7 @@ function renderMessages(messages, isBackground) {
                 <div style="white-space: pre-wrap;">${escapeHtml(m.message_text)}</div>
                 ${interactiveBtnHtml}
                 <div style="display: flex; justify-content: flex-end; align-items: center; font-size: 0.65rem; color: #64748b; margin-top: 4px;">
-                    <span>${timeStr}</span>
+                    <span>${dateTimeStr}</span>
                     ${statusTick}
                 </div>
             </div>
