@@ -253,6 +253,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
             } catch (Exception $e) { $error_message = 'Error deleting call log: ' . $e->getMessage(); }
         }
     }
+
+    // Edit Remark (Super Admin only)
+    elseif ($action === 'edit_remark' && is_super_admin() && mentor_tables_exist($pdo)) {
+        $remark_id = (int)($_POST['remark_id'] ?? 0);
+        $remark_text = trim($_POST['remark_text'] ?? '');
+        if ($remark_id && $remark_text) {
+            try {
+                $pdo->prepare("UPDATE mentor_remarks SET remark = ? WHERE id = ?")
+                    ->execute([$remark_text, $remark_id]);
+                log_admin_activity($pdo, $admin_username, 'mentor_remark_edit', "Edited remark #{$remark_id}");
+                $success_message = 'Remark updated.';
+            } catch (Exception $e) { $error_message = 'Error updating remark: ' . $e->getMessage(); }
+        }
+    }
+
+    // Delete Remark (Super Admin only)
+    elseif ($action === 'delete_remark' && is_super_admin() && mentor_tables_exist($pdo)) {
+        $remark_id = (int)($_POST['remark_id'] ?? 0);
+        if ($remark_id) {
+            try {
+                $pdo->prepare("DELETE FROM mentor_remarks WHERE id = ?")->execute([$remark_id]);
+                log_admin_activity($pdo, $admin_username, 'mentor_remark_delete', "Deleted remark #{$remark_id}");
+                $success_message = 'Remark deleted.';
+            } catch (Exception $e) { $error_message = 'Error deleting remark: ' . $e->getMessage(); }
+        }
+    }
 }
 
 // ── Load Data ──
@@ -452,9 +478,6 @@ include 'includes/admin_nav.php';
 <div class="alert alert-warn"><i class="fas fa-triangle-exclamation"></i><span>Mentoring tables not installed. Run <strong>database-update-22.sql</strong>.</span></div>
 <?php else: ?>
 
-
-
-<?php if ($tab === 'students'): ?>
 <!-- CSS styles for responsive mobile cards -->
 <style>
 .mentoring-table th {
@@ -531,6 +554,8 @@ include 'includes/admin_nav.php';
         <?php endif; ?>
     </div>
 </div>
+
+<?php if ($tab === 'students'): ?>
 
 <!-- State Rendering -->
 <?php if ($selected_course_id === 0): ?>
@@ -672,15 +697,22 @@ include 'includes/admin_nav.php';
 <?php endif; ?>
 
 <?php elseif ($tab === 'calls'): ?>
+<?php if ($selected_course_id === 0): ?>
+    <div class="panel" style="padding: 2.5rem; text-align: center;">
+        <div style="font-size: 3rem; margin-bottom: 12px;">📞</div>
+        <h3 style="margin-bottom: 6px; color: var(--text);">Select a course to view call logs</h3>
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Choose a PEPP course above to view and manage call logs.</p>
+    </div>
+<?php else: ?>
 <!-- Call Logs -->
 <div class="panel">
     <div class="panel-head">
         <span class="head-icon" style="background:var(--green-soft);color:var(--green-ink);"><i class="fas fa-phone"></i></span>
-        <h2>Call Logs</h2>
+        <h2>Call Logs (<?= e($selected_course_name) ?>)</h2>
     </div>
     <div class="panel-body flush table-wrap">
         <?php if (empty($call_logs)): ?>
-            <div style="padding:2rem;text-align:center;color:var(--text-muted);">No call logs yet.</div>
+            <div style="padding:2rem;text-align:center;color:var(--text-muted);">No call logs yet for this course.</div>
         <?php else: ?>
         <table class="data-table">
             <thead>
@@ -735,17 +767,25 @@ include 'includes/admin_nav.php';
         <?php endif; ?>
     </div>
 </div>
+<?php endif; ?>
 
 <?php elseif ($tab === 'remarks'): ?>
+<?php if ($selected_course_id === 0): ?>
+    <div class="panel" style="padding: 2.5rem; text-align: center;">
+        <div style="font-size: 3rem; margin-bottom: 12px;">💬</div>
+        <h3 style="margin-bottom: 6px; color: var(--text);">Select a course to view remarks</h3>
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Choose a PEPP course above to view and manage student remarks.</p>
+    </div>
+<?php else: ?>
 <!-- Remarks -->
 <div class="panel">
     <div class="panel-head">
         <span class="head-icon" style="background:var(--amber-soft);color:var(--amber-ink);"><i class="fas fa-comment-dots"></i></span>
-        <h2>Student Remarks</h2>
+        <h2>Student Remarks (<?= e($selected_course_name) ?>)</h2>
     </div>
     <div class="panel-body flush table-wrap">
         <?php if (empty($remarks_list)): ?>
-            <div style="padding:2rem;text-align:center;color:var(--text-muted);">No remarks yet.</div>
+            <div style="padding:2rem;text-align:center;color:var(--text-muted);">No remarks yet for this course.</div>
         <?php else: ?>
         <table class="data-table">
             <thead>
@@ -782,6 +822,16 @@ include 'includes/admin_nav.php';
                     ?>
                     <a href="https://wa.me/<?php echo $rm_wa; ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
                     <?php endif; ?>
+                    
+                    <?php if (is_super_admin()): ?>
+                    <button type="button" class="btn btn-sm btn-outline" style="color:var(--blue-ink); border-color:var(--blue-soft); padding: 4px 8px;" onclick="openEditRemark('<?php echo $rm['id']; ?>', '<?php echo e($rm['student_name'] ?: $rm['student_user_id']); ?>', '<?php echo e($rm['remark']); ?>')" title="Edit Remark"><i class="fas fa-edit"></i></button>
+                    <form method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete this remark?');">
+                        <?php echo csrf_field(); ?>
+                        <input type="hidden" name="action" value="delete_remark">
+                        <input type="hidden" name="remark_id" value="<?php echo $rm['id']; ?>">
+                        <button type="submit" class="btn btn-sm btn-outline" style="color:var(--red-ink); border-color:var(--red-soft); padding: 4px 8px;" title="Delete Remark"><i class="fas fa-trash-can"></i></button>
+                    </form>
+                    <?php endif; ?>
                 </td>
             </tr>
             <?php endforeach; ?>
@@ -790,6 +840,7 @@ include 'includes/admin_nav.php';
         <?php endif; ?>
     </div>
 </div>
+<?php endif; ?>
 
 <?php elseif ($tab === 'assignments' && is_super_admin()): ?>
 <!-- Mentor Assignments (Super Admin) -->
@@ -940,6 +991,27 @@ include 'includes/admin_nav.php';
 </div>
 </div>
 
+<!-- Edit Remark Modal -->
+<div id="editRemarkModal" class="modal-backdrop">
+<div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.6rem;max-width:440px;width:100%;">
+    <h3 style="margin-bottom:1rem;"><i class="fas fa-edit" style="color:#3b82f6;"></i> Edit Student Remark</h3>
+    <p id="editRemarkStudentName" style="margin-bottom:1rem;color:var(--text-muted);font-size:.85rem;"></p>
+    <form method="POST">
+        <?php echo csrf_field(); ?>
+        <input type="hidden" name="action" value="edit_remark">
+        <input type="hidden" name="remark_id" id="editRemarkId">
+        <div style="margin-bottom:14px;">
+            <label style="display:block;font-size:.8rem;font-weight:600;margin-bottom:4px;">Remark *</label>
+            <textarea name="remark_text" id="editRemarkText" rows="4" required placeholder="Progress notes, concerns, praise, etc." style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);resize:vertical;"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button type="button" class="btn btn-sm btn-outline" onclick="closeModal('editRemarkModal')">Cancel</button>
+            <button type="submit" class="btn btn-sm btn-primary" style="background:#3b82f6;border-color:#3b82f6;"><i class="fas fa-save"></i> Save Changes</button>
+        </div>
+    </form>
+</div>
+</div>
+
 <script>
 function openCall(id, name) {
     document.getElementById('callStudentId').value = id;
@@ -958,10 +1030,16 @@ function openEditCall(logId, studentName, timestamp, notes) {
     document.getElementById('editCallNotes').value = notes;
     openModal('editCallModal');
 }
+function openEditRemark(remarkId, studentName, remarkText) {
+    document.getElementById('editRemarkId').value = remarkId;
+    document.getElementById('editRemarkStudentName').textContent = 'Student: ' + studentName;
+    document.getElementById('editRemarkText').value = remarkText;
+    openModal('editRemarkModal');
+}
 // Escape key to close open modals
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-        ['callModal', 'remarkModal', 'assignModal', 'editCallModal'].forEach(id => {
+        ['callModal', 'remarkModal', 'assignModal', 'editCallModal', 'editRemarkModal'].forEach(id => {
             const m = document.getElementById(id);
             if (m && m.classList.contains('open')) {
                 closeModal(id);
