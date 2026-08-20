@@ -474,7 +474,17 @@ include 'includes/admin_nav.php';
                 <tr>
                     <td>
                         <div class="cell-main"><?php echo e($r['full_name']); ?></div>
-                        <div class="cell-sub"><?php echo e($r['email']); ?><?php echo $r['payout_method'] ? '<br>' . e($r['payout_method']) . ': ' . e($r['payout_details']) : ''; ?></div>
+                        <div class="cell-sub">
+                            <?php echo e($r['email']); ?>
+                            <?php if ($r['payout_method']): ?>
+                                <br>
+                                <?php echo e($r['payout_method']); ?>: 
+                                <span class="copyable-upi" style="font-weight:600; color:var(--text);"><?php echo e($r['payout_details']); ?></span>
+                                <button type="button" class="btn-copy-upi" onclick="copyToClipboard('<?php echo e($r['payout_details']); ?>', this)" style="background:none; border:none; color:var(--accent); cursor:pointer; padding:0 4px; font-size:0.75rem; vertical-align:middle;" title="Copy details">
+                                    <i class="far fa-copy"></i>
+                                </button>
+                            <?php endif; ?>
+                        </div>
                         <?php
                         $ref_phone = '';
                         if (!empty($r['whatsapp'])) {
@@ -507,7 +517,12 @@ include 'includes/admin_nav.php';
                             </div>
                         <?php endif; ?>
                     </td>
-                    <td><span class="badge violet"><?php echo e($r['referral_code']); ?></span></td>
+                    <td>
+                        <span class="badge violet"><?php echo e($r['referral_code']); ?></span>
+                        <div style="font-size:0.7rem; color:var(--text-muted); margin-top:4px; white-space:nowrap;">
+                            <?php echo date('d M Y, h:i A', strtotime($r['created_at'])); ?>
+                        </div>
+                    </td>
                     <td class="cell-sub"><?php echo e($r['academic_year']); ?></td>
                     <td><?php echo (int)$w['joined']; ?></td>
                     <td>₹<?php echo number_format($w['credited'], 0); ?></td>
@@ -666,6 +681,21 @@ function escapeHtml(text) {
         .replace(/>/g, \"&gt;\")
         .replace(/\"/g, \"&quot;\")
         .replace(/'/g, \"&#039;\");
+}
+function copyToClipboard(text, btn) {
+    navigator.clipboard.writeText(text).then(function() {
+        var icon = btn.querySelector(\"i\");
+        if (icon) {
+            icon.className = \"fas fa-check\";
+            icon.style.color = \"#10b981\";
+            setTimeout(function() {
+                icon.className = \"far fa-copy\";
+                icon.style.color = \"\";
+            }, 2000);
+        }
+    }).catch(function(err) {
+        console.error(\"Failed to copy: \", err);
+    });
 }
 </script>";
 include 'includes/admin_footer.php';
