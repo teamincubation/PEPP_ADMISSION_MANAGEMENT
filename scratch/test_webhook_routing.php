@@ -21,7 +21,11 @@ try {
     $pdo->exec("DELETE FROM communication_queue");
 
     // Insert mock conversation to satisfy foreign key constraint
-    $pdo->exec("INSERT INTO whatsapp_conversations (id, contact_number, contact_name, created_at, updated_at) VALUES (999999, '919567276458', 'Adnan', NOW(), NOW()) ON DUPLICATE KEY UPDATE id = id");
+    $pdo->exec("
+        INSERT INTO whatsapp_conversations (id, wa_phone_number, contact_name, created_at, updated_at) 
+        VALUES (999999, '919567276458', 'Adnan', NOW(), NOW()) 
+        ON DUPLICATE KEY UPDATE id = id
+    ");
 
     // Insert approved source template with button routing configuration
     $stmtTpl = $pdo->prepare("
