@@ -462,6 +462,15 @@ include 'includes/admin_nav.php';
                     <td><span class="badge <?php echo $stBadge; ?>"><?php echo ucfirst($st); ?></span></td>
                     <td style="text-align:right; white-space:nowrap;">
                         <a class="btn btn-sm btn-outline" href="student-details.php?user_id=<?php echo urlencode($s['user_id']); ?>" title="Full profile"><i class="fas fa-eye"></i></a>
+                        <?php 
+                        $raw_wa = preg_replace('/\D/', '', ($s['whatsapp_country_code'] ?? '') . ($s['whatsapp_number'] ?? ''));
+                        if (is_credential_restricted('students') && !can_admin_whatsapp_chat()): ?>
+                            <a class="btn btn-sm btn-whatsapp" href="javascript:void(0)" onclick="alert('Access to student WhatsApp chat is restricted.')" style="opacity:0.6; cursor:not-allowed;" title="WhatsApp chat restricted"><i class="fab fa-whatsapp"></i></a>
+                        <?php elseif (empty($raw_wa)): ?>
+                            <a class="btn btn-sm btn-whatsapp" href="javascript:void(0)" onclick="alert('Student does not have a WhatsApp number.')" style="opacity:0.6; cursor:not-allowed;" title="No WhatsApp number"><i class="fab fa-whatsapp"></i></a>
+                        <?php else: ?>
+                            <a class="btn btn-sm btn-whatsapp" target="_blank" href="https://wa.me/<?php echo e($raw_wa); ?>" title="Chat on WhatsApp"><i class="fab fa-whatsapp"></i></a>
+                        <?php endif; ?>
                         <button class="btn btn-sm btn-soft-violet" title="Remarks/Notes" onclick="openRemarksModal('<?php echo e($s['user_id']); ?>')"><i class="fas fa-clipboard"></i></button>
                         <button class="btn btn-sm btn-soft-blue" title="Extend access" onclick="openExtend('<?php echo e($s['user_id']); ?>', '<?php echo e(addslashes($s['name'])); ?>', '<?php echo e($s['course_duration_date']); ?>')"><i class="fas fa-calendar-plus"></i></button>
                         <button class="btn btn-sm btn-soft-amber" title="Change status" onclick="openStatus('<?php echo e($s['user_id']); ?>', '<?php echo e(addslashes($s['name'])); ?>', '<?php echo e($st); ?>')"><i class="fas fa-user-gear"></i></button>
