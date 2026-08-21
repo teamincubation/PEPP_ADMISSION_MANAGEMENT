@@ -44,7 +44,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     
     if ($email && $date_of_birth) {
         try {
-            // Get student details with course information
+            // Get student details with course information for all matching records
             $stmt = $pdo->prepare("
                 SELECT u.*, 
                        pc.course_name as course_display_name,
@@ -54,6 +54,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 WHERE u.email = ? AND u.date_of_birth = ? AND u.status = 'approved'
             ");
             $stmt->execute([$email, $date_of_birth]);
+            $matching_students = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            if (!empty($matching_students)) {
+                if (count($matching_students) === 1) {
+                    $student_data = $matching_students[0];
+                    
+                    // Check for pending payment requests first
+                    $stmt = $pdo->prepare("
+                        SELECT * FROM instalment_details 
+                        WHERE user_id = ? AND status = 'pending' AND paid_date IS NOT NULL
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                    ");
+                    $stmt->execute([$student_data['user_id']]);
+                    $pending_request = $stmt->fetch();
+                    
+                    // Get next installment to pay
+                    $stmt = $pdo->prepare("
+                        SELECT * FROM instalment_details 
+                        WHERE user_id = ? AND status = 'pending' AND paid_date IS NULL
+                        ORDER BY instalment_number ASC
+                        LIMIT 1
+                    ");
+                    $stmt->execute([$student_data['user_id']]);
+                    $installment_data = $stmt->fetch();
+                    
+                    if ($installment_data || $pending_request) {
+                        $verification_success = true;
+                        $step = 'payment';
+                    } else {
+                        $error_message = "No pending installments found for your account.";
+                    }
+                } else {
+                    $step = 'select_course';
+                }
+            } else {
+                $error_message = "Invalid email or date of birth. Please check your details.";
+            }
+        } catch (Exception $e) {
+            $error_message = "Database error. Please try again later.";
+        }
+    } else {
+        $error_message = "Please fill in all required fields.";
+    }
+}
+
+// Handle select course action
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'select_course') {
+    $email = trim($_POST['email'] ?? '');
+    $date_of_birth = $_POST['date_of_birth'] ?? '';
+    $user_id = trim($_POST['user_id'] ?? '');
+    
+    if ($email && $date_of_birth && $user_id) {
+        try {
+            // Verify selected user_id is correct and belongs to the approved email + dob combination
+            $stmt = $pdo->prepare("
+                SELECT u.*, 
+                       pc.course_name as course_display_name,
+                       pc.total_fee as course_total_fee
+                FROM users u
+                LEFT JOIN pepp_courses pc ON u.pepp_course = pc.course_name
+                WHERE u.user_id = ? AND u.email = ? AND u.date_of_birth = ? AND u.status = 'approved'
+            ");
+            $stmt->execute([$user_id, $email, $date_of_birth]);
             $student_data = $stmt->fetch();
             
             if ($student_data) {
@@ -81,16 +145,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $verification_success = true;
                     $step = 'payment';
                 } else {
-                    $error_message = "No pending installments found for your account.";
+                    // Fetch matching students again to display selection in case of error
+                    $stmt = $pdo->prepare("
+                        SELECT u.*, 
+                               pc.course_name as course_display_name,
+                               pc.total_fee as course_total_fee
+                        FROM users u
+                        LEFT JOIN pepp_courses pc ON u.pepp_course = pc.course_name
+                        WHERE u.email = ? AND u.date_of_birth = ? AND u.status = 'approved'
+                    ");
+                    $stmt->execute([$email, $date_of_birth]);
+                    $matching_students = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    
+                    $error_message = "No pending installments found for the selected course.";
+                    $step = 'select_course';
                 }
             } else {
-                $error_message = "Invalid email or date of birth. Please check your details.";
+                $error_message = "Invalid selection. Please try again.";
+                $step = 'verify';
             }
         } catch (Exception $e) {
             $error_message = "Database error. Please try again later.";
+            $step = 'verify';
         }
     } else {
-        $error_message = "Please fill in all required fields.";
+        $error_message = "Please select a course to continue.";
+        // Fetch matching students again to display selection
+        try {
+            $stmt = $pdo->prepare("
+                SELECT u.*, 
+                       pc.course_name as course_display_name,
+                       pc.total_fee as course_total_fee
+                FROM users u
+                LEFT JOIN pepp_courses pc ON u.pepp_course = pc.course_name
+                WHERE u.email = ? AND u.date_of_birth = ? AND u.status = 'approved'
+            ");
+            $stmt->execute([$email, $date_of_birth]);
+            $matching_students = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $step = 'select_course';
+        } catch (Exception $e) {
+            $step = 'verify';
+        }
     }
 }
 
@@ -789,6 +884,41 @@ if ($step === 'payment' && isset($_GET['user_id'])) {
             .file-upload-area { padding: 1.5rem 1rem; }
             .step { padding: 0.6rem 1.25rem; font-size: 0.8rem; }
         }
+
+        /* ── COURSE SELECTION ── */
+        .course-option {
+            display: block;
+            cursor: pointer;
+            border: 1.5px solid var(--gray-200);
+            padding: 1.2rem;
+            border-radius: 16px;
+            background: #fff;
+            transition: all 0.2s ease;
+            position: relative;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,.02);
+        }
+        .course-option:hover {
+            border-color: #f59e0b !important;
+            background: #fffbeb !important;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(180, 83, 9, 0.08);
+        }
+        .course-option.selected {
+            border-color: #d97706 !important;
+            background: #fef3c7 !important;
+            box-shadow: 0 4px 16px rgba(217, 119, 6, 0.12);
+        }
+        .course-option input[type="radio"] {
+            position: absolute;
+            right: 1.25rem;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 20px;
+            height: 20px;
+            accent-color: #d97706;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -836,6 +966,57 @@ if ($step === 'payment' && isset($_GET['user_id'])) {
                             <i class="fas fa-search"></i> Verify & Continue
                         </button>
                     </form>
+
+                <?php elseif ($step === 'select_course' && !empty($matching_students)): ?>
+                    <!-- Step 1.5: Select Course -->
+                    <div class="step-indicator">
+                        <div class="step active">
+                            <i class="fas fa-graduation-cap"></i> Select Course
+                        </div>
+                    </div>
+
+                    <?php if ($error_message): ?>
+                        <div class="alert alert-error">
+                            <i class="fas fa-exclamation-circle"></i>
+                            <?php echo htmlspecialchars($error_message); ?>
+                        </div>
+                    <?php endif; ?>
+
+                    <p style="text-align: center; margin-bottom: 1.5rem; color: var(--gray-700); font-weight: 600; font-size: 0.9rem;">
+                        Multiple course registrations found. Please select which course you would like to manage:
+                    </p>
+
+                    <form method="POST" action="">
+                        <input type="hidden" name="action" value="select_course">
+                        <input type="hidden" name="email" value="<?php echo htmlspecialchars($email); ?>">
+                        <input type="hidden" name="date_of_birth" value="<?php echo htmlspecialchars($date_of_birth); ?>">
+                        
+                        <div style="margin-bottom: 1.5rem;">
+                            <?php foreach ($matching_students as $student): ?>
+                                <label class="course-option">
+                                    <input type="radio" name="user_id" value="<?php echo htmlspecialchars($student['user_id']); ?>" required>
+                                    <div style="padding-right: 2.5rem;">
+                                        <div style="font-weight: 700; font-size: 0.95rem; color: #3b2604; margin-bottom: 4px;"><?php echo htmlspecialchars($student['pepp_course']); ?></div>
+                                        <div style="font-size: 0.8rem; color: var(--gray-600); font-weight: 600;">
+                                            <span><strong>Year:</strong> <?php echo htmlspecialchars($student['pepp_academic_year']); ?></span>
+                                            <span style="margin: 0 8px;">&middot;</span>
+                                            <span><strong>Plan:</strong> <?php echo htmlspecialchars($student['payment_plan'] ?: 'One Time'); ?></span>
+                                        </div>
+                                    </div>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary btn-full">
+                            <i class="fas fa-arrow-right"></i> View Installment Plan
+                        </button>
+                    </form>
+
+                    <div style="margin-top: 1rem; text-align: center;">
+                        <a href="installmentpayment.php" class="btn btn-secondary">
+                            <i class="fas fa-arrow-left"></i> Back to Verification
+                        </a>
+                    </div>
 
                 <?php elseif ($step === 'payment' && $student_data && ($installment_data || $pending_request)): ?>
                     <!-- Step 2: Payment Update -->
@@ -1057,20 +1238,36 @@ if ($step === 'payment' && isset($_GET['user_id'])) {
     </div>
 
     <script>
-        document.getElementById('payment_screenshot').addEventListener('change', function(e) {
-            const file = e.target.files[0];
-            const fileInfo = document.getElementById('file-info');
-            const fileName = document.getElementById('file-name');
-            const fileSize = document.getElementById('file-size');
-            
-            if (file) {
-                fileName.textContent = file.name;
-                fileSize.textContent = (file.size / 1024 / 1024).toFixed(2) + ' MB';
-                fileInfo.style.display = 'block';
-            } else {
-                fileInfo.style.display = 'none';
+        // Highlight selected course option card
+        document.querySelectorAll('.course-option input[type="radio"]').forEach(radio => {
+            if (radio.checked) {
+                radio.closest('.course-option').classList.add('selected');
             }
+            radio.addEventListener('change', function() {
+                document.querySelectorAll('.course-option').forEach(el => el.classList.remove('selected'));
+                if (this.checked) {
+                    this.closest('.course-option').classList.add('selected');
+                }
+            });
         });
+
+        const paymentScreenshot = document.getElementById('payment_screenshot');
+        if (paymentScreenshot) {
+            paymentScreenshot.addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                const fileInfo = document.getElementById('file-info');
+                const fileName = document.getElementById('file-name');
+                const fileSize = document.getElementById('file-size');
+                
+                if (file) {
+                    fileName.textContent = file.name;
+                    fileSize.textContent = (file.size / 1024 / 1024).toFixed(2) + ' MB';
+                    fileInfo.style.display = 'block';
+                } else {
+                    fileInfo.style.display = 'none';
+                }
+            });
+        }
 
         document.querySelector('form[method="POST"]')?.addEventListener('submit', function(e) {
             const action = this.querySelector('input[name="action"]')?.value;
