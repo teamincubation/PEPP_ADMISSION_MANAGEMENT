@@ -20,6 +20,9 @@ try {
     $pdo->exec("DELETE FROM whatsapp_messages");
     $pdo->exec("DELETE FROM communication_queue");
 
+    // Insert mock conversation to satisfy foreign key constraint
+    $pdo->exec("INSERT INTO whatsapp_conversations (id, contact_number, contact_name, created_at, updated_at) VALUES (999999, '919567276458', 'Adnan', NOW(), NOW()) ON DUPLICATE KEY UPDATE id = id");
+
     // Insert approved source template with button routing configuration
     $stmtTpl = $pdo->prepare("
         INSERT INTO communication_templates (channel, template_name, language, status, category, meta_data, created_at, updated_at)
@@ -78,7 +81,7 @@ try {
         // Record inbound message
         $insMsg = $pdo->prepare("
             INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, reply_to_wa_message_id, status, raw_payload, created_at)
-            VALUES (1, ?, 'inbound', ?, ?, ?, 'delivered', ?, NOW())
+            VALUES (999999, ?, 'inbound', ?, ?, ?, 'delivered', ?, NOW())
         ");
         $text = "Student clicked button: \"{$btnText}\"";
         $insMsg->execute([$msgId, $type, $text, $replyToId, $rawPayload]);
@@ -197,7 +200,7 @@ try {
     // 2. Insert parent message to test reply context
     $pdo->prepare("
         INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, raw_payload, created_at)
-        VALUES (1, 'parent_msg_id_123', 'outbound', 'template', 'Outbound Template Message', ?, NOW())
+        VALUES (999999, 'parent_msg_id_123', 'outbound', 'template', 'Outbound Template Message', ?, NOW())
     ")->execute([json_encode(['name' => 'm_clin_psy_rci_admission_started'])]);
 
     echo "--- SIMULATIONS ---\n\n";
