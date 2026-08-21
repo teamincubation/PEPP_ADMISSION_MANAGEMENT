@@ -52,6 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             $header_type = trim($_POST['header_type'] ?? 'NONE');
             $header_text = trim($_POST['header_text'] ?? '');
+            $header_media_url = trim($_POST['existing_header_image_url'] ?? '');
             
             $body_text = trim($_POST['body_text'] ?? '');
             $footer_text = trim($_POST['footer_text'] ?? '');
@@ -59,6 +60,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $button_type = trim($_POST['button_type'] ?? 'NONE');
             $buttons_input = $_POST['buttons'] ?? [];
             $var_examples = $_POST['examples'] ?? [];
+
+            // Secure server-side validation and upload for Image Header
+            if ($header_type === 'IMAGE') {
+                if (isset($_FILES['header_image']) && $_FILES['header_image']['error'] === UPLOAD_ERR_OK) {
+                    $file = $_FILES['header_image'];
+                    $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+                    $allowedExtensions = ['jpg', 'jpeg', 'png'];
+                    $maxSize = 5 * 1024 * 1024; // 5MB
+
+                    if (!in_array($ext, $allowedExtensions, true)) {
+                        $error_message = 'Invalid image header file extension. Allowed: JPG, JPEG, PNG.';
+                    } elseif ($file['size'] > $maxSize) {
+                        $error_message = 'Image file is too large (max 5MB).';
+                    } else {
+                        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                        $mimeType = finfo_file($finfo, $file['tmp_name']);
+                        finfo_close($finfo);
+
+                        $allowedMimeTypes = ['image/jpeg', 'image/png', 'image/pjpeg', 'image/x-png'];
+                        if (!in_array($mimeType, $allowedMimeTypes, true)) {
+                            $error_message = 'Invalid image file type/MIME type. Allowed: JPG, JPEG, PNG.';
+                        } else {
+                            $dir = __DIR__ . '/uploads/whatsapp_campaign_media/';
+                            if (!is_dir($dir)) {
+                                mkdir($dir, 0755, true);
+                            }
+                            
+                            $safeName = 'tpl_header_' . bin2hex(random_bytes(16)) . '.' . $ext;
+                            if (move_uploaded_file($file['tmp_name'], $dir . $safeName)) {
+                                $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+                                $header_media_url = $protocol . '://' . $_SERVER['HTTP_HOST'] . rtrim(dirname($_SERVER['SCRIPT_NAME']), '/\\') . '/uploads/whatsapp_campaign_media/' . $safeName;
+                            } else {
+                                $error_message = 'Failed to save uploaded image file.';
+                            }
+                        }
+                    }
+                } elseif (empty($header_media_url) && $action === 'submit_meta') {
+                    $error_message = 'Please upload an image for the Image Header before submitting to Meta WABA.';
+                }
+            }
 
             // Server-side Validations
             if (!preg_match('/^[a-z0-9_]+$/', $tpl_name)) {
@@ -118,7 +159,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 // For Image/Video/Document headers, Meta requires a public sample URL file in examples
                                 $default_media_url = '';
                                 if ($header_type === 'IMAGE') {
-                                    $default_media_url = 'https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png';
+                                    $default_media_url = !empty($header_media_url) ? $header_media_url : 'https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png';
                                 } elseif ($header_type === 'VIDEO') {
                                     $default_media_url = 'https://www.w3schools.com/html/mov_bbb.mp4';
                                 } elseif ($header_type === 'DOCUMENT') {
@@ -210,7 +251,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             'footer_text'    => $footer_text,
                             'button_type'    => $button_type,
                             'buttons'        => $buttons_input,
-                            'variables'      => $var_examples
+                            'variables'      => $var_examples,
+                            'header_media_url' => $header_media_url
                         ]);
 
                         if ($action === 'save_template') {
@@ -327,7 +369,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     'components' => $tpl['components'] ?? [],
                                     'body_text' => $bodyText,
                                     'header_text' => $headerText,
-                                    'footer_text' => $footerText
+                                    'footer_text' => $footerText,
+                                    'header_media_url' => $existing_meta['header_media_url'] ?? null
                                 ]);
 
                                 $stmtUpsert->execute([$name, $lang, $status, $category, $qualityStatus, $rejectedReason, $metaData]);
@@ -598,7 +641,7 @@ include 'includes/admin_nav.php';
                 </div>
                 
                 <div style="padding:20px;">
-                    <form method="POST" id="template-builder-form">
+                    <form method="POST" id="template-builder-form" enctype="multipart/form-data">
                         <?php echo csrf_field(); ?>
                         <input type="hidden" name="action" id="builder-action" value="save_template">
                         
@@ -639,6 +682,13 @@ include 'includes/admin_nav.php';
                             
                             <div id="header-text-container" style="display:none; margin-bottom:10px;">
                                 <input type="text" name="header_text" id="inp-header-text" class="form-control" placeholder="Enter header text... (Supports {{1}})" oninput="detectVariables(); updatePreview();">
+                            </div>
+
+                            <div id="header-image-container" style="display:none; margin-bottom:10px;">
+                                <label style="display:block; font-size:0.75rem; font-weight:700; color:#4b5563; margin-bottom:4px;">Upload Image Header <span style="color:#ef4444;">*</span></label>
+                                <input type="file" name="header_image" id="inp-header-image" class="form-control" accept="image/jpeg,image/png" onchange="previewSelectedImage(this)">
+                                <span style="font-size:0.72rem; color:#94a3b8; display:block; margin-top:4px;">Allowed formats: JPG, JPEG, PNG. Max size: 5MB.</span>
+                                <input type="hidden" name="existing_header_image_url" id="inp-header-image-url-existing" value="">
                             </div>
                         </div>
 
@@ -825,16 +875,61 @@ function validateTemplateName(val) {
 
 function onHeaderTypeChange(type) {
     const txtContainer = document.getElementById('header-text-container');
+    const imgContainer = document.getElementById('header-image-container');
+    
     if (type === 'TEXT') {
         txtContainer.style.display = 'block';
+        imgContainer.style.display = 'none';
         document.getElementById('inp-header-text').required = true;
-    } else {
+        document.getElementById('inp-header-image').required = false;
+    } else if (type === 'IMAGE') {
         txtContainer.style.display = 'none';
+        imgContainer.style.display = 'block';
         document.getElementById('inp-header-text').required = false;
         document.getElementById('inp-header-text').value = '';
+        
+        const existingUrl = document.getElementById('inp-header-image-url-existing').value;
+        document.getElementById('inp-header-image').required = !existingUrl;
+    } else {
+        txtContainer.style.display = 'none';
+        imgContainer.style.display = 'none';
+        document.getElementById('inp-header-text').required = false;
+        document.getElementById('inp-header-text').value = '';
+        document.getElementById('inp-header-image').required = false;
     }
     detectVariables();
     updatePreview();
+}
+
+function previewSelectedImage(input) {
+    const mediaBlock = document.getElementById('preview-header-media');
+    if (input.files && input.files[0]) {
+        const file = input.files[0];
+        
+        const allowedTypes = ['image/jpeg', 'image/png'];
+        if (!allowedTypes.includes(file.type)) {
+            alert('Invalid file type. Allowed: JPG, JPEG, PNG.');
+            input.value = '';
+            updatePreview();
+            return;
+        }
+        
+        const maxSize = 5 * 1024 * 1024; // 5MB
+        if (file.size > maxSize) {
+            alert('File is too large (max 5MB).');
+            input.value = '';
+            updatePreview();
+            return;
+        }
+        
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            mediaBlock.innerHTML = `<img src="${e.target.result}" style="width:100%; height:100%; object-fit:cover; border-radius:6px;" id="preview-header-img">`;
+        };
+        reader.readAsDataURL(file);
+    } else {
+        updatePreview();
+    }
 }
 
 function onButtonTypeChange(type) {
@@ -944,15 +1039,28 @@ function updatePreview() {
     // 1. Header Media
     const headerType = document.getElementById('sel-header-type').value;
     const mediaBlock = document.getElementById('preview-header-media');
-    const mediaIcon = document.getElementById('preview-header-media-icon');
     
     if (headerType !== 'NONE' && headerType !== 'TEXT') {
         mediaBlock.style.display = 'flex';
-        if (headerType === 'IMAGE') mediaIcon.className = 'fas fa-image';
-        else if (headerType === 'VIDEO') mediaIcon.className = 'fas fa-video';
-        else if (headerType === 'DOCUMENT') mediaIcon.className = 'fas fa-file-pdf';
+        if (headerType === 'IMAGE') {
+            const fileInput = document.getElementById('inp-header-image');
+            const existingUrl = document.getElementById('inp-header-image-url-existing').value;
+            
+            if (fileInput && fileInput.files && fileInput.files[0]) {
+                // Reader onload handles visual preview
+            } else if (existingUrl) {
+                mediaBlock.innerHTML = `<img src="${existingUrl}" style="width:100%; height:100%; object-fit:cover; border-radius:6px;" id="preview-header-img">`;
+            } else {
+                mediaBlock.innerHTML = `<i class="fas fa-image" id="preview-header-media-icon"></i>`;
+            }
+        } else if (headerType === 'VIDEO') {
+            mediaBlock.innerHTML = `<i class="fas fa-video" id="preview-header-media-icon"></i>`;
+        } else if (headerType === 'DOCUMENT') {
+            mediaBlock.innerHTML = `<i class="fas fa-file-pdf" id="preview-header-media-icon"></i>`;
+        }
     } else {
         mediaBlock.style.display = 'none';
+        mediaBlock.innerHTML = `<i class="fas fa-image" id="preview-header-media-icon"></i>`;
     }
     
     // 2. Header Text
@@ -1072,14 +1180,23 @@ function openVisualPreview(tplName, meta) {
     // Header Media
     const headerType = meta.header_type || 'NONE';
     const mediaBlock = document.getElementById('modal-header-media');
-    const mediaIcon = document.getElementById('modal-header-media-icon');
+    
     if (headerType !== 'NONE' && headerType !== 'TEXT') {
         mediaBlock.style.display = 'flex';
-        if (headerType === 'IMAGE') mediaIcon.className = 'fas fa-image';
-        else if (headerType === 'VIDEO') mediaIcon.className = 'fas fa-video';
-        else if (headerType === 'DOCUMENT') mediaIcon.className = 'fas fa-file-pdf';
+        if (headerType === 'IMAGE') {
+            if (meta.header_media_url) {
+                mediaBlock.innerHTML = `<img src="${meta.header_media_url}" style="width:100%; height:100%; object-fit:cover; border-radius:6px;">`;
+            } else {
+                mediaBlock.innerHTML = `<i class="fas fa-image" id="modal-header-media-icon"></i>`;
+            }
+        } else if (headerType === 'VIDEO') {
+            mediaBlock.innerHTML = `<i class="fas fa-video" id="modal-header-media-icon"></i>`;
+        } else if (headerType === 'DOCUMENT') {
+            mediaBlock.innerHTML = `<i class="fas fa-file-pdf" id="modal-header-media-icon"></i>`;
+        }
     } else {
         mediaBlock.style.display = 'none';
+        mediaBlock.innerHTML = `<i class="fas fa-image" id="modal-header-media-icon"></i>`;
     }
     
     // Header Text
