@@ -404,6 +404,12 @@ class CommunicationEngine {
                     $updRemStmt->execute([$queueId]);
                 } catch (Exception $remEx) {}
 
+                // Update campaign recipient mapping to 'sent'
+                try {
+                    $updCampStmt = $this->pdo->prepare("UPDATE communication_campaign_recipients SET status = 'sent', sent_at = NOW() WHERE queue_id = ?");
+                    $updCampStmt->execute([$queueId]);
+                } catch (Exception $campEx) {}
+
                 // Log outbound message in WhatsApp Inbox (Safeguard 1 & 2)
                 if ($channel === 'whatsapp' && !empty($msgId)) {
                     try {
@@ -574,6 +580,11 @@ class CommunicationEngine {
                     $updRemStmt = $this->pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'failed' WHERE queue_id = ?");
                     $updRemStmt->execute([$queueId]);
                 } catch (Exception $remEx) {}
+
+                try {
+                    $updCampStmt = $this->pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = ? WHERE queue_id = ?");
+                    $updCampStmt->execute([$errMsg, $queueId]);
+                } catch (Exception $campEx) {}
             }
 
             // Sync status to legacy log table if applicable

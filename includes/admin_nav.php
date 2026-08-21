@@ -65,6 +65,176 @@ if (file_exists(__DIR__ . '/email_campaigns_helper.php')) {
         error_log('nav email campaigns cron: ' . $e->getMessage());
     }
 }
+
+// WhatsApp Campaigns: run a tiny batch of campaign queue generation and dispatch.
+try {
+    $now = time();
+    $cooldown = 30; // 30 seconds cooldown between lazy triggers
+    
+    // Fetch last check timestamp from admin_settings
+    $stmtLazy = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_last_lazy_trigger' LIMIT 1");
+    $stmtLazy->execute();
+    $lastLazyTime = (int)$stmtLazy->fetchColumn();
+    
+    if (($now - $lastLazyTime) >= $cooldown) {
+        // Atomically lock and update check timestamp to prevent race conditions
+        $stmtUpdLazy = $pdo->prepare("UPDATE admin_settings SET setting_value = ? WHERE setting_name = 'whatsapp_last_lazy_trigger'");
+        $stmtUpdLazy->execute([$now]);
+        if ($stmtUpdLazy->rowCount() === 0) {
+            $pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('whatsapp_last_lazy_trigger', ?, NOW()) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()")->execute([$now]);
+        }
+        
+        // Trigger a tiny processing batch in the background (e.g., maximum 3 queue generation and 3 dispatches)
+        if (file_exists(dirname(__DIR__) . '/cron-queue.php')) {
+            $schedStmt = $pdo->prepare("
+                SELECT * FROM communication_campaigns 
+                WHERE status IN ('scheduled', 'active') 
+                  AND (scheduled_at IS NULL OR scheduled_at <= NOW()) 
+                  LIMIT 1
+            ");
+            $schedStmt->execute();
+            $dueCampaign = $schedStmt->fetch();
+            
+            if ($dueCampaign) {
+                $campId = $dueCampaign['id'];
+                
+                $pdo->beginTransaction();
+                
+                $isMysql = (strpos($pdo->getAttribute(PDO::ATTR_DRIVER_NAME), 'mysql') !== false);
+                $forUpdate = $isMysql ? ' FOR UPDATE' : '';
+                
+                // Fetch at most 3 recipients snapshot to avoid delays in admin browsing
+                $stmtRec = $pdo->prepare("
+                    SELECT * FROM communication_campaign_recipients 
+                    WHERE campaign_id = ? AND status = 'pending' AND queue_id IS NULL 
+                    LIMIT 3
+                    " . $forUpdate
+                );
+                $stmtRec->execute([$campId]);
+                $recipients = $stmtRec->fetchAll();
+                
+                if (!empty($recipients)) {
+                    if ($dueCampaign['status'] === 'scheduled') {
+                        $pdo->prepare("UPDATE communication_campaigns SET status = 'active', updated_at = NOW() WHERE id = ?")->execute([$campId]);
+                    }
+                    
+                    $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
+                    $stmtTpl->execute([$dueCampaign['template_name']]);
+                    $template = $stmtTpl->fetch();
+                    
+                    if ($template) {
+                        $criteria = json_decode($dueCampaign['segment_criteria'], true) ?: [];
+                        $varMappings = $criteria['var_mappings'] ?? [];
+                        $staticVals = $criteria['static_vals'] ?? [];
+                        $mediaUrl = $criteria['header_media'] ?? '';
+                        $meta = json_decode($template['meta_data'], true) ?: [];
+                        
+                        require_once dirname(__DIR__) . '/includes/communication/CommunicationEngine.php';
+                        $engine = CommunicationEngine::getInstance($pdo);
+                        
+                        foreach ($recipients as $rec) {
+                            $resolvedParams = [];
+                            if ($dueCampaign['target_audience'] === 'leads') {
+                                $stmtLead = $pdo->prepare("SELECT * FROM leads WHERE id = ? LIMIT 1");
+                                $stmtLead->execute([$rec['lead_id']]);
+                                $lead = $stmtLead->fetch();
+                                if ($lead) {
+                                    if ((int)($lead['is_opted_out'] ?? 0) === 1) {
+                                        $pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = 'Lead opted out before queueing' WHERE id = ?")->execute([$rec['id']]);
+                                        continue;
+                                    }
+                                    
+                                    $skippedParam = '';
+                                    foreach ($varMappings as $idx => $field) {
+                                        $val = ($field === 'static') ? ($staticVals[$idx] ?? '') : ($lead[$field] ?? '');
+                                        if ($val === null || trim((string)$val) === '') {
+                                            $skippedParam = ($field === 'static') ? "static_var_{$idx}" : $field;
+                                            break;
+                                        }
+                                        $resolvedParams[] = trim((string)$val);
+                                    }
+                                    if ($skippedParam !== '') {
+                                        $pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = ? WHERE id = ?")->execute(["Skipped: Required template parameter '{$skippedParam}' is empty.", $rec['id']]);
+                                        continue;
+                                    }
+                                }
+                            } else {
+                                $stmtUser = $pdo->prepare("SELECT * FROM users WHERE user_id = ? LIMIT 1");
+                                $stmtUser->execute([$rec['user_id']]);
+                                $user = $stmtUser->fetch();
+                                if ($user) {
+                                    $skippedParam = '';
+                                    foreach ($varMappings as $idx => $field) {
+                                        $val = ($field === 'static') ? ($staticVals[$idx] ?? '') : ($user[$field] ?? '');
+                                        if ($val === null || trim((string)$val) === '') {
+                                            $skippedParam = ($field === 'static') ? "static_var_{$idx}" : $field;
+                                            break;
+                                        }
+                                        $resolvedParams[] = trim((string)$val);
+                                    }
+                                    if ($skippedParam !== '') {
+                                        $pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = ? WHERE id = ?")->execute(["Skipped: Required template parameter '{$skippedParam}' is empty.", $rec['id']]);
+                                        continue;
+                                    }
+                                }
+                            }
+                            
+                            $templatePayload = [
+                                'name' => $dueCampaign['template_name'],
+                                'language' => $template['language'] ?: 'en',
+                                'parameters' => $resolvedParams
+                            ];
+                            
+                            $headerType = $meta['header_type'] ?? 'NONE';
+                            if ($headerType !== 'NONE' && $headerType !== 'TEXT') {
+                                $templatePayload['header_type'] = $headerType;
+                                $templatePayload['header_parameters'] = [$mediaUrl];
+                            }
+                            
+                            $body = "Campaign message: {$dueCampaign['name']}";
+                            $queueId = $engine->queueMessage(
+                                'whatsapp',
+                                $rec['recipient'],
+                                $rec['recipient_name'],
+                                $dueCampaign['name'],
+                                $body,
+                                $body,
+                                [],
+                                $templatePayload,
+                                $dueCampaign['created_by'],
+                                date('Y-m-d H:i:s'),
+                                $rec['user_id']
+                            );
+                            
+                            $pdo->prepare("UPDATE communication_campaign_recipients SET queue_id = ?, status = 'pending' WHERE id = ?")->execute([$queueId, $rec['id']]);
+                        }
+                        $pdo->commit();
+                    } else {
+                        $pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = 'Marketing template not found or approved' WHERE campaign_id = ? AND status = 'pending' AND queue_id IS NULL")->execute([$campId]);
+                        $pdo->commit();
+                    }
+                } else {
+                    $pdo->commit();
+                    
+                    $pendingCount = (int)$pdo->query("SELECT COUNT(*) FROM communication_campaign_recipients WHERE campaign_id = {$campId} AND queue_id IS NULL")->fetchColumn();
+                    if ($pendingCount === 0 && $dueCampaign['status'] === 'active') {
+                        $pdo->prepare("UPDATE communication_campaigns SET status = 'completed', updated_at = NOW() WHERE id = ?")->execute([$campId]);
+                    }
+                }
+            }
+            
+            // Process a tiny batch of 3 pending queue items
+            require_once dirname(__DIR__) . '/includes/communication/QueueProcessor.php';
+            $processor = new QueueProcessor($pdo, 3);
+            $processor->execute();
+        }
+    }
+} catch (Exception $lazyEx) {
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
+    error_log("Lazy campaign trigger failed: " . $lazyEx->getMessage());
+}
 $nav_pending_payments  = 0;
 $nav_pending_onboarding = 0;
 $nav_due_within_10_days = 0;

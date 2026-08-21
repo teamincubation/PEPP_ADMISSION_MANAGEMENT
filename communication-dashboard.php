@@ -32,6 +32,15 @@ try {
 $stmt = $pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%'");
 $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
 
+if (empty($settings['whatsapp_cron_worker_key'])) {
+    $genKey = bin2hex(random_bytes(16));
+    try {
+        $insStmt = $pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('whatsapp_cron_worker_key', ?, NOW()) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()");
+        $insStmt->execute([$genKey]);
+        $settings['whatsapp_cron_worker_key'] = $genKey;
+    } catch (Exception $e) {}
+}
+
 /* ── POST ACTIONS ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!csrf_verify()) {
@@ -42,12 +51,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($action === 'save_settings') {
             $pdo->beginTransaction();
             try {
+                $cronKey = trim($_POST['whatsapp_cron_worker_key'] ?? '');
+                if (empty($cronKey)) {
+                    $cronKey = $settings['whatsapp_cron_worker_key'] ?? bin2hex(random_bytes(16));
+                }
+                $_POST['whatsapp_cron_worker_key'] = $cronKey;
+
                 $keys = [
                     'whatsapp_business_id',
                     'whatsapp_phone_id',
                     'whatsapp_access_token',
                     'whatsapp_app_secret',
                     'whatsapp_webhook_verify_token',
+                    'whatsapp_cron_worker_key',
                     'whatsapp_api_version'
                 ];
                 
@@ -525,9 +541,14 @@ include 'includes/admin_nav.php';
                             <input type="text" name="whatsapp_webhook_verify_token" value="<?php echo htmlspecialchars($settings['whatsapp_webhook_verify_token'] ?? 'pepp_verify_token_2026'); ?>" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:0.85rem;" required>
                         </div>
                         <div>
-                            <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Meta App Secret</label>
-                            <input type="password" name="whatsapp_app_secret" value="<?php echo htmlspecialchars($settings['whatsapp_app_secret'] ?? ''); ?>" placeholder="Used for payload signature checking" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:0.85rem;">
+                            <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Cron Worker Key</label>
+                            <input type="text" name="whatsapp_cron_worker_key" value="<?php echo htmlspecialchars($settings['whatsapp_cron_worker_key'] ?? ''); ?>" placeholder="Auto-generated if left empty" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:0.85rem;">
                         </div>
+                    </div>
+
+                    <div style="margin-bottom:16px; width:50%;">
+                        <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Meta App Secret</label>
+                        <input type="password" name="whatsapp_app_secret" value="<?php echo htmlspecialchars($settings['whatsapp_app_secret'] ?? ''); ?>" placeholder="Used for payload signature checking" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:0.85rem;">
                     </div>
 
                     <div style="margin-bottom:20px; width:50%;">
@@ -539,8 +560,11 @@ include 'includes/admin_nav.php';
                         </select>
                     </div>
 
-                    <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px dashed #e5e7eb; padding-top:14px;">
-                        <span style="font-size:0.8rem; color:#6b7280;"><i class="fas fa-link"></i> Webhook Callback URL: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-family:monospace; font-size:0.75rem;">https://pepplearning.in/admissions/api/v1/communication/webhook.php</code></span>
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px dashed #e5e7eb; padding-top:14px; flex-wrap:wrap; gap:12px;">
+                        <div style="display:flex; flex-direction:column; gap:4px; font-size:0.8rem; color:#6b7280; text-align:left;">
+                            <span><i class="fas fa-link"></i> Webhook Callback URL: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-family:monospace; font-size:0.75rem;">https://pepplearning.in/admissions/api/v1/communication/webhook.php</code></span>
+                            <span><i class="fas fa-clock"></i> Hostinger Cron URL: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-family:monospace; font-size:0.75rem;">https://pepplearning.in/admissions/cron-queue.php?key=<?php echo htmlspecialchars($settings['whatsapp_cron_worker_key'] ?? ''); ?></code></span>
+                        </div>
                         <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save API Config</button>
                     </div>
                 </form>

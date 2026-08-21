@@ -140,15 +140,28 @@ if (isset($_GET['action'])) {
             exit;
         }
 
-        $stmtRec = $pdo->prepare("
-            SELECT r.*, q.status as queue_status, q.error_message, q.delivered_at, q.read_at 
-            FROM communication_campaign_recipients r
-            LEFT JOIN communication_queue q ON r.queue_id = q.id
-            WHERE r.campaign_id = ? 
-            ORDER BY r.id ASC
-        ");
-        $stmtRec->execute([$id]);
-        $recipients = $stmtRec->fetchAll(PDO::FETCH_ASSOC);
+        try {
+            $stmtRec = $pdo->prepare("
+                SELECT r.*, 
+                       q.status as queue_status, 
+                       q.error_message as queue_error, 
+                       q.delivered_at, 
+                       q.message_id, 
+                       q.retry_count, 
+                       q.last_retry_at, 
+                       wm.read_at 
+                FROM communication_campaign_recipients r
+                LEFT JOIN communication_queue q ON r.queue_id = q.id
+                LEFT JOIN whatsapp_messages wm ON q.message_id = wm.wa_message_id
+                WHERE r.campaign_id = ? 
+                ORDER BY r.id ASC
+            ");
+            $stmtRec->execute([$id]);
+            $recipients = $stmtRec->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+            exit;
+        }
 
         echo json_encode([
             'success' => true,
@@ -497,10 +510,17 @@ try {
     $campaigns = $pdo->query("
         SELECT c.*, 
           COUNT(r.id) as total_recipients,
-          SUM(CASE WHEN r.status = 'sent' THEN 1 ELSE 0 END) as sent_count,
-          SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) as failed_count
+          SUM(CASE WHEN r.queue_id IS NULL AND r.status = 'pending' THEN 1 ELSE 0 END) as pending_count,
+          SUM(CASE WHEN r.queue_id IS NOT NULL AND q.status = 'pending' THEN 1 ELSE 0 END) as queued_count,
+          SUM(CASE WHEN q.status = 'processing' THEN 1 ELSE 0 END) as processing_count,
+          SUM(CASE WHEN q.status = 'sent' OR r.status = 'sent' THEN 1 ELSE 0 END) as sent_count,
+          SUM(CASE WHEN q.status = 'delivered' THEN 1 ELSE 0 END) as delivered_count,
+          SUM(CASE WHEN q.status = 'read' THEN 1 ELSE 0 END) as read_count,
+          SUM(CASE WHEN r.status = 'failed' OR q.status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+          SUM(CASE WHEN q.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count
         FROM communication_campaigns c
         LEFT JOIN communication_campaign_recipients r ON c.id = r.campaign_id
+        LEFT JOIN communication_queue q ON r.queue_id = q.id
         GROUP BY c.id
         ORDER BY c.id DESC
     ")->fetchAll();
@@ -713,10 +733,16 @@ include 'includes/admin_nav.php';
                                     $recipCount = (int)$camp['total_recipients'];
                                     $sentCount = (int)$camp['sent_count'];
                                     $failCount = (int)$camp['failed_count'];
-                                    $prog = $recipCount > 0 ? round(($sentCount + $failCount) / $recipCount * 100) : 0;
+                                    $deliveredCount = (int)($camp['delivered_count'] ?? 0);
+                                    $readCount = (int)($camp['read_count'] ?? 0);
+                                    $cancelledCount = (int)($camp['cancelled_count'] ?? 0);
+                                    
+                                    $processed = $sentCount + $failCount + $deliveredCount + $readCount + $cancelledCount;
+                                    $prog = $recipCount > 0 ? round($processed / $recipCount * 100) : 0;
+                                    if ($prog > 100) $prog = 100;
                                     
                                     $statusColor = 'gray';
-                                    if ($camp['status'] === 'active' || $camp['status'] === 'active') $statusColor = 'blue';
+                                    if ($camp['status'] === 'active') $statusColor = 'blue';
                                     elseif ($camp['status'] === 'completed') $statusColor = 'green';
                                     elseif ($camp['status'] === 'paused') $statusColor = 'orange';
                                     elseif ($camp['status'] === 'cancelled') $statusColor = 'red';
@@ -731,7 +757,7 @@ include 'includes/admin_nav.php';
                                     <td style="padding:12px;">
                                         <div style="display:flex; justify-content:space-between; font-size:0.7rem; font-weight:700; color:#475569; margin-bottom:2px;">
                                             <span><?php echo $prog; ?>%</span>
-                                            <span>S:<?php echo $sentCount; ?> / F:<?php echo $failCount; ?></span>
+                                            <span>S:<?php echo $sentCount; ?> | D:<?php echo $deliveredCount; ?> | R:<?php echo $readCount; ?> | F:<?php echo $failCount; ?></span>
                                         </div>
                                         <div style="width:100%; height:6px; background:#e2e8f0; border-radius:3px; overflow:hidden;">
                                             <div style="width:<?php echo $prog; ?>%; height:100%; background:<?php echo ($failCount > 0 ? '#f59e0b' : '#10b981'); ?>;"></div>
@@ -1191,7 +1217,11 @@ function updateVisualCardPreview() {
                 btn.style.fontSize = '0.7rem';
                 btn.style.fontWeight = '700';
                 btn.style.border = '1px solid #e2e8f0';
-                btn.innerText = txt;
+                let btnText = txt;
+                if (typeof txt === 'object' && txt !== null) {
+                    btnText = txt.text || '';
+                }
+                btn.innerText = btnText;
                 bubbleButtons.appendChild(btn);
             }
         });
@@ -1353,19 +1383,29 @@ function renderDrilldownRecipientsTable(list) {
         let qStatusBadge = 'gray';
         if (r.queue_status === 'sent') qStatusBadge = 'green';
         else if (r.queue_status === 'read') qStatusBadge = 'blue';
-        else if (r.queue_status === 'failed') qStatusBadge = 'red';
+        else if (r.queue_status === 'failed' || r.status === 'failed') qStatusBadge = 'red';
         else if (r.queue_status === 'processing') qStatusBadge = 'orange';
+        else if (r.queue_status === 'delivered') qStatusBadge = 'green';
 
         tr.innerHTML = `
             <td style="padding:10px; font-weight:700; color:#111827;">${escapeHtml(r.recipient_name)}</td>
             <td style="padding:10px;">${escapeHtml(r.recipient)}</td>
-            <td style="padding:10px; color:#64748b; font-size:0.7rem;">${escapeHtml(r.message_id || '-')}</td>
-            <td style="padding:10px;"><span class="badge ${qStatusBadge}" style="font-size:0.65rem;">${escapeHtml(r.queue_status || 'pending')}</span></td>
+            <td style="padding:10px; color:#64748b; font-size:0.7rem;">
+                Msg ID: ${escapeHtml(r.message_id || '-')}<br>
+                Queue ID: ${escapeHtml(r.queue_id || '-')}
+            </td>
+            <td style="padding:10px;">
+                <span class="badge ${qStatusBadge}" style="font-size:0.65rem;">${escapeHtml(r.queue_status || r.status || 'pending')}</span><br>
+                <small style="color:#64748b;">Retries: ${r.retry_count !== null && r.retry_count !== undefined ? r.retry_count : 0}</small>
+            </td>
             <td style="padding:10px; color:#6b7280; font-size:0.7rem;">
                 ${r.sent_at ? 'Sent: ' + r.sent_at : ''}
+                ${r.delivered_at ? '<br>Delivered: ' + r.delivered_at : ''}
                 ${r.read_at ? '<br>Read: ' + r.read_at : ''}
             </td>
-            <td style="padding:10px; color:#ef4444; font-size:0.7rem; max-width:200px; word-break:break-all;">${escapeHtml(r.error_message || '-')}</td>
+            <td style="padding:10px; color:#ef4444; font-size:0.7rem; max-width:200px; word-break:break-all;">
+                ${escapeHtml(r.error_message || r.queue_error || '-')}
+            </td>
         `;
         tbody.appendChild(tr);
     });

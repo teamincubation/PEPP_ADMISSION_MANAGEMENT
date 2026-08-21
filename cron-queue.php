@@ -1,19 +1,65 @@
 <?php
 /**
  * Cron runner entry point to process messaging queue.
- * Configured to run in background.
+ * Configured to run in background or via HTTPS.
  */
 require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/includes/communication/QueueProcessor.php';
 
 try {
+    $is_cli = (php_sapi_name() === 'cli');
+    $is_authenticated = false;
+
+    if ($is_cli) {
+        $is_authenticated = true;
+    } else {
+        header('Content-Type: application/json');
+        
+        // Read secret token from DB
+        try {
+            $stmtSec = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_cron_worker_key' LIMIT 1");
+            $stmtSec->execute();
+            $correctToken = $stmtSec->fetchColumn();
+            
+            $providedKey = $_GET['key'] ?? '';
+            if ($correctToken && $providedKey === $correctToken) {
+                $is_authenticated = true;
+            }
+        } catch (Exception $secEx) {
+            // Fallback fail-closed
+        }
+    }
+
+    if (!$is_authenticated) {
+        if (!$is_cli) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => 'Unauthorized access.']);
+        } else {
+            echo "Error: Unauthorized access.\n";
+        }
+        exit;
+    }
+
+    // Set JSON header for HTTP responses
+    if (!$is_cli) {
+        header('Content-Type: application/json');
+    }
+
     $queueId = isset($argv[1]) ? (int)$argv[1] : null;
     
     if ($queueId > 0) {
         require_once __DIR__ . '/includes/communication/CommunicationEngine.php';
         $engine = CommunicationEngine::getInstance($pdo);
         $success = $engine->processQueueItem($queueId);
-        echo "Queue item #{$queueId} processed: " . ($success ? "Success" : "Failed") . "\n";
+        if ($is_cli) {
+            echo "Queue item #{$queueId} processed: " . ($success ? "Success" : "Failed") . "\n";
+        } else {
+            echo json_encode([
+                'success' => true,
+                'message' => "Queue item #{$queueId} processed.",
+                'result' => $success ? "Success" : "Failed"
+            ]);
+        }
     } else {
         // Automatically process scheduled/due campaigns in the background
         try {
@@ -29,12 +75,19 @@ try {
             if ($dueCampaign) {
                 $campId = $dueCampaign['id'];
                 
+                $pdo->beginTransaction();
+                
+                // Concurrency lock using FOR UPDATE if MySQL driver
+                $isMysql = (strpos($pdo->getAttribute(PDO::ATTR_DRIVER_NAME), 'mysql') !== false);
+                $forUpdate = $isMysql ? ' FOR UPDATE' : '';
+                
                 // Fetch pending recipients snapshot
                 $stmtRec = $pdo->prepare("
                     SELECT * FROM communication_campaign_recipients 
                     WHERE campaign_id = ? AND status = 'pending' AND queue_id IS NULL 
                     LIMIT 200
-                ");
+                    " . $forUpdate
+                );
                 $stmtRec->execute([$campId]);
                 $recipients = $stmtRec->fetchAll();
                 
@@ -92,9 +145,9 @@ try {
                                     if ($skippedParam !== '') {
                                         $pdo->prepare("
                                             UPDATE communication_campaign_recipients 
-                                            SET status = 'failed', error_message = 'Skipped: Required template parameter \'' . $skippedParam . '\' is empty.' 
+                                            SET status = 'failed', error_message = ? 
                                             WHERE id = ?
-                                        ")->execute([$rec['id']]);
+                                        ")->execute(["Skipped: Required template parameter '{$skippedParam}' is empty.", $rec['id']]);
                                         continue;
                                     }
                                 } else {
@@ -124,9 +177,9 @@ try {
                                     if ($skippedParam !== '') {
                                         $pdo->prepare("
                                             UPDATE communication_campaign_recipients 
-                                            SET status = 'failed', error_message = 'Skipped: Required template parameter \'' . $skippedParam . '\' is empty.' 
+                                            SET status = 'failed', error_message = ? 
                                             WHERE id = ?
-                                        ")->execute([$rec['id']]);
+                                        ")->execute(["Skipped: Required template parameter '{$skippedParam}' is empty.", $rec['id']]);
                                         continue;
                                     }
                                 }
@@ -166,15 +219,19 @@ try {
                                  WHERE id = ?
                              ")->execute([$queueId, $rec['id']]);
                         }
+                        $pdo->commit();
                     } else {
                         // Template not found/deleted, mark recipients as failed
                         $pdo->prepare("
                             UPDATE communication_campaign_recipients 
-                            SET status = 'failed' 
+                            SET status = 'failed', error_message = 'Marketing template not found or approved' 
                             WHERE campaign_id = ? AND status = 'pending' AND queue_id IS NULL
                         ")->execute([$campId]);
+                        $pdo->commit();
                     }
                 } else {
+                    $pdo->commit();
+                    
                     // Check if campaign is finished (all recipients have queue IDs)
                     $pendingCount = (int)$pdo->query("
                         SELECT COUNT(*) FROM communication_campaign_recipients 
@@ -187,6 +244,9 @@ try {
                 }
             }
         } catch (Exception $schedEx) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             error_log("Scheduled campaign dispatcher error: " . $schedEx->getMessage());
         }
 
@@ -203,9 +263,25 @@ try {
 
         $processor = new QueueProcessor($pdo, 25);
         $processed = $processor->execute();
-        echo "Queue processed successfully. Items dispatched: " . $processed . "\n";
+        
+        if ($is_cli) {
+            echo "Queue processed successfully. Items dispatched: " . $processed . "\n";
+        } else {
+            echo json_encode([
+                'success' => true,
+                'message' => "Queue processed successfully.",
+                'dispatched_count' => $processed
+            ]);
+        }
     }
 } catch (Exception $e) {
     error_log("Cron Queue Processor Error: " . $e->getMessage());
-    echo "Error: " . $e->getMessage() . "\n";
+    if ($is_cli) {
+        echo "Error: " . $e->getMessage() . "\n";
+    } else {
+        echo json_encode([
+            'success' => false,
+            'message' => 'Processor Error: ' . $e->getMessage()
+        ]);
+    }
 }
