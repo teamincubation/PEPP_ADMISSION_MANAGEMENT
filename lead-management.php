@@ -297,6 +297,7 @@ include 'includes/admin_nav.php';
         <span class="head-icon" style="background:var(--amber-soft);color:var(--amber-ink);"><i class="fas fa-bell"></i></span>
         <h2>Follow-ups Needed <?php echo count($today_leads) ? '(' . count($today_leads) . ')' : ''; ?></h2>
         <div class="head-right">
+            <a href="communication-campaigns.php?target=leads" class="btn btn-sm btn-success" style="border-radius:6px; font-weight:700;"><i class="fas fa-bullhorn"></i> Create WhatsApp Campaign</a>
             <button class="btn btn-sm btn-primary" onclick="openModal('add-lead-modal')"><i class="fas fa-plus"></i> Add Lead</button>
             <button class="btn btn-sm btn-outline" onclick="openModal('import-modal')"><i class="fas fa-file-import"></i> Bulk Import</button>
         </div>

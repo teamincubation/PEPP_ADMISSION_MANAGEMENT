@@ -39,22 +39,68 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
             
             $components = [];
             
-            // Build Document Header if pdf attachment is present and has public URL
-            if (!empty($attachments)) {
-                $doc = $attachments[0];
-                if (!empty($doc['url'])) {
-                    $components[] = [
-                        'type' => 'header',
-                        'parameters' => [
-                            [
-                                'type' => 'document',
-                                'document' => [
-                                    'link' => $doc['url'],
-                                    'filename' => $doc['name'] ?? 'document.pdf'
-                                ]
-                            ]
+            // Build Header parameters if present in templateData
+            if (!empty($templateData['header_type']) && !empty($templateData['header_parameters'])) {
+                $hType = strtoupper($templateData['header_type']);
+                $hParams = (array)$templateData['header_parameters'];
+                
+                $hComponent = [
+                    'type' => 'header',
+                    'parameters' => []
+                ];
+                
+                if ($hType === 'TEXT') {
+                    foreach ($hParams as $val) {
+                        $hComponent['parameters'][] = [
+                            'type' => 'text',
+                            'text' => (string)$val
+                        ];
+                    }
+                } elseif ($hType === 'IMAGE') {
+                    $hComponent['parameters'][] = [
+                        'type' => 'image',
+                        'image' => [
+                            'link' => (string)$hParams[0]
                         ]
                     ];
+                } elseif ($hType === 'VIDEO') {
+                    $hComponent['parameters'][] = [
+                        'type' => 'video',
+                        'video' => [
+                            'link' => (string)$hParams[0]
+                        ]
+                    ];
+                } elseif ($hType === 'DOCUMENT') {
+                    $hComponent['parameters'][] = [
+                        'type' => 'document',
+                        'document' => [
+                            'link' => (string)$hParams[0],
+                            'filename' => $templateData['header_document_filename'] ?? 'document.pdf'
+                        ]
+                    ];
+                }
+                
+                if (!empty($hComponent['parameters'])) {
+                    $components[] = $hComponent;
+                }
+            } else {
+                // Fallback to legacy document attachments mapping
+                if (!empty($attachments)) {
+                    $doc = $attachments[0];
+                    if (!empty($doc['url'])) {
+                        $components[] = [
+                            'type' => 'header',
+                            'parameters' => [
+                                [
+                                    'type' => 'document',
+                                    'document' => [
+                                        'link' => $doc['url'],
+                                        'filename' => $doc['name'] ?? 'document.pdf'
+                                    ]
+                                ]
+                            ]
+                        ];
+                    }
                 }
             }
 
@@ -243,7 +289,110 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
         ];
     }
 
+    /**
+     * Submits a WhatsApp message template to Meta for approval.
+     * 
+     * @param string $name
+     * @param string $category
+     * @param string $language
+     * @param array $components
+     * @return array|false Response array on success, false on failure
+     */
+    public function createTemplate($name, $category, $language, array $components) {
+        $url = "https://graph.facebook.com/{$this->apiVersion}/{$this->businessId}/message_templates";
+        
+        $payload = [
+            'name' => $name,
+            'category' => $category,
+            'language' => $language,
+            'components' => $components
+        ];
+        
+        $headers = [
+            "Authorization: Bearer {$this->accessToken}",
+            "Content-Type: application/json"
+        ];
+        
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+        
+        if ($err) {
+            $this->lastError = "CURL Error: " . $err;
+            error_log("createTemplate CURL Error: " . $err);
+            return false;
+        }
+        
+        $respDecoded = json_decode($response, true);
+        if ($httpCode >= 200 && $httpCode < 300) {
+            return [
+                'success' => true,
+                'id' => $respDecoded['id'] ?? null,
+                'response' => $respDecoded
+            ];
+        } else {
+            $errDetails = $respDecoded['error']['message'] ?? 'Unknown Meta API Error';
+            $this->lastError = "Meta API Error [{$httpCode}]: {$errDetails}";
+            error_log("createTemplate Meta API Error: " . $response);
+            return false;
+        }
+    }
+
+    /**
+     * Deletes a WhatsApp message template from Meta.
+     * 
+     * @param string $name
+     * @return bool True on success, false on failure
+     */
+    public function deleteTemplate($name) {
+        $url = "https://graph.facebook.com/{$this->apiVersion}/{$this->businessId}/message_templates?name=" . urlencode($name);
+        
+        $headers = [
+            "Authorization: Bearer {$this->accessToken}"
+        ];
+        
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "DELETE");
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+        
+        if ($err) {
+            $this->lastError = "CURL Error: " . $err;
+            error_log("deleteTemplate CURL Error: " . $err);
+            return false;
+        }
+        
+        $respDecoded = json_decode($response, true);
+        if ($httpCode >= 200 && $httpCode < 300 && isset($respDecoded['success']) && $respDecoded['success'] === true) {
+            return true;
+        } else {
+            $errDetails = $respDecoded['error']['message'] ?? 'Unknown Meta API Error';
+            $this->lastError = "Meta API Error [{$httpCode}]: {$errDetails}";
+            error_log("deleteTemplate Meta API Error: " . $response);
+            return false;
+        }
+    }
+
     public function getLastError() {
         return $this->lastError;
     }
 }
+

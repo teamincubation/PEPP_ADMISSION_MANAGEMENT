@@ -121,6 +121,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ");
                     $stmtMsgUpd->execute([$status, $status, $status, $msgId]);
 
+                    // Sync status to communication campaign recipients
+                    $stmtGetQ = $pdo->prepare("SELECT id FROM communication_queue WHERE message_id = ? LIMIT 1");
+                    $stmtGetQ->execute([$msgId]);
+                    $qId = $stmtGetQ->fetchColumn();
+                    if ($qId) {
+                        $stmtCampRecip = $pdo->prepare("
+                            UPDATE communication_campaign_recipients 
+                            SET status = CASE WHEN ? = 'failed' THEN 'failed' ELSE 'sent' END,
+                                sent_at = CASE WHEN ? IN ('sent', 'delivered', 'read') AND sent_at IS NULL THEN NOW() ELSE sent_at END
+                            WHERE queue_id = ?
+                        ");
+                        $stmtCampRecip->execute([$status, $status, $qId]);
+                    }
+
                     // Sync back to legacy whatsapp_notifications table if relevant
                     $stmtFind = $pdo->prepare("SELECT error_message FROM communication_queue WHERE message_id = ? LIMIT 1");
                     $stmtFind->execute([$msgId]);

@@ -211,6 +211,58 @@ class CommunicationEngine {
             $stmt->execute([$queueId]);
             $item = $stmt->fetch();
             
+            // Check campaign status and compliance if this queue item is part of a bulk campaign
+            $campStmt = $this->pdo->prepare("
+                SELECT c.id as campaign_id, c.status as campaign_status, c.target_audience, r.lead_id, r.id as recipient_id
+                FROM communication_campaigns c
+                JOIN communication_campaign_recipients r ON c.id = r.campaign_id
+                WHERE r.queue_id = ? LIMIT 1
+            ");
+            $campStmt->execute([$queueId]);
+            $campInfo = $campStmt->fetch();
+            
+            if ($campInfo) {
+                $campStatus = $campInfo['campaign_status'];
+                if ($campStatus === 'paused') {
+                    // Revert status back to pending
+                    $revertStmt = $this->pdo->prepare("UPDATE communication_queue SET status = 'pending', worker_started_at = NULL WHERE id = ?");
+                    $revertStmt->execute([$queueId]);
+                    $this->pdo->commit();
+                    return false;
+                } elseif ($campStatus === 'cancelled') {
+                    // Cancel queue item
+                    $cancelStmt = $this->pdo->prepare("UPDATE communication_queue SET status = 'cancelled', error_message = 'Campaign cancelled', updated_at = NOW() WHERE id = ?");
+                    $cancelStmt->execute([$queueId]);
+                    
+                    // Mark recipient failed
+                    $recipStmt = $this->pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = 'Campaign cancelled' WHERE id = ?");
+                    $recipStmt->execute([$campInfo['recipient_id']]);
+                    
+                    $this->pdo->commit();
+                    return false;
+                }
+                
+                // Pre-dispatch compliance opt-out check for lead campaigns
+                if ($campInfo['target_audience'] === 'leads' && !empty($campInfo['lead_id'])) {
+                    $optOutStmt = $this->pdo->prepare("SELECT is_opted_out FROM leads WHERE id = ? LIMIT 1");
+                    $optOutStmt->execute([$campInfo['lead_id']]);
+                    $leadOptedOut = (int)$optOutStmt->fetchColumn();
+                    
+                    if ($leadOptedOut === 1) {
+                        // Cancel queue item
+                        $cancelStmt = $this->pdo->prepare("UPDATE communication_queue SET status = 'cancelled', error_message = 'Lead opted out before dispatch', updated_at = NOW() WHERE id = ?");
+                        $cancelStmt->execute([$queueId]);
+                        
+                        // Mark campaign recipient as failed/skipped
+                        $recipStmt = $this->pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = 'Lead opted out before dispatch' WHERE id = ?");
+                        $recipStmt->execute([$campInfo['recipient_id']]);
+                        
+                        $this->pdo->commit();
+                        return false;
+                    }
+                }
+            }
+            
             $this->pdo->commit();
 
             // ── MODE-ERA GUARD: Prevent stale/mode-incompatible WhatsApp dispatches ──

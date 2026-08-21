@@ -199,6 +199,9 @@ function render_nav_item($key, $active_page, $nav_data) {
         case 'whatsapp':
             echo '<a class="nav-item ' . nav_active('whatsapp', $active_page) . '" href="whatsapp-notification.php"><i class="fab fa-whatsapp"></i> Manual WP Log</a>';
             break;
+        case 'whatsapp-marketing-templates':
+            echo '<a class="nav-item ' . nav_active('whatsapp-marketing-templates', $active_page) . '" href="whatsapp-marketing-templates.php"><i class="fas fa-layer-group"></i> Marketing Templates</a>';
+            break;
         case 'whatsapp-inbox':
             echo '<a class="nav-item ' . nav_active('whatsapp-inbox', $active_page) . '" href="whatsapp-inbox.php"><i class="fab fa-whatsapp"></i> WhatsApp Inbox';
             if ($nav_unread_inbox_count > 0) {
@@ -297,7 +300,7 @@ $default_sidebar = [
         'id' => 'payments',
         'title' => 'Payments',
         'icon' => 'fas fa-money-bill-wave',
-        'items' => ['installments', 'invoices', 'communication', 'whatsapp']
+        'items' => ['installments', 'invoices', 'communication', 'whatsapp-marketing-templates', 'whatsapp']
     ],
     [
         'id' => 'academics',

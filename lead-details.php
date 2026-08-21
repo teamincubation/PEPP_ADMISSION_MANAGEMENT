@@ -79,18 +79,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $yr = in_array($_POST['year_of_study'] ?? '', $YEARS, true) ? $_POST['year_of_study'] : null;
                     $assigned = (is_super_admin() && !empty($_POST['assigned_to'])) ? $_POST['assigned_to'] : $lead['assigned_to'];
 
-                    if ($whatsapp_number === '') {
-                        throw new Exception("WhatsApp number is required.");
-                    }
-
+                    $is_opted_out = isset($_POST['is_opted_out']) ? 1 : 0;
                     $inc = $is_followup ? 1 : 0;
                     $stmt = $pdo->prepare("
                         UPDATE leads SET name=?, whatsapp_number=?, interested_course=?, last_institute=?, last_course=?, is_fyugp=?, year_of_study=?,
-                            status=?, next_followup_date=?, assigned_to=?, followup_count = followup_count + ?, updated_at = NOW()
+                            status=?, is_opted_out=?, next_followup_date=?, assigned_to=?, followup_count = followup_count + ?, updated_at = NOW()
                         WHERE id = ?
                     ");
-                    $stmt->execute([$name, $whatsapp_number, $course, $inst, $lcourse, $fy, $yr, $new_status,
+                    $stmt->execute([$name, $whatsapp_number, $course, $inst, $lcourse, $fy, $yr, $new_status, $is_opted_out,
                         $closed ? ($followup ?: null) : $followup, $assigned, $inc, $lead_id]);
+
+                    if ($is_opted_out != $lead['is_opted_out']) {
+                        $logMsg = $is_opted_out ? "WhatsApp Marketing: Lead opted out." : "WhatsApp Marketing: Lead opted back in.";
+                        lead_log($pdo, $lead_id, 'details_change', $logMsg, null, null, null, $admin_username);
+                    }
 
                     // Timeline entries
                     if ($whatsapp_number !== $lead['whatsapp_number']) {
@@ -254,6 +256,11 @@ include 'includes/admin_nav.php';
                         <div class="field full">
                             <label style="display:inline-flex;align-items:center;gap:8px;font-weight:600;text-transform:none;letter-spacing:0;cursor:pointer;">
                                 <input type="checkbox" name="log_followup" value="1" style="width:16px;height:16px;accent-color:var(--accent);"> Count this as a completed follow-up (+1)
+                            </label>
+                        </div>
+                        <div class="field full" style="border-top:1px dashed #e2e8f0; padding-top:10px; margin-top:10px;">
+                            <label style="display:inline-flex;align-items:center;gap:8px;font-weight:600;text-transform:none;color:#ef4444;letter-spacing:0;cursor:pointer;">
+                                <input type="checkbox" name="is_opted_out" value="1" <?php echo !empty($lead['is_opted_out']) ? 'checked' : ''; ?> style="width:16px;height:16px;accent-color:#ef4444;"> Opt-out from WhatsApp marketing campaigns
                             </label>
                         </div>
                     </div>

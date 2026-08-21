@@ -236,7 +236,7 @@ try {
     elseif (in_array($low_page, ['student-approval.php', 'add-student.php'], true)) $cur_sec = 'Registrations';
     elseif (in_array($low_page, ['studentpage.php', 'studentonboarding.php', 'student-details.php'], true)) $cur_sec = 'Students';
     elseif (in_array($low_page, ['sessions.php', 'lead-management.php', 'student-mentoring.php'], true)) $cur_sec = 'Leads & Mentoring';
-    elseif (in_array($low_page, ['whatsapp-notification.php', 'whatsapp-inbox.php', 'communication-dashboard.php', 'communication-campaigns.php'], true)) $cur_sec = 'Communication';
+    elseif (in_array($low_page, ['whatsapp-notification.php', 'whatsapp-inbox.php', 'communication-dashboard.php', 'communication-campaigns.php', 'whatsapp-marketing-templates.php'], true)) $cur_sec = 'Communication';
     elseif (in_array($low_page, ['course-management.php', 'faculties.php', 'studyplans.php', 'student-study-reports.php', 'assessment-results.php', 'studyplan-designer.php', 'studyplan-chapters.php'], true)) $cur_sec = 'Academics';
     elseif (in_array($low_page, ['settings.php'], true)) $cur_sec = 'Settings';
     elseif (in_array($low_page, ['admin-management.php', 'employee-management.php', 'admin-activity.php', 'reports.php', 'email-reports.php'], true)) $cur_sec = 'Admin Panel';
@@ -363,7 +363,7 @@ function can_access($page_key) {
     if (trim($admin_perms) === 'ALL') return true;
     
     $perms = array_map('trim', explode(',', $admin_perms));
-    if ($page_key === 'whatsapp-inbox' && in_array('communication', $perms, true)) {
+    if (($page_key === 'whatsapp-inbox' || $page_key === 'whatsapp-marketing-templates') && in_array('communication', $perms, true)) {
         return true;
     }
     return in_array($page_key, $perms, true);
@@ -394,6 +394,7 @@ function get_first_accessible_page_url() {
         'email-reports' => 'email-reports.php',
         'whatsapp'      => 'whatsapp-notification.php',
         'whatsapp-inbox'=> 'whatsapp-inbox.php',
+        'whatsapp-marketing-templates' => 'whatsapp-marketing-templates.php',
         'courses'       => 'course-management.php',
         'faculties'     => 'faculties.php',
         'studyplans'    => 'studyplans.php',
