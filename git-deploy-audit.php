@@ -48,6 +48,29 @@ echo "============================================\n";
 echo "Working Directory: " . getcwd() . "\n";
 echo "Run Time          : " . date('Y-m-d H:i:s') . "\n\n";
 
+// Fallback file and commit check (using raw PHP functions, bypasses disabled commands)
+echo "--- FALLBACK DIAGNOSTICS (No command execution needed) ---\n";
+if (file_exists('.git/refs/heads/main')) {
+    $commit_hash = trim(file_get_contents('.git/refs/heads/main'));
+    echo "Active Deployed Commit : " . $commit_hash . "\n";
+} else {
+    echo "Active Deployed Commit : (Unable to read .git/refs/heads/main)\n";
+}
+
+$files_to_check = [
+    'includes/communication/Providers/WhatsAppCloudProvider.php',
+    'whatsapp-marketing-templates.php',
+    'git-deploy-audit.php'
+];
+foreach ($files_to_check as $f) {
+    if (file_exists($f)) {
+        echo str_pad($f, 60) . "Modified: " . date("Y-m-d H:i:s", filemtime($f)) . "\n";
+    } else {
+        echo str_pad($f, 60) . "MISSING\n";
+    }
+}
+echo "--------------------------------------------------------\n\n";
+
 // Helper function to run shell commands safely
 // Helper function to run shell commands safely using proc_open
 function run_cmd($cmd) {
