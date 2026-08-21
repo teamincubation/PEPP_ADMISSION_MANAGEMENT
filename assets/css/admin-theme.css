@@ -777,3 +777,262 @@ html.theme-sepia .alert-success { border-color: #d1fae5; }
 html.theme-sepia .alert-error   { border-color: #fee2e2; }
 html.theme-sepia .alert-info    { border-color: #dbeafe; }
 html.theme-sepia .alert-warn    { border-color: #fef3c7; }
+
+/* ============================================================
+   ULTRA-MODERN UI/UX DESIGN SYSTEM (Forms, Controls, Dropdowns & Inputs)
+   ============================================================ */
+
+/* 1. Global Inputs, Selects, and Textareas */
+input[type="text"],
+input[type="number"],
+input[type="email"],
+input[type="password"],
+input[type="tel"],
+input[type="url"],
+input[type="date"],
+input[type="datetime-local"],
+input[type="search"],
+select,
+textarea,
+.form-control,
+.field input,
+.field select,
+.field textarea {
+    width: 100%;
+    font-family: 'DM Sans', 'Segoe UI', sans-serif;
+    font-size: 0.88rem;
+    font-weight: 500;
+    line-height: 1.5;
+    padding: 10px 14px;
+    border: 1.5px solid #cbd5e1;
+    border-radius: 10px;
+    background-color: #ffffff;
+    color: #0f172a;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 2. Custom Select Dropdowns (<select>) - Replaces plain browser defaults */
+select,
+.form-control select,
+.field select,
+select.form-control {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2364748b' stroke-width='2.2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5' /%3E%3C/svg%3E") !important;
+    background-repeat: no-repeat !important;
+    background-position: right 14px center !important;
+    background-size: 16px 16px !important;
+    padding-right: 42px !important;
+    cursor: pointer !important;
+}
+
+select option {
+    padding: 10px;
+    background-color: #ffffff;
+    color: #0f172a;
+}
+
+/* 3. Hover and Focus States */
+input[type="text"]:hover,
+input[type="number"]:hover,
+input[type="email"]:hover,
+input[type="password"]:hover,
+input[type="tel"]:hover,
+input[type="url"]:hover,
+input[type="date"]:hover,
+input[type="datetime-local"]:hover,
+select:hover,
+textarea:hover,
+.form-control:hover {
+    border-color: #94a3b8;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+input[type="tel"]:focus,
+input[type="url"]:focus,
+input[type="date"]:focus,
+input[type="datetime-local"]:focus,
+select:focus,
+textarea:focus,
+.form-control:focus {
+    outline: none !important;
+    border-color: #7c3aed !important;
+    background-color: #ffffff !important;
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.14), 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* 4. Textarea Customization */
+textarea,
+textarea.form-control,
+.field textarea {
+    min-height: 95px;
+    border-radius: 12px;
+    resize: vertical;
+}
+
+/* 5. Custom Checkboxes and Radio Buttons */
+input[type="checkbox"],
+input[type="radio"] {
+    accent-color: #7c3aed;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    cursor: pointer;
+    vertical-align: middle;
+    transition: transform 0.15s ease;
+}
+
+input[type="checkbox"]:hover,
+input[type="radio"]:hover {
+    transform: scale(1.08);
+}
+
+/* 6. Form Labels & Field Headers */
+label,
+.field label,
+.form-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: 'Space Grotesk', 'DM Sans', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #475569;
+    margin-bottom: 6px;
+}
+
+label .req,
+.field label .req {
+    color: #ef4444;
+    font-weight: 800;
+}
+
+.help,
+.field .help {
+    font-size: 0.75rem;
+    color: #64748b;
+    margin-top: 5px;
+    font-weight: 500;
+    line-height: 1.4;
+}
+
+/* 7. Modern Button Enhancements */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: 10px;
+    padding: 10px 18px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+    color: #ffffff;
+    border: none;
+    box-shadow: 0 2px 8px rgba(124, 58, 237, 0.28);
+}
+
+.btn-primary:hover {
+    background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+    box-shadow: 0 4px 14px rgba(124, 58, 237, 0.38);
+    transform: translateY(-1.5px);
+}
+
+.btn-success {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    color: #ffffff;
+    border: none;
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.25);
+}
+
+.btn-success:hover {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+    transform: translateY(-1.5px);
+}
+
+.btn-outline {
+    background: #ffffff;
+    color: #334155;
+    border: 1.5px solid #cbd5e1;
+}
+
+.btn-outline:hover {
+    background: #f8fafc;
+    border-color: #94a3b8;
+    color: #0f172a;
+    transform: translateY(-1px);
+}
+
+/* 8. Modern Cards & Container Glassmorphism Elevators */
+.panel,
+.card-box,
+.filter-bar {
+    border-radius: 16px;
+    border: 1px solid #e2e8f0;
+    background: #ffffff;
+    box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.02);
+}
+
+/* 9. WhatsApp Phone Live Visual Preview Box Styling */
+.whatsapp-phone-mockup {
+    border-radius: 18px;
+    overflow: hidden;
+    border: 1px solid #cbd5e1;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+    background-color: #efeae2;
+}
+
+.whatsapp-mockup-header {
+    background: #075e54;
+    color: #ffffff;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.whatsapp-mockup-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #128c7e;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ffffff;
+    font-weight: 700;
+}
+
+.whatsapp-mockup-body {
+    padding: 18px 16px;
+    min-height: 220px;
+    background-image: radial-gradient(#d1d5db 1px, transparent 1px);
+    background-size: 16px 16px;
+}
+
+.whatsapp-chat-bubble {
+    background: #ffffff;
+    border-radius: 0px 14px 14px 14px;
+    padding: 12px 14px;
+    max-width: 90%;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+    font-size: 0.88rem;
+    color: #111827;
+    line-height: 1.5;
+}
+

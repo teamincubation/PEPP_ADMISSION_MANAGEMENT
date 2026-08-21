@@ -611,14 +611,14 @@ include 'includes/admin_nav.php';
                         <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
                             <div>
                                 <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:6px;">Category</label>
-                                <select name="category" style="width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem;">
+                                <select name="category" class="form-control" style="width:100%; border-radius:8px; font-size:0.85rem;">
                                     <option value="MARKETING">MARKETING (Offers, Promotions, Campaign messages)</option>
                                     <option value="UTILITY">UTILITY (Receipts, Onboarding, Reminders)</option>
                                 </select>
                             </div>
                             <div>
                                 <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:6px;">Language</label>
-                                <select name="language" style="width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem;">
+                                <select name="language" class="form-control" style="width:100%; border-radius:8px; font-size:0.85rem;">
                                     <?php foreach ($supported_languages as $code => $lbl): ?>
                                         <option value="<?php echo htmlspecialchars($code); ?>"><?php echo htmlspecialchars($lbl); ?> (<?php echo $code; ?>)</option>
                                     <?php endforeach; ?>
