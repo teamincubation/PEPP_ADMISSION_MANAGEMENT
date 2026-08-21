@@ -551,6 +551,47 @@ foreach ($localTemplates as $tpl) {
 include 'includes/admin_nav.php';
 ?>
 
+<style>
+/* ── RESPONSIVE STYLE FIXES FOR MARKETING TEMPLATES ── */
+#templates-filter-form {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr auto;
+    gap: 12px;
+    align-items: end;
+}
+@media (max-width: 1024px) {
+    #templates-filter-form {
+        grid-template-columns: 1fr 1fr !important;
+    }
+}
+@media (max-width: 640px) {
+    #templates-filter-form {
+        grid-template-columns: 1fr !important;
+    }
+}
+@media (max-width: 991px) {
+    .builder-grid-container {
+        grid-template-columns: 1fr !important;
+    }
+}
+/* Sticky Actions Column styling */
+.data-table th:last-child,
+.data-table td:last-child {
+    position: sticky;
+    right: 0;
+    background: #fff;
+    z-index: 10;
+    box-shadow: -4px 0 8px rgba(0,0,0,0.05);
+}
+.data-table th:last-child {
+    background: #f8fafc;
+    z-index: 11;
+}
+.data-table tbody tr:hover td:last-child {
+    background: #fafbff;
+}
+</style>
+
 <div class="container-fluid" style="padding:20px;">
     <?php if ($success_message): ?>
         <div class="alert alert-success" style="background:#f0fdf4; border:1px solid #bbf7d0; color:#166534; padding:12px 18px; border-radius:12px; margin-bottom:20px;">
@@ -565,7 +606,7 @@ include 'includes/admin_nav.php';
     <?php endif; ?>
 
     <!-- ── NAVIGATION TABS ── -->
-    <div style="display:flex; gap:10px; margin-bottom:20px; border-bottom:1px solid #e5e7eb; padding-bottom:8px;">
+    <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:20px; border-bottom:1px solid #e5e7eb; padding-bottom:8px;">
         <a href="communication-dashboard.php" class="btn btn-sm btn-outline" style="border-radius:8px;"><i class="fas fa-gears"></i> API Settings &amp; Queue</a>
         <a href="communication-templates.php" class="btn btn-sm btn-outline" style="border-radius:8px;"><i class="fas fa-layer-group"></i> Meta Templates Sync</a>
         <a href="whatsapp-marketing-templates.php" class="btn btn-sm btn-primary" style="border-radius:8px;"><i class="fas fa-magic"></i> Marketing Templates</a>
@@ -594,7 +635,7 @@ include 'includes/admin_nav.php';
     <div id="panel-list" style="display: block;">
         <!-- Filters Row -->
         <div style="background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:16px; margin-bottom:20px;">
-            <form method="GET" style="display:grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap:12px; align-items:end;">
+            <form method="GET" id="templates-filter-form">
                 <div>
                     <label style="font-size:0.75rem; font-weight:700; color:#475569; display:block; margin-bottom:4px;">Search Name</label>
                     <input type="text" name="search" class="form-control" value="<?php echo htmlspecialchars($f_search); ?>" placeholder="e.g. cuet_pg_2027" style="border-radius:8px; font-size:0.8rem;">
@@ -635,7 +676,8 @@ include 'includes/admin_nav.php';
 
         <!-- Templates List Table -->
         <div style="background:#fff; border:1px solid #e2e8f0; border-radius:16px; overflow:hidden;">
-            <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+            <div style="overflow-x:auto; -webkit-overflow-scrolling:touch;">
+                <table class="data-table" style="width:100%; min-width:1200px; border-collapse:collapse; font-size:0.85rem;">
                 <thead>
                     <tr style="background:#f8fafc; text-align:left; border-bottom:1px solid #e2e8f0;">
                         <th style="padding:14px; font-weight:700; color:#475569;">Template Name</th>
@@ -726,12 +768,13 @@ include 'includes/admin_nav.php';
                     <?php endif; ?>
                 </tbody>
             </table>
+            </div>
         </div>
     </div>
 
     <!-- ── TAB 2: CREATE BUILDER VIEW ── -->
     <div id="panel-create" style="display: none;">
-        <div style="display:grid; grid-template-columns: 1.8fr 1.2fr; gap:24px; align-items:start;">
+        <div class="builder-grid-container" style="display:grid; grid-template-columns: 1.8fr 1.2fr; gap:24px; align-items:start;">
             <!-- Left: Builder Form -->
             <div style="background:#fff; border:1px solid #e2e8f0; border-radius:16px; overflow:hidden;">
                 <div style="background:#f8fafc; border-bottom:1px solid #e2e8f0; padding:14px 20px;">
