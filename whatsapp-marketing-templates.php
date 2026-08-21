@@ -604,21 +604,21 @@ include 'includes/admin_nav.php';
                         
                         <div style="margin-bottom:16px;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:6px;">Template Name <span style="color:#ef4444;">*</span></label>
-                            <input type="text" name="template_name" id="inp-tpl-name" placeholder="e.g. welcome_offer_march" style="width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; outline:none;" oninput="validateTemplateName(this.value); updatePreview();" required>
+                            <input type="text" name="template_name" id="inp-tpl-name" class="form-control" placeholder="e.g. welcome_offer_march" oninput="validateTemplateName(this.value); updatePreview();" required>
                             <span style="font-size:0.75rem; color:#94a3b8; display:block; margin-top:4px;">Must contain only lowercase letters, numbers, and underscores. No spaces.</span>
                         </div>
 
                         <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
                             <div>
                                 <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:6px;">Category</label>
-                                <select name="category" class="form-control" style="width:100%; border-radius:8px; font-size:0.85rem;">
+                                <select name="category" class="form-control">
                                     <option value="MARKETING">MARKETING (Offers, Promotions, Campaign messages)</option>
                                     <option value="UTILITY">UTILITY (Receipts, Onboarding, Reminders)</option>
                                 </select>
                             </div>
                             <div>
                                 <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:6px;">Language</label>
-                                <select name="language" class="form-control" style="width:100%; border-radius:8px; font-size:0.85rem;">
+                                <select name="language" class="form-control">
                                     <?php foreach ($supported_languages as $code => $lbl): ?>
                                         <option value="<?php echo htmlspecialchars($code); ?>"><?php echo htmlspecialchars($lbl); ?> (<?php echo $code; ?>)</option>
                                     <?php endforeach; ?>
@@ -629,7 +629,7 @@ include 'includes/admin_nav.php';
                         <!-- Header Block -->
                         <div style="border-top:1px dashed #e2e8f0; margin-top:20px; padding-top:14px; margin-bottom:16px;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#1e293b; margin-bottom:6px;"><i class="fas fa-heading"></i> Template Header</label>
-                            <select name="header_type" id="sel-header-type" class="form-control" style="width:100%; border-radius:8px; margin-bottom:10px;" onchange="onHeaderTypeChange(this.value)">
+                            <select name="header_type" id="sel-header-type" class="form-control" style="margin-bottom:10px;" onchange="onHeaderTypeChange(this.value)">
                                 <option value="NONE">- No Header -</option>
                                 <option value="TEXT">Text Header</option>
                                 <option value="IMAGE">Image Header (JPEG/PNG)</option>
@@ -638,14 +638,14 @@ include 'includes/admin_nav.php';
                             </select>
                             
                             <div id="header-text-container" style="display:none; margin-bottom:10px;">
-                                <input type="text" name="header_text" id="inp-header-text" class="form-control" placeholder="Enter header text... (Supports {{1}})" style="border-radius:8px; font-size:0.85rem;" oninput="detectVariables(); updatePreview();">
+                                <input type="text" name="header_text" id="inp-header-text" class="form-control" placeholder="Enter header text... (Supports {{1}})" oninput="detectVariables(); updatePreview();">
                             </div>
                         </div>
 
                         <!-- Body Block -->
                         <div style="border-top:1px dashed #e2e8f0; margin-top:20px; padding-top:14px; margin-bottom:16px;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#1e293b; margin-bottom:6px;"><i class="fas fa-align-justify"></i> Message Body <span style="color:#ef4444;">*</span></label>
-                            <textarea name="body_text" id="txt-body-text" rows="5" placeholder="Type your marketing message here. Use {{1}}, {{2}} for dynamic parameters." style="width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; outline:none; resize:vertical; font-family:sans-serif;" oninput="detectVariables(); updatePreview();" required></textarea>
+                            <textarea name="body_text" id="txt-body-text" class="form-control" rows="5" placeholder="Type your marketing message here. Use {{1}}, {{2}} for dynamic parameters." oninput="detectVariables(); updatePreview();" required></textarea>
                         </div>
 
                         <!-- Variables Dynamic Mapping Config -->
@@ -657,13 +657,13 @@ include 'includes/admin_nav.php';
                         <!-- Footer Block -->
                         <div style="border-top:1px dashed #e2e8f0; margin-top:20px; padding-top:14px; margin-bottom:16px;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#1e293b; margin-bottom:6px;"><i class="fas fa-paragraph"></i> Template Footer (Optional)</label>
-                            <input type="text" name="footer_text" id="inp-footer-text" class="form-control" placeholder="e.g. Reply STOP to opt out" style="border-radius:8px; font-size:0.85rem;" oninput="updatePreview();">
+                            <input type="text" name="footer_text" id="inp-footer-text" class="form-control" placeholder="e.g. Reply STOP to opt out" oninput="updatePreview();">
                         </div>
 
                         <!-- Buttons Block -->
                         <div style="border-top:1px dashed #e2e8f0; margin-top:20px; padding-top:14px; margin-bottom:20px;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#1e293b; margin-bottom:6px;"><i class="fas fa-square-caret-right"></i> Dynamic Template Buttons</label>
-                            <select name="button_type" id="sel-button-type" class="form-control" style="width:100%; border-radius:8px; margin-bottom:12px;" onchange="onButtonTypeChange(this.value)">
+                            <select name="button_type" id="sel-button-type" class="form-control" style="margin-bottom:12px;" onchange="onButtonTypeChange(this.value)">
                                 <option value="NONE">- No Buttons -</option>
                                 <option value="QUICK_REPLY">Quick Reply Buttons (Max 3)</option>
                                 <option value="CTA">Call to Action (CTA) Buttons (1 Url + 1 Phone)</option>

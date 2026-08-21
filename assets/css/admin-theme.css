@@ -779,10 +779,10 @@ html.theme-sepia .alert-info    { border-color: #dbeafe; }
 html.theme-sepia .alert-warn    { border-color: #fef3c7; }
 
 /* ============================================================
-   ULTRA-MODERN UI/UX DESIGN SYSTEM (Forms, Controls, Dropdowns & Inputs)
+   ULTRA-MODERN FORM INPUTS & DROPDOWN SELECTS DESIGN SYSTEM
    ============================================================ */
 
-/* 1. Global Inputs, Selects, and Textareas */
+/* 1. Base Text Fields, Inputs, Selects, and Textareas */
 input[type="text"],
 input[type="number"],
 input[type="email"],
@@ -797,26 +797,54 @@ textarea,
 .form-control,
 .field input,
 .field select,
-.field textarea {
-    width: 100%;
-    font-family: 'DM Sans', 'Segoe UI', sans-serif;
-    font-size: 0.88rem;
-    font-weight: 500;
-    line-height: 1.5;
-    padding: 10px 14px;
-    border: 1.5px solid #cbd5e1;
-    border-radius: 10px;
-    background-color: #ffffff;
-    color: #0f172a;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+.field textarea,
+form input,
+form select,
+form textarea {
+    display: block !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+    font-size: 0.875rem !important; /* 14px */
+    font-weight: 500 !important;
+    color: #0f172a !important; /* slate-900 */
+    background-color: #ffffff !important;
+    background-clip: padding-box !important;
+    border: 1.5px solid #cbd5e1 !important; /* slate-300 */
+    border-radius: 10px !important; /* modern crisp rounded corner */
+    box-shadow: 0 1px 2px 0 rgba(15, 23, 42, 0.04) !important;
+    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out, background-color 0.15s ease-in-out !important;
 }
 
-/* 2. Custom Select Dropdowns (<select>) - Replaces plain browser defaults */
+/* 2. Height & Line Height for Single-line Text Fields and Select Dropdowns */
+input[type="text"],
+input[type="number"],
+input[type="email"],
+input[type="password"],
+input[type="tel"],
+input[type="url"],
+input[type="date"],
+input[type="datetime-local"],
+input[type="search"],
+select,
+.form-control:not(textarea),
+.field input,
+.field select,
+form input:not(textarea),
+form select {
+    height: 42px !important;
+    min-height: 42px !important;
+    max-height: 42px !important;
+    padding: 0 14px !important;
+    line-height: 40px !important;
+}
+
+/* 3. Custom Dropdown Selects (<select>) - Modern Custom Arrow */
 select,
 .form-control select,
 .field select,
-select.form-control {
+select.form-control,
+form select {
     appearance: none !important;
     -webkit-appearance: none !important;
     -moz-appearance: none !important;
@@ -828,13 +856,15 @@ select.form-control {
     cursor: pointer !important;
 }
 
+/* Dropdown Option Items */
 select option {
-    padding: 10px;
-    background-color: #ffffff;
-    color: #0f172a;
+    padding: 10px 14px !important;
+    font-size: 14px !important;
+    background-color: #ffffff !important;
+    color: #0f172a !important;
 }
 
-/* 3. Hover and Focus States */
+/* 4. Hover State */
 input[type="text"]:hover,
 input[type="number"]:hover,
 input[type="email"]:hover,
@@ -843,12 +873,17 @@ input[type="tel"]:hover,
 input[type="url"]:hover,
 input[type="date"]:hover,
 input[type="datetime-local"]:hover,
+input[type="search"]:hover,
 select:hover,
 textarea:hover,
-.form-control:hover {
-    border-color: #94a3b8;
+.form-control:hover,
+.field input:hover,
+.field select:hover,
+.field textarea:hover {
+    border-color: #94a3b8 !important; /* slate-400 */
 }
 
+/* 5. Focus State with Glowing Accent Ring */
 input[type="text"]:focus,
 input[type="number"]:focus,
 input[type="email"]:focus,
@@ -857,73 +892,82 @@ input[type="tel"]:focus,
 input[type="url"]:focus,
 input[type="date"]:focus,
 input[type="datetime-local"]:focus,
+input[type="search"]:focus,
 select:focus,
 textarea:focus,
-.form-control:focus {
+.form-control:focus,
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
     outline: none !important;
-    border-color: #7c3aed !important;
+    border-color: #7c3aed !important; /* violet-600 */
     background-color: #ffffff !important;
-    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.14), 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.14), 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
 }
 
-/* 4. Textarea Customization */
+/* 6. Textarea Fields */
 textarea,
 textarea.form-control,
-.field textarea {
-    min-height: 95px;
-    border-radius: 12px;
-    resize: vertical;
+.field textarea,
+form textarea {
+    height: auto !important;
+    min-height: 100px !important;
+    max-height: 400px !important;
+    padding: 12px 16px !important;
+    line-height: 1.5 !important;
+    border-radius: 12px !important;
+    resize: vertical !important;
 }
 
-/* 5. Custom Checkboxes and Radio Buttons */
+/* 7. Custom Checkboxes and Radio Buttons */
 input[type="checkbox"],
 input[type="radio"] {
-    accent-color: #7c3aed;
-    width: 18px;
-    height: 18px;
-    border-radius: 5px;
-    cursor: pointer;
+    accent-color: #7c3aed !important;
+    width: 18px !important;
+    height: 18px !important;
+    border-radius: 5px !important;
+    cursor: pointer !important;
     vertical-align: middle;
-    transition: transform 0.15s ease;
+    transition: transform 0.15s ease !important;
 }
 
 input[type="checkbox"]:hover,
 input[type="radio"]:hover {
-    transform: scale(1.08);
+    transform: scale(1.08) !important;
 }
 
-/* 6. Form Labels & Field Headers */
+/* 8. Form Labels & Field Headers */
 label,
 .field label,
 .form-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-family: 'Space Grotesk', 'DM Sans', sans-serif;
-    font-size: 0.75rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: #475569;
-    margin-bottom: 6px;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 5px !important;
+    font-family: 'Space Grotesk', 'DM Sans', sans-serif !important;
+    font-size: 0.75rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.04em !important;
+    color: #475569 !important;
+    margin-bottom: 6px !important;
 }
 
 label .req,
 .field label .req {
-    color: #ef4444;
-    font-weight: 800;
+    color: #ef4444 !important;
+    font-weight: 800 !important;
 }
 
 .help,
 .field .help {
-    font-size: 0.75rem;
-    color: #64748b;
-    margin-top: 5px;
-    font-weight: 500;
-    line-height: 1.4;
+    font-size: 0.75rem !important;
+    color: #64748b !important;
+    margin-top: 5px !important;
+    font-weight: 500 !important;
+    line-height: 1.4 !important;
 }
 
-/* 7. Modern Button Enhancements */
+/* 9. Modern Button Enhancements */
 .btn {
     display: inline-flex;
     align-items: center;
@@ -940,99 +984,100 @@ label .req,
 }
 
 .btn-primary {
-    background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
-    color: #ffffff;
-    border: none;
-    box-shadow: 0 2px 8px rgba(124, 58, 237, 0.28);
+    background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%) !important;
+    color: #ffffff !important;
+    border: none !important;
+    box-shadow: 0 2px 8px rgba(124, 58, 237, 0.28) !important;
 }
 
 .btn-primary:hover {
-    background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
-    box-shadow: 0 4px 14px rgba(124, 58, 237, 0.38);
+    background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%) !important;
+    box-shadow: 0 4px 14px rgba(124, 58, 237, 0.38) !important;
     transform: translateY(-1.5px);
 }
 
 .btn-success {
-    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-    color: #ffffff;
-    border: none;
-    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.25);
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+    color: #ffffff !important;
+    border: none !important;
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.25) !important;
 }
 
 .btn-success:hover {
-    background: linear-gradient(135deg, #059669 0%, #047857 100%);
-    box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+    background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
+    box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35) !important;
     transform: translateY(-1.5px);
 }
 
 .btn-outline {
-    background: #ffffff;
-    color: #334155;
-    border: 1.5px solid #cbd5e1;
+    background: #ffffff !important;
+    color: #334155 !important;
+    border: 1.5px solid #cbd5e1 !important;
 }
 
 .btn-outline:hover {
-    background: #f8fafc;
-    border-color: #94a3b8;
-    color: #0f172a;
+    background: #f8fafc !important;
+    border-color: #94a3b8 !important;
+    color: #0f172a !important;
     transform: translateY(-1px);
 }
 
-/* 8. Modern Cards & Container Glassmorphism Elevators */
+/* 10. Modern Cards & Container Glassmorphism Elevators */
 .panel,
 .card-box,
 .filter-bar {
-    border-radius: 16px;
-    border: 1px solid #e2e8f0;
-    background: #ffffff;
-    box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.02);
+    border-radius: 16px !important;
+    border: 1px solid #e2e8f0 !important;
+    background: #ffffff !important;
+    box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.02) !important;
 }
 
-/* 9. WhatsApp Phone Live Visual Preview Box Styling */
+/* 11. WhatsApp Phone Live Visual Preview Box Styling */
 .whatsapp-phone-mockup {
-    border-radius: 18px;
-    overflow: hidden;
-    border: 1px solid #cbd5e1;
-    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
-    background-color: #efeae2;
+    border-radius: 18px !important;
+    overflow: hidden !important;
+    border: 1px solid #cbd5e1 !important;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05) !important;
+    background-color: #efeae2 !important;
 }
 
 .whatsapp-mockup-header {
-    background: #075e54;
-    color: #ffffff;
-    padding: 12px 16px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
+    background: #075e54 !important;
+    color: #ffffff !important;
+    padding: 12px 16px !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
 }
 
 .whatsapp-mockup-avatar {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: #128c7e;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #ffffff;
-    font-weight: 700;
+    width: 36px !important;
+    height: 36px !important;
+    border-radius: 50% !important;
+    background: #128c7e !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
 }
 
 .whatsapp-mockup-body {
-    padding: 18px 16px;
-    min-height: 220px;
-    background-image: radial-gradient(#d1d5db 1px, transparent 1px);
-    background-size: 16px 16px;
+    padding: 18px 16px !important;
+    min-height: 220px !important;
+    background-image: radial-gradient(#d1d5db 1px, transparent 1px) !important;
+    background-size: 16px 16px !important;
 }
 
 .whatsapp-chat-bubble {
-    background: #ffffff;
-    border-radius: 0px 14px 14px 14px;
-    padding: 12px 14px;
-    max-width: 90%;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-    font-size: 0.88rem;
-    color: #111827;
-    line-height: 1.5;
+    background: #ffffff !important;
+    border-radius: 0px 14px 14px 14px !important;
+    padding: 12px 14px !important;
+    max-width: 90% !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12) !important;
+    font-size: 0.88rem !important;
+    color: #111827 !important;
+    line-height: 1.5 !important;
 }
+
 
