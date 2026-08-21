@@ -49,10 +49,40 @@ echo "Working Directory: " . getcwd() . "\n";
 echo "Run Time          : " . date('Y-m-d H:i:s') . "\n\n";
 
 // Helper function to run shell commands safely
+// Helper function to run shell commands safely using proc_open
 function run_cmd($cmd) {
     echo "$ {$cmd}\n";
-    $output = shell_exec($cmd);
-    echo ($output !== null) ? $output : "(no output)\n";
+    if (!function_exists('proc_open')) {
+        echo "ERROR: proc_open is disabled on this server.\n";
+        echo "--------------------------------------------------------\n";
+        return '';
+    }
+
+    $descriptorspec = [
+        0 => ["pipe", "r"], // stdin
+        1 => ["pipe", "w"], // stdout
+        2 => ["pipe", "w"]  // stderr
+    ];
+
+    $process = @proc_open($cmd, $descriptorspec, $pipes);
+    $output = '';
+
+    if (is_resource($process)) {
+        fclose($pipes[0]); // Close stdin immediately since we don't write input
+        
+        $stdout = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        
+        $stderr = stream_get_contents($pipes[2]);
+        fclose($pipes[2]);
+        
+        proc_close($process);
+        $output = $stdout . $stderr;
+    } else {
+        $output = "ERROR: Failed to run command using proc_open.\n";
+    }
+
+    echo ($output !== '') ? $output : "(no output)\n";
     echo "--------------------------------------------------------\n";
     return $output;
 }
