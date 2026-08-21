@@ -342,10 +342,122 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
             ];
         } else {
             $errDetails = $respDecoded['error']['message'] ?? 'Unknown Meta API Error';
-            $this->lastError = "Meta API Error [{$httpCode}]: {$errDetails}";
-            error_log("createTemplate Meta API Error: " . $response);
+            $errCode = $respDecoded['error']['code'] ?? '';
+            $errSubcode = $respDecoded['error']['error_subcode'] ?? '';
+            $fbtraceId = $respDecoded['error']['fbtrace_id'] ?? '';
+            
+            $this->lastError = "Meta rejected template submission: {$errDetails} (Code: {$errCode}, Subcode: {$errSubcode}, Trace ID: {$fbtraceId})";
+            
+            // Safe logging without credentials
+            $sanitizedPayload = $payload;
+            error_log("createTemplate Meta API Error [{$httpCode}]: " . json_encode([
+                'error' => $respDecoded['error'] ?? null,
+                'payload' => $sanitizedPayload
+            ]));
             return false;
         }
+    }
+
+    /**
+     * Uploads local media file using Meta's Resumable Upload API to get a header handle.
+     * 
+     * @param string $filePath Absolute local path to the media file
+     * @return string|false The media handle on success, false on failure
+     */
+    public function uploadSampleMedia($filePath) {
+        if (!file_exists($filePath)) {
+            $this->lastError = "Local file not found: {$filePath}";
+            return false;
+        }
+        
+        $fileSize = filesize($filePath);
+        $mimeType = mime_content_type($filePath);
+        $fileName = basename($filePath);
+        
+        // Step 1: Create Upload Session
+        $sessionUrl = "https://graph.facebook.com/{$this->apiVersion}/{$this->businessId}/uploads";
+        $sessionPayload = json_encode([
+            'file_length' => $fileSize,
+            'file_type' => $mimeType,
+            'file_name' => $fileName
+        ]);
+        
+        $headers = [
+            "Authorization: OAuth {$this->accessToken}",
+            "Content-Type: application/json"
+        ];
+        
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $sessionUrl);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $sessionPayload);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+        
+        if ($err) {
+            $this->lastError = "Upload Session CURL Error: " . $err;
+            error_log("Upload Session CURL Error: " . $err);
+            return false;
+        }
+        
+        $respDecoded = json_decode($response, true);
+        $uploadId = $respDecoded['id'] ?? null;
+        
+        if ($httpCode < 200 || $httpCode >= 300 || empty($uploadId)) {
+            $errDetails = $respDecoded['error']['message'] ?? 'Failed to create upload session';
+            $errCode = $respDecoded['error']['code'] ?? '';
+            $errSubcode = $respDecoded['error']['error_subcode'] ?? '';
+            $this->lastError = "Upload Session Error [{$httpCode}]: {$errDetails} (Code: {$errCode}, Subcode: {$errSubcode})";
+            error_log("Upload Session Meta API Error: " . $response);
+            return false;
+        }
+        
+        // Step 2: Upload File Data
+        $uploadUrl = "https://graph.facebook.com/{$this->apiVersion}/{$uploadId}";
+        $fileData = file_get_contents($filePath);
+        
+        $chUpload = curl_init();
+        curl_setopt($chUpload, CURLOPT_URL, $uploadUrl);
+        curl_setopt($chUpload, CURLOPT_POST, true);
+        curl_setopt($chUpload, CURLOPT_POSTFIELDS, $fileData);
+        curl_setopt($chUpload, CURLOPT_HTTPHEADER, [
+            "Authorization: OAuth {$this->accessToken}",
+            "file_offset: 0",
+            "Content-Type: {$mimeType}"
+        ]);
+        curl_setopt($chUpload, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($chUpload, CURLOPT_SSL_VERIFYPEER, true);
+        
+        $uploadResponse = curl_exec($chUpload);
+        $uploadHttpCode = curl_getinfo($chUpload, CURLINFO_HTTP_CODE);
+        $uploadErr = curl_error($chUpload);
+        curl_close($chUpload);
+        
+        if ($uploadErr) {
+            $this->lastError = "File Upload CURL Error: " . $uploadErr;
+            error_log("File Upload CURL Error: " . $uploadErr);
+            return false;
+        }
+        
+        $uploadDecoded = json_decode($uploadResponse, true);
+        $handle = $uploadDecoded['h'] ?? null;
+        
+        if ($uploadHttpCode < 200 || $uploadHttpCode >= 300 || empty($handle)) {
+            $errDetails = $uploadDecoded['error']['message'] ?? 'Failed to upload media data';
+            $errCode = $uploadDecoded['error']['code'] ?? '';
+            $errSubcode = $uploadDecoded['error']['error_subcode'] ?? '';
+            $this->lastError = "File Upload Error [{$uploadHttpCode}]: {$errDetails} (Code: {$errCode}, Subcode: {$errSubcode})";
+            error_log("File Upload Meta API Error: " . $uploadResponse);
+            return false;
+        }
+        
+        return $handle;
     }
 
     /**

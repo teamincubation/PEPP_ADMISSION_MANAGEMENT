@@ -67,25 +67,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } elseif (empty($businessId) || empty($accessToken)) {
                     $error_message = 'Please configure Meta Business Account ID and Access Token in settings first.';
                 } else {
-                    $res = $provider->createTemplate($tpl_name, $category, $language, $components);
-                    if ($res && !empty($res['success'])) {
-                        $meta_template_id = $res['id'] ?? null;
-                        $meta['meta_template_id'] = $meta_template_id;
-                        $meta_data_updated = json_encode($meta);
-
-                        try {
-                            $stmtUpd = $pdo->prepare("
-                                UPDATE communication_templates 
-                                SET status = 'pending', meta_data = ?, updated_at = NOW() 
-                                WHERE id = ?
-                            ");
-                            $stmtUpd->execute([$meta_data_updated, $tpl_id]);
-                            $success_message = "Template successfully submitted to Meta WABA! Status: PENDING. (Meta ID: {$meta_template_id})";
-                        } catch (Exception $e) {
-                            $error_message = "API submission succeeded but saving locally failed: " . $e->getMessage();
+                    // If image header, upload media first and replace handle in components
+                    if ($header_type === 'IMAGE' && !empty($header_media_url)) {
+                        $localFilename = basename($header_media_url);
+                        $localPath = __DIR__ . '/uploads/whatsapp_campaign_media/' . $localFilename;
+                        if (file_exists($localPath)) {
+                            $handle = $provider->uploadSampleMedia($localPath);
+                            if ($handle) {
+                                foreach ($components as &$comp) {
+                                    if ($comp['type'] === 'HEADER' && $comp['format'] === 'IMAGE') {
+                                        $comp['example'] = [
+                                            'header_handle' => [$handle]
+                                        ];
+                                    }
+                                }
+                                unset($comp);
+                            } else {
+                                $error_message = "Failed to upload image header to Meta: " . ($provider->getLastError() ?: "Media upload failed.");
+                            }
+                        } else {
+                            $error_message = "Local header image file not found on server.";
                         }
-                    } else {
-                        $error_message = "Meta API Error: " . ($provider->getLastError() ?: 'Unknown Error');
+                    }
+
+                    if (empty($error_message)) {
+                        $res = $provider->createTemplate($tpl_name, $category, $language, $components);
+                        if ($res && !empty($res['success'])) {
+                            $meta_template_id = $res['id'] ?? null;
+                            $meta['meta_template_id'] = $meta_template_id;
+                            $meta_data_updated = json_encode($meta);
+
+                            try {
+                                $stmtUpd = $pdo->prepare("
+                                    UPDATE communication_templates 
+                                    SET status = 'pending', meta_data = ?, updated_at = NOW() 
+                                    WHERE id = ?
+                                ");
+                                $stmtUpd->execute([$meta_data_updated, $tpl_id]);
+                                $success_message = "Template successfully submitted to Meta WABA! Status: PENDING. (Meta ID: {$meta_template_id})";
+                            } catch (Exception $e) {
+                                $error_message = "API submission succeeded but saving locally failed: " . $e->getMessage();
+                            }
+                        } else {
+                            $error_message = $provider->getLastError() ?: 'Unknown Error';
+                        }
                     }
                 }
             }
@@ -329,37 +354,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             if (empty($businessId) || empty($accessToken)) {
                                 $error_message = 'Please configure Meta Business Account ID and Access Token in settings first.';
                             } else {
-                                // Execute Meta template creation call
-                                $res = $provider->createTemplate($tpl_name, $category, $language, $components);
-                                if ($res && !empty($res['success'])) {
-                                    $meta_template_id = $res['id'] ?? null;
-                                    
-                                    // Update local JSON metadata to include Meta Template ID
-                                    $meta_array = json_decode($meta_data, true);
-                                    $meta_array['meta_template_id'] = $meta_template_id;
-                                    $meta_data_updated = json_encode($meta_array);
-
-                                    try {
-                                        if ($edit_id > 0) {
-                                            $stmtUpdate = $pdo->prepare("
-                                                UPDATE communication_templates 
-                                                SET template_name = ?, language = ?, status = 'pending', category = ?, meta_data = ?, updated_at = NOW()
-                                                WHERE id = ?
-                                            ");
-                                            $stmtUpdate->execute([$tpl_name, $language, $category, $meta_data_updated, $edit_id]);
+                                // If image header, upload media first and replace handle in components
+                                if ($header_type === 'IMAGE' && !empty($header_media_url)) {
+                                    $localFilename = basename($header_media_url);
+                                    $localPath = __DIR__ . '/uploads/whatsapp_campaign_media/' . $localFilename;
+                                    if (file_exists($localPath)) {
+                                        $handle = $provider->uploadSampleMedia($localPath);
+                                        if ($handle) {
+                                            foreach ($components as &$comp) {
+                                                if ($comp['type'] === 'HEADER' && $comp['format'] === 'IMAGE') {
+                                                    $comp['example'] = [
+                                                        'header_handle' => [$handle]
+                                                    ];
+                                                }
+                                            }
+                                            unset($comp);
                                         } else {
-                                            $stmtSave = $pdo->prepare("
-                                                INSERT INTO communication_templates (channel, template_name, language, status, category, meta_data, created_at, updated_at)
-                                                VALUES ('whatsapp', ?, ?, 'pending', ?, ?, NOW(), NOW())
-                                            ");
-                                            $stmtSave->execute([$tpl_name, $language, $category, $meta_data_updated]);
+                                            $error_message = "Failed to upload image header to Meta: " . ($provider->getLastError() ?: "Media upload failed.");
                                         }
-                                        $success_message = "Template successfully submitted to Meta WABA! Status: PENDING. (Meta ID: {$meta_template_id})";
-                                    } catch (Exception $e) {
-                                        $error_message = "API submission succeeded but saving locally failed: " . $e->getMessage();
+                                    } else {
+                                        $error_message = "Local header image file not found on server.";
                                     }
-                                } else {
-                                    $error_message = "Meta API Submission Rejected: " . $provider->getLastError();
+                                }
+
+                                if (empty($error_message)) {
+                                    // Execute Meta template creation call
+                                    $res = $provider->createTemplate($tpl_name, $category, $language, $components);
+                                    if ($res && !empty($res['success'])) {
+                                        $meta_template_id = $res['id'] ?? null;
+                                        
+                                        // Update local JSON metadata to include Meta Template ID
+                                        $meta_array = json_decode($meta_data, true);
+                                        $meta_array['meta_template_id'] = $meta_template_id;
+                                        $meta_data_updated = json_encode($meta_array);
+
+                                        try {
+                                            if ($edit_id > 0) {
+                                                $stmtUpdate = $pdo->prepare("
+                                                    UPDATE communication_templates 
+                                                    SET template_name = ?, language = ?, status = 'pending', category = ?, meta_data = ?, updated_at = NOW()
+                                                    WHERE id = ?
+                                                ");
+                                                $stmtUpdate->execute([$tpl_name, $language, $category, $meta_data_updated, $edit_id]);
+                                            } else {
+                                                $stmtSave = $pdo->prepare("
+                                                    INSERT INTO communication_templates (channel, template_name, language, status, category, meta_data, created_at, updated_at)
+                                                    VALUES ('whatsapp', ?, ?, 'pending', ?, ?, NOW(), NOW())
+                                                ");
+                                                $stmtSave->execute([$tpl_name, $language, $category, $meta_data_updated]);
+                                            }
+                                            $success_message = "Template successfully submitted to Meta WABA! Status: PENDING. (Meta ID: {$meta_template_id})";
+                                        } catch (Exception $e) {
+                                            $error_message = "API submission succeeded but saving locally failed: " . $e->getMessage();
+                                        }
+                                    } else {
+                                        $error_message = $provider->getLastError() ?: 'Unknown Error';
+                                    }
                                 }
                             }
                         }
