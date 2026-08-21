@@ -994,7 +994,13 @@ function loadTemplateDetails(tplName) {
 
 function renderMediaHeaderUI(meta) {
     const mediaBlock = document.getElementById('section-media-header');
-    const headerType = meta.header_type || 'NONE';
+    let headerType = meta.header_type || 'NONE';
+    if (headerType === 'NONE' && meta.components) {
+        const headerComp = meta.components.find(c => c.type === 'HEADER');
+        if (headerComp) {
+            headerType = headerComp.format || 'NONE';
+        }
+    }
     if (headerType !== 'NONE' && headerType !== 'TEXT') {
         mediaBlock.style.display = 'block';
         document.getElementById('inp-media-file').required = true;
@@ -1140,7 +1146,13 @@ function updateVisualCardPreview() {
     if (!currentTemplateMeta) return;
 
     // Header Media Block preview
-    const hType = currentTemplateMeta.header_type || 'NONE';
+    let hType = currentTemplateMeta.header_type || 'NONE';
+    if (hType === 'NONE' && currentTemplateMeta.components) {
+        const headerComp = currentTemplateMeta.components.find(c => c.type === 'HEADER');
+        if (headerComp) {
+            hType = headerComp.format || 'NONE';
+        }
+    }
     const previewMedia = document.getElementById('preview-box-header-media');
     const previewMediaIcon = document.getElementById('preview-box-media-icon');
     if (hType !== 'NONE' && hType !== 'TEXT') {
