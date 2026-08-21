@@ -22,10 +22,11 @@ try {
 
     // Insert mock conversation to satisfy foreign key constraint
     $pdo->exec("
-        INSERT INTO whatsapp_conversations (id, wa_phone_number, contact_name, created_at, updated_at) 
-        VALUES (999999, '919567276458', 'Adnan', NOW(), NOW()) 
-        ON DUPLICATE KEY UPDATE id = id
+        INSERT INTO whatsapp_conversations (wa_phone_number, contact_name, created_at, updated_at) 
+        VALUES ('919567276458', 'Adnan', NOW(), NOW())
     ");
+    $convId = (int)$pdo->lastInsertId();
+    echo "✔ Mock conversation created with ID: {$convId}\n";
 
     // Insert approved source template with button routing configuration
     $stmtTpl = $pdo->prepare("
@@ -72,7 +73,7 @@ try {
     echo "✔ Mock templates successfully set up in transaction.\n\n";
 
     // Helper routing function representing the proposed webhook logic
-    $routeWebhook = function($pdo, $msgId, $from, $type, $btnText, $buttonPayload, $replyToId, $rawPayload) {
+    $routeWebhook = function($pdo, $convId, $msgId, $from, $type, $btnText, $buttonPayload, $replyToId, $rawPayload) {
         $cleanFrom = preg_replace('/\D/', '', $from);
         
         // 1. Idempotency Check
@@ -85,10 +86,10 @@ try {
         // Record inbound message
         $insMsg = $pdo->prepare("
             INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, reply_to_wa_message_id, status, raw_payload, created_at)
-            VALUES (999999, ?, 'inbound', ?, ?, ?, 'delivered', ?, NOW())
+            VALUES (?, ?, 'inbound', ?, ?, ?, 'delivered', ?, NOW())
         ");
         $text = "Student clicked button: \"{$btnText}\"";
-        $insMsg->execute([$msgId, $type, $text, $replyToId, $rawPayload]);
+        $insMsg->execute([$convId, $msgId, $type, $text, $replyToId, $rawPayload]);
 
         // 2. Resolve original/parent template context if possible
         $parentTemplateName = null;
@@ -204,29 +205,29 @@ try {
     // 2. Insert parent message to test reply context
     $pdo->prepare("
         INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, raw_payload, created_at)
-        VALUES (999999, 'parent_msg_id_123', 'outbound', 'template', 'Outbound Template Message', ?, NOW())
-    ")->execute([json_encode(['name' => 'm_clin_psy_rci_admission_started'])]);
+        VALUES (?, 'parent_msg_id_123', 'outbound', 'template', 'Outbound Template Message', ?, NOW())
+    ")->execute([$convId, json_encode(['name' => 'm_clin_psy_rci_admission_started'])]);
 
     echo "--- SIMULATIONS ---\n\n";
 
     // Scenario 1: Basic Plan button click (payload matches rci_basic_plan)
     echo "Scenario 1: Student clicks 'Basic Plan' (with payload)\n";
-    $res1 = $routeWebhook($pdo, 'wamid.1', '919567276458', 'button', 'Basic Plan', 'rci_basic_plan', 'parent_msg_id_123', '{}');
+    $res1 = $routeWebhook($pdo, $convId, 'wamid.1', '919567276458', 'button', 'Basic Plan', 'rci_basic_plan', 'parent_msg_id_123', '{}');
     echo "Result: " . json_encode($res1, JSON_PRETTY_PRINT) . "\n\n";
 
     // Scenario 2: Standard Plan button click (No payload - matches fallback text)
     echo "Scenario 2: Student clicks 'Standard Plan' (No payload, falls back to text match)\n";
-    $res2 = $routeWebhook($pdo, 'wamid.2', '919567276458', 'button', 'Standard Plan', '', 'parent_msg_id_123', '{}');
+    $res2 = $routeWebhook($pdo, $convId, 'wamid.2', '919567276458', 'button', 'Standard Plan', '', 'parent_msg_id_123', '{}');
     echo "Result: " . json_encode($res2, JSON_PRETTY_PRINT) . "\n\n";
 
     // Scenario 3: Unknown button click
     echo "Scenario 3: Student clicks an 'Unknown Button'\n";
-    $res3 = $routeWebhook($pdo, 'wamid.3', '919567276458', 'button', 'Unknown Button', 'unknown_payload', 'parent_msg_id_123', '{}');
+    $res3 = $routeWebhook($pdo, $convId, 'wamid.3', '919567276458', 'button', 'Unknown Button', 'unknown_payload', 'parent_msg_id_123', '{}');
     echo "Result: " . json_encode($res3, JSON_PRETTY_PRINT) . "\n\n";
 
     // Scenario 4: Duplicate webhook event for Scenario 1
     echo "Scenario 4: Duplicate webhook event received for message ID 'wamid.1'\n";
-    $res4 = $routeWebhook($pdo, 'wamid.1', '919567276458', 'button', 'Basic Plan', 'rci_basic_plan', 'parent_msg_id_123', '{}');
+    $res4 = $routeWebhook($pdo, $convId, 'wamid.1', '919567276458', 'button', 'Basic Plan', 'rci_basic_plan', 'parent_msg_id_123', '{}');
     echo "Result: " . json_encode($res4, JSON_PRETTY_PRINT) . "\n\n";
 
     echo "--- DATABASE STATE VERIFICATION ---\n";
