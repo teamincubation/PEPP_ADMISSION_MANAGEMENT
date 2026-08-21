@@ -360,6 +360,19 @@ class CommunicationEngine {
                 if (count($providedParams) < $expectedParamsCount) {
                     throw new Exception("Parameter count mismatch: Template expects {$expectedParamsCount} parameters, only " . count($providedParams) . " provided.");
                 }
+
+                // Dynamically inject Quick Reply payloads from template metadata if configured
+                $quickReplyPayloads = [];
+                $qrConfig = $meta['buttons']['quick_reply'] ?? [];
+                for ($idx = 1; $idx <= 3; $idx++) {
+                    $btnData = $qrConfig[$idx] ?? null;
+                    if ($btnData && isset($btnData['text']) && trim($btnData['text']) !== '') {
+                        $quickReplyPayloads[] = trim($btnData['payload'] ?? '');
+                    }
+                }
+                if (!empty($quickReplyPayloads)) {
+                    $templateData['quick_reply_payloads'] = $quickReplyPayloads;
+                }
             }
 
             $provider = $this->getProvider($channel);

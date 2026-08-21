@@ -210,8 +210,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if (!$vars_valid) {
                         $error_message = 'Variables in the body must be sequential and start at {{1}} without gaps.';
                     } else {
-                        // Compile meta components payload structure
-                        $components = [];
+                        // Quick Reply Button Validation
+                        if ($button_type === 'QUICK_REPLY') {
+                            $payloads = [];
+                            foreach ($buttons_input['quick_reply'] ?? [] as $btnIndex => $btnData) {
+                                $btnText = trim(is_array($btnData) ? ($btnData['text'] ?? '') : $btnData);
+                                $payloadVal = trim(is_array($btnData) ? ($btnData['payload'] ?? '') : '');
+                                $actionType = trim(is_array($btnData) ? ($btnData['action_type'] ?? 'NONE') : 'NONE');
+                                $targetTpl = trim(is_array($btnData) ? ($btnData['target_template_name'] ?? '') : '');
+                                
+                                if ($btnText !== '') {
+                                    if ($payloadVal === '') {
+                                        $error_message = "Button " . htmlspecialchars($btnIndex) . " text is set, but its Payload / Action ID is empty.";
+                                        break;
+                                    }
+                                    if (!preg_match('/^[a-zA-Z0-9_\-]+$/', $payloadVal)) {
+                                        $error_message = "Button " . htmlspecialchars($btnIndex) . " Payload / Action ID contains invalid characters. Use alphanumeric, underscore, or hyphen only.";
+                                        break;
+                                    }
+                                    if (in_array($payloadVal, $payloads, true)) {
+                                        $error_message = "Duplicate Payload / Action ID '{$payloadVal}' found. Each button payload must be unique within the template.";
+                                        break;
+                                    }
+                                    $payloads[] = $payloadVal;
+                                    
+                                    if ($actionType === 'SEND_TEMPLATE') {
+                                        if ($targetTpl === '') {
+                                            $error_message = "Button " . htmlspecialchars($btnIndex) . " Action is SEND_TEMPLATE, but no Target Template is selected.";
+                                            break;
+                                        }
+                                        // Verify target template exists and is approved in local db
+                                        $stmtTplCheck = $pdo->prepare("SELECT status FROM communication_templates WHERE template_name = ? AND channel = 'whatsapp' LIMIT 1");
+                                        $stmtTplCheck->execute([$targetTpl]);
+                                        $tplStatus = $stmtTplCheck->fetchColumn();
+                                        if (!$tplStatus) {
+                                            $error_message = "Target template '{$targetTpl}' for Button " . htmlspecialchars($btnIndex) . " does not exist.";
+                                            break;
+                                        }
+                                        if (strtolower($tplStatus) !== 'approved') {
+                                            $error_message = "Target template '{$targetTpl}' for Button " . htmlspecialchars($btnIndex) . " is not approved (Status: {$tplStatus}). Only META APPROVED templates can be targets.";
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (empty($error_message)) {
+                            // Compile meta components payload structure
+                            $components = [];
 
                         // Header Component
                         if ($header_type !== 'NONE') {
@@ -275,11 +322,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if ($button_type !== 'NONE') {
                             $buttons_list = [];
                             if ($button_type === 'QUICK_REPLY') {
-                                foreach (array_slice($buttons_input['quick_reply'] ?? [], 0, 3) as $txt) {
-                                    if (trim($txt)) {
+                                foreach (array_slice($buttons_input['quick_reply'] ?? [], 0, 3) as $btnData) {
+                                    $txt = trim(is_array($btnData) ? ($btnData['text'] ?? '') : $btnData);
+                                    if ($txt !== '') {
                                         $buttons_list[] = [
                                             'type' => 'QUICK_REPLY',
-                                            'text' => substr(trim($txt), 0, 25)
+                                            'text' => substr($txt, 0, 25)
                                         ];
                                     }
                                 }
@@ -411,6 +459,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         $error_message = $provider->getLastError() ?: 'Unknown Error';
                                     }
                                 }
+                            }
                             }
                         }
                     }
@@ -587,6 +636,11 @@ $where_sql = implode(' AND ', $where);
 $stmtList = $pdo->prepare("SELECT * FROM communication_templates WHERE {$where_sql} ORDER BY id DESC");
 $stmtList->execute($params);
 $localTemplates = $stmtList->fetchAll(PDO::FETCH_ASSOC);
+
+// Query Meta Approved templates for Quick Reply targets
+$stmtApproved = $pdo->prepare("SELECT template_name, language FROM communication_templates WHERE channel = 'whatsapp' AND status = 'approved' ORDER BY template_name ASC");
+$stmtApproved->execute();
+$approvedTemplates = $stmtApproved->fetchAll(PDO::FETCH_ASSOC);
 
 // Map local templates to separate Marketing and Non-marketing for isolation
 $marketingTemplates = [];
@@ -912,10 +966,159 @@ include 'includes/admin_nav.php';
                             </select>
 
                             <!-- Quick Reply Section -->
-                            <div id="buttons-quickreply-container" style="display:none; flex-direction:column; gap:10px; margin-bottom:10px;">
-                                <input type="text" name="buttons[quick_reply][1]" class="form-control btn-qr-text" placeholder="Quick Reply Button 1 text (e.g. Enquire Now)" style="border-radius:8px;" oninput="updatePreview()" value="<?php echo htmlspecialchars($edit_meta['buttons']['quick_reply'][1] ?? ''); ?>">
-                                <input type="text" name="buttons[quick_reply][2]" class="form-control btn-qr-text" placeholder="Quick Reply Button 2 text (Optional)" style="border-radius:8px;" oninput="updatePreview()" value="<?php echo htmlspecialchars($edit_meta['buttons']['quick_reply'][2] ?? ''); ?>">
-                                <input type="text" name="buttons[quick_reply][3]" class="form-control btn-qr-text" placeholder="Quick Reply Button 3 text (Optional)" style="border-radius:8px;" oninput="updatePreview()" value="<?php echo htmlspecialchars($edit_meta['buttons']['quick_reply'][3] ?? ''); ?>">
+                            <div id="buttons-quickreply-container" style="display:none; flex-direction:column; gap:16px; margin-bottom:12px;">
+                                <!-- Button 1 Details -->
+                                <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:14px; border-radius:12px; display:flex; flex-direction:column; gap:10px;">
+                                    <div style="font-size:0.8rem; font-weight:700; color:#1e293b;"><i class="fas fa-circle-1" style="color:#3b82f6; margin-right:4px;"></i> Quick Reply Button 1</div>
+                                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                                        <div>
+                                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Button Label Text</label>
+                                            <input type="text" name="buttons[quick_reply][1][text]" class="form-control btn-qr-text" placeholder="e.g. Basic Plan" style="border-radius:8px; font-size:0.8rem;" oninput="updatePreview()" value="<?php 
+                                                $b = $edit_meta['buttons']['quick_reply'][1] ?? '';
+                                                echo htmlspecialchars(is_array($b) ? ($b['text'] ?? '') : $b); 
+                                            ?>">
+                                        </div>
+                                        <div>
+                                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Payload / Action ID</label>
+                                            <input type="text" name="buttons[quick_reply][1][payload]" class="form-control" placeholder="e.g. rci_basic_plan" style="border-radius:8px; font-size:0.8rem;" value="<?php 
+                                                $b = $edit_meta['buttons']['quick_reply'][1] ?? '';
+                                                echo htmlspecialchars(is_array($b) ? ($b['payload'] ?? '') : ''); 
+                                            ?>">
+                                        </div>
+                                    </div>
+                                    <div style="display:grid; grid-template-columns: 1fr 1.2fr; gap:12px;">
+                                        <div>
+                                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Action Type</label>
+                                            <select name="buttons[quick_reply][1][action_type]" class="form-control" style="border-radius:8px; font-size:0.8rem;">
+                                                <option value="NONE" <?php 
+                                                    $b = $edit_meta['buttons']['quick_reply'][1] ?? '';
+                                                    $act = is_array($b) ? ($b['action_type'] ?? 'NONE') : 'NONE';
+                                                    echo $act === 'NONE' ? 'selected' : '';
+                                                ?>>- No Action -</option>
+                                                <option value="SEND_TEMPLATE" <?php 
+                                                    $b = $edit_meta['buttons']['quick_reply'][1] ?? '';
+                                                    $act = is_array($b) ? ($b['action_type'] ?? 'NONE') : 'NONE';
+                                                    echo $act === 'SEND_TEMPLATE' ? 'selected' : '';
+                                                ?>>SEND_TEMPLATE (Auto-reply template)</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Target Template (Approved Only)</label>
+                                            <select name="buttons[quick_reply][1][target_template_name]" class="form-control" style="border-radius:8px; font-size:0.8rem;">
+                                                <option value="">- Select Target Template -</option>
+                                                <?php foreach ($approvedTemplates as $at): ?>
+                                                    <option value="<?php echo htmlspecialchars($at['template_name']); ?>" <?php 
+                                                        $b = $edit_meta['buttons']['quick_reply'][1] ?? '';
+                                                        $tgt = is_array($b) ? ($b['target_template_name'] ?? '') : '';
+                                                        echo $tgt === $at['template_name'] ? 'selected' : '';
+                                                    ?>><?php echo htmlspecialchars($at['template_name']); ?> (<?php echo htmlspecialchars($at['language']); ?>)</option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Button 2 Details -->
+                                <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:14px; border-radius:12px; display:flex; flex-direction:column; gap:10px;">
+                                    <div style="font-size:0.8rem; font-weight:700; color:#1e293b;"><i class="fas fa-circle-2" style="color:#3b82f6; margin-right:4px;"></i> Quick Reply Button 2 (Optional)</div>
+                                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                                        <div>
+                                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Button Label Text</label>
+                                            <input type="text" name="buttons[quick_reply][2][text]" class="form-control btn-qr-text" placeholder="e.g. Standard Plan" style="border-radius:8px; font-size:0.8rem;" oninput="updatePreview()" value="<?php 
+                                                $b = $edit_meta['buttons']['quick_reply'][2] ?? '';
+                                                echo htmlspecialchars(is_array($b) ? ($b['text'] ?? '') : $b); 
+                                            ?>">
+                                        </div>
+                                        <div>
+                                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Payload / Action ID</label>
+                                            <input type="text" name="buttons[quick_reply][2][payload]" class="form-control" placeholder="e.g. rci_standard_plan" style="border-radius:8px; font-size:0.8rem;" value="<?php 
+                                                $b = $edit_meta['buttons']['quick_reply'][2] ?? '';
+                                                echo htmlspecialchars(is_array($b) ? ($b['payload'] ?? '') : ''); 
+                                            ?>">
+                                        </div>
+                                    </div>
+                                    <div style="display:grid; grid-template-columns: 1fr 1.2fr; gap:12px;">
+                                        <div>
+                                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Action Type</label>
+                                            <select name="buttons[quick_reply][2][action_type]" class="form-control" style="border-radius:8px; font-size:0.8rem;">
+                                                <option value="NONE" <?php 
+                                                    $b = $edit_meta['buttons']['quick_reply'][2] ?? '';
+                                                    $act = is_array($b) ? ($b['action_type'] ?? 'NONE') : 'NONE';
+                                                    echo $act === 'NONE' ? 'selected' : '';
+                                                ?>>- No Action -</option>
+                                                <option value="SEND_TEMPLATE" <?php 
+                                                    $b = $edit_meta['buttons']['quick_reply'][2] ?? '';
+                                                    $act = is_array($b) ? ($b['action_type'] ?? 'NONE') : 'NONE';
+                                                    echo $act === 'SEND_TEMPLATE' ? 'selected' : '';
+                                                ?>>SEND_TEMPLATE (Auto-reply template)</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Target Template (Approved Only)</label>
+                                            <select name="buttons[quick_reply][2][target_template_name]" class="form-control" style="border-radius:8px; font-size:0.8rem;">
+                                                <option value="">- Select Target Template -</option>
+                                                <?php foreach ($approvedTemplates as $at): ?>
+                                                    <option value="<?php echo htmlspecialchars($at['template_name']); ?>" <?php 
+                                                        $b = $edit_meta['buttons']['quick_reply'][2] ?? '';
+                                                        $tgt = is_array($b) ? ($b['target_template_name'] ?? '') : '';
+                                                        echo $tgt === $at['template_name'] ? 'selected' : '';
+                                                    ?>><?php echo htmlspecialchars($at['template_name']); ?> (<?php echo htmlspecialchars($at['language']); ?>)</option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Button 3 Details -->
+                                <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:14px; border-radius:12px; display:flex; flex-direction:column; gap:10px;">
+                                    <div style="font-size:0.8rem; font-weight:700; color:#1e293b;"><i class="fas fa-circle-3" style="color:#3b82f6; margin-right:4px;"></i> Quick Reply Button 3 (Optional)</div>
+                                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                                        <div>
+                                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Button Label Text</label>
+                                            <input type="text" name="buttons[quick_reply][3][text]" class="form-control btn-qr-text" placeholder="e.g. Contact Support" style="border-radius:8px; font-size:0.8rem;" oninput="updatePreview()" value="<?php 
+                                                $b = $edit_meta['buttons']['quick_reply'][3] ?? '';
+                                                echo htmlspecialchars(is_array($b) ? ($b['text'] ?? '') : $b); 
+                                            ?>">
+                                        </div>
+                                        <div>
+                                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Payload / Action ID</label>
+                                            <input type="text" name="buttons[quick_reply][3][payload]" class="form-control" placeholder="e.g. rci_support" style="border-radius:8px; font-size:0.8rem;" value="<?php 
+                                                $b = $edit_meta['buttons']['quick_reply'][3] ?? '';
+                                                echo htmlspecialchars(is_array($b) ? ($b['payload'] ?? '') : ''); 
+                                            ?>">
+                                        </div>
+                                    </div>
+                                    <div style="display:grid; grid-template-columns: 1fr 1.2fr; gap:12px;">
+                                        <div>
+                                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Action Type</label>
+                                            <select name="buttons[quick_reply][3][action_type]" class="form-control" style="border-radius:8px; font-size:0.8rem;">
+                                                <option value="NONE" <?php 
+                                                    $b = $edit_meta['buttons']['quick_reply'][3] ?? '';
+                                                    $act = is_array($b) ? ($b['action_type'] ?? 'NONE') : 'NONE';
+                                                    echo $act === 'NONE' ? 'selected' : '';
+                                                ?>>- No Action -</option>
+                                                <option value="SEND_TEMPLATE" <?php 
+                                                    $b = $edit_meta['buttons']['quick_reply'][3] ?? '';
+                                                    $act = is_array($b) ? ($b['action_type'] ?? 'NONE') : 'NONE';
+                                                    echo $act === 'SEND_TEMPLATE' ? 'selected' : '';
+                                                ?>>SEND_TEMPLATE (Auto-reply template)</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#475569; margin-bottom:4px;">Target Template (Approved Only)</label>
+                                            <select name="buttons[quick_reply][3][target_template_name]" class="form-control" style="border-radius:8px; font-size:0.8rem;">
+                                                <option value="">- Select Target Template -</option>
+                                                <?php foreach ($approvedTemplates as $at): ?>
+                                                    <option value="<?php echo htmlspecialchars($at['template_name']); ?>" <?php 
+                                                        $b = $edit_meta['buttons']['quick_reply'][3] ?? '';
+                                                        $tgt = is_array($b) ? ($b['target_template_name'] ?? '') : '';
+                                                        echo $tgt === $at['template_name'] ? 'selected' : '';
+                                                    ?>><?php echo htmlspecialchars($at['template_name']); ?> (<?php echo htmlspecialchars($at['language']); ?>)</option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
 
                             <!-- CTA Buttons Section -->

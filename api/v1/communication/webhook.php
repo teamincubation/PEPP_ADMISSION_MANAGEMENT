@@ -197,14 +197,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $caption = null;
             $replyToId = $msg['context']['message_id'] ?? null;
             
+            $buttonPayload = '';
             if ($type === 'text') {
                 $text = $msg['text']['body'] ?? '';
             } elseif ($type === 'button') {
-                $text = $msg['button']['text'] ?? '';
+                $btnText = $msg['button']['text'] ?? '';
+                $text = "Student clicked button: \"{$btnText}\"";
+                $buttonPayload = $msg['button']['payload'] ?? '';
             } elseif ($type === 'interactive') {
                 $intType = $msg['interactive']['type'] ?? '';
                 if ($intType === 'button_reply') {
-                    $text = $msg['interactive']['button_reply']['title'] ?? '';
+                    $btnText = $msg['interactive']['button_reply']['title'] ?? '';
+                    $text = "Student clicked interactive button: \"{$btnText}\"";
+                    $buttonPayload = $msg['interactive']['button_reply']['id'] ?? '';
                 } elseif ($intType === 'list_reply') {
                     $text = $msg['interactive']['list_reply']['title'] ?? '';
                 }
@@ -308,10 +313,136 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $mediaFilename,
                     $caption,
                     $replyToId,
-                    $rawPayload
+$rawPayload
                 ]);
 
                 $pdo->commit();
+
+                $preventAutoResponse = false;
+                // ── WHATSAPP TEMPLATE QUICK-REPLY BUTTON ACTION ROUTING ──
+                if (!empty($buttonPayload)) {
+                    try {
+                        // Search for approved templates with this button action payload in metadata
+                        $stmtAction = $pdo->prepare("
+                            SELECT template_name, meta_data 
+                            FROM communication_templates 
+                            WHERE channel = 'whatsapp' 
+                              AND status = 'approved' 
+                              AND meta_data LIKE ?
+                        ");
+                        $stmtAction->execute(['%' . $buttonPayload . '%']);
+                        $allActions = $stmtAction->fetchAll(PDO::FETCH_ASSOC);
+                        
+                        $matchedAction = null;
+                        foreach ($allActions as $tplRow) {
+                            $tplMeta = json_decode($tplRow['meta_data'], true) ?: [];
+                            $actions = $tplMeta['buttons']['quick_reply'] ?? [];
+                            foreach ($actions as $act) {
+                                if (isset($act['payload']) && trim($act['payload']) === $buttonPayload) {
+                                    $matchedAction = [
+                                        'source_template_name' => $tplRow['template_name'],
+                                        'action_type' => $act['action_type'] ?? 'NONE',
+                                        'target_template_name' => $act['target_template_name'] ?? ''
+                                    ];
+                                    break 2;
+                                }
+                            }
+                        }
+                        
+                        if ($matchedAction) {
+                            $actionType = $matchedAction['action_type'];
+                            $targetTplName = $matchedAction['target_template_name'];
+                            
+                            error_log("INBOUND BUTTON ACTION TRIGGERED: Inbound Message ID: {$msgId} | Payload: {$buttonPayload} | Action: {$actionType} | Target Template: {$targetTplName} | Student: " . ($studentMatch['name'] ?? 'Unknown'));
+                            
+                            if ($actionType === 'SEND_TEMPLATE' && !empty($targetTplName)) {
+                                $preventAutoResponse = true;
+                                
+                                // Find target template details
+                                $stmtTarget = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? AND channel = 'whatsapp' AND status = 'approved' LIMIT 1");
+                                $stmtTarget->execute([$targetTplName]);
+                                $targetTpl = $stmtTarget->fetch();
+                                
+                                if ($targetTpl) {
+                                    $targetMeta = json_decode($targetTpl['meta_data'], true) ?: [];
+                                    $targetMetaTemplateId = $targetMeta['meta_template_id'] ?? 'N/A';
+                                    
+                                    // Determine parameters to send
+                                    $parameters = [];
+                                    $targetBody = $targetMeta['body_text'] ?? '';
+                                    preg_match_all('/\{\{(\d+)\}\}/', $targetBody, $bodyMatches);
+                                    $expectedParamsCount = !empty($bodyMatches[1]) ? max(array_map('intval', $bodyMatches[1])) : 0;
+                                    
+                                    if ($expectedParamsCount > 0) {
+                                        $studentName = $studentMatch['name'] ?? 'Student';
+                                        $peppCourse = $studentMatch['pepp_course'] ?? 'PEPP Course';
+                                        
+                                        for ($i = 0; $i < $expectedParamsCount; $i++) {
+                                            if ($i === 0) {
+                                                $parameters[] = $studentName;
+                                            } elseif ($i === 1) {
+                                                $parameters[] = $peppCourse;
+                                            } else {
+                                                $parameters[] = 'Sample';
+                                            }
+                                        }
+                                    }
+                                    
+                                    $targetHeaderType = $targetMeta['header_type'] ?? 'NONE';
+                                    $targetHeaderMediaUrl = $targetMeta['header_media_url'] ?? '';
+                                    
+                                    $templateDataToSend = [
+                                        'name' => $targetTplName,
+                                        'language' => $targetTpl['language'] ?? 'en_US',
+                                        'parameters' => $parameters
+                                    ];
+                                    if ($targetHeaderType !== 'NONE' && !empty($targetHeaderMediaUrl)) {
+                                        $templateDataToSend['header_type'] = $targetHeaderType;
+                                        $templateDataToSend['header_parameters'] = [$targetHeaderMediaUrl];
+                                    }
+                                    
+                                    // Enqueue in communication queue
+                                    require_once dirname(dirname(dirname(__DIR__))) . '/includes/communication/CommunicationEngine.php';
+                                    $engine = CommunicationEngine::getInstance($pdo);
+                                    
+                                    $subject = "Auto-Reply: " . $targetTplName;
+                                    $targetBodyText = $targetMeta['body_text'] ?? '';
+                                    $targetBodyHtml = nl2br($targetBodyText);
+                                    
+                                    $recipientName = $contactName;
+                                    
+                                    $queueId = $engine->queueMessage(
+                                        'whatsapp',
+                                        $cleanFrom,
+                                        $recipientName,
+                                        $subject,
+                                        $targetBodyHtml,
+                                        $targetBodyText,
+                                        [],
+                                        $templateDataToSend,
+                                        'system_auto_reply',
+                                        null,
+                                        $studentUid,
+                                        'auto_reply_button'
+                                    );
+                                    
+                                    if ($queueId) {
+                                        $engine->dispatchQueueItemAsync($queueId);
+                                        error_log("SUCCESS: Button action enqueued. Queue ID: {$queueId} | Target: {$targetTplName} | Meta Template ID: {$targetMetaTemplateId}");
+                                    } else {
+                                        error_log("FAILED: Unable to enqueue button action response template.");
+                                    }
+                                } else {
+                                    error_log("FAILED: Target template '{$targetTplName}' is not approved or was not found in the database.");
+                                }
+                            }
+                        } else {
+                            error_log("INBOUND BUTTON ACTION: No matching template action mapping found for payload: {$buttonPayload}");
+                        }
+                    } catch (Exception $actionEx) {
+                        error_log("WhatsApp Webhook button action routing error: " . $actionEx->getMessage());
+                    }
+                }
 
                 // ── AUTOMATED INTERACTIVE AUTO-RESPONSE TRIGGER ──
                 try {
@@ -319,7 +450,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $displayNumber = preg_replace('/\D/', '', $metadata['display_phone_number'] ?? '');
                     
                     // Verify recipient WABA display number (916282563209)
-                    if (empty($displayNumber) || $displayNumber === '916282563209') {
+                    if ((empty($displayNumber) || $displayNumber === '916282563209') && !$preventAutoResponse) {
                         $cooldown = 3600; // 1 hour default cooldown
                         try {
                             $stmtCd = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_auto_response_cooldown' LIMIT 1");

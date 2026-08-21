@@ -141,6 +141,25 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
                 }
             }
 
+            // Build Quick Reply button parameters (payloads)
+            if (isset($templateData['quick_reply_payloads']) && is_array($templateData['quick_reply_payloads'])) {
+                foreach ($templateData['quick_reply_payloads'] as $btnIndex => $payloadVal) {
+                    if ($payloadVal !== null && $payloadVal !== '') {
+                        $components[] = [
+                            'type' => 'button',
+                            'sub_type' => 'quick_reply',
+                            'index' => (string)$btnIndex,
+                            'parameters' => [
+                                [
+                                    'type' => 'payload',
+                                    'payload' => (string)$payloadVal
+                                ]
+                            ]
+                        ];
+                    }
+                }
+            }
+
             $payload['type'] = 'template';
 
             $payload['template'] = [
