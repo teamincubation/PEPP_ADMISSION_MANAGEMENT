@@ -7,6 +7,7 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
     private $accessToken;
     private $apiVersion;
     private $lastError = '';
+    private $appId = null;
 
     public function __construct($businessId, $phoneId, $accessToken, $apiVersion = 'v20.0') {
         $this->businessId = trim($businessId);
@@ -359,6 +360,49 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
     }
 
     /**
+     * Dynamically fetches the Meta App ID associated with the current access token.
+     * 
+     * @return string|false The App ID on success, false on failure
+     */
+    public function getMetaAppId() {
+        $url = "https://graph.facebook.com/{$this->apiVersion}/app";
+        
+        $headers = [
+            "Authorization: Bearer {$this->accessToken}"
+        ];
+        
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+        
+        if ($err) {
+            $this->lastError = "Get App ID CURL Error: " . $err;
+            return false;
+        }
+        
+        $respDecoded = json_decode($response, true);
+        $appId = $respDecoded['id'] ?? null;
+        
+        if ($httpCode < 200 || $httpCode >= 300 || empty($appId)) {
+            $errDetails = $respDecoded['error']['message'] ?? 'Failed to retrieve Meta App ID';
+            $errCode = $respDecoded['error']['code'] ?? '';
+            $errSubcode = $respDecoded['error']['error_subcode'] ?? '';
+            $this->lastError = "Get App ID Error [{$httpCode}]: {$errDetails} (Code: {$errCode}, Subcode: {$errSubcode})";
+            error_log("Get App ID Meta API Error [{$httpCode}]: " . $response);
+            return false;
+        }
+        
+        return $appId;
+    }
+
+    /**
      * Uploads local media file using Meta's Resumable Upload API to get a header handle.
      * 
      * @param string $filePath Absolute local path to the media file
@@ -370,12 +414,21 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
             return false;
         }
         
+        $appId = $this->appId;
+        if (empty($appId)) {
+            $appId = $this->getMetaAppId();
+            if (!$appId) {
+                return false;
+            }
+            $this->appId = $appId;
+        }
+        
         $fileSize = filesize($filePath);
         $mimeType = mime_content_type($filePath);
         $fileName = basename($filePath);
         
-        // Step 1: Create Upload Session
-        $sessionUrl = "https://graph.facebook.com/{$this->apiVersion}/{$this->businessId}/uploads";
+        // Step 1: Create Upload Session using App ID
+        $sessionUrl = "https://graph.facebook.com/{$this->apiVersion}/{$appId}/uploads";
         $sessionPayload = json_encode([
             'file_length' => $fileSize,
             'file_type' => $mimeType,
@@ -413,9 +466,19 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
             $errDetails = $respDecoded['error']['message'] ?? 'Failed to create upload session';
             $errCode = $respDecoded['error']['code'] ?? '';
             $errSubcode = $respDecoded['error']['error_subcode'] ?? '';
-            $this->lastError = "Upload Session Error [{$httpCode}]: {$errDetails} (Code: {$errCode}, Subcode: {$errSubcode})";
-            error_log("Upload Session Meta API Error: " . $response);
+            $fbtraceId = $respDecoded['error']['fbtrace_id'] ?? '';
+            $this->lastError = "Upload Session Error [{$httpCode}]: {$errDetails} (Code: {$errCode}, Subcode: {$errSubcode}, Trace ID: {$fbtraceId})";
+            
+            // Safe logging without credentials
+            error_log("Upload Session Meta API Error [{$httpCode}]: " . json_encode([
+                'endpoint' => "POST /{$this->apiVersion}/{$appId}/uploads",
+                'error' => $respDecoded['error'] ?? null,
+                'object_id' => $appId,
+                'object_type' => 'App ID'
+            ]));
             return false;
+        } else {
+            error_log("Upload Session Created Successfully: upload ID = {$uploadId} (Meta App ID: {$appId})");
         }
         
         // Step 2: Upload File Data
@@ -452,9 +515,16 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
             $errDetails = $uploadDecoded['error']['message'] ?? 'Failed to upload media data';
             $errCode = $uploadDecoded['error']['code'] ?? '';
             $errSubcode = $uploadDecoded['error']['error_subcode'] ?? '';
-            $this->lastError = "File Upload Error [{$uploadHttpCode}]: {$errDetails} (Code: {$errCode}, Subcode: {$errSubcode})";
-            error_log("File Upload Meta API Error: " . $uploadResponse);
+            $fbtraceId = $uploadDecoded['error']['fbtrace_id'] ?? '';
+            $this->lastError = "File Upload Error [{$uploadHttpCode}]: {$errDetails} (Code: {$errCode}, Subcode: {$errSubcode}, Trace ID: {$fbtraceId})";
+            
+            error_log("File Upload Meta API Error [{$uploadHttpCode}]: " . json_encode([
+                'endpoint' => "POST /{$this->apiVersion}/{$uploadId}",
+                'error' => $uploadDecoded['error'] ?? null
+            ]));
             return false;
+        } else {
+            error_log("File Upload Succeeded: handle generated = " . substr($handle, 0, 20) . "...");
         }
         
         return $handle;
