@@ -377,16 +377,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         ]);
 
                         if ($action === 'save_template') {
-                            // Save or Update Local DRAFT
+                            // Save or Update Local DRAFT / Routing Mapping
                             try {
                                 if ($edit_id > 0) {
-                                    $stmtUpdate = $pdo->prepare("
-                                        UPDATE communication_templates 
-                                        SET template_name = ?, language = ?, category = ?, meta_data = ?, updated_at = NOW()
-                                        WHERE id = ?
-                                    ");
-                                    $stmtUpdate->execute([$tpl_name, $language, $category, $meta_data, $edit_id]);
-                                    $success_message = "Marketing template draft '{$tpl_name}' updated successfully.";
+                                    $stmtCheck = $pdo->prepare("SELECT status FROM communication_templates WHERE id = ?");
+                                    $stmtCheck->execute([$edit_id]);
+                                    $currStatus = $stmtCheck->fetchColumn();
+                                    
+                                    if ($currStatus && $currStatus !== 'draft') {
+                                        // Fetch existing metadata to preserve approved fields
+                                        $stmtExist = $pdo->prepare("SELECT meta_data FROM communication_templates WHERE id = ?");
+                                        $stmtExist->execute([$edit_id]);
+                                        $existMeta = json_decode($stmtExist->fetchColumn(), true) ?: [];
+                                        
+                                        // Merge new button definitions
+                                        $meta_array = json_decode($meta_data, true);
+                                        $existMeta['button_type'] = $meta_array['button_type'] ?? 'NONE';
+                                        $existMeta['buttons'] = $meta_array['buttons'] ?? [];
+                                        
+                                        $meta_data_to_save = json_encode($existMeta);
+                                        
+                                        $stmtUpdate = $pdo->prepare("
+                                            UPDATE communication_templates 
+                                            SET meta_data = ?, updated_at = NOW()
+                                            WHERE id = ?
+                                        ");
+                                        $stmtUpdate->execute([$meta_data_to_save, $edit_id]);
+                                        $success_message = "ERP routing configuration for template '{$tpl_name}' updated successfully.";
+                                    } else {
+                                        // Local draft template: update everything
+                                        $stmtUpdate = $pdo->prepare("
+                                            UPDATE communication_templates 
+                                            SET template_name = ?, language = ?, category = ?, meta_data = ?, updated_at = NOW()
+                                            WHERE id = ?
+                                        ");
+                                        $stmtUpdate->execute([$tpl_name, $language, $category, $meta_data, $edit_id]);
+                                        $success_message = "Marketing template draft '{$tpl_name}' updated successfully.";
+                                    }
                                 } else {
                                     $stmtSave = $pdo->prepare("
                                         INSERT INTO communication_templates (channel, template_name, language, status, category, meta_data, created_at, updated_at)
@@ -598,7 +625,7 @@ $edit_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : 0;
 $edit_template = null;
 $edit_meta = [];
 if ($edit_id > 0) {
-    $stmtEdit = $pdo->prepare("SELECT * FROM communication_templates WHERE id = ? AND channel = 'whatsapp' AND status = 'draft' LIMIT 1");
+    $stmtEdit = $pdo->prepare("SELECT * FROM communication_templates WHERE id = ? AND channel = 'whatsapp' AND status <> 'deleted' LIMIT 1");
     $stmtEdit->execute([$edit_id]);
     $edit_template = $stmtEdit->fetch();
     if ($edit_template) {
@@ -856,6 +883,8 @@ include 'includes/admin_nav.php';
                                                 <button type="submit" class="btn btn-sm btn-danger" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; background:#fee2e2; border-color:#fecaca; color:#b91c1c;"><i class="fas fa-trash"></i> Delete</button>
                                             </form>
                                         <?php else: ?>
+                                            <a href="?edit_id=<?php echo $tpl['id']; ?>" class="btn btn-sm btn-outline" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; color:#4f46e5; border-color:#c7d2fe; background:#eef2ff; text-decoration:none;"><i class="fas fa-route"></i> Routing</a>
+                                            
                                             <button class="btn btn-sm btn-outline" onclick="openVisualPreview(<?php echo htmlspecialchars(json_encode($tpl['template_name'])); ?>, <?php echo htmlspecialchars(json_encode($meta)); ?>)" style="padding:4px 8px; border-radius:6px; font-size:0.75rem;"><i class="fas fa-eye"></i> Preview</button>
                                             
                                             <form method="POST" onsubmit="return confirm('This will request deletion of the WhatsApp template from Meta. Existing historical communication records will not be deleted. Continue?');" style="display:inline-block; margin:0;">
@@ -890,6 +919,20 @@ include 'includes/admin_nav.php';
                         <?php echo csrf_field(); ?>
                         <input type="hidden" name="action" id="builder-action" value="save_template">
                         <input type="hidden" name="edit_id" id="inp-edit-id" value="<?php echo htmlspecialchars($edit_template['id'] ?? ''); ?>">
+                        
+                        <?php 
+                        $isRoutingMode = ($edit_template && $edit_template['status'] !== 'draft');
+                        if ($isRoutingMode): 
+                        ?>
+                            <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:12px; padding:12px; margin-bottom:20px; color:#b45309; font-size:0.8rem; display:flex; gap:8px; align-items:center;">
+                                <i class="fas fa-triangle-exclamation" style="font-size:1.1rem;"></i>
+                                <div>
+                                    <strong>ERP Routing Configuration Mode:</strong> This template is already approved/pending on Meta. You can configure the ERP button auto-replies below, but structural fields are locked.
+                                </div>
+                            </div>
+                        <?php endif; ?>
+                        
+                        <div style="<?php echo $isRoutingMode ? 'pointer-events:none; opacity:0.65;' : ''; ?>">
                         
                         <div style="margin-bottom:16px;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:6px;">Template Name <span style="color:#ef4444;">*</span></label>
@@ -954,6 +997,7 @@ include 'includes/admin_nav.php';
                         <div style="border-top:1px dashed #e2e8f0; margin-top:20px; padding-top:14px; margin-bottom:16px;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#1e293b; margin-bottom:6px;"><i class="fas fa-paragraph"></i> Template Footer (Optional)</label>
                             <input type="text" name="footer_text" id="inp-footer-text" class="form-control" placeholder="e.g. Reply STOP to opt out" oninput="updatePreview();" value="<?php echo htmlspecialchars($edit_meta['footer_text'] ?? ''); ?>">
+                        </div>
                         </div>
 
                         <!-- Buttons Block -->
@@ -1138,8 +1182,12 @@ include 'includes/admin_nav.php';
 
                         <!-- Submission Controls -->
                         <div style="display:flex; gap:12px; justify-content:flex-end; border-top:1px solid #e2e8f0; padding-top:20px;">
-                            <button type="button" onclick="triggerBuilderSubmit('save_template')" class="btn btn-outline" style="border-radius:8px; font-weight:700; padding:10px 20px;"><i class="fas fa-floppy-disk"></i> <?php echo $edit_template ? 'Update Local Draft' : 'Save Local Draft'; ?></button>
-                            <button type="button" onclick="triggerBuilderSubmit('submit_meta')" class="btn btn-primary" style="border-radius:8px; font-weight:700; padding:10px 20px;"><i class="fas fa-rocket"></i> Submit to Meta WABA</button>
+                            <?php if ($isRoutingMode): ?>
+                                <button type="button" onclick="triggerBuilderSubmit('save_template')" class="btn btn-primary" style="border-radius:8px; font-weight:700; padding:10px 20px; background:#6366f1; border-color:#4f46e5; color:#fff;"><i class="fas fa-route"></i> Save Routing Configuration</button>
+                            <?php else: ?>
+                                <button type="button" onclick="triggerBuilderSubmit('save_template')" class="btn btn-outline" style="border-radius:8px; font-weight:700; padding:10px 20px;"><i class="fas fa-floppy-disk"></i> <?php echo $edit_template ? 'Update Local Draft' : 'Save Local Draft'; ?></button>
+                                <button type="button" onclick="triggerBuilderSubmit('submit_meta')" class="btn btn-primary" style="border-radius:8px; font-weight:700; padding:10px 20px;"><i class="fas fa-rocket"></i> Submit to Meta WABA</button>
+                            <?php endif; ?>
                         </div>
                     </form>
                 </div>

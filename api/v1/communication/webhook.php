@@ -320,31 +320,76 @@ $rawPayload
 
                 $preventAutoResponse = false;
                 // ── WHATSAPP TEMPLATE QUICK-REPLY BUTTON ACTION ROUTING ──
-                if (!empty($buttonPayload)) {
+                $isButtonClick = ($type === 'button' || ($type === 'interactive' && ($msg['interactive']['type'] ?? '') === 'button_reply'));
+                if ($isButtonClick) {
                     try {
-                        // Search for approved templates with this button action payload in metadata
-                        $stmtAction = $pdo->prepare("
-                            SELECT template_name, meta_data 
-                            FROM communication_templates 
-                            WHERE channel = 'whatsapp' 
-                              AND status = 'approved' 
-                              AND meta_data LIKE ?
-                        ");
-                        $stmtAction->execute(['%' . $buttonPayload . '%']);
-                        $allActions = $stmtAction->fetchAll(PDO::FETCH_ASSOC);
-                        
+                        // Resolve parent template name from conversation history context if replyToId is present
+                        $parentTemplateName = null;
+                        if (!empty($replyToId)) {
+                            $stmtParent = $pdo->prepare("SELECT raw_payload FROM whatsapp_messages WHERE wa_message_id = ? LIMIT 1");
+                            $stmtParent->execute([$replyToId]);
+                            $parentPayloadJson = $stmtParent->fetchColumn();
+                            if ($parentPayloadJson) {
+                                $parentPayload = json_decode($parentPayloadJson, true);
+                                $parentTemplateName = $parentPayload['name'] ?? null;
+                            }
+                        }
+
                         $matchedAction = null;
-                        foreach ($allActions as $tplRow) {
-                            $tplMeta = json_decode($tplRow['meta_data'], true) ?: [];
-                            $actions = $tplMeta['buttons']['quick_reply'] ?? [];
-                            foreach ($actions as $act) {
-                                if (isset($act['payload']) && trim($act['payload']) === $buttonPayload) {
-                                    $matchedAction = [
-                                        'source_template_name' => $tplRow['template_name'],
-                                        'action_type' => $act['action_type'] ?? 'NONE',
-                                        'target_template_name' => $act['target_template_name'] ?? ''
-                                    ];
-                                    break 2;
+                        
+                        // First attempt: Match by unique payload (if available)
+                        if (!empty($buttonPayload)) {
+                            $stmtAction = $pdo->prepare("
+                                SELECT template_name, meta_data 
+                                FROM communication_templates 
+                                WHERE channel = 'whatsapp' 
+                                  AND status = 'approved' 
+                                  AND meta_data LIKE ?
+                            ");
+                            $stmtAction->execute(['%' . $buttonPayload . '%']);
+                            $allActions = $stmtAction->fetchAll(PDO::FETCH_ASSOC);
+                            
+                            foreach ($allActions as $tplRow) {
+                                $tplMeta = json_decode($tplRow['meta_data'], true) ?: [];
+                                $actions = $tplMeta['buttons']['quick_reply'] ?? [];
+                                foreach ($actions as $act) {
+                                    if (isset($act['payload']) && trim($act['payload']) === $buttonPayload) {
+                                        $matchedAction = [
+                                            'source_template_name' => $tplRow['template_name'],
+                                            'action_type' => $act['action_type'] ?? 'NONE',
+                                            'target_template_name' => $act['target_template_name'] ?? ''
+                                        ];
+                                        break 2;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Second attempt: Fallback to parent template name + button text match
+                        if (!$matchedAction && !empty($parentTemplateName) && !empty($btnText)) {
+                            $stmtParentTpl = $pdo->prepare("
+                                SELECT template_name, meta_data 
+                                FROM communication_templates 
+                                WHERE template_name = ? 
+                                  AND channel = 'whatsapp' 
+                                  AND status = 'approved' 
+                                  LIMIT 1
+                            ");
+                            $stmtParentTpl->execute([$parentTemplateName]);
+                            $parentTplRow = $stmtParentTpl->fetch();
+                            
+                            if ($parentTplRow) {
+                                $tplMeta = json_decode($parentTplRow['meta_data'], true) ?: [];
+                                $actions = $tplMeta['buttons']['quick_reply'] ?? [];
+                                foreach ($actions as $act) {
+                                    if (isset($act['text']) && trim($act['text']) === $btnText) {
+                                        $matchedAction = [
+                                            'source_template_name' => $parentTplRow['template_name'],
+                                            'action_type' => $act['action_type'] ?? 'NONE',
+                                            'target_template_name' => $act['target_template_name'] ?? ''
+                                        ];
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -353,7 +398,7 @@ $rawPayload
                             $actionType = $matchedAction['action_type'];
                             $targetTplName = $matchedAction['target_template_name'];
                             
-                            error_log("INBOUND BUTTON ACTION TRIGGERED: Inbound Message ID: {$msgId} | Payload: {$buttonPayload} | Action: {$actionType} | Target Template: {$targetTplName} | Student: " . ($studentMatch['name'] ?? 'Unknown'));
+                            error_log("INBOUND BUTTON ACTION TRIGGERED: Inbound Message ID: {$msgId} | Payload: {$buttonPayload} | Text: {$btnText} | Action: {$actionType} | Target Template: {$targetTplName} | Student: " . ($studentMatch['name'] ?? 'Unknown'));
                             
                             if ($actionType === 'SEND_TEMPLATE' && !empty($targetTplName)) {
                                 $preventAutoResponse = true;
@@ -388,8 +433,29 @@ $rawPayload
                                         }
                                     }
                                     
+                                    // Robust header extraction for target template
                                     $targetHeaderType = $targetMeta['header_type'] ?? 'NONE';
+                                    if ($targetHeaderType === 'NONE' && !empty($targetMeta['components'])) {
+                                        foreach ($targetMeta['components'] as $c) {
+                                            if (($c['type'] ?? '') === 'HEADER') {
+                                                $targetHeaderType = $c['format'] ?? 'NONE';
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    
                                     $targetHeaderMediaUrl = $targetMeta['header_media_url'] ?? '';
+                                    if (empty($targetHeaderMediaUrl) && !empty($targetMeta['components'])) {
+                                        // Fallback checks (skip temporary meta CDN links)
+                                        foreach ($targetMeta['components'] as $c) {
+                                            if (($c['type'] ?? '') === 'HEADER' && !empty($c['example']['header_handle'][0])) {
+                                                $maybeUrl = $c['example']['header_handle'][0];
+                                                if (strpos($maybeUrl, 'scontent.whatsapp.net') === false && strpos($maybeUrl, 'fbcdn.net') === false) {
+                                                    $targetHeaderMediaUrl = $maybeUrl;
+                                                }
+                                            }
+                                        }
+                                    }
                                     
                                     $templateDataToSend = [
                                         'name' => $targetTplName,
@@ -437,7 +503,7 @@ $rawPayload
                                 }
                             }
                         } else {
-                            error_log("INBOUND BUTTON ACTION: No matching template action mapping found for payload: {$buttonPayload}");
+                            error_log("INBOUND BUTTON ACTION: No matching template action mapping found for payload: {$buttonPayload} | Text: {$btnText}");
                         }
                     } catch (Exception $actionEx) {
                         error_log("WhatsApp Webhook button action routing error: " . $actionEx->getMessage());
