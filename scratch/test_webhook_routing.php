@@ -20,13 +20,14 @@ try {
     $pdo->exec("DELETE FROM whatsapp_messages");
     $pdo->exec("DELETE FROM communication_queue");
 
-    // Insert mock conversation to satisfy foreign key constraint
+    // Insert mock conversation to satisfy foreign key constraint, handling existing phone numbers cleanly
     $pdo->exec("
         INSERT INTO whatsapp_conversations (wa_phone_number, contact_name, created_at, updated_at) 
         VALUES ('919567276458', 'Adnan', NOW(), NOW())
+        ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id), contact_name=VALUES(contact_name), updated_at=NOW()
     ");
     $convId = (int)$pdo->lastInsertId();
-    echo "✔ Mock conversation created with ID: {$convId}\n";
+    echo "✔ Mock conversation resolved to ID: {$convId}\n";
 
     // Insert approved source template with button routing configuration
     $stmtTpl = $pdo->prepare("
