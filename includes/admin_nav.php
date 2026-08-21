@@ -185,11 +185,28 @@ try {
                                 'parameters' => $resolvedParams
                             ];
                             
-                            $headerType = $meta['header_type'] ?? 'NONE';
-                            if ($headerType !== 'NONE' && $headerType !== 'TEXT') {
-                                $templatePayload['header_type'] = $headerType;
-                                $templatePayload['header_parameters'] = [$mediaUrl];
-                            }
+                             $headerType = $meta['header_type'] ?? 'NONE';
+                             if ($headerType === 'NONE' && !empty($meta['components'])) {
+                                 foreach ($meta['components'] as $c) {
+                                     if (($c['type'] ?? '') === 'HEADER') {
+                                         $headerType = $c['format'] ?? 'NONE';
+                                         break;
+                                     }
+                                 }
+                             }
+                             
+                             $mediaUrl = $criteria['header_media'] ?? '';
+                             if (empty($mediaUrl)) {
+                                 $fallbackUrl = $meta['header_media_url'] ?? '';
+                                 if (!empty($fallbackUrl) && strpos($fallbackUrl, 'scontent.whatsapp.net') === false && strpos($fallbackUrl, 'fbcdn.net') === false) {
+                                     $mediaUrl = $fallbackUrl;
+                                 }
+                             }
+
+                             if ($headerType !== 'NONE' && $headerType !== 'TEXT' && !empty($mediaUrl)) {
+                                 $templatePayload['header_type'] = $headerType;
+                                 $templatePayload['header_parameters'] = [$mediaUrl];
+                             }
                             
                             $body = "Campaign message: {$dueCampaign['name']}";
                             $queueId = $engine->queueMessage(
