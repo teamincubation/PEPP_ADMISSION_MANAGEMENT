@@ -44,8 +44,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $action = $_POST['action'] ?? '';
         
+        // Action: Submit existing draft directly to Meta WABA from the list view
+        if ($action === 'submit_draft_to_meta') {
+            $tpl_id = (int)($_POST['template_id'] ?? 0);
+            $stmtFind = $pdo->prepare("SELECT * FROM communication_templates WHERE id = ? AND channel = 'whatsapp' AND status = 'draft' LIMIT 1");
+            $stmtFind->execute([$tpl_id]);
+            $tpl = $stmtFind->fetch();
+
+            if (!$tpl) {
+                $error_message = 'Draft template not found or already submitted.';
+            } else {
+                $meta = json_decode($tpl['meta_data'], true) ?: [];
+                $tpl_name = $tpl['template_name'];
+                $category = $tpl['category'];
+                $language = $tpl['language'];
+                $components = $meta['components'] ?? [];
+                $header_type = $meta['header_type'] ?? 'NONE';
+                $header_media_url = $meta['header_media_url'] ?? '';
+
+                if ($header_type === 'IMAGE' && empty($header_media_url)) {
+                    $error_message = 'Please edit this draft and upload an image before submitting to Meta WABA.';
+                } elseif (empty($businessId) || empty($accessToken)) {
+                    $error_message = 'Please configure Meta Business Account ID and Access Token in settings first.';
+                } else {
+                    $res = $provider->createTemplate($tpl_name, $category, $language, $components);
+                    if ($res && !empty($res['success'])) {
+                        $meta_template_id = $res['id'] ?? null;
+                        $meta['meta_template_id'] = $meta_template_id;
+                        $meta_data_updated = json_encode($meta);
+
+                        try {
+                            $stmtUpd = $pdo->prepare("
+                                UPDATE communication_templates 
+                                SET status = 'pending', meta_data = ?, updated_at = NOW() 
+                                WHERE id = ?
+                            ");
+                            $stmtUpd->execute([$meta_data_updated, $tpl_id]);
+                            $success_message = "Template successfully submitted to Meta WABA! Status: PENDING. (Meta ID: {$meta_template_id})";
+                        } catch (Exception $e) {
+                            $error_message = "API submission succeeded but saving locally failed: " . $e->getMessage();
+                        }
+                    } else {
+                        $error_message = "Meta API Error: " . ($provider->getLastError() ?: 'Unknown Error');
+                    }
+                }
+            }
+        }
+        
         // 1. SAVE DRAFT OR SUBMIT TO META
         if ($action === 'save_template' || $action === 'submit_meta') {
+            $edit_id = isset($_POST['edit_id']) ? (int)$_POST['edit_id'] : 0;
             $tpl_name = strtolower(trim($_POST['template_name'] ?? ''));
             $category = trim($_POST['category'] ?? 'MARKETING');
             $language = trim($_POST['language'] ?? 'en_US');
@@ -110,8 +158,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error_message = 'Template body text cannot be empty.';
             } else {
                 // Check local duplicate template name
-                $stmtCheck = $pdo->prepare("SELECT id FROM communication_templates WHERE channel = 'whatsapp' AND template_name = ? AND status <> 'deleted' LIMIT 1");
-                $stmtCheck->execute([$tpl_name]);
+                $stmtCheck = $pdo->prepare("SELECT id FROM communication_templates WHERE channel = 'whatsapp' AND template_name = ? AND id <> ? AND status <> 'deleted' LIMIT 1");
+                $stmtCheck->execute([$tpl_name, $edit_id]);
                 if ($stmtCheck->fetch()) {
                     $error_message = "A local template named '{$tpl_name}' already exists.";
                 } else {
@@ -256,14 +304,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         ]);
 
                         if ($action === 'save_template') {
-                            // Save as Local DRAFT
+                            // Save or Update Local DRAFT
                             try {
-                                $stmtSave = $pdo->prepare("
-                                    INSERT INTO communication_templates (channel, template_name, language, status, category, meta_data, created_at, updated_at)
-                                    VALUES ('whatsapp', ?, ?, 'draft', ?, ?, NOW(), NOW())
-                                ");
-                                $stmtSave->execute([$tpl_name, $language, $category, $meta_data]);
-                                $success_message = "Marketing template draft '{$tpl_name}' saved locally.";
+                                if ($edit_id > 0) {
+                                    $stmtUpdate = $pdo->prepare("
+                                        UPDATE communication_templates 
+                                        SET template_name = ?, language = ?, category = ?, meta_data = ?, updated_at = NOW()
+                                        WHERE id = ?
+                                    ");
+                                    $stmtUpdate->execute([$tpl_name, $language, $category, $meta_data, $edit_id]);
+                                    $success_message = "Marketing template draft '{$tpl_name}' updated successfully.";
+                                } else {
+                                    $stmtSave = $pdo->prepare("
+                                        INSERT INTO communication_templates (channel, template_name, language, status, category, meta_data, created_at, updated_at)
+                                        VALUES ('whatsapp', ?, ?, 'draft', ?, ?, NOW(), NOW())
+                                    ");
+                                    $stmtSave->execute([$tpl_name, $language, $category, $meta_data]);
+                                    $success_message = "Marketing template draft '{$tpl_name}' saved locally.";
+                                }
                             } catch (Exception $e) {
                                 $error_message = "Failed to save draft: " . $e->getMessage();
                             }
@@ -282,11 +340,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     $meta_data_updated = json_encode($meta_array);
 
                                     try {
-                                        $stmtSave = $pdo->prepare("
-                                            INSERT INTO communication_templates (channel, template_name, language, status, category, meta_data, created_at, updated_at)
-                                            VALUES ('whatsapp', ?, ?, 'pending', ?, ?, NOW(), NOW())
-                                        ");
-                                        $stmtSave->execute([$tpl_name, $language, $category, $meta_data_updated]);
+                                        if ($edit_id > 0) {
+                                            $stmtUpdate = $pdo->prepare("
+                                                UPDATE communication_templates 
+                                                SET template_name = ?, language = ?, status = 'pending', category = ?, meta_data = ?, updated_at = NOW()
+                                                WHERE id = ?
+                                            ");
+                                            $stmtUpdate->execute([$tpl_name, $language, $category, $meta_data_updated, $edit_id]);
+                                        } else {
+                                            $stmtSave = $pdo->prepare("
+                                                INSERT INTO communication_templates (channel, template_name, language, status, category, meta_data, created_at, updated_at)
+                                                VALUES ('whatsapp', ?, ?, 'pending', ?, ?, NOW(), NOW())
+                                            ");
+                                            $stmtSave->execute([$tpl_name, $language, $category, $meta_data_updated]);
+                                        }
                                         $success_message = "Template successfully submitted to Meta WABA! Status: PENDING. (Meta ID: {$meta_template_id})";
                                     } catch (Exception $e) {
                                         $error_message = "API submission succeeded but saving locally failed: " . $e->getMessage();
@@ -424,6 +491,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
         }
+    }
+}
+
+/* ── Load draft if editing ── */
+$edit_id = isset($_GET['edit_id']) ? (int)$_GET['edit_id'] : 0;
+$edit_template = null;
+$edit_meta = [];
+if ($edit_id > 0) {
+    $stmtEdit = $pdo->prepare("SELECT * FROM communication_templates WHERE id = ? AND channel = 'whatsapp' AND status = 'draft' LIMIT 1");
+    $stmtEdit->execute([$edit_id]);
+    $edit_template = $stmtEdit->fetch();
+    if ($edit_template) {
+        $edit_meta = json_decode($edit_template['meta_data'], true) ?: [];
     }
 }
 
@@ -612,15 +692,33 @@ include 'includes/admin_nav.php';
                                 <td style="padding:14px; color:#ef4444; font-size:0.75rem; max-width:180px; word-break:break-all;"><?php echo htmlspecialchars($tpl['rejection_reason'] ?? '-'); ?></td>
                                 <td style="padding:14px; color:#64748b; font-size:0.75rem;"><?php echo $tpl['updated_at']; ?></td>
                                 <td style="padding:14px; text-align:right;">
-                                    <div style="display:inline-flex; gap:8px;">
-                                        <button class="btn btn-sm btn-outline" onclick="openVisualPreview(<?php echo htmlspecialchars(json_encode($tpl['template_name'])); ?>, <?php echo htmlspecialchars(json_encode($meta)); ?>)" style="padding:4px 8px; border-radius:6px; font-size:0.75rem;"><i class="fas fa-eye"></i> Preview</button>
-                                        
-                                        <form method="POST" onsubmit="return confirm('This will request deletion of the WhatsApp template from Meta. Existing historical communication records will not be deleted. Continue?');" style="display:inline-block;">
-                                            <?php echo csrf_field(); ?>
-                                            <input type="hidden" name="action" value="delete_template">
-                                            <input type="hidden" name="delete_name" value="<?php echo htmlspecialchars($tpl['template_name']); ?>">
-                                            <button type="submit" class="btn btn-sm btn-danger" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; background:#fee2e2; border-color:#fecaca; color:#b91c1c;"><i class="fas fa-trash"></i> Delete</button>
-                                        </form>
+                                    <div style="display:inline-flex; gap:8px; align-items:center;">
+                                        <?php if ($tpl['status'] === 'draft'): ?>
+                                            <a href="?edit_id=<?php echo $tpl['id']; ?>" class="btn btn-sm btn-outline" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; color:#7c3aed; border-color:#ddd6fe; background:#f5f3ff; text-decoration:none;"><i class="fas fa-edit"></i> Edit</a>
+                                            
+                                            <form method="POST" style="display:inline-block; margin:0;">
+                                                <?php echo csrf_field(); ?>
+                                                <input type="hidden" name="action" value="submit_draft_to_meta">
+                                                <input type="hidden" name="template_id" value="<?php echo $tpl['id']; ?>">
+                                                <button type="submit" class="btn btn-sm btn-success" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; background:#10b981; border-color:#059669; color:#fff;"><i class="fas fa-rocket"></i> Submit</button>
+                                            </form>
+                                            
+                                            <form method="POST" onsubmit="return confirm('This will delete the local template draft. Continue?');" style="display:inline-block; margin:0;">
+                                                <?php echo csrf_field(); ?>
+                                                <input type="hidden" name="action" value="delete_template">
+                                                <input type="hidden" name="delete_name" value="<?php echo htmlspecialchars($tpl['template_name']); ?>">
+                                                <button type="submit" class="btn btn-sm btn-danger" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; background:#fee2e2; border-color:#fecaca; color:#b91c1c;"><i class="fas fa-trash"></i> Delete</button>
+                                            </form>
+                                        <?php else: ?>
+                                            <button class="btn btn-sm btn-outline" onclick="openVisualPreview(<?php echo htmlspecialchars(json_encode($tpl['template_name'])); ?>, <?php echo htmlspecialchars(json_encode($meta)); ?>)" style="padding:4px 8px; border-radius:6px; font-size:0.75rem;"><i class="fas fa-eye"></i> Preview</button>
+                                            
+                                            <form method="POST" onsubmit="return confirm('This will request deletion of the WhatsApp template from Meta. Existing historical communication records will not be deleted. Continue?');" style="display:inline-block; margin:0;">
+                                                <?php echo csrf_field(); ?>
+                                                <input type="hidden" name="action" value="delete_template">
+                                                <input type="hidden" name="delete_name" value="<?php echo htmlspecialchars($tpl['template_name']); ?>">
+                                                <button type="submit" class="btn btn-sm btn-danger" style="padding:4px 8px; border-radius:6px; font-size:0.75rem; background:#fee2e2; border-color:#fecaca; color:#b91c1c;"><i class="fas fa-trash"></i> Delete</button>
+                                            </form>
+                                        <?php endif; ?>
                                     </div>
                                 </td>
                             </tr>
@@ -644,10 +742,11 @@ include 'includes/admin_nav.php';
                     <form method="POST" id="template-builder-form" enctype="multipart/form-data">
                         <?php echo csrf_field(); ?>
                         <input type="hidden" name="action" id="builder-action" value="save_template">
+                        <input type="hidden" name="edit_id" id="inp-edit-id" value="<?php echo htmlspecialchars($edit_template['id'] ?? ''); ?>">
                         
                         <div style="margin-bottom:16px;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:6px;">Template Name <span style="color:#ef4444;">*</span></label>
-                            <input type="text" name="template_name" id="inp-tpl-name" class="form-control" placeholder="e.g. welcome_offer_march" oninput="validateTemplateName(this.value); updatePreview();" required>
+                            <input type="text" name="template_name" id="inp-tpl-name" class="form-control" placeholder="e.g. welcome_offer_march" oninput="validateTemplateName(this.value); updatePreview();" value="<?php echo htmlspecialchars($edit_template['template_name'] ?? ''); ?>" required>
                             <span style="font-size:0.75rem; color:#94a3b8; display:block; margin-top:4px;">Must contain only lowercase letters, numbers, and underscores. No spaces.</span>
                         </div>
 
@@ -655,15 +754,15 @@ include 'includes/admin_nav.php';
                             <div>
                                 <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:6px;">Category</label>
                                 <select name="category" class="form-control">
-                                    <option value="MARKETING">MARKETING (Offers, Promotions, Campaign messages)</option>
-                                    <option value="UTILITY">UTILITY (Receipts, Onboarding, Reminders)</option>
+                                    <option value="MARKETING" <?php echo ($edit_template && $edit_template['category'] === 'MARKETING') ? 'selected' : ''; ?>>MARKETING (Offers, Promotions, Campaign messages)</option>
+                                    <option value="UTILITY" <?php echo ($edit_template && $edit_template['category'] === 'UTILITY') ? 'selected' : ''; ?>>UTILITY (Receipts, Onboarding, Reminders)</option>
                                 </select>
                             </div>
                             <div>
                                 <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:6px;">Language</label>
                                 <select name="language" class="form-control">
                                     <?php foreach ($supported_languages as $code => $lbl): ?>
-                                        <option value="<?php echo htmlspecialchars($code); ?>"><?php echo htmlspecialchars($lbl); ?> (<?php echo $code; ?>)</option>
+                                        <option value="<?php echo htmlspecialchars($code); ?>" <?php echo ($edit_template && $edit_template['language'] === $code) ? 'selected' : ''; ?>><?php echo htmlspecialchars($lbl); ?> (<?php echo $code; ?>)</option>
                                     <?php endforeach; ?>
                                 </select>
                             </div>
@@ -673,29 +772,29 @@ include 'includes/admin_nav.php';
                         <div style="border-top:1px dashed #e2e8f0; margin-top:20px; padding-top:14px; margin-bottom:16px;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#1e293b; margin-bottom:6px;"><i class="fas fa-heading"></i> Template Header</label>
                             <select name="header_type" id="sel-header-type" class="form-control" style="margin-bottom:10px;" onchange="onHeaderTypeChange(this.value)">
-                                <option value="NONE">- No Header -</option>
-                                <option value="TEXT">Text Header</option>
-                                <option value="IMAGE">Image Header (JPEG/PNG)</option>
-                                <option value="VIDEO">Video Header (MP4)</option>
-                                <option value="DOCUMENT">Document Header (PDF)</option>
+                                <option value="NONE" <?php echo ($edit_template && ($edit_meta['header_type'] ?? 'NONE') === 'NONE') ? 'selected' : ''; ?>>- No Header -</option>
+                                <option value="TEXT" <?php echo ($edit_template && ($edit_meta['header_type'] ?? 'NONE') === 'TEXT') ? 'selected' : ''; ?>>Text Header</option>
+                                <option value="IMAGE" <?php echo ($edit_template && ($edit_meta['header_type'] ?? 'NONE') === 'IMAGE') ? 'selected' : ''; ?>>Image Header (JPEG/PNG)</option>
+                                <option value="VIDEO" <?php echo ($edit_template && ($edit_meta['header_type'] ?? 'NONE') === 'VIDEO') ? 'selected' : ''; ?>>Video Header (MP4)</option>
+                                <option value="DOCUMENT" <?php echo ($edit_template && ($edit_meta['header_type'] ?? 'NONE') === 'DOCUMENT') ? 'selected' : ''; ?>>Document Header (PDF)</option>
                             </select>
                             
                             <div id="header-text-container" style="display:none; margin-bottom:10px;">
-                                <input type="text" name="header_text" id="inp-header-text" class="form-control" placeholder="Enter header text... (Supports {{1}})" oninput="detectVariables(); updatePreview();">
+                                <input type="text" name="header_text" id="inp-header-text" class="form-control" placeholder="Enter header text... (Supports {{1}})" oninput="detectVariables(); updatePreview();" value="<?php echo htmlspecialchars($edit_meta['header_text'] ?? ''); ?>">
                             </div>
 
                             <div id="header-image-container" style="display:none; margin-bottom:10px;">
                                 <label style="display:block; font-size:0.75rem; font-weight:700; color:#4b5563; margin-bottom:4px;">Upload Image Header <span style="color:#ef4444;">*</span></label>
                                 <input type="file" name="header_image" id="inp-header-image" class="form-control" accept="image/jpeg,image/png" onchange="previewSelectedImage(this)">
                                 <span style="font-size:0.72rem; color:#94a3b8; display:block; margin-top:4px;">Allowed formats: JPG, JPEG, PNG. Max size: 5MB.</span>
-                                <input type="hidden" name="existing_header_image_url" id="inp-header-image-url-existing" value="">
+                                <input type="hidden" name="existing_header_image_url" id="inp-header-image-url-existing" value="<?php echo htmlspecialchars($edit_meta['header_media_url'] ?? ''); ?>">
                             </div>
                         </div>
 
                         <!-- Body Block -->
                         <div style="border-top:1px dashed #e2e8f0; margin-top:20px; padding-top:14px; margin-bottom:16px;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#1e293b; margin-bottom:6px;"><i class="fas fa-align-justify"></i> Message Body <span style="color:#ef4444;">*</span></label>
-                            <textarea name="body_text" id="txt-body-text" class="form-control" rows="5" placeholder="Type your marketing message here. Use {{1}}, {{2}} for dynamic parameters." oninput="detectVariables(); updatePreview();" required></textarea>
+                            <textarea name="body_text" id="txt-body-text" class="form-control" rows="5" placeholder="Type your marketing message here. Use {{1}}, {{2}} for dynamic parameters." oninput="detectVariables(); updatePreview();" required><?php echo htmlspecialchars($edit_template ? ($edit_meta['body_text'] ?? '') : ''); ?></textarea>
                         </div>
 
                         <!-- Variables Dynamic Mapping Config -->
@@ -707,43 +806,43 @@ include 'includes/admin_nav.php';
                         <!-- Footer Block -->
                         <div style="border-top:1px dashed #e2e8f0; margin-top:20px; padding-top:14px; margin-bottom:16px;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#1e293b; margin-bottom:6px;"><i class="fas fa-paragraph"></i> Template Footer (Optional)</label>
-                            <input type="text" name="footer_text" id="inp-footer-text" class="form-control" placeholder="e.g. Reply STOP to opt out" oninput="updatePreview();">
+                            <input type="text" name="footer_text" id="inp-footer-text" class="form-control" placeholder="e.g. Reply STOP to opt out" oninput="updatePreview();" value="<?php echo htmlspecialchars($edit_meta['footer_text'] ?? ''); ?>">
                         </div>
 
                         <!-- Buttons Block -->
                         <div style="border-top:1px dashed #e2e8f0; margin-top:20px; padding-top:14px; margin-bottom:20px;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#1e293b; margin-bottom:6px;"><i class="fas fa-square-caret-right"></i> Dynamic Template Buttons</label>
                             <select name="button_type" id="sel-button-type" class="form-control" style="margin-bottom:12px;" onchange="onButtonTypeChange(this.value)">
-                                <option value="NONE">- No Buttons -</option>
-                                <option value="QUICK_REPLY">Quick Reply Buttons (Max 3)</option>
-                                <option value="CTA">Call to Action (CTA) Buttons (1 Url + 1 Phone)</option>
+                                <option value="NONE" <?php echo ($edit_template && ($edit_meta['button_type'] ?? 'NONE') === 'NONE') ? 'selected' : ''; ?>>- No Buttons -</option>
+                                <option value="QUICK_REPLY" <?php echo ($edit_template && ($edit_meta['button_type'] ?? 'NONE') === 'QUICK_REPLY') ? 'selected' : ''; ?>>Quick Reply Buttons (Max 3)</option>
+                                <option value="CTA" <?php echo ($edit_template && ($edit_meta['button_type'] ?? 'NONE') === 'CTA') ? 'selected' : ''; ?>>Call to Action (CTA) Buttons (1 Url + 1 Phone)</option>
                             </select>
 
                             <!-- Quick Reply Section -->
                             <div id="buttons-quickreply-container" style="display:none; flex-direction:column; gap:10px; margin-bottom:10px;">
-                                <input type="text" name="buttons[quick_reply][1]" class="form-control btn-qr-text" placeholder="Quick Reply Button 1 text (e.g. Enquire Now)" style="border-radius:8px;" oninput="updatePreview()">
-                                <input type="text" name="buttons[quick_reply][2]" class="form-control btn-qr-text" placeholder="Quick Reply Button 2 text (Optional)" style="border-radius:8px;" oninput="updatePreview()">
-                                <input type="text" name="buttons[quick_reply][3]" class="form-control btn-qr-text" placeholder="Quick Reply Button 3 text (Optional)" style="border-radius:8px;" oninput="updatePreview()">
+                                <input type="text" name="buttons[quick_reply][1]" class="form-control btn-qr-text" placeholder="Quick Reply Button 1 text (e.g. Enquire Now)" style="border-radius:8px;" oninput="updatePreview()" value="<?php echo htmlspecialchars($edit_meta['buttons']['quick_reply'][1] ?? ''); ?>">
+                                <input type="text" name="buttons[quick_reply][2]" class="form-control btn-qr-text" placeholder="Quick Reply Button 2 text (Optional)" style="border-radius:8px;" oninput="updatePreview()" value="<?php echo htmlspecialchars($edit_meta['buttons']['quick_reply'][2] ?? ''); ?>">
+                                <input type="text" name="buttons[quick_reply][3]" class="form-control btn-qr-text" placeholder="Quick Reply Button 3 text (Optional)" style="border-radius:8px;" oninput="updatePreview()" value="<?php echo htmlspecialchars($edit_meta['buttons']['quick_reply'][3] ?? ''); ?>">
                             </div>
 
                             <!-- CTA Buttons Section -->
                             <div id="buttons-cta-container" style="display:none; flex-direction:column; gap:14px; margin-bottom:10px; border:1px solid #f1f5f9; padding:12px; border-radius:12px; background:#fbfbfb;">
                                 <!-- Phone -->
                                 <div style="display:grid; grid-template-columns:1.2fr 2fr; gap:10px;">
-                                    <input type="text" name="buttons[phone_text]" id="inp-phone-text" class="form-control" placeholder="Phone button label (e.g. Call Us)" style="border-radius:8px;" oninput="updatePreview()">
-                                    <input type="text" name="buttons[phone_number]" id="inp-phone-number" class="form-control" placeholder="Phone number (e.g. +917025000444)" style="border-radius:8px;" oninput="updatePreview()">
+                                    <input type="text" name="buttons[phone_text]" id="inp-phone-text" class="form-control" placeholder="Phone button label (e.g. Call Us)" style="border-radius:8px;" oninput="updatePreview()" value="<?php echo htmlspecialchars($edit_meta['buttons']['phone_text'] ?? ''); ?>">
+                                    <input type="text" name="buttons[phone_number]" id="inp-phone-number" class="form-control" placeholder="Phone number (e.g. +917025000444)" style="border-radius:8px;" oninput="updatePreview()" value="<?php echo htmlspecialchars($edit_meta['buttons']['phone_number'] ?? ''); ?>">
                                 </div>
                                 <!-- Website -->
                                 <div style="display:grid; grid-template-columns:1.2fr 2fr; gap:10px;">
-                                    <input type="text" name="buttons[url_text]" id="inp-url-text" class="form-control" placeholder="Website button label (e.g. Visit Link)" style="border-radius:8px;" oninput="updatePreview()">
-                                    <input type="text" name="buttons[url_value]" id="inp-url-value" class="form-control" placeholder="Website URL (e.g. https://pepplearning.in)" style="border-radius:8px;" oninput="updatePreview()">
+                                    <input type="text" name="buttons[url_text]" id="inp-url-text" class="form-control" placeholder="Website button label (e.g. Visit Link)" style="border-radius:8px;" oninput="updatePreview()" value="<?php echo htmlspecialchars($edit_meta['buttons']['url_text'] ?? ''); ?>">
+                                    <input type="text" name="buttons[url_value]" id="inp-url-value" class="form-control" placeholder="Website URL (e.g. https://pepplearning.in)" style="border-radius:8px;" oninput="updatePreview()" value="<?php echo htmlspecialchars($edit_meta['buttons']['url_value'] ?? ''); ?>">
                                 </div>
                             </div>
                         </div>
 
                         <!-- Submission Controls -->
                         <div style="display:flex; gap:12px; justify-content:flex-end; border-top:1px solid #e2e8f0; padding-top:20px;">
-                            <button type="button" onclick="triggerBuilderSubmit('save_template')" class="btn btn-outline" style="border-radius:8px; font-weight:700; padding:10px 20px;"><i class="fas fa-floppy-disk"></i> Save Local Draft</button>
+                            <button type="button" onclick="triggerBuilderSubmit('save_template')" class="btn btn-outline" style="border-radius:8px; font-weight:700; padding:10px 20px;"><i class="fas fa-floppy-disk"></i> <?php echo $edit_template ? 'Update Local Draft' : 'Save Local Draft'; ?></button>
                             <button type="button" onclick="triggerBuilderSubmit('submit_meta')" class="btn btn-primary" style="border-radius:8px; font-weight:700; padding:10px 20px;"><i class="fas fa-rocket"></i> Submit to Meta WABA</button>
                         </div>
                     </form>
@@ -823,6 +922,22 @@ include 'includes/admin_nav.php';
 
 <script>
 let currentView = 'list';
+const savedVariables = <?php echo json_encode($edit_meta['variables'] ?? new stdClass()); ?>;
+
+document.addEventListener("DOMContentLoaded", function() {
+    toggleView('<?php echo ($edit_template) ? 'create' : 'list'; ?>');
+    
+    // Trigger select change handlers to show proper subforms
+    const headerSelect = document.getElementById('sel-header-type');
+    if (headerSelect) {
+        onHeaderTypeChange(headerSelect.value);
+    }
+    
+    const buttonSelect = document.getElementById('sel-button-type');
+    if (buttonSelect) {
+        onButtonTypeChange(buttonSelect.value);
+    }
+});
 
 function toggleView(tabName) {
     currentView = tabName;
@@ -981,9 +1096,11 @@ function detectVariables() {
             div.style.gridTemplateColumns = '1.2fr 2fr';
             div.style.gap = '10px';
             div.style.alignItems = 'center';
+            
+            const savedVal = savedVariables['header'] || '';
             div.innerHTML = `
                 <span style="font-size:0.75rem; font-weight:700; color:#4b5563;">Header Var {{1}} Example Value:</span>
-                <input type="text" name="examples[header]" class="form-control var-example-input" data-var="header" placeholder="e.g. Adnan" style="border-radius:8px; font-size:0.8rem;" oninput="updatePreview()" required>
+                <input type="text" name="examples[header]" class="form-control var-example-input" data-var="header" placeholder="e.g. Adnan" style="border-radius:8px; font-size:0.8rem;" oninput="updatePreview()" value="${savedVal}" required>
             `;
             container.appendChild(div);
         }
@@ -994,9 +1111,11 @@ function detectVariables() {
             div.style.gridTemplateColumns = '1.2fr 2fr';
             div.style.gap = '10px';
             div.style.alignItems = 'center';
+            
+            const savedVal = savedVariables[vNum] || '';
             div.innerHTML = `
                 <span style="font-size:0.75rem; font-weight:700; color:#4b5563;">Body Var {{${vNum}}} Example Value:</span>
-                <input type="text" name="examples[${vNum}]" class="form-control var-example-input" data-var="${vNum}" placeholder="e.g. Student Name" style="border-radius:8px; font-size:0.8rem;" oninput="updatePreview()" required>
+                <input type="text" name="examples[${vNum}]" class="form-control var-example-input" data-var="${vNum}" placeholder="e.g. Student Name" style="border-radius:8px; font-size:0.8rem;" oninput="updatePreview()" value="${savedVal}" required>
             `;
             container.appendChild(div);
         });
