@@ -37,6 +37,18 @@ try {
     $stmtLastProcessed = $pdo->query("SELECT id, status, error_message, updated_at FROM communication_queue WHERE status IN ('sent', 'failed') ORDER BY id DESC LIMIT 5");
     $results['last_processed'] = $stmtLastProcessed->fetchAll(PDO::FETCH_ASSOC);
 
+    // Query pending/failed queue items that would be selected by the worker query right now
+    $stmtPendingDue = $pdo->query("
+        SELECT id, status, next_attempt_at, retry_count, priority, created_at, template_name, error_message 
+        FROM communication_queue 
+        WHERE status IN ('pending', 'failed') 
+          AND next_attempt_at <= NOW() 
+          AND retry_count < 3
+        ORDER BY priority DESC, created_at ASC 
+        LIMIT 20
+    ");
+    $results['pending_due_items'] = $stmtPendingDue->fetchAll(PDO::FETCH_ASSOC);
+
     // Let's query admin_settings for cron worker key to verify it is configured
     $stmtSettings = $pdo->query("SELECT * FROM admin_settings WHERE setting_name IN ('whatsapp_cron_worker_key', 'whatsapp_app_secret')");
     $results['admin_settings'] = $stmtSettings->fetchAll(PDO::FETCH_ASSOC);
