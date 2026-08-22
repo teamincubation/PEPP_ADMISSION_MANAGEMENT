@@ -246,9 +246,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         
                         if ($student) {
                             $studPhone = normalizeLeadPhone($student['whatsapp_country_code'] . $student['whatsapp_number']);
-                            $studCourse = normalizeLeadCourse($student['pepp_course']);
                             
-                            if ($studPhone === $normPhone && $studCourse === $normCourse) {
+                            if ($studPhone === $normPhone) {
                                 $success = convertLeadFromApprovedAdmission($pdo, $lead['id'], $student['user_id'], $admin_username);
                                 if ($success) {
                                     $pdo->commit();
@@ -259,11 +258,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 }
                             } else {
                                 $pdo->rollBack();
-                                if ($studPhone !== $normPhone) {
-                                    $error_message = "Reconciliation error: Contact numbers do not match.";
-                                } else {
-                                    $error_message = "This contact has joined another PEPP course (" . htmlspecialchars($student['pepp_course']) . "), but not the course associated with this lead.";
-                                }
+                                $error_message = "Reconciliation error: Contact numbers do not match.";
                             }
                         } else {
                             $pdo->rollBack();
@@ -333,6 +328,7 @@ $f_status   = trim($_GET['status'] ?? '');
 $f_assigned = trim($_GET['assigned'] ?? '');
 $f_course   = trim($_GET['course'] ?? '');
 $f_due      = trim($_GET['due'] ?? '');           // today | overdue | upcoming
+$f_joined   = trim($_GET['joined'] ?? '');
 $f_q        = trim($_GET['q'] ?? '');
 
 $where = ['1=1']; $params = [];
@@ -344,6 +340,40 @@ if ($f_course !== '') { $where[] = "l.interested_course = ?"; $params[] = $f_cou
 if ($f_due === 'today')    { $where[] = "l.next_followup_date = CURDATE() AND l.status NOT IN ('converted','rejected','not_interested')"; }
 if ($f_due === 'overdue')  { $where[] = "l.next_followup_date < CURDATE() AND l.status NOT IN ('converted','rejected','not_interested')"; }
 if ($f_due === 'upcoming') { $where[] = "l.next_followup_date > CURDATE() AND l.status NOT IN ('converted','rejected','not_interested')"; }
+if ($f_joined === 'yes') {
+    $where[] = "EXISTS (
+        SELECT 1 FROM users u
+        WHERE u.status = 'approved'
+          AND (
+              REPLACE(REPLACE(CONCAT(u.whatsapp_country_code, u.whatsapp_number), '+', ''), ' ', '') = l.whatsapp_number
+              OR u.whatsapp_number = l.whatsapp_number
+              OR (LENGTH(l.whatsapp_number) >= 10 AND u.whatsapp_number = RIGHT(l.whatsapp_number, 10))
+              OR (LENGTH(l.whatsapp_number) >= 10 AND CONCAT(REPLACE(u.whatsapp_country_code, '+', ''), u.whatsapp_number) = RIGHT(l.whatsapp_number, 10))
+          )
+    )";
+} elseif ($f_joined === 'not_converted') {
+    $where[] = "l.status <> 'converted' AND EXISTS (
+        SELECT 1 FROM users u
+        WHERE u.status = 'approved'
+          AND (
+              REPLACE(REPLACE(CONCAT(u.whatsapp_country_code, u.whatsapp_number), '+', ''), ' ', '') = l.whatsapp_number
+              OR u.whatsapp_number = l.whatsapp_number
+              OR (LENGTH(l.whatsapp_number) >= 10 AND u.whatsapp_number = RIGHT(l.whatsapp_number, 10))
+              OR (LENGTH(l.whatsapp_number) >= 10 AND CONCAT(REPLACE(u.whatsapp_country_code, '+', ''), u.whatsapp_number) = RIGHT(l.whatsapp_number, 10))
+          )
+    )";
+} elseif ($f_joined === 'converted') {
+    $where[] = "l.status = 'converted' AND EXISTS (
+        SELECT 1 FROM users u
+        WHERE u.status = 'approved'
+          AND (
+              REPLACE(REPLACE(CONCAT(u.whatsapp_country_code, u.whatsapp_number), '+', ''), ' ', '') = l.whatsapp_number
+              OR u.whatsapp_number = l.whatsapp_number
+              OR (LENGTH(l.whatsapp_number) >= 10 AND u.whatsapp_number = RIGHT(l.whatsapp_number, 10))
+              OR (LENGTH(l.whatsapp_number) >= 10 AND CONCAT(REPLACE(u.whatsapp_country_code, '+', ''), u.whatsapp_number) = RIGHT(l.whatsapp_number, 10))
+          )
+    )";
+}
 if ($f_q !== '') {
     $where[] = "(l.whatsapp_number LIKE ? OR l.name LIKE ? OR l.interested_course LIKE ? OR l.last_institute LIKE ?)";
     $like = "%{$f_q}%"; array_push($params, $like, $like, $like, $like);
@@ -496,6 +526,7 @@ include 'includes/admin_nav.php';
                 $joinedCount = 0;
                 $appliedCount = 0;
                 $sameCourseApprovedStudent = null;
+                $anyCourseApprovedStudent = null;
                 $eligibleForManualConversion = false;
                 $normLeadCourse = normalizeLeadCourse($l['interested_course']);
 
@@ -505,11 +536,15 @@ include 'includes/admin_nav.php';
                         if (normalizeLeadCourse($m['pepp_course']) === $normLeadCourse) {
                             $sameCourseApprovedStudent = $m;
                         }
+                        if ($anyCourseApprovedStudent === null) {
+                            $anyCourseApprovedStudent = $m;
+                        }
                     } elseif ($m['status'] === 'pending') {
                         $appliedCount++;
                     }
                 }
-                if ($sameCourseApprovedStudent && $l['status'] !== 'converted') {
+                $conversionStudent = $sameCourseApprovedStudent ?: $anyCourseApprovedStudent;
+                if ($conversionStudent && $l['status'] !== 'converted') {
                     $eligibleForManualConversion = true;
                 }
                 
@@ -556,10 +591,10 @@ include 'includes/admin_nav.php';
                                     data-lead-name="<?php echo htmlspecialchars($l['name']); ?>" 
                                     data-lead-course="<?php echo htmlspecialchars($l['interested_course']); ?>" 
                                     data-lead-phone="<?php echo htmlspecialchars($l['whatsapp_number']); ?>" 
-                                    data-student-id="<?php echo htmlspecialchars($sameCourseApprovedStudent['user_id']); ?>" 
-                                    data-student-name="<?php echo htmlspecialchars($sameCourseApprovedStudent['name']); ?>" 
-                                    data-student-course="<?php echo htmlspecialchars($sameCourseApprovedStudent['pepp_course']); ?>" 
-                                    data-student-date="<?php echo $sameCourseApprovedStudent['approval_date'] ? date('d M Y', strtotime($sameCourseApprovedStudent['approval_date'])) : 'N/A'; ?>" 
+                                    data-student-id="<?php echo htmlspecialchars($conversionStudent['user_id']); ?>" 
+                                    data-student-name="<?php echo htmlspecialchars($conversionStudent['name']); ?>" 
+                                    data-student-course="<?php echo htmlspecialchars($conversionStudent['pepp_course']); ?>" 
+                                    data-student-date="<?php echo $conversionStudent['approval_date'] ? date('d M Y', strtotime($conversionStudent['approval_date'])) : 'N/A'; ?>" 
                                     onclick="confirmManualConversion(this)" 
                                     title="Mark as Converted" 
                                     style="border-radius:6px; padding:2px 8px; font-size:0.7rem; font-weight:700; margin-right:4px;">
@@ -612,6 +647,14 @@ include 'includes/admin_nav.php';
                 </select>
             </div>
             <?php endif; ?>
+            <div class="field"><label>Joined Status</label>
+                <select name="joined">
+                    <option value="">All</option>
+                    <option value="yes" <?php echo $f_joined === 'yes' ? 'selected' : ''; ?>>Joined any course</option>
+                    <option value="not_converted" <?php echo $f_joined === 'not_converted' ? 'selected' : ''; ?>>Joined &amp; Not Converted</option>
+                    <option value="converted" <?php echo $f_joined === 'converted' ? 'selected' : ''; ?>>Joined &amp; Converted</option>
+                </select>
+            </div>
             <div class="field grow-2"><label>Search</label><input type="text" name="q" value="<?php echo e($f_q); ?>" placeholder="Name, WhatsApp, course or institute"></div>
             <button type="submit" class="btn btn-primary"><i class="fas fa-filter"></i> Filter</button>
             <a href="lead-management.php" class="btn btn-outline">Reset</a>
@@ -643,17 +686,28 @@ include 'includes/admin_nav.php';
                 $eligibleForManualConversion = false;
                 $normLeadCourse = normalizeLeadCourse($l['interested_course']);
 
+                $joinedCount = 0;
+                $appliedCount = 0;
+                $sameCourseApprovedStudent = null;
+                $anyCourseApprovedStudent = null;
+                $eligibleForManualConversion = false;
+                $normLeadCourse = normalizeLeadCourse($l['interested_course']);
+
                 foreach ($matches as $m) {
                     if ($m['status'] === 'approved') {
                         $joinedCount++;
                         if (normalizeLeadCourse($m['pepp_course']) === $normLeadCourse) {
                             $sameCourseApprovedStudent = $m;
                         }
+                        if ($anyCourseApprovedStudent === null) {
+                            $anyCourseApprovedStudent = $m;
+                        }
                     } elseif ($m['status'] === 'pending') {
                         $appliedCount++;
                     }
                 }
-                if ($sameCourseApprovedStudent && $l['status'] !== 'converted') {
+                $conversionStudent = $sameCourseApprovedStudent ?: $anyCourseApprovedStudent;
+                if ($conversionStudent && $l['status'] !== 'converted') {
                     $eligibleForManualConversion = true;
                 }
                 
@@ -711,10 +765,10 @@ include 'includes/admin_nav.php';
                                     data-lead-name="<?php echo htmlspecialchars($l['name']); ?>" 
                                     data-lead-course="<?php echo htmlspecialchars($l['interested_course']); ?>" 
                                     data-lead-phone="<?php echo htmlspecialchars($l['whatsapp_number']); ?>" 
-                                    data-student-id="<?php echo htmlspecialchars($sameCourseApprovedStudent['user_id']); ?>" 
-                                    data-student-name="<?php echo htmlspecialchars($sameCourseApprovedStudent['name']); ?>" 
-                                    data-student-course="<?php echo htmlspecialchars($sameCourseApprovedStudent['pepp_course']); ?>" 
-                                    data-student-date="<?php echo $sameCourseApprovedStudent['approval_date'] ? date('d M Y', strtotime($sameCourseApprovedStudent['approval_date'])) : 'N/A'; ?>" 
+                                    data-student-id="<?php echo htmlspecialchars($conversionStudent['user_id']); ?>" 
+                                    data-student-name="<?php echo htmlspecialchars($conversionStudent['name']); ?>" 
+                                    data-student-course="<?php echo htmlspecialchars($conversionStudent['pepp_course']); ?>" 
+                                    data-student-date="<?php echo $conversionStudent['approval_date'] ? date('d M Y', strtotime($conversionStudent['approval_date'])) : 'N/A'; ?>" 
                                     onclick="confirmManualConversion(this)" 
                                     title="Mark as Converted" 
                                     style="border-radius:6px; padding:2px 8px; font-size:0.7rem; font-weight:700; margin-right:4px;">
