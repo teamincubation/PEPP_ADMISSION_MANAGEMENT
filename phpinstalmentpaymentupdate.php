@@ -81,7 +81,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
                 $stmtCheck->execute([$inst['installment_id'], $stage]);
                 $existingStatus = $stmtCheck->fetchColumn();
 
-                if ($existingStatus === 'sent' || $existingStatus === 'queued') {
+                if ($existingStatus === 'sent' || $existingStatus === 'queued' || $existingStatus === 'failed') {
                     $pdo->rollBack();
                     $skipped++;
                     $details[] = [
@@ -89,7 +89,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
                         'installment' => $instNum,
                         'stage' => $stageLabel,
                         'status' => 'already_processed',
-                        'reason' => 'Reminder already sent or queued.'
+                        'reason' => 'Reminder already sent, queued, or failed.'
                     ];
                     continue;
                 }
@@ -98,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
                     $stmtTrack = $pdo->prepare("INSERT INTO installment_whatsapp_reminders (installment_id, reminder_stage, status, last_attempted_at) VALUES (?, ?, 'queued', NOW())");
                     $stmtTrack->execute([$inst['installment_id'], $stage]);
                 } else {
-                    $stmtTrack = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued', last_attempted_at = NOW() WHERE installment_id = ? AND reminder_stage = ? AND status NOT IN ('queued', 'sent')");
+                    $stmtTrack = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued', last_attempted_at = NOW() WHERE installment_id = ? AND reminder_stage = ? AND status NOT IN ('queued', 'sent', 'failed')");
                     $stmtTrack->execute([$inst['installment_id'], $stage]);
                 }
 

@@ -443,6 +443,26 @@ function onTemplateSelectChange(tplName) {
                 alert('Failed to load template variables mapping: ' + res.error);
             }
         });
+function controlQueueInbox(queueId, action) {
+    if (action === 'cancel_queue_item') {
+        if (!confirm('Cancel this queue item?\nIt will NOT be sent again automatically.')) {
+            return;
+        }
+    }
+    
+    const formData = new FormData();
+    formData.append('action', action);
+    formData.append('queue_id', queueId);
+    formData.append('csrf_token', csrfToken);
+    
+    fetch('communication-dashboard.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.text())
+    .then(html => {
+        loadStudentContext(currentStudentUid);
+    });
 }
 
 function loadStudentContext(studentUid) {
@@ -461,6 +481,44 @@ function loadStudentContext(studentUid) {
         .then(res => {
             if (res.success) {
                 const s = res.student;
+                
+                let activeQueueHtml = '';
+                if (res.active_reminders && res.active_reminders.length > 0) {
+                    res.active_reminders.forEach(q => {
+                        let btnHtml = '';
+                        if (q.status === 'pending' || q.status === 'scheduled') {
+                            btnHtml = `
+                                <button type="button" class="btn btn-xs" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; background:#f1f5f9; border:1px solid #cbd5e1; cursor:pointer;" onclick="controlQueueInbox(${q.id}, 'pause_queue_item')" title="Pause"><i class="fas fa-pause"></i></button>
+                                <button type="button" class="btn btn-xs btn-danger" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="controlQueueInbox(${q.id}, 'cancel_queue_item')" title="Cancel"><i class="fas fa-xmark"></i></button>
+                            `;
+                        } else if (q.status === 'paused') {
+                            btnHtml = `
+                                <button type="button" class="btn btn-xs btn-success" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; color:#fff; background:#10b981; border:none; cursor:pointer;" onclick="controlQueueInbox(${q.id}, 'resume_queue_item')" title="Resume"><i class="fas fa-play"></i></button>
+                                <button type="button" class="btn btn-xs btn-danger" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="controlQueueInbox(${q.id}, 'cancel_queue_item')" title="Cancel"><i class="fas fa-xmark"></i></button>
+                            `;
+                        } else if (q.status === 'failed') {
+                            btnHtml = `
+                                <button type="button" class="btn btn-xs btn-success" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; color:#fff; background:#8b5cf6; border:none; cursor:pointer;" onclick="controlQueueInbox(${q.id}, 'retry_queue_item')" title="Retry"><i class="fas fa-rotate-right"></i></button>
+                                <button type="button" class="btn btn-xs btn-danger" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="controlQueueInbox(${q.id}, 'cancel_queue_item')" title="Cancel"><i class="fas fa-xmark"></i></button>
+                            `;
+                        }
+                        
+                        activeQueueHtml += `
+                            <div style="display:flex; justify-content:space-between; align-items:center; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px; margin-bottom:6px; font-size:0.7rem;">
+                                <div style="min-width:0; flex:1;">
+                                    <div style="font-weight:700; color:#1e293b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">#${q.id} - ${escapeHtml(q.event_name || 'Manual')}</div>
+                                    <div style="color:#64748b; font-size:0.6rem;">Status: <span style="font-weight:700; color:${q.status === 'paused' ? '#d97706' : (q.status === 'failed' ? '#ef4444' : '#2563eb')}">${q.status.toUpperCase()}</span></div>
+                                </div>
+                                <div style="display:flex; gap:4px; margin-left:6px;">
+                                    ${btnHtml}
+                                </div>
+                            </div>
+                        `;
+                    });
+                } else {
+                    activeQueueHtml = '<div style="font-size:0.75rem; color:#94a3b8; text-align:center; padding:8px;">No active queue items.</div>';
+                }
+
                 container.innerHTML = `
                     <div><strong>Name:</strong> <div>${escapeHtml(s.name)}</div></div>
                     <div><strong>Student UID:</strong> <div>${escapeHtml(s.user_id)}</div></div>
@@ -472,6 +530,11 @@ function loadStudentContext(studentUid) {
                     <div><strong>Outstanding Balance:</strong> <div style="color:#ef4444; font-weight:700;">₹${s.balance}</div></div>
                     <div><strong>Next Due Date:</strong> <div style="font-weight:700; color:#1e293b;">${s.next_due_date}</div></div>
                     
+                    <div style="margin-top:16px; border-top:1px solid #e2e8f0; padding-top:12px;">
+                        <strong style="display:block; margin-bottom:8px; font-size:0.8rem; color:#475569;"><i class="fas fa-list-check"></i> Active Queue Items</strong>
+                        ${activeQueueHtml}
+                    </div>
+
                     <a href="student-details.php?id=${s.id}" class="btn btn-outline" style="text-align:center; padding:6px; font-size:0.75rem; border-radius:6px; margin-top:8px;" target="_blank">
                         <i class="fas fa-external-link"></i> Go to Profile
                     </a>

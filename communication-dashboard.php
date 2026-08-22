@@ -32,6 +32,9 @@ try {
 $stmt = $pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%'");
 $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
 
+require_once 'includes/communication/CommunicationEngine.php';
+$isPaused = CommunicationEngine::getInstance($pdo)->isQueuePaused();
+
 if (empty($settings['whatsapp_cron_worker_key'])) {
     $genKey = bin2hex(random_bytes(16));
     try {
@@ -168,7 +171,150 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $error_message = 'Failed to switch mode: ' . $e->getMessage();
                 }
             }
+        } elseif ($action === 'pause_queue') {
+            require_once 'includes/communication/CommunicationEngine.php';
+            CommunicationEngine::getInstance($pdo)->setQueuePaused(true);
+            $success_message = "Global WhatsApp communication queue PAUSED successfully.";
+            $isPaused = true;
+        } elseif ($action === 'resume_queue') {
+            require_once 'includes/communication/CommunicationEngine.php';
+            $engine = CommunicationEngine::getInstance($pdo);
+            $engine->setQueuePaused(false);
+            $success_message = "Global WhatsApp communication queue RESUMED successfully.";
+            $isPaused = false;
+            $engine->triggerCronBackground();
+        } elseif ($action === 'pause_queue_item') {
+            $queueId = isset($_POST['queue_id']) ? (int)$_POST['queue_id'] : 0;
+            if ($queueId > 0) {
+                try {
+                    $pdo->beginTransaction();
+                    $stmt = $pdo->prepare("SELECT status FROM communication_queue WHERE id = ? FOR UPDATE");
+                    $stmt->execute([$queueId]);
+                    $status = $stmt->fetchColumn();
+                    if ($status && in_array($status, ['pending', 'scheduled', 'failed'], true)) {
+                        $upd = $pdo->prepare("UPDATE communication_queue SET status = 'paused', updated_at = NOW() WHERE id = ?");
+                        $upd->execute([$queueId]);
+                        
+                        try {
+                            $updRemStmt = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'paused' WHERE queue_id = ?");
+                            $updRemStmt->execute([$queueId]);
+                        } catch (Exception $remEx) {}
+
+                        $pdo->commit();
+                        $success_message = "Queue item #{$queueId} paused successfully.";
+                    } else {
+                        $pdo->rollBack();
+                        $error_message = "Cannot pause queue item #{$queueId} (current status: " . ($status ?: 'unknown') . ").";
+                    }
+                } catch (Exception $e) {
+                    if ($pdo->inTransaction()) $pdo->rollBack();
+                    $error_message = 'Failed to pause item: ' . $e->getMessage();
+                }
+            }
+        } elseif ($action === 'resume_queue_item') {
+            $queueId = isset($_POST['queue_id']) ? (int)$_POST['queue_id'] : 0;
+            if ($queueId > 0) {
+                try {
+                    $pdo->beginTransaction();
+                    $stmt = $pdo->prepare("SELECT status FROM communication_queue WHERE id = ? FOR UPDATE");
+                    $stmt->execute([$queueId]);
+                    $status = $stmt->fetchColumn();
+                    if ($status === 'paused') {
+                        $upd = $pdo->prepare("UPDATE communication_queue SET status = 'pending', next_attempt_at = NOW(), updated_at = NOW() WHERE id = ?");
+                        $upd->execute([$queueId]);
+                        
+                        try {
+                            $updRemStmt = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued' WHERE queue_id = ?");
+                            $updRemStmt->execute([$queueId]);
+                        } catch (Exception $remEx) {}
+
+                        $pdo->commit();
+                        $success_message = "Queue item #{$queueId} resumed successfully.";
+                        
+                        // Trigger background processing instantly
+                        require_once 'includes/communication/CommunicationEngine.php';
+                        CommunicationEngine::getInstance($pdo)->triggerCronBackground();
+                    } else {
+                        $pdo->rollBack();
+                        $error_message = "Cannot resume queue item #{$queueId} (current status: " . ($status ?: 'unknown') . ").";
+                    }
+                } catch (Exception $e) {
+                    if ($pdo->inTransaction()) $pdo->rollBack();
+                    $error_message = 'Failed to resume item: ' . $e->getMessage();
+                }
+            }
+        } elseif ($action === 'cancel_queue_item') {
+            $queueId = isset($_POST['queue_id']) ? (int)$_POST['queue_id'] : 0;
+            if ($queueId > 0) {
+                try {
+                    $pdo->beginTransaction();
+                    $stmt = $pdo->prepare("SELECT status FROM communication_queue WHERE id = ? FOR UPDATE");
+                    $stmt->execute([$queueId]);
+                    $status = $stmt->fetchColumn();
+                    if ($status && !in_array($status, ['sent', 'delivered', 'read', 'cancelled'], true)) {
+                        $reason = trim($_POST['cancel_reason'] ?? 'No longer required');
+                        $upd = $pdo->prepare("UPDATE communication_queue SET status = 'cancelled', next_attempt_at = '2038-01-01 00:00:00', error_message = ?, updated_at = NOW() WHERE id = ?");
+                        $upd->execute(['Cancelled: ' . $reason, $queueId]);
+                        
+                        try {
+                            $updCampStmt = $pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = ? WHERE queue_id = ?");
+                            $updCampStmt->execute(['Cancelled: ' . $reason, $queueId]);
+                        } catch (Exception $campEx) {}
+
+                        try {
+                            $updRemStmt = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'failed' WHERE queue_id = ?");
+                            $updRemStmt->execute([$queueId]);
+                        } catch (Exception $remEx) {}
+
+                        $pdo->commit();
+                        $success_message = "Queue item #{$queueId} cancelled successfully.";
+                    } else {
+                        $pdo->rollBack();
+                        $error_message = "Cannot cancel queue item #{$queueId} (current status: " . ($status ?: 'unknown') . ").";
+                    }
+                } catch (Exception $e) {
+                    if ($pdo->inTransaction()) $pdo->rollBack();
+                    $error_message = 'Failed to cancel item: ' . $e->getMessage();
+                }
+            }
+        } elseif ($action === 'retry_queue_item') {
+            $queueId = isset($_POST['queue_id']) ? (int)$_POST['queue_id'] : 0;
+            if ($queueId > 0) {
+                try {
+                    $pdo->beginTransaction();
+                    $stmt = $pdo->prepare("SELECT status FROM communication_queue WHERE id = ? FOR UPDATE");
+                    $stmt->execute([$queueId]);
+                    $status = $stmt->fetchColumn();
+                    if (in_array($status, ['failed', 'cancelled'], true)) {
+                        $upd = $pdo->prepare("UPDATE communication_queue SET status = 'pending', retry_count = 0, next_attempt_at = NOW(), error_message = NULL, updated_at = NOW() WHERE id = ?");
+                        $upd->execute([$queueId]);
+                        
+                        try {
+                            $updRemStmt = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued' WHERE queue_id = ?");
+                            $updRemStmt->execute([$queueId]);
+                        } catch (Exception $remEx) {}
+
+                        $pdo->commit();
+                        $success_message = "Queue item #{$queueId} re-queued for retry successfully.";
+                        
+                        // Trigger background processing instantly
+                        require_once 'includes/communication/CommunicationEngine.php';
+                        CommunicationEngine::getInstance($pdo)->triggerCronBackground();
+                    } else {
+                        $pdo->rollBack();
+                        $error_message = "Cannot retry queue item #{$queueId} (current status: " . ($status ?: 'unknown') . ").";
+                    }
+                } catch (Exception $e) {
+                    if ($pdo->inTransaction()) $pdo->rollBack();
+                    $error_message = 'Failed to retry item: ' . $e->getMessage();
+                }
+            }
         } elseif ($action === 'process_queue') {
+            require_once 'includes/communication/CommunicationEngine.php';
+            $engine = CommunicationEngine::getInstance($pdo);
+            if ($engine->isQueuePaused()) {
+                $error_message = 'Cannot process queue: The queue is currently paused.';
+            } else {
             $currentTime = time();
             $lastProcessed = $_SESSION['last_queue_process_at'] ?? 0;
             if ($currentTime - $lastProcessed < 10) {
@@ -176,8 +322,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $_SESSION['last_queue_process_at'] = $currentTime;
                 try {
-                    // Claim and identify the IDs we are about to process (max 25)
-                    $stmtIds = $pdo->prepare("
+                    // Claim and identify the IDs we are about to process                    $stmtIds = $pdo->prepare("
                         SELECT id FROM communication_queue 
                         WHERE status IN ('pending', 'failed') 
                           AND next_attempt_at <= NOW() 
@@ -186,42 +331,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         LIMIT 25
                     ");
                     $stmtIds->execute();
-                    $eligibleIds = $stmtIds->fetchAll(PDO::FETCH_COLUMN);
+                    $ids = $stmtIds->fetchAll(PDO::FETCH_COLUMN);
                     
-                    if (empty($eligibleIds)) {
-                        $success_message = "Processing completed.<br>"
-                                       . "• Processed: <strong>0</strong><br>"
-                                       . "• Delivered: <strong>0</strong><br>"
-                                       . "• Failed: <strong>0</strong><br>"
-                                       . "• Skipped/Stale: <strong>0</strong>";
+                    if (empty($ids)) {
+                        $success_message = 'No pending queue messages are currently due for dispatch.';
                     } else {
-                        require_once 'includes/communication/QueueProcessor.php';
-                        $processor = new QueueProcessor($pdo, 25);
-                        $res = $processor->execute();
-                        $processed = is_array($res) ? $res['processed'] : $res;
+                        $processed = 0;
+                        $failed_count = 0;
                         
-                        // Query the final status of the processed items
-                        $inQuery = implode(',', array_map('intval', $eligibleIds));
-                        $stmtStatus = $pdo->query("SELECT status, COUNT(*) as c FROM communication_queue WHERE id IN ($inQuery) GROUP BY status");
-                        $results = $stmtStatus->fetchAll(PDO::FETCH_KEY_PAIR);
+                        foreach ($ids as $queueId) {
+                            $success = $engine->processQueueItem($queueId);
+                            if ($success) {
+                                $processed++;
+                            } else {
+                                $failed_count++;
+                            }
+                        }
                         
-                        $deliveredCount = ($results['delivered'] ?? 0) + ($results['sent'] ?? 0) + ($results['read'] ?? 0);
-                        $failedCount = $results['failed'] ?? 0;
-                        $cancelledCount = $results['cancelled'] ?? 0;
-                        $skippedCount = $results['pending'] ?? 0; // if still pending, it was skipped
-                        $processedCount = count($eligibleIds);
-                        
-                        // Log audit activity
-                        log_admin_activity($pdo, $admin_username, 'process_queue', "Manually processed pending queue batch. Attempted: {$processedCount}, Sent/Delivered: {$deliveredCount}, Failed: {$failedCount}, Cancelled: {$cancelledCount}");
-                        
-                        $success_message = "Processing completed.<br>"
-                                       . "• Processed: <strong>{$processedCount}</strong><br>"
-                                       . "• Delivered: <strong>{$deliveredCount}</strong><br>"
-                                       . "• Failed: <strong>{$failedCount}</strong><br>"
-                                       . "• Skipped/Stale: <strong>{$cancelledCount}</strong>";
+                        $success_message = "Queue run complete: Successfully processed {$processed} messages" . ($failed_count > 0 ? ", failed/skipped {$failed_count} messages." : ".");
                     }
                 } catch (Exception $e) {
-                    $error_message = 'Queue processing error: ' . $e->getMessage();
+                    $error_message = 'Queue processing failed: ' . $e->getMessage();
                 }
             }
         }
@@ -341,6 +471,12 @@ include 'includes/admin_nav.php';
 ?>
 
 <div class="container-fluid" style="padding:20px;">
+    <?php if ($isPaused): ?>
+        <div class="alert alert-warning" style="background:#fffbeb; border:1px solid #fde047; color:#854d0e; padding:12px 18px; border-radius:12px; margin-bottom:20px; font-weight:600;">
+            <i class="fas fa-pause-circle" style="color:#d97706; margin-right:4px;"></i> WhatsApp Queue is currently PAUSED. No queued messages will be automatically dispatched.
+        </div>
+    <?php endif; ?>
+
     <?php if ($success_message): ?>
         <div class="alert alert-success" style="background:#f0fdf4; border:1px solid #bbf7d0; color:#166534; padding:12px 18px; border-radius:12px; margin-bottom:20px;">
             <i class="fas fa-circle-check"></i> <?php echo $success_message; ?>
@@ -675,12 +811,27 @@ include 'includes/admin_nav.php';
         <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px; display:flex; justify-content:space-between; align-items:center;">
             <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;"><i class="fas fa-list-check" style="margin-right:4px;"></i> <?php echo $view === 'installments' ? 'Installment Reminders Log' : 'Communication Queue'; ?> (<?php echo number_format($totalRecords); ?> total records)</h3>
             <div style="display:flex; align-items:center; gap:12px;">
-                <span style="font-size:0.75rem; color:#6b7280;">Cron updates automatically every minute</span>
-                <form method="POST" style="margin:0;">
-                    <?php echo csrf_field(); ?>
-                    <input type="hidden" name="action" value="process_queue">
-                    <button type="submit" class="btn btn-sm btn-primary" style="border-radius:8px; background:linear-gradient(135deg, #8b5cf6, #7c3aed); border:none; font-weight:600;"><i class="fas fa-play" style="margin-right:4px;"></i> Process Pending Queue</button>
-                </form>
+                <?php if ($isPaused): ?>
+                    <span style="font-weight:700; color:#dc2626; font-size:0.85rem;"><i class="fas fa-circle-pause"></i> QUEUE PAUSED</span>
+                    <form method="POST" style="margin:0;">
+                        <?php echo csrf_field(); ?>
+                        <input type="hidden" name="action" value="resume_queue">
+                        <button type="submit" class="btn btn-sm btn-success" style="border-radius:8px; background:#10b981; border:none; color:#fff; font-weight:600; cursor:pointer; padding:6px 12px;"><i class="fas fa-play" style="margin-right:4px;"></i> Resume Queue</button>
+                    </form>
+                <?php else: ?>
+                    <span style="font-weight:700; color:#16a34a; font-size:0.85rem;"><i class="fas fa-circle-check"></i> QUEUE ACTIVE</span>
+                    <form method="POST" style="margin:0;" onsubmit="return confirm('WARNING: Pausing the queue will stop all automated campaigns, webhooks, and background reminders immediately.\n\nAre you sure you want to pause the queue?');">
+                        <?php echo csrf_field(); ?>
+                        <input type="hidden" name="action" value="pause_queue">
+                        <button type="submit" class="btn btn-sm" style="border-radius:8px; border:1px solid #ef4444; color:#ef4444; background:#fff; font-weight:600; cursor:pointer; padding:6px 12px;"><i class="fas fa-pause" style="margin-right:4px;"></i> Pause Queue</button>
+                    </form>
+                    <span style="font-size:0.75rem; color:#6b7280;">Cron updates automatically every minute</span>
+                    <form method="POST" style="margin:0;">
+                        <?php echo csrf_field(); ?>
+                        <input type="hidden" name="action" value="process_queue">
+                        <button type="submit" class="btn btn-sm btn-primary" style="border-radius:8px; background:linear-gradient(135deg, #8b5cf6, #7c3aed); border:none; font-weight:600; cursor:pointer; padding:6px 12px;"><i class="fas fa-play" style="margin-right:4px;"></i> Process Pending Queue</button>
+                    </form>
+                <?php endif; ?>
             </div>
         </div>
         
@@ -694,6 +845,7 @@ include 'includes/admin_nav.php';
                     <th style="padding:12px; font-weight:600; color:#374151;">Installment Details</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Amount / Due Date</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Queue Status</th>
+                    <th style="padding:12px; font-weight:600; color:#374151; min-width:120px;">Actions</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Reminder Status</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Meta Message ID / Logs</th>
                 <?php else: ?>
@@ -703,6 +855,7 @@ include 'includes/admin_nav.php';
                     <th style="padding:12px; font-weight:600; color:#374151;">Updated At</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Invoice</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Status</th>
+                    <th style="padding:12px; font-weight:600; color:#374151; min-width:120px;">Actions</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Meta Delivery Log</th>
                 <?php endif; ?>
                 </tr>
@@ -710,7 +863,7 @@ include 'includes/admin_nav.php';
             <tbody>
                 <?php if (empty($recentLogs)): ?>
                     <tr>
-                        <td colspan="<?php echo $view === 'installments' ? 8 : 7; ?>" style="padding:20px; text-align:center; color:#9ca3af;">No messages have been enqueued yet.</td>
+                        <td colspan="<?php echo $view === 'installments' ? 9 : 8; ?>" style="padding:20px; text-align:center; color:#9ca3af;">No messages have been enqueued yet.</td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($recentLogs as $log): ?>
@@ -743,13 +896,66 @@ include 'includes/admin_nav.php';
                                 </td>
                                 <td style="padding:12px;">
                                     <span class="badge <?php 
-                                        echo $log['queue_status'] === 'read' || $log['queue_status'] === 'delivered' || $log['queue_status'] === 'sent' ? 'green' : 
-                                             ($log['queue_status'] === 'failed' ? 'red' : 'amber'); 
+                                        if ($log['queue_status'] === 'read' || $log['queue_status'] === 'delivered' || $log['queue_status'] === 'sent') {
+                                            echo 'green';
+                                        } elseif ($log['queue_status'] === 'failed') {
+                                            echo ($log['retry_count'] >= 3) ? 'red' : 'amber';
+                                        } elseif ($log['queue_status'] === 'cancelled') {
+                                            echo 'gray';
+                                        } elseif ($log['queue_status'] === 'paused') {
+                                            echo 'amber';
+                                        } else {
+                                            echo 'blue';
+                                        }
                                     ?>">
-                                        <?php echo strtoupper($log['queue_status']); ?>
+                                        <?php 
+                                            if ($log['queue_status'] === 'failed') {
+                                                echo ($log['retry_count'] >= 3) ? 'FAILED — PERMANENT' : 'FAILED — RETRYING';
+                                            } else {
+                                                echo strtoupper($log['queue_status']); 
+                                            }
+                                        ?>
                                     </span>
                                     <br>
                                     <span style="font-size:0.7rem; color:#6b7280; font-weight:normal;">Retries: <?php echo $log['retry_count']; ?></span>
+                                </td>
+                                <td style="padding:12px;">
+                                    <div style="display:flex; gap:6px; align-items:center;">
+                                    <?php if ($log['queue_status'] === 'pending' || $log['queue_status'] === 'scheduled'): ?>
+                                        <form method="POST" style="margin:0; display:inline;">
+                                            <?php echo csrf_field(); ?>
+                                            <input type="hidden" name="action" value="pause_queue_item">
+                                            <input type="hidden" name="queue_id" value="<?php echo $log['queue_id']; ?>">
+                                            <button type="submit" class="btn btn-xs" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; background:#f1f5f9; border:1px solid #cbd5e1; cursor:pointer;" title="Pause message"><i class="fas fa-pause"></i> Pause</button>
+                                        </form>
+                                        <button type="button" class="btn btn-xs btn-danger" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="openCancelModal(<?php echo $log['queue_id']; ?>, '<?php echo htmlspecialchars($log['recipient']); ?>', '<?php echo htmlspecialchars($log['queue_status']); ?>')" title="Cancel message"><i class="fas fa-xmark"></i> Cancel</button>
+                                    <?php elseif ($log['queue_status'] === 'paused'): ?>
+                                        <form method="POST" style="margin:0; display:inline;">
+                                            <?php echo csrf_field(); ?>
+                                            <input type="hidden" name="action" value="resume_queue_item">
+                                            <input type="hidden" name="queue_id" value="<?php echo $log['queue_id']; ?>">
+                                            <button type="submit" class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; color:#fff; background:#10b981; border:none; cursor:pointer;" title="Resume message"><i class="fas fa-play"></i> Resume</button>
+                                        </form>
+                                        <button type="button" class="btn btn-xs btn-danger" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="openCancelModal(<?php echo $log['queue_id']; ?>, '<?php echo htmlspecialchars($log['recipient']); ?>', '<?php echo htmlspecialchars($log['queue_status']); ?>')" title="Cancel message"><i class="fas fa-xmark"></i> Cancel</button>
+                                    <?php elseif ($log['queue_status'] === 'failed'): ?>
+                                        <form method="POST" style="margin:0; display:inline;">
+                                            <?php echo csrf_field(); ?>
+                                            <input type="hidden" name="action" value="retry_queue_item">
+                                            <input type="hidden" name="queue_id" value="<?php echo $log['queue_id']; ?>">
+                                            <button type="submit" class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; color:#fff; background:#8b5cf6; border:none; cursor:pointer;" title="Retry message"><i class="fas fa-rotate-right"></i> Retry</button>
+                                        </form>
+                                        <button type="button" class="btn btn-xs btn-danger" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="openCancelModal(<?php echo $log['queue_id']; ?>, '<?php echo htmlspecialchars($log['recipient']); ?>', '<?php echo htmlspecialchars($log['queue_status']); ?>')" title="Cancel message"><i class="fas fa-xmark"></i> Cancel</button>
+                                    <?php elseif ($log['queue_status'] === 'cancelled'): ?>
+                                        <form method="POST" style="margin:0; display:inline;">
+                                            <?php echo csrf_field(); ?>
+                                            <input type="hidden" name="action" value="retry_queue_item">
+                                            <input type="hidden" name="queue_id" value="<?php echo $log['queue_id']; ?>">
+                                            <button type="submit" class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; color:#fff; background:#8b5cf6; border:none; cursor:pointer;" title="Retry as new manual operation"><i class="fas fa-rotate-right"></i> Retry</button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span style="color:#9ca3af;">-</span>
+                                    <?php endif; ?>
+                                    </div>
                                 </td>
                                 <td style="padding:12px;">
                                     <span class="badge <?php 
@@ -758,10 +964,6 @@ include 'includes/admin_nav.php';
                                     ?>">
                                         <?php echo strtoupper($log['tracking_status'] ?? 'UNKNOWN'); ?>
                                     </span>
-                                    <?php if (!empty($log['last_attempted_at'])): ?>
-                                        <br>
-                                        <span style="font-size:0.7rem; color:#6b7280; font-weight:normal;">Try: <?php echo date('d M h:i A', strtotime($log['last_attempted_at'])); ?></span>
-                                    <?php endif; ?>
                                 </td>
                                 <td style="padding:12px; max-width:320px;" title="<?php echo htmlspecialchars($log['error_message'] ?? ''); ?>">
                                     <?php if ($log['message_id'] && $log['message_id'] !== 'NONE'): ?>
@@ -812,11 +1014,64 @@ include 'includes/admin_nav.php';
                                 </td>
                                 <td style="padding:12px;">
                                     <span class="badge <?php 
-                                        echo $log['status'] === 'read' || $log['status'] === 'delivered' || $log['status'] === 'sent' ? 'green' : 
-                                             ($log['status'] === 'failed' ? 'red' : 'amber'); 
+                                        if ($log['status'] === 'read' || $log['status'] === 'delivered' || $log['status'] === 'sent') {
+                                            echo 'green';
+                                        } elseif ($log['status'] === 'failed') {
+                                            echo ($log['retry_count'] >= 3) ? 'red' : 'amber';
+                                        } elseif ($log['status'] === 'cancelled') {
+                                            echo 'gray';
+                                        } elseif ($log['status'] === 'paused') {
+                                            echo 'amber';
+                                        } else {
+                                            echo 'blue';
+                                        }
                                     ?>">
-                                        <?php echo strtoupper($log['status']); ?>
+                                        <?php 
+                                            if ($log['status'] === 'failed') {
+                                                echo ($log['retry_count'] >= 3) ? 'FAILED — PERMANENT' : 'FAILED — RETRYING';
+                                            } else {
+                                                echo strtoupper($log['status']); 
+                                            }
+                                        ?>
                                     </span>
+                                </td>
+                                <td style="padding:12px;">
+                                    <div style="display:flex; gap:6px; align-items:center;">
+                                    <?php if ($log['status'] === 'pending' || $log['status'] === 'scheduled'): ?>
+                                        <form method="POST" style="margin:0; display:inline;">
+                                            <?php echo csrf_field(); ?>
+                                            <input type="hidden" name="action" value="pause_queue_item">
+                                            <input type="hidden" name="queue_id" value="<?php echo $log['id']; ?>">
+                                            <button type="submit" class="btn btn-xs" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; background:#f1f5f9; border:1px solid #cbd5e1; cursor:pointer;" title="Pause message"><i class="fas fa-pause"></i> Pause</button>
+                                        </form>
+                                        <button type="button" class="btn btn-xs btn-danger" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="openCancelModal(<?php echo $log['id']; ?>, '<?php echo htmlspecialchars($log['recipient']); ?>', '<?php echo htmlspecialchars($log['status']); ?>')" title="Cancel message"><i class="fas fa-xmark"></i> Cancel</button>
+                                    <?php elseif ($log['status'] === 'paused'): ?>
+                                        <form method="POST" style="margin:0; display:inline;">
+                                            <?php echo csrf_field(); ?>
+                                            <input type="hidden" name="action" value="resume_queue_item">
+                                            <input type="hidden" name="queue_id" value="<?php echo $log['id']; ?>">
+                                            <button type="submit" class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; color:#fff; background:#10b981; border:none; cursor:pointer;" title="Resume message"><i class="fas fa-play"></i> Resume</button>
+                                        </form>
+                                        <button type="button" class="btn btn-xs btn-danger" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="openCancelModal(<?php echo $log['id']; ?>, '<?php echo htmlspecialchars($log['recipient']); ?>', '<?php echo htmlspecialchars($log['status']); ?>')" title="Cancel message"><i class="fas fa-xmark"></i> Cancel</button>
+                                    <?php elseif ($log['status'] === 'failed'): ?>
+                                        <form method="POST" style="margin:0; display:inline;">
+                                            <?php echo csrf_field(); ?>
+                                            <input type="hidden" name="action" value="retry_queue_item">
+                                            <input type="hidden" name="queue_id" value="<?php echo $log['id']; ?>">
+                                            <button type="submit" class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; color:#fff; background:#8b5cf6; border:none; cursor:pointer;" title="Retry message"><i class="fas fa-rotate-right"></i> Retry</button>
+                                        </form>
+                                        <button type="button" class="btn btn-xs btn-danger" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="openCancelModal(<?php echo $log['id']; ?>, '<?php echo htmlspecialchars($log['recipient']); ?>', '<?php echo htmlspecialchars($log['status']); ?>')" title="Cancel message"><i class="fas fa-xmark"></i> Cancel</button>
+                                    <?php elseif ($log['status'] === 'cancelled'): ?>
+                                        <form method="POST" style="margin:0; display:inline;">
+                                            <?php echo csrf_field(); ?>
+                                            <input type="hidden" name="action" value="retry_queue_item">
+                                            <input type="hidden" name="queue_id" value="<?php echo $log['id']; ?>">
+                                            <button type="submit" class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.7rem; border-radius:4px; color:#fff; background:#8b5cf6; border:none; cursor:pointer;" title="Retry as new manual operation"><i class="fas fa-rotate-right"></i> Retry</button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span style="color:#9ca3af;">-</span>
+                                    <?php endif; ?>
+                                    </div>
                                 </td>
                                 <td style="padding:12px; color:#ef4444; max-width:320px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="<?php echo htmlspecialchars($log['error_message'] ?? ''); ?>">
                                     <?php echo $log['error_message'] ? htmlspecialchars(preg_replace('/(Bearer|token|key|secret)[^\s]*/i', '***', $log['error_message'])) : '<span style="color:#9ca3af;">-</span>'; ?>
@@ -886,5 +1141,59 @@ include 'includes/admin_nav.php';
         </div>
     </div>
 </div>
+
+<!-- Cancel Queue Modal Overlay -->
+<div id="cancelQueueModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15, 23, 42, 0.6); backdrop-filter:blur(4px); z-index:9999; justify-content:center; align-items:center;">
+    <div style="background:#fff; border-radius:16px; width:450px; max-width:90%; padding:24px; box-shadow:0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); border:1px solid #e5e7eb;">
+        <h3 style="margin-top:0; font-size:1.15rem; font-weight:700; color:#111827; display:flex; align-items:center; gap:8px;">
+            <i class="fas fa-circle-exclamation" style="color:#ef4444;"></i> Cancel Queue <span id="modalQueueIdDisplay">#XXX</span>?
+        </h3>
+        
+        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px; margin:16px 0; font-size:0.85rem;">
+            <div style="margin-bottom:6px; color:#475569;"><strong>Recipient:</strong> <span id="modalRecipientDisplay">+91XXXXXXXXXX</span></div>
+            <div style="color:#475569;"><strong>Status:</strong> <span id="modalStatusDisplay">Failed</span></div>
+        </div>
+
+        <p style="font-size:0.85rem; color:#4b5563; margin-bottom:20px;">
+            Once cancelled, the communication engine will not retry this queue item.
+        </p>
+
+        <form method="POST" action="" id="cancelQueueForm">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="cancel_queue_item">
+            <input type="hidden" name="queue_id" id="modalQueueIdInput" value="">
+            
+            <div style="margin-bottom:20px;">
+                <label style="display:block; font-size:0.8rem; font-weight:600; color:#4b5563; margin-bottom:6px;">Reason for Cancellation (Optional):</label>
+                <select name="cancel_reason" style="width:100%; padding:8px 12px; border-radius:8px; border:1px solid #d1d5db; font-size:0.85rem; background:#fff;">
+                    <option value="No longer required">No longer required</option>
+                    <option value="Invalid number">Invalid number</option>
+                    <option value="Student changed number">Student changed number</option>
+                    <option value="Duplicate message">Duplicate message</option>
+                    <option value="Wrong recipient">Wrong recipient</option>
+                </select>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:10px;">
+                <button type="button" class="btn btn-sm" style="border-radius:8px; padding:8px 16px; font-weight:600; border:1px solid #d1d5db; background:#fff; cursor:pointer;" onclick="closeCancelModal()">Keep Queue</button>
+                <button type="submit" class="btn btn-sm btn-danger" style="border-radius:8px; padding:8px 16px; font-weight:600; background:#ef4444; border:none; color:#fff; cursor:pointer;">Cancel Queue</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openCancelModal(queueId, recipient, status) {
+    document.getElementById('modalQueueIdDisplay').innerText = '#' + queueId;
+    document.getElementById('modalQueueIdInput').value = queueId;
+    document.getElementById('modalRecipientDisplay').innerText = recipient;
+    document.getElementById('modalStatusDisplay').innerText = status.toUpperCase();
+    document.getElementById('cancelQueueModal').style.display = 'flex';
+}
+
+function closeCancelModal() {
+    document.getElementById('cancelQueueModal').style.display = 'none';
+}
+</script>
 
 <?php include 'includes/admin_footer.php'; ?>

@@ -47,9 +47,22 @@ try {
 
     $queueId = isset($argv[1]) ? (int)$argv[1] : null;
     
+    require_once __DIR__ . '/includes/communication/CommunicationEngine.php';
+    $engine = CommunicationEngine::getInstance($pdo);
+    
+    if ($engine->isQueuePaused()) {
+        if ($is_cli) {
+            echo "Queue is paused. Exiting.\n";
+        } else {
+            echo json_encode([
+                'success' => true,
+                'message' => 'Queue is paused. Exiting.'
+            ]);
+        }
+        exit(0);
+    }
+    
     if ($queueId > 0) {
-        require_once __DIR__ . '/includes/communication/CommunicationEngine.php';
-        $engine = CommunicationEngine::getInstance($pdo);
         $success = $engine->processQueueItem($queueId);
         if ($is_cli) {
             echo "Queue item #{$queueId} processed: " . ($success ? "Success" : "Failed") . "\n";

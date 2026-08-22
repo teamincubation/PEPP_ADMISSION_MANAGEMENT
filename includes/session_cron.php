@@ -303,17 +303,17 @@ function installments_dispatch_whatsapp_reminders($pdo) {
                 $stmtCheck->execute([$inst['installment_id'], $stage]);
                 $existingStatus = $stmtCheck->fetchColumn();
 
-                if ($existingStatus === 'sent' || $existingStatus === 'queued') {
+                if ($existingStatus === 'sent' || $existingStatus === 'queued' || $existingStatus === 'failed') {
                     $pdo->rollBack();
-                    continue; // Skip already successfully queued or sent reminders
+                    continue; // Skip already successfully queued, sent, or failed reminders
                 }
 
-                // If doesn't exist, insert as 'queued'. If 'failed', update to 'queued'.
+                // If doesn't exist, insert as 'queued'.
                 if ($existingStatus === false) {
                     $stmtTrack = $pdo->prepare("INSERT INTO installment_whatsapp_reminders (installment_id, reminder_stage, status, last_attempted_at) VALUES (?, ?, 'queued', NOW())");
                     $stmtTrack->execute([$inst['installment_id'], $stage]);
                 } else {
-                    $stmtTrack = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued', last_attempted_at = NOW() WHERE installment_id = ? AND reminder_stage = ? AND status NOT IN ('queued', 'sent')");
+                    $stmtTrack = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued', last_attempted_at = NOW() WHERE installment_id = ? AND reminder_stage = ? AND status NOT IN ('queued', 'sent', 'failed')");
                     $stmtTrack->execute([$inst['installment_id'], $stage]);
                     if ($stmtTrack->rowCount() === 0) {
                         $pdo->rollBack();
@@ -447,17 +447,17 @@ function installments_dispatch_whatsapp_overdue_reminders($pdo) {
                 $stmtCheck->execute([$inst['installment_id'], $stage]);
                 $existingStatus = $stmtCheck->fetchColumn();
 
-                if ($existingStatus === 'sent' || $existingStatus === 'queued') {
+                if ($existingStatus === 'sent' || $existingStatus === 'queued' || $existingStatus === 'failed') {
                     $pdo->rollBack();
-                    continue; // Skip already successfully queued or sent reminders
+                    continue; // Skip already successfully queued, sent, or failed reminders
                 }
 
-                // If doesn't exist, insert as 'queued'. If 'failed', update to 'queued'.
+                // If doesn't exist, insert as 'queued'.
                 if ($existingStatus === false) {
                     $stmtTrack = $pdo->prepare("INSERT INTO installment_whatsapp_reminders (installment_id, reminder_stage, status, last_attempted_at) VALUES (?, ?, 'queued', NOW())");
                     $stmtTrack->execute([$inst['installment_id'], $stage]);
                 } else {
-                    $stmtTrack = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued', last_attempted_at = NOW() WHERE installment_id = ? AND reminder_stage = ? AND status NOT IN ('queued', 'sent')");
+                    $stmtTrack = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued', last_attempted_at = NOW() WHERE installment_id = ? AND reminder_stage = ? AND status NOT IN ('queued', 'sent', 'failed')");
                     $stmtTrack->execute([$inst['installment_id'], $stage]);
                     if ($stmtTrack->rowCount() === 0) {
                         $pdo->rollBack();

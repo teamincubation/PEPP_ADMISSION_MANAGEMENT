@@ -99,6 +99,7 @@ class TestSuite {
                 event_name TEXT,
                 invoice_id TEXT,
                 error_message TEXT,
+                message_id TEXT,
                 retry_count INTEGER DEFAULT 0,
                 last_retry_at TEXT,
                 worker_started_at TEXT,
@@ -167,6 +168,35 @@ class TestSuite {
                 event_name TEXT,
                 created_at TEXT,
                 updated_at TEXT
+            );
+
+            DROP TABLE IF EXISTS whatsapp_conversations;
+            CREATE TABLE whatsapp_conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wa_phone_number TEXT,
+                student_uid TEXT,
+                student_user_id TEXT,
+                contact_name TEXT,
+                last_message_text TEXT,
+                last_message_at TEXT,
+                unread_count INTEGER DEFAULT 0,
+                status TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+
+            DROP TABLE IF EXISTS whatsapp_messages;
+            CREATE TABLE whatsapp_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER,
+                wa_message_id TEXT,
+                direction TEXT,
+                message_type TEXT,
+                message_text TEXT,
+                status TEXT,
+                raw_payload TEXT,
+                created_at TEXT,
+                sent_at TEXT
             );
 
             DROP TABLE IF EXISTS whatsapp_mode_audit;
@@ -321,6 +351,106 @@ class TestSuite {
             $this->assertEquals('failed', $res['status'], "Transient error should keep status failed for scheduling");
             $this->assertEquals(1, $res['retry_count'], "Transient error should increment retry_count to 1");
             $this->assertStringContainsString('Temporary HTTP 503', $res['error_message'], "Error message should contain transient HTTP error details");
+        });
+
+        $this->runTest('TEST H: Individual Queue Pause & Exclusions', function() {
+            $queueId = $this->engine->queueMessage('whatsapp', '919999999999', 'Test User', 'Subject', '<p>Body</p>', 'Body', [], [], 'system_test');
+            $this->pdo->prepare("UPDATE communication_queue SET status = 'paused' WHERE id = ?")->execute([$queueId]);
+            
+            $success = $this->engine->processQueueItem($queueId);
+            $this->assertEquals(false, $success, "Paused item should return false from processQueueItem");
+            
+            $status = $this->pdo->query("SELECT status FROM communication_queue WHERE id = {$queueId}")->fetchColumn();
+            $this->assertEquals('paused', $status, "Status should remain paused");
+        });
+
+        $this->runTest('TEST I: Individual Queue Resume', function() {
+            $queueId = $this->engine->queueMessage('whatsapp', '919999999999', 'Test User', 'Subject', '<p>Body</p>', 'Body', [], [], 'system_test');
+            $this->pdo->prepare("UPDATE communication_queue SET status = 'paused' WHERE id = ?")->execute([$queueId]);
+            
+            $this->pdo->prepare("UPDATE communication_queue SET status = 'pending', next_attempt_at = NOW() WHERE id = ?")->execute([$queueId]);
+            $this->mockProvider->shouldFail = false;
+            $success = $this->engine->processQueueItem($queueId);
+            $this->assertEquals(true, $success, "Resumed item should process successfully");
+            
+            $status = $this->pdo->query("SELECT status FROM communication_queue WHERE id = {$queueId}")->fetchColumn();
+            $this->assertEquals('sent', $status, "Status should update to sent");
+        });
+
+        $this->runTest('TEST J: Individual Queue Cancel & Exclusions', function() {
+            $queueId = $this->engine->queueMessage('whatsapp', '919999999999', 'Test User', 'Subject', '<p>Body</p>', 'Body', [], [], 'system_test');
+            $this->pdo->prepare("UPDATE communication_queue SET status = 'cancelled', next_attempt_at = '2038-01-01 00:00:00' WHERE id = ?")->execute([$queueId]);
+            
+            $success = $this->engine->processQueueItem($queueId);
+            $this->assertEquals(false, $success, "Cancelled item should return false from processQueueItem");
+            
+            $status = $this->pdo->query("SELECT status FROM communication_queue WHERE id = {$queueId}")->fetchColumn();
+            $this->assertEquals('cancelled', $status, "Status should remain cancelled");
+        });
+
+        $this->runTest('TEST K: Global Queue Pause', function() {
+            $queueId = $this->engine->queueMessage('whatsapp', '919999999999', 'Test User', 'Subject', '<p>Body</p>', 'Body', [], [], 'system_test');
+            $this->engine->setQueuePaused(true);
+            
+            $success = $this->engine->processQueueItem($queueId);
+            $this->assertEquals(false, $success, "Globally paused queue should skip processQueueItem");
+            
+            $status = $this->pdo->query("SELECT status FROM communication_queue WHERE id = {$queueId}")->fetchColumn();
+            $this->assertEquals('pending', $status, "Status should remain pending");
+            
+            $this->engine->setQueuePaused(false);
+            $success2 = $this->engine->processQueueItem($queueId);
+            $this->assertEquals(true, $success2, "Resuming globally should process queue items");
+        });
+
+        $this->runTest('TEST L: Permanent Recipient Failure Suppression', function() {
+            $this->engine->queueMessage('whatsapp', '917777777777', 'Stale Recipient', 'Subject', 'Html', 'Text', [], [], 'system_test');
+            $this->pdo->exec("UPDATE communication_queue SET status = 'failed', retry_count = 3, error_message = 'Meta API Error: 131026 policy block' WHERE recipient = '917777777777'");
+            
+            $newQueueId = $this->engine->queueMessage('whatsapp', '917777777777', 'Stale Recipient', 'Subject', 'Html', 'Text', [], [], 'system');
+            
+            $stmt = $this->pdo->prepare("SELECT status, retry_count, error_message FROM communication_queue WHERE id = ?");
+            $stmt->execute([$newQueueId]);
+            $res = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            $this->assertEquals('failed', $res['status'], "Suppressed item should be created in failed status");
+            $this->assertEquals(3, $res['retry_count'], "Suppressed item should have max retries = 3");
+            $this->assertStringContainsString('previously failed permanently', $res['error_message'], "Error message should show suppression reason");
+            
+            $manualQueueId = $this->engine->queueMessage('whatsapp', '917777777777', 'Stale Recipient', 'Subject', 'Html', 'Text', [], [], 'admin_username');
+            $this->mockProvider->shouldFail = false;
+            $success = $this->engine->processQueueItem($manualQueueId);
+            $this->assertEquals(true, $success, "Manual admin queue should bypass suppression and succeed");
+        });
+
+        $this->runTest('TEST M: Pre-Send Phone Change Sync & Superseded Marker', function() {
+            $userId = 'test_student_' . uniqid();
+            $this->pdo->prepare("INSERT INTO users (user_id, name, whatsapp_country_code, whatsapp_number, status, type, created_at) VALUES (?, 'Test Student', '91', '9999999999', 'approved', 'student', NOW())")->execute([$userId]);
+
+            $queueId = $this->engine->queueMessage('whatsapp', '919999999999', 'Test Student', 'Reminder', '<p>Body</p>', 'Body', [], [], 'system_scheduler', null, $userId);
+            
+            // Simulating a student changing number right before Meta API send (during processing state)
+            $this->pdo->prepare("UPDATE users SET whatsapp_number = '8888888888' WHERE user_id = ?")->execute([$userId]);
+            
+            // Claim row and process it
+            $this->engine->processQueueItem($queueId);
+
+            // Assert old queue item is superseded/failed
+            $oldQ = $this->pdo->query("SELECT status, error_message FROM communication_queue WHERE id = {$queueId}")->fetch(PDO::FETCH_ASSOC);
+            $this->assertEquals('failed', $oldQ['status']);
+            $this->assertEquals('Superseded: Recipient number changed', $oldQ['error_message']);
+
+            // Assert new replacement queue item is created targeting new number
+            $newQ = $this->pdo->query("SELECT id, recipient, status FROM communication_queue WHERE student_uid = '{$userId}' AND id != {$queueId} ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+            $this->assertNotEmpty($newQ);
+            $this->assertEquals('918888888888', $newQ['recipient']);
+        });
+
+        $this->runTest('TEST N: Race Condition Pre-Send Cancel/Pause State Abort', function() {
+            $queueId = $this->engine->queueMessage('whatsapp', '919999999999', 'Test User', 'Subject', '<p>Body</p>', 'Body', [], [], 'system_test');
+            $this->pdo->prepare("UPDATE communication_queue SET status = 'cancelled' WHERE id = ?")->execute([$queueId]);
+            $success = $this->engine->processQueueItem($queueId);
+            $this->assertEquals(false, $success, "Process should return false since it is cancelled");
         });
 
         echo "\n=== All Tests Completed Successfully ===\n";

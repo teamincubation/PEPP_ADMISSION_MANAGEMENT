@@ -68,6 +68,38 @@ class CommunicationEngine {
             $retryCount = 3; // Block auto-retries for invalid phone numbers
         }
 
+        $normalizedRecipient = self::normalizePhone($recipient);
+
+        // Permanent recipient failure suppression check for automatic actions
+        if ($channel === 'whatsapp' && !empty($normalizedRecipient) && in_array($sentBy, ['system', 'system_scheduler', 'system_test'], true)) {
+            $stmtSupp = $this->pdo->prepare("
+                SELECT error_message FROM communication_queue 
+                WHERE recipient = ? AND status = 'failed' 
+                  AND retry_count >= 2
+                  AND (
+                    error_message LIKE '%healthy ecosystem engagement%' OR 
+                    error_message LIKE '%131026%' OR 
+                    error_message LIKE '%policy%' OR 
+                    error_message LIKE '%not in allowed list%' OR 
+                    error_message LIKE '%invalid phone number%' OR 
+                    error_message LIKE '%does not exist%' OR 
+                    error_message LIKE '%recipient%' OR 
+                    error_message LIKE '%undeliverable%' OR 
+                    error_message LIKE '%not a whatsapp number%' OR
+                    error_message LIKE '%Suppressed%'
+                  )
+                LIMIT 1
+            ");
+            $stmtSupp->execute([$normalizedRecipient]);
+            $suppressedMsg = $stmtSupp->fetchColumn();
+
+            if ($suppressedMsg) {
+                $status = 'failed';
+                $errorMsg = 'Suppressed: WhatsApp recipient previously failed permanently';
+                $retryCount = 3; // Block execution
+            }
+        }
+
         // Auto-resolve placeholders if student UID is provided and text is raw
         if ($studentUid && empty($templateData['name'])) {
             if (function_exists('fill_student_template')) {
@@ -190,6 +222,11 @@ class CommunicationEngine {
      * Executes the dispatch logic of a specific queued message.
      */
     public function processQueueItem($queueId) {
+        if ($this->isQueuePaused()) {
+            error_log("[QUEUE_PAUSED] Global queue processing is paused. Skipping queue item #{$queueId}.");
+            return false;
+        }
+
         $item = null;
         try {
             // Atomically lock and claim the queue item to prevent concurrency issues
@@ -221,6 +258,58 @@ class CommunicationEngine {
             $stmt = $this->pdo->prepare("SELECT * FROM communication_queue WHERE id = ?");
             $stmt->execute([$queueId]);
             $item = $stmt->fetch();
+
+            // Permanent WhatsApp recipient suppression check
+            if ($item && $item['channel'] === 'whatsapp' && in_array($item['sent_by'] ?? 'system', ['system', 'system_scheduler', 'system_test'], true)) {
+                $normalizedRecipient = self::normalizePhone($item['recipient']);
+                $stmtSupp = $this->pdo->prepare("
+                    SELECT id FROM communication_queue 
+                    WHERE recipient = ? AND status = 'failed' 
+                      AND id != ?
+                      AND retry_count >= 2
+                      AND (
+                        error_message LIKE '%healthy ecosystem engagement%' OR 
+                        error_message LIKE '%131026%' OR 
+                        error_message LIKE '%policy%' OR 
+                        error_message LIKE '%not in allowed list%' OR 
+                        error_message LIKE '%invalid phone number%' OR 
+                        error_message LIKE '%does not exist%' OR 
+                        error_message LIKE '%recipient%' OR 
+                        error_message LIKE '%undeliverable%' OR 
+                        error_message LIKE '%not a whatsapp number%' OR
+                        error_message LIKE '%Suppressed%'
+                      )
+                    LIMIT 1
+                ");
+                $stmtSupp->execute([$normalizedRecipient, $queueId]);
+                $hasFailedBefore = $stmtSupp->fetchColumn();
+
+                if ($hasFailedBefore) {
+                    $updSupp = $this->pdo->prepare("
+                        UPDATE communication_queue 
+                        SET status = 'failed', 
+                            retry_count = 3, 
+                            error_message = 'Suppressed: WhatsApp recipient previously failed permanently', 
+                            updated_at = NOW() 
+                        WHERE id = ?
+                    ");
+                    $updSupp->execute([$queueId]);
+
+                    try {
+                        $updCampStmt = $this->pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = 'Suppressed: WhatsApp recipient previously failed permanently' WHERE queue_id = ?");
+                        $updCampStmt->execute([$queueId]);
+                    } catch (Exception $e) {}
+
+                    try {
+                        $updRemStmt = $this->pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'failed' WHERE queue_id = ?");
+                        $updRemStmt->execute([$queueId]);
+                    } catch (Exception $e) {}
+
+                    error_log("[QUEUE_SUPPRESSED] Suppressed dispatch for queue ID {$queueId} targeting previously failed recipient {$normalizedRecipient}");
+                    $this->pdo->commit();
+                    return false;
+                }
+            }
 
             // Pre-send validation check
             if ($item && $item['channel'] === 'whatsapp' && !empty($item['student_uid'])) {
@@ -458,6 +547,80 @@ class CommunicationEngine {
             }
 
             $provider = $this->getProvider($channel);
+            
+            // Race-condition revalidation right before Meta API dispatch
+            $checkStmt = $this->pdo->prepare("SELECT status, recipient, student_uid, event_name, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, sent_by, invoice_id FROM communication_queue WHERE id = ?");
+            $checkStmt->execute([$queueId]);
+            $chkItem = $checkStmt->fetch();
+
+            if (!$chkItem) {
+                return false;
+            }
+
+            if ($chkItem['status'] === 'cancelled' || $chkItem['status'] === 'paused') {
+                error_log("[QUEUE_RACE_ABORT] Queue item #{$queueId} was updated to {$chkItem['status']} by admin before Meta API dispatch. Aborting.");
+                return false;
+            }
+
+            if (!empty($chkItem['student_uid'])) {
+                $studStmt = $this->pdo->prepare("SELECT whatsapp_country_code, whatsapp_number FROM users WHERE user_id = ?");
+                $studStmt->execute([$chkItem['student_uid']]);
+                $student = $studStmt->fetch();
+                if ($student) {
+                    $currentPhone = self::normalizePhone($student['whatsapp_country_code'] . $student['whatsapp_number']);
+                    $queuedPhone = self::normalizePhone($chkItem['recipient']);
+                    if ($currentPhone !== $queuedPhone) {
+                        // Recipient changed! Mark old item as superseded
+                        $updStale = $this->pdo->prepare("UPDATE communication_queue SET status = 'failed', error_message = 'Superseded: Recipient number changed', updated_at = NOW() WHERE id = ?");
+                        $updStale->execute([$queueId]);
+
+                        // Enqueue replacement for new number
+                        $dupStmt = $this->pdo->prepare("
+                            SELECT COUNT(*) FROM communication_queue 
+                            WHERE student_uid = ? 
+                              AND (event_name = ? OR (event_name IS NULL AND ? IS NULL))
+                              AND recipient = ? 
+                              AND status IN ('pending', 'processing', 'sent', 'delivered', 'read')
+                        ");
+                        $dupStmt->execute([$chkItem['student_uid'], $chkItem['event_name'], $chkItem['event_name'], $currentPhone]);
+                        $exists = (int)$dupStmt->fetchColumn();
+
+                        if ($exists === 0) {
+                            $insStmt = $this->pdo->prepare("
+                                INSERT INTO communication_queue 
+                                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at) 
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, ?, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                            ");
+                            $insStmt->execute([
+                                'whatsapp',
+                                $currentPhone,
+                                $chkItem['recipient_name'],
+                                $chkItem['subject'],
+                                $chkItem['body_html'],
+                                $chkItem['body_text'],
+                                $chkItem['template_name'],
+                                $chkItem['template_data'],
+                                $chkItem['attachments'],
+                                $chkItem['sent_by'],
+                                $chkItem['student_uid'],
+                                $chkItem['event_name'],
+                                $chkItem['invoice_id']
+                            ]);
+                            $newQueueId = (int)$this->pdo->lastInsertId();
+
+                            // Update tracking table installment_whatsapp_reminders
+                            $updTrack = $this->pdo->prepare("
+                                UPDATE installment_whatsapp_reminders 
+                                SET queue_id = ?, status = 'queued'
+                                WHERE queue_id = ?
+                            ");
+                            $updTrack->execute([$newQueueId, $queueId]);
+                            error_log("[QUEUE_REENQUEUED_RACE] old_queue_id={$queueId} new_queue_id={$newQueueId} student_id={$chkItem['student_uid']} recipient={$currentPhone}");
+                        }
+                        return false;
+                    }
+                }
+            }
             
             // Log API request time
             $updReqStmt = $this->pdo->prepare("UPDATE communication_queue SET api_requested_at = NOW() WHERE id = ?");
@@ -1031,6 +1194,10 @@ class CommunicationEngine {
      * @return bool
      */
     public function dispatchQueueItemAsync($queueId) {
+        if ($this->isQueuePaused()) {
+            return false;
+        }
+
         if ($this->pdo->inTransaction()) {
             // Defer dispatch to background cron to prevent nested transactions and unsafe external API calls during transaction
             return true;
@@ -1077,6 +1244,36 @@ class CommunicationEngine {
         } catch (\Throwable $e) {
             error_log("Async Dispatch Throwable (proc_open disabled or failed): " . $e->getMessage() . ". Falling back to synchronous execution for queue item #{$queueId}");
             return $this->processQueueItem($queueId);
+        }
+    }
+
+    /**
+     * Checks if the communication queue is globally paused.
+     */
+    public function isQueuePaused() {
+        try {
+            $stmt = $this->pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'communication_queue_paused' LIMIT 1");
+            $stmt->execute();
+            $val = $stmt->fetchColumn();
+            return ((int)$val === 1);
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Toggles the global pause state.
+     */
+    public function setQueuePaused($paused) {
+        try {
+            $val = $paused ? '1' : '0';
+            $this->pdo->prepare("DELETE FROM admin_settings WHERE setting_name = 'communication_queue_paused'")->execute();
+            $stmt = $this->pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('communication_queue_paused', ?, NOW())");
+            $stmt->execute([$val]);
+            return true;
+        } catch (Exception $e) {
+            error_log("Failed to setQueuePaused: " . $e->getMessage());
+            return false;
         }
     }
 
@@ -1199,6 +1396,10 @@ class CommunicationEngine {
      * Uses curl HTTP loopback with 1-second timeout.
      */
     public function triggerCronBackground() {
+        if ($this->isQueuePaused()) {
+            error_log("[CRON_TRIGGER_ABORT] Queue is paused. Background cron trigger skipped.");
+            return;
+        }
         try {
             $stmtSec = $this->pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_cron_worker_key' LIMIT 1");
             $stmtSec->execute();

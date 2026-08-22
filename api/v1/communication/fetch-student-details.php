@@ -52,6 +52,20 @@ try {
     $totalPayable = (float)($student['total_fee'] ?? 0);
     $balance = max(0, $totalPayable - $collected);
 
+    // Fetch active/pending/failed queue items for this student
+    $queueItems = [];
+    try {
+        $qStmt = $pdo->prepare("
+            SELECT id, event_name, status, retry_count, error_message, updated_at 
+            FROM communication_queue 
+            WHERE student_uid = ? AND status IN ('pending', 'failed', 'paused')
+            ORDER BY id DESC
+            LIMIT 5
+        ");
+        $qStmt->execute([$student['user_id']]);
+        $queueItems = $qStmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+
     echo json_encode([
         'success' => true,
         'student' => [
@@ -65,7 +79,8 @@ try {
             'total_paid' => number_format($collected),
             'balance' => number_format($balance),
             'next_due_date' => $nextDueDate
-        ]
+        ],
+        'active_reminders' => $queueItems
     ]);
 } catch (Exception $e) {
     http_response_code(500);
