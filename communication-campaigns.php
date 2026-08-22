@@ -27,8 +27,119 @@ function clean_wa_phone($num) {
    AJAX APIs
    ───────────────────────────────────────────────────────────────────────────── */
 if (isset($_GET['action'])) {
-    header('Content-Type: application/json');
     $action = $_GET['action'];
+    
+    // 0. Download Campaign Report (CSV/Excel)
+    if ($action === 'download_report') {
+        $id = (int)$_GET['campaign_id'];
+        $format = $_GET['format'] ?? 'csv'; // csv | excel
+        
+        $stmt = $pdo->prepare("SELECT * FROM communication_campaigns WHERE id = ? LIMIT 1");
+        $stmt->execute([$id]);
+        $camp = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$camp) {
+            echo "Campaign not found.";
+            exit;
+        }
+
+        $stmtRec = $pdo->prepare("
+            SELECT r.*, 
+                   q.status as queue_status, 
+                   q.error_message as queue_error, 
+                   q.delivered_at, 
+                   q.message_id, 
+                   q.retry_count, 
+                   q.last_retry_at, 
+                   wm.read_at 
+            FROM communication_campaign_recipients r
+            LEFT JOIN communication_queue q ON r.queue_id = q.id
+            LEFT JOIN whatsapp_messages wm ON q.message_id = wm.wa_message_id
+            WHERE r.campaign_id = ? 
+            ORDER BY r.id ASC
+        ");
+        $stmtRec->execute([$id]);
+        $recipients = $stmtRec->fetchAll(PDO::FETCH_ASSOC);
+
+        $filename = "campaign_report_" . $id . "_" . date('Ymd_His');
+
+        if ($format === 'excel') {
+            header('Content-Type: application/vnd.ms-excel');
+            header('Content-Disposition: attachment; filename="' . $filename . '.xls"');
+            header('Cache-Control: max-age=0');
+            
+            echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
+            echo '<head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"></head>';
+            echo '<body>';
+            echo '<table border="1">';
+            echo '<tr style="background:#f1f5f9; font-weight:bold;">';
+            echo '<th>Campaign ID</th><th>Campaign Name</th><th>Template Name</th><th>Target Audience</th>';
+            echo '<th>Recipient Name</th><th>WhatsApp Phone</th><th>Queue ID</th><th>Queue Status</th>';
+            echo '<th>Meta Message ID</th><th>Sent Time</th><th>Delivery Status</th><th>Delivery Time</th><th>Read Time</th>';
+            echo '<th>Failure Reason</th><th>Retry Count</th>';
+            echo '</tr>';
+            foreach ($recipients as $r) {
+                $status = $r['queue_status'] ?: $r['status'] ?: 'pending';
+                echo '<tr>';
+                echo '<td>' . htmlspecialchars($camp['id']) . '</td>';
+                echo '<td>' . htmlspecialchars($camp['name']) . '</td>';
+                echo '<td>' . htmlspecialchars($camp['template_name']) . '</td>';
+                echo '<td>' . htmlspecialchars(strtoupper($camp['target_audience'])) . '</td>';
+                echo '<td>' . htmlspecialchars($r['recipient_name']) . '</td>';
+                echo '<td>' . htmlspecialchars($r['recipient']) . '</td>';
+                echo '<td>' . htmlspecialchars($r['queue_id'] ?: '-') . '</td>';
+                echo '<td>' . htmlspecialchars(strtoupper($status)) . '</td>';
+                echo '<td>' . htmlspecialchars($r['message_id'] ?: '-') . '</td>';
+                echo '<td>' . htmlspecialchars($r['sent_at'] ?: '-') . '</td>';
+                echo '<td>' . htmlspecialchars(strtoupper($status)) . '</td>';
+                echo '<td>' . htmlspecialchars($r['delivered_at'] ?: '-') . '</td>';
+                echo '<td>' . htmlspecialchars($r['read_at'] ?: '-') . '</td>';
+                echo '<td>' . htmlspecialchars($r['error_message'] ?: $r['queue_error'] ?: '-') . '</td>';
+                echo '<td>' . htmlspecialchars($r['retry_count'] !== null ? $r['retry_count'] : 0) . '</td>';
+                echo '</tr>';
+            }
+            echo '</table></body></html>';
+        } else {
+            header('Content-Type: text/csv; charset=UTF-8');
+            header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
+            header('Cache-Control: max-age=0');
+            
+            $out = fopen('php://output', 'w');
+            fwrite($out, "\xEF\xBB\xBF");
+            
+            fputcsv($out, [
+                'Campaign ID', 'Campaign Name', 'Template Name', 'Target Audience',
+                'Recipient Name', 'WhatsApp Phone', 'Queue ID', 'Queue Status',
+                'Meta Message ID', 'Sent Time', 'Delivery Status', 'Delivery Time', 'Read Time',
+                'Failure Reason', 'Retry Count'
+            ]);
+            
+            foreach ($recipients as $r) {
+                $status = $r['queue_status'] ?: $r['status'] ?: 'pending';
+                fputcsv($out, [
+                    $camp['id'],
+                    $camp['name'],
+                    $camp['template_name'],
+                    strtoupper($camp['target_audience']),
+                    $r['recipient_name'],
+                    $r['recipient'],
+                    $r['queue_id'] ?: '-',
+                    strtoupper($status),
+                    $r['message_id'] ?: '-',
+                    $r['sent_at'] ?: '-',
+                    strtoupper($status),
+                    $r['delivered_at'] ?: '-',
+                    $r['read_at'] ?: '-',
+                    $r['error_message'] ?: $r['queue_error'] ?: '-',
+                    $r['retry_count'] !== null ? $r['retry_count'] : 0
+                ]);
+            }
+            fclose($out);
+        }
+        exit;
+    }
+
+    header('Content-Type: application/json');
 
     // 1. Fetch Template Metadata Details
     if ($action === 'ajax_get_template') {
@@ -560,6 +671,233 @@ include 'includes/admin_nav.php';
 ?>
 
 <div class="container-fluid" style="padding:20px;">
+    <style>
+    /* Modern Form Sectioning */
+    .form-step-section {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 20px;
+        box-shadow: 0 1px 3px rgba(15,23,42,0.02);
+    }
+    .form-step-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 16px;
+        border-bottom: 1px dashed #e5e7eb;
+        padding-bottom: 10px;
+    }
+    .form-step-number {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background: var(--accent-soft);
+        color: var(--accent-dark);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 0.8rem;
+    }
+    .form-step-title {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: #1e293b;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    /* Modern Checkbox Layout */
+    .chk-card-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+    }
+    .chk-card-label {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border: 1.5px solid #cbd5e1;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 0.8rem;
+        font-weight: 500;
+        background: #fff;
+        transition: all 0.15s ease;
+    }
+    .chk-card-label:hover {
+        border-color: #94a3b8;
+        background: #f8fafc;
+    }
+    .chk-card-label input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        border-radius: 4px;
+        accent-color: var(--accent-dark);
+        cursor: pointer;
+    }
+    .chk-card-label.checked {
+        border-color: var(--accent-dark);
+        background: var(--accent-soft);
+        color: var(--accent-dark);
+        font-weight: 700;
+    }
+
+    /* Premium KPI Cards */
+    .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 20px;
+    }
+    @media (max-width: 1024px) {
+        .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 640px) {
+        .kpi-grid { grid-template-columns: 1fr; }
+    }
+    .kpi-card {
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 16px 20px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .kpi-icon {
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.25rem;
+    }
+    .kpi-icon.audience { background: #ede9fe; color: #7c3aed; }
+    .kpi-icon.sent { background: #d1fae5; color: #047857; }
+    .kpi-icon.read { background: #dbeafe; color: #1d4ed8; }
+    .kpi-icon.failed { background: #fee2e2; color: #b91c1c; }
+    .kpi-info {
+        display: flex;
+        flex-direction: column;
+    }
+    .kpi-value {
+        font-size: 1.4rem;
+        font-weight: 800;
+        color: #0f172a;
+        line-height: 1.2;
+    }
+    .kpi-label {
+        font-size: 0.68rem;
+        color: #64748b;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-top: 2px;
+    }
+
+    /* Custom Table Avatar Circle */
+    .table-avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: var(--accent-soft);
+        color: var(--accent-dark);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 0.85rem;
+        border: 1.5px solid var(--border);
+        text-transform: uppercase;
+    }
+
+    /* Dropdown Menu styling */
+    .report-dropdown {
+        position: relative;
+        display: inline-block;
+    }
+    .report-dropdown-menu {
+        display: none;
+        position: absolute;
+        right: 0;
+        top: 100%;
+        margin-top: 6px;
+        background: #fff;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        z-index: 1000;
+        min-width: 170px;
+        overflow: hidden;
+    }
+    .report-dropdown-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        font-size: 0.8rem;
+        color: #334155;
+        font-weight: 600;
+        cursor: pointer;
+        background: #fff;
+        border: none;
+        width: 100%;
+        text-align: left;
+        transition: background 0.1s ease;
+        text-decoration: none !important;
+    }
+    .report-dropdown-item:hover {
+        background: #f8fafc;
+        color: var(--accent-dark);
+        text-decoration: none !important;
+    }
+    .report-dropdown-item i {
+        font-size: 0.9rem;
+    }
+
+    /* Modals Overlay */
+    .popover-modal-backdrop {
+        display: none;
+        position: fixed;
+        z-index: 99999;
+        left: 0; top: 0;
+        width: 100%; height: 100%;
+        overflow: auto;
+        background-color: rgba(15,23,42,0.45);
+        justify-content: center;
+        align-items: center;
+        backdrop-filter: blur(4px);
+    }
+    .popover-modal {
+        background-color: #fff;
+        border-radius: 16px;
+        max-width: 460px;
+        width: 90%;
+        padding: 24px;
+        box-shadow: var(--shadow-md);
+        position: relative;
+        border: 1px solid var(--border);
+    }
+    .popover-modal-close {
+        position: absolute;
+        right: 18px; top: 14px;
+        cursor: pointer;
+        font-size: 1.4rem;
+        color: #94a3b8;
+        font-weight: 700;
+        background: none;
+        border: none;
+    }
+    .popover-modal-close:hover {
+        color: #475569;
+    }
+    </style>
     <?php if ($success_message): ?>
         <div class="alert alert-success" style="background:#f0fdf4; border:1px solid #bbf7d0; color:#166534; padding:12px 18px; border-radius:12px; margin-bottom:20px;">
             <i class="fas fa-circle-check"></i> <?php echo htmlspecialchars($success_message); ?>
@@ -602,114 +940,148 @@ include 'includes/admin_nav.php';
                     <input type="hidden" name="action" value="create_campaign">
                     <input type="hidden" name="target_audience" id="inp-target-audience" value="leads">
                     
-                    <div style="margin-bottom:12px;">
-                        <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Campaign Name <span style="color:#ef4444;">*</span></label>
-                        <input type="text" name="campaign_name" id="inp-campaign-name" placeholder="e.g. CUET PG August Admission Campaign" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:0.85rem;" required>
+                    <!-- STEP 1: CAMPAIGN DETAILS -->
+                    <div class="form-step-section">
+                        <div class="form-step-header">
+                            <div class="form-step-number">1</div>
+                            <div class="form-step-title">Campaign Details</div>
+                        </div>
+                        <div style="margin-bottom:0;">
+                            <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Campaign Name <span style="color:#ef4444;">*</span></label>
+                            <input type="text" name="campaign_name" id="inp-campaign-name" class="form-control" placeholder="e.g. CUET PG August Admission Campaign" style="font-size:0.82rem;" required>
+                        </div>
                     </div>
 
-                    <!-- Leads Target Filters Section -->
-                    <div id="section-target-leads" style="display:block; border:1px solid #f1f5f9; padding:12px; border-radius:12px; background:#fafafa; margin-bottom:14px;">
-                        <span style="font-size:0.8rem; font-weight:700; color:#1e293b; display:block; margin-bottom:10px;"><i class="fas fa-filter"></i> Target Leads Filters</span>
-                        
-                        <div style="margin-bottom:10px;">
-                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#4b5563; margin-bottom:4px;">Lead Statuses <span style="color:#ef4444;">*</span></label>
-                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
-                                <label style="font-size:0.75rem; display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" name="target_leads_statuses[]" value="new" checked class="chk-status" onchange="triggerAudiencePreview()"> New</label>
-                                <label style="font-size:0.75rem; display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" name="target_leads_statuses[]" value="contacted" checked class="chk-status" onchange="triggerAudiencePreview()"> Contacted</label>
-                                <label style="font-size:0.75rem; display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" name="target_leads_statuses[]" value="interested" checked class="chk-status" onchange="triggerAudiencePreview()"> Interested</label>
-                                <label style="font-size:0.75rem; display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" name="target_leads_statuses[]" value="follow_up" checked class="chk-status" onchange="triggerAudiencePreview()"> Follow-up</label>
-                            </div>
+                    <!-- STEP 2: AUDIENCE FILTERS -->
+                    <div class="form-step-section">
+                        <div class="form-step-header">
+                            <div class="form-step-number">2</div>
+                            <div class="form-step-title">Audience Filters</div>
                         </div>
-
-                        <div>
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-                                <label style="font-size:0.75rem; font-weight:700; color:#4b5563;">PEPP Course Targets <span style="color:#ef4444;">*</span></label>
-                                <div style="display:flex; gap:6px;">
-                                    <button type="button" onclick="toggleLeadCheckboxes(true)" style="border:none; background:none; font-size:0.65rem; color:#3b82f6; font-weight:700; cursor:pointer; padding:0;">Select All</button>
-                                    <span style="font-size:0.65rem; color:#94a3b8;">|</span>
-                                    <button type="button" onclick="toggleLeadCheckboxes(false)" style="border:none; background:none; font-size:0.65rem; color:#ef4444; font-weight:700; cursor:pointer; padding:0;">Clear All</button>
+                        
+                        <!-- Leads Target Filters Section -->
+                        <div id="section-target-leads" style="display:block;">
+                            <div style="margin-bottom:12px;">
+                                <label style="display:block; font-size:0.75rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Lead Statuses <span style="color:#ef4444;">*</span></label>
+                                <div class="chk-card-grid">
+                                    <label class="chk-card-label checked">
+                                        <input type="checkbox" name="target_leads_statuses[]" value="new" checked class="chk-status" onchange="triggerAudiencePreview(); this.parentElement.classList.toggle('checked', this.checked);"> New
+                                    </label>
+                                    <label class="chk-card-label checked">
+                                        <input type="checkbox" name="target_leads_statuses[]" value="contacted" checked class="chk-status" onchange="triggerAudiencePreview(); this.parentElement.classList.toggle('checked', this.checked);"> Contacted
+                                    </label>
+                                    <label class="chk-card-label checked">
+                                        <input type="checkbox" name="target_leads_statuses[]" value="interested" checked class="chk-status" onchange="triggerAudiencePreview(); this.parentElement.classList.toggle('checked', this.checked);"> Interested
+                                    </label>
+                                    <label class="chk-card-label checked">
+                                        <input type="checkbox" name="target_leads_statuses[]" value="follow_up" checked class="chk-status" onchange="triggerAudiencePreview(); this.parentElement.classList.toggle('checked', this.checked);"> Follow-up
+                                    </label>
                                 </div>
                             </div>
-                            <div style="max-height:120px; overflow-y:auto; border:1px solid #cbd5e1; border-radius:6px; padding:6px; background:#fff;" id="leads-courses-checklist">
-                                <?php foreach ($leadCourses as $lc): ?>
-                                    <label style="font-size:0.75rem; display:flex; align-items:center; gap:6px; margin-bottom:4px; cursor:pointer;"><input type="checkbox" name="target_leads_courses[]" value="<?php echo htmlspecialchars($lc); ?>" class="chk-course" onchange="triggerAudiencePreview()"> <?php echo htmlspecialchars($lc); ?></label>
-                                <?php endforeach; ?>
-                            </div>
-                        </div>
-                    </div>
 
-                    <!-- Students Target Filters Section -->
-                    <div id="section-target-students" style="display:none; border:1px solid #f1f5f9; padding:12px; border-radius:12px; background:#fafafa; margin-bottom:14px;">
-                        <span style="font-size:0.8rem; font-weight:700; color:#1e293b; display:block; margin-bottom:10px;"><i class="fas fa-filter"></i> Target Students Filters</span>
-                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
                             <div>
-                                <label style="font-size:0.75rem; font-weight:700; color:#4b5563; display:block; margin-bottom:4px;">Enrolled Course</label>
-                                <select name="target_course" class="form-control" style="font-size:0.8rem; border-radius:6px;">
-                                    <option value="">All Courses</option>
-                                    <?php foreach ($studentCourses as $sc): ?>
-                                        <option value="<?php echo htmlspecialchars($sc); ?>"><?php echo htmlspecialchars($sc); ?></option>
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                                    <label style="font-size:0.75rem; font-weight:700; color:#4b5563;">PEPP Course Targets <span style="color:#ef4444;">*</span></label>
+                                    <div style="display:flex; gap:6px;">
+                                        <button type="button" onclick="toggleLeadCheckboxes(true)" style="border:none; background:none; font-size:0.65rem; color:#8b5cf6; font-weight:700; cursor:pointer; padding:0;">Select All</button>
+                                        <span style="font-size:0.65rem; color:#94a3b8;">|</span>
+                                        <button type="button" onclick="toggleLeadCheckboxes(false)" style="border:none; background:none; font-size:0.65rem; color:#ef4444; font-weight:700; cursor:pointer; padding:0;">Clear All</button>
+                                    </div>
+                                </div>
+                                <div style="max-height:150px; overflow-y:auto; border:1.5px solid #cbd5e1; border-radius:10px; padding:10px; background:#fff;" id="leads-courses-checklist">
+                                    <?php foreach ($leadCourses as $lc): ?>
+                                        <label style="font-size:0.75rem; display:flex; align-items:center; gap:8px; margin-bottom:6px; cursor:pointer;"><input type="checkbox" name="target_leads_courses[]" value="<?php echo htmlspecialchars($lc); ?>" class="chk-course" onchange="triggerAudiencePreview()" style="width:15px; height:15px; accent-color:var(--accent-dark);"> <?php echo htmlspecialchars($lc); ?></label>
                                     <?php endforeach; ?>
-                                </select>
+                                </div>
                             </div>
-                            <div>
-                                <label style="font-size:0.75rem; font-weight:700; color:#4b5563; display:block; margin-bottom:4px;">Approval Status</label>
-                                <select name="target_status" class="form-control" style="font-size:0.8rem; border-radius:6px;">
-                                    <option value="">Approved &amp; Pending</option>
-                                    <option value="approved">Approved Only</option>
-                                    <option value="pending">Pending Only</option>
-                                </select>
+                        </div>
+
+                        <!-- Students Target Filters Section -->
+                        <div id="section-target-students" style="display:none;">
+                            <div style="display:flex; flex-direction:column; gap:12px;">
+                                <div>
+                                    <label style="font-size:0.75rem; font-weight:700; color:#4b5563; display:block; margin-bottom:4px;">Enrolled Course</label>
+                                    <select name="target_course" class="form-control" style="font-size:0.8rem;">
+                                        <option value="">All Courses</option>
+                                        <?php foreach ($studentCourses as $sc): ?>
+                                            <option value="<?php echo htmlspecialchars($sc); ?>"><?php echo htmlspecialchars($sc); ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.75rem; font-weight:700; color:#4b5563; display:block; margin-bottom:4px;">Approval Status</label>
+                                    <select name="target_status" class="form-control" style="font-size:0.8rem;">
+                                        <option value="">Approved &amp; Pending</option>
+                                        <option value="approved">Approved Only</option>
+                                        <option value="pending">Pending Only</option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Template Selection -->
-                    <div style="margin-bottom:12px;">
-                        <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Meta Approved Template <span style="color:#ef4444;">*</span></label>
-                        <select name="template_name" id="sel-template-name" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:0.85rem;" onchange="loadTemplateDetails(this.value)" required>
-                            <option value="">-- Select Marketing Template --</option>
-                            <?php foreach ($marketingTemplates as $m_tpl): ?>
-                                <option value="<?php echo htmlspecialchars($m_tpl['template_name']); ?>"><?php echo htmlspecialchars($m_tpl['template_name']); ?> (<?php echo $m_tpl['language']; ?>)</option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-
-                    <!-- Upload Image Header Block -->
-                    <div id="section-media-header" style="display:none; border:1px solid #e2e8f0; border-radius:12px; padding:12px; background:#fcfcfc; margin-bottom:14px;">
-                        <label style="display:block; font-size:0.75rem; font-weight:700; color:#1e293b; margin-bottom:4px;"><i class="fas fa-file-image"></i> Required Header Media File</label>
-                        <input type="file" name="header_media_file" id="inp-media-file" class="form-control" style="font-size:0.75rem;" accept="image/*,video/mp4,application/pdf" onchange="onMediaFileChange(event)">
-                        <span style="font-size:0.65rem; color:#94a3b8; display:block; margin-top:2px;">Select JPG, PNG, MP4, or PDF. Max file size: 5MB.</span>
-                    </div>
-
-                    <!-- Dynamic Variables Mapping Block -->
-                    <div id="section-variable-mapping" style="display:none; border:1px solid #e2e8f0; border-radius:12px; padding:12px; background:#f8fafc; margin-bottom:14px;">
-                        <span style="font-size:0.75rem; font-weight:700; color:#4b5563; display:block; margin-bottom:8px;"><i class="fas fa-brackets-curly" style="color:#6366f1;"></i> Interpolation Variable Mappings</span>
-                        <div id="variable-mappings-inputs" style="display:flex; flex-direction:column; gap:8px;"></div>
-                    </div>
-
-                    <!-- Scheduling Options -->
-                    <div style="border-top:1px dashed #e2e8f0; padding-top:12px; margin-bottom:16px;">
-                        <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;"><i class="fas fa-clock"></i> Schedule Settings</label>
-                        <div style="display:flex; gap:10px; margin-bottom:10px;">
-                            <label style="font-size:0.75rem; display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="radio" name="schedule_type" value="now" checked onchange="toggleScheduleBlock(false)"> Send Immediately</label>
-                            <label style="font-size:0.75rem; display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="radio" name="schedule_type" value="schedule" onchange="toggleScheduleBlock(true)"> Schedule Launch</label>
+                    <!-- STEP 3: MESSAGE CONTENT -->
+                    <div class="form-step-section">
+                        <div class="form-step-header">
+                            <div class="form-step-number">3</div>
+                            <div class="form-step-title">Message Content</div>
                         </div>
-                        <div id="section-schedule-datetime" style="display:none; grid-template-columns:1fr 1fr; gap:10px; border:1px solid #f1f5f9; padding:8px; border-radius:8px; background:#fafafa;">
-                            <div>
-                                <label style="font-size:0.7rem; color:#64748b; font-weight:600;">Date</label>
-                                <input type="date" name="schedule_date" id="inp-sched-date" class="form-control" style="font-size:0.75rem;">
+                        
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Meta Approved Template <span style="color:#ef4444;">*</span></label>
+                            <select name="template_name" id="sel-template-name" class="form-control" onchange="loadTemplateDetails(this.value)" required>
+                                <option value="">-- Select Marketing Template --</option>
+                                <?php foreach ($marketingTemplates as $m_tpl): ?>
+                                    <option value="<?php echo htmlspecialchars($m_tpl['template_name']); ?>"><?php echo htmlspecialchars($m_tpl['template_name']); ?> (<?php echo $m_tpl['language']; ?>)</option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <!-- Upload Image Header Block -->
+                        <div id="section-media-header" style="display:none; border:1.5px solid #cbd5e1; border-radius:12px; padding:12px; background:#fcfcfc; margin-bottom:12px;">
+                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#1e293b; margin-bottom:6px;"><i class="fas fa-file-image" style="color:var(--accent-dark);"></i> Required Header Media File</label>
+                            <input type="file" name="header_media_file" id="inp-media-file" class="form-control" style="font-size:0.75rem; height:auto !important; padding:6px 12px !important;" accept="image/*,video/mp4,application/pdf" onchange="onMediaFileChange(event)">
+                            <span style="font-size:0.65rem; color:#64748b; display:block; margin-top:4px;">Select JPG, PNG, MP4, or PDF. Max file size: 5MB.</span>
+                        </div>
+
+                        <!-- Dynamic Variables Mapping Block -->
+                        <div id="section-variable-mapping" style="display:none; border:1.5px solid #cbd5e1; border-radius:12px; padding:12px; background:#f8fafc; margin-bottom:0;">
+                            <span style="font-size:0.75rem; font-weight:700; color:#4b5563; display:block; margin-bottom:8px;"><i class="fas fa-brackets-curly" style="color:#6366f1;"></i> Variable Mappings</span>
+                            <div id="variable-mappings-inputs" style="display:flex; flex-direction:column; gap:10px;"></div>
+                        </div>
+                    </div>
+
+                    <!-- STEP 4: SCHEDULING -->
+                    <div class="form-step-section">
+                        <div class="form-step-header">
+                            <div class="form-step-number">4</div>
+                            <div class="form-step-title">Scheduling</div>
+                        </div>
+                        
+                        <div style="margin-bottom:0;">
+                            <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;"><i class="fas fa-clock" style="color:var(--accent-dark);"></i> Launch Schedule</label>
+                            <div style="display:flex; gap:16px; margin-bottom:12px;">
+                                <label style="font-size:0.78rem; display:flex; align-items:center; gap:6px; cursor:pointer; font-weight:600;"><input type="radio" name="schedule_type" value="now" checked onchange="toggleScheduleBlock(false)" style="width:16px; height:16px; accent-color:var(--accent-dark);"> Send Immediately</label>
+                                <label style="font-size:0.78rem; display:flex; align-items:center; gap:6px; cursor:pointer; font-weight:600;"><input type="radio" name="schedule_type" value="schedule" onchange="toggleScheduleBlock(true)" style="width:16px; height:16px; accent-color:var(--accent-dark);"> Schedule Launch</label>
                             </div>
-                            <div>
-                                <label style="font-size:0.7rem; color:#64748b; font-weight:600;">Time</label>
-                                <input type="time" name="schedule_time" id="inp-sched-time" class="form-control" style="font-size:0.75rem;">
+                            <div id="section-schedule-datetime" style="display:none; grid-template-columns:1fr 1fr; gap:10px; border:1.5px solid #cbd5e1; padding:10px; border-radius:10px; background:#f8fafc;">
+                                <div>
+                                    <label style="font-size:0.7rem; color:#64748b; font-weight:700; text-transform:uppercase; margin-bottom:4px; display:block;">Date</label>
+                                    <input type="date" name="schedule_date" id="inp-sched-date" class="form-control" style="font-size:0.8rem;">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.7rem; color:#64748b; font-weight:700; text-transform:uppercase; margin-bottom:4px; display:block;">Time</label>
+                                    <input type="time" name="schedule_time" id="inp-sched-time" class="form-control" style="font-size:0.8rem;">
+                                </div>
                             </div>
                         </div>
                     </div>
 
                     <!-- Calculate Button -->
-                    <button type="button" onclick="calculatePreview()" class="btn btn-outline" style="width:100%; border-radius:8px; font-weight:700; margin-bottom:10px; padding:10px;"><i class="fas fa-calculator"></i> Calculate &amp; Preview Recipients</button>
+                    <button type="button" onclick="calculatePreview()" class="btn btn-outline" style="width:100%; border-radius:10px; font-weight:700; margin-bottom:12px; padding:12px; height:44px; display:flex; align-items:center; justify-content:center; gap:8px;"><i class="fas fa-calculator"></i> Calculate &amp; Preview Recipients</button>
 
                     <!-- Launch Submit Button -->
-                    <button type="submit" class="btn btn-primary" id="btn-submit-campaign" style="width:100%; border-radius:8px; font-weight:700; padding:10px;" disabled><i class="fas fa-rocket"></i> Confirm &amp; Queue Campaign</button>
+                    <button type="submit" class="btn btn-primary" id="btn-submit-campaign" style="width:100%; border-radius:10px; font-weight:700; padding:12px; height:44px; display:flex; align-items:center; justify-content:center; gap:8px;" disabled><i class="fas fa-rocket"></i> Confirm &amp; Queue Campaign</button>
                 </form>
             </div>
         </div>
@@ -765,12 +1137,27 @@ include 'includes/admin_nav.php';
                                     <td style="padding:12px;"><span class="badge gray" style="font-size:0.65rem; font-weight:700;"><?php echo strtoupper($camp['target_audience']); ?></span></td>
                                     <td style="padding:12px; font-weight:700;"><?php echo $recipCount; ?></td>
                                     <td style="padding:12px;">
-                                        <div style="display:flex; justify-content:space-between; font-size:0.7rem; font-weight:700; color:#475569; margin-bottom:2px;">
-                                            <span><?php echo $prog; ?>%</span>
-                                            <span>S:<?php echo $sentCount; ?> | D:<?php echo $deliveredCount; ?> | R:<?php echo $readCount; ?> | F:<?php echo $failCount; ?></span>
+                                        <div style="display:flex; justify-content:space-between; font-size:0.7rem; font-weight:700; color:#475569; margin-bottom:4px;">
+                                            <span>Progress: <?php echo $prog; ?>%</span>
                                         </div>
-                                        <div style="width:100%; height:6px; background:#e2e8f0; border-radius:3px; overflow:hidden;">
-                                            <div style="width:<?php echo $prog; ?>%; height:100%; background:<?php echo ($failCount > 0 ? '#f59e0b' : '#10b981'); ?>;"></div>
+                                        <div style="display:flex; flex-direction:column; gap:6px;">
+                                            <div style="width:100%; height:6px; background:#e2e8f0; border-radius:3px; overflow:hidden;">
+                                                <div style="width:<?php echo $prog; ?>%; height:100%; background:<?php echo ($failCount > 0 ? '#ef4444' : '#10b981'); ?>;"></div>
+                                            </div>
+                                            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                                                <span style="font-size:0.68rem; padding:2px 6px; background:#f1f5f9; color:#475569; border-radius:4px; font-weight:700;" title="Sent">
+                                                    <i class="fas fa-paper-plane" style="margin-right:2px; font-size:0.6rem;"></i> <?php echo $sentCount; ?> S
+                                                </span>
+                                                <span style="font-size:0.68rem; padding:2px 6px; background:#e0f2fe; color:#0369a1; border-radius:4px; font-weight:700;" title="Delivered">
+                                                    <i class="fas fa-check" style="margin-right:2px; font-size:0.6rem;"></i> <?php echo $deliveredCount; ?> D
+                                                </span>
+                                                <span style="font-size:0.68rem; padding:2px 6px; background:#dcfce7; color:#15803d; border-radius:4px; font-weight:700;" title="Read">
+                                                    <i class="fas fa-check-double" style="margin-right:2px; font-size:0.6rem;"></i> <?php echo $readCount; ?> R
+                                                </span>
+                                                <span style="font-size:0.68rem; padding:2px 6px; background:#fee2e2; color:#b91c1c; border-radius:4px; font-weight:700;" title="Failed">
+                                                    <i class="fas fa-circle-xmark" style="margin-right:2px; font-size:0.6rem;"></i> <?php echo $failCount; ?> F
+                                                </span>
+                                            </div>
                                         </div>
                                     </td>
                                     <td style="padding:12px; text-align:right;">
@@ -851,46 +1238,69 @@ include 'includes/admin_nav.php';
 
             <!-- Campaign Drilldown Details Panel -->
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; overflow:hidden; box-shadow:0 4px 12px rgba(0,0,0,0.02); display:none;" id="panel-campaign-drilldown">
-                <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px; display:flex; justify-content:space-between; align-items:center;">
-                    <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;" id="drilldown-title">Campaign Drilldown</h3>
-                    <button type="button" onclick="closeCampaignDrilldown()" class="btn btn-sm btn-outline" style="font-size:0.75rem;"><i class="fas fa-chevron-left"></i> Back to Dashboard</button>
+                <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                    <div>
+                        <h3 style="margin:0; font-size:1.1rem; font-weight:700; color:#1f2937;" id="drilldown-title">Campaign Detail</h3>
+                        <p style="margin:4px 0 0; font-size:0.78rem; color:#64748b;" id="drilldown-subtitle"></p>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <button type="button" onclick="closeCampaignDrilldown()" class="btn btn-outline" style="border-radius:8px; font-size:0.8rem; height:36px; display:flex; align-items:center; gap:6px;"><i class="fas fa-chevron-left"></i> Back to Dashboard</button>
+                        
+                        <!-- Download Report Dropdown -->
+                        <div class="report-dropdown">
+                            <button type="button" class="btn btn-primary" onclick="toggleReportDropdown(event)" style="border-radius:8px; font-size:0.8rem; height:36px; display:flex; align-items:center; gap:6px; font-weight:700;"><i class="fas fa-file-export"></i> Download Report <i class="fas fa-chevron-down" style="font-size:0.7rem;"></i></button>
+                            <div class="report-dropdown-menu" id="report-dropdown-menu">
+                                <a href="#" class="report-dropdown-item" onclick="triggerReportDownload('csv'); return false;">
+                                    <i class="fas fa-file-csv" style="color:#10b981;"></i> Download as CSV
+                                </a>
+                                <a href="#" class="report-dropdown-item" onclick="triggerReportDownload('excel'); return false;">
+                                    <i class="fas fa-file-excel" style="color:#047857;"></i> Download as Excel
+                                </a>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 
-                <div style="padding:16px;">
+                <div style="padding:20px;">
                     <!-- Campaign Control Actions Panel -->
-                    <div style="display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; border-bottom:1px dashed #e2e8f0; padding-bottom:14px;">
+                    <div style="display:flex; gap:10px; margin-bottom:20px; flex-wrap:wrap; border-bottom:1px dashed #e2e8f0; padding-bottom:14px;">
                         <input type="hidden" id="drilldown-camp-id">
-                        <button type="button" id="btn-ctrl-pause" onclick="triggerCampaignControl('pause')" class="btn btn-sm btn-outline" style="border-radius:6px; border-color:#f59e0b; color:#d97706;"><i class="fas fa-pause"></i> Pause sending</button>
-                        <button type="button" id="btn-ctrl-resume" onclick="triggerCampaignControl('resume')" class="btn btn-sm btn-outline" style="border-radius:6px; border-color:#10b981; color:#059669; display:none;"><i class="fas fa-play"></i> Resume sending</button>
-                        <button type="button" id="btn-ctrl-cancel" onclick="triggerCampaignControl('cancel')" class="btn btn-sm btn-outline" style="border-radius:6px; border-color:#ef4444; color:#dc2626;"><i class="fas fa-stop"></i> Cancel campaign</button>
-                        <button type="button" id="btn-ctrl-retry" onclick="triggerCampaignControl('retry')" class="btn btn-sm btn-success" style="border-radius:6px;"><i class="fas fa-arrow-rotate-forward"></i> Retry Failed dispatches</button>
+                        <button type="button" id="btn-ctrl-pause" onclick="triggerCampaignControl('pause')" class="btn btn-sm btn-outline" style="border-radius:8px; border-color:#f59e0b; color:#d97706; font-weight:700;"><i class="fas fa-pause"></i> Pause campaign</button>
+                        <button type="button" id="btn-ctrl-resume" onclick="triggerCampaignControl('resume')" class="btn btn-sm btn-outline" style="border-radius:8px; border-color:#10b981; color:#059669; display:none; font-weight:700;"><i class="fas fa-play"></i> Resume campaign</button>
+                        <button type="button" id="btn-ctrl-cancel" onclick="triggerCampaignControl('cancel')" class="btn btn-sm btn-outline" style="border-radius:8px; border-color:#ef4444; color:#dc2626; font-weight:700;"><i class="fas fa-stop"></i> Cancel campaign</button>
+                        <button type="button" id="btn-ctrl-retry" onclick="triggerCampaignControl('retry')" class="btn btn-sm btn-success" style="border-radius:8px; font-weight:700;"><i class="fas fa-arrow-rotate-forward"></i> Retry Failed dispatches</button>
                     </div>
 
                     <!-- Statistics Info Grid -->
-                    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; margin-bottom:20px; font-size:0.75rem;" id="drilldown-metrics-grid"></div>
+                    <div class="kpi-grid" id="drilldown-metrics-grid"></div>
 
                     <!-- Search Filter Row -->
-                    <div style="margin-bottom:12px; display:grid; grid-template-columns: 2fr 1fr; gap:10px;">
-                        <input type="text" id="drilldown-search-recip" placeholder="Search by recipient name, phone, or error message..." class="form-control" style="font-size:0.8rem; border-radius:8px;" oninput="filterDrilldownRecipients()">
-                        <select id="drilldown-status-filter" class="form-control" style="font-size:0.8rem; border-radius:8px;" onchange="filterDrilldownRecipients()">
+                    <div style="margin-bottom:16px; display:grid; grid-template-columns: 2.2fr 1fr; gap:12px;">
+                        <div style="position:relative; width:100%;">
+                            <i class="fas fa-magnifying-glass" style="position:absolute; left:12px; top:13px; color:#64748b; font-size:0.85rem;"></i>
+                            <input type="text" id="drilldown-search-recip" placeholder="Search by recipient name, phone, or error message..." class="form-control" style="font-size:0.8rem; padding-left:36px !important;" oninput="filterDrilldownRecipients()">
+                        </div>
+                        <select id="drilldown-status-filter" class="form-control" style="font-size:0.8rem;" onchange="filterDrilldownRecipients()">
                             <option value="">All Statuses</option>
                             <option value="pending">Pending</option>
                             <option value="sent">Sent (Meta Dispatched)</option>
+                            <option value="delivered">Delivered</option>
+                            <option value="read">Read (Opened)</option>
                             <option value="failed">Failed</option>
                         </select>
                     </div>
 
                     <!-- Recipients Drilldown Table -->
-                    <div style="max-height:320px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:10px;">
-                        <table style="width:100%; border-collapse:collapse; font-size:0.78rem; text-align:left;">
-                            <thead style="background:#f8fafc; position:sticky; top:0; z-index:10; border-bottom:1px solid #cbd5e1;">
+                    <div style="max-height:360px; overflow-y:auto; border:1px solid #e5e7eb; border-radius:12px;">
+                        <table style="width:100%; border-collapse:collapse; font-size:0.8rem; text-align:left;">
+                            <thead style="background:#f8fafc; position:sticky; top:0; z-index:10; border-bottom:1px solid #e5e7eb;">
                                 <tr>
-                                    <th style="padding:10px; font-weight:700;">Recipient Name</th>
-                                    <th style="padding:10px; font-weight:700;">WhatsApp Phone</th>
-                                    <th style="padding:10px; font-weight:700;">Meta Message ID</th>
-                                    <th style="padding:10px; font-weight:700;">Queue Status</th>
-                                    <th style="padding:10px; font-weight:700;">Delivery details</th>
-                                    <th style="padding:10px; font-weight:700;">Failure Log</th>
+                                    <th style="padding:12px; font-weight:700; color:#475569;">Recipient Name</th>
+                                    <th style="padding:12px; font-weight:700; color:#475569;">WhatsApp Phone</th>
+                                    <th style="padding:12px; font-weight:700; color:#475569;">Meta Message ID</th>
+                                    <th style="padding:12px; font-weight:700; color:#475569;">Queue Status</th>
+                                    <th style="padding:12px; font-weight:700; color:#475569;">Delivery Details</th>
+                                    <th style="padding:12px; font-weight:700; color:#475569;">Failure Log</th>
                                 </tr>
                             </thead>
                             <tbody id="table-body-drilldown-recipients"></tbody>
@@ -904,8 +1314,8 @@ include 'includes/admin_nav.php';
 </div>
 
 <!-- Dynamic Preview Confirmation Dialog Overlay -->
-<div id="confirm-modal" style="display:none; position:fixed; z-index:9999; left:0; top:0; width:100%; height:100%; overflow:auto; background-color:rgba(0,0,0,0.5); justify-content:center; align-items:center; backdrop-filter:blur(3px);">
-    <div style="background-color:#fff; border-radius:16px; max-width:480px; width:90%; padding:24px; box-shadow:0 10px 40px rgba(0,0,0,0.15); position:relative;">
+<div id="confirm-modal" class="popover-modal-backdrop" onclick="if(event.target===this)closeConfirmModal()">
+    <div class="popover-modal" style="max-width:480px;">
         <h4 style="margin-top:0; margin-bottom:12px; font-weight:800; color:#1e293b; font-size:1.1rem; border-bottom:1px solid #e2e8f0; padding-bottom:8px;"><i class="fas fa-triangle-exclamation" style="color:#f59e0b;"></i> Confirm Campaign Launch</h4>
         
         <p style="font-size:0.82rem; color:#64748b; line-height:1.4; margin-bottom:16px;">You are about to launch a bulk campaign. Messages will be enqueued in the communication queue and processed asynchronously by the background runner.</p>
@@ -921,6 +1331,43 @@ include 'includes/admin_nav.php';
         <div style="display:flex; gap:12px; justify-content:flex-end;">
             <button type="button" class="btn btn-outline" onclick="closeConfirmModal()" style="border-radius:8px;">Cancel</button>
             <button type="button" class="btn btn-primary" onclick="submitCampaignForm()" style="border-radius:8px; font-weight:700;"><i class="fas fa-rocket"></i> Confirm &amp; Queue Campaign</button>
+        </div>
+    </div>
+</div>
+
+<!-- Meta ID Modal -->
+<div id="meta-id-modal" class="popover-modal-backdrop" onclick="if(event.target===this)closeMetaIdModal()">
+    <div class="popover-modal">
+        <button type="button" class="popover-modal-close" onclick="closeMetaIdModal()">&times;</button>
+        <h4 style="margin-top:0; margin-bottom:14px; font-weight:700; color:#1f2937; font-size:1.05rem; display:flex; align-items:center; gap:8px;"><i class="fab fa-whatsapp" style="color:#25d366; font-size:1.25rem;"></i> Meta Message ID</h4>
+        
+        <div style="background:#f8fafc; border:1.5px solid #cbd5e1; padding:14px; border-radius:10px; font-family:monospace; font-size:0.8rem; word-break:break-all; margin-bottom:20px; color:#334155; min-height:48px;" id="meta-id-text"></div>
+        
+        <div style="display:flex; gap:12px; justify-content:flex-end;">
+            <button type="button" class="btn btn-outline" onclick="closeMetaIdModal()" style="border-radius:8px;">Close</button>
+            <button type="button" class="btn btn-primary" onclick="copyMetaId()" id="btn-copy-meta-id" style="border-radius:8px; font-weight:700; display:flex; align-items:center; gap:6px;"><i class="fas fa-copy"></i> Copy ID</button>
+        </div>
+    </div>
+</div>
+
+<!-- Failure Details Modal -->
+<div id="failure-detail-modal" class="popover-modal-backdrop" onclick="if(event.target===this)closeFailureDetailModal()">
+    <div class="popover-modal" style="max-width:520px;">
+        <button type="button" class="popover-modal-close" onclick="closeFailureDetailModal()">&times;</button>
+        <h4 style="margin-top:0; margin-bottom:14px; font-weight:700; color:#dc2626; font-size:1.05rem; display:flex; align-items:center; gap:8px;"><i class="fas fa-circle-exclamation" style="font-size:1.2rem;"></i> Dispatch Failure Log</h4>
+        
+        <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:14px; border-radius:10px; font-size:0.82rem; display:flex; flex-direction:column; gap:8px; margin-bottom:16px;">
+            <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Recipient:</span><strong id="fail-modal-recip">-</strong></div>
+            <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">WhatsApp Phone:</span><strong id="fail-modal-phone">-</strong></div>
+            <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Queue Status:</span><span class="badge red" id="fail-modal-status">-</span></div>
+            <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Retries Count:</span><strong id="fail-modal-retries">0</strong></div>
+        </div>
+
+        <label style="display:block; font-size:0.75rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Error Message</label>
+        <div style="background:#fff5f5; border:1px solid #fee2e2; padding:14px; border-radius:10px; font-size:0.8rem; color:#b91c1c; line-height:1.4; white-space:pre-wrap; margin-bottom:20px; font-family:monospace;" id="failure-log-text"></div>
+        
+        <div style="text-align:right;">
+            <button type="button" class="btn btn-outline" onclick="closeFailureDetailModal()" style="border-radius:8px;">Close</button>
         </div>
     </div>
 </div>
@@ -1334,6 +1781,7 @@ function loadCampaignDrilldown(campId) {
 
                 document.getElementById('drilldown-camp-id').value = c.id;
                 document.getElementById('drilldown-title').innerText = "Campaign Detail: " + c.name;
+                document.getElementById('drilldown-subtitle').innerHTML = `Template: <strong>${escapeHtml(c.template_name)}</strong> &nbsp;|&nbsp; Target: <strong>${escapeHtml(c.target_audience.toUpperCase())}</strong>`;
 
                 // Adjust Action control buttons
                 if (c.status === 'paused') {
@@ -1354,22 +1802,38 @@ function loadCampaignDrilldown(campId) {
                 grid.innerHTML = '';
 
                 const total = res.recipients.length;
-                const sent = res.recipients.filter(r => r.queue_status === 'sent').length;
+                const sent = res.recipients.filter(r => r.queue_status === 'sent' || r.queue_status === 'delivered' || r.queue_status === 'read').length;
                 const read = res.recipients.filter(r => r.queue_status === 'read').length;
                 const failed = res.recipients.filter(r => r.status === 'failed' || r.queue_status === 'failed').length;
 
                 grid.innerHTML = `
-                    <div style="border:1px solid #e2e8f0; border-radius:10px; padding:10px; background:#fafafa; text-align:center;">
-                        <strong>${total}</strong><div style="font-size:0.6rem; color:#64748b; margin-top:2px;">AUDIENCE</div>
+                    <div class="kpi-card">
+                        <div class="kpi-icon audience"><i class="fas fa-users"></i></div>
+                        <div class="kpi-info">
+                            <span class="kpi-value">${total}</span>
+                            <span class="kpi-label">Audience Size</span>
+                        </div>
                     </div>
-                    <div style="border:1px solid #e2e8f0; border-radius:10px; padding:10px; background:#fafafa; text-align:center;">
-                        <strong style="color:#059669;">${sent}</strong><div style="font-size:0.6rem; color:#64748b; margin-top:2px;">SENT</div>
+                    <div class="kpi-card">
+                        <div class="kpi-icon sent"><i class="fas fa-paper-plane"></i></div>
+                        <div class="kpi-info">
+                            <span class="kpi-value">${sent}</span>
+                            <span class="kpi-label">Sent</span>
+                        </div>
                     </div>
-                    <div style="border:1px solid #e2e8f0; border-radius:10px; padding:10px; background:#fafafa; text-align:center;">
-                        <strong style="color:#2563eb;">${read}</strong><div style="font-size:0.6rem; color:#64748b; margin-top:2px;">READ RECEIPTS</div>
+                    <div class="kpi-card">
+                        <div class="kpi-icon read"><i class="fas fa-check-double"></i></div>
+                        <div class="kpi-info">
+                            <span class="kpi-value">${read}</span>
+                            <span class="kpi-label">Read Receipts</span>
+                        </div>
                     </div>
-                    <div style="border:1px solid #e2e8f0; border-radius:10px; padding:10px; background:#fafafa; text-align:center;">
-                        <strong style="color:#dc2626;">${failed}</strong><div style="font-size:0.6rem; color:#64748b; margin-top:2px;">FAILED</div>
+                    <div class="kpi-card">
+                        <div class="kpi-icon failed"><i class="fas fa-circle-xmark"></i></div>
+                        <div class="kpi-info">
+                            <span class="kpi-value">${failed}</span>
+                            <span class="kpi-label">Failed</span>
+                        </div>
                     </div>
                 `;
 
@@ -1400,34 +1864,59 @@ function renderDrilldownRecipientsTable(list) {
 
     list.forEach(r => {
         const tr = document.createElement('tr');
-        tr.style.borderBottom = '1px solid #f3f4f6';
+        tr.style.borderBottom = '1px solid #f1f5f9';
         
-        let qStatusBadge = 'gray';
-        if (r.queue_status === 'sent') qStatusBadge = 'green';
-        else if (r.queue_status === 'read') qStatusBadge = 'blue';
-        else if (r.queue_status === 'failed' || r.status === 'failed') qStatusBadge = 'red';
-        else if (r.queue_status === 'processing') qStatusBadge = 'orange';
-        else if (r.queue_status === 'delivered') qStatusBadge = 'green';
+        let qStatusClass = 'gray';
+        if (r.queue_status === 'sent') qStatusClass = 'green';
+        else if (r.queue_status === 'read') qStatusClass = 'blue';
+        else if (r.queue_status === 'failed' || r.status === 'failed') qStatusClass = 'red';
+        else if (r.queue_status === 'processing') qStatusClass = 'orange';
+        else if (r.queue_status === 'delivered') qStatusClass = 'green';
+
+        // Avatar Initial
+        const initial = r.recipient_name ? r.recipient_name.charAt(0) : 'R';
+
+        // Meta Message ID column
+        let metaIdCol = '-';
+        if (r.message_id) {
+            metaIdCol = `<button type="button" class="btn btn-sm btn-outline" style="border-radius:6px; font-size:0.7rem; padding:4px 8px; display:inline-flex; align-items:center; gap:4px;" onclick="openMetaIdModal('${escapeHtml(r.message_id)}')"><i class="fas fa-eye"></i> View Meta ID</button>
+                         <div style="font-size:0.65rem; color:#64748b; margin-top:4px;">Queue ID: ${escapeHtml(r.queue_id || '-')}</div>`;
+        }
+
+        // Delivery details column
+        let deliveryCol = '';
+        if (r.sent_at) deliveryCol += `<div style="font-size:0.7rem; color:#64748b;">Sent: ${escapeHtml(r.sent_at)}</div>`;
+        if (r.delivered_at) deliveryCol += `<div style="font-size:0.7rem; color:#059669;">Delivered: ${escapeHtml(r.delivered_at)}</div>`;
+        if (r.read_at) deliveryCol += `<div style="font-size:0.7rem; color:#2563eb;">Read: ${escapeHtml(r.read_at)}</div>`;
+        if (!deliveryCol) deliveryCol = '<span style="color:#94a3b8;">-</span>';
+
+        // Failure log column
+        let error = r.error_message || r.queue_error;
+        let failureCol = '-';
+        if (error) {
+            failureCol = `<button type="button" class="btn btn-sm btn-outline" style="border-radius:6px; border-color:#fee2e2; color:#dc2626; background:#fef2f2; font-size:0.7rem; padding:4px 8px; display:inline-flex; align-items:center; gap:4px;" onclick="openFailureModal('${escapeHtml(r.recipient_name)}', '${escapeHtml(r.recipient)}', '${escapeHtml(qStatusClass.toUpperCase())}', '${escapeHtml(r.retry_count || 0)}', '${escapeHtml(error)}')"><i class="fas fa-circle-exclamation"></i> View Error</button>`;
+        }
 
         tr.innerHTML = `
-            <td style="padding:10px; font-weight:700; color:#111827;">${escapeHtml(r.recipient_name)}</td>
-            <td style="padding:10px;">${escapeHtml(r.recipient)}</td>
-            <td style="padding:10px; color:#64748b; font-size:0.7rem;">
-                Msg ID: ${escapeHtml(r.message_id || '-')}<br>
-                Queue ID: ${escapeHtml(r.queue_id || '-')}
+            <td style="padding:12px;">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <div class="table-avatar">${escapeHtml(initial)}</div>
+                    <div style="font-weight:700; color:#1e293b;">${escapeHtml(r.recipient_name)}</div>
+                </div>
             </td>
-            <td style="padding:10px;">
-                <span class="badge ${qStatusBadge}" style="font-size:0.65rem;">${escapeHtml(r.queue_status || r.status || 'pending')}</span><br>
-                <small style="color:#64748b;">Retries: ${r.retry_count !== null && r.retry_count !== undefined ? r.retry_count : 0}</small>
+            <td style="padding:12px; font-weight:600; color:#475569;">
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <i class="fab fa-whatsapp" style="color:#25d366; font-size:0.9rem;"></i>
+                    ${escapeHtml(r.recipient)}
+                </div>
             </td>
-            <td style="padding:10px; color:#6b7280; font-size:0.7rem;">
-                ${r.sent_at ? 'Sent: ' + r.sent_at : ''}
-                ${r.delivered_at ? '<br>Delivered: ' + r.delivered_at : ''}
-                ${r.read_at ? '<br>Read: ' + r.read_at : ''}
+            <td style="padding:12px;">${metaIdCol}</td>
+            <td style="padding:12px;">
+                <span class="badge ${qStatusClass}" style="font-size:0.68rem; font-weight:700; text-transform:uppercase;">${escapeHtml(r.queue_status || r.status || 'pending')}</span>
+                <div style="font-size:0.65rem; color:#64748b; margin-top:4px;">Retries: ${r.retry_count !== null && r.retry_count !== undefined ? r.retry_count : 0}</div>
             </td>
-            <td style="padding:10px; color:#ef4444; font-size:0.7rem; max-width:200px; word-break:break-all;">
-                ${escapeHtml(r.error_message || r.queue_error || '-')}
-            </td>
+            <td style="padding:12px;">${deliveryCol}</td>
+            <td style="padding:12px;">${failureCol}</td>
         `;
         tbody.appendChild(tr);
     });
@@ -1473,6 +1962,83 @@ function triggerCampaignControl(action) {
         }
     });
 }
+
+// Report dropdown controls
+function toggleReportDropdown(event) {
+    event.stopPropagation();
+    const menu = document.getElementById('report-dropdown-menu');
+    menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+}
+
+function triggerReportDownload(format) {
+    const campId = document.getElementById('drilldown-camp-id').value;
+    window.location.href = `communication-campaigns.php?action=download_report&campaign_id=${campId}&format=${format}`;
+    document.getElementById('report-dropdown-menu').style.display = 'none';
+}
+
+// Close report dropdown on click outside
+window.addEventListener('click', () => {
+    const menu = document.getElementById('report-dropdown-menu');
+    if (menu) menu.style.display = 'none';
+});
+
+// Modal popups controls
+function openMetaIdModal(metaId) {
+    document.getElementById('meta-id-text').innerText = metaId;
+    const btn = document.getElementById('btn-copy-meta-id');
+    btn.innerHTML = '<i class="fas fa-copy"></i> Copy ID';
+    btn.style.background = '';
+    btn.style.borderColor = '';
+    document.getElementById('meta-id-modal').style.display = 'flex';
+}
+
+document.addEventListener('click', function(e) {
+    const menu = document.getElementById('report-dropdown-menu');
+    if (menu && !e.target.closest('.report-dropdown')) {
+        menu.style.display = 'none';
+    }
+});
+
+function closeMetaIdModal() {
+    document.getElementById('meta-id-modal').style.display = 'none';
+}
+
+function copyMetaId() {
+    const metaId = document.getElementById('meta-id-text').innerText;
+    navigator.clipboard.writeText(metaId).then(() => {
+        const btn = document.getElementById('btn-copy-meta-id');
+        btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+        btn.style.background = '#10b981';
+        btn.style.borderColor = '#10b981';
+        setTimeout(() => {
+            btn.innerHTML = '<i class="fas fa-copy"></i> Copy ID';
+            btn.style.background = '';
+            btn.style.borderColor = '';
+        }, 2000);
+    });
+}
+
+function openFailureModal(name, phone, status, retries, errorLog) {
+    document.getElementById('fail-modal-recip').innerText = name;
+    document.getElementById('fail-modal-phone').innerText = phone;
+    document.getElementById('fail-modal-status').innerText = status;
+    document.getElementById('fail-modal-retries').innerText = retries;
+    document.getElementById('failure-log-text').innerText = errorLog;
+    document.getElementById('failure-detail-modal').style.display = 'flex';
+}
+
+function closeFailureDetailModal() {
+    document.getElementById('failure-detail-modal').style.display = 'none';
+}
+
+// ESC key support to close modals
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        closeMetaIdModal();
+        closeFailureDetailModal();
+        closeConfirmModal();
+    }
+});
 
 // Visual layout helper tools
 function escapeHtml(text) {

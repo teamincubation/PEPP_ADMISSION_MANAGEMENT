@@ -721,6 +721,100 @@ include 'includes/admin_nav.php';
 .data-table tbody tr:hover td:last-child {
     background: #fafbff;
 }
+
+/* WhatsApp Mobile Conversation Simulator styling */
+.whatsapp-chat-simulator {
+    background: #e5ddd5;
+    border: 1px solid #cbd5e1;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
+.whatsapp-chat-header {
+    background: #008069;
+    color: #fff;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.whatsapp-chat-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #ece5dd;
+    color: #128c7e;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 1.1rem;
+}
+.whatsapp-chat-body {
+    padding: 20px;
+    min-height: 340px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png');
+    background-repeat: repeat;
+    background-size: auto;
+}
+.whatsapp-chat-bubble {
+    background: #fff;
+    border-radius: 8px 8px 8px 0;
+    max-width: 85%;
+    padding: 12px 14px;
+    align-self: flex-start;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+    position: relative;
+    width: 100%;
+}
+.whatsapp-chat-footer {
+    display: flex;
+    justify-content: flex-end;
+    font-size: 0.65rem;
+    color: #8696a0;
+    margin-top: 4px;
+    gap: 3px;
+}
+.whatsapp-chat-buttons-container {
+    margin-top: 10px;
+    border-top: 1px solid #f1f5f9;
+    padding-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.whatsapp-chat-quickreply {
+    background: #fff;
+    color: #008069;
+    border: 1px solid #e9edef;
+    padding: 8px;
+    text-align: center;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: default;
+    box-shadow: 0 1px 1px rgba(0,0,0,0.06);
+    transition: background 0.1s ease;
+}
+.whatsapp-chat-cta {
+    background: #fff;
+    color: #008069;
+    border: 1px solid #e9edef;
+    padding: 8px;
+    text-align: center;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: default;
+    box-shadow: 0 1px 1px rgba(0,0,0,0.06);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
 </style>
 
 <div class="container-fluid" style="padding:20px;">
@@ -1195,18 +1289,18 @@ include 'includes/admin_nav.php';
 
             <!-- Right: WhatsApp Live Preview Bubble -->
             <div style="position:sticky; top:20px;">
-                <div style="background:#e5ddd5; border:1px solid #cbd5e1; border-radius:16px; overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,0.06); font-family:Helvetica, Arial, sans-serif;">
-                    <div style="background:#075e54; color:#fff; padding:12px 16px; display:flex; align-items:center; gap:10px;">
-                        <div style="width:36px; height:36px; border-radius:50%; background:#ece5dd; color:#128c7e; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:1.2rem;">P</div>
+                <div class="whatsapp-chat-simulator">
+                    <div class="whatsapp-chat-header">
+                        <div class="whatsapp-chat-avatar">P</div>
                         <div>
                             <div style="font-weight:700; font-size:0.9rem;">PEPP Learning</div>
                             <div style="font-size:0.7rem; opacity:0.8;">Meta Official Business API Channel</div>
                         </div>
                     </div>
                     
-                    <div style="padding:20px; min-height:300px; display:flex; flex-direction:column; justify-content:flex-start; background-image:url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png'); background-repeat:repeat; background-size: auto;">
+                    <div class="whatsapp-chat-body">
                         <!-- WhatsApp Message bubble card -->
-                        <div style="background:#fff; border-radius:8px 8px 8px 0; max-width:85%; padding:10px; align-self:flex-start; box-shadow:0 1px 2px rgba(0,0,0,0.15); position:relative; width: 100%;">
+                        <div class="whatsapp-chat-bubble">
                             <!-- Header Media preview block -->
                             <div id="preview-header-media" style="display:none; background:#ece5dd; border-radius:6px; height:120px; align-items:center; justify-content:center; font-size:1.8rem; color:#94a3b8; margin-bottom:8px;">
                                 <i class="fas fa-image" id="preview-header-media-icon"></i>
@@ -1223,6 +1317,11 @@ include 'includes/admin_nav.php';
                             
                             <!-- Inside-bubble button pills -->
                             <div id="preview-bubble-buttons" style="display:none; flex-direction:column; gap:4px; margin-top:10px; border-top:1px solid #f1f5f9; padding-top:6px;"></div>
+
+                            <div class="whatsapp-chat-footer">
+                                <span>10:42 AM</span>
+                                <i class="fas fa-check" style="font-size:0.6rem;"></i>
+                            </div>
                         </div>
                         
                         <!-- CTA button pills (represented outside the card, floating under it) -->
@@ -1245,17 +1344,30 @@ include 'includes/admin_nav.php';
         <h4 id="modal-title" style="margin-top:0; margin-bottom:15px; font-weight:700; color:#1e293b; font-size:1.05rem;">Template Inspection</h4>
         
         <!-- Mock Phone wrapper inside modal -->
-        <div style="background:#e5ddd5; border:1px solid #cbd5e1; border-radius:12px; overflow:hidden; font-family:sans-serif; background-image:url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png'); background-repeat:repeat; padding:16px; min-height:220px; display:flex; flex-direction:column; justify-content:center;">
-            <div style="background:#fff; border-radius:8px 8px 8px 0; max-width:90%; padding:10px; align-self:flex-start; box-shadow:0 1px 2px rgba(0,0,0,0.15); width:100%;">
-                <div id="modal-header-media" style="display:none; background:#ece5dd; border-radius:6px; height:100px; align-items:center; justify-content:center; font-size:1.6rem; color:#94a3b8; margin-bottom:8px;">
-                    <i class="fas fa-image" id="modal-header-media-icon"></i>
+        <div class="whatsapp-chat-simulator">
+            <div class="whatsapp-chat-header">
+                <div class="whatsapp-chat-avatar">P</div>
+                <div>
+                    <div style="font-weight:700; font-size:0.85rem;">PEPP Learning</div>
+                    <div style="font-size:0.65rem; opacity:0.8;">Meta Official Business API Channel</div>
                 </div>
-                <div id="modal-header-text" style="font-weight:700; font-size:0.85rem; color:#111827; margin-bottom:6px; display:none;"></div>
-                <div id="modal-body" style="font-size:0.85rem; color:#374151; line-height:1.4; white-space:pre-wrap;"></div>
-                <div id="modal-footer" style="font-size:0.7rem; color:#94a3b8; margin-top:6px; display:none; border-top:1px dashed #f1f5f9; padding-top:4px;"></div>
-                <div id="modal-bubble-buttons" style="display:none; flex-direction:column; gap:4px; margin-top:10px; border-top:1px solid #f1f5f9; padding-top:6px;"></div>
             </div>
-            <div id="modal-floating-buttons" style="display:none; width:90%; align-self:flex-start; margin-top:6px; flex-direction:column; gap:6px;"></div>
+            <div class="whatsapp-chat-body" style="min-height:240px; padding:16px;">
+                <div style="background:#fff; border-radius:8px 8px 8px 0; max-width:90%; padding:10px; align-self:flex-start; box-shadow:0 1px 2px rgba(0,0,0,0.15); width:100%;">
+                    <div id="modal-header-media" style="display:none; background:#ece5dd; border-radius:6px; height:100px; align-items:center; justify-content:center; font-size:1.6rem; color:#94a3b8; margin-bottom:8px;">
+                        <i class="fas fa-image" id="modal-header-media-icon"></i>
+                    </div>
+                    <div id="modal-header-text" style="font-weight:700; font-size:0.85rem; color:#111827; margin-bottom:6px; display:none;"></div>
+                    <div id="modal-body" style="font-size:0.85rem; color:#374151; line-height:1.4; white-space:pre-wrap;"></div>
+                    <div id="modal-footer" style="font-size:0.7rem; color:#94a3b8; margin-top:6px; display:none; border-top:1px dashed #f1f5f9; padding-top:4px;"></div>
+                    <div id="modal-bubble-buttons" style="display:none; flex-direction:column; gap:4px; margin-top:10px; border-top:1px solid #f1f5f9; padding-top:6px;"></div>
+                    <div class="whatsapp-chat-footer">
+                        <span>10:42 AM</span>
+                        <i class="fas fa-check-double" style="font-size:0.6rem; color:#53bdeb;"></i>
+                    </div>
+                </div>
+                <div id="modal-floating-buttons" style="display:none; width:90%; align-self:flex-start; margin-top:6px; flex-direction:column; gap:6px;"></div>
+            </div>
         </div>
         
         <div style="text-align:right; margin-top:15px;">
@@ -1583,15 +1695,7 @@ function updatePreview() {
             const txt = inp.value.trim();
             if (txt) {
                 const btn = document.createElement('div');
-                btn.style.background = '#f8fafc';
-                btn.style.color = '#3b82f6';
-                btn.style.padding = '8px';
-                btn.style.textAlign = 'center';
-                btn.style.borderRadius = '6px';
-                btn.style.fontSize = '0.8rem';
-                btn.style.fontWeight = '700';
-                btn.style.border = '1px solid #e2e8f0';
-                btn.style.cursor = 'default';
+                btn.className = 'whatsapp-chat-quickreply';
                 btn.innerText = txt;
                 bubbleBtnContainer.appendChild(btn);
             }
@@ -1607,28 +1711,14 @@ function updatePreview() {
         
         if (phoneTxt && phoneNum) {
             const btn = document.createElement('div');
-            btn.style.background = '#fff';
-            btn.style.color = '#00a884';
-            btn.style.padding = '10px';
-            btn.style.textAlign = 'center';
-            btn.style.borderRadius = '8px';
-            btn.style.fontSize = '0.8rem';
-            btn.style.fontWeight = '700';
-            btn.style.boxShadow = '0 1px 2px rgba(0,0,0,0.1)';
-            btn.innerHTML = `<i class="fas fa-phone" style="margin-right:4px;"></i> ${phoneTxt}`;
+            btn.className = 'whatsapp-chat-cta';
+            btn.innerHTML = `<i class="fas fa-phone"></i> ${phoneTxt}`;
             floatBtnContainer.appendChild(btn);
         }
         if (urlTxt && urlVal) {
             const btn = document.createElement('div');
-            btn.style.background = '#fff';
-            btn.style.color = '#00a884';
-            btn.style.padding = '10px';
-            btn.style.textAlign = 'center';
-            btn.style.borderRadius = '8px';
-            btn.style.fontSize = '0.8rem';
-            btn.style.fontWeight = '700';
-            btn.style.boxShadow = '0 1px 2px rgba(0,0,0,0.1)';
-            btn.innerHTML = `<i class="fas fa-arrow-up-right-from-square" style="margin-right:4px;"></i> ${urlTxt}`;
+            btn.className = 'whatsapp-chat-cta';
+            btn.innerHTML = `<i class="fas fa-arrow-up-right-from-square"></i> ${urlTxt}`;
             floatBtnContainer.appendChild(btn);
         }
     } else {
@@ -1698,14 +1788,7 @@ function openVisualPreview(tplName, meta) {
         Object.values(meta.buttons.quick_reply).forEach(txt => {
             if (txt && txt.trim()) {
                 const btn = document.createElement('div');
-                btn.style.background = '#f8fafc';
-                btn.style.color = '#3b82f6';
-                btn.style.padding = '8px';
-                btn.style.textAlign = 'center';
-                btn.style.borderRadius = '6px';
-                btn.style.fontSize = '0.8rem';
-                btn.style.fontWeight = '700';
-                btn.style.border = '1px solid #e2e8f0';
+                btn.className = 'whatsapp-chat-quickreply';
                 btn.innerText = txt;
                 bubbleBtnContainer.appendChild(btn);
             }
@@ -1721,28 +1804,14 @@ function openVisualPreview(tplName, meta) {
         
         if (phoneTxt && phoneNum) {
             const btn = document.createElement('div');
-            btn.style.background = '#fff';
-            btn.style.color = '#00a884';
-            btn.style.padding = '10px';
-            btn.style.textAlign = 'center';
-            btn.style.borderRadius = '8px';
-            btn.style.fontSize = '0.8rem';
-            btn.style.fontWeight = '700';
-            btn.style.boxShadow = '0 1px 2px rgba(0,0,0,0.1)';
-            btn.innerHTML = `<i class="fas fa-phone" style="margin-right:4px;"></i> ${phoneTxt}`;
+            btn.className = 'whatsapp-chat-cta';
+            btn.innerHTML = `<i class="fas fa-phone"></i> ${phoneTxt}`;
             floatBtnContainer.appendChild(btn);
         }
         if (urlTxt && urlVal) {
             const btn = document.createElement('div');
-            btn.style.background = '#fff';
-            btn.style.color = '#00a884';
-            btn.style.padding = '10px';
-            btn.style.textAlign = 'center';
-            btn.style.borderRadius = '8px';
-            btn.style.fontSize = '0.8rem';
-            btn.style.fontWeight = '700';
-            btn.style.boxShadow = '0 1px 2px rgba(0,0,0,0.1)';
-            btn.innerHTML = `<i class="fas fa-arrow-up-right-from-square" style="margin-right:4px;"></i> ${urlTxt}`;
+            btn.className = 'whatsapp-chat-cta';
+            btn.innerHTML = `<i class="fas fa-arrow-up-right-from-square"></i> ${urlTxt}`;
             floatBtnContainer.appendChild(btn);
         }
     } else {
@@ -1763,6 +1832,12 @@ window.onclick = function(event) {
         modal.style.display = 'none';
     }
 }
+
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        closePreviewModal();
+    }
+});
 </script>
 
 <?php include 'includes/admin_footer.php'; ?>
