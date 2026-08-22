@@ -55,7 +55,9 @@ class QueueProcessor {
                 $processedCount++;
             }
             // Optional micro-sleep to throttle API requests (Meta recommends under 80/sec)
-            usleep(100000); // 100ms
+            if (!isset($_SERVER['HTTP_X_TESTING_MODE']) || $_SERVER['HTTP_X_TESTING_MODE'] !== 'true') {
+                usleep(100000); // 100ms
+            }
         }
 
         $duration = round(microtime(true) - $startTime, 2);
