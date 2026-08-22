@@ -25,6 +25,43 @@ $LEAD_STATUSES = [
 $YEARS = ['First Year', 'Second Year', 'Third Year', 'Fourth Year', 'Completed'];
 $CLOSED = ['converted', 'rejected', 'not_interested'];
 
+/* ── Filter Lock/Unlock Handler ── */
+if (isset($_GET['unlock'])) {
+    unset($_SESSION['locked_lead_filters']);
+    $cleanParams = $_GET;
+    unset($cleanParams['unlock']);
+    header("Location: lead-management.php" . (!empty($cleanParams) ? "?" . http_build_query($cleanParams) : ""));
+    exit;
+}
+
+if (isset($_GET['lock'])) {
+    $_SESSION['locked_lead_filters'] = [
+        'status'   => $_GET['status'] ?? '',
+        'assigned' => $_GET['assigned'] ?? '',
+        'course'   => $_GET['course'] ?? '',
+        'due'      => $_GET['due'] ?? '',
+        'joined'   => $_GET['joined'] ?? '',
+        'q'        => $_GET['q'] ?? ''
+    ];
+    $cleanParams = $_GET;
+    unset($cleanParams['lock']);
+    header("Location: lead-management.php" . (!empty($cleanParams) ? "?" . http_build_query($cleanParams) : ""));
+    exit;
+}
+
+if (isset($_SESSION['locked_lead_filters']) && !isset($_GET['unlock'])) {
+    $tempGet = $_GET;
+    unset($tempGet['page']);
+    if (empty($tempGet)) {
+        $_GET['status']   = $_SESSION['locked_lead_filters']['status'];
+        $_GET['assigned'] = $_SESSION['locked_lead_filters']['assigned'];
+        $_GET['course']   = $_SESSION['locked_lead_filters']['course'];
+        $_GET['due']      = $_SESSION['locked_lead_filters']['due'];
+        $_GET['joined']   = $_SESSION['locked_lead_filters']['joined'];
+        $_GET['q']        = $_SESSION['locked_lead_filters']['q'];
+    }
+}
+
 $success_message = '';
 $error_message   = '';
 
@@ -657,7 +694,12 @@ include 'includes/admin_nav.php';
             </div>
             <div class="field grow-2"><label>Search</label><input type="text" name="q" value="<?php echo e($f_q); ?>" placeholder="Name, WhatsApp, course or institute"></div>
             <button type="submit" class="btn btn-primary"><i class="fas fa-filter"></i> Filter</button>
-            <a href="lead-management.php" class="btn btn-outline">Reset</a>
+            <?php if (isset($_SESSION['locked_lead_filters'])): ?>
+                <button type="submit" name="unlock" value="1" class="btn btn-danger" style="border-radius:8px; background:#ef4444; border:none; color:#fff; cursor:pointer;"><i class="fas fa-lock-open"></i> Unlock</button>
+            <?php else: ?>
+                <button type="submit" name="lock" value="1" class="btn btn-outline" style="border-radius:8px; border-color:#cbd5e1; color:#475569; cursor:pointer;"><i class="fas fa-lock"></i> Lock</button>
+            <?php endif; ?>
+            <a href="lead-management.php?unlock=1" class="btn btn-outline">Reset</a>
         </form>
     </div>
 </div>
@@ -666,7 +708,7 @@ include 'includes/admin_nav.php';
 <div class="panel">
     <div class="panel-head">
         <span class="head-icon" style="background:var(--accent-soft);color:var(--accent-dark);"><i class="fas fa-list"></i></span>
-        <h2>Leads (<?php echo number_format($total); ?>)</h2>
+        <h2>Leads (<?php echo number_format($total); ?>) <?php if (isset($_SESSION['locked_lead_filters'])): ?><i class="fas fa-lock" style="color:#ef4444; font-size:0.9rem; margin-left:6px;" title="Filters Locked"></i><?php endif; ?></h2>
     </div>
     <div class="panel-body flush table-wrap">
         <?php if (empty($leads)): ?>
