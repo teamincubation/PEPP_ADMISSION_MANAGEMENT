@@ -36,8 +36,25 @@ try {
     $inboundMsgs = $stmtInbound->fetchAll(PDO::FETCH_ASSOC);
     $results['inbound_messages'] = $inboundMsgs;
 
-    // 3. Parent messages (Outbound) referenced by context.message_id
+    // 3. Parent messages (Outbound) referenced by context.message_id or manually searched
     $parentMsgs = [];
+    $stmtSpecificParent = $pdo->prepare("
+        SELECT id, conversation_id, wa_message_id, direction, message_type, message_text, raw_payload, status, created_at 
+        FROM whatsapp_messages 
+        WHERE wa_message_id = 'wamid.HBgMOTE3MzA2MTk4MTAyFQIAERgSNEU5MkM0MTYzM0E4RTc5RTUzAA=='
+    ");
+    $stmtSpecificParent->execute();
+    $results['specific_parent_message'] = $stmtSpecificParent->fetch(PDO::FETCH_ASSOC);
+
+    $stmtRecentOutbound = $pdo->prepare("
+        SELECT id, conversation_id, wa_message_id, direction, message_type, message_text, raw_payload, status, created_at 
+        FROM whatsapp_messages 
+        WHERE direction = 'outbound' 
+        ORDER BY id DESC LIMIT 5
+    ");
+    $stmtRecentOutbound->execute();
+    $results['recent_outbound_messages'] = $stmtRecentOutbound->fetchAll(PDO::FETCH_ASSOC);
+
     foreach ($inboundMsgs as $inMsg) {
         $replyTo = $inMsg['reply_to_wa_message_id'];
         if (!empty($replyTo)) {
