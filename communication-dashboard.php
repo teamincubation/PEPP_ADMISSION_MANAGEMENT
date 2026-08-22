@@ -322,7 +322,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $_SESSION['last_queue_process_at'] = $currentTime;
                 try {
-                    // Claim and identify the IDs we are about to process                    $stmtIds = $pdo->prepare("
+                    // Claim and identify the IDs we are about to process
+                    $stmtIds = $pdo->prepare("
                         SELECT id FROM communication_queue 
                         WHERE status IN ('pending', 'failed') 
                           AND next_attempt_at <= NOW() 
@@ -353,6 +354,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } catch (Exception $e) {
                     $error_message = 'Queue processing failed: ' . $e->getMessage();
                 }
+            }
             }
         }
     }

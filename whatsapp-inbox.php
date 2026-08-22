@@ -443,6 +443,8 @@ function onTemplateSelectChange(tplName) {
                 alert('Failed to load template variables mapping: ' + res.error);
             }
         });
+}
+
 function controlQueueInbox(queueId, action) {
     if (action === 'cancel_queue_item') {
         if (!confirm('Cancel this queue item?\nIt will NOT be sent again automatically.')) {
