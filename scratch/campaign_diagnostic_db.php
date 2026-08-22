@@ -30,8 +30,12 @@ try {
 
     // 4. Query recent logs/activity to trace if cron is running
     // Let's query recent queue execution status in communication_queue
-    $stmtQueueRecent = $pdo->query("SELECT * FROM communication_queue ORDER BY id DESC LIMIT 5");
+    $stmtQueueRecent = $pdo->query("SELECT * FROM communication_queue ORDER BY id DESC LIMIT 10");
     $results['recent_queue'] = $stmtQueueRecent->fetchAll(PDO::FETCH_ASSOC);
+
+    // Query last processed items (sent/failed)
+    $stmtLastProcessed = $pdo->query("SELECT id, status, error_message, updated_at FROM communication_queue WHERE status IN ('sent', 'failed') ORDER BY id DESC LIMIT 5");
+    $results['last_processed'] = $stmtLastProcessed->fetchAll(PDO::FETCH_ASSOC);
 
     // Let's query admin_settings for cron worker key to verify it is configured
     $stmtSettings = $pdo->query("SELECT * FROM admin_settings WHERE setting_name IN ('whatsapp_cron_worker_key', 'whatsapp_app_secret')");
