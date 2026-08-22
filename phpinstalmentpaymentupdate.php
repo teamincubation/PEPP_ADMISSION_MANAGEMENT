@@ -127,6 +127,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
                 else $ordStr = $ord . "th";
 
                 $context = [
+                    'student_uid' => $inst['user_id'] ?? '',
                     'student_name' => $inst['student_name'] ?? '',
                     'course_name' => $inst['pepp_course'] ?? '',
                     'academic_year' => $inst['pepp_academic_year'] ?? '',

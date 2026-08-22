@@ -632,6 +632,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !in_array(($_POST['action'] ?? ''),
                 $vals[] = $user_id;
                 $pdo->prepare("UPDATE users SET " . implode(', ', $set) . " WHERE user_id = ?")->execute($vals);
                 
+                if (in_array('whatsapp_number', $changed, true) || in_array('whatsapp_country_code', $changed, true)) {
+                    try {
+                        require_once 'includes/communication/CommunicationEngine.php';
+                        $commEngine = CommunicationEngine::getInstance($pdo);
+                        $commEngine->syncStudentQueueOnNumberChange($user_id, $_POST['whatsapp_country_code'] ?? '', $_POST['whatsapp_number'] ?? '');
+                    } catch (Exception $syncEx) {
+                        error_log("Queue number sync error: " . $syncEx->getMessage());
+                    }
+                }
+
                 // If discount_amount was changed, recalculate and update total_fee, and sync coupon_redemptions.discount_applied
                 if (in_array('discount_amount', $changed, true)) {
                     $new_discount = max(0, floatval($_POST['discount_amount'] ?? 0));

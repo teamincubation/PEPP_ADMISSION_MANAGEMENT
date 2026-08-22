@@ -155,10 +155,15 @@ class CommunicationEngine {
         return $queueId;
     }
 
+    public $mockProvider = null;
+
     /**
      * Instantiates and returns the configured channel provider.
      */
     public function getProvider($channel) {
+        if ($this->mockProvider !== null) {
+            return $this->mockProvider;
+        }
         // Read dynamic configuration options from the general database settings
         $stmt = $this->pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%'");
         $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
@@ -209,11 +214,84 @@ class CommunicationEngine {
                 $this->pdo->rollBack();
                 return false;
             }
+
+            error_log("[QUEUE_CLAIM] queue_id={$queueId} claimed by worker.");
             
             // Retrieve item details securely
             $stmt = $this->pdo->prepare("SELECT * FROM communication_queue WHERE id = ?");
             $stmt->execute([$queueId]);
             $item = $stmt->fetch();
+
+            // Pre-send validation check
+            if ($item && $item['channel'] === 'whatsapp' && !empty($item['student_uid'])) {
+                $studStmt = $this->pdo->prepare("SELECT whatsapp_country_code, whatsapp_number FROM users WHERE user_id = ?");
+                $studStmt->execute([$item['student_uid']]);
+                $student = $studStmt->fetch();
+                if ($student) {
+                    $currentPhone = self::normalizePhone($student['whatsapp_country_code'] . $student['whatsapp_number']);
+                    $queuedPhone = self::normalizePhone($item['recipient']);
+                    if ($currentPhone !== $queuedPhone) {
+                        // Mark old queue item as failed / superseded (storing the exact mismatch reason)
+                        $updStale = $this->pdo->prepare("
+                            UPDATE communication_queue 
+                            SET status = 'failed', 
+                                error_message = 'Superseded: Recipient number changed', 
+                                updated_at = NOW() 
+                            WHERE id = ?
+                        ");
+                        $updStale->execute([$queueId]);
+                        
+                        // Try to re-enqueue for the new phone number (with duplicate check)
+                        $dupStmt = $this->pdo->prepare("
+                            SELECT COUNT(*) FROM communication_queue 
+                            WHERE student_uid = ? 
+                              AND (event_name = ? OR (event_name IS NULL AND ? IS NULL))
+                              AND recipient = ? 
+                              AND status IN ('pending', 'processing', 'sent', 'delivered', 'read')
+                        ");
+                        $dupStmt->execute([$item['student_uid'], $item['event_name'], $item['event_name'], $currentPhone]);
+                        $exists = (int)$dupStmt->fetchColumn();
+
+                        if ($exists === 0) {
+                            $insStmt = $this->pdo->prepare("
+                                INSERT INTO communication_queue 
+                                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at) 
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, ?, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                            ");
+                            $insStmt->execute([
+                                $item['channel'],
+                                $currentPhone,
+                                $item['recipient_name'],
+                                $item['subject'],
+                                $item['body_html'],
+                                $item['body_text'],
+                                $item['template_name'],
+                                $item['template_data'],
+                                $item['attachments'],
+                                $item['sent_by'],
+                                $item['student_uid'],
+                                $item['event_name'],
+                                $item['invoice_id']
+                            ]);
+                            $newQueueId = (int)$this->pdo->lastInsertId();
+                            
+                            // Update tracking table installment_whatsapp_reminders
+                            $updTrack = $this->pdo->prepare("
+                                UPDATE installment_whatsapp_reminders 
+                                SET queue_id = ? 
+                                WHERE queue_id = ?
+                            ");
+                            $updTrack->execute([$newQueueId, $queueId]);
+                            error_log("[QUEUE_REENQUEUED] old_queue_id={$queueId} new_queue_id={$newQueueId} student_id={$item['student_uid']} recipient={$currentPhone}");
+                        }
+                        
+                        error_log("[QUEUE_RECIPIENT_MISMATCH] queue_id={$queueId} student_uid={$item['student_uid']} queued_phone={$queuedPhone} current_phone={$currentPhone} action=superseded");
+                        
+                        $this->pdo->commit();
+                        return false; // Stop execution
+                    }
+                }
+            }
             
             // Check campaign status and compliance if this queue item is part of a bulk campaign
             $campStmt = $this->pdo->prepare("
@@ -402,6 +480,8 @@ class CommunicationEngine {
                 ");
                 $doneStmt->execute([$msgId, $queueId]);
 
+                error_log("[QUEUE_SENT] queue_id={$queueId} sent successfully. Meta Message ID: {$msgId}");
+
                 // Update installment reminder tracking table to 'sent'
                 try {
                     $updRemStmt = $this->pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'sent' WHERE queue_id = ?");
@@ -552,24 +632,49 @@ class CommunicationEngine {
             
             $errMsg = $e->getMessage();
             $retryCount = $item ? ((int)$item['retry_count'] + 1) : 1;
-            $maxRetries = ($item && $item['channel'] === 'whatsapp') ? 3 : 5;
+            $maxRetries = ($item && $item['channel'] === 'email') ? 5 : 3;
             
             $isPermanentFailure = false;
+            $isRecipientFailure = false;
             $lowerErrMsg = strtolower($errMsg);
             if (
                 strpos($lowerErrMsg, 'healthy ecosystem engagement') !== false ||
+                strpos($lowerErrMsg, '131026') !== false ||
+                strpos($lowerErrMsg, 'policy') !== false ||
                 strpos($lowerErrMsg, 'not in allowed list') !== false ||
+                strpos($lowerErrMsg, 'invalid phone number') !== false ||
+                strpos($lowerErrMsg, 'does not exist') !== false ||
+                strpos($lowerErrMsg, 'recipient') !== false ||
+                strpos($lowerErrMsg, 'undeliverable') !== false ||
+                strpos($lowerErrMsg, 'not a whatsapp number') !== false
+            ) {
+                $isRecipientFailure = true;
+                $isPermanentFailure = true;
+            } elseif (
                 strpos($lowerErrMsg, 'parameter count mismatch') !== false ||
                 strpos($lowerErrMsg, 'not approved') !== false ||
                 strpos($lowerErrMsg, 'not found in database') !== false ||
-                strpos($lowerErrMsg, 'invalid phone number') !== false ||
-                (strpos($lowerErrMsg, 'http 400') !== false && strpos($lowerErrMsg, 'rate limit') === false)
+                (strpos($lowerErrMsg, 'http 400') !== false && strpos($lowerErrMsg, 'rate limit') === false) ||
+                strpos($lowerErrMsg, 'param') !== false ||
+                strpos($lowerErrMsg, 'template') !== false
             ) {
                 $isPermanentFailure = true;
             }
 
             if ($isPermanentFailure) {
-                $retryCount = $maxRetries;
+                if ($isRecipientFailure) {
+                    if ($retryCount >= 2) {
+                        $retryCount = $maxRetries;
+                        error_log("[QUEUE_PERMANENT_FAILURE] queue_id={$queueId} recipient=" . ($item ? $item['recipient'] : 'unknown') . " attempt=2 error=" . $errMsg);
+                    } else {
+                        error_log("[QUEUE_RETRY] queue_id={$queueId} recipient=" . ($item ? $item['recipient'] : 'unknown') . " permanent error but retry capped at 2. attempts=1 error=" . $errMsg);
+                    }
+                } else {
+                    $retryCount = $maxRetries;
+                    error_log("[QUEUE_FAILED] queue_id={$queueId} recipient=" . ($item ? $item['recipient'] : 'unknown') . " config error fail-fast error=" . $errMsg);
+                }
+            } else {
+                error_log("[QUEUE_RETRY] queue_id={$queueId} recipient=" . ($item ? $item['recipient'] : 'unknown') . " transient error backoff attempt={$retryCount} error=" . $errMsg);
             }
 
             $chan = $item ? $item['channel'] : 'whatsapp';
@@ -852,7 +957,7 @@ class CommunicationEngine {
             }
 
             // Strict duplicate notification check based on student_uid + event_name + template_name
-            if ($studentUid && $eventName && $resolved['name']) {
+            if ($studentUid && $eventName && $resolved['name'] && !in_array($eventName, ['installment_reminder', 'installment_overdue'], true)) {
                 if ($eventName === 'payment_receipt' && $invoiceId) {
                     $dupStmt = $this->pdo->prepare("
                         SELECT COUNT(*) FROM communication_queue 
@@ -932,6 +1037,9 @@ class CommunicationEngine {
         }
 
         $phpBinary = 'php';
+        if (file_exists('/opt/alt/php82/usr/bin/php')) {
+            $phpBinary = '/opt/alt/php82/usr/bin/php';
+        }
         $cronScript = dirname(dirname(__DIR__)) . '/cron-queue.php';
         
         if (!file_exists($cronScript)) {
@@ -969,6 +1077,153 @@ class CommunicationEngine {
         } catch (\Throwable $e) {
             error_log("Async Dispatch Throwable (proc_open disabled or failed): " . $e->getMessage() . ". Falling back to synchronous execution for queue item #{$queueId}");
             return $this->processQueueItem($queueId);
+        }
+    }
+
+    /**
+     * Centralized phone-number normalization mechanism.
+     */
+    public static function normalizePhone($phone) {
+        if (function_exists('normalizeLeadPhone')) {
+            return normalizeLeadPhone($phone);
+        }
+        $cleaned = preg_replace('/\D/', '', (string)$phone);
+        if (strlen($cleaned) === 11 && strpos($cleaned, '0') === 0) {
+            $cleaned = substr($cleaned, 1);
+        }
+        if (strlen($cleaned) === 10) {
+            $cleaned = '91' . $cleaned;
+        }
+        return $cleaned;
+    }
+
+    /**
+     * Synchronizes future pending/scheduled/failed queue items when a student's phone number changes.
+     * Cancels the old queue items as 'superseded' and clones them targeting the new phone number.
+     * Updates tracking row queue_ids atomically to prevent duplicate reminders.
+     */
+    public function syncStudentQueueOnNumberChange($studentUid, $newCountryCode, $newNumber) {
+        $newPhone = self::normalizePhone($newCountryCode . $newNumber);
+        if (empty($newPhone)) {
+            return;
+        }
+
+        try {
+            $this->pdo->beginTransaction();
+
+            // Find all eligible future/pending/retryable queue items for this student
+            $stmt = $this->pdo->prepare("
+                SELECT * FROM communication_queue 
+                WHERE student_uid = ? 
+                  AND status IN ('pending', 'scheduled', 'failed')
+                  AND channel = 'whatsapp'
+            ");
+            $stmt->execute([$studentUid]);
+            $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($items as $item) {
+                $oldPhone = self::normalizePhone($item['recipient']);
+                if ($oldPhone === $newPhone) {
+                    continue; // Already matching, skip
+                }
+
+                // Check for duplicate queue protection on the new number for this specific event/installment/invoice
+                $dupStmt = $this->pdo->prepare("
+                    SELECT COUNT(*) FROM communication_queue 
+                    WHERE student_uid = ? 
+                      AND (event_name = ? OR (event_name IS NULL AND ? IS NULL))
+                      AND recipient = ? 
+                      AND status IN ('pending', 'processing', 'sent', 'delivered', 'read')
+                ");
+                $dupStmt->execute([$studentUid, $item['event_name'], $item['event_name'], $newPhone]);
+                $exists = (int)$dupStmt->fetchColumn();
+
+                if ($exists === 0) {
+                    // Clone queue item targeting the new number
+                    $insStmt = $this->pdo->prepare("
+                        INSERT INTO communication_queue 
+                        (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, ?, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ");
+                    $insStmt->execute([
+                        $item['channel'],
+                        $newPhone,
+                        $item['recipient_name'],
+                        $item['subject'],
+                        $item['body_html'],
+                        $item['body_text'],
+                        $item['template_name'],
+                        $item['template_data'],
+                        $item['attachments'],
+                        $item['sent_by'],
+                        $studentUid,
+                        $item['event_name'],
+                        $item['invoice_id']
+                    ]);
+                    $newQueueId = (int)$this->pdo->lastInsertId();
+
+                    // Update tracking table installment_whatsapp_reminders
+                    $updTrack = $this->pdo->prepare("
+                        UPDATE installment_whatsapp_reminders 
+                        SET queue_id = ? 
+                        WHERE queue_id = ?
+                    ");
+                    $updTrack->execute([$newQueueId, $item['id']]);
+                    error_log("[QUEUE_REENQUEUED] old_queue_id={$item['id']} new_queue_id={$newQueueId} student_id={$studentUid} recipient={$newPhone}");
+                }
+
+                // Supersede the old queue item
+                $updOld = $this->pdo->prepare("
+                    UPDATE communication_queue 
+                    SET status = 'failed', 
+                        error_message = 'Superseded: Recipient number changed', 
+                        updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = ?
+                ");
+                $updOld->execute([$item['id']]);
+
+                error_log("[QUEUE_SUPERSEDED] queue_id={$item['id']} student_uid={$studentUid} queued_phone={$oldPhone} current_phone={$newPhone}");
+            }
+
+            $this->pdo->commit();
+        } catch (Exception $e) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            error_log("Failed syncStudentQueueOnNumberChange: " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Spawns an immediate background process to trigger the queue processor.
+     * Uses curl HTTP loopback with 1-second timeout.
+     */
+    public function triggerCronBackground() {
+        try {
+            $stmtSec = $this->pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_cron_worker_key' LIMIT 1");
+            $stmtSec->execute();
+            $token = $stmtSec->fetchColumn();
+            if (!$token) return;
+
+            $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+            $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+            $scriptName = $_SERVER['SCRIPT_NAME'] ?? '/admissions/index.php';
+            $dir = dirname($scriptName);
+            if ($dir === '\\' || $dir === '/') {
+                $dir = '';
+            }
+            $url = $protocol . '://' . $host . $dir . '/cron-queue.php?key=' . $token;
+
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 1);
+            curl_setopt($ch, CURLOPT_NOSIGNAL, 1);
+            curl_exec($ch);
+            curl_close($ch);
+            error_log("[CRON_TRIGGER] background cron loopback triggered. URL: {$url}");
+        } catch (Exception $e) {
+            error_log("Failed to trigger background cron: " . $e->getMessage());
         }
     }
 }

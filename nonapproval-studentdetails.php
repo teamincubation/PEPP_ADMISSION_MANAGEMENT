@@ -94,6 +94,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $vals[] = $student_id;
                 $stmt = $pdo->prepare("UPDATE users SET " . implode(', ', $set) . " WHERE user_id = ?");
                 $stmt->execute($vals);
+                
+                if (in_array('whatsapp_number', $changed, true) || in_array('whatsapp_country_code', $changed, true)) {
+                    try {
+                        require_once 'includes/communication/CommunicationEngine.php';
+                        $commEngine = CommunicationEngine::getInstance($pdo);
+                        $commEngine->syncStudentQueueOnNumberChange($student_id, $_POST['whatsapp_country_code'] ?? '', $_POST['whatsapp_number'] ?? '');
+                    } catch (Exception $syncEx) {
+                        error_log("Queue number sync error before approval: " . $syncEx->getMessage());
+                    }
+                }
+
                 $message = 'Student details updated successfully.';
                 if ($changed) {
                     track_record($pdo, $student_id, 'registration_edited',

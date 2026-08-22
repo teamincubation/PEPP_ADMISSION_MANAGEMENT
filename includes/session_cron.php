@@ -335,6 +335,7 @@ function installments_dispatch_whatsapp_reminders($pdo) {
                 else $ordStr = $ord . "th";
 
                 $context = [
+                    'student_uid' => $inst['user_id'] ?? '',
                     'student_name' => $inst['student_name'] ?? '',
                     'course_name' => $inst['pepp_course'] ?? '',
                     'academic_year' => $inst['pepp_academic_year'] ?? '',
@@ -478,6 +479,7 @@ function installments_dispatch_whatsapp_overdue_reminders($pdo) {
                 else $ordStr = $ord . "th";
 
                 $context = [
+                    'student_uid' => $inst['user_id'] ?? '',
                     'student_name' => $inst['student_name'] ?? '',
                     'course_name' => $inst['pepp_course'] ?? '',
                     'academic_year' => $inst['pepp_academic_year'] ?? '',
@@ -486,7 +488,7 @@ function installments_dispatch_whatsapp_overdue_reminders($pdo) {
                     'installment_due_date' => date('d M Y', strtotime($inst['due_date']))
                 ];
 
-                // Trigger installment_overdue notification event (student_uid is omitted from context so engine duplicate check is bypassed; stage-based idempotency is handled here)
+                // Trigger installment_overdue notification event (stage-based idempotency is handled here)
                 $queueId = $commEngine->sendEventNotification(
                     'installment_overdue',
                     $wa_phone,

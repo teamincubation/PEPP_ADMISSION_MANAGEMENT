@@ -197,7 +197,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } else {
                         require_once 'includes/communication/QueueProcessor.php';
                         $processor = new QueueProcessor($pdo, 25);
-                        $processed = $processor->execute();
+                        $res = $processor->execute();
+                        $processed = is_array($res) ? $res['processed'] : $res;
                         
                         // Query the final status of the processed items
                         $inQuery = implode(',', array_map('intval', $eligibleIds));
@@ -493,6 +494,61 @@ include 'includes/admin_nav.php';
             <div style="font-size:1.8rem; font-weight:800; color:#111827;"><?php echo number_format($stats['failed']); ?></div>
             <div style="font-size:0.75rem; color:#ef4444; margin-top:2px; font-weight:600;">Needs verification &amp; retry</div>
         </div>
+    </div>
+
+    <!-- ── CRON HEALTH STATUS CARD ── -->
+    <?php
+    $lastCron = null;
+    if (!empty($settings['whatsapp_last_cron_run'])) {
+        $lastCron = json_decode($settings['whatsapp_last_cron_run'], true);
+    }
+    $isCronActive = false;
+    if ($lastCron && isset($lastCron['timestamp'])) {
+        if (time() - (int)$lastCron['timestamp'] <= 300) { // 5 minutes
+            $isCronActive = true;
+        }
+    }
+    ?>
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:16px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);">
+        <div>
+            <div style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em; font-weight:700; color:#4b5563; margin-bottom:4px;">
+                Background Queue Worker Status
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span class="badge <?php echo $isCronActive ? 'green' : 'red'; ?>" style="font-size:0.85rem; font-weight:800; padding:4px 8px;">
+                    <?php echo $isCronActive ? 'CRON ACTIVE' : 'CRON NOT RUNNING'; ?>
+                </span>
+                <span style="font-size:0.85rem; color:#4b5563; font-weight:600;">
+                    <?php if ($lastCron): ?>
+                        Last run: <strong><?php echo date('d M Y, h:i:s A', $lastCron['timestamp']); ?></strong> (<?php echo htmlspecialchars($lastCron['source'] ?? 'Unknown'); ?>)
+                    <?php else: ?>
+                        No background cron execution recorded yet.
+                    <?php endif; ?>
+                </span>
+            </div>
+        </div>
+        <?php if ($lastCron): ?>
+            <div style="display:flex; gap:16px; text-align:right;">
+                <div>
+                    <div style="font-size:0.7rem; color:#6b7280; font-weight:600;">Status</div>
+                    <div style="font-size:0.9rem; font-weight:700; color:<?php echo $lastCron['status'] === 'SUCCESS' ? '#059669' : '#dc2626'; ?>;">
+                        <?php echo htmlspecialchars($lastCron['status'] ?? 'N/A'); ?>
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size:0.7rem; color:#6b7280; font-weight:600;">Processed</div>
+                    <div style="font-size:0.9rem; font-weight:700; color:#111827;"><?php echo (int)($lastCron['processed'] ?? 0); ?></div>
+                </div>
+                <div>
+                    <div style="font-size:0.7rem; color:#6b7280; font-weight:600;">Failed</div>
+                    <div style="font-size:0.9rem; font-weight:700; color:#dc2626;"><?php echo (int)($lastCron['failed'] ?? 0); ?></div>
+                </div>
+                <div>
+                    <div style="font-size:0.7rem; color:#6b7280; font-weight:600;">Duration</div>
+                    <div style="font-size:0.9rem; font-weight:700; color:#111827;"><?php echo number_format($lastCron['duration'] ?? 0, 2); ?>s</div>
+                </div>
+            </div>
+        <?php endif; ?>
     </div>
 
     <!-- ── NAVIGATION TABS ── -->

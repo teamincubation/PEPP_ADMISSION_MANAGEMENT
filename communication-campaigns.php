@@ -273,6 +273,10 @@ if (isset($_GET['action'])) {
                 $stmtCampActive->execute([$id]);
 
                 $pdo->commit();
+                try {
+                    $engine->triggerCronBackground();
+                } catch (Exception $bgEx) {}
+
                 echo json_encode(['success' => true, 'message' => "Successfully re-queued {$retriedCount} failed dispatches."]);
             } catch (Exception $e) {
                 $pdo->rollBack();
@@ -492,6 +496,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             }
 
                             $pdo->commit();
+                            try {
+                                require_once 'includes/communication/CommunicationEngine.php';
+                                $commEngine = CommunicationEngine::getInstance($pdo);
+                                $commEngine->triggerCronBackground();
+                            } catch (Exception $bgEx) {}
+
                             $success_message = "Campaign successfully configured and snapshot saved! Enqueued {$queuedCount} recipients for background dispatch.";
                         } catch (Exception $e) {
                             $pdo->rollBack();

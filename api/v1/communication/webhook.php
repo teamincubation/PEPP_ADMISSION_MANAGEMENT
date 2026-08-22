@@ -618,6 +618,13 @@ $rawPayload
         } catch (Exception $ex) {}
     }
 
+    // Trigger background cron to dispatch any newly created auto-replies or messages
+    try {
+        if (isset($engine) && $engine instanceof CommunicationEngine) {
+            $engine->triggerCronBackground();
+        }
+    } catch (Exception $cronBgEx) {}
+
     http_response_code(200);
     echo json_encode(['success' => true]);
     exit;

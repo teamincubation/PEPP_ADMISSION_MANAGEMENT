@@ -37,7 +37,7 @@ try {
         } else {
             echo "Error: Unauthorized access.\n";
         }
-        exit;
+        exit(1);
     }
 
     // Set JSON header for HTTP responses
@@ -278,27 +278,94 @@ try {
             }
         }
 
-        $processor = new QueueProcessor($pdo, 25);
-        $processed = $processor->execute();
+        $telemetry = [
+            'timestamp' => time(),
+            'datetime' => date('Y-m-d H:i:s'),
+            'source' => $is_cli ? 'CLI' : 'HTTP',
+            'status' => 'SUCCESS',
+            'processed' => 0,
+            'failed' => 0,
+            'eligible' => 0,
+            'ids' => [],
+            'duration' => 0.0
+        ];
+
+        try {
+            $processor = new QueueProcessor($pdo, 25);
+            $res = $processor->execute();
+            if (is_array($res)) {
+                $telemetry['processed'] = $res['processed'];
+                $telemetry['failed'] = $res['failed'];
+                $telemetry['eligible'] = $res['eligible'];
+                $telemetry['ids'] = $res['ids'];
+                $telemetry['duration'] = $res['duration'];
+            } else {
+                $telemetry['processed'] = (int)$res;
+            }
+        } catch (Exception $execEx) {
+            $telemetry['status'] = 'FAILED';
+            $telemetry['error'] = $execEx->getMessage();
+            throw $execEx;
+        } finally {
+            try {
+                $telemetryJson = json_encode($telemetry);
+                $telStmt = $pdo->prepare("
+                    INSERT INTO admin_settings (setting_name, setting_value, updated_at) 
+                    VALUES ('whatsapp_last_cron_run', ?, NOW()) 
+                    ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()
+                ");
+                $telStmt->execute([$telemetryJson]);
+                error_log("[CRON_COMPLETE] cron completed. Telemetry: " . $telemetryJson);
+            } catch (Exception $telEx) {}
+        }
         
         if ($is_cli) {
-            echo "Queue processed successfully. Items dispatched: " . $processed . "\n";
+            echo "Queue processed successfully. Items dispatched: " . $telemetry['processed'] . " | Failed: " . $telemetry['failed'] . "\n";
+            exit(0);
         } else {
             echo json_encode([
                 'success' => true,
                 'message' => "Queue processed successfully.",
-                'dispatched_count' => $processed
+                'dispatched_count' => $telemetry['processed'],
+                'failed_count' => $telemetry['failed'],
+                'eligible_count' => $telemetry['eligible'],
+                'duration' => $telemetry['duration']
             ]);
+            exit;
         }
     }
 } catch (Exception $e) {
     error_log("Cron Queue Processor Error: " . $e->getMessage());
+    try {
+        $telemetry = [
+            'timestamp' => time(),
+            'datetime' => date('Y-m-d H:i:s'),
+            'source' => (php_sapi_name() === 'cli') ? 'CLI' : 'HTTP',
+            'status' => 'FAILED',
+            'error' => $e->getMessage(),
+            'processed' => 0,
+            'failed' => 0,
+            'eligible' => 0,
+            'ids' => [],
+            'duration' => 0.0
+        ];
+        $telemetryJson = json_encode($telemetry);
+        $telStmt = $pdo->prepare("
+            INSERT INTO admin_settings (setting_name, setting_value, updated_at) 
+            VALUES ('whatsapp_last_cron_run', ?, NOW()) 
+            ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()
+        ");
+        $telStmt->execute([$telemetryJson]);
+    } catch (Exception $telEx) {}
+
     if ($is_cli) {
         echo "Error: " . $e->getMessage() . "\n";
+        exit(1);
     } else {
         echo json_encode([
             'success' => false,
             'message' => 'Processor Error: ' . $e->getMessage()
         ]);
+        exit;
     }
 }

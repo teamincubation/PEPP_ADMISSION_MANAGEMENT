@@ -38,7 +38,13 @@ class QueueProcessor {
         
         $itemIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
         if (empty($itemIds)) {
-            return 0;
+            return [
+                'processed' => 0,
+                'failed' => 0,
+                'eligible' => 0,
+                'ids' => [],
+                'duration' => 0.0
+            ];
         }
 
         $startTime = microtime(true);
@@ -64,6 +70,12 @@ class QueueProcessor {
         $failedCount = $eligibleCount - $processedCount;
         error_log("QueueProcessor completed. Dispatched: {$processedCount}. Failed/skipped: {$failedCount}. Duration: {$duration}s.");
 
-        return $processedCount;
+        return [
+            'processed' => $processedCount,
+            'failed' => $failedCount,
+            'eligible' => $eligibleCount,
+            'ids' => $itemIds,
+            'duration' => $duration
+        ];
     }
 }
