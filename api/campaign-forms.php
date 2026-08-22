@@ -469,34 +469,43 @@ try {
                 continue;
             }
 
-            // Check if already exists in leads
-            $stmt = $pdo->prepare("SELECT id FROM leads WHERE whatsapp_number = ?");
-            $stmt->execute([$clean_number]);
-            $existing_lead_id = $stmt->fetchColumn();
-            if ($existing_lead_id) {
-                // Mark submission as converted pointing to existing lead
-                $pdo->prepare("UPDATE campaign_form_submissions SET is_converted_lead = 1, converted_lead_id = ? WHERE id = ?")->execute([$existing_lead_id, $sub_id]);
-                $skipped_count++;
-                $errors[] = "Submission #{$sub_id} ({$name}) marked: Lead with number +{$clean_number} already exists in CRM.";
-                continue;
-            }
-
-            // Insert into leads
+            // Check if already exists in leads (course-specific check with named locking)
+            $pdo->beginTransaction();
+            acquireLeadLock($pdo, $clean_number, $course_name);
             try {
+                $dupRes = checkLeadDuplicate($pdo, $clean_number, $course_name, null, true);
+                if ($dupRes['count'] > 0) {
+                    $existing_lead_id = $dupRes['matches'][0]['id'];
+                    // Mark submission as converted pointing to existing lead
+                    $pdo->prepare("UPDATE campaign_form_submissions SET is_converted_lead = 1, converted_lead_id = ? WHERE id = ?")->execute([$existing_lead_id, $sub_id]);
+                    $skipped_count++;
+                    $errors[] = "Submission #{$sub_id} ({$name}) marked: Lead with number +{$clean_number} already exists in CRM for course '{$course_name}'.";
+                    $pdo->commit();
+                    continue;
+                }
+
+                // Insert into leads
+                $normPhone = normalizeLeadPhone($clean_number);
                 $stmt = $pdo->prepare("
                     INSERT INTO leads (whatsapp_number, name, interested_course, status, next_followup_date, assigned_to, source, created_by, created_at, last_activity_at)
                     VALUES (?, ?, ?, 'new', CURDATE(), '__ALL__', 'campaign_form', ?, NOW(), NOW())
                 ");
-                $stmt->execute([$clean_number, $name, $course_name, $admin_username]);
+                $stmt->execute([$normPhone, $name, $course_name, $admin_username]);
                 $new_lead_id = $pdo->lastInsertId();
 
                 // Update submission status to converted
                 $pdo->prepare("UPDATE campaign_form_submissions SET is_converted_lead = 1, converted_lead_id = ? WHERE id = ?")->execute([$new_lead_id, $sub_id]);
 
                 $converted_count++;
+                $pdo->commit();
             } catch (Exception $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
                 $skipped_count++;
                 $errors[] = "Submission #{$sub_id} ({$name}) error: " . $e->getMessage();
+            } finally {
+                releaseLeadLock($pdo, $clean_number, $course_name);
             }
         }
 

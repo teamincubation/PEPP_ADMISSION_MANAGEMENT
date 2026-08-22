@@ -691,3 +691,141 @@ function ld_tables_exist($pdo) {
     return $exists;
 }
 
+/**
+ * Centralized helpers for Lead duplicate prevention & conversion.
+ */
+if (!function_exists('normalizeLeadPhone')) {
+    function normalizeLeadPhone($phone) {
+        $cleaned = preg_replace('/\D/', '', (string)$phone);
+        if (strlen($cleaned) === 11 && strpos($cleaned, '0') === 0) {
+            $cleaned = substr($cleaned, 1);
+        }
+        if (strlen($cleaned) === 10) {
+            $cleaned = '91' . $cleaned;
+        }
+        return $cleaned;
+    }
+}
+
+if (!function_exists('normalizeLeadCourse')) {
+    function normalizeLeadCourse($course) {
+        if ($course === null) return '';
+        return strtolower(trim(preg_replace('/\s+/', ' ', (string)$course)));
+    }
+}
+
+if (!function_exists('checkLeadDuplicate')) {
+    function checkLeadDuplicate($pdo, $phone, $course, $excludeLeadId = null, $inTransaction = false) {
+        $normPhone = normalizeLeadPhone($phone);
+        $normCourse = normalizeLeadCourse($course);
+        if (empty($normPhone)) {
+            return ['count' => 0, 'matches' => []];
+        }
+
+        $last10 = substr($normPhone, -10);
+        $isSqlite = false;
+        try {
+            $isSqlite = ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+        } catch (Exception $e) {}
+        $lockSql = ($inTransaction && !$isSqlite) ? " FOR UPDATE" : "";
+        
+        // Ignore leads whose status is 'rejected'
+        $stmt = $pdo->prepare("
+            SELECT id, whatsapp_number, interested_course, status, name 
+            FROM leads 
+            WHERE (whatsapp_number LIKE ? OR whatsapp_number LIKE ?)
+              AND status <> 'rejected'
+            " . $lockSql
+        );
+        $stmt->execute(['%' . $last10, $normPhone]);
+        $leads = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $matches = [];
+        foreach ($leads as $l) {
+            if ($excludeLeadId !== null && (int)$l['id'] === (int)$excludeLeadId) {
+                continue;
+            }
+            if (normalizeLeadPhone($l['whatsapp_number']) === $normPhone && 
+                normalizeLeadCourse($l['interested_course']) === $normCourse) {
+                $matches[] = $l;
+            }
+        }
+        
+        return [
+            'count' => count($matches),
+            'matches' => $matches
+        ];
+    }
+}
+
+if (!function_exists('acquireLeadLock')) {
+    function acquireLeadLock($pdo, $phone, $course) {
+        $normPhone = normalizeLeadPhone($phone);
+        $normCourse = normalizeLeadCourse($course);
+        $lockName = 'lead_lock_' . $normPhone . '_' . md5($normCourse);
+        $stmt = $pdo->prepare("SELECT GET_LOCK(?, 10)");
+        $stmt->execute([$lockName]);
+        return (int)$stmt->fetchColumn() === 1;
+    }
+}
+
+if (!function_exists('releaseLeadLock')) {
+    function releaseLeadLock($pdo, $phone, $course) {
+        $normPhone = normalizeLeadPhone($phone);
+        $normCourse = normalizeLeadCourse($course);
+        $lockName = 'lead_lock_' . $normPhone . '_' . md5($normCourse);
+        $stmt = $pdo->prepare("SELECT RELEASE_LOCK(?)");
+        $stmt->execute([$lockName]);
+    }
+}
+
+if (!function_exists('convertLeadFromApprovedAdmission')) {
+    function convertLeadFromApprovedAdmission($pdo, $leadId, $studentUserId, $adminUsername) {
+        try {
+            $stmtExist = $pdo->prepare("SELECT status FROM leads WHERE id = ?");
+            $stmtExist->execute([$leadId]);
+            $status = $stmtExist->fetchColumn();
+            if ($status === 'converted') {
+                return true; // Idempotent
+            }
+            
+            $stmtUpdate = $pdo->prepare("
+                UPDATE leads 
+                SET status = 'converted', 
+                    converted_user_id = ?, 
+                    updated_at = NOW() 
+                WHERE id = ?
+            ");
+            $stmtUpdate->execute([$studentUserId, $leadId]);
+            
+            // Log lead activity timeline
+            if (function_exists('lead_log')) {
+                lead_log($pdo, $leadId, 'status_change', "Lead marked converted via matched approved student #{$studentUserId}", $status, 'converted', null, $adminUsername);
+            } else {
+                $stmtAct = $pdo->prepare("
+                    INSERT INTO lead_activity (lead_id, activity_type, remark, old_status, new_status, performed_by, performed_at) 
+                    VALUES (?, 'status_change', ?, ?, 'converted', ?, NOW())
+                ");
+                $stmtAct->execute([$leadId, "Lead marked converted via matched approved student #{$studentUserId}", $status, $adminUsername]);
+                $pdo->prepare("UPDATE leads SET last_activity_at = NOW() WHERE id = ?")->execute([$leadId]);
+            }
+            
+            // Log admin activity
+            if (function_exists('log_admin_activity')) {
+                log_admin_activity($pdo, $adminUsername, 'lead_converted', "Lead #{$leadId} marked converted for Student #{$studentUserId}");
+            } else {
+                $stmtLog = $pdo->prepare("
+                    INSERT INTO admin_activity_log (username, action_type, description, ip_address, user_agent, timestamp) 
+                    VALUES (?, 'lead_converted', ?, ?, ?, NOW())
+                ");
+                $stmtLog->execute([$adminUsername, "Lead #{$leadId} marked converted for Student #{$studentUserId}", $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1', $_SERVER['HTTP_USER_AGENT'] ?? 'CLI']);
+            }
+            
+            return true;
+        } catch (Exception $e) {
+            error_log("Failed to convert lead #{$leadId}: " . $e->getMessage());
+            return false;
+        }
+    }
+}
+

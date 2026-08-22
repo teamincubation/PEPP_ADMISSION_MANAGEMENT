@@ -129,6 +129,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 "Course access until {$course_duration_date}; {$created_installments} future installment(s) scheduled"
             ]);
 
+            // Automatic lead conversion logic on approval
+            try {
+                $studentPhone = $student['whatsapp_country_code'] . $student['whatsapp_number'];
+                $studentCourse = $student['pepp_course'];
+                
+                $dupRes = checkLeadDuplicate($pdo, $studentPhone, $studentCourse, null, true);
+                if ($dupRes['count'] === 1) {
+                    $matchedLeadId = $dupRes['matches'][0]['id'];
+                    convertLeadFromApprovedAdmission($pdo, $matchedLeadId, $student['user_id'], $admin_username);
+                } elseif ($dupRes['count'] > 1) {
+                    error_log("Student Approval Auto-Conversion Ambiguity: Phone '{$studentPhone}', Course '{$studentCourse}' matched {$dupRes['count']} duplicate leads. Skipping auto-conversion.");
+                } else {
+                    error_log("Student Approval Auto-Conversion: Phone '{$studentPhone}', Course '{$studentCourse}' did not match any active lead.");
+                }
+            } catch (Exception $leadEx) {
+                throw $leadEx;
+            }
+
             $pdo->commit();
 
             status_log($pdo, $user_id, 'pending', 'approved', 'Application approved', $admin_username);

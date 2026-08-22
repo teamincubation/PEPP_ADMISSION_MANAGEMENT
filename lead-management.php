@@ -68,29 +68,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $wa = clean_wa($_POST['whatsapp_number'] ?? '');
                 $status = in_array($_POST['status'] ?? '', array_keys($LEAD_STATUSES), true) ? $_POST['status'] : 'new';
                 $followup = $_POST['next_followup_date'] ?? '';
+                $course_name = trim($_POST['interested_course'] ?? '');
+                
                 if (strlen($wa) < 11) {
                     $error_message = 'A valid WhatsApp number is required.';
                 } elseif (!in_array($status, $CLOSED, true) && $followup === '') {
                     $error_message = 'A next follow-up date is required until the lead is converted or rejected.';
                 } else {
-                    $assigned = is_super_admin() ? (trim($_POST['assigned_to'] ?? '') ?: '__ALL__') : '__ALL__';
-                    $stmt = $pdo->prepare("
-                        INSERT INTO leads (whatsapp_number, name, interested_course, last_institute, last_course,
-                            is_fyugp, year_of_study, status, next_followup_date, assigned_to, source, created_by, created_at, last_activity_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, NOW(), NOW())
-                    ");
-                    $stmt->execute([
-                        $wa, trim($_POST['name'] ?? ''), trim($_POST['interested_course'] ?? ''),
-                        trim($_POST['last_institute'] ?? ''), trim($_POST['last_course'] ?? ''),
-                        in_array($_POST['is_fyugp'] ?? '', ['yes', 'no'], true) ? $_POST['is_fyugp'] : null,
-                        in_array($_POST['year_of_study'] ?? '', $YEARS, true) ? $_POST['year_of_study'] : null,
-                        $status, in_array($status, $CLOSED, true) ? ($followup ?: null) : $followup,
-                        $assigned, $admin_username
-                    ]);
-                    $lead_id = (int)$pdo->lastInsertId();
-                    lead_log($pdo, $lead_id, 'created', trim($_POST['remarks'] ?? '') ?: 'Lead created', null, $status, $followup, $admin_username);
-                    log_admin_activity($pdo, $admin_username, 'lead_created', "Lead added: {$wa}" . (trim($_POST['name'] ?? '') ? ' (' . trim($_POST['name']) . ')' : ''));
-                    $success_message = 'Lead added.';
+                    $pdo->beginTransaction();
+                    $lockAcquired = acquireLeadLock($pdo, $wa, $course_name);
+                    try {
+                        // Check duplicate lead
+                        $dupRes = checkLeadDuplicate($pdo, $wa, $course_name, null, true);
+                        if ($dupRes['count'] > 0) {
+                            $existingLead = $dupRes['matches'][0];
+                            $error_message = "Lead already exists for this contact number for this course (Lead ID: #{$existingLead['id']}, Name: " . htmlspecialchars($existingLead['name'] ?? 'Unknown') . ", Status: " . htmlspecialchars($LEAD_STATUSES[$existingLead['status']][0] ?? $existingLead['status']) . ").";
+                            $pdo->rollBack();
+                        } else {
+                            $assigned = is_super_admin() ? (trim($_POST['assigned_to'] ?? '') ?: '__ALL__') : '__ALL__';
+                            $stmt = $pdo->prepare("
+                                INSERT INTO leads (whatsapp_number, name, interested_course, last_institute, last_course,
+                                    is_fyugp, year_of_study, status, next_followup_date, assigned_to, source, created_by, created_at, last_activity_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, NOW(), NOW())
+                            ");
+                            $stmt->execute([
+                                normalizeLeadPhone($wa), trim($_POST['name'] ?? ''), $course_name,
+                                trim($_POST['last_institute'] ?? ''), trim($_POST['last_course'] ?? ''),
+                                in_array($_POST['is_fyugp'] ?? '', ['yes', 'no'], true) ? $_POST['is_fyugp'] : null,
+                                in_array($_POST['year_of_study'] ?? '', $YEARS, true) ? $_POST['year_of_study'] : null,
+                                $status, in_array($status, $CLOSED, true) ? ($followup ?: null) : $followup,
+                                $assigned, $admin_username
+                            ]);
+                            $lead_id = (int)$pdo->lastInsertId();
+                            lead_log($pdo, $lead_id, 'created', trim($_POST['remarks'] ?? '') ?: 'Lead created', null, $status, $followup, $admin_username);
+                            log_admin_activity($pdo, $admin_username, 'lead_created', "Lead added: {$wa}" . (trim($_POST['name'] ?? '') ? ' (' . trim($_POST['name']) . ')' : ''));
+                            $pdo->commit();
+                            $success_message = 'Lead added.';
+                        }
+                    } catch (Exception $ex) {
+                        if ($pdo->inTransaction()) {
+                            $pdo->rollBack();
+                        }
+                        throw $ex;
+                    } finally {
+                        releaseLeadLock($pdo, $wa, $course_name);
+                    }
                 }
             } elseif ($action === 'bulk_import') {
                 if (!isset($_FILES['lead_file']) || $_FILES['lead_file']['error'] !== UPLOAD_ERR_OK) {
@@ -100,30 +122,160 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($rows === null) {
                         $error_message = 'Could not read the file. Please upload a .csv file (Excel: Save As → CSV).';
                     } else {
-                        $added = 0; $skipped = 0;
+                        $added = 0; 
+                        $skipped_invalid = 0;
+                        $skipped_db_dup = 0;
+                        $skipped_file_dup = 0;
+                        $duplicate_logs = [];
+                        $processed_in_sheet = [];
+                        
                         $assigned_default = is_super_admin() ? (trim($_POST['bulk_assigned_to'] ?? '') ?: '__ALL__') : '__ALL__';
-                        foreach ($rows as $r) {
-                            $wa = clean_wa($r['whatsapp_number'] ?? '');
-                            if (strlen($wa) < 11) { $skipped++; continue; }
-                            $yr = in_array($r['year_of_study'] ?? '', $YEARS, true) ? $r['year_of_study'] : null;
-                            $fy = in_array(strtolower($r['is_fyugp'] ?? ''), ['yes', 'no'], true) ? strtolower($r['is_fyugp']) : null;
-                            $fu = (!empty($r['next_followup_date']) && strtotime($r['next_followup_date'])) ? date('Y-m-d', strtotime($r['next_followup_date'])) : date('Y-m-d', strtotime('+2 days'));
-                            $stmt = $pdo->prepare("
-                                INSERT INTO leads (whatsapp_number, name, interested_course, last_institute, last_course,
-                                    is_fyugp, year_of_study, status, next_followup_date, assigned_to, source, created_by, created_at, last_activity_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, 'import', ?, NOW(), NOW())
-                            ");
-                            $stmt->execute([
-                                $wa, trim($r['name'] ?? ''), trim($r['interested_course'] ?? ''),
-                                trim($r['last_institute'] ?? ''), trim($r['last_course'] ?? ''),
-                                $fy, $yr, $fu, $assigned_default, $admin_username
-                            ]);
-                            $lead_id = (int)$pdo->lastInsertId();
-                            lead_log($pdo, $lead_id, 'created', trim($r['remarks'] ?? '') ?: 'Imported from file', null, 'new', $fu, $admin_username);
-                            $added++;
+                        
+                        $pdo->beginTransaction();
+                        try {
+                            foreach ($rows as $idx => $r) {
+                                $rowNum = $idx + 2; // Row 1 is header
+                                $wa = clean_wa($r['whatsapp_number'] ?? '');
+                                $course_name = trim($r['interested_course'] ?? '');
+                                
+                                if (strlen($wa) < 11) { 
+                                    $skipped_invalid++; 
+                                    continue; 
+                                }
+                                
+                                $normPhone = normalizeLeadPhone($wa);
+                                $normCourse = normalizeLeadCourse($course_name);
+                                $sheetKey = $normPhone . '||' . $normCourse;
+                                
+                                // Check duplicate in sheet
+                                if (isset($processed_in_sheet[$sheetKey])) {
+                                    $skipped_file_dup++;
+                                    $duplicate_logs[] = "Row {$rowNum}: Phone '{$wa}', Course '{$course_name}' - Duplicate within import file.";
+                                    continue;
+                                }
+                                
+                                // Acquire named lock for database-level check
+                                acquireLeadLock($pdo, $wa, $course_name);
+                                try {
+                                    $dupRes = checkLeadDuplicate($pdo, $wa, $course_name, null, true);
+                                    if ($dupRes['count'] > 0) {
+                                        $existingLead = $dupRes['matches'][0];
+                                        $skipped_db_dup++;
+                                        $duplicate_logs[] = "Row {$rowNum}: Phone '{$wa}', Course '{$course_name}' - Duplicate (existing Lead #{$existingLead['id']} found).";
+                                        continue;
+                                    }
+                                    
+                                    // Mark as processed in this session
+                                    $processed_in_sheet[$sheetKey] = true;
+                                    
+                                    $yr = in_array($r['year_of_study'] ?? '', $YEARS, true) ? $r['year_of_study'] : null;
+                                    $fy = in_array(strtolower($r['is_fyugp'] ?? ''), ['yes', 'no'], true) ? strtolower($r['is_fyugp']) : null;
+                                    $fu = (!empty($r['next_followup_date']) && strtotime($r['next_followup_date'])) ? date('Y-m-d', strtotime($r['next_followup_date'])) : date('Y-m-d', strtotime('+2 days'));
+                                    
+                                    $stmt = $pdo->prepare("
+                                        INSERT INTO leads (whatsapp_number, name, interested_course, last_institute, last_course,
+                                            is_fyugp, year_of_study, status, next_followup_date, assigned_to, source, created_by, created_at, last_activity_at)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, 'import', ?, NOW(), NOW())
+                                    ");
+                                    $stmt->execute([
+                                        $normPhone, trim($r['name'] ?? ''), $course_name,
+                                        trim($r['last_institute'] ?? ''), trim($r['last_course'] ?? ''),
+                                        $fy, $yr, $fu, $assigned_default, $admin_username
+                                    ]);
+                                    $lead_id = (int)$pdo->lastInsertId();
+                                    lead_log($pdo, $lead_id, 'created', trim($r['remarks'] ?? '') ?: 'Imported from file', null, 'new', $fu, $admin_username);
+                                    $added++;
+                                } finally {
+                                    releaseLeadLock($pdo, $wa, $course_name);
+                                }
+                            }
+                            $pdo->commit();
+                        } catch (Exception $ex) {
+                            if ($pdo->inTransaction()) {
+                                $pdo->rollBack();
+                            }
+                            throw $ex;
                         }
-                        log_admin_activity($pdo, $admin_username, 'leads_imported', "Bulk import: {$added} added, {$skipped} skipped");
-                        $success_message = "Import complete: {$added} lead(s) added" . ($skipped ? ", {$skipped} skipped (missing/invalid WhatsApp number)" : '') . '.';
+                        
+                        log_admin_activity($pdo, $admin_username, 'leads_imported', "Bulk import: {$added} added, {$skipped_invalid} invalid, {$skipped_db_dup} db duplicates, {$skipped_file_dup} file duplicates");
+                        
+                        $success_message = "<strong>Import Completed:</strong><br>";
+                        $success_message .= "Successfully Imported: {$added}<br>";
+                        $success_message .= "Duplicates in Database (Skipped): {$skipped_db_dup}<br>";
+                        $success_message .= "Duplicates in Upload File (Skipped): {$skipped_file_dup}<br>";
+                        $success_message .= "Invalid Suffix/Missing Phone (Skipped): {$skipped_invalid}<br>";
+                        
+                        if (!empty($duplicate_logs)) {
+                            $success_message .= "<div style='margin-top:10px; max-height:150px; overflow-y:auto; font-size:0.75rem; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px; text-align:left;'>";
+                            $success_message .= "<strong>Skipped rows details:</strong><br>";
+                            foreach ($duplicate_logs as $log) {
+                                $success_message .= htmlspecialchars($log) . "<br>";
+                            }
+                            $success_message .= "</div>";
+                        }
+                    }
+                }
+            } elseif ($action === 'mark_converted') {
+                $lead_id = (int)($_POST['lead_id'] ?? 0);
+                $student_user_id = trim($_POST['student_user_id'] ?? '');
+                
+                $stmt = $pdo->prepare("SELECT * FROM leads WHERE id = ? FOR UPDATE");
+                $stmt->execute([$lead_id]);
+                $lead = $stmt->fetch();
+                
+                if (!$lead) {
+                    $error_message = 'Lead not found.';
+                } elseif ($lead['status'] === 'converted') {
+                    $error_message = 'This lead is already converted.';
+                } else {
+                    $pdo->beginTransaction();
+                    $lockAcquired = acquireLeadLock($pdo, $lead['whatsapp_number'], $lead['interested_course']);
+                    try {
+                        $normPhone = normalizeLeadPhone($lead['whatsapp_number']);
+                        $normCourse = normalizeLeadCourse($lead['interested_course']);
+                        
+                        // Query matching student/admission records
+                        $stmtStud = $pdo->prepare("
+                            SELECT * FROM users 
+                            WHERE user_id = ?
+                              AND status = 'approved'
+                            FOR UPDATE
+                        ");
+                        $stmtStud->execute([$student_user_id]);
+                        $student = $stmtStud->fetch();
+                        
+                        if ($student) {
+                            $studPhone = normalizeLeadPhone($student['whatsapp_country_code'] . $student['whatsapp_number']);
+                            $studCourse = normalizeLeadCourse($student['pepp_course']);
+                            
+                            if ($studPhone === $normPhone && $studCourse === $normCourse) {
+                                $success = convertLeadFromApprovedAdmission($pdo, $lead['id'], $student['user_id'], $admin_username);
+                                if ($success) {
+                                    $pdo->commit();
+                                    $success_message = "Lead #{$lead['id']} successfully marked as converted for Student #{$student['user_id']}.";
+                                } else {
+                                    $pdo->rollBack();
+                                    $error_message = "Failed to convert lead.";
+                                }
+                            } else {
+                                $pdo->rollBack();
+                                if ($studPhone !== $normPhone) {
+                                    $error_message = "Reconciliation error: Contact numbers do not match.";
+                                } else {
+                                    $error_message = "This contact has joined another PEPP course (" . htmlspecialchars($student['pepp_course']) . "), but not the course associated with this lead.";
+                                }
+                            }
+                        } else {
+                            $pdo->rollBack();
+                            $error_message = "No approved admission found for Student ID {$student_user_id}.";
+                        }
+                    } catch (Exception $ex) {
+                        if ($pdo->inTransaction()) {
+                            $pdo->rollBack();
+                        }
+                        throw $ex;
+                    } finally {
+                        releaseLeadLock($pdo, $lead['whatsapp_number'], $lead['interested_course']);
                     }
                 }
             }
@@ -229,6 +381,34 @@ try {
     $stmt->execute($params);
     $leads = $stmt->fetchAll();
 
+    // Preload matching approved/pending admission records in a single database query to avoid N+1 query loops
+    $preloadedAdmissions = [];
+    $phonesToSearch = [];
+    foreach (array_merge($leads, $today_leads) as $l) {
+        $cleaned = preg_replace('/\D/', '', $l['whatsapp_number']);
+        if (strlen($cleaned) >= 10) {
+            $phonesToSearch[] = $cleaned;
+            $phonesToSearch[] = substr($cleaned, -10);
+        }
+    }
+    if (!empty($phonesToSearch)) {
+        $phonesToSearch = array_unique($phonesToSearch);
+        $placeholders = implode(',', array_fill(0, count($phonesToSearch), '?'));
+        
+        $stmtPreload = $pdo->prepare("
+            SELECT id, user_id, name, whatsapp_number, whatsapp_country_code, pepp_course, status, approval_date 
+            FROM users 
+            WHERE (whatsapp_number IN ({$placeholders}) OR CONCAT(whatsapp_country_code, whatsapp_number) IN ({$placeholders}))
+        ");
+        $stmtPreload->execute(array_merge($phonesToSearch, $phonesToSearch));
+        $admissions = $stmtPreload->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($admissions as $adm) {
+            $normPhone = normalizeLeadPhone($adm['whatsapp_country_code'] . $adm['whatsapp_number']);
+            $preloadedAdmissions[$normPhone][] = $adm;
+        }
+    }
+
     if (is_super_admin()) {
         $admin_list = $pdo->query("SELECT DISTINCT assigned_to FROM leads WHERE assigned_to IS NOT NULL AND assigned_to <> '' ORDER BY assigned_to")->fetchAll(PDO::FETCH_COLUMN);
     }
@@ -309,16 +489,83 @@ include 'includes/admin_nav.php';
         <table class="data-table">
             <thead><tr><th>Lead</th><th>Interested In</th><th>Status</th><th>Follow-up</th><th style="text-align:right;">Actions</th></tr></thead>
             <tbody>
-            <?php foreach ($today_leads as $l): $overdue = $l['next_followup_date'] < date('Y-m-d'); ?>
+            <?php foreach ($today_leads as $l): 
+                $overdue = $l['next_followup_date'] < date('Y-m-d');
+                $normPhone = normalizeLeadPhone($l['whatsapp_number']);
+                $matches = $preloadedAdmissions[$normPhone] ?? [];
+                $joinedCount = 0;
+                $appliedCount = 0;
+                $sameCourseApprovedStudent = null;
+                $eligibleForManualConversion = false;
+                $normLeadCourse = normalizeLeadCourse($l['interested_course']);
+
+                foreach ($matches as $m) {
+                    if ($m['status'] === 'approved') {
+                        $joinedCount++;
+                        if (normalizeLeadCourse($m['pepp_course']) === $normLeadCourse) {
+                            $sameCourseApprovedStudent = $m;
+                        }
+                    } elseif ($m['status'] === 'pending') {
+                        $appliedCount++;
+                    }
+                }
+                if ($sameCourseApprovedStudent && $l['status'] !== 'converted') {
+                    $eligibleForManualConversion = true;
+                }
+                
+                $matchedDetails = [];
+                foreach ($matches as $m) {
+                    $matchedDetails[] = [
+                        'course' => $m['pepp_course'],
+                        'student_name' => $m['name'],
+                        'status' => ucfirst($m['status']),
+                        'date' => $m['approval_date'] ? date('d M Y', strtotime($m['approval_date'])) : 'N/A',
+                        'student_id' => $m['user_id'],
+                        'is_same_course' => (normalizeLeadCourse($m['pepp_course']) === normalizeLeadCourse($l['interested_course'])),
+                        'lead_status' => $l['status']
+                    ];
+                }
+                $detailsJson = htmlspecialchars(json_encode($matchedDetails));
+            ?>
                 <tr<?php echo $overdue ? ' style="background:#fff7f7;"' : ''; ?>>
                     <td>
                         <div class="cell-main"><?php echo e($l['name'] ?: 'Unknown'); ?></div>
-                        <div class="cell-sub"><?php echo format_credential($l['whatsapp_number'], 'phone', 'leads'); ?> · <?php echo (int)$l['followup_count']; ?> follow-up(s)</div>
+                        <div class="cell-sub">
+                            <?php echo format_credential($l['whatsapp_number'], 'phone', 'leads'); ?> · <?php echo (int)$l['followup_count']; ?> follow-up(s)
+                            <?php if (!empty($matches)): ?>
+                                <div style="margin-top:4px;">
+                                    <button type="button" class="joined-courses-btn" data-details="<?php echo $detailsJson; ?>" onclick="showJoinedCoursesModal(this)" style="padding:1px 6px; border-radius:4px; font-size:0.62rem; line-height:1.2; font-weight:700; cursor:pointer; background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46;">
+                                        <?php if ($joinedCount > 0): ?>
+                                            🟢 Joined: <?php echo $joinedCount; ?>
+                                        <?php endif; ?>
+                                        <?php if ($appliedCount > 0): ?>
+                                            <?php echo $joinedCount > 0 ? ' | ' : ''; ?>🟡 Applied: <?php echo $appliedCount; ?>
+                                        <?php endif; ?>
+                                    </button>
+                                </div>
+                            <?php endif; ?>
+                        </div>
                     </td>
                     <td class="cell-sub"><?php echo e($l['interested_course'] ?: '-'); ?></td>
                     <td><span class="badge <?php echo $LEAD_STATUSES[$l['status']][1]; ?>"><?php echo $LEAD_STATUSES[$l['status']][0]; ?></span></td>
                     <td><span class="badge <?php echo $overdue ? 'red' : 'amber'; ?>"><?php echo date('d M', strtotime($l['next_followup_date'])); ?><?php echo $overdue ? ' · overdue' : ' · today'; ?></span></td>
                     <td style="text-align:right; white-space:nowrap;">
+                        <?php if ($eligibleForManualConversion): ?>
+                            <button type="button" class="btn btn-sm btn-success" 
+                                    data-lead-id="<?php echo $l['id']; ?>" 
+                                    data-lead-name="<?php echo htmlspecialchars($l['name']); ?>" 
+                                    data-lead-course="<?php echo htmlspecialchars($l['interested_course']); ?>" 
+                                    data-lead-phone="<?php echo htmlspecialchars($l['whatsapp_number']); ?>" 
+                                    data-student-id="<?php echo htmlspecialchars($sameCourseApprovedStudent['user_id']); ?>" 
+                                    data-student-name="<?php echo htmlspecialchars($sameCourseApprovedStudent['name']); ?>" 
+                                    data-student-course="<?php echo htmlspecialchars($sameCourseApprovedStudent['pepp_course']); ?>" 
+                                    data-student-date="<?php echo $sameCourseApprovedStudent['approval_date'] ? date('d M Y', strtotime($sameCourseApprovedStudent['approval_date'])) : 'N/A'; ?>" 
+                                    onclick="confirmManualConversion(this)" 
+                                    title="Mark as Converted" 
+                                    style="border-radius:6px; padding:2px 8px; font-size:0.7rem; font-weight:700; margin-right:4px;">
+                                <i class="fas fa-check-circle"></i> Mark Converted
+                            </button>
+                        <?php endif; ?>
                         <a class="btn btn-sm btn-outline" href="tel:<?php echo preg_replace('/\D/', '', $l['whatsapp_number']); ?>" title="Call"><i class="fas fa-phone"></i></a>
                         <a class="btn btn-sm btn-whatsapp" href="<?php echo e(wa_link($l['whatsapp_number'])); ?>" target="_blank" title="WhatsApp"><i class="fab fa-whatsapp"></i></a>
                         <a class="btn btn-sm btn-primary" href="lead-details.php?id=<?php echo (int)$l['id']; ?>"><i class="fas fa-pen"></i> Update</a>
@@ -388,11 +635,60 @@ include 'includes/admin_nav.php';
             <?php foreach ($leads as $l):
                 $overdue = $l['next_followup_date'] && $l['next_followup_date'] < date('Y-m-d') && !in_array($l['status'], $CLOSED, true);
                 $istoday = $l['next_followup_date'] === date('Y-m-d') && !in_array($l['status'], $CLOSED, true);
+                $normPhone = normalizeLeadPhone($l['whatsapp_number']);
+                $matches = $preloadedAdmissions[$normPhone] ?? [];
+                $joinedCount = 0;
+                $appliedCount = 0;
+                $sameCourseApprovedStudent = null;
+                $eligibleForManualConversion = false;
+                $normLeadCourse = normalizeLeadCourse($l['interested_course']);
+
+                foreach ($matches as $m) {
+                    if ($m['status'] === 'approved') {
+                        $joinedCount++;
+                        if (normalizeLeadCourse($m['pepp_course']) === $normLeadCourse) {
+                            $sameCourseApprovedStudent = $m;
+                        }
+                    } elseif ($m['status'] === 'pending') {
+                        $appliedCount++;
+                    }
+                }
+                if ($sameCourseApprovedStudent && $l['status'] !== 'converted') {
+                    $eligibleForManualConversion = true;
+                }
+                
+                $matchedDetails = [];
+                foreach ($matches as $m) {
+                    $matchedDetails[] = [
+                        'course' => $m['pepp_course'],
+                        'student_name' => $m['name'],
+                        'status' => ucfirst($m['status']),
+                        'date' => $m['approval_date'] ? date('d M Y', strtotime($m['approval_date'])) : 'N/A',
+                        'student_id' => $m['user_id'],
+                        'is_same_course' => (normalizeLeadCourse($m['pepp_course']) === normalizeLeadCourse($l['interested_course'])),
+                        'lead_status' => $l['status']
+                    ];
+                }
+                $detailsJson = htmlspecialchars(json_encode($matchedDetails));
             ?>
                 <tr>
                     <td>
                         <div class="cell-main"><?php echo e($l['name'] ?: 'Unknown'); ?></div>
-                        <div class="cell-sub"><?php echo format_credential($l['whatsapp_number'], 'phone', 'leads'); ?> · <?php echo (int)$l['followup_count']; ?> follow-up(s)</div>
+                        <div class="cell-sub">
+                            <?php echo format_credential($l['whatsapp_number'], 'phone', 'leads'); ?> · <?php echo (int)$l['followup_count']; ?> follow-up(s)
+                            <?php if (!empty($matches)): ?>
+                                <div style="margin-top:4px;">
+                                    <button type="button" class="joined-courses-btn" data-details="<?php echo $detailsJson; ?>" onclick="showJoinedCoursesModal(this)" style="padding:1px 6px; border-radius:4px; font-size:0.62rem; line-height:1.2; font-weight:700; cursor:pointer; background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46;">
+                                        <?php if ($joinedCount > 0): ?>
+                                            🟢 Joined: <?php echo $joinedCount; ?>
+                                        <?php endif; ?>
+                                        <?php if ($appliedCount > 0): ?>
+                                            <?php echo $joinedCount > 0 ? ' | ' : ''; ?>🟡 Applied: <?php echo $appliedCount; ?>
+                                        <?php endif; ?>
+                                    </button>
+                                </div>
+                            <?php endif; ?>
+                        </div>
                     </td>
                     <td class="cell-sub"><?php echo e($l['interested_course'] ?: '-'); ?></td>
                     <td class="cell-sub">
@@ -409,6 +705,22 @@ include 'includes/admin_nav.php';
                     </td>
                     <td class="cell-sub"><?php echo $l['assigned_to'] === '__ALL__' ? '<span class="badge violet">All Admins</span>' : e($l['assigned_to'] ?: '-'); ?></td>
                     <td style="text-align:right; white-space:nowrap;">
+                        <?php if ($eligibleForManualConversion): ?>
+                            <button type="button" class="btn btn-sm btn-success" 
+                                    data-lead-id="<?php echo $l['id']; ?>" 
+                                    data-lead-name="<?php echo htmlspecialchars($l['name']); ?>" 
+                                    data-lead-course="<?php echo htmlspecialchars($l['interested_course']); ?>" 
+                                    data-lead-phone="<?php echo htmlspecialchars($l['whatsapp_number']); ?>" 
+                                    data-student-id="<?php echo htmlspecialchars($sameCourseApprovedStudent['user_id']); ?>" 
+                                    data-student-name="<?php echo htmlspecialchars($sameCourseApprovedStudent['name']); ?>" 
+                                    data-student-course="<?php echo htmlspecialchars($sameCourseApprovedStudent['pepp_course']); ?>" 
+                                    data-student-date="<?php echo $sameCourseApprovedStudent['approval_date'] ? date('d M Y', strtotime($sameCourseApprovedStudent['approval_date'])) : 'N/A'; ?>" 
+                                    onclick="confirmManualConversion(this)" 
+                                    title="Mark as Converted" 
+                                    style="border-radius:6px; padding:2px 8px; font-size:0.7rem; font-weight:700; margin-right:4px;">
+                                <i class="fas fa-check-circle"></i> Mark Converted
+                            </button>
+                        <?php endif; ?>
                         <a class="btn btn-sm btn-outline" href="tel:<?php echo preg_replace('/\D/', '', $l['whatsapp_number']); ?>" title="Call"><i class="fas fa-phone"></i></a>
                         <a class="btn btn-sm btn-whatsapp" href="<?php echo e(wa_link($l['whatsapp_number'])); ?>" target="_blank" title="WhatsApp"><i class="fab fa-whatsapp"></i></a>
                         <a class="btn btn-sm btn-primary" href="lead-details.php?id=<?php echo (int)$l['id']; ?>" title="Open lead"><i class="fas fa-arrow-right"></i></a>
@@ -505,7 +817,141 @@ include 'includes/admin_nav.php';
 </div>
 
 <?php
-$extra_scripts = "<script>
+$extra_scripts = "
+<!-- Hidden POST Form for Manual Conversion -->
+<form id='manual-conversion-form' method='POST' action='lead-management.php' style='display:none;'>
+    " . csrf_field() . "
+    <input type='hidden' name='action' value='mark_converted'>
+    <input type='hidden' name='lead_id' id='post-convert-lead-id'>
+    <input type='hidden' name='student_user_id' id='post-convert-student-id'>
+</form>
+
+<!-- Joined Courses Modal -->
+<div id='joined-courses-modal' style='display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); align-items:center; justify-content:center; z-index:9999;'>
+    <div style='background:#fff; border-radius:16px; width:100%; max-width:400px; padding:20px; box-shadow:0 10px 25px rgba(0,0,0,0.1);'>
+        <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; border-bottom:1px solid #e2e8f0; padding-bottom:10px;'>
+            <h4 style='margin:0; font-size:0.95rem; font-weight:700; color:#1e293b;'><i class='fas fa-user-graduate' style='color:#10b981; margin-right:6px;'></i> Joined PEPP Courses</h4>
+            <button onclick=\"document.getElementById('joined-courses-modal').style.display='none'\" style='background:none; border:none; font-size:1.2rem; cursor:pointer; color:#94a3b8;'>&times;</button>
+        </div>
+        <div id='joined-courses-modal-list' style='max-height:300px; overflow-y:auto; margin-bottom:16px; text-align:left;'></div>
+        <div style='text-align:right;'>
+            <button onclick=\"document.getElementById('joined-courses-modal').style.display='none'\" class='btn btn-secondary' style='border-radius:8px; font-size:0.8rem; padding:6px 14px;'>Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Manual Conversion Confirmation Modal -->
+<div id='confirm-conversion-modal' style='display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); align-items:center; justify-content:center; z-index:9999;'>
+    <div style='background:#fff; border-radius:16px; width:100%; max-width:420px; padding:20px; box-shadow:0 10px 25px rgba(0,0,0,0.1); text-align:left;'>
+        <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; border-bottom:1px solid #e2e8f0; padding-bottom:10px;'>
+            <h4 style='margin:0; font-size:0.95rem; font-weight:700; color:#1e293b;'><i class='fas fa-check-circle' style='color:#10b981; margin-right:6px;'></i> Confirm Conversion</h4>
+            <button onclick=\"document.getElementById('confirm-conversion-modal').style.display='none'\" style='background:none; border:none; font-size:1.2rem; cursor:pointer; color:#94a3b8;'>&times;</button>
+        </div>
+        <p style='font-size:0.8rem; color:#64748b; margin-bottom:14px;'>Mark this lead as Converted?</p>
+        
+        <div style='background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px; margin-bottom:16px; font-size:0.75rem; color:#475569;'>
+            <strong>Lead Record:</strong><br>
+            Name: <span id='modal-lead-name'></span><br>
+            Course: <span id='modal-lead-course'></span><br>
+            Phone: <span id='modal-lead-phone'></span>
+            
+            <hr style='border:0; border-top:1px solid #e2e8f0; margin:10px 0;'>
+            
+            <strong>Matched Admission:</strong><br>
+            Student: <span id='modal-student-name'></span> (<span id='modal-student-id'></span>)<br>
+            Course: <span id='modal-student-course'></span><br>
+            Status: <span style='color:#10b981; font-weight:700;'>Approved</span> on <span id='modal-student-date'></span>
+        </div>
+        
+        <div style='display:flex; justify-content:end; gap:8px;'>
+            <button onclick=\"document.getElementById('confirm-conversion-modal').style.display='none'\" class='btn btn-outline' style='border-radius:8px; font-size:0.8rem; padding:6px 14px;'>Cancel</button>
+            <button onclick='submitManualConversion()' class='btn btn-success' style='border-radius:8px; font-size:0.8rem; padding:6px 14px; font-weight:700;'>Yes, Mark Converted</button>
+        </div>
+    </div>
+</div>
+
+<script>
+var selectedLeadId = null;
+var selectedStudentId = null;
+
+function confirmManualConversion(btn) {
+    selectedLeadId = btn.getAttribute('data-lead-id');
+    selectedStudentId = btn.getAttribute('data-student-id');
+    
+    document.getElementById('modal-lead-name').textContent = btn.getAttribute('data-lead-name');
+    document.getElementById('modal-lead-course').textContent = btn.getAttribute('data-lead-course');
+    document.getElementById('modal-lead-phone').textContent = btn.getAttribute('data-lead-phone');
+    
+    document.getElementById('modal-student-name').textContent = btn.getAttribute('data-student-name');
+    document.getElementById('modal-student-id').textContent = selectedStudentId;
+    document.getElementById('modal-student-course').textContent = btn.getAttribute('data-student-course');
+    document.getElementById('modal-student-date').textContent = btn.getAttribute('data-student-date');
+    
+    document.getElementById('confirm-conversion-modal').style.display = 'flex';
+}
+
+function submitManualConversion() {
+    document.getElementById('post-convert-lead-id').value = selectedLeadId;
+    document.getElementById('post-convert-student-id').value = selectedStudentId;
+    document.getElementById('manual-conversion-form').submit();
+}
+
+function showJoinedCoursesModal(btn) {
+    var details = JSON.parse(btn.getAttribute('data-details'));
+    var listHtml = '<div style=\"display:flex; flex-direction:column; gap:12px;\">';
+    
+    details.forEach(function(item) {
+        var statusColor = '#94a3b8'; // Default grey
+        var indicator = '○';
+        if (item.status === 'Approved') {
+            statusColor = '#10b981'; // Green
+            indicator = '✓';
+        } else if (item.status === 'Pending') {
+            statusColor = '#f59e0b'; // Amber
+            indicator = '⚡';
+        } else if (item.status === 'Rejected') {
+            statusColor = '#ef4444'; // Red
+            indicator = '✗';
+        }
+        
+        var courseTypeBadge = '';
+        if (item.is_same_course) {
+            courseTypeBadge = ' <span style=\"background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; padding:2px 6px; border-radius:4px; font-size:0.65rem; font-weight:700;\">Same Course</span>';
+        } else {
+            courseTypeBadge = ' <span style=\"background:#f1f5f9; border:1px solid #cbd5e1; color:#475569; padding:2px 6px; border-radius:4px; font-size:0.65rem; font-weight:700;\">Other Course</span>';
+        }
+        
+        listHtml += '<div style=\"background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;\">';
+        listHtml += '  <div style=\"display:flex; justify-content:space-between; align-items:center; font-weight:700; color:#1e293b; font-size:0.82rem; margin-bottom:4px;\">';
+        listHtml += '    <span>' + indicator + ' ' + escapeHtml(item.course) + '</span>';
+        listHtml += '    ' + courseTypeBadge;
+        listHtml += '  </div>';
+        listHtml += '  <div style=\"font-size:0.75rem; color:#64748b; margin-top:4px;\">';
+        listHtml += '    Name: ' + escapeHtml(item.student_name) + ' (' + escapeHtml(item.student_id) + ')<br>';
+        listHtml += '    Status: <span style=\"font-weight:700; color:' + statusColor + ';\">' + escapeHtml(item.status) + '</span>';
+        if (item.status === 'Approved') {
+            listHtml += ' • Approved on ' + escapeHtml(item.date);
+        }
+        listHtml += '    <br>Current Lead Status: <span style=\"font-weight:700; color:#475569;\">' + escapeHtml(item.lead_status) + '</span>';
+        listHtml += '  </div>';
+        listHtml += '</div>';
+    });
+    listHtml += '</div>';
+    
+    document.getElementById('joined-courses-modal-list').innerHTML = listHtml;
+    document.getElementById('joined-courses-modal').style.display = 'flex';
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    return text.toString()
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 function toggleFollowupReq(prefix) {
     var status = document.getElementById(prefix + '-status').value;
     var closed = ['converted','rejected','not_interested'].indexOf(status) !== -1;
