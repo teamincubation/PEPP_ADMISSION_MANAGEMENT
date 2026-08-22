@@ -14,29 +14,14 @@ $possibleBinaries = [
     '/opt/alt/php81/usr/bin/php',
     '/usr/local/bin/php',
     '/usr/bin/php',
-    'php'
 ];
 
 echo "4. Checking PHP Binary Locations:\n";
 foreach ($possibleBinaries as $bin) {
-    if ($bin === 'php') {
-        $output = [];
-        $return_var = -1;
-        @exec("php -v", $output, $return_var);
-        if ($return_var === 0) {
-            echo " - 'php' is available on PATH: " . implode(" | ", array_slice($output, 0, 1)) . "\n";
-        } else {
-            echo " - 'php' is NOT directly available on PATH.\n";
-        }
+    if (file_exists($bin)) {
+        echo " - {$bin} exists.\n";
     } else {
-        if (file_exists($bin)) {
-            $output = [];
-            $return_var = -1;
-            @exec($bin . " -v", $output, $return_var);
-            echo " - {$bin} exists and is executable: " . implode(" | ", array_slice($output, 0, 1)) . "\n";
-        } else {
-            echo " - {$bin} does NOT exist.\n";
-        }
+        echo " - {$bin} does NOT exist.\n";
     }
 }
 
@@ -47,3 +32,6 @@ if (file_exists($cronPath)) {
 } else {
     echo " - cron-queue.php NOT found at: {$cronPath}\n";
 }
+
+echo "\n6. Checking disable_functions in php.ini:\n";
+echo " - disabled: " . ini_get('disable_functions') . "\n";
