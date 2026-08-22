@@ -701,14 +701,17 @@ include 'includes/admin_nav.php';
     <div style="display:grid; grid-template-columns: 2fr 1fr; gap:20px; align-items:start;">
         <!-- Left: API Config Panel -->
         <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; overflow:hidden;">
-            <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px; display:flex; justify-content:space-between; align-items:center;">
-                <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;"><i class="fab fa-whatsapp" style="color:#25D366; margin-right:4px;"></i> Meta WhatsApp Cloud API Settings</h3>
-                <span class="badge <?php echo (!empty($settings['whatsapp_phone_id']) && !empty($settings['whatsapp_access_token'])) ? 'green' : 'gray'; ?>">
-                    <?php echo (!empty($settings['whatsapp_phone_id']) && !empty($settings['whatsapp_access_token'])) ? 'CONFIGURED' : 'UNCONFIGURED'; ?>
-                </span>
+            <div style="background:#f8fafc; padding:14px 20px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; user-select:none;" onclick="toggleApiSettings()">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;"><i class="fab fa-whatsapp" style="color:#25D366; margin-right:4px;"></i> Meta WhatsApp Cloud API Settings</h3>
+                    <span class="badge <?php echo (!empty($settings['whatsapp_phone_id']) && !empty($settings['whatsapp_access_token'])) ? 'green' : 'gray'; ?>">
+                        <?php echo (!empty($settings['whatsapp_phone_id']) && !empty($settings['whatsapp_access_token'])) ? 'CONFIGURED' : 'UNCONFIGURED'; ?>
+                    </span>
+                </div>
+                <i class="fas fa-chevron-down" id="api-settings-toggle-icon" style="color:#6b7280; font-size:1rem; transition: transform 0.2s;"></i>
             </div>
             
-            <div style="padding:20px;">
+            <div id="api-settings-body" style="padding:20px; border-top:1px solid #e5e7eb; display:none;">
                 <form method="POST">
                     <?php echo csrf_field(); ?>
                     <input type="hidden" name="action" value="save_settings">
@@ -1195,6 +1198,18 @@ function openCancelModal(queueId, recipient, status) {
 
 function closeCancelModal() {
     document.getElementById('cancelQueueModal').style.display = 'none';
+}
+
+function toggleApiSettings() {
+    const body = document.getElementById('api-settings-body');
+    const icon = document.getElementById('api-settings-toggle-icon');
+    if (body.style.display === 'none') {
+        body.style.display = 'block';
+        icon.style.transform = 'rotate(180deg)';
+    } else {
+        body.style.display = 'none';
+        icon.style.transform = 'rotate(0deg)';
+    }
 }
 </script>
 
