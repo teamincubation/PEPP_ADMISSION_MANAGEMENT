@@ -71,7 +71,7 @@ try {
 
     // 5. Target template communication queue items
     $stmtQueue = $pdo->prepare("
-        SELECT id, channel, recipient, subject, body_text, status, attempts, error_message, template_data, created_at, updated_at 
+        SELECT id, channel, recipient, subject, body_text, status, retry_count, error_message, template_data, created_at, updated_at 
         FROM communication_queue 
         WHERE template_data LIKE '%m_clin_psy_rci_basic%' OR subject LIKE '%m_clin_psy_rci_basic%'
         ORDER BY id DESC LIMIT 5
@@ -96,7 +96,7 @@ try {
 
     // 7. Last 5 successful outbound template queue dispatches (for comparison)
     $stmtSuccess = $pdo->prepare("
-        SELECT id, channel, recipient, subject, status, attempts, error_message, template_data, created_at, updated_at 
+        SELECT id, channel, recipient, subject, status, retry_count, error_message, template_data, created_at, updated_at 
         FROM communication_queue 
         WHERE status = 'sent' AND channel = 'whatsapp' AND template_data IS NOT NULL
         ORDER BY id DESC LIMIT 5
