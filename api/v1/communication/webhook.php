@@ -195,7 +195,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $mediaMime = null;
             $mediaFilename = null;
             $caption = null;
-            $replyToId = $msg['context']['message_id'] ?? null;
+            $replyToId = $msg['context']['id'] ?? $msg['context']['message_id'] ?? null;
             
             $buttonPayload = '';
             if ($type === 'text') {
@@ -353,7 +353,11 @@ $rawPayload
                                 $tplMeta = json_decode($tplRow['meta_data'], true) ?: [];
                                 $actions = $tplMeta['buttons']['quick_reply'] ?? [];
                                 foreach ($actions as $act) {
-                                    if (isset($act['payload']) && trim($act['payload']) === $buttonPayload) {
+                                    if (
+                                        (isset($act['payload']) && trim((string)$act['payload']) === trim((string)$buttonPayload))
+                                        ||
+                                        (isset($act['text']) && trim((string)$act['text']) === trim((string)$buttonPayload))
+                                    ) {
                                         $matchedAction = [
                                             'source_template_name' => $tplRow['template_name'],
                                             'action_type' => $act['action_type'] ?? 'NONE',
