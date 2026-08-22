@@ -196,7 +196,11 @@ class CommunicationEngine {
                 WHERE id = ? 
                   AND status IN ('pending', 'scheduled', 'failed')
                   AND next_attempt_at <= NOW()
-                  AND retry_count < 3
+                  AND (
+                    (channel = 'whatsapp' AND retry_count < 3) OR
+                    (channel = 'email' AND retry_count < 5) OR
+                    (channel NOT IN ('whatsapp', 'email') AND retry_count < 3)
+                  )
             ");
             $procStmt->execute([$queueId]);
             $affected = $procStmt->rowCount();
@@ -549,6 +553,25 @@ class CommunicationEngine {
             $errMsg = $e->getMessage();
             $retryCount = $item ? ((int)$item['retry_count'] + 1) : 1;
             $maxRetries = ($item && $item['channel'] === 'whatsapp') ? 3 : 5;
+            
+            $isPermanentFailure = false;
+            $lowerErrMsg = strtolower($errMsg);
+            if (
+                strpos($lowerErrMsg, 'healthy ecosystem engagement') !== false ||
+                strpos($lowerErrMsg, 'not in allowed list') !== false ||
+                strpos($lowerErrMsg, 'parameter count mismatch') !== false ||
+                strpos($lowerErrMsg, 'not approved') !== false ||
+                strpos($lowerErrMsg, 'not found in database') !== false ||
+                strpos($lowerErrMsg, 'invalid phone number') !== false ||
+                (strpos($lowerErrMsg, 'http 400') !== false && strpos($lowerErrMsg, 'rate limit') === false)
+            ) {
+                $isPermanentFailure = true;
+            }
+
+            if ($isPermanentFailure) {
+                $retryCount = $maxRetries;
+            }
+
             $chan = $item ? $item['channel'] : 'whatsapp';
             $legacyErr = $item ? (string)$item['error_message'] : '';
 
