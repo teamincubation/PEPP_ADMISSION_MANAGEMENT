@@ -185,6 +185,12 @@ try {
     $stmtTpl = $pdo->prepare("INSERT INTO communication_templates (template_name, language, status, meta_data) VALUES (?, ?, ?, ?)");
     $stmtTpl->execute(['m_clin_psy_rci_admission_started', 'en_US', 'approved', $metaData]);
 
+    // Reset CommunicationEngine singleton instance to use SQLite PDO
+    $ref = new ReflectionClass('CommunicationEngine');
+    $prop = $ref->getProperty('instance');
+    $prop->setAccessible(true);
+    $prop->setValue(null, null);
+
 } catch (Exception $e) {
     die("Mock SQLite setup failed: " . $e->getMessage() . "\n");
 }
