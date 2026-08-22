@@ -672,6 +672,19 @@ include 'includes/admin_nav.php';
 
 <div class="container-fluid" style="padding:20px;">
     <style>
+    /* Responsive Layout Grid */
+    .campaign-main-layout-grid {
+        display: grid;
+        grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
+        gap: 20px;
+        align-items: start;
+    }
+    @media (max-width: 991px) {
+        .campaign-main-layout-grid {
+            grid-template-columns: 1fr !important;
+        }
+    }
+
     /* Modern Form Sectioning */
     .form-step-section {
         background: #ffffff;
@@ -684,29 +697,72 @@ include 'includes/admin_nav.php';
     .form-step-header {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 12px;
         margin-bottom: 16px;
-        border-bottom: 1px dashed #e5e7eb;
-        padding-bottom: 10px;
+        border-bottom: 1px solid #f1f5f9;
+        padding-bottom: 12px;
     }
     .form-step-number {
-        width: 26px;
-        height: 26px;
-        border-radius: 50%;
-        background: var(--accent-soft);
-        color: var(--accent-dark);
+        width: 32px !important;
+        height: 32px !important;
+        min-width: 32px !important;
+        font-size: 0.9rem !important;
+        border-radius: 8px !important;
+        font-weight: 800 !important;
+        background: #f3f4f6 !important;
+        color: #4b5563 !important;
+        border: 1px solid #cbd5e1 !important;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-weight: 700;
-        font-size: 0.8rem;
     }
     .form-step-title {
-        font-size: 0.82rem;
+        font-size: 0.85rem !important;
         font-weight: 700;
         color: #1e293b;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+        text-transform: capitalize !important;
+        letter-spacing: 0.2px;
+    }
+
+    /* Override standard inputs and select styling */
+    .form-control, select.form-control {
+        height: 40px !important;
+        padding: 8px 14px !important;
+        font-size: 0.82rem !important;
+        border-radius: 8px !important;
+        border: 1.5px solid #cbd5e1 !important;
+        background-color: #fff !important;
+        color: #1e293b !important;
+        font-weight: 500 !important;
+        box-shadow: none !important;
+        transition: all 0.15s ease-in-out !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+    }
+    .form-control:focus, select.form-control:focus {
+        border-color: #7c3aed !important;
+        outline: none !important;
+        box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15) !important;
+    }
+
+    /* Scrollable checklist customize */
+    #leads-courses-checklist {
+        scrollbar-width: thin;
+        scrollbar-color: #cbd5e1 #f1f5f9;
+    }
+    #leads-courses-checklist::-webkit-scrollbar {
+        width: 6px;
+    }
+    #leads-courses-checklist::-webkit-scrollbar-track {
+        background: #f1f5f9;
+        border-radius: 4px;
+    }
+    #leads-courses-checklist::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 4px;
+    }
+    #leads-courses-checklist::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8;
     }
 
     /* Modern Checkbox Layout */
@@ -718,31 +774,34 @@ include 'includes/admin_nav.php';
     .chk-card-label {
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 10px 14px;
+        gap: 8px;
+        padding: 8px 10px;
         border: 1.5px solid #cbd5e1;
-        border-radius: 10px;
+        border-radius: 8px;
         cursor: pointer;
-        font-size: 0.8rem;
-        font-weight: 500;
+        font-size: 0.78rem;
+        font-weight: 600;
         background: #fff;
         transition: all 0.15s ease;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .chk-card-label:hover {
         border-color: #94a3b8;
         background: #f8fafc;
     }
     .chk-card-label input[type="checkbox"] {
-        width: 16px;
-        height: 16px;
+        width: 15px;
+        height: 15px;
         border-radius: 4px;
-        accent-color: var(--accent-dark);
+        accent-color: #7c3aed;
         cursor: pointer;
     }
     .chk-card-label.checked {
-        border-color: var(--accent-dark);
-        background: var(--accent-soft);
-        color: var(--accent-dark);
+        border-color: #7c3aed;
+        background: #f5f3ff;
+        color: #7c3aed;
         font-weight: 700;
     }
 
@@ -806,14 +865,14 @@ include 'includes/admin_nav.php';
         width: 32px;
         height: 32px;
         border-radius: 50%;
-        background: var(--accent-soft);
-        color: var(--accent-dark);
+        background: #f5f3ff;
+        color: #7c3aed;
         display: flex;
         align-items: center;
         justify-content: center;
         font-weight: 700;
         font-size: 0.85rem;
-        border: 1.5px solid var(--border);
+        border: 1.5px solid #ddd6fe;
         text-transform: uppercase;
     }
 
@@ -854,12 +913,28 @@ include 'includes/admin_nav.php';
     }
     .report-dropdown-item:hover {
         background: #f8fafc;
-        color: var(--accent-dark);
+        color: #7c3aed;
         text-decoration: none !important;
     }
     .report-dropdown-item i {
         font-size: 0.9rem;
     }
+
+    /* Badges styles */
+    .badge {
+        display: inline-block;
+        padding: 4px 8px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        border-radius: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+    .badge.gray { background: #e2e8f0; color: #475569; }
+    .badge.green { background: #d1fae5; color: #065f46; }
+    .badge.blue { background: #dbeafe; color: #1e40af; }
+    .badge.orange { background: #fef3c7; color: #92400e; }
+    .badge.red { background: #fee2e2; color: #991b1b; }
 
     /* Modals Overlay */
     .popover-modal-backdrop {
@@ -880,9 +955,9 @@ include 'includes/admin_nav.php';
         max-width: 460px;
         width: 90%;
         padding: 24px;
-        box-shadow: var(--shadow-md);
+        box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);
         position: relative;
-        border: 1px solid var(--border);
+        border: 1px solid #e2e8f0;
     }
     .popover-modal-close {
         position: absolute;
@@ -896,6 +971,26 @@ include 'includes/admin_nav.php';
     }
     .popover-modal-close:hover {
         color: #475569;
+    }
+
+    /* Actions styling overrides */
+    .btn-primary-action {
+        background: #7c3aed !important;
+        border-color: #7c3aed !important;
+        color: #fff !important;
+    }
+    .btn-primary-action:hover {
+        background: #6d28d9 !important;
+        border-color: #6d28d9 !important;
+    }
+    .btn-danger-action {
+        background: #ef4444 !important;
+        border-color: #ef4444 !important;
+        color: #fff !important;
+    }
+    .btn-danger-action:hover {
+        background: #dc2626 !important;
+        border-color: #dc2626 !important;
     }
     </style>
     <?php if ($success_message): ?>
@@ -920,7 +1015,7 @@ include 'includes/admin_nav.php';
     </div>
 
     <!-- Layout Grid -->
-    <div style="display:grid; grid-template-columns: 1.1fr 1.9fr; gap:20px; align-items:start;">
+    <div class="campaign-main-layout-grid">
         
         <!-- Left Column: Create Campaign Form -->
         <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; overflow:hidden; box-shadow:0 4px 12px rgba(0,0,0,0.02);">
@@ -943,8 +1038,11 @@ include 'includes/admin_nav.php';
                     <!-- STEP 1: CAMPAIGN DETAILS -->
                     <div class="form-step-section">
                         <div class="form-step-header">
-                            <div class="form-step-number">1</div>
-                            <div class="form-step-title">Campaign Details</div>
+                            <div class="form-step-number">01</div>
+                            <div style="display:flex; flex-direction:column; gap:2px;">
+                                <div class="form-step-title">Campaign Details</div>
+                                <div style="font-size:0.7rem; color:#64748b; font-weight:500; text-transform:none;">Define campaign properties</div>
+                            </div>
                         </div>
                         <div style="margin-bottom:0;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Campaign Name <span style="color:#ef4444;">*</span></label>
@@ -955,8 +1053,11 @@ include 'includes/admin_nav.php';
                     <!-- STEP 2: AUDIENCE FILTERS -->
                     <div class="form-step-section">
                         <div class="form-step-header">
-                            <div class="form-step-number">2</div>
-                            <div class="form-step-title">Audience Filters</div>
+                            <div class="form-step-number">02</div>
+                            <div style="display:flex; flex-direction:column; gap:2px;">
+                                <div class="form-step-title">Audience Filters</div>
+                                <div style="font-size:0.7rem; color:#64748b; font-weight:500; text-transform:none;">Choose target segmentation</div>
+                            </div>
                         </div>
                         
                         <!-- Leads Target Filters Section -->
@@ -1023,8 +1124,11 @@ include 'includes/admin_nav.php';
                     <!-- STEP 3: MESSAGE CONTENT -->
                     <div class="form-step-section">
                         <div class="form-step-header">
-                            <div class="form-step-number">3</div>
-                            <div class="form-step-title">Message Content</div>
+                            <div class="form-step-number">03</div>
+                            <div style="display:flex; flex-direction:column; gap:2px;">
+                                <div class="form-step-title">Message Content</div>
+                                <div style="font-size:0.7rem; color:#64748b; font-weight:500; text-transform:none;">Configure WABA variables</div>
+                            </div>
                         </div>
                         
                         <div style="margin-bottom:12px;">
@@ -1054,8 +1158,11 @@ include 'includes/admin_nav.php';
                     <!-- STEP 4: SCHEDULING -->
                     <div class="form-step-section">
                         <div class="form-step-header">
-                            <div class="form-step-number">4</div>
-                            <div class="form-step-title">Scheduling</div>
+                            <div class="form-step-number">04</div>
+                            <div style="display:flex; flex-direction:column; gap:2px;">
+                                <div class="form-step-title">Scheduling</div>
+                                <div style="font-size:0.7rem; color:#64748b; font-weight:500; text-transform:none;">Define launch schedule</div>
+                            </div>
                         </div>
                         
                         <div style="margin-bottom:0;">
@@ -1238,17 +1345,18 @@ include 'includes/admin_nav.php';
 
             <!-- Campaign Drilldown Details Panel -->
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; overflow:hidden; box-shadow:0 4px 12px rgba(0,0,0,0.02); display:none;" id="panel-campaign-drilldown">
-                <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:16px 20px; display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:15px;">
                     <div>
-                        <h3 style="margin:0; font-size:1.1rem; font-weight:700; color:#1f2937;" id="drilldown-title">Campaign Detail</h3>
-                        <p style="margin:4px 0 0; font-size:0.78rem; color:#64748b;" id="drilldown-subtitle"></p>
+                        <span style="font-size:0.65rem; font-weight:800; color:#8b5cf6; text-transform:uppercase; letter-spacing:0.05em; display:block; margin-bottom:2px;">Campaign</span>
+                        <h3 style="margin:0; font-size:1.25rem; font-weight:800; color:#0f172a;" id="drilldown-title">Campaign Detail</h3>
+                        <div style="display:flex; align-items:center; gap:14px; margin-top:8px; flex-wrap:wrap;" id="drilldown-subtitle"></div>
                     </div>
                     <div style="display:flex; align-items:center; gap:10px;">
-                        <button type="button" onclick="closeCampaignDrilldown()" class="btn btn-outline" style="border-radius:8px; font-size:0.8rem; height:36px; display:flex; align-items:center; gap:6px;"><i class="fas fa-chevron-left"></i> Back to Dashboard</button>
+                        <button type="button" onclick="closeCampaignDrilldown()" class="btn btn-outline" style="border-radius:8px; font-size:0.8rem; height:36px; display:flex; align-items:center; gap:6px; font-weight:700;"><i class="fas fa-chevron-left"></i> Back to Dashboard</button>
                         
                         <!-- Download Report Dropdown -->
                         <div class="report-dropdown">
-                            <button type="button" class="btn btn-primary" onclick="toggleReportDropdown(event)" style="border-radius:8px; font-size:0.8rem; height:36px; display:flex; align-items:center; gap:6px; font-weight:700;"><i class="fas fa-file-export"></i> Download Report <i class="fas fa-chevron-down" style="font-size:0.7rem;"></i></button>
+                            <button type="button" class="btn btn-primary" onclick="toggleReportDropdown(event)" style="border-radius:8px; font-size:0.8rem; height:36px; display:flex; align-items:center; gap:6px; font-weight:700; background:#7c3aed; border-color:#7c3aed;"><i class="fas fa-file-export"></i> Download Report <i class="fas fa-chevron-down" style="font-size:0.7rem;"></i></button>
                             <div class="report-dropdown-menu" id="report-dropdown-menu">
                                 <a href="#" class="report-dropdown-item" onclick="triggerReportDownload('csv'); return false;">
                                     <i class="fas fa-file-csv" style="color:#10b981;"></i> Download as CSV
@@ -1263,12 +1371,12 @@ include 'includes/admin_nav.php';
                 
                 <div style="padding:20px;">
                     <!-- Campaign Control Actions Panel -->
-                    <div style="display:flex; gap:10px; margin-bottom:20px; flex-wrap:wrap; border-bottom:1px dashed #e2e8f0; padding-bottom:14px;">
+                    <div style="display:flex; gap:10px; margin-bottom:20px; flex-wrap:wrap; border-bottom:1px dashed #e2e8f0; padding-bottom:14px; align-items:center;">
                         <input type="hidden" id="drilldown-camp-id">
-                        <button type="button" id="btn-ctrl-pause" onclick="triggerCampaignControl('pause')" class="btn btn-sm btn-outline" style="border-radius:8px; border-color:#f59e0b; color:#d97706; font-weight:700;"><i class="fas fa-pause"></i> Pause campaign</button>
-                        <button type="button" id="btn-ctrl-resume" onclick="triggerCampaignControl('resume')" class="btn btn-sm btn-outline" style="border-radius:8px; border-color:#10b981; color:#059669; display:none; font-weight:700;"><i class="fas fa-play"></i> Resume campaign</button>
-                        <button type="button" id="btn-ctrl-cancel" onclick="triggerCampaignControl('cancel')" class="btn btn-sm btn-outline" style="border-radius:8px; border-color:#ef4444; color:#dc2626; font-weight:700;"><i class="fas fa-stop"></i> Cancel campaign</button>
-                        <button type="button" id="btn-ctrl-retry" onclick="triggerCampaignControl('retry')" class="btn btn-sm btn-success" style="border-radius:8px; font-weight:700;"><i class="fas fa-arrow-rotate-forward"></i> Retry Failed dispatches</button>
+                        <button type="button" id="btn-ctrl-resume" onclick="triggerCampaignControl('resume')" class="btn btn-primary btn-primary-action" style="display:none; border-radius:8px; font-size:0.8rem; height:36px; padding:0 14px; align-items:center; gap:6px; font-weight:700;"><i class="fas fa-play"></i> Resume Campaign</button>
+                        <button type="button" id="btn-ctrl-pause" onclick="triggerCampaignControl('pause')" class="btn btn-outline" style="border-radius:8px; font-size:0.8rem; height:36px; padding:0 14px; display:inline-flex; align-items:center; gap:6px; font-weight:700; border-color:#d97706; color:#d97706; background:#fff;"><i class="fas fa-pause"></i> Pause Campaign</button>
+                        <button type="button" id="btn-ctrl-retry" onclick="triggerCampaignControl('retry')" class="btn btn-outline" style="border-radius:8px; font-size:0.8rem; height:36px; padding:0 14px; display:inline-flex; align-items:center; gap:6px; font-weight:700; border-color:#8b5cf6; color:#8b5cf6; background:#fff;"><i class="fas fa-arrow-rotate-forward"></i> Retry Failed Dispatches</button>
+                        <button type="button" id="btn-ctrl-cancel" onclick="triggerCampaignControl('cancel')" class="btn btn-danger btn-danger-action" style="border-radius:8px; font-size:0.8rem; height:36px; padding:0 14px; display:inline-flex; align-items:center; gap:6px; font-weight:700;"><i class="fas fa-stop"></i> Cancel Campaign</button>
                     </div>
 
                     <!-- Statistics Info Grid -->
@@ -1780,21 +1888,29 @@ function loadCampaignDrilldown(campId) {
                 activeCampaignRecipients = res.recipients;
 
                 document.getElementById('drilldown-camp-id').value = c.id;
-                document.getElementById('drilldown-title').innerText = "Campaign Detail: " + c.name;
-                document.getElementById('drilldown-subtitle').innerHTML = `Template: <strong>${escapeHtml(c.template_name)}</strong> &nbsp;|&nbsp; Target: <strong>${escapeHtml(c.target_audience.toUpperCase())}</strong>`;
+                document.getElementById('drilldown-title').innerText = c.name;
+                document.getElementById('drilldown-subtitle').innerHTML = `
+                    <span style="font-size:0.75rem; color:#475569; display:inline-flex; align-items:center; gap:6px;">
+                        <i class="fas fa-layer-group" style="color:#94a3b8; font-size:0.8rem;"></i> Template: <strong style="color:#1e293b;">${escapeHtml(c.template_name)}</strong>
+                    </span>
+                    <span style="font-size:0.75rem; color:#cbd5e1;">•</span>
+                    <span style="font-size:0.75rem; color:#475569; display:inline-flex; align-items:center; gap:6px;">
+                        <i class="fas fa-users" style="color:#94a3b8; font-size:0.8rem;"></i> Target: <span class="badge gray" style="font-size:0.65rem; font-weight:700;">${escapeHtml(c.target_audience.toUpperCase())}</span>
+                    </span>
+                `;
 
                 // Adjust Action control buttons
                 if (c.status === 'paused') {
                     document.getElementById('btn-ctrl-pause').style.display = 'none';
-                    document.getElementById('btn-ctrl-resume').style.display = 'inline-block';
+                    document.getElementById('btn-ctrl-resume').style.display = 'inline-flex';
                 } else if (c.status === 'completed' || c.status === 'cancelled') {
                     document.getElementById('btn-ctrl-pause').style.display = 'none';
                     document.getElementById('btn-ctrl-resume').style.display = 'none';
                     document.getElementById('btn-ctrl-cancel').style.display = 'none';
                 } else {
-                    document.getElementById('btn-ctrl-pause').style.display = 'inline-block';
+                    document.getElementById('btn-ctrl-pause').style.display = 'inline-flex';
                     document.getElementById('btn-ctrl-resume').style.display = 'none';
-                    document.getElementById('btn-ctrl-cancel').style.display = 'inline-block';
+                    document.getElementById('btn-ctrl-cancel').style.display = 'inline-flex';
                 }
 
                 // Render metrics info grid
