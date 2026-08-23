@@ -394,6 +394,33 @@ try {
     $webhookCount = (int)$pdo->query("SELECT COUNT(*) FROM communication_webhook_events")->fetchColumn();
 } catch (Exception $ex) {}
 
+// Search and Filter variables
+$filter_status = isset($_GET['queue_status']) ? trim($_GET['queue_status']) : '';
+$filter_search = isset($_GET['queue_search']) ? trim($_GET['queue_search']) : '';
+
+$whereClauses = [];
+$whereParams = [];
+
+if ($filter_status !== '') {
+    $whereClauses[] = "cq.status = :status_filter";
+    $whereParams[':status_filter'] = $filter_status;
+}
+
+if ($filter_search !== '') {
+    if ($view === 'installments') {
+        $whereClauses[] = "(cq.recipient LIKE :search_filter OR cq.recipient_name LIKE :search_filter OR u.name LIKE :search_filter OR cq.id = :search_exact_id)";
+    } else {
+        $whereClauses[] = "(cq.recipient LIKE :search_filter OR cq.recipient_name LIKE :search_filter OR cq.id = :search_exact_id OR cq.event_name LIKE :search_filter)";
+    }
+    $whereParams[':search_filter'] = '%' . $filter_search . '%';
+    $whereParams[':search_exact_id'] = is_numeric($filter_search) ? (int)$filter_search : 0;
+}
+
+$whereSql = '';
+if (!empty($whereClauses)) {
+    $whereSql = ' WHERE ' . implode(' AND ', $whereClauses);
+}
+
 // Load paginated logs
 $perPage = 50;
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
@@ -401,7 +428,37 @@ if ($page < 1) {
     $page = 1;
 }
 
-$totalRecords = $stats['total'];
+try {
+    if ($view === 'installments') {
+        $countSql = "
+            SELECT COUNT(*) 
+            FROM communication_queue cq
+            INNER JOIN installment_whatsapp_reminders r ON r.queue_id = cq.id
+            LEFT JOIN instalment_details inst ON inst.id = r.installment_id
+            LEFT JOIN users u ON u.user_id = inst.user_id
+            $whereSql
+        ";
+    } else {
+        $countSql = "
+            SELECT COUNT(*) 
+            FROM communication_queue cq
+            $whereSql
+        ";
+    }
+    $countStmt = $pdo->prepare($countSql);
+    foreach ($whereParams as $paramKey => $paramVal) {
+        if ($paramKey === ':search_exact_id') {
+            $countStmt->bindValue($paramKey, $paramVal, PDO::PARAM_INT);
+        } else {
+            $countStmt->bindValue($paramKey, $paramVal, PDO::PARAM_STR);
+        }
+    }
+    $countStmt->execute();
+    $totalRecords = (int)$countStmt->fetchColumn();
+} catch (Exception $ex) {
+    $totalRecords = 0;
+}
+
 $totalPages = ($totalRecords > 0) ? (int)ceil($totalRecords / $perPage) : 1;
 
 if ($page > $totalPages) {
@@ -413,7 +470,7 @@ $offset = ($page - 1) * $perPage;
 $recentLogs = [];
 try {
     if ($view === 'installments') {
-        $stmtLogs = $pdo->prepare("
+        $querySql = "
             SELECT cq.id AS queue_id,
                    cq.recipient,
                    cq.recipient_name,
@@ -434,16 +491,26 @@ try {
             INNER JOIN installment_whatsapp_reminders r ON r.queue_id = cq.id
             LEFT JOIN instalment_details inst ON inst.id = r.installment_id
             LEFT JOIN users u ON u.user_id = inst.user_id
+            $whereSql
             ORDER BY cq.created_at DESC, cq.id DESC
             LIMIT :limit OFFSET :offset
-        ");
+        ";
     } else {
-        $stmtLogs = $pdo->prepare("
-            SELECT id, channel, recipient, recipient_name, status, retry_count, next_attempt_at, error_message, updated_at, student_uid, event_name, invoice_id, message_id
-            FROM communication_queue 
-            ORDER BY created_at DESC, id DESC
+        $querySql = "
+            SELECT cq.id, cq.channel, cq.recipient, cq.recipient_name, cq.status, cq.retry_count, cq.next_attempt_at, cq.error_message, cq.updated_at, cq.student_uid, cq.event_name, cq.invoice_id, cq.message_id
+            FROM communication_queue cq
+            $whereSql
+            ORDER BY cq.created_at DESC, cq.id DESC
             LIMIT :limit OFFSET :offset
-        ");
+        ";
+    }
+    $stmtLogs = $pdo->prepare($querySql);
+    foreach ($whereParams as $paramKey => $paramVal) {
+        if ($paramKey === ':search_exact_id') {
+            $stmtLogs->bindValue($paramKey, $paramVal, PDO::PARAM_INT);
+        } else {
+            $stmtLogs->bindValue($paramKey, $paramVal, PDO::PARAM_STR);
+        }
     }
     $stmtLogs->bindValue(':limit', (int)$perPage, PDO::PARAM_INT);
     $stmtLogs->bindValue(':offset', (int)$offset, PDO::PARAM_INT);
@@ -810,6 +877,40 @@ include 'includes/admin_nav.php';
             <i class="fab fa-whatsapp"></i> Installment WhatsApp Reminders
         </a>
     </div>
+
+    <!-- Search and Filter Panel -->
+    <form method="GET" style="background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-top:16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+        <input type="hidden" name="view" value="<?php echo htmlspecialchars($view); ?>">
+        
+        <!-- Search Input -->
+        <div style="flex:1; min-width:240px; position:relative;">
+            <i class="fas fa-search" style="position:absolute; left:12px; top:12px; color:#94a3b8; font-size:0.85rem;"></i>
+            <input type="text" name="queue_search" value="<?php echo htmlspecialchars($filter_search); ?>" placeholder="Search by recipient name, phone, or queue ID..." style="width:100%; height:38px; padding-left:36px; padding-right:12px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:0.82rem; font-weight:500; color:#1e293b; box-sizing:border-box;" onfocus="this.style.borderColor='#7c3aed';" onblur="this.style.borderColor='#cbd5e1';">
+        </div>
+        
+        <!-- Status Dropdown -->
+        <div style="width:200px; min-width:160px;">
+            <select name="queue_status" style="width:100%; height:38px; padding:0 12px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:0.82rem; font-weight:500; color:#1e293b; background-color:#fff; box-sizing:border-box;" onchange="this.form.submit()">
+                <option value="">All Statuses</option>
+                <option value="pending" <?php echo $filter_status === 'pending' ? 'selected' : ''; ?>>Pending</option>
+                <option value="processing" <?php echo $filter_status === 'processing' ? 'selected' : ''; ?>>Processing</option>
+                <option value="sent" <?php echo $filter_status === 'sent' ? 'selected' : ''; ?>>Sent</option>
+                <option value="delivered" <?php echo $filter_status === 'delivered' ? 'selected' : ''; ?>>Delivered</option>
+                <option value="read" <?php echo $filter_status === 'read' ? 'selected' : ''; ?>>Read</option>
+                <option value="failed" <?php echo $filter_status === 'failed' ? 'selected' : ''; ?>>Failed</option>
+                <option value="paused" <?php echo $filter_status === 'paused' ? 'selected' : ''; ?>>Paused</option>
+                <option value="cancelled" <?php echo $filter_status === 'cancelled' ? 'selected' : ''; ?>>Cancelled</option>
+            </select>
+        </div>
+        
+        <!-- Action Buttons -->
+        <div style="display:flex; gap:8px;">
+            <button type="submit" class="btn btn-primary" style="height:38px; border-radius:8px; font-size:0.82rem; font-weight:700; padding:0 16px; background:#7c3aed; border-color:#7c3aed; color:#fff; display:flex; align-items:center; gap:6px; cursor:pointer;"><i class="fas fa-filter"></i> Filter</button>
+            <?php if ($filter_search !== '' || $filter_status !== ''): ?>
+                <a href="?view=<?php echo urlencode($view); ?>" class="btn btn-outline" style="height:38px; border-radius:8px; font-size:0.82rem; font-weight:700; padding:0 16px; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; border:1px solid #cbd5e1; color:#475569; background:#fff; gap:6px;"><i class="fas fa-rotate-left"></i> Reset</a>
+            <?php endif; ?>
+        </div>
+    </form>
 
     <!-- ── RECENT DISPATCHES QUEUE LOGS ── -->
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; overflow:hidden; margin-top:20px; margin-bottom:20px;">
