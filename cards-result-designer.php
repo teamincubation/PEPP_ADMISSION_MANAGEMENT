@@ -787,7 +787,7 @@ document.addEventListener('DOMContentLoaded', function() {
         elements = savedConfig.elements || [];
         studentRankMappings = savedMappings || {};
         document.getElementById('prop-ranks-count').value = savedConfig.ranksCount || '4';
-        document.getElementById('prop-export-format').value = savedDesign['output_format'] || 'png';
+        document.getElementById('prop-export-format').value = '<?php echo $saved_design ? addslashes($saved_design['output_format']) : "png"; ?>';
     } else {
         // Initial setup from template
         elements = JSON.parse(JSON.stringify(templateElements));
@@ -875,7 +875,7 @@ function drawElements() {
         let textContent = el.textContent || '';
         let photoSrc = null;
 
-        const rankMatch = el.id.match(/^rank_(name|institute|photo|badge)_(\d+)$/);
+        const rankMatch = String(el.id || '').match(/^rank_(name|institute|photo|badge)_(\d+)$/);
         if (rankMatch) {
             const field = rankMatch[1];
             const rankNum = parseInt(rankMatch[2]);
@@ -1366,9 +1366,9 @@ function addNewStudentRankBlock() {
             "color": "#1e293b",
             "textAlign": "left",
             "lineHeight": 1.2,
-            "letterSpacing" => 0,
+            "letterSpacing": 0,
             "opacity": 1,
-            "rotate" => 0
+            "rotate": 0
         },
         {
             "id": "rank_institute_" + nextRank,
@@ -1380,14 +1380,14 @@ function addNewStudentRankBlock() {
             "width": 800,
             "height": 45,
             "fontFamily": "Google Sans Flex",
-            "fontSize" => 30,
-            "fontWeight" => "400",
-            "color" => "#64748b",
-            "textAlign" => "left",
-            "lineHeight" => 1.2,
-            "letterSpacing" => 0,
-            "opacity" => 1,
-            "rotate" => 0
+            "fontSize": 30,
+            "fontWeight": "400",
+            "color": "#64748b",
+            "textAlign": "left",
+            "lineHeight": 1.2,
+            "letterSpacing": 0,
+            "opacity": 1,
+            "rotate": 0
         }
     ];
 
@@ -1588,7 +1588,7 @@ function saveDesign(isExporting = false) {
                 let textContent = el.textContent || '';
                 let photoSrc = null;
 
-                const rankMatch = el.id.match(/^rank_(name|institute|photo|badge)_(\d+)$/);
+                const rankMatch = String(el.id || '').match(/^rank_(name|institute|photo|badge)_(\d+)$/);
                 if (rankMatch) {
                     const field = rankMatch[1];
                     const rankNum = parseInt(rankMatch[2]);
