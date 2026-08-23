@@ -352,7 +352,7 @@ if ($active_tab === 'test_results') {
         $academic_years = $pdo->query("SELECT year FROM academic_years ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN);
     } catch(Exception $e){}
     try {
-        $result_templates = $pdo->query("SELECT id, title FROM card_templates WHERE category = 'Achievement' AND status = 'active' ORDER BY title ASC")->fetchAll();
+        $result_templates = $pdo->query("SELECT id, title, category FROM card_templates WHERE status = 'active' ORDER BY title ASC")->fetchAll();
     } catch(Exception $e){}
     try {
         $saved_cards = $pdo->query("
@@ -622,9 +622,18 @@ include 'includes/admin_nav.php';
                         <div class="field" style="margin:0;">
                             <label>Background Template <span style="color:#ef4444;">*</span></label>
                             <select id="sel-template" onchange="updateStartButton()">
-                                <?php foreach ($result_templates as $rt): ?>
-                                    <option value="<?php echo $rt['id']; ?>" <?php echo $rt['title'] === 'Mega Test Result Template' ? 'selected' : ''; ?>><?php echo htmlspecialchars($rt['title']); ?></option>
-                                <?php endforeach; ?>
+                                <?php if (empty($result_templates)): ?>
+                                    <option value="">No eligible card templates found. Please create a template under Card Templates.</option>
+                                <?php else: ?>
+                                    <option value="">— Select Template —</option>
+                                    <?php foreach ($result_templates as $rt): ?>
+                                        <?php
+                                        $cat_label = $categories[$rt['category']] ?? $rt['category'];
+                                        $option_title = $rt['title'] . ' (' . $cat_label . ')';
+                                        ?>
+                                        <option value="<?php echo $rt['id']; ?>" <?php echo $rt['title'] === 'Mega Test Result Template' ? 'selected' : ''; ?>><?php echo htmlspecialchars($option_title); ?></option>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
                             </select>
                         </div>
                     </div>
