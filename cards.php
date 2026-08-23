@@ -9,9 +9,9 @@ if (!can_access('cards') && !can_access('card-templates')) {
 
 try {
     $pdo->exec("CREATE TABLE IF NOT EXISTS clipart_images (
-        id INT AUTO_INCREMENT PRIMARY KEY, 
-        name VARCHAR(255) NOT NULL, 
-        file_path VARCHAR(255) NOT NULL, 
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        file_path VARCHAR(255) NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
 } catch (Exception $e) {}
@@ -48,7 +48,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'uploa
                 }
                 $safe_filename = uniqid() . '_' . preg_replace('/[^A-Za-z0-9._-]/', '_', $filename);
                 $target_path = $base_dir . '/' . $safe_filename;
-                
+
                 if (@move_uploaded_file($_FILES['font_file']['tmp_name'], $target_path)) {
                     $db_path = 'uploads/custom_fonts/' . $safe_filename;
                     try {
@@ -73,7 +73,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'uploa
         $width = (int)($_POST['univ_width'] ?? 150);
         $height = (int)($_POST['univ_height'] ?? 150);
         $dpi = (int)($_POST['univ_dpi'] ?? 72);
-        
+
         if (!$univ_name) {
             $error_message = 'Please specify a university name.';
         } elseif (empty($_FILES['logo_file']['name']) || $_FILES['logo_file']['error'] !== UPLOAD_ERR_OK) {
@@ -90,7 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'uploa
                 }
                 $safe_filename = uniqid() . '_' . preg_replace('/[^A-Za-z0-9._-]/', '_', $filename);
                 $target_path = $base_dir . '/' . $safe_filename;
-                
+
                 if (@move_uploaded_file($_FILES['logo_file']['tmp_name'], $target_path)) {
                     $db_path = 'uploads/logos/' . $safe_filename;
                     try {
@@ -128,7 +128,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'uploa
                 }
                 $safe_filename = uniqid() . '_' . preg_replace('/[^A-Za-z0-9._-]/', '_', $filename);
                 $target_path = $base_dir . '/' . $safe_filename;
-                
+
                 if (@move_uploaded_file($_FILES['clipart_file']['tmp_name'], $target_path)) {
                     $db_path = 'uploads/cliparts/' . $safe_filename;
                     try {
@@ -186,7 +186,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
 
                         $insert_stmt = $pdo->prepare("
-                            INSERT INTO card_templates 
+                            INSERT INTO card_templates
                             (title, category, description, bg_image, canvas_width, canvas_height, resolution_dpi, aspect_ratio, status, elements_json, created_by)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ");
@@ -219,10 +219,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare("SELECT bg_image FROM card_templates WHERE id = ?");
                 $stmt->execute([$tid]);
                 $bg = $stmt->fetchColumn();
-                
+
                 $stmt = $pdo->prepare("DELETE FROM card_templates WHERE id = ?");
                 $stmt->execute([$tid]);
-                
+
                 if ($bg) {
                     $real_bg = __DIR__ . '/../' . $bg;
                     if (file_exists($real_bg)) {
@@ -243,10 +243,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare("SELECT font_file FROM custom_fonts WHERE id = ?");
                 $stmt->execute([$fid]);
                 $file = $stmt->fetchColumn();
-                
+
                 $stmt = $pdo->prepare("DELETE FROM custom_fonts WHERE id = ?");
                 $stmt->execute([$fid]);
-                
+
                 if ($file) {
                     $real_file = __DIR__ . '/../' . $file;
                     if (file_exists($real_file)) {
@@ -267,10 +267,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare("SELECT logo_file FROM university_logos WHERE id = ?");
                 $stmt->execute([$lid]);
                 $file = $stmt->fetchColumn();
-                
+
                 $stmt = $pdo->prepare("DELETE FROM university_logos WHERE id = ?");
                 $stmt->execute([$lid]);
-                
+
                 if ($file) {
                     $real_file = __DIR__ . '/../' . $file;
                     if (file_exists($real_file)) {
@@ -291,10 +291,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare("SELECT file_path FROM clipart_images WHERE id = ?");
                 $stmt->execute([$cid]);
                 $file = $stmt->fetchColumn();
-                
+
                 $stmt = $pdo->prepare("DELETE FROM clipart_images WHERE id = ?");
                 $stmt->execute([$cid]);
-                
+
                 if ($file) {
                     $real_file = __DIR__ . '/../' . $file;
                     if (file_exists($real_file)) {
@@ -306,16 +306,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error_message = "Failed to delete clipart: " . $e->getMessage();
             }
         }
+    } elseif ($action === 'delete_result_card') {
+        if (!csrf_verify()) {
+            $error_message = 'Security token mismatch.';
+        } else {
+            $rc_id = (int)($_POST['result_card_id'] ?? 0);
+            try {
+                $stmt = $pdo->prepare("SELECT output_file FROM test_result_cards WHERE id = ?");
+                $stmt->execute([$rc_id]);
+                $file = $stmt->fetchColumn();
+
+                $stmt = $pdo->prepare("DELETE FROM test_result_cards WHERE id = ?");
+                $stmt->execute([$rc_id]);
+
+                if ($file) {
+                    $real_file = __DIR__ . '/../' . $file;
+                    if (file_exists($real_file)) {
+                        @unlink($real_file);
+                    }
+                }
+                $success_message = "Test Result Card deleted successfully.";
+            } catch (Exception $e) {
+                $error_message = "Failed to delete result card: " . $e->getMessage();
+            }
+        }
     }
 }
 
 // ── Load Templates, Categories, and Fonts ────────────
-$active_tab = $_GET['tab'] ?? 'generate'; // 'generate' or 'templates'
+$active_tab = $_GET['tab'] ?? 'generate'; // 'generate', 'templates', or 'test_results'
 if ($active_tab === 'templates' && !can_access('card-templates')) {
     $active_tab = 'generate';
 }
-if ($active_tab === 'generate' && !can_access('cards')) {
+if (($active_tab === 'generate' || $active_tab === 'test_results') && !can_access('cards')) {
     $active_tab = 'templates';
+}
+
+// Load additional lists for Test Result Cards tab
+$academic_years = [];
+$result_templates = [];
+$saved_cards = [];
+
+if ($active_tab === 'test_results') {
+    try {
+        $academic_years = $pdo->query("SELECT year FROM academic_years ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN);
+    } catch(Exception $e){}
+    try {
+        $result_templates = $pdo->query("SELECT id, title FROM card_templates WHERE category = 'Achievement' AND status = 'active' ORDER BY title ASC")->fetchAll();
+    } catch(Exception $e){}
+    try {
+        $saved_cards = $pdo->query("
+            SELECT trc.*, ct.title AS template_title
+            FROM test_result_cards trc
+            LEFT JOIN card_templates ct ON trc.template_id = ct.id
+            ORDER BY trc.created_at DESC
+        ")->fetchAll();
+    } catch(Exception $e){}
 }
 $search_q = trim($_GET['search'] ?? '');
 $cat_filter = trim($_GET['category'] ?? '');
@@ -497,6 +543,7 @@ include 'includes/admin_nav.php';
 <div class="tab-row">
     <?php if (can_access('cards')): ?>
         <a href="cards.php?tab=generate" class="tab-btn <?php echo $active_tab === 'generate' ? 'active' : ''; ?>"><i class="fas fa-magic"></i> Generate Cards</a>
+        <a href="cards.php?tab=test_results" class="tab-btn <?php echo $active_tab === 'test_results' ? 'active' : ''; ?>"><i class="fas fa-award"></i> Test Result Cards</a>
     <?php endif; ?>
     <?php if (can_access('card-templates')): ?>
         <a href="cards.php?tab=templates" class="tab-btn <?php echo $active_tab === 'templates' ? 'active' : ''; ?>"><i class="fas fa-layer-group"></i> Card Templates</a>
@@ -506,6 +553,7 @@ include 'includes/admin_nav.php';
 <div class="cards-layout" <?php if (!can_access('card-templates')) echo 'style="grid-template-columns: 1fr;"'; ?>>
     <!-- Left Area: Active View -->
     <div>
+        <?php if ($active_tab !== 'test_results'): ?>
         <!-- Search Bar & Categories -->
         <div class="panel" style="margin-bottom: 20px;">
             <div class="panel-body">
@@ -526,13 +574,237 @@ include 'includes/admin_nav.php';
                     </div>
                     <button type="submit" class="btn btn-primary"><i class="fas fa-search"></i> Filter</button>
                     <a href="cards.php?tab=<?php echo htmlspecialchars($active_tab); ?>" class="btn btn-outline">Reset</a>
-                    
+
                     <?php if ($active_tab === 'templates'): ?>
                         <a href="cards-edit.php" class="btn btn-soft-violet" style="margin-left:auto;"><i class="fas fa-plus"></i> Create Card Template</a>
                     <?php endif; ?>
                 </form>
             </div>
         </div>
+        <?php endif; ?>
+
+        <!-- tab: Test Result Cards -->
+        <?php if ($active_tab === 'test_results'): ?>
+            <!-- Selection Wizard -->
+            <div class="panel" style="margin-bottom: 20px;">
+                <div class="panel-head">
+                    <h3><i class="fas fa-magic" style="color:var(--accent);"></i> Design Test Result Card</h3>
+                </div>
+                <div class="panel-body">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px;">
+                        <div class="field" style="margin:0;">
+                            <label>Academic Year <span style="color:#ef4444;">*</span></label>
+                            <select id="sel-year" onchange="loadCourses(this.value)">
+                                <option value="">— Select Year —</option>
+                                <?php foreach ($academic_years as $y): ?>
+                                    <option value="<?php echo htmlspecialchars($y); ?>"><?php echo htmlspecialchars($y); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="field" style="margin:0;">
+                            <label>Course <span style="color:#ef4444;">*</span></label>
+                            <select id="sel-course" onchange="loadStudyPlans(this.value)" disabled>
+                                <option value="">— Select Course —</option>
+                            </select>
+                        </div>
+                        <div class="field" style="margin:0;">
+                            <label>Study Plan <span style="color:#ef4444;">*</span></label>
+                            <select id="sel-plan" onchange="loadTests(this.value)" disabled>
+                                <option value="">— Select Plan —</option>
+                            </select>
+                        </div>
+                        <div class="field" style="margin:0;">
+                            <label>Published Test / Result <span style="color:#ef4444;">*</span></label>
+                            <select id="sel-test" onchange="updateStartButton()" disabled>
+                                <option value="">— Select Test —</option>
+                            </select>
+                        </div>
+                        <div class="field" style="margin:0;">
+                            <label>Background Template <span style="color:#ef4444;">*</span></label>
+                            <select id="sel-template" onchange="updateStartButton()">
+                                <?php foreach ($result_templates as $rt): ?>
+                                    <option value="<?php echo $rt['id']; ?>" <?php echo $rt['title'] === 'Mega Test Result Template' ? 'selected' : ''; ?>><?php echo htmlspecialchars($rt['title']); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="text-align: right;">
+                        <button type="button" id="btn-start-design" class="btn btn-primary" onclick="startResultDesigner()" disabled>
+                            <i class="fas fa-palette"></i> Start Designing
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Saved designs list -->
+            <div class="panel">
+                <div class="panel-head">
+                    <h3><i class="fas fa-floppy-disk" style="color:var(--accent);"></i> Saved Test Result Cards</h3>
+                </div>
+                <div class="panel-body" style="padding: 0; overflow-x: auto;">
+                    <?php if (empty($saved_cards)): ?>
+                        <div style="text-align: center; padding: 40px; color: #94a3b8;">
+                            <i class="fas fa-inbox" style="font-size: 2rem; margin-bottom: 8px; display: block; opacity: 0.5;"></i>
+                            <p>No saved result cards found. Use the filters above to design your first card.</p>
+                        </div>
+                    <?php else: ?>
+                        <table class="table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                            <thead>
+                                <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0; text-align: left;">
+                                    <th style="padding: 12px 16px;">Design Title</th>
+                                    <th style="padding: 12px 16px;">Template</th>
+                                    <th style="padding: 12px 16px;">Details</th>
+                                    <th style="padding: 12px 16px;">Created By</th>
+                                    <th style="padding: 12px 16px;">Created At</th>
+                                    <th style="padding: 12px 16px; text-align: right;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($saved_cards as $sc): ?>
+                                    <tr style="border-bottom: 1px solid #f1f5f9; vertical-align: middle;">
+                                        <td style="padding: 12px 16px; font-weight: 700; color: #1e293b;">
+                                            <?php echo htmlspecialchars($sc['design_title']); ?>
+                                        </td>
+                                        <td style="padding: 12px 16px; color: #64748b;">
+                                            <?php echo htmlspecialchars($sc['template_title'] ?: 'Unknown'); ?>
+                                        </td>
+                                        <td style="padding: 12px 16px; color: #64748b; font-size: 0.8rem;">
+                                            <strong>Year:</strong> <?php echo htmlspecialchars($sc['academic_year']); ?><br>
+                                            <strong>Test ID:</strong> <?php echo $sc['activity_id']; ?>
+                                        </td>
+                                        <td style="padding: 12px 16px; color: #64748b;">
+                                            <?php echo htmlspecialchars($sc['created_by']); ?>
+                                        </td>
+                                        <td style="padding: 12px 16px; color: #94a3b8; font-size: 0.8rem;">
+                                            <?php echo htmlspecialchars(date('d M Y, h:i A', strtotime($sc['created_at']))); ?>
+                                        </td>
+                                        <td style="padding: 12px 16px; text-align: right;">
+                                            <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center;">
+                                                <a href="cards-result-designer.php?id=<?php echo $sc['id']; ?>" class="btn btn-sm btn-outline" style="padding: 4px 8px; font-size: 0.72rem;"><i class="fas fa-edit"></i> Edit</a>
+                                                <?php if ($sc['output_file'] && file_exists(__DIR__ . '/../' . $sc['output_file'])): ?>
+                                                    <a href="../<?php echo htmlspecialchars($sc['output_file']); ?>" download class="btn btn-sm btn-soft-violet" style="padding: 4px 8px; font-size: 0.72rem;"><i class="fas fa-download"></i> Download</a>
+                                                <?php endif; ?>
+                                                <form method="POST" onsubmit="return confirm('Are you sure you want to delete this saved result card?');" style="margin:0;">
+                                                    <?php echo csrf_field(); ?>
+                                                    <input type="hidden" name="action" value="delete_result_card">
+                                                    <input type="hidden" name="result_card_id" value="<?php echo $sc['id']; ?>">
+                                                    <button type="submit" class="btn btn-sm btn-soft-red" style="padding: 4px 8px; font-size: 0.72rem;"><i class="fas fa-trash"></i> Delete</button>
+                                                </form>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <!-- JavaScript helper for selectors -->
+            <script>
+            function loadCourses(year) {
+                const selCourse = document.getElementById('sel-course');
+                const selPlan = document.getElementById('sel-plan');
+                const selTest = document.getElementById('sel-test');
+
+                selCourse.innerHTML = '<option value="">— Loading... —</option>'; selCourse.disabled = true;
+                selPlan.innerHTML = '<option value="">— Select Plan —</option>'; selPlan.disabled = true;
+                selTest.innerHTML = '<option value="">— Select Test —</option>'; selTest.disabled = true;
+                updateStartButton();
+
+                if (!year) {
+                    selCourse.innerHTML = '<option value="">— Select Course —</option>';
+                    return;
+                }
+
+                fetch('assessment-results.php?action=get_courses&year=' + encodeURIComponent(year))
+                    .then(r => r.json()).then(courses => {
+                        selCourse.innerHTML = '<option value="">— Select Course —</option>';
+                        courses.forEach(c => {
+                            selCourse.innerHTML += `<option value="${c.id}">${c.course_name}${c.course_code ? ' (' + c.course_code + ')' : ''}</option>`;
+                        });
+                        selCourse.disabled = false;
+                    });
+            }
+
+            function loadStudyPlans(courseId) {
+                const year = document.getElementById('sel-year').value;
+                const selPlan = document.getElementById('sel-plan');
+                const selTest = document.getElementById('sel-test');
+
+                selPlan.innerHTML = '<option value="">— Loading... —</option>'; selPlan.disabled = true;
+                selTest.innerHTML = '<option value="">— Select Test —</option>'; selTest.disabled = true;
+                updateStartButton();
+
+                if (!courseId) {
+                    selPlan.innerHTML = '<option value="">— Select Plan —</option>';
+                    return;
+                }
+
+                fetch('assessment-results.php?action=get_study_plans&year=' + encodeURIComponent(year) + '&course_id=' + courseId)
+                    .then(r => r.json()).then(plans => {
+                        selPlan.innerHTML = '<option value="">— Select Plan —</option>';
+                        plans.forEach(p => {
+                            selPlan.innerHTML += `<option value="${p.id}">${p.title} [${p.status}]</option>`;
+                        });
+                        selPlan.disabled = false;
+                    });
+            }
+
+            function loadTests(planId) {
+                const courseId = document.getElementById('sel-course').value;
+                const selTest = document.getElementById('sel-test');
+
+                selTest.innerHTML = '<option value="">— Loading... —</option>'; selTest.disabled = true;
+                updateStartButton();
+
+                if (!planId) {
+                    selTest.innerHTML = '<option value="">— Select Test —</option>';
+                    return;
+                }
+
+                fetch('assessment-results.php?action=get_tests&plan_id=' + planId + '&course_id=' + courseId)
+                    .then(r => r.json()).then(tests => {
+                        selTest.innerHTML = '<option value="">— Select Test —</option>';
+                        const publishedTests = tests.filter(t => t.has_published_result);
+
+                        if (publishedTests.length === 0) {
+                            selTest.innerHTML = '<option value="">— No Published Results —</option>';
+                            return;
+                        }
+
+                        publishedTests.forEach(t => {
+                            let label = t.activity_title;
+                            if (t.chapter) label += ` (Ch: ${t.chapter})`;
+                            if (t.activity_date) label += ` [${t.activity_date}]`;
+                            selTest.innerHTML += `<option value="${t.id}">${label}</option>`;
+                        });
+                        selTest.disabled = false;
+                    });
+            }
+
+            function updateStartButton() {
+                const year = document.getElementById('sel-year').value;
+                const course = document.getElementById('sel-course').value;
+                const plan = document.getElementById('sel-plan').value;
+                const test = document.getElementById('sel-test').value;
+                const template = document.getElementById('sel-template').value;
+
+                const btn = document.getElementById('btn-start-design');
+                if (btn) btn.disabled = !(year && course && plan && test && template);
+            }
+
+            function startResultDesigner() {
+                const year = document.getElementById('sel-year').value;
+                const course = document.getElementById('sel-course').value;
+                const plan = document.getElementById('sel-plan').value;
+                const test = document.getElementById('sel-test').value;
+                const template = document.getElementById('sel-template').value;
+
+                window.location.href = `cards-result-designer.php?year=${encodeURIComponent(year)}&course_id=${course}&plan_id=${plan}&activity_id=${test}&template_id=${template}`;
+            }
+            </script>
+        <?php endif; ?>
 
         <!-- tab: Generate -->
         <?php if ($active_tab === 'generate'): ?>
@@ -543,7 +815,7 @@ include 'includes/admin_nav.php';
                 </div>
             <?php else: ?>
                 <div class="templates-grid">
-                    <?php foreach ($active_templates as $tpl): 
+                    <?php foreach ($active_templates as $tpl):
                         $bg_style = $tpl['bg_image'];
                         if (strpos($bg_style, 'gradient') !== false) {
                             $bg_css = "background: " . $bg_style . ";";
@@ -584,7 +856,7 @@ include 'includes/admin_nav.php';
                 </div>
             <?php else: ?>
                 <div class="templates-grid">
-                    <?php foreach ($all_templates as $tpl): 
+                    <?php foreach ($all_templates as $tpl):
                         $bg_style = $tpl['bg_image'];
                         if (strpos($bg_style, 'gradient') !== false) {
                             $bg_css = "background: " . $bg_style . ";";
