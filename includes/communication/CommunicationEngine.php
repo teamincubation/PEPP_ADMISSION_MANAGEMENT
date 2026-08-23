@@ -8,6 +8,7 @@
 require_once __DIR__ . '/Providers/CommunicationProviderInterface.php';
 require_once __DIR__ . '/Providers/WhatsAppCloudProvider.php';
 require_once __DIR__ . '/Providers/EmailMailerProvider.php';
+require_once __DIR__ . '/CommunicationHelper.php';
 
 if (file_exists(dirname(dirname(__DIR__)) . '/includes/template_helper.php')) {
     require_once dirname(dirname(__DIR__)) . '/includes/template_helper.php';
@@ -794,48 +795,28 @@ class CommunicationEngine {
             } catch (Exception $ex_resp) {}
             
             $errMsg = $e->getMessage();
+            $errCode = 0;
+            if (isset($provider) && $provider instanceof WhatsAppCloudProvider) {
+                $errCode = $provider->getLastErrorCode();
+            }
+
             $retryCount = $item ? ((int)$item['retry_count'] + 1) : 1;
             $maxRetries = ($item && $item['channel'] === 'email') ? 5 : 3;
             
             $isPermanentFailure = false;
-            $isRecipientFailure = false;
-            $lowerErrMsg = strtolower($errMsg);
-            if (
-                strpos($lowerErrMsg, 'healthy ecosystem engagement') !== false ||
-                strpos($lowerErrMsg, '131026') !== false ||
-                strpos($lowerErrMsg, 'policy') !== false ||
-                strpos($lowerErrMsg, 'not in allowed list') !== false ||
-                strpos($lowerErrMsg, 'invalid phone number') !== false ||
-                strpos($lowerErrMsg, 'does not exist') !== false ||
-                strpos($lowerErrMsg, 'recipient') !== false ||
-                strpos($lowerErrMsg, 'undeliverable') !== false ||
-                strpos($lowerErrMsg, 'not a whatsapp number') !== false
-            ) {
-                $isRecipientFailure = true;
-                $isPermanentFailure = true;
-            } elseif (
-                strpos($lowerErrMsg, 'parameter count mismatch') !== false ||
-                strpos($lowerErrMsg, 'not approved') !== false ||
-                strpos($lowerErrMsg, 'not found in database') !== false ||
-                (strpos($lowerErrMsg, 'http 400') !== false && strpos($lowerErrMsg, 'rate limit') === false) ||
-                strpos($lowerErrMsg, 'param') !== false ||
-                strpos($lowerErrMsg, 'template') !== false
-            ) {
-                $isPermanentFailure = true;
+            $chan = $item ? $item['channel'] : 'whatsapp';
+            if ($chan === 'whatsapp') {
+                $isPermanentFailure = CommunicationHelper::isPermanentMetaFailure($errCode, $errMsg);
+            } else {
+                $isPermanentFailure = (strpos(strtolower($errMsg), 'not approved') !== false || strpos(strtolower($errMsg), 'parameter') !== false);
             }
 
             if ($isPermanentFailure) {
-                if ($isRecipientFailure) {
-                    if ($retryCount >= 2) {
-                        $retryCount = $maxRetries;
-                        error_log("[QUEUE_PERMANENT_FAILURE] queue_id={$queueId} recipient=" . ($item ? $item['recipient'] : 'unknown') . " attempt=2 error=" . $errMsg);
-                    } else {
-                        error_log("[QUEUE_RETRY] queue_id={$queueId} recipient=" . ($item ? $item['recipient'] : 'unknown') . " permanent error but retry capped at 2. attempts=1 error=" . $errMsg);
-                    }
-                } else {
-                    $retryCount = $maxRetries;
-                    error_log("[QUEUE_FAILED] queue_id={$queueId} recipient=" . ($item ? $item['recipient'] : 'unknown') . " config error fail-fast error=" . $errMsg);
+                $retryCount = $maxRetries;
+                if ($errCode > 0) {
+                    $errMsg = "[Meta Code {$errCode}] " . $errMsg;
                 }
+                error_log("[QUEUE_PERMANENT_FAILURE] queue_id={$queueId} recipient=" . ($item ? $item['recipient'] : 'unknown') . " marked terminal failure instantly. Error: " . $errMsg);
             } else {
                 error_log("[QUEUE_RETRY] queue_id={$queueId} recipient=" . ($item ? $item['recipient'] : 'unknown') . " transient error backoff attempt={$retryCount} error=" . $errMsg);
             }

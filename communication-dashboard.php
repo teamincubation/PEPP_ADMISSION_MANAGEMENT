@@ -309,6 +309,131 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $error_message = 'Failed to retry item: ' . $e->getMessage();
                 }
             }
+        } elseif ($action === 'bulk_cancel_queue_items') {
+            $queueIds = isset($_POST['queue_ids']) ? array_map('intval', (array)$_POST['queue_ids']) : [];
+            $reason = trim($_POST['cancel_reason'] ?? 'Bulk cancelled');
+            if (empty($queueIds)) {
+                $error_message = 'No queue items selected for cancellation.';
+            } else {
+                $cancelledCount = 0;
+                $skippedCount = 0;
+                
+                try {
+                    $pdo->beginTransaction();
+                    $placeholders = implode(',', array_fill(0, count($queueIds), '?'));
+                    $stmt = $pdo->prepare("SELECT id, status FROM communication_queue WHERE id IN ($placeholders) FOR UPDATE");
+                    $stmt->execute($queueIds);
+                    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    
+                    $eligibleIds = [];
+                    foreach ($rows as $row) {
+                        $status = $row['status'] ?? '';
+                        if ($status && !in_array($status, ['sent', 'delivered', 'read', 'cancelled'], true)) {
+                            $eligibleIds[] = (int)$row['id'];
+                        } else {
+                            $skippedCount++;
+                        }
+                    }
+                    
+                    if (!empty($eligibleIds)) {
+                        $placeholdersEligible = implode(',', array_fill(0, count($eligibleIds), '?'));
+                        $upd = $pdo->prepare("UPDATE communication_queue SET status = 'cancelled', next_attempt_at = '2038-01-01 00:00:00', error_message = ?, updated_at = NOW() WHERE id IN ($placeholdersEligible)");
+                        $upd->execute(array_merge(['Cancelled: ' . $reason], $eligibleIds));
+                        
+                        try {
+                            $updCamp = $pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = ? WHERE queue_id IN ($placeholdersEligible)");
+                            $updCamp->execute(array_merge(['Cancelled: ' . $reason], $eligibleIds));
+                        } catch (Exception $campEx) {}
+                        
+                        try {
+                            $updRem = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'failed' WHERE queue_id IN ($placeholdersEligible)");
+                            $updRem->execute($eligibleIds);
+                        } catch (Exception $remEx) {}
+                        
+                        $cancelledCount = count($eligibleIds);
+                    }
+                    
+                    $pdo->commit();
+                    $success_message = "Successfully cancelled {$cancelledCount} messages." . ($skippedCount > 0 ? " (Skipped {$skippedCount} already sent/cancelled items)." : "");
+                } catch (Exception $e) {
+                    if ($pdo->inTransaction()) $pdo->rollBack();
+                    $error_message = 'Failed to execute bulk cancellation: ' . $e->getMessage();
+                }
+            }
+        } elseif ($action === 'bulk_retry_queue_items') {
+            $queueIds = isset($_POST['queue_ids']) ? array_map('intval', (array)$_POST['queue_ids']) : [];
+            if (empty($queueIds)) {
+                $error_message = 'No queue items selected for retry.';
+            } else {
+                $retriedCount = 0;
+                $skippedPermanentCount = 0;
+                $skippedStatusCount = 0;
+                
+                try {
+                    $pdo->beginTransaction();
+                    $placeholders = implode(',', array_fill(0, count($queueIds), '?'));
+                    $stmt = $pdo->prepare("SELECT id, status, error_message FROM communication_queue WHERE id IN ($placeholders) FOR UPDATE");
+                    $stmt->execute($queueIds);
+                    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    
+                    $eligibleIds = [];
+                    foreach ($rows as $row) {
+                        $status = $row['status'] ?? '';
+                        $error_message_orig = $row['error_message'] ?? '';
+                        
+                        if (!in_array($status, ['failed', 'cancelled'], true)) {
+                            $skippedStatusCount++;
+                            continue;
+                        }
+                        
+                        $errCode = null;
+                        if (!empty($error_message_orig)) {
+                            if (preg_match('/\\[Meta Code (\\d+)\\]/', $error_message_orig, $matches)) {
+                                $errCode = (int)$matches[1];
+                            }
+                        }
+                        $isPermanent = CommunicationHelper::isPermanentMetaFailure($errCode, $error_message_orig);
+                        if ($isPermanent) {
+                            $skippedPermanentCount++;
+                            continue;
+                        }
+                        
+                        $eligibleIds[] = (int)$row['id'];
+                    }
+                    
+                    if (!empty($eligibleIds)) {
+                        $placeholdersEligible = implode(',', array_fill(0, count($eligibleIds), '?'));
+                        $upd = $pdo->prepare("UPDATE communication_queue SET status = 'pending', retry_count = 0, next_attempt_at = NOW(), error_message = NULL, updated_at = NOW() WHERE id IN ($placeholdersEligible)");
+                        $upd->execute($eligibleIds);
+                        
+                        try {
+                            $updRem = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued' WHERE queue_id IN ($placeholdersEligible)");
+                            $updRem->execute($eligibleIds);
+                        } catch (Exception $remEx) {}
+                        
+                        $retriedCount = count($eligibleIds);
+                    }
+                    
+                    $pdo->commit();
+                    
+                    $feedback = [];
+                    if ($retriedCount > 0) $feedback[] = "{$retriedCount} retried";
+                    if ($skippedPermanentCount > 0) $feedback[] = "{$skippedPermanentCount} skipped because they are permanent Meta failures";
+                    if ($skippedStatusCount > 0) $feedback[] = "{$skippedStatusCount} skipped because they are not failed/cancelled";
+                    
+                    $success_message = count($queueIds) . " selected — " . implode(', ', $feedback) . ".";
+                    
+                    if ($retriedCount > 0) {
+                        try {
+                            require_once 'includes/communication/CommunicationEngine.php';
+                            CommunicationEngine::getInstance($pdo)->triggerCronBackground();
+                        } catch (Exception $engEx) {}
+                    }
+                } catch (Exception $e) {
+                    if ($pdo->inTransaction()) $pdo->rollBack();
+                    $error_message = 'Failed to execute bulk retry: ' . $e->getMessage();
+                }
+            }
         } elseif ($action === 'process_queue') {
             require_once 'includes/communication/CommunicationEngine.php';
             $engine = CommunicationEngine::getInstance($pdo);
@@ -939,12 +1064,24 @@ include 'includes/admin_nav.php';
                     </form>
                 <?php endif; ?>
             </div>
+
+        <!-- Bulk Actions Toolbar -->
+        <div id="bulkActionsToolbar" style="display:none; background:#f1f5f9; border-bottom:1px solid #e2e8f0; padding:10px 20px; align-items:center; justify-content:space-between; transition: all 0.2s;">
+            <div style="font-size:0.82rem; font-weight:700; color:#334155; display:flex; align-items:center; gap:8px;">
+                <span id="bulkSelectionCount" style="background:#8b5cf6; color:#fff; padding:2px 8px; border-radius:12px; font-size:0.75rem; font-weight:700;">0 selected</span>
+            </div>
+            <div style="display:flex; gap:10px;">
+                <button type="button" class="btn btn-sm btn-success" style="border-radius:6px; padding:6px 12px; font-weight:700; font-size:0.8rem; background:#8b5cf6; border:none; color:#fff; cursor:pointer;" onclick="openBulkRetryModal()"><i class="fas fa-rotate-right" style="margin-right:4px;"></i> Retry Selected</button>
+                <button type="button" class="btn btn-sm btn-danger" style="border-radius:6px; padding:6px 12px; font-weight:700; font-size:0.8rem; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="openBulkCancelModal()"><i class="fas fa-xmark" style="margin-right:4px;"></i> Cancel Selected</button>
+            </div>
+        </div>
         </div>
         
         <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
             <thead>
                 <tr style="background:#f9fafb; text-align:left; border-bottom:1px solid #e5e7eb;">
                 <?php if ($view === 'installments'): ?>
+                    <th style="padding:12px; width:40px; text-align:center;"><input type="checkbox" id="selectAllQueues" style="cursor:pointer; transform:scale(1.1);"></th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Queue ID</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Student</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Recipient</th>
@@ -955,6 +1092,7 @@ include 'includes/admin_nav.php';
                     <th style="padding:12px; font-weight:600; color:#374151;">Reminder Status</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Meta Message ID / Logs</th>
                 <?php else: ?>
+                    <th style="padding:12px; width:40px; text-align:center;"><input type="checkbox" id="selectAllQueues" style="cursor:pointer; transform:scale(1.1);"></th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Queue ID</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Recipient</th>
                     <th style="padding:12px; font-weight:600; color:#374151;">Channel / Event</th>
@@ -969,12 +1107,15 @@ include 'includes/admin_nav.php';
             <tbody>
                 <?php if (empty($recentLogs)): ?>
                     <tr>
-                        <td colspan="<?php echo $view === 'installments' ? 9 : 8; ?>" style="padding:20px; text-align:center; color:#9ca3af;">No messages have been enqueued yet.</td>
+                        <td colspan="<?php echo $view === 'installments' ? 10 : 9; ?>" style="padding:20px; text-align:center; color:#9ca3af;">No messages have been enqueued yet.</td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($recentLogs as $log): ?>
                         <?php if ($view === 'installments'): ?>
                             <tr style="border-bottom:1px solid #f3f4f6;">
+                                <td style="padding:12px; text-align:center; width:40px;">
+                                    <input type="checkbox" class="queue-select-chk" value="<?php echo $log['queue_id']; ?>" style="cursor:pointer; transform:scale(1.1);">
+                                </td>
                                 <td style="padding:12px; font-weight:600;">#<?php echo $log['queue_id']; ?></td>
                                 <td style="padding:12px; font-weight:600;">
                                     <?php if (!empty($log['student_uid'])): ?>
@@ -1085,6 +1226,9 @@ include 'includes/admin_nav.php';
                             </tr>
                         <?php else: ?>
                             <tr style="border-bottom:1px solid #f3f4f6;">
+                                <td style="padding:12px; text-align:center; width:40px;">
+                                    <input type="checkbox" class="queue-select-chk" value="<?php echo $log['id']; ?>" style="cursor:pointer; transform:scale(1.1);">
+                                </td>
                                 <td style="padding:12px; font-weight:600;">#<?php echo $log['id']; ?></td>
                                 <td style="padding:12px; font-weight:600;">
                                     <?php if (!empty($log['student_uid'])): ?>
@@ -1314,4 +1458,158 @@ function toggleApiSettings() {
 }
 </script>
 
+
+<!-- Bulk Cancel Modal Overlay -->
+<div id="bulkCancelModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15, 23, 42, 0.6); backdrop-filter:blur(4px); z-index:9999; justify-content:center; align-items:center;">
+    <div style="background:#fff; border-radius:16px; width:450px; max-width:90%; padding:24px; box-shadow:0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); border:1px solid #e5e7eb;">
+        <h3 style="margin-top:0; font-size:1.15rem; font-weight:700; color:#111827; display:flex; align-items:center; gap:8px;">
+            <i class="fas fa-circle-exclamation" style="color:#ef4444;"></i> Cancel Selected Queue Messages?
+        </h3>
+        
+        <p style="font-size:0.85rem; color:#4b5563; margin-bottom:20px; line-height:1.5;">
+            You are about to cancel <strong id="bulkCancelCountDisplay">0</strong> queued messages. Cancelled messages will not be processed or retried by the communication queue.
+        </p>
+
+        <form method="POST" action="" id="bulkCancelForm">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="bulk_cancel_queue_items">
+            <div id="bulkCancelIdsContainer"></div>
+            
+            <div style="margin-bottom:20px;">
+                <label style="display:block; font-size:0.8rem; font-weight:600; color:#4b5563; margin-bottom:6px;">Reason for Cancellation (Optional):</label>
+                <select name="cancel_reason" style="width:100%; padding:8px 12px; border-radius:8px; border:1px solid #d1d5db; font-size:0.85rem; background:#fff;">
+                    <option value="No longer required">No longer required</option>
+                    <option value="Invalid number">Invalid number</option>
+                    <option value="Student changed number">Student changed number</option>
+                    <option value="Duplicate message">Duplicate message</option>
+                    <option value="Wrong recipient">Wrong recipient</option>
+                </select>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:10px;">
+                <button type="button" class="btn btn-sm" style="border-radius:8px; padding:8px 16px; font-weight:600; border:1px solid #d1d5db; background:#fff; cursor:pointer;">Cancel</button>
+                <button type="submit" class="btn btn-sm btn-danger" style="border-radius:8px; padding:8px 16px; font-weight:600; background:#ef4444; border:none; color:#fff; cursor:pointer;">Confirm Cancellation</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Bulk Retry Modal Overlay -->
+<div id="bulkRetryModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15, 23, 42, 0.6); backdrop-filter:blur(4px); z-index:9999; justify-content:center; align-items:center;">
+    <div style="background:#fff; border-radius:16px; width:450px; max-width:90%; padding:24px; box-shadow:0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); border:1px solid #e5e7eb;">
+        <h3 style="margin-top:0; font-size:1.15rem; font-weight:700; color:#111827; display:flex; align-items:center; gap:8px;">
+            <i class="fas fa-rotate-right" style="color:#8b5cf6;"></i> Retry Selected Queue Messages?
+        </h3>
+        
+        <p style="font-size:0.85rem; color:#4b5563; margin-bottom:20px; line-height:1.5;">
+            You are about to retry <strong id="bulkRetryCountDisplay">0</strong> selected messages. Already cancelled, delivered, read, or permanently failed Meta errors will be skipped automatically.
+        </p>
+
+        <form method="POST" action="" id="bulkRetryForm">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="bulk_retry_queue_items">
+            <div id="bulkRetryIdsContainer"></div>
+
+            <div style="display:flex; justify-content:flex-end; gap:10px;">
+                <button type="button" class="btn btn-sm" style="border-radius:8px; padding:8px 16px; font-weight:600; border:1px solid #d1d5db; background:#fff; cursor:pointer;">Cancel</button>
+                <button type="submit" class="btn btn-sm btn-primary" style="border-radius:8px; padding:8px 16px; font-weight:600; background:#8b5cf6; border:none; color:#fff; cursor:pointer;">Confirm Retry</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const selectAllChks = document.querySelectorAll('#selectAllQueues');
+    const chks = document.querySelectorAll('.queue-select-chk');
+    const toolbar = document.getElementById('bulkActionsToolbar');
+    const counterDisplay = document.getElementById('bulkSelectionCount');
+
+    function updateToolbar() {
+        const checkedChks = document.querySelectorAll('.queue-select-chk:checked');
+        const count = checkedChks.length;
+        if (count > 0) {
+            if (counterDisplay) counterDisplay.innerText = count + ' selected';
+            if (toolbar) toolbar.style.display = 'flex';
+        } else {
+            if (toolbar) toolbar.style.display = 'none';
+        }
+        
+        selectAllChks.forEach(selectAllChk => {
+            selectAllChk.checked = (chks.length > 0 && count === chks.length);
+        });
+    }
+
+    selectAllChks.forEach(selectAllChk => {
+        selectAllChk.addEventListener('change', () => {
+            chks.forEach(chk => {
+                chk.checked = selectAllChk.checked;
+            });
+            updateToolbar();
+        });
+    });
+
+    chks.forEach(chk => {
+        chk.addEventListener('change', () => {
+            updateToolbar();
+        });
+    });
+    
+    // Wire up modal cancel buttons
+    document.querySelectorAll('#bulkCancelModal button, #bulkRetryModal button').forEach(btn => {
+        if (btn.innerText.trim() === 'Cancel') {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                closeBulkCancelModal();
+                closeBulkRetryModal();
+            });
+        }
+    });
+});
+
+function getSelectedQueueIds() {
+    const checked = document.querySelectorAll('.queue-select-chk:checked');
+    const ids = [];
+    checked.forEach(chk => {
+        ids.push(chk.value);
+    });
+    return ids;
+}
+
+function openBulkCancelModal() {
+    const ids = getSelectedQueueIds();
+    if (ids.length === 0) return;
+    document.getElementById('bulkCancelCountDisplay').innerText = ids.length;
+    
+    const container = document.getElementById('bulkCancelIdsContainer');
+    container.innerHTML = '';
+    ids.forEach(id => {
+        container.innerHTML += `<input type="hidden" name="queue_ids[]" value="${id}">`;
+    });
+    
+    document.getElementById('bulkCancelModal').style.display = 'flex';
+}
+
+function closeBulkCancelModal() {
+    document.getElementById('bulkCancelModal').style.display = 'none';
+}
+
+function openBulkRetryModal() {
+    const ids = getSelectedQueueIds();
+    if (ids.length === 0) return;
+    document.getElementById('bulkRetryCountDisplay').innerText = ids.length;
+    
+    const container = document.getElementById('bulkRetryIdsContainer');
+    container.innerHTML = '';
+    ids.forEach(id => {
+        container.innerHTML += `<input type="hidden" name="queue_ids[]" value="${id}">`;
+    });
+    
+    document.getElementById('bulkRetryModal').style.display = 'flex';
+}
+
+function closeBulkRetryModal() {
+    document.getElementById('bulkRetryModal').style.display = 'none';
+}
+</script>
 <?php include 'includes/admin_footer.php'; ?>

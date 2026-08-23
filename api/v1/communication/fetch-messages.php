@@ -70,8 +70,19 @@ try {
         $upd->execute([$convId]);
     }
 
-    // 2. Fetch message history
-    $stmt = $pdo->prepare("SELECT * FROM whatsapp_messages WHERE conversation_id = ? ORDER BY created_at ASC");
+    // 2. Fetch message history with failure reason using a safe correlated subquery
+    $stmt = $pdo->prepare("
+        SELECT wm.*, 
+               (
+                 SELECT error_message 
+                 FROM communication_queue 
+                 WHERE message_id = wm.wa_message_id 
+                 LIMIT 1
+               ) AS failure_reason 
+        FROM whatsapp_messages wm
+        WHERE wm.conversation_id = ? 
+        ORDER BY wm.created_at ASC
+    ");
     $stmt->execute([$convId]);
     $messages = $stmt->fetchAll(PDO::FETCH_ASSOC);
 

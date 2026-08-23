@@ -181,9 +181,42 @@ include 'includes/admin_nav.php';
 .status-tick.failed {
     color: #ef4444;
 }
+.bubble.outbound.failed {
+    background: #fef2f2 !important;
+    color: #1e293b !important;
+    border-color: #fca5a5 !important;
+}
 </style>
 
 <script>
+function isPermanentError(errMsg) {
+    if (!errMsg) return false;
+    const lower = errMsg.toLowerCase();
+    const codeMatch = errMsg.match(/\[Meta Code (\d+)\]/);
+    if (codeMatch) {
+        const code = parseInt(codeMatch[1], 10);
+        if ([131026, 131053, 131047, 131045, 131051, 131052, 100, 190].includes(code)) {
+            return true;
+        }
+        if ([131021, 131048, 429].includes(code)) {
+            return false;
+        }
+    }
+    return (
+        lower.includes('healthy ecosystem engagement') ||
+        lower.includes('131026') ||
+        lower.includes('policy') ||
+        lower.includes('not in allowed list') ||
+        lower.includes('invalid phone number') ||
+        lower.includes('does not exist') ||
+        lower.includes('recipient') ||
+        lower.includes('undeliverable') ||
+        lower.includes('not a whatsapp number') ||
+        lower.includes('parameter') ||
+        lower.includes('not approved')
+    );
+}
+
 let currentFilter = 'all';
 let currentConversationId = null;
 let currentStudentUid = null;
@@ -299,7 +332,8 @@ function renderMessages(messages, isBackground) {
     let html = '';
     messages.forEach(m => {
         const isOut = m.direction === 'outbound';
-        const bubbleClass = isOut ? 'outbound' : 'inbound';
+        const isFailed = isOut && m.status === 'failed' && isPermanentError(m.failure_reason);
+        const bubbleClass = isOut ? (isFailed ? 'outbound failed' : 'outbound') : 'inbound';
         
         let statusTick = '';
         if (isOut) {
@@ -339,6 +373,14 @@ function renderMessages(messages, isBackground) {
         }
 
         let messageContentHtml = `<div style="white-space: pre-wrap;">${escapeHtml(m.message_text)}</div>`;
+        if (isFailed) {
+            messageContentHtml += `
+                <div style="font-size: 0.72rem; color: #b91c1c; background: #fff1f2; border: 1px solid #fda4af; padding: 6px 10px; border-radius: 6px; margin-top: 6px; font-weight: 500; text-align: left;">
+                    <strong style="color: #991b1b; display: block; font-weight: 700; margin-bottom: 2px;"><i class="fas fa-circle-exclamation"></i> 🔴 DELIVERY FAILED</strong>
+                    Meta: ${escapeHtml(m.failure_reason || 'This message was not delivered to maintain healthy ecosystem engagement.')}
+                </div>
+            `;
+        }
         if (m.message_type === 'image' && m.media_id) {
             const mediaUrl = `api/v1/communication/media.php?id=${m.id}`;
             const downloadUrl = `api/v1/communication/media.php?id=${m.id}&download=1`;
@@ -499,10 +541,19 @@ function loadStudentContext(studentUid) {
                                 <button type="button" class="btn btn-xs btn-danger" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="controlQueueInbox(${q.id}, 'cancel_queue_item')" title="Cancel"><i class="fas fa-xmark"></i></button>
                             `;
                         } else if (q.status === 'failed') {
-                            btnHtml = `
-                                <button type="button" class="btn btn-xs btn-success" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; color:#fff; background:#8b5cf6; border:none; cursor:pointer;" onclick="controlQueueInbox(${q.id}, 'retry_queue_item')" title="Retry"><i class="fas fa-rotate-right"></i></button>
-                                <button type="button" class="btn btn-xs btn-danger" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="controlQueueInbox(${q.id}, 'cancel_queue_item')" title="Cancel"><i class="fas fa-xmark"></i></button>
-                            `;
+                            const isPermanent = isPermanentError(q.error_message);
+                            
+                            if (isPermanent) {
+                                btnHtml = `
+                                    <button type="button" class="btn btn-xs" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; background:#e2e8f0; border:none; color:#94a3b8; cursor:not-allowed;" title="Permanent Meta Failure (Cannot Retry)" disabled><i class="fas fa-ban"></i></button>
+                                    <button type="button" class="btn btn-xs btn-danger" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="controlQueueInbox(${q.id}, 'cancel_queue_item')" title="Cancel"><i class="fas fa-xmark"></i></button>
+                                `;
+                            } else {
+                                btnHtml = `
+                                    <button type="button" class="btn btn-xs btn-success" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; color:#fff; background:#8b5cf6; border:none; cursor:pointer;" onclick="controlQueueInbox(${q.id}, 'retry_queue_item')" title="Retry"><i class="fas fa-rotate-right"></i></button>
+                                    <button type="button" class="btn btn-xs btn-danger" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; background:#ef4444; border:none; color:#fff; cursor:pointer;" onclick="controlQueueInbox(${q.id}, 'cancel_queue_item')" title="Cancel"><i class="fas fa-xmark"></i></button>
+                                `;
+                            }
                         }
                         
                         activeQueueHtml += `

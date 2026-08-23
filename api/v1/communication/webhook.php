@@ -6,6 +6,7 @@
  */
 
 require_once dirname(dirname(dirname(__DIR__))) . '/config/database.php';
+require_once dirname(dirname(dirname(__DIR__))) . '/includes/communication/CommunicationHelper.php';
 
 // Fetch verification token and secrets
 $stmt = $pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%'");
@@ -93,23 +94,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $msgId  = $stat['id'] ?? '';
             $status = $stat['status'] ?? ''; // sent, delivered, read, failed
             $errMsg = null;
+            $errCode = null;
             
             if ($status === 'failed' && !empty($stat['errors'])) {
                 $errMsg = $stat['errors'][0]['message'] ?? 'Meta Delivery Failure';
+                $errCode = $stat['errors'][0]['code'] ?? null;
             }
 
             if ($msgId && $status) {
                 try {
+                    $isPermanent = false;
+                    if ($status === 'failed') {
+                        $isPermanent = CommunicationHelper::isPermanentMetaFailure($errCode, $errMsg);
+                        if ($errCode !== null && $errCode > 0) {
+                            $errMsg = "[Meta Code {$errCode}] " . $errMsg;
+                        }
+                    }
+
                     // Update main communication queue status
                     $stmtQueue = $pdo->prepare("
                         UPDATE communication_queue 
                         SET status = ?, 
+                            retry_count = CASE WHEN ? = 1 THEN 3 ELSE retry_count END,
                             error_message = COALESCE(?, error_message), 
                             delivered_at = CASE WHEN ? IN ('delivered', 'read') AND delivered_at IS NULL THEN NOW() ELSE delivered_at END,
                             updated_at = NOW() 
                         WHERE message_id = ?
                     ");
-                    $stmtQueue->execute([$status, $errMsg, $status, $msgId]);
+                    $stmtQueue->execute([$status, $isPermanent ? 1 : 0, $errMsg, $status, $msgId]);
 
                     // Update local message tracking status (Safeguard 1)
                     $stmtMsgUpd = $pdo->prepare("

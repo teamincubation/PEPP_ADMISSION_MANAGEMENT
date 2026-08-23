@@ -7,6 +7,7 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
     private $accessToken;
     private $apiVersion;
     private $lastError = '';
+    private $lastErrorCode = 0;
     private $appId = null;
 
     public function __construct($businessId, $phoneId, $accessToken, $apiVersion = 'v20.0') {
@@ -28,9 +29,11 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
         if (isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true') {
             if ($cleanPhone === '910000000001') {
                 $this->lastError = 'HTTP 400: This message was not delivered to maintain healthy ecosystem engagement.';
+                $this->lastErrorCode = 131053;
                 return false;
             } elseif ($cleanPhone === '910000000002') {
                 $this->lastError = 'HTTP 400: Rate limit hit. Temporary error.';
+                $this->lastErrorCode = 131021;
                 return false;
             } else {
                 return [
@@ -243,6 +246,7 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
 
         if ($err) {
             $this->lastError = "CURL Error: " . $err;
+            $this->lastErrorCode = 0;
             error_log("WhatsApp API CURL Error: " . $err);
             return false;
         }
@@ -256,10 +260,15 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
             ];
         } else {
             $errDetails = $respDecoded['error']['message'] ?? 'Unknown API Error';
+            $this->lastErrorCode = $respDecoded['error']['code'] ?? 0;
             $this->lastError = "HTTP {$httpCode}: {$errDetails}";
             error_log("WhatsApp API Error Details: Code {$httpCode} - Response " . $response);
             return false;
         }
+    }
+
+    public function getLastErrorCode() {
+        return $this->lastErrorCode;
     }
 
     public function downloadMedia($mediaId) {
