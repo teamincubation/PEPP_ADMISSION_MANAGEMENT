@@ -22,7 +22,7 @@ include 'includes/admin_nav.php';
 ?>
 
 <div style="display: flex; height: calc(100vh - 120px); min-height: 500px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; margin-top: 10px;">
-    
+
     <!-- LEFT PANEL: Conversations List -->
     <div style="width: 320px; border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; background: #fff; flex-shrink: 0;">
         <!-- Search and Tabs -->
@@ -31,7 +31,7 @@ include 'includes/admin_nav.php';
                 <i class="fas fa-search" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #94a3b8; font-size: 0.85rem;"></i>
                 <input type="text" id="search-input" oninput="loadConversations()" placeholder="Search name, phone, UID..." style="width: 100%; padding: 8px 12px 8px 36px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.85rem; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor='#cbd5e1'">
             </div>
-            
+
             <div style="display: flex; gap: 4px; background: #f1f5f9; padding: 4px; border-radius: 8px;">
                 <button onclick="switchTab('all', this)" class="tab-btn active" style="flex: 1; padding: 6px; border: none; background: transparent; border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer; color: #475569; transition: all 0.2s;">All</button>
                 <button onclick="switchTab('unread', this)" class="tab-btn" style="flex: 1; padding: 6px; border: none; background: transparent; border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer; color: #475569; transition: all 0.2s;">Unread</button>
@@ -39,7 +39,7 @@ include 'includes/admin_nav.php';
                 <button onclick="switchTab('unknown', this)" class="tab-btn" style="flex: 1; padding: 6px; border: none; background: transparent; border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer; color: #475569; transition: all 0.2s;">Unknown</button>
             </div>
         </div>
-        
+
         <!-- Conversations Scroll -->
         <div id="convs-list" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column;">
             <!-- Rendered dynamically -->
@@ -48,7 +48,7 @@ include 'includes/admin_nav.php';
             </div>
         </div>
     </div>
-    
+
     <!-- CENTER PANEL: Chat Thread -->
     <div style="flex: 1; display: flex; flex-direction: column; background: #f8fafc; position: relative;">
         <!-- Thread Header -->
@@ -62,7 +62,7 @@ include 'includes/admin_nav.php';
             </div>
             <div id="24h-status-badge"></div>
         </div>
-        
+
         <!-- Messages Scroll Area -->
         <div id="messages-body" style="flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px;">
             <div style="margin: auto; text-align: center; color: #94a3b8; font-size: 0.85rem;">
@@ -70,7 +70,7 @@ include 'includes/admin_nav.php';
                 Select a conversation from the sidebar to view chat history.
             </div>
         </div>
-        
+
         <!-- Input / Reply Bar -->
         <div id="reply-container" style="border-top: 1px solid #e2e8f0; background: #fff; padding: 16px; display: none; flex-direction: column; gap: 10px; flex-shrink: 0;">
             <!-- Meta 24 Hour Warning and Template Selector -->
@@ -84,7 +84,7 @@ include 'includes/admin_nav.php';
                     <?php endforeach; ?>
                 </select>
             </div>
-            
+
             <!-- Template Variables Mapping Visualizer (Safeguard 3) -->
             <div id="template-variables-preview" style="display: none; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-size: 0.75rem;">
                 <h5 style="margin:0 0 6px; font-weight:700; color:#475569;">Variables Mapping &amp; Live Resolution:</h5>
@@ -102,7 +102,7 @@ include 'includes/admin_nav.php';
             </div>
         </div>
     </div>
-    
+
     <!-- RIGHT PANEL: Student Context -->
     <div id="student-context-panel" style="width: 280px; border-left: 1px solid #e2e8f0; background: #fff; display: none; flex-direction: column; overflow-y: auto; flex-shrink: 0; padding: 20px;">
         <h4 style="margin: 0 0 16px; font-weight: 700; color: #1e293b; font-size: 0.95rem; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px;">
@@ -258,32 +258,40 @@ function renderConversations(isBackground) {
         container.innerHTML = '<div style="padding: 20px; text-align: center; color: #94a3b8; font-size: 0.8rem;">No conversations found.</div>';
         return;
     }
-    
+
     let html = '';
     conversationsData.forEach(c => {
         const isActive = c.id == currentConversationId ? 'active' : '';
         const unreadBadge = c.unread_count > 0 ? `<span style="background:#ef4444; color:#fff; font-size:0.7rem; font-weight:700; padding:2px 6px; border-radius:10px; margin-left:auto;">${c.unread_count}</span>` : '';
         const nameInitial = (c.contact_name || 'U').charAt(0).toUpperCase();
-        
+
         let lastMsgSnippet = c.last_message_text || '';
         if (lastMsgSnippet.length > 35) lastMsgSnippet = lastMsgSnippet.substring(0, 35) + '...';
-        
+
+        const isFailed = c.latest_message_direction === 'outbound' && c.latest_message_status === 'failed';
+        if (isFailed) {
+            lastMsgSnippet = `<span style="color:#ef4444; font-weight:600;"><i class="fas fa-circle-exclamation" style="font-size:0.7rem;"></i> Delivery failed</span>`;
+        }
+
         const dateObj = new Date(c.last_message_at);
         const dateStr = dateObj.toLocaleDateString([], {day:'2-digit', month:'short'});
         const timeStr = dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
         const dateTimeStr = dateStr + ', ' + timeStr;
-        
+
         html += `
             <div class="conv-item ${isActive}" onclick="selectConversation(${c.id}, '${c.student_uid}', '${c.wa_phone_number}')">
                 <div style="display: flex; align-items: center; gap: 10px;">
                     <div style="width: 32px; height: 32px; border-radius: 50%; background: #f1f5f9; color: #475569; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.8rem;">${nameInitial}</div>
                     <div style="flex: 1; min-width: 0;">
                         <div style="display:flex; justify-content:space-between; align-items:center; gap:4px;">
-                            <span style="font-weight: 700; color: #1e293b; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${c.contact_name || 'Unknown Contact'}</span>
+                            <span style="font-weight: 700; color: #1e293b; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px;">
+                                ${c.contact_name || 'Unknown Contact'}
+                                ${isFailed ? `<span style="background:#fee2e2; color:#ef4444; border:1px solid #fecaca; font-size:0.6rem; font-weight:800; padding:1px 5px; border-radius:4px; line-height:1.2; text-transform:uppercase;">Failed</span>` : ''}
+                            </span>
                             <span style="font-size: 0.65rem; color: #94a3b8; white-space: nowrap;">${dateTimeStr}</span>
                         </div>
                         <div style="display: flex; align-items: center; justify-content: space-between; gap:4px; margin-top: 2px;">
-                            <span style="font-size: 0.75rem; color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${lastMsgSnippet}</span>
+                            <span style="font-size: 0.75rem; color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%;">${lastMsgSnippet}</span>
                             ${unreadBadge}
                         </div>
                     </div>
@@ -297,10 +305,10 @@ function renderConversations(isBackground) {
 function selectConversation(id, studentUid, waPhone) {
     currentConversationId = id;
     currentStudentUid = studentUid;
-    
+
     // Highlight conversation item
     document.querySelectorAll('.conv-item').forEach(el => el.classList.remove('active'));
-    
+
     loadMessages(id);
     loadStudentContext(studentUid);
 }
@@ -319,7 +327,7 @@ function loadMessages(id, isBackground = false) {
 
 function renderMessages(messages, isBackground) {
     const container = document.getElementById('messages-body');
-    
+
     // Find conversation details
     const conv = conversationsData.find(c => c.id == currentConversationId);
     if (!conv) return;
@@ -334,7 +342,7 @@ function renderMessages(messages, isBackground) {
         const isOut = m.direction === 'outbound';
         const isFailed = isOut && m.status === 'failed' && isPermanentError(m.failure_reason);
         const bubbleClass = isOut ? (isFailed ? 'outbound failed' : 'outbound') : 'inbound';
-        
+
         let statusTick = '';
         if (isOut) {
             if (m.status === 'read') {
@@ -349,7 +357,7 @@ function renderMessages(messages, isBackground) {
                 statusTick = '<i class="fas fa-clock status-tick" title="Pending"></i>';
             }
         }
-        
+
         const dateObj = new Date(m.created_at);
         const dateStr = dateObj.toLocaleDateString([], {day:'2-digit', month:'short'});
         const timeStr = dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
@@ -361,7 +369,7 @@ function renderMessages(messages, isBackground) {
                 const payloadObj = typeof m.raw_payload === 'string' ? JSON.parse(m.raw_payload) : m.raw_payload;
                 const btnText = payloadObj.interactive_button_text || 'Message Here';
                 const btnUrl = payloadObj.interactive_button_url || 'https://wa.me/917025000444';
-                
+
                 interactiveBtnHtml = `
                     <div style="margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.1); padding-top: 6px;">
                         <a href="${escapeHtml(btnUrl)}" target="_blank" style="font-size:0.75rem; padding:4px 10px; border-radius:6px; background:#ffffff; display:inline-flex; align-items:center; gap:6px; border:1px solid #cbd5e1; color:#0f172a; text-decoration:none; font-weight:600; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
@@ -409,7 +417,7 @@ function renderMessages(messages, isBackground) {
             </div>
         `;
     });
-    
+
     container.innerHTML = html;
     if (!isBackground) {
         container.scrollTop = container.scrollHeight;
@@ -425,7 +433,7 @@ function updateWindowPolicies() {
     const freeTextInput = document.getElementById('free-text-input-row');
     const badge = document.getElementById('24h-status-badge');
     const tplPreview = document.getElementById('template-variables-preview');
-    
+
     replyContainer.style.display = 'flex';
     tplPreview.style.display = 'none';
 
@@ -444,7 +452,7 @@ function updateWindowPolicies() {
     if (diffHours <= 24) {
         warning.style.display = 'none';
         freeTextInput.style.display = 'flex';
-        
+
         const hoursLeft = Math.ceil(24 - diffHours);
         badge.innerHTML = `<span class="badge green" style="font-size:0.7rem; font-weight:700;"><i class="fas fa-clock"></i> ${hoursLeft}h left</span>`;
     } else {
@@ -493,12 +501,12 @@ function controlQueueInbox(queueId, action) {
             return;
         }
     }
-    
+
     const formData = new FormData();
     formData.append('action', action);
     formData.append('queue_id', queueId);
     formData.append('csrf_token', csrfToken);
-    
+
     fetch('communication-dashboard.php', {
         method: 'POST',
         body: formData
@@ -512,20 +520,20 @@ function controlQueueInbox(queueId, action) {
 function loadStudentContext(studentUid) {
     const panel = document.getElementById('student-context-panel');
     const container = document.getElementById('student-context-content');
-    
+
     if (!studentUid) {
         panel.style.display = 'none';
         return;
     }
-    
+
     panel.style.display = 'flex';
-    
+
     fetch(`api/v1/communication/fetch-student-details.php?student_uid=${encodeURIComponent(studentUid)}`)
         .then(r => r.json())
         .then(res => {
             if (res.success) {
                 const s = res.student;
-                
+
                 let activeQueueHtml = '';
                 if (res.active_reminders && res.active_reminders.length > 0) {
                     res.active_reminders.forEach(q => {
@@ -542,7 +550,7 @@ function loadStudentContext(studentUid) {
                             `;
                         } else if (q.status === 'failed') {
                             const isPermanent = isPermanentError(q.error_message);
-                            
+
                             if (isPermanent) {
                                 btnHtml = `
                                     <button type="button" class="btn btn-xs" style="padding:2px 4px; font-size:0.65rem; border-radius:3px; background:#e2e8f0; border:none; color:#94a3b8; cursor:not-allowed;" title="Permanent Meta Failure (Cannot Retry)" disabled><i class="fas fa-ban"></i></button>
@@ -555,7 +563,7 @@ function loadStudentContext(studentUid) {
                                 `;
                             }
                         }
-                        
+
                         activeQueueHtml += `
                             <div style="display:flex; justify-content:space-between; align-items:center; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px; margin-bottom:6px; font-size:0.7rem;">
                                 <div style="min-width:0; flex:1;">
@@ -582,7 +590,7 @@ function loadStudentContext(studentUid) {
                     <div><strong>Total Paid:</strong> <div>₹${s.total_paid}</div></div>
                     <div><strong>Outstanding Balance:</strong> <div style="color:#ef4444; font-weight:700;">₹${s.balance}</div></div>
                     <div><strong>Next Due Date:</strong> <div style="font-weight:700; color:#1e293b;">${s.next_due_date}</div></div>
-                    
+
                     <div style="margin-top:16px; border-top:1px solid #e2e8f0; padding-top:12px;">
                         <strong style="display:block; margin-bottom:8px; font-size:0.8rem; color:#475569;"><i class="fas fa-list-check"></i> Active Queue Items</strong>
                         ${activeQueueHtml}
@@ -629,7 +637,7 @@ function sendReply() {
             document.getElementById('reply-textarea').style.display = 'block';
             if (tplSelect) tplSelect.value = '';
             document.getElementById('template-variables-preview').style.display = 'none';
-            
+
             // Reload message thread immediately
             loadMessages(currentConversationId);
             loadConversations();

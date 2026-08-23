@@ -8,7 +8,23 @@ header('Content-Type: application/json');
 $filter = $_GET['filter'] ?? 'all'; // all, unread, students, unknown
 $search = trim($_GET['search'] ?? '');
 
-$sql = "SELECT * FROM whatsapp_conversations WHERE 1=1";
+$sql = "SELECT wc.*,
+               (
+                   SELECT direction
+                   FROM whatsapp_messages
+                   WHERE conversation_id = wc.id
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT 1
+               ) AS latest_message_direction,
+               (
+                   SELECT status
+                   FROM whatsapp_messages
+                   WHERE conversation_id = wc.id
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT 1
+               ) AS latest_message_status
+        FROM whatsapp_conversations wc
+        WHERE 1=1";
 $params = [];
 
 if ($filter === 'unread') {
@@ -45,7 +61,7 @@ try {
                 if ($rawPayload && isset($rawPayload['name']) && isset($rawPayload['parameters'])) {
                     $tplName = $rawPayload['name'];
                     $paramsList = $rawPayload['parameters'];
-                    
+
                     static $tplCache = [];
                     if (!isset($tplCache[$tplName])) {
                         $stmtTpl = $pdo->prepare("SELECT meta_data, updated_at FROM communication_templates WHERE template_name = ? LIMIT 1");
@@ -53,7 +69,7 @@ try {
                         $tpl = $stmtTpl->fetch(PDO::FETCH_ASSOC);
                         $tplCache[$tplName] = $tpl ?: false;
                     }
-                    
+
                     $tpl = $tplCache[$tplName];
                     if ($tpl) {
                         $msgTime = strtotime($lastMsg['created_at']);
