@@ -961,26 +961,43 @@ class CommunicationEngine {
                 } elseif ($student) {
                     if ($val === 'student_name') {
                         $resolvedVal = $student['name'] ?? '';
-                    } elseif ($val === 'student_id') {
+                    } elseif ($val === 'student_uid' || $val === 'student_id' || $val === 'application_id') {
                         $resolvedVal = $student['user_id'] ?? '';
-                    } elseif ($val === 'whatsapp_number') {
+                    } elseif ($val === 'whatsapp_number' || $val === 'student_phone') {
                         $resolvedVal = ($student['whatsapp_country_code'] ?? '') . ($student['whatsapp_number'] ?? '');
-                    } elseif ($val === 'student_email') {
+                    } elseif ($val === 'email' || $val === 'student_email') {
                         $resolvedVal = $student['email'] ?? '';
-                    } elseif ($val === 'current_course_name') {
+                    } elseif ($val === 'gender') {
+                        $resolvedVal = $student['gender'] ?? '';
+                    } elseif ($val === 'date_of_birth') {
+                        $resolvedVal = !empty($student['date_of_birth']) ? date('d M Y', strtotime($student['date_of_birth'])) : '';
+                    } elseif ($val === 'college_school') {
+                        $resolvedVal = $student['college_school'] ?? '';
+                    } elseif ($val === 'source' || $val === 'how_know_pepp') {
+                        $resolvedVal = $student['how_know_pepp'] ?? '';
+                    } elseif ($val === 'mobile_number') {
+                        $resolvedVal = $student['mobile_number'] ?? '';
+                    } elseif ($val === 'course_name' || $val === 'current_course_name') {
                         $resolvedVal = $student['pepp_course'] ?? '';
-                    } elseif ($val === 'current_course_fee') {
+                    } elseif ($val === 'current_course_fee' || $val === 'course_fee') {
                         $courseFee = (float)($student['total_fee'] ?? 0) + (float)($student['discount_amount'] ?? 0);
                         $resolvedVal = number_format($courseFee);
-                    } elseif ($val === 'total_paid') {
-                        $resolvedVal = number_format($collected);
-                    } elseif ($val === 'registration_fee_paid') {
-                        $resolvedVal = number_format((float)($student['paid_amount'] ?? 0));
-                    } elseif ($val === 'installment_paid') {
-                        $resolvedVal = number_format(max(0.0, $collected - (float)($student['paid_amount'] ?? 0)));
+                    } elseif ($val === 'academic_year') {
+                        $resolvedVal = $student['pepp_academic_year'] ?? '';
                     } elseif ($val === 'payment_plan') {
                         $resolvedVal = $student['payment_plan'] ?? '';
-                    } elseif ($val === 'number_of_installments') {
+                    } elseif ($val === 'registration_fee' || $val === 'registration_fee_paid' || $val === 'registration_paid' || $val === 'registration_payment_amount') {
+                        $resolvedVal = number_format((float)($student['paid_amount'] ?? 0));
+                    } elseif ($val === 'registration_paid_date' || $val === 'registration_payment_date' || $val === 'paid_date' || $val === 'payment_date') {
+                        $resolvedVal = !empty($student['paid_date']) ? date('d M Y', strtotime($student['paid_date'])) : '';
+                    } elseif ($val === 'total_paid' || $val === 'total_collected') {
+                        $resolvedVal = number_format($collected);
+                    } elseif ($val === 'outstanding_balance' || $val === 'balance_amount' || $val === 'balance') {
+                        $balance = max(0.0, (float)($student['total_fee'] ?? 0) - $collected);
+                        $resolvedVal = number_format($balance);
+                    } elseif ($val === 'amount_paid' || $val === 'payment_amount' || $val === 'paid_amount') {
+                        $resolvedVal = number_format((float)($student['paid_amount'] ?? 0));
+                    } elseif ($val === 'installment_count' || $val === 'number_of_installments') {
                         try {
                             $cntStmt = $this->pdo->prepare("SELECT COUNT(*) FROM instalment_details WHERE user_id = ?");
                             $cntStmt->execute([$student['user_id']]);
@@ -988,15 +1005,36 @@ class CommunicationEngine {
                         } catch (Exception $e) {
                             $resolvedVal = '0';
                         }
-                    } elseif ($val === 'academic_year') {
+                    } elseif ($val === 'invoice_number') {
+                        try {
+                            $invStmt = $this->pdo->prepare("SELECT invoice_no FROM invoices WHERE user_id = ? ORDER BY id DESC LIMIT 1");
+                            $invStmt->execute([$student['user_id']]);
+                            $resolvedVal = (string)$invStmt->fetchColumn();
+                        } catch (Exception $e) {
+                            $resolvedVal = '';
+                        }
+                    } elseif ($val === 'invoice_link') {
+                        try {
+                            $invStmt = $this->pdo->prepare("SELECT invoice_no FROM invoices WHERE user_id = ? ORDER BY id DESC LIMIT 1");
+                            $invStmt->execute([$student['user_id']]);
+                            $invNo = $invStmt->fetchColumn();
+                            $resolvedVal = $invNo ? "https://pepplearning.in/invoice/" . rawurlencode($invNo) : '';
+                        } catch (Exception $e) {
+                            $resolvedVal = '';
+                        }
+                    } elseif ($val === 'rejection_reason') {
+                        try {
+                            $rejStmt = $this->pdo->prepare("SELECT reason FROM student_status_log WHERE user_id = ? AND new_status = 'rejected' ORDER BY id DESC LIMIT 1");
+                            $rejStmt->execute([$student['user_id']]);
+                            $resolvedVal = (string)$rejStmt->fetchColumn();
+                        } catch (Exception $e) {
+                            $resolvedVal = '';
+                        }
+                    } elseif ($val === 'installment_paid') {
+                        $resolvedVal = number_format(max(0.0, $collected - (float)($student['paid_amount'] ?? 0)));
+                    } elseif ($val === 'previous_academic_year' || $val === 'new_academic_year') {
                         $resolvedVal = $student['pepp_academic_year'] ?? '';
-                    } elseif ($val === 'previous_academic_year') {
-                        $resolvedVal = $student['pepp_academic_year'] ?? '';
-                    } elseif ($val === 'new_academic_year') {
-                        $resolvedVal = $student['pepp_academic_year'] ?? '';
-                    } elseif ($val === 'previous_course_name') {
-                        $resolvedVal = $student['pepp_course'] ?? '';
-                    } elseif ($val === 'new_course_name') {
+                    } elseif ($val === 'previous_course_name' || $val === 'new_course_name') {
                         $resolvedVal = $student['pepp_course'] ?? '';
                     } elseif ($val === 'previous_course_fee') {
                         $resolvedVal = '0.00';
@@ -1006,9 +1044,6 @@ class CommunicationEngine {
                         $resolvedVal = '0.00';
                     } elseif ($val === 'upgrade_amount') {
                         $resolvedVal = '0.00';
-                    } elseif ($val === 'outstanding_balance') {
-                        $balance = max(0, (float)($student['total_fee'] ?? 0) - $collected);
-                        $resolvedVal = number_format($balance);
                     } elseif ($val === 'new_outstanding_balance') {
                         $balance = max(0, (float)($student['total_fee'] ?? 0) - $collected);
                         $resolvedVal = number_format($balance);
@@ -1016,28 +1051,12 @@ class CommunicationEngine {
                         $resolvedVal = date('d M Y');
                     } elseif ($val === 'migration_reason') {
                         $resolvedVal = '';
-                    } elseif ($val === 'application_id') {
-                        $resolvedVal = $student['user_id'] ?? '';
-                    } elseif ($val === 'course_name') {
-                        $resolvedVal = $student['pepp_course'] ?? '';
-                    } elseif ($val === 'student_phone') {
-                        $resolvedVal = ($student['whatsapp_country_code'] ?? '') . ($student['whatsapp_number'] ?? '');
-                    } elseif ($val === 'payment_amount' || $val === 'paid_amount') {
-                        $resolvedVal = number_format((float)($student['paid_amount'] ?? 0));
-                    } elseif ($val === 'paid_date') {
-                        $resolvedVal = !empty($student['paid_date']) ? date('d M Y', strtotime($student['paid_date'])) : '';
                     } elseif ($val === 'payment_mode') {
                         $resolvedVal = $student['payment_mode'] ?? '';
-                    } elseif ($val === 'course_fee') {
-                        $courseFee = (float)($student['total_fee'] ?? 0) + (float)($student['discount_amount'] ?? 0);
-                        $resolvedVal = number_format($courseFee);
                     } elseif ($val === 'discount_amount') {
                         $resolvedVal = number_format((float)($student['discount_amount'] ?? 0));
                     } elseif ($val === 'total_payable') {
                         $resolvedVal = number_format((float)($student['total_fee'] ?? 0));
-                    } elseif ($val === 'balance_amount') {
-                        $balance = max(0, (float)($student['total_fee'] ?? 0) - $collected);
-                        $resolvedVal = number_format($balance);
                     } elseif ($val === 'next_due_date' || $val === 'installment_due_date') {
                         $resolvedVal = $nextDueDate;
                     } elseif ($val === 'new_access_end' || $val === 'course_duration_date' || $val === 'access_end') {
@@ -1105,7 +1124,9 @@ class CommunicationEngine {
                                 } elseif ($val === 'new_course_fee') {
                                     $resolvedVal = number_format((float)$lastMig['new_course_fee']);
                                 } elseif ($val === 'migration_amount_paid') {
-                                    $resolvedVal = number_format((float)$lastMig['upgrade_amount']);
+                                    $expectedOutstanding = (float)$lastMig['outstanding_before'] + ((float)$lastMig['new_course_fee'] - (float)$lastMig['old_course_fee']);
+                                    $diff = $expectedOutstanding - (float)$lastMig['outstanding_after'];
+                                    $resolvedVal = number_format(max(0.0, min($diff, (float)$lastMig['upgrade_amount'])));
                                 } elseif ($val === 'upgrade_amount') {
                                     $resolvedVal = number_format((float)$lastMig['upgrade_amount']);
                                 } elseif ($val === 'outstanding_balance') {

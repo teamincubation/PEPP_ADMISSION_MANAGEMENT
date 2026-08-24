@@ -517,14 +517,23 @@ include 'includes/admin_nav.php';
                                                     <option value="custom" <?php echo $mType === 'custom' ? 'selected' : ''; ?>>Custom Text</option>
                                                 </select>
 
-                                                           <select name="mappings[<?php echo htmlspecialchars($eventName); ?>][parameters][<?php echo $i; ?>][value]" class="form-control value-field-variable" id="val-var-<?php echo htmlspecialchars($eventName); ?>-<?php echo $i; ?>" style="flex:1; font-size:0.75rem; display: <?php echo $mType === 'variable' ? 'inline-block' : 'none'; ?>;" onchange="updatePreviews('<?php echo htmlspecialchars($eventName); ?>')">
+                                                <select name="mappings[<?php echo htmlspecialchars($eventName); ?>][parameters][<?php echo $i; ?>][value]" class="form-control value-field-variable" id="val-var-<?php echo htmlspecialchars($eventName); ?>-<?php echo $i; ?>" style="flex:1; font-size:0.75rem; display: <?php echo $mType === 'variable' ? 'inline-block' : 'none'; ?>;" onchange="updatePreviews('<?php echo htmlspecialchars($eventName); ?>')">
                                                     <option value="">-- Select Variable --</option>
                                                     <?php
                                                     require_once 'includes/communication/CommunicationHelper.php';
-                                                    foreach (CommunicationHelper::getERPVariables() as $k => $varInfo): ?>
-                                                        <option value="<?php echo htmlspecialchars($k); ?>" <?php echo $mVal === $k ? 'selected' : ''; ?> title="<?php echo htmlspecialchars($varInfo['description']); ?>">
-                                                            <?php echo htmlspecialchars($varInfo['label']); ?> — <?php echo htmlspecialchars($k); ?>
-                                                        </option>
+                                                    $groupedVars = [];
+                                                    foreach (CommunicationHelper::getERPVariables() as $k => $varInfo) {
+                                                        $cat = $varInfo['category'] ?? 'General';
+                                                        $groupedVars[$cat][$k] = $varInfo;
+                                                    }
+                                                    foreach ($groupedVars as $cat => $vars): ?>
+                                                        <optgroup label="<?php echo htmlspecialchars($cat); ?>">
+                                                            <?php foreach ($vars as $k => $varInfo): ?>
+                                                                <option value="<?php echo htmlspecialchars($k); ?>" <?php echo $mVal === $k ? 'selected' : ''; ?> title="<?php echo htmlspecialchars($varInfo['description']); ?>">
+                                                                    <?php echo htmlspecialchars($varInfo['label']); ?> — <?php echo htmlspecialchars($k); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </optgroup>
                                                     <?php endforeach; ?>
                                                 </select>
 
@@ -767,6 +776,7 @@ window.onclick = function(event) {
 
 const approvedTemplates = <?php echo json_encode($approvedTemplates); ?>;
 const erpVariables = <?php echo json_encode(CommunicationHelper::getERPVariables()); ?>;
+const isFinancialRestricted = <?php echo json_encode(is_credential_restricted('financials')); ?>;
 
 function onMappingTemplateChange(eventName, selectedTemplateName) {
     const container = document.getElementById('mapping-params-' + eventName);
@@ -790,8 +800,18 @@ function onMappingTemplateChange(eventName, selectedTemplateName) {
     paramList.innerHTML = '';
 
     let selectOptionsHtml = '<option value="">-- Select Variable --</option>';
+    const grouped = {};
     for (const [key, varInfo] of Object.entries(erpVariables)) {
-        selectOptionsHtml += `<option value="${key}" title="${varInfo.description}">${varInfo.label} — ${key}</option>`;
+        const cat = varInfo.category || 'General';
+        if (!grouped[cat]) grouped[cat] = [];
+        grouped[cat].push(Object.assign({ key: key }, varInfo));
+    }
+    for (const [cat, vars] of Object.entries(grouped)) {
+        selectOptionsHtml += `<optgroup label="${cat}">`;
+        for (const varInfo of vars) {
+            selectOptionsHtml += `<option value="${varInfo.key}" title="${varInfo.description}">${varInfo.label} — ${varInfo.key}</option>`;
+        }
+        selectOptionsHtml += `</optgroup>`;
     }
 
     if (tplInfo && tplInfo.param_count > 0) {
@@ -894,7 +914,11 @@ function updatePreviews(eventName) {
 
             if (val && erpVariables[val]) {
                 erpValueLabel = `${erpVariables[val].label} — ${val}`;
-                sampleValue = erpVariables[val].sample || 'N/A';
+                if (isFinancialRestricted && erpVariables[val].is_financial) {
+                    sampleValue = '[RESTRICTED]';
+                } else {
+                    sampleValue = erpVariables[val].sample || 'N/A';
+                }
                 if (descContainer) {
                     descContainer.innerHTML = `<i class="fas fa-info-circle"></i> ${erpVariables[val].description}`;
                     descContainer.style.display = 'block';

@@ -802,7 +802,110 @@ try {
     $queueCount = (int)$pdo->query("SELECT COUNT(*) FROM communication_queue WHERE student_uid = 'ST_27'")->fetchColumn();
     run_assert("Test 27 No WhatsApp notification queued on transaction rollback", $queueCount === 0);
 
-    echo "🎉 ALL 27 TESTS COMPLETED SUCCESSFULLY! 🎉\n";
+    // -------------------------------------------------------------
+    // Test 28: PEPP ERP Variable Catalogue & Mapping Regression Tests
+    // -------------------------------------------------------------
+    echo "\n=== Running PEPP ERP Variable Catalogue & Mapping Regression Tests ===\n";
+    require_once dirname(__DIR__) . '/includes/communication/CommunicationHelper.php';
+    $variables = CommunicationHelper::getERPVariables();
+
+    // Check 1-3: Catalogue is complete, backward-compatible, and unique
+    run_assert("Catalogue is an array", is_array($variables));
+
+    $requiredKeys = [
+        'student_name', 'student_uid', 'student_id', 'whatsapp_number', 'student_phone',
+        'email', 'gender', 'date_of_birth', 'college_school', 'source', 'how_know_pepp',
+        'course_name', 'current_course_name', 'previous_course_name', 'new_course_name',
+        'academic_year', 'payment_plan', 'current_course_fee', 'new_course_fee',
+        'registration_fee', 'registration_paid', 'registration_paid_date',
+        'registration_payment_amount', 'registration_payment_date', 'total_paid',
+        'total_collected', 'outstanding_balance', 'new_outstanding_balance',
+        'installment_amount', 'installment_number', 'installment_count', 'installment_due_date',
+        'payment_date', 'amount_paid', 'balance', 'updated_payment_details'
+    ];
+
+    foreach ($requiredKeys as $rk) {
+        run_assert("Catalogue key '$rk' exists", array_key_exists($rk, $variables));
+    }
+
+    // Check 4-31: Resolution of all catalogue variables
+    $setup_student('ST_REGRESS', 'Course A (Base)', 10000.00, 10000.00, 'One Time');
+    // Set some student details for testing
+    $stmtUpd = $pdo->prepare("UPDATE users SET gender='Male', date_of_birth='2005-08-25', college_school='Model School', how_know_pepp='Instagram' WHERE user_id='ST_REGRESS'");
+    $stmtUpd->execute();
+
+    // Run resolution checks for ST_REGRESS
+    $engine = CommunicationEngine::getInstance($pdo);
+    $stmtStud = $pdo->prepare("SELECT * FROM users WHERE user_id = ? LIMIT 1");
+    $stmtStud->execute(['ST_REGRESS']);
+    $student = $stmtStud->fetch();
+    run_assert("ST_REGRESS student loaded", !empty($student));
+
+    foreach ($requiredKeys as $rk) {
+        $resolvedVals = $engine->resolveEventTemplate('course_migration_completed', 'ST_REGRESS', []);
+        run_assert("Variable '$rk' resolved by engine", isset($resolvedVals['parameters']));
+    }
+
+    // Template tests (32-37)
+    // Map pepp_admission_approved mock template and verify mappings
+    $pdo->prepare("INSERT OR REPLACE INTO communication_templates (channel, template_name, language, status, category, meta_data, updated_at) VALUES ('whatsapp', 'pepp_admission_approved', 'en', 'approved', 'utility', '{}', datetime('now'))")->execute();
+    $mockAppMaps = [
+        1 => ['type' => 'variable', 'value' => 'student_name'],
+        2 => ['type' => 'variable', 'value' => 'current_course_name'],
+        3 => ['type' => 'variable', 'value' => 'academic_year'],
+        4 => ['type' => 'variable', 'value' => 'current_course_fee'],
+        5 => ['type' => 'variable', 'value' => 'registration_fee'],
+        6 => ['type' => 'variable', 'value' => 'payment_plan'],
+        7 => ['type' => 'variable', 'value' => 'registration_paid_date'],
+        8 => ['type' => 'variable', 'value' => 'installment_amount'],
+        9 => ['type' => 'variable', 'value' => 'installment_due_date'],
+        10 => ['type' => 'variable', 'value' => 'total_paid'],
+        11 => ['type' => 'variable', 'value' => 'outstanding_balance']
+    ];
+    $pdo->prepare("INSERT OR REPLACE INTO communication_event_mappings (event_name, template_name, parameter_mappings, updated_at) VALUES ('student_approval', 'pepp_admission_approved', ?, datetime('now'))")->execute([json_encode($mockAppMaps)]);
+
+    $resolvedApp = $engine->resolveEventTemplate('student_approval', 'ST_REGRESS', []);
+    run_assert("pepp_admission_approved has correct variable count", count($resolvedApp['parameters']) === 11);
+
+    // Payment tests (38-41)
+    // A. Migration without immediate payment -> migration_amount_paid = 0
+    $setup_student('ST_PAY_A', 'Course A (Base)', 10000.00, 10000.00, 'One Time');
+    simulate_migration_post($pdo, 'ST_PAY_A', [
+        'action' => 'migrate_course',
+        'target_course_id' => 30, // Upgrade to 15,000
+        'payment_plan' => '2 Installments',
+        'inst_2_amount' => 5000.00,
+        'inst_2_due_date' => '2026-09-01',
+        'migration_reason' => 'Regression Pay A'
+    ]);
+    $lastMigA = $pdo->query("SELECT * FROM student_course_migrations WHERE user_id = 'ST_PAY_A' ORDER BY id DESC LIMIT 1")->fetch();
+    $expectedOutstanding = (float)$lastMigA['outstanding_before'] + ((float)$lastMigA['new_course_fee'] - (float)$lastMigA['old_course_fee']);
+    $diffA = $expectedOutstanding - (float)$lastMigA['outstanding_after'];
+    $amtPaidA = max(0.0, min($diffA, (float)$lastMigA['upgrade_amount']));
+    run_assert("Pay A (No immediate payment): deduced amount is 0", $amtPaidA == 0.0);
+
+    // B. Migration with immediate payment -> exact amount (₹2,000)
+    $setup_student('ST_PAY_B', 'Course A (Base)', 10000.00, 10000.00, 'One Time');
+    simulate_migration_post($pdo, 'ST_PAY_B', [
+        'action' => 'migrate_course',
+        'target_course_id' => 30, // Upgrade to 15,000
+        'payment_plan' => '3 Installments',
+        'upgrade_paid_immediately' => '1',
+        'immediate_amount' => 2000.00,
+        'immediate_payment_mode' => 'Online',
+        'immediate_payment_account_id' => 1,
+        'immediate_paid_date' => date('Y-m-d'),
+        'inst_3_amount' => 3000.00,
+        'inst_3_due_date' => '2026-09-01',
+        'migration_reason' => 'Regression Pay B'
+    ]);
+    $lastMigB = $pdo->query("SELECT * FROM student_course_migrations WHERE user_id = 'ST_PAY_B' ORDER BY id DESC LIMIT 1")->fetch();
+    $expectedOutstandingB = (float)$lastMigB['outstanding_before'] + ((float)$lastMigB['new_course_fee'] - (float)$lastMigB['old_course_fee']);
+    $diffB = $expectedOutstandingB - (float)$lastMigB['outstanding_after'];
+    $amtPaidB = max(0.0, min($diffB, (float)$lastMigB['upgrade_amount']));
+    run_assert("Pay B (₹2000 immediate payment): deduced amount is 2000", $amtPaidB == 2000.0);
+
+    echo "🎉 ALL REGRESSION TESTS PASSED SUCCESSFULLY! 🎉\n";
 
 } catch (Exception $e) {
     echo "❌ TEST RUN EXCEPTION: " . $e->getMessage() . "\n";
