@@ -3,6 +3,41 @@ require_once 'includes/auth.php';
 require_once 'config/database.php';
 require_once 'includes/file_helper.php';
 
+function getSavedCardMetadata($designConfigJson) {
+    $metadata = [
+        'chapter' => null,
+        'date' => null,
+        'number' => null
+    ];
+    if (empty($designConfigJson)) {
+        return $metadata;
+    }
+    $cfg = json_decode($designConfigJson, true);
+    if (!is_array($cfg)) {
+        return $metadata;
+    }
+    $elements = $cfg['elements'] ?? [];
+    if (!is_array($elements)) {
+        return $metadata;
+    }
+    foreach ($elements as $el) {
+        if (!is_array($el)) continue;
+        $elId = $el['id'] ?? '';
+        $textVal = $el['textContent'] ?? $el['text'] ?? null;
+        if ($textVal !== null) {
+            $textVal = trim($textVal);
+        }
+        if ($elId === 'chapter_name') {
+            $metadata['chapter'] = $textVal;
+        } elseif ($elId === 'test_date') {
+            $metadata['date'] = $textVal;
+        } elseif ($elId === 'test_number') {
+            $metadata['number'] = $textVal;
+        }
+    }
+    return $metadata;
+}
+
 if (!can_access('cards') && !can_access('card-templates')) {
     require_permission('cards');
 }
@@ -357,16 +392,15 @@ if ($active_tab === 'test_results') {
     try {
         $saved_cards = $pdo->query("
             SELECT trc.*, ct.title AS template_title,
-                   (SELECT chapter_snapshot FROM assessment_result_batches
-                    WHERE study_plan_id = trc.study_plan_id
-                      AND activity_id = trc.activity_id
-                      AND status = 'published' LIMIT 1) AS chapter_name,
-                   (SELECT activity_date_snapshot FROM assessment_result_batches
-                    WHERE study_plan_id = trc.study_plan_id
-                      AND activity_id = trc.activity_id
-                      AND status = 'published' LIMIT 1) AS test_date,
-                   (SELECT day_number FROM study_plan_activities
-                    WHERE id = trc.activity_id LIMIT 1) AS test_number
+                   COALESCE(
+                       (SELECT chapter FROM study_plan_activities WHERE id = trc.activity_id LIMIT 1),
+                       (SELECT chapter_snapshot FROM assessment_result_batches WHERE activity_id = trc.activity_id AND status = 'published' LIMIT 1)
+                   ) AS chapter_name,
+                   COALESCE(
+                       (SELECT activity_date FROM study_plan_activities WHERE id = trc.activity_id LIMIT 1),
+                       (SELECT activity_date_snapshot FROM assessment_result_batches WHERE activity_id = trc.activity_id AND status = 'published' LIMIT 1)
+                   ) AS test_date,
+                   (SELECT day_number FROM study_plan_activities WHERE id = trc.activity_id LIMIT 1) AS test_number
             FROM test_result_cards trc
             LEFT JOIN card_templates ct ON trc.template_id = ct.id
             ORDER BY trc.created_at DESC
@@ -775,9 +809,18 @@ include 'includes/admin_nav.php';
                                             <?php echo htmlspecialchars($sc['template_title'] ?: 'Unknown'); ?>
                                         </td>
                                         <td style="padding: 12px 16px; color: #64748b; font-size: 0.8rem; line-height: 1.45;">
-                                            <strong>Chapter:</strong> <?php echo !empty($sc['chapter_name']) ? htmlspecialchars($sc['chapter_name']) : '&mdash;'; ?><br>
-                                            <strong>Test Date:</strong> <?php echo !empty($sc['test_date']) ? htmlspecialchars(date('d M Y', strtotime($sc['test_date']))) : '&mdash;'; ?><br>
-                                            <strong>Test No:</strong> <?php echo !empty($sc['test_number']) ? htmlspecialchars($sc['test_number']) : '&mdash;'; ?><br>
+                                            <?php
+                                            $meta = getSavedCardMetadata($sc['design_config'] ?? '');
+                                            $disp_chapter = !empty($meta['chapter']) ? $meta['chapter'] : ($sc['chapter_name'] ?? '');
+                                            $disp_date = !empty($meta['date']) ? $meta['date'] : ($sc['test_date'] ?? '');
+                                            if (!empty($disp_date) && preg_match('/^\d{4}-\d{2}-\d{2}/', $disp_date)) {
+                                                $disp_date = date('d M Y', strtotime($disp_date));
+                                            }
+                                            $disp_number = !empty($meta['number']) ? $meta['number'] : ($sc['test_number'] ?? '');
+                                            ?>
+                                            <strong>Chapter:</strong> <?php echo !empty($disp_chapter) ? htmlspecialchars($disp_chapter) : '&mdash;'; ?><br>
+                                            <strong>Test Date:</strong> <?php echo !empty($disp_date) ? htmlspecialchars($disp_date) : '&mdash;'; ?><br>
+                                            <strong>Test No:</strong> <?php echo !empty($disp_number) ? htmlspecialchars($disp_number) : '&mdash;'; ?><br>
                                             <strong>Year:</strong> <?php echo htmlspecialchars($sc['academic_year']); ?><br>
                                             <strong>Test ID:</strong> <?php echo htmlspecialchars($sc['activity_id']); ?>
                                         </td>

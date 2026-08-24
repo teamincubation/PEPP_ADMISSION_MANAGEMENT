@@ -942,6 +942,133 @@ try {
     echo "\n--- TEST 133: Merged mode remains functional ---\n";
     run_assert("Merged mode batches loading remains supported", strpos($designer_html, 'course_id') !== false);
 
+    echo "\n--- TEST 134: Saved card listing resolves actual Chapter from card's published test ---\n";
+    $has_coalesced_chapter = strpos($cards_html, 'COALESCE(') !== false && strpos($cards_html, 'chapter_snapshot') !== false;
+    run_assert("Chapter is resolved from study plan activity or result batch snapshot", $has_coalesced_chapter);
+
+    echo "\n--- TEST 135: Saved card listing resolves actual Test Date from card's published test ---\n";
+    $has_coalesced_date = strpos($cards_html, 'COALESCE(') !== false && strpos($cards_html, 'activity_date_snapshot') !== false;
+    run_assert("Test date is resolved from study plan activity or result batch snapshot", $has_coalesced_date);
+
+    echo "\n--- TEST 136: Saved card listing resolves actual Test Number from card's published test ---\n";
+    $has_coalesced_number = strpos($cards_html, 'day_number') !== false;
+    run_assert("Test number is resolved from study plan activities day_number", $has_coalesced_number);
+
+    echo "\n--- TEST 137: Saved card ID 8 / activity ID 26335 resolves metadata correctly ---\n";
+    $has_config_decoder = strpos($cards_html, 'getSavedCardMetadata') !== false;
+    run_assert("Saved card listing utilizes getSavedCardMetadata helper function", $has_config_decoder);
+
+    echo "\n--- TEST 138: Listing does not use saved-card created_at as Test Date ---\n";
+    $has_separate_created_and_test_date = strpos($cards_html, 'disp_date') !== false && strpos($cards_html, 'created_at') !== false;
+    run_assert("Listing uses distinct date fields for test date and design creation date", $has_separate_created_and_test_date);
+
+    echo "\n--- TEST 139: Listing does not use rank number as Test Number ---\n";
+    $has_test_number_field = strpos($cards_html, 'disp_number') !== false && strpos($cards_html, 'test_number') !== false;
+    run_assert("Listing maps test number to published day/test number rather than index", $has_test_number_field);
+
+    echo "\n--- TEST 140: Listing and designer use the same published-test metadata relationship ---\n";
+    $designer_study_plan_activities_check = strpos($designer_html, 'study_plan_activities') !== false;
+    $cards_study_plan_activities_check = strpos($cards_html, 'study_plan_activities') !== false;
+    run_assert("Both cards.php and designer read from study_plan_activities for metadata lookup", $designer_study_plan_activities_check && $cards_study_plan_activities_check);
+
+    echo "\n--- TEST 141: Dynamic execution unit tests for getSavedCardMetadata helper ---\n";
+    $cards_code = file_get_contents(dirname(__DIR__) . '/cards.php');
+    $start_pos = strpos($cards_code, 'function getSavedCardMetadata');
+    if ($start_pos !== false) {
+        $brace_count = 0;
+        $end_pos = $start_pos;
+        $len = strlen($cards_code);
+        for ($i = $start_pos; $i < $len; $i++) {
+            if ($cards_code[$i] === '{') {
+                $brace_count++;
+            } elseif ($cards_code[$i] === '}') {
+                $brace_count--;
+                if ($brace_count === 0) {
+                    $end_pos = $i;
+                    break;
+                }
+            }
+        }
+        $function_code = substr($cards_code, $start_pos, $end_pos - $start_pos + 1);
+        eval($function_code);
+    }
+
+    run_assert("getSavedCardMetadata function is declared successfully", function_exists('getSavedCardMetadata'));
+
+    // Test 1: Saved card with chapter_name text displays that exact chapter.
+    $mock_config_1 = json_encode([
+        'elements' => [
+            ['id' => 'chapter_name', 'textContent' => 'Sensation & Perception 5']
+        ]
+    ]);
+    $meta_1 = getSavedCardMetadata($mock_config_1);
+    run_assert("Saved card with chapter_name text extracts chapter correctly", $meta_1['chapter'] === 'Sensation & Perception 5');
+
+    // Test 2: Saved card with test_date text displays that exact date.
+    $mock_config_2 = json_encode([
+        'elements' => [
+            ['id' => 'test_date', 'textContent' => '19 Aug 2026']
+        ]
+    ]);
+    $meta_2 = getSavedCardMetadata($mock_config_2);
+    run_assert("Saved card with test_date text extracts date correctly", $meta_2['date'] === '19 Aug 2026');
+
+    // Test 3: Saved card with test_number text displays that exact number.
+    $mock_config_3 = json_encode([
+        'elements' => [
+            ['id' => 'test_number', 'textContent' => '2']
+        ]
+    ]);
+    $meta_3 = getSavedCardMetadata($mock_config_3);
+    run_assert("Saved card with test_number text extracts number correctly", $meta_3['number'] === '2');
+
+    // Test 4: Saved card values take priority over published-test fallback values.
+    $sc_db_fallback = [
+        'chapter_name' => 'Published Chapter Name',
+        'test_date' => '2026-08-14',
+        'test_number' => '1'
+    ];
+    $meta_priority = getSavedCardMetadata($mock_config_1);
+    $disp_chapter = !empty($meta_priority['chapter']) ? $meta_priority['chapter'] : $sc_db_fallback['chapter_name'];
+    run_assert("Saved card value priority overrides fallback values", $disp_chapter === 'Sensation & Perception 5');
+
+    // Test 5 & 6 & 7: Missing saved fields fall back to published metadata.
+    $meta_empty = getSavedCardMetadata('{}');
+    $disp_chapter_fallback = !empty($meta_empty['chapter']) ? $meta_empty['chapter'] : $sc_db_fallback['chapter_name'];
+    $disp_date_fallback = !empty($meta_empty['date']) ? $meta_empty['date'] : $sc_db_fallback['test_date'];
+    $disp_number_fallback = !empty($meta_empty['number']) ? $meta_empty['number'] : $sc_db_fallback['test_number'];
+    run_assert("Missing chapter falls back to metadata", $disp_chapter_fallback === 'Published Chapter Name');
+    run_assert("Missing date falls back to metadata", $disp_date_fallback === '2026-08-14');
+    run_assert("Missing number falls back to metadata", $disp_number_fallback === '1');
+
+    // Test 8: Card ID 8 / activity ID 26335 resolves metadata correctly
+    $sc_id_8 = [
+        'id' => 8,
+        'activity_id' => 26335,
+        'academic_year' => '2026-27',
+        'design_config' => json_encode([
+            'elements' => [
+                ['id' => 'chapter_name', 'textContent' => 'Sensation and Perception 5'],
+                ['id' => 'test_date', 'textContent' => '19 Aug 2026'],
+                ['id' => 'test_number', 'textContent' => '2']
+            ]
+        ])
+    ];
+    $meta_id_8 = getSavedCardMetadata($sc_id_8['design_config']);
+    run_assert("Card ID 8 chapter resolves to 'Sensation and Perception 5'", $meta_id_8['chapter'] === 'Sensation and Perception 5');
+    run_assert("Card ID 8 date resolves to '19 Aug 2026'", $meta_id_8['date'] === '19 Aug 2026');
+    run_assert("Card ID 8 number resolves to '2'", $meta_id_8['number'] === '2');
+
+    // Test 9: created_at is never used as Test Date.
+    $created_at_val = '2026-08-24 19:03:00';
+    $test_date_resolved = !empty($meta_id_8['date']) ? $meta_id_8['date'] : $created_at_val;
+    run_assert("created_at is not used as Test Date when custom metadata exists", $test_date_resolved !== $created_at_val);
+
+    // Test 10: rank number is never used as Test Number.
+    $rank_slot_number = 'Slot 1';
+    $test_number_resolved = !empty($meta_id_8['number']) ? $meta_id_8['number'] : $rank_slot_number;
+    run_assert("Rank slot number is not used as Test Number when custom metadata exists", $test_number_resolved !== $rank_slot_number);
+
     echo "\n=== All designer improvements & UI regression automated tests passed successfully! ===\n";
 
 } catch (Exception $e) {
