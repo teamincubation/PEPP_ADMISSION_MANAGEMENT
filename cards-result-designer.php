@@ -497,6 +497,7 @@ include 'includes/admin_nav.php';
 
 /* Masking Shapes */
 .mask-circle { border-radius: 50%; }
+.mask-ellipse { border-radius: 50%; }
 .mask-rounded { border-radius: 12%; }
 .mask-hexagon { clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%); }
 .mask-diamond { clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%); }
@@ -731,6 +732,7 @@ include 'includes/admin_nav.php';
                         <div class="field" style="margin:0;">
                             <label>Letter Spacing (px)</label>
                             <input type="number" id="prop-text-spacing" step="0.5" value="0" oninput="updateActiveElementFromProps()">
+                        </div>
                     </div>
                 </div>
 
@@ -764,7 +766,8 @@ include 'includes/admin_nav.php';
 
                 <!-- Photo specific settings -->
                 <div class="prop-section" id="prop-photo-settings" style="display:none;">
-                    <div class="prop-title">Photo Settings</div>
+                    <div class="prop-title" style="margin-bottom: 12px; font-weight: 800;">Student Photo Settings</div>
+
                     <div class="field full" style="margin-bottom:8px;">
                         <label>Assigned Student</label>
                         <select id="prop-photo-student" style="width:100%; font-size:0.8rem;" onchange="updateStudentAssignOverride(this.value)">
@@ -776,66 +779,250 @@ include 'includes/admin_nav.php';
                             <?php endforeach; ?>
                         </select>
                     </div>
-                    <div style="background:#f8fafc; padding:10px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:8px;">
-                        <div style="font-size:0.7rem; font-weight:700; color:#64748b; margin-bottom:6px;">Photo Upload Override</div>
-                        <input type="file" id="prop-photo-upload" accept="image/*" style="font-size:0.75rem;" onchange="uploadPhotoOverride(this)">
+
+                    <div style="background:#f8fafc; padding:10px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:12px;">
+                        <div style="font-size:0.7rem; font-weight:700; color:#64748b; margin-bottom:4px;">Photo Upload Override</div>
+                        <input type="file" id="prop-photo-upload" accept="image/*" style="font-size:0.75rem; width:100%;" onchange="uploadPhotoOverride(this)">
                     </div>
-                    <div class="field full" style="margin-bottom:8px;">
-                        <label>Mask Shape</label>
-                        <select id="prop-photo-mask" onchange="updateActiveElementFromProps()">
-                            <option value="none">None (Square)</option>
-                            <option value="circle">Circle</option>
-                            <option value="rounded">Rounded Box</option>
-                            <option value="hexagon">Hexagon</option>
-                            <option value="diamond">Diamond</option>
-                        </select>
-                    </div>
-                    <div class="field full">
-                        <label>Zoom (<span id="lbl-zoom-val">100</span>%)</label>
-                        <input type="range" id="prop-photo-zoom" min="50" max="400" value="100" oninput="updateActivePhotoTransform()">
-                    </div>
-                    <div class="field-row" style="margin-top:8px;">
-                        <div class="field" style="margin:0;">
-                            <label>Pan X (px)</label>
-                            <input type="number" id="prop-photo-panx" oninput="updateActivePhotoTransform()">
+
+                    <!-- Collapsible position group -->
+                    <details open style="margin-bottom: 8px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+                        <summary style="background: #f8fafc; padding: 8px 12px; font-weight: bold; font-size: 0.75rem; color: #334155; cursor: pointer; user-select: none;">
+                            Position
+                        </summary>
+                        <div style="padding: 10px; display: flex; gap: 8px;">
+                            <div class="field" style="margin:0; flex:1;">
+                                <label style="font-size: 0.7rem;">Position X (px)</label>
+                                <input type="number" id="prop-photo-x-val" oninput="updateActiveElementFromPhotoCoords()">
+                            </div>
+                            <div class="field" style="margin:0; flex:1;">
+                                <label style="font-size: 0.7rem;">Position Y (px)</label>
+                                <input type="number" id="prop-photo-y-val" oninput="updateActiveElementFromPhotoCoords()">
+                            </div>
                         </div>
-                        <div class="field" style="margin:0;">
-                            <label>Pan Y (px)</label>
-                            <input type="number" id="prop-photo-pany" oninput="updateActivePhotoTransform()">
+                    </details>
+
+                    <!-- Collapsible frame size group -->
+                    <details open style="margin-bottom: 8px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+                        <summary style="background: #f8fafc; padding: 8px 12px; font-weight: bold; font-size: 0.75rem; color: #334155; cursor: pointer; user-select: none;">
+                            Frame Size
+                        </summary>
+                        <div style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
+                            <div style="display: flex; gap: 8px;">
+                                <div class="field" style="margin:0; flex:1;">
+                                    <label style="font-size: 0.7rem;">Width (px)</label>
+                                    <input type="number" id="prop-photo-w-val" oninput="updateActiveElementFromPhotoCoords()">
+                                </div>
+                                <div class="field" style="margin:0; flex:1;">
+                                    <label style="font-size: 0.7rem;">Height (px)</label>
+                                    <input type="number" id="prop-photo-h-val" oninput="updateActiveElementFromPhotoCoords()">
+                                </div>
+                            </div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem; color: #475569;">
+                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;">
+                                    <input type="checkbox" id="prop-photo-aspect-lock" style="accent-color: var(--accent);">
+                                    Lock Aspect Ratio
+                                </label>
+                                <button type="button" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size: 0.65rem;" onclick="resetPhotoFrame()">Reset Frame</button>
+                            </div>
                         </div>
-                    </div>
-                    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin-top:10px;">
-                        <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="nudgePhoto(0, -5)" title="Pan Up"><i class="fas fa-chevron-up"></i></button>
-                        <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="nudgePhoto(0, 5)" title="Pan Down"><i class="fas fa-chevron-down"></i></button>
-                        <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="nudgePhoto(-5, 0)" title="Pan Left"><i class="fas fa-chevron-left"></i></button>
-                        <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="nudgePhoto(5, 0)" title="Pan Right"><i class="fas fa-chevron-right"></i></button>
-                        <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="zoomPhoto(10)" title="Zoom In"><i class="fas fa-magnifying-glass-plus"></i></button>
-                        <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="zoomPhoto(-10)" title="Zoom Out"><i class="fas fa-magnifying-glass-minus"></i></button>
-                    </div>
-                    <div class="field full" style="margin-top:12px;">
-                        <label>Rotation (<span id="lbl-rotation-val">0</span>°)</label>
-                        <input type="range" id="prop-photo-rotation" min="-180" max="180" value="0" oninput="updateActivePhotoTransform()">
-                    </div>
-                    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin-top:6px; margin-bottom:12px;">
-                        <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="rotatePhoto(-90)" title="Rotate 90 Left"><i class="fas fa-rotate-left"></i> -90°</button>
-                        <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="rotatePhoto(90)" title="Rotate 90 Right"><i class="fas fa-rotate-right"></i> +90°</button>
-                        <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="rotatePhoto(0, true)" title="Reset Rotation">0°</button>
-                    </div>
-                    <div class="field-row" style="margin-top:8px;">
-                        <div class="field" style="margin:0;">
-                            <label>Border Width</label>
-                            <input type="number" id="prop-photo-border-w" min="0" max="20" oninput="updateActivePhotoBorder()">
+                    </details>
+
+                    <!-- Collapsible Image Transform group -->
+                    <details open style="margin-bottom: 8px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+                        <summary style="background: #f8fafc; padding: 8px 12px; font-weight: bold; font-size: 0.75rem; color: #334155; cursor: pointer; user-select: none;">
+                            Image Transform
+                        </summary>
+                        <div style="padding: 10px; display: flex; flex-direction: column; gap: 10px;">
+                            <div class="field full" style="margin:0;">
+                                <label style="font-size: 0.7rem; display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                    <span>Zoom / Scale</span>
+                                    <strong><span id="lbl-zoom-val">100</span>%</strong>
+                                </label>
+                                <input type="range" id="prop-photo-zoom" min="50" max="400" value="100" oninput="updateActivePhotoTransform()" style="width: 100%; cursor: pointer;">
+                                <div style="display: flex; gap: 6px; margin-top: 4px;">
+                                    <button type="button" class="btn btn-sm btn-outline" style="flex:1; padding: 2px; font-size: 0.7rem;" onclick="zoomPhoto(-10)" title="Zoom Out"><i class="fas fa-minus"></i> Out</button>
+                                    <button type="button" class="btn btn-sm btn-outline" style="flex:1; padding: 2px; font-size: 0.7rem;" onclick="zoomPhoto(0, true)" title="Reset Zoom">Reset</button>
+                                    <button type="button" class="btn btn-sm btn-outline" style="flex:1; padding: 2px; font-size: 0.7rem;" onclick="zoomPhoto(10)" title="Zoom In"><i class="fas fa-plus"></i> In</button>
+                                </div>
+                            </div>
+
+                            <div class="field full" style="margin:0;">
+                                <label style="font-size: 0.7rem; display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                    <span>Rotation</span>
+                                    <strong><span id="lbl-rotation-val">0</span>°</strong>
+                                </label>
+                                <input type="range" id="prop-photo-rotation" min="-180" max="180" value="0" oninput="updateActivePhotoTransform()" style="width: 100%; cursor: pointer;">
+                                <div style="display: flex; gap: 6px; margin-top: 4px;">
+                                    <button type="button" class="btn btn-sm btn-outline" style="flex:1; padding: 2px; font-size: 0.7rem;" onclick="rotatePhoto(-90)" title="Rotate 90 Left"><i class="fas fa-rotate-left"></i> -90°</button>
+                                    <button type="button" class="btn btn-sm btn-outline" style="flex:1; padding: 2px; font-size: 0.7rem;" onclick="rotatePhoto(0, true)" title="Reset Rotation">0°</button>
+                                    <button type="button" class="btn btn-sm btn-outline" style="flex:1; padding: 2px; font-size: 0.7rem;" onclick="rotatePhoto(90)" title="Rotate 90 Right"><i class="fas fa-rotate-right"></i> +90°</button>
+                                </div>
+                            </div>
+
+                            <div style="margin-top: 4px;">
+                                <label style="font-size: 0.7rem; display: block; margin-bottom: 4px;">Flip Image</label>
+                                <div style="display: flex; gap: 6px;">
+                                    <button type="button" id="btn-photo-fliph" class="btn btn-sm btn-outline" style="flex:1; padding: 4px; font-size: 0.7rem;" onclick="flipPhotoHorizontal()"><i class="fas fa-arrows-left-right"></i> Flip H</button>
+                                    <button type="button" id="btn-photo-flipv" class="btn btn-sm btn-outline" style="flex:1; padding: 4px; font-size: 0.7rem;" onclick="flipPhotoVertical()"><i class="fas fa-arrows-up-down"></i> Flip V</button>
+                                    <button type="button" class="btn btn-sm btn-outline" style="flex:1; padding: 4px; font-size: 0.7rem;" onclick="resetFlipPhoto()">Reset</button>
+                                </div>
+                            </div>
                         </div>
-                        <div class="field" style="margin:0;">
-                            <label>Border Radius</label>
-                            <input type="number" id="prop-photo-border-r" min="0" max="100" oninput="updateActivePhotoBorder()">
+                    </details>
+
+                    <!-- Collapsible Crop / Pan group -->
+                    <details open style="margin-bottom: 8px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+                        <summary style="background: #f8fafc; padding: 8px 12px; font-weight: bold; font-size: 0.75rem; color: #334155; cursor: pointer; user-select: none;">
+                            Crop / Pan
+                        </summary>
+                        <div style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
+                            <div style="display: flex; gap: 8px;">
+                                <div class="field" style="margin:0; flex:1;">
+                                    <label style="font-size: 0.7rem;">Pan X (px)</label>
+                                    <input type="number" id="prop-photo-panx" oninput="updateActivePhotoTransform()">
+                                </div>
+                                <div class="field" style="margin:0; flex:1;">
+                                    <label style="font-size: 0.7rem;">Pan Y (px)</label>
+                                    <input type="number" id="prop-photo-pany" oninput="updateActivePhotoTransform()">
+                                </div>
+                            </div>
+                            <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin-top:4px;">
+                                <button type="button" class="btn btn-sm btn-outline" style="padding:4px;" onclick="nudgePhoto(0, -5)" title="Pan Up"><i class="fas fa-chevron-up"></i></button>
+                                <button type="button" class="btn btn-sm btn-outline" style="padding:4px;" onclick="nudgePhoto(0, 5)" title="Pan Down"><i class="fas fa-chevron-down"></i></button>
+                                <button type="button" class="btn btn-sm btn-outline" style="padding:4px;" onclick="nudgePhoto(-5, 0)" title="Pan Left"><i class="fas fa-chevron-left"></i></button>
+                                <button type="button" class="btn btn-sm btn-outline" style="padding:4px;" onclick="nudgePhoto(5, 0)" title="Pan Right"><i class="fas fa-chevron-right"></i></button>
+                                <button type="button" class="btn btn-sm btn-outline" style="grid-column: span 2; padding:4px; font-size:0.7rem;" onclick="nudgePhoto(0, 0, true)">Reset Pan</button>
+                            </div>
                         </div>
-                    </div>
-                    <div class="field full" style="margin-top:8px; margin-bottom:12px;">
-                        <label>Border Color</label>
-                        <input type="color" id="prop-photo-border-c" style="height:32px; padding:0; border:none; width:100%;" oninput="updateActivePhotoBorder()">
-                    </div>
-                    <button class="btn btn-sm btn-outline" style="width:100%; margin-top:8px;" onclick="resetPhotoTransform()">Reset Photo</button>
+                    </details>
+
+                    <!-- Collapsible Shape & Mask group -->
+                    <details open style="margin-bottom: 8px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+                        <summary style="background: #f8fafc; padding: 8px 12px; font-weight: bold; font-size: 0.75rem; color: #334155; cursor: pointer; user-select: none;">
+                            Shape & Mask
+                        </summary>
+                        <div style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
+                            <div class="field full" style="margin:0;">
+                                <label style="font-size: 0.7rem;">Mask Shape</label>
+                                <select id="prop-photo-mask" onchange="updateActivePhotoShape()">
+                                    <option value="none">Rectangle (Square)</option>
+                                    <option value="circle">Circle</option>
+                                    <option value="rounded">Rounded Rectangle</option>
+                                    <option value="ellipse">Ellipse</option>
+                                    <option value="hexagon">Hexagon</option>
+                                    <option value="diamond">Diamond</option>
+                                </select>
+                            </div>
+                            <div class="field full" style="margin:0;">
+                                <label style="font-size: 0.7rem;">Display / Fit Mode</label>
+                                <select id="prop-photo-fit" onchange="updateActivePhotoShape()">
+                                    <option value="cover">Cover (Fill & Crop)</option>
+                                    <option value="contain">Contain (Fit Aspect)</option>
+                                    <option value="fill">Fill (Stretch)</option>
+                                    <option value="original">Original Size</option>
+                                </select>
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- Collapsible Border group -->
+                    <details open style="margin-bottom: 8px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+                        <summary style="background: #f8fafc; padding: 8px 12px; font-weight: bold; font-size: 0.75rem; color: #334155; cursor: pointer; user-select: none;">
+                            Border
+                        </summary>
+                        <div style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
+                            <div style="display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: #475569; margin-bottom: 4px;">
+                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: bold; user-select: none;">
+                                    <input type="checkbox" id="prop-photo-border-enabled" onchange="updateActivePhotoBorder()" style="accent-color: var(--accent);">
+                                    Enable Border
+                                </label>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                <div class="field" style="margin:0; flex:1;">
+                                    <label style="font-size: 0.7rem;">Width (px)</label>
+                                    <input type="number" id="prop-photo-border-w" min="0" max="20" oninput="updateActivePhotoBorder()">
+                                </div>
+                                <div class="field" style="margin:0; flex:1;">
+                                    <label style="font-size: 0.7rem;">Radius (px)</label>
+                                    <input type="number" id="prop-photo-border-r" min="0" max="100" oninput="updateActivePhotoBorder()">
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 8px; align-items: flex-end;">
+                                <div class="field" style="margin:0; flex:1;">
+                                    <label style="font-size: 0.7rem;">Border Color</label>
+                                    <input type="color" id="prop-photo-border-c" style="height:32px; padding:0; border:none; width:100%; cursor: pointer;" oninput="updateActivePhotoBorder()">
+                                </div>
+                                <div class="field" style="margin:0; flex:1;">
+                                    <label style="font-size: 0.7rem;">Border Style</label>
+                                    <select id="prop-photo-border-s" onchange="updateActivePhotoBorder()">
+                                        <option value="solid">Solid</option>
+                                        <option value="dashed">Dashed</option>
+                                        <option value="dotted">Dotted</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- Collapsible Appearance group -->
+                    <details open style="margin-bottom: 8px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+                        <summary style="background: #f8fafc; padding: 8px 12px; font-weight: bold; font-size: 0.75rem; color: #334155; cursor: pointer; user-select: none;">
+                            Appearance & Shadow
+                        </summary>
+                        <div style="padding: 10px; display: flex; flex-direction: column; gap: 10px;">
+                            <div class="field full" style="margin:0;">
+                                <label style="font-size: 0.7rem; display: flex; justify-content: space-between; align-items: center;">
+                                    <span>Opacity</span>
+                                    <strong><span id="lbl-opacity-val">100</span>%</strong>
+                                </label>
+                                <input type="range" id="prop-photo-opacity" min="0" max="100" value="100" oninput="updateActivePhotoAppearance()" style="width: 100%; cursor: pointer;">
+                                <div style="text-align: right; margin-top: 4px;">
+                                    <button type="button" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size: 0.65rem;" onclick="resetOpacityPhoto()">Reset Opacity</button>
+                                </div>
+                            </div>
+
+                            <div style="border-top: 1px solid #f1f5f9; padding-top: 8px; display: flex; flex-direction: column; gap: 8px;">
+                                <label style="display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: #475569; font-weight: bold; cursor: pointer; user-select: none;">
+                                    <input type="checkbox" id="prop-photo-shadow-enabled" onchange="updateActivePhotoAppearance()" style="accent-color: var(--accent);">
+                                    Enable Drop Shadow
+                                </label>
+                                <div style="display: flex; gap: 8px;">
+                                    <div class="field" style="margin:0; flex:1;">
+                                        <label style="font-size: 0.7rem;">Offset X (px)</label>
+                                        <input type="number" id="prop-photo-shadow-x" oninput="updateActivePhotoAppearance()">
+                                    </div>
+                                    <div class="field" style="margin:0; flex:1;">
+                                        <label style="font-size: 0.7rem;">Offset Y (px)</label>
+                                        <input type="number" id="prop-photo-shadow-y" oninput="updateActivePhotoAppearance()">
+                                    </div>
+                                </div>
+                                <div style="display: flex; gap: 8px;">
+                                    <div class="field" style="margin:0; flex:1;">
+                                        <label style="font-size: 0.7rem;">Blur Radius</label>
+                                        <input type="number" id="prop-photo-shadow-blur" min="0" oninput="updateActivePhotoAppearance()">
+                                    </div>
+                                    <div class="field" style="margin:0; flex:1;">
+                                        <label style="font-size: 0.7rem;">Opacity (0-1)</label>
+                                        <input type="number" id="prop-photo-shadow-opacity" min="0" max="1" step="0.1" oninput="updateActivePhotoAppearance()">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- Collapsible Quick Actions group -->
+                    <details open style="margin-bottom: 8px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+                        <summary style="background: #f8fafc; padding: 8px 12px; font-weight: bold; font-size: 0.75rem; color: #334155; cursor: pointer; user-select: none;">
+                            Quick Actions
+                        </summary>
+                        <div style="padding: 10px; display: flex; flex-direction: column; gap: 6px;">
+                            <button type="button" class="btn btn-sm btn-outline" style="width: 100%; text-align: left; padding: 6px 12px;" onclick="centerPhotoFrame('h')"><i class="fas fa-arrows-left-right" style="margin-right: 6px;"></i> Center Frame Horizontally</button>
+                            <button type="button" class="btn btn-sm btn-outline" style="width: 100%; text-align: left; padding: 6px 12px;" onclick="centerPhotoFrame('v')"><i class="fas fa-arrows-up-down" style="margin-right: 6px;"></i> Center Frame Vertically</button>
+                            <button type="button" class="btn btn-sm btn-outline" style="width: 100%; text-align: left; padding: 6px 12px;" onclick="centerImageContent()"><i class="fas fa-compress" style="margin-right: 6px;"></i> Center Image Content</button>
+                            <button type="button" class="btn btn-sm btn-outline" style="width: 100%; text-align: left; padding: 6px 12px; color: #b91c1c; border-color: #fca5a5;" onclick="resetPhotoTransform()"><i class="fas fa-arrow-rotate-left" style="margin-right: 6px;"></i> Reset Photo Adjustments</button>
+                        </div>
+                    </details>
                 </div>
 
                 <!-- Element Actions -->
@@ -1171,6 +1358,18 @@ document.addEventListener('DOMContentLoaded', async function() {
                             el.rotate = pe.rotate;
                             if (el.type === 'photo') {
                                 el.mask = pe.mask;
+                                el.fitMode = pe.fitMode || 'cover';
+                                el.borderEnabled = pe.borderEnabled !== false;
+                                el.borderWidth = pe.borderWidth || 0;
+                                el.borderColor = pe.borderColor || '#ffffff';
+                                el.borderRadius = pe.borderRadius !== undefined ? pe.borderRadius : 12;
+                                el.borderStyle = pe.borderStyle || 'solid';
+                                el.shadowEnabled = pe.shadowEnabled || false;
+                                el.shadowX = pe.shadowX !== undefined ? pe.shadowX : 0;
+                                el.shadowY = pe.shadowY !== undefined ? pe.shadowY : 4;
+                                el.shadowBlur = pe.shadowBlur !== undefined ? pe.shadowBlur : 8;
+                                el.shadowOpacity = pe.shadowOpacity !== undefined ? pe.shadowOpacity : 0.3;
+                                el.opacity = pe.opacity !== undefined ? pe.opacity : 100;
                             }
                             if (pe.showMarker !== undefined) {
                                 el.showMarker = pe.showMarker;
@@ -1380,6 +1579,12 @@ function initCanvasSize() {
     drawElements();
 }
 
+function getRankBadgeStyle(rank) {
+    const markerColors = {1: '#eab308', 2: '#94a3b8', 3: '#cd7f32', 4: '#64748b'};
+    const markerColor = markerColors[rank] || '#64748b';
+    return { markerColor: markerColor };
+}
+
 // ── 2. Render Canvas & Preview Elements ────────────
 function drawElements() {
     const canvas = document.getElementById('designer-canvas');
@@ -1423,6 +1628,21 @@ function drawElements() {
                     else if (field === 'badge') textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
                     else if (field === 'photo') {
                         photoSrc = mapping.photo_override || (student.user_photo ? '../' + student.user_photo : null);
+                    }
+                }
+            }
+        }
+
+        if (el.id && el.id.startsWith('rank_badge_')) {
+            const slotNum = parseInt(el.id.replace('rank_badge_', ''));
+            const photoElId = 'rank_photo_' + slotNum;
+            const mapping = studentRankMappings[photoElId];
+            if (mapping && mapping.student_uid) {
+                const student = rankingList.find(s => (s.user_id === mapping.student_uid || s.student_email === mapping.student_uid));
+                if (student) {
+                    const style = getRankBadgeStyle(student.computed_rank);
+                    if (!savedDesignId || !el.markerColorManuallySet) {
+                        el.markerColor = style.markerColor;
                     }
                 }
             }
@@ -1479,27 +1699,47 @@ function drawElements() {
             wrapper.className = 'mask-' + (el.mask || 'rounded');
 
             div.style.boxSizing = 'border-box';
-            if (el.borderWidth && el.borderWidth > 0) {
-                div.style.border = `${el.borderWidth}px solid ${el.borderColor || '#ffffff'}`;
+            div.style.opacity = el.opacity !== undefined ? (el.opacity / 100) : 1;
+
+            // Border style, color, and width
+            const hasBorder = el.borderEnabled !== false && el.borderWidth && el.borderWidth > 0;
+            if (hasBorder) {
+                div.style.borderWidth = el.borderWidth + 'px';
+                div.style.borderStyle = el.borderStyle || 'solid';
+                div.style.borderColor = el.borderColor || '#ffffff';
             } else {
                 div.style.border = 'none';
             }
 
-            const r = el.borderRadius !== undefined ? el.borderRadius : (el.mask === 'circle' ? bgW : (el.mask === 'rounded' ? 12 : 0));
-            div.style.borderRadius = (el.mask === 'circle') ? '50%' : `${r}px`;
-            wrapper.style.borderRadius = (el.mask === 'circle') ? '50%' : `${Math.max(0, r - (el.borderWidth || 0))}px`;
+            // Box shadow
+            if (el.shadowEnabled) {
+                const sx = el.shadowX !== undefined ? el.shadowX : 0;
+                const sy = el.shadowY !== undefined ? el.shadowY : 4;
+                const sb = el.shadowBlur !== undefined ? el.shadowBlur : 8;
+                const so = el.shadowOpacity !== undefined ? el.shadowOpacity : 0.3;
+                div.style.boxShadow = `${sx}px ${sy}px ${sb}px rgba(0,0,0,${so})`;
+            } else {
+                div.style.boxShadow = 'none';
+            }
+
+            const r = el.borderRadius !== undefined ? el.borderRadius : (el.mask === 'circle' || el.mask === 'ellipse' ? bgW : (el.mask === 'rounded' ? 12 : 0));
+            div.style.borderRadius = (el.mask === 'circle' || el.mask === 'ellipse') ? '50%' : `${r}px`;
+            wrapper.style.borderRadius = (el.mask === 'circle' || el.mask === 'ellipse') ? '50%' : `${Math.max(0, r - (hasBorder ? el.borderWidth : 0))}px`;
 
             if (photoSrc) {
                 const img = document.createElement('img');
                 img.src = photoSrc;
                 img.style.width = '100%';
                 img.style.height = '100%';
-                img.style.objectFit = 'cover';
+                img.style.objectFit = el.fitMode || 'cover';
                 img.style.pointerEvents = 'none';
 
-                const mapping = studentRankMappings[el.id] || { zoom: 100, panX: 0, panY: 0, rotation: 0 };
+                const mapping = studentRankMappings[el.id] || { zoom: 100, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false };
                 const scaleFactor = (mapping.zoom || 100) / 100;
-                img.style.transform = 'scale(' + scaleFactor + ') translate(' + mapping.panX + 'px, ' + mapping.panY + 'px) rotate(' + (mapping.rotation || 0) + 'deg)';
+                const scaleX = scaleFactor * (mapping.flipH ? -1 : 1);
+                const scaleY = scaleFactor * (mapping.flipV ? -1 : 1);
+
+                img.style.transform = 'scale(' + scaleX + ', ' + scaleY + ') translate(' + (mapping.panX || 0) + 'px, ' + (mapping.panY || 0) + 'px) rotate(' + (mapping.rotation || 0) + 'deg)';
                 img.style.transformOrigin = 'center center';
 
                 wrapper.appendChild(img);
@@ -1674,21 +1914,57 @@ function startResizingElement(e, dir, el) {
         const deltaX = (event.clientX - startX) / scale;
         const deltaY = (event.clientY - startY) / scale;
 
-        if (dir.includes('e')) {
-            el.width = Math.max(20, Math.round(startW + deltaX));
-        }
-        if (dir.includes('s')) {
-            el.height = Math.max(20, Math.round(startH + deltaY));
-        }
-        if (dir.includes('w')) {
-            const newW = Math.max(20, Math.round(startW - deltaX));
-            el.left = Math.round(startLeft + (startW - newW));
-            el.width = newW;
-        }
-        if (dir.includes('n')) {
-            const newH = Math.max(20, Math.round(startH - deltaY));
-            el.top = Math.round(startTop + (startH - newH));
-            el.height = newH;
+        const lockRatio = document.getElementById('prop-photo-aspect-lock')?.checked;
+
+        if (lockRatio && el.type === 'photo') {
+            const ratio = startW / startH;
+            if (dir === 'se' || dir === 'nw') {
+                const delta = Math.max(deltaX, deltaY);
+                el.width = Math.max(20, Math.round(startW + delta));
+                el.height = Math.round(el.width / ratio);
+                if (dir === 'nw') {
+                    el.left = Math.round(startLeft + (startW - el.width));
+                    el.top = Math.round(startTop + (startH - el.height));
+                }
+            } else if (dir === 'ne' || dir === 'sw') {
+                const delta = Math.max(deltaX, -deltaY);
+                el.width = Math.max(20, Math.round(startW + delta));
+                el.height = Math.round(el.width / ratio);
+                if (dir === 'ne') {
+                    el.top = Math.round(startTop + (startH - el.height));
+                } else {
+                    el.left = Math.round(startLeft + (startW - el.width));
+                }
+            } else if (dir.includes('e') || dir.includes('w')) {
+                el.width = Math.max(20, Math.round(startW + deltaX));
+                el.height = Math.round(el.width / ratio);
+                if (dir.includes('w')) {
+                    el.left = Math.round(startLeft + (startW - el.width));
+                }
+            } else if (dir.includes('s') || dir.includes('n')) {
+                el.height = Math.max(20, Math.round(startH + deltaY));
+                el.width = Math.round(el.height * ratio);
+                if (dir.includes('n')) {
+                    el.top = Math.round(startTop + (startH - el.height));
+                }
+            }
+        } else {
+            if (dir.includes('e')) {
+                el.width = Math.max(20, Math.round(startW + deltaX));
+            }
+            if (dir.includes('s')) {
+                el.height = Math.max(20, Math.round(startH + deltaY));
+            }
+            if (dir.includes('w')) {
+                const newW = Math.max(20, Math.round(startW - deltaX));
+                el.left = Math.round(startLeft + (startW - newW));
+                el.width = newW;
+            }
+            if (dir.includes('n')) {
+                const newH = Math.max(20, Math.round(startH - deltaY));
+                el.top = Math.round(startTop + (startH - newH));
+                el.height = newH;
+            }
         }
 
         drawElements();
@@ -1789,6 +2065,13 @@ function updatePropertiesPanel() {
     document.getElementById('prop-el-w').value = el.width;
     document.getElementById('prop-el-h').value = el.height;
 
+    if (el.type === 'photo') {
+        document.getElementById('prop-photo-x-val').value = el.left;
+        document.getElementById('prop-photo-y-val').value = el.top;
+        document.getElementById('prop-photo-w-val').value = el.width;
+        document.getElementById('prop-photo-h-val').value = el.height;
+    }
+
     const textSettings = document.getElementById('prop-text-settings');
     const photoSettings = document.getElementById('prop-photo-settings');
     const markerSettings = document.getElementById('prop-marker-settings');
@@ -1830,30 +2113,78 @@ function updatePropertiesPanel() {
         photoSettings.style.display = 'block';
 
         if (selectedIds.length === 1) {
-            const mapping = studentRankMappings[el.id] || { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0 };
+            const mapping = studentRankMappings[el.id] || { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false };
             document.getElementById('prop-photo-student').value = mapping.student_uid || '';
             document.getElementById('prop-photo-mask').value = el.mask || 'rounded';
+            document.getElementById('prop-photo-fit').value = el.fitMode || 'cover';
             document.getElementById('prop-photo-zoom').value = mapping.zoom || 100;
             document.getElementById('lbl-zoom-val').textContent = mapping.zoom || 100;
             document.getElementById('prop-photo-panx').value = mapping.panX || 0;
             document.getElementById('prop-photo-pany').value = mapping.panY || 0;
             document.getElementById('prop-photo-rotation').value = mapping.rotation || 0;
             document.getElementById('lbl-rotation-val').textContent = mapping.rotation || 0;
+
+            document.getElementById('prop-photo-border-enabled').checked = el.borderEnabled !== false;
             document.getElementById('prop-photo-border-w').value = el.borderWidth || 0;
             document.getElementById('prop-photo-border-c').value = el.borderColor || '#ffffff';
             document.getElementById('prop-photo-border-r').value = el.borderRadius !== undefined ? el.borderRadius : 12;
+            document.getElementById('prop-photo-border-s').value = el.borderStyle || 'solid';
+
+            document.getElementById('prop-photo-opacity').value = el.opacity !== undefined ? el.opacity : 100;
+            document.getElementById('lbl-opacity-val').textContent = el.opacity !== undefined ? el.opacity : 100;
+
+            document.getElementById('prop-photo-shadow-enabled').checked = el.shadowEnabled || false;
+            document.getElementById('prop-photo-shadow-x').value = el.shadowX !== undefined ? el.shadowX : 0;
+            document.getElementById('prop-photo-shadow-y').value = el.shadowY !== undefined ? el.shadowY : 4;
+            document.getElementById('prop-photo-shadow-blur').value = el.shadowBlur !== undefined ? el.shadowBlur : 8;
+            document.getElementById('prop-photo-shadow-opacity').value = el.shadowOpacity !== undefined ? el.shadowOpacity : 0.3;
+
+            // Set flip button highlight classes
+            const btnH = document.getElementById('btn-photo-fliph');
+            if (btnH) {
+                if (mapping.flipH) {
+                    btnH.style.background = '#eef2ff';
+                    btnH.style.borderColor = 'var(--accent)';
+                } else {
+                    btnH.style.background = '';
+                    btnH.style.borderColor = '';
+                }
+            }
+            const btnV = document.getElementById('btn-photo-flipv');
+            if (btnV) {
+                if (mapping.flipV) {
+                    btnV.style.background = '#eef2ff';
+                    btnV.style.borderColor = 'var(--accent)';
+                } else {
+                    btnV.style.background = '';
+                    btnV.style.borderColor = '';
+                }
+            }
         } else {
             document.getElementById('prop-photo-student').value = '';
             document.getElementById('prop-photo-mask').value = el.mask || 'rounded';
+            document.getElementById('prop-photo-fit').value = el.fitMode || 'cover';
             document.getElementById('prop-photo-zoom').value = 100;
             document.getElementById('lbl-zoom-val').textContent = 100;
             document.getElementById('prop-photo-panx').value = 0;
             document.getElementById('prop-photo-pany').value = 0;
             document.getElementById('prop-photo-rotation').value = 0;
             document.getElementById('lbl-rotation-val').textContent = 0;
+
+            document.getElementById('prop-photo-border-enabled').checked = false;
             document.getElementById('prop-photo-border-w').value = 0;
             document.getElementById('prop-photo-border-c').value = '#ffffff';
             document.getElementById('prop-photo-border-r').value = 12;
+            document.getElementById('prop-photo-border-s').value = 'solid';
+
+            document.getElementById('prop-photo-opacity').value = 100;
+            document.getElementById('lbl-opacity-val').textContent = 100;
+
+            document.getElementById('prop-photo-shadow-enabled').checked = false;
+            document.getElementById('prop-photo-shadow-x').value = 0;
+            document.getElementById('prop-photo-shadow-y').value = 4;
+            document.getElementById('prop-photo-shadow-blur').value = 8;
+            document.getElementById('prop-photo-shadow-opacity').value = 0.3;
         }
     } else {
         textSettings.style.display = 'none';
@@ -1923,6 +2254,7 @@ function updateActiveElementFromProps() {
             if (el.id && el.id.startsWith('rank_badge_')) {
                 el.showMarker = document.getElementById('prop-marker-show').value === 'true';
                 el.markerColor = document.getElementById('prop-marker-color').value;
+                el.markerColorManuallySet = true;
                 el.markerBorderWidth = parseInt(document.getElementById('prop-marker-border-w').value) || 0;
                 el.markerBorderColor = document.getElementById('prop-marker-border-c').value;
             }
@@ -1939,7 +2271,7 @@ function updateActiveElementFromProps() {
 function updateActivePhotoTransform() {
     if (!activeId) return;
     if (!studentRankMappings[activeId]) {
-        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, photo_override: null };
+        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false, photo_override: null };
     }
     const mapping = studentRankMappings[activeId];
     mapping.zoom = parseInt(document.getElementById('prop-photo-zoom').value) || 100;
@@ -1955,14 +2287,19 @@ function updateActivePhotoTransform() {
     saveHistoryState();
 }
 
-function nudgePhoto(x, y) {
+function nudgePhoto(x, y, isReset = false) {
     if (!activeId) return;
     if (!studentRankMappings[activeId]) {
-        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, photo_override: null };
+        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false, photo_override: null };
     }
     const mapping = studentRankMappings[activeId];
-    mapping.panX = (mapping.panX || 0) + x;
-    mapping.panY = (mapping.panY || 0) + y;
+    if (isReset) {
+        mapping.panX = 0;
+        mapping.panY = 0;
+    } else {
+        mapping.panX = (mapping.panX || 0) + x;
+        mapping.panY = (mapping.panY || 0) + y;
+    }
 
     document.getElementById('prop-photo-panx').value = mapping.panX;
     document.getElementById('prop-photo-pany').value = mapping.panY;
@@ -1970,13 +2307,17 @@ function nudgePhoto(x, y) {
     saveHistoryState();
 }
 
-function zoomPhoto(factor) {
+function zoomPhoto(factor, isReset = false) {
     if (!activeId) return;
     if (!studentRankMappings[activeId]) {
-        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, photo_override: null };
+        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false, photo_override: null };
     }
     const mapping = studentRankMappings[activeId];
-    mapping.zoom = Math.max(50, Math.min(400, (mapping.zoom || 100) + factor));
+    if (isReset) {
+        mapping.zoom = 100;
+    } else {
+        mapping.zoom = Math.max(50, Math.min(400, (mapping.zoom || 100) + factor));
+    }
 
     document.getElementById('prop-photo-zoom').value = mapping.zoom;
     document.getElementById('lbl-zoom-val').textContent = mapping.zoom;
@@ -1987,7 +2328,7 @@ function zoomPhoto(factor) {
 function rotatePhoto(val, isAbsolute = false) {
     if (!activeId) return;
     if (!studentRankMappings[activeId]) {
-        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, photo_override: null };
+        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false, photo_override: null };
     }
     const mapping = studentRankMappings[activeId];
     if (isAbsolute) {
@@ -2007,10 +2348,206 @@ function rotatePhoto(val, isAbsolute = false) {
 function updateActivePhotoBorder() {
     if (!activeId) return;
     const el = elements.find(item => item.id === activeId);
-    if (!el) return;
+    if (!el || el.type !== 'photo') return;
+    el.borderEnabled = document.getElementById('prop-photo-border-enabled').checked;
     el.borderWidth = parseInt(document.getElementById('prop-photo-border-w').value) || 0;
     el.borderColor = document.getElementById('prop-photo-border-c').value || '#ffffff';
     el.borderRadius = parseInt(document.getElementById('prop-photo-border-r').value) || 0;
+    el.borderStyle = document.getElementById('prop-photo-border-s').value || 'solid';
+
+    drawElements();
+    saveHistoryState();
+}
+
+function updateActivePhotoShape() {
+    if (!activeId) return;
+    const el = elements.find(item => item.id === activeId);
+    if (!el || el.type !== 'photo') return;
+    el.mask = document.getElementById('prop-photo-mask').value;
+    el.fitMode = document.getElementById('prop-photo-fit').value;
+    drawElements();
+    saveHistoryState();
+}
+
+function updateActivePhotoAppearance() {
+    if (!activeId) return;
+    const el = elements.find(item => item.id === activeId);
+    if (!el || el.type !== 'photo') return;
+
+    el.opacity = parseInt(document.getElementById('prop-photo-opacity').value) ?? 100;
+    document.getElementById('lbl-opacity-val').textContent = el.opacity;
+
+    el.shadowEnabled = document.getElementById('prop-photo-shadow-enabled').checked;
+    el.shadowX = parseInt(document.getElementById('prop-photo-shadow-x').value) || 0;
+    el.shadowY = parseInt(document.getElementById('prop-photo-shadow-y').value) || 0;
+    el.shadowBlur = parseInt(document.getElementById('prop-photo-shadow-blur').value) || 0;
+    el.shadowOpacity = parseFloat(document.getElementById('prop-photo-shadow-opacity').value) || 0;
+
+    drawElements();
+    saveHistoryState();
+}
+
+function resetOpacityPhoto() {
+    if (!activeId) return;
+    const el = elements.find(item => item.id === activeId);
+    if (!el || el.type !== 'photo') return;
+    el.opacity = 100;
+    document.getElementById('prop-photo-opacity').value = 100;
+    document.getElementById('lbl-opacity-val').textContent = 100;
+    drawElements();
+    saveHistoryState();
+}
+
+function flipPhotoHorizontal() {
+    if (!activeId) return;
+    if (!studentRankMappings[activeId]) {
+        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false };
+    }
+    const m = studentRankMappings[activeId];
+    m.flipH = !m.flipH;
+    const btn = document.getElementById('btn-photo-fliph');
+    if (btn) {
+        if (m.flipH) {
+            btn.style.background = '#eef2ff';
+            btn.style.borderColor = 'var(--accent)';
+        } else {
+            btn.style.background = '';
+            btn.style.borderColor = '';
+        }
+    }
+    drawElements();
+    saveHistoryState();
+}
+
+function flipPhotoVertical() {
+    if (!activeId) return;
+    if (!studentRankMappings[activeId]) {
+        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false };
+    }
+    const m = studentRankMappings[activeId];
+    m.flipV = !m.flipV;
+    const btn = document.getElementById('btn-photo-flipv');
+    if (btn) {
+        if (m.flipV) {
+            btn.style.background = '#eef2ff';
+            btn.style.borderColor = 'var(--accent)';
+        } else {
+            btn.style.background = '';
+            btn.style.borderColor = '';
+        }
+    }
+    drawElements();
+    saveHistoryState();
+}
+
+function resetFlipPhoto() {
+    if (!activeId) return;
+    if (!studentRankMappings[activeId]) return;
+    const m = studentRankMappings[activeId];
+    m.flipH = false;
+    m.flipV = false;
+    const btnH = document.getElementById('btn-photo-fliph');
+    if (btnH) { btnH.style.background = ''; btnH.style.borderColor = ''; }
+    const btnV = document.getElementById('btn-photo-flipv');
+    if (btnV) { btnV.style.background = ''; btnV.style.borderColor = ''; }
+    drawElements();
+    saveHistoryState();
+}
+
+function centerPhotoFrame(dir) {
+    if (!activeId) return;
+    const el = elements.find(item => item.id === activeId);
+    if (!el || el.type !== 'photo') return;
+    if (dir === 'h') {
+        el.left = Math.round((bgW - el.width) / 2);
+        document.getElementById('prop-photo-x-val').value = el.left;
+        document.getElementById('prop-el-x').value = el.left;
+    } else if (dir === 'v') {
+        el.top = Math.round((bgH - el.height) / 2);
+        document.getElementById('prop-photo-y-val').value = el.top;
+        document.getElementById('prop-el-y').value = el.top;
+    }
+    drawElements();
+    saveHistoryState();
+}
+
+function centerImageContent() {
+    if (!activeId) return;
+    if (!studentRankMappings[activeId]) {
+        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false };
+    }
+    const m = studentRankMappings[activeId];
+    m.panX = 0;
+    m.panY = 0;
+    document.getElementById('prop-photo-panx').value = 0;
+    document.getElementById('prop-photo-pany').value = 0;
+    drawElements();
+    saveHistoryState();
+}
+
+function resetPhotoFrame() {
+    if (!activeId) return;
+    const el = elements.find(item => item.id === activeId);
+    if (!el || el.type !== 'photo') return;
+    const tplEl = templateElements.find(t => t.id === el.id);
+    if (tplEl) {
+        el.left = tplEl.left;
+        el.top = tplEl.top;
+        el.width = tplEl.width;
+        el.height = tplEl.height;
+
+        document.getElementById('prop-photo-x-val').value = el.left;
+        document.getElementById('prop-photo-y-val').value = el.top;
+        document.getElementById('prop-photo-w-val').value = el.width;
+        document.getElementById('prop-photo-h-val').value = el.height;
+        document.getElementById('prop-el-x').value = el.left;
+        document.getElementById('prop-el-y').value = el.top;
+        document.getElementById('prop-el-w').value = el.width;
+        document.getElementById('prop-el-h').value = el.height;
+
+        drawElements();
+        saveHistoryState();
+    }
+}
+
+function updateActiveElementFromPhotoCoords() {
+    if (!activeId) return;
+    const el = elements.find(item => item.id === activeId);
+    if (!el || el.type !== 'photo') return;
+
+    const lockRatio = document.getElementById('prop-photo-aspect-lock')?.checked;
+    const newX = parseInt(document.getElementById('prop-photo-x-val').value) || 0;
+    const newY = parseInt(document.getElementById('prop-photo-y-val').value) || 0;
+    const newW = parseInt(document.getElementById('prop-photo-w-val').value) || 20;
+    const newH = parseInt(document.getElementById('prop-photo-h-val').value) || 20;
+
+    el.left = newX;
+    el.top = newY;
+
+    if (lockRatio) {
+        const lastW = el.width;
+        const lastH = el.height;
+        if (newW !== lastW) {
+            el.width = newW;
+            el.height = Math.round(newW * (lastH / lastW));
+            document.getElementById('prop-photo-h-val').value = el.height;
+        } else if (newH !== lastH) {
+            el.height = newH;
+            el.width = Math.round(newH * (lastW / lastH));
+            document.getElementById('prop-photo-w-val').value = el.width;
+        } else {
+            el.width = newW;
+            el.height = newH;
+        }
+    } else {
+        el.width = newW;
+        el.height = newH;
+    }
+
+    document.getElementById('prop-el-x').value = el.left;
+    document.getElementById('prop-el-y').value = el.top;
+    document.getElementById('prop-el-w').value = el.width;
+    document.getElementById('prop-el-h').value = el.height;
 
     drawElements();
     saveHistoryState();
@@ -2019,52 +2556,35 @@ function updateActivePhotoBorder() {
 function resetPhotoTransform() {
     if (!activeId) return;
     const el = elements.find(item => item.id === activeId);
-    if (!el) return;
+    if (!el || el.type !== 'photo') return;
 
     if (!studentRankMappings[activeId]) {
-        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, photo_override: null };
+        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false, photo_override: null };
     }
     const mapping = studentRankMappings[activeId];
     mapping.zoom = 100;
     mapping.panX = 0;
     mapping.panY = 0;
     mapping.rotation = 0;
+    mapping.flipH = false;
+    mapping.flipV = false;
 
-    // Retrieve original template parameters
-    const tplEl = templateElements.find(t => t.id === el.id);
-    if (tplEl) {
-        el.left = tplEl.left;
-        el.top = tplEl.top;
-        el.width = tplEl.width;
-        el.height = tplEl.height;
-        el.borderWidth = tplEl.borderWidth || 0;
-        el.borderColor = tplEl.borderColor || '#ffffff';
-        el.borderRadius = tplEl.borderRadius !== undefined ? tplEl.borderRadius : 12;
-        el.mask = tplEl.mask || 'rounded';
-    } else {
-        el.borderWidth = 0;
-        el.borderColor = '#ffffff';
-        el.borderRadius = 12;
-        el.mask = 'rounded';
-    }
+    const tplEl = templateElements.find(t => t.id === el.id) || {};
+    el.borderEnabled = tplEl.borderEnabled !== undefined ? tplEl.borderEnabled : false;
+    el.borderWidth = tplEl.borderWidth || 0;
+    el.borderColor = tplEl.borderColor || '#ffffff';
+    el.borderRadius = tplEl.borderRadius !== undefined ? tplEl.borderRadius : 12;
+    el.borderStyle = tplEl.borderStyle || 'solid';
+    el.mask = tplEl.mask || 'rounded';
+    el.fitMode = tplEl.fitMode || 'cover';
+    el.opacity = tplEl.opacity !== undefined ? tplEl.opacity : 100;
+    el.shadowEnabled = tplEl.shadowEnabled !== undefined ? tplEl.shadowEnabled : false;
+    el.shadowX = tplEl.shadowX !== undefined ? tplEl.shadowX : 0;
+    el.shadowY = tplEl.shadowY !== undefined ? tplEl.shadowY : 4;
+    el.shadowBlur = tplEl.shadowBlur !== undefined ? tplEl.shadowBlur : 8;
+    el.shadowOpacity = tplEl.shadowOpacity !== undefined ? tplEl.shadowOpacity : 0.3;
 
-    // Update UI controls
-    document.getElementById('prop-photo-zoom').value = 100;
-    document.getElementById('lbl-zoom-val').textContent = 100;
-    document.getElementById('prop-photo-panx').value = 0;
-    document.getElementById('prop-photo-pany').value = 0;
-    document.getElementById('prop-photo-rotation').value = 0;
-    document.getElementById('lbl-rotation-val').textContent = 0;
-    document.getElementById('prop-photo-mask').value = el.mask;
-    document.getElementById('prop-photo-border-w').value = el.borderWidth;
-    document.getElementById('prop-photo-border-c').value = el.borderColor;
-    document.getElementById('prop-photo-border-r').value = el.borderRadius;
-
-    document.getElementById('prop-el-x').value = el.left;
-    document.getElementById('prop-el-y').value = el.top;
-    document.getElementById('prop-el-w').value = el.width;
-    document.getElementById('prop-el-h').value = el.height;
-
+    updatePropertiesPanel();
     drawElements();
     saveHistoryState();
 }
@@ -2091,6 +2611,20 @@ function updateStudentAssignOverride(studentUid) {
         studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, photo_override: null };
     }
     studentRankMappings[activeId].student_uid = studentUid;
+
+    const rankMatch = String(activeId).match(/^rank_photo_(\d+)$/);
+    if (rankMatch) {
+        const slotNum = parseInt(rankMatch[1]);
+        const badgeEl = elements.find(el => el.id === 'rank_badge_' + slotNum);
+        if (badgeEl) {
+            const student = rankingList.find(s => (s.user_id === studentUid || s.student_email === studentUid));
+            if (student) {
+                const style = getRankBadgeStyle(student.computed_rank);
+                badgeEl.markerColor = style.markerColor;
+            }
+        }
+    }
+
     drawElements();
     saveHistoryState();
 }
@@ -2319,6 +2853,18 @@ function applyLayoutPreset(presetId) {
                             el.rotate = pe.rotate;
                             if (el.type === 'photo') {
                                 el.mask = pe.mask;
+                                el.fitMode = pe.fitMode || 'cover';
+                                el.borderEnabled = pe.borderEnabled !== false;
+                                el.borderWidth = pe.borderWidth || 0;
+                                el.borderColor = pe.borderColor || '#ffffff';
+                                el.borderRadius = pe.borderRadius !== undefined ? pe.borderRadius : 12;
+                                el.borderStyle = pe.borderStyle || 'solid';
+                                el.shadowEnabled = pe.shadowEnabled || false;
+                                el.shadowX = pe.shadowX !== undefined ? pe.shadowX : 0;
+                                el.shadowY = pe.shadowY !== undefined ? pe.shadowY : 4;
+                                el.shadowBlur = pe.shadowBlur !== undefined ? pe.shadowBlur : 8;
+                                el.shadowOpacity = pe.shadowOpacity !== undefined ? pe.shadowOpacity : 0.3;
+                                el.opacity = pe.opacity !== undefined ? pe.opacity : 100;
                             }
                             if (pe.showMarker !== undefined) {
                                 el.showMarker = pe.showMarker;
@@ -2654,7 +3200,13 @@ function saveDesign(isExporting = false) {
                         if (student) {
                             if (field === 'name') textContent = student.name;
                             else if (field === 'institute') textContent = student.college_school;
-                            else if (field === 'badge') textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
+                            else if (field === 'badge') {
+                                textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
+                                const style = getRankBadgeStyle(student.computed_rank);
+                                if (!savedDesignId || !el.markerColorManuallySet) {
+                                    el.markerColor = style.markerColor;
+                                }
+                            }
                             else if (field === 'photo') {
                                 photoSrc = mapping.photo_override || (student.user_photo ? '../' + student.user_photo : null);
                             }
@@ -2731,12 +3283,51 @@ function saveDesign(isExporting = false) {
                         studentImg.src = photoSrc;
                         studentImg.onload = function() {
                             ctx.save();
-                            ctx.globalAlpha = el.opacity ?? 1;
+                            ctx.globalAlpha = (el.opacity !== undefined ? el.opacity : 100) / 100;
 
-                            // Clip photo to shape mask
+                            // Draw shadow first using the mask path
+                            if (el.shadowEnabled) {
+                                ctx.save();
+                                ctx.shadowColor = `rgba(0, 0, 0, ${el.shadowOpacity !== undefined ? el.shadowOpacity : 0.3})`;
+                                ctx.shadowBlur = el.shadowBlur !== undefined ? el.shadowBlur : 8;
+                                ctx.shadowOffsetX = el.shadowX !== undefined ? el.shadowX : 0;
+                                ctx.shadowOffsetY = el.shadowY !== undefined ? el.shadowY : 4;
+
+                                ctx.beginPath();
+                                if (el.mask === 'circle') {
+                                    ctx.arc(el.left + el.width/2, el.top + el.height/2, el.width/2, 0, Math.PI * 2);
+                                } else if (el.mask === 'ellipse') {
+                                    ctx.ellipse(el.left + el.width/2, el.top + el.height/2, el.width/2, el.height/2, 0, 0, Math.PI * 2);
+                                } else if (el.mask === 'hexagon') {
+                                    const side = el.width / 4;
+                                    ctx.moveTo(el.left + side, el.top);
+                                    ctx.lineTo(el.left + el.width - side, el.top);
+                                    ctx.lineTo(el.left + el.width, el.top + el.height/2);
+                                    ctx.lineTo(el.left + el.width - side, el.top + el.height);
+                                    ctx.lineTo(el.left + side, el.top + el.height);
+                                    ctx.lineTo(el.left, el.top + el.height/2);
+                                    ctx.closePath();
+                                } else if (el.mask === 'diamond') {
+                                    ctx.moveTo(el.left + el.width/2, el.top);
+                                    ctx.lineTo(el.left + el.width, el.top + el.height/2);
+                                    ctx.lineTo(el.left + el.width/2, el.top + el.height);
+                                    ctx.lineTo(el.left, el.top + el.height/2);
+                                    ctx.closePath();
+                                } else {
+                                    const r = el.borderRadius !== undefined ? el.borderRadius : (el.mask === 'rounded' ? el.width * 0.12 : 0);
+                                    ctx.roundRect(el.left, el.top, el.width, el.height, r);
+                                }
+                                ctx.fillStyle = '#ffffff';
+                                ctx.fill();
+                                ctx.restore();
+                            }
+
+                            // Now clip and draw the image
                             ctx.beginPath();
                             if (el.mask === 'circle') {
                                 ctx.arc(el.left + el.width/2, el.top + el.height/2, el.width/2, 0, Math.PI * 2);
+                            } else if (el.mask === 'ellipse') {
+                                ctx.ellipse(el.left + el.width/2, el.top + el.height/2, el.width/2, el.height/2, 0, 0, Math.PI * 2);
                             } else if (el.mask === 'hexagon') {
                                 const side = el.width / 4;
                                 ctx.moveTo(el.left + side, el.top);
@@ -2757,35 +3348,57 @@ function saveDesign(isExporting = false) {
                                 ctx.roundRect(el.left, el.top, el.width, el.height, r);
                             }
 
-                            // Save context for clipping & image drawing
                             ctx.save();
                             ctx.clip();
 
-                            const mapping = studentRankMappings[el.id] || { zoom: 100, panX: 0, panY: 0, rotation: 0 };
+                            const mapping = studentRankMappings[el.id] || { zoom: 100, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false };
                             const scaleFactor = (mapping.zoom || 100) / 100;
 
-                            // Compute zoom cover dimensions
+                            // Compute zoom cover/contain/fill dimensions
                             const imgW = studentImg.width;
                             const imgH = studentImg.height;
-                            const scaleCover = Math.max(el.width / imgW, el.height / imgH);
-                            const drawW = imgW * scaleCover * scaleFactor;
-                            const drawH = imgH * scaleCover * scaleFactor;
+                            let drawW, drawH;
 
-                            // Translate, rotate, and draw student photo
+                            if (el.fitMode === 'contain') {
+                                const scaleCover = Math.min(el.width / imgW, el.height / imgH);
+                                drawW = imgW * scaleCover * scaleFactor;
+                                drawH = imgH * scaleCover * scaleFactor;
+                            } else if (el.fitMode === 'fill') {
+                                drawW = el.width * scaleFactor;
+                                drawH = el.height * scaleFactor;
+                            } else if (el.fitMode === 'original') {
+                                drawW = imgW * scaleFactor;
+                                drawH = imgH * scaleFactor;
+                            } else { // default 'cover'
+                                const scaleCover = Math.max(el.width / imgW, el.height / imgH);
+                                drawW = imgW * scaleCover * scaleFactor;
+                                drawH = imgH * scaleCover * scaleFactor;
+                            }
+
+                            // Translate, rotate, scale/flip, and draw student photo
                             ctx.translate(el.left + el.width/2, el.top + el.height/2);
-                            ctx.translate(mapping.panX, mapping.panY);
+                            ctx.translate(mapping.panX || 0, mapping.panY || 0);
                             if (mapping.rotation) {
                                 ctx.rotate(mapping.rotation * Math.PI / 180);
                             }
+                            ctx.scale(mapping.flipH ? -1 : 1, mapping.flipV ? -1 : 1);
                             ctx.drawImage(studentImg, -drawW/2, -drawH/2, drawW, drawH);
 
                             ctx.restore(); // restores clip path
 
                             // Stroke border on top of clipped image
-                            if (el.borderWidth && el.borderWidth > 0) {
+                            if (el.borderEnabled !== false && el.borderWidth && el.borderWidth > 0) {
                                 ctx.lineWidth = el.borderWidth;
                                 ctx.strokeStyle = el.borderColor || '#ffffff';
+                                if (el.borderStyle === 'dashed') {
+                                    ctx.setLineDash([15, 10]);
+                                } else if (el.borderStyle === 'dotted') {
+                                    ctx.setLineDash([4, 6]);
+                                } else {
+                                    ctx.setLineDash([]);
+                                }
                                 ctx.stroke();
+                                ctx.setLineDash([]);
                             }
 
                             ctx.restore(); // restores opacity/transform

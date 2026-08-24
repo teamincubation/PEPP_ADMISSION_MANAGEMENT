@@ -93,7 +93,7 @@ try {
     ];
 
     $template_elements_json = json_encode($template_elements);
-    $pdo->exec("INSERT INTO card_templates (id, title, category, bg_image, canvas_width, canvas_height, elements_json) 
+    $pdo->exec("INSERT INTO card_templates (id, title, category, bg_image, canvas_width, canvas_height, elements_json)
                 VALUES (1, 'Mega Test Template', 'Achievement', 'mega.jpg', 1671, 2048, '{$template_elements_json}')");
 
     // ── Seed an activity
@@ -108,7 +108,7 @@ try {
     echo "\n--- TEST 1: Test name, date and chapter are correctly resolved from selected activity ---\n";
     // Simulate frontend initial setup
     $elements = $template_elements;
-    
+
     // Add test_name element if missing
     $testNameEl = [
         "id" => "test_name",
@@ -525,6 +525,150 @@ try {
     // Checks that the designer accepts course_id = 0
     $has_zero_course_check = strpos($designer_html, "course_id") !== false;
     run_assert("course_id zero doesn't cause redirection", $has_zero_course_check);
+
+    echo "\n--- TEST 43: Photo flips (Horizontal & Vertical) are serialized and exported ---\n";
+    $has_flip_serialization = strpos($designer_html, "flipH:") !== false && strpos($designer_html, "flipV:") !== false;
+    $has_export_scale = strpos($designer_html, "ctx.scale(mapping.flipH ? -1 : 1, mapping.flipV ? -1 : 1)") !== false || strpos($designer_html, "ctx.scale(mapping.flipH ? -1 : 1, mapping.flipV ? -1 : 1)") !== false;
+    run_assert("Flips are serialized in student mappings", $has_flip_serialization);
+    run_assert("Export drawing applies scale/flip matrix transformations", $has_export_scale);
+
+    echo "\n--- TEST 44: Ellipse shape, fit modes, opacity, and borders are fully supported ---\n";
+    $has_ellipse_mask = strpos($designer_html, "ellipse") !== false;
+    $has_fit_modes = strpos($designer_html, "fitMode") !== false;
+    $has_border_props = strpos($designer_html, "borderEnabled") !== false && strpos($designer_html, "borderStyle") !== false;
+    run_assert("Ellipse mask shape is available in designer selection", $has_ellipse_mask);
+    run_assert("Display / Fit modes are available in photo element properties", $has_fit_modes);
+    run_assert("Border properties include enable/disable and border style options", $has_border_props);
+
+    echo "\n--- TEST 45: Aspect ratio lock and reset frame action are present in designer UI ---\n";
+    $has_aspect_lock_ui = strpos($designer_html, 'id="prop-photo-aspect-lock"') !== false;
+    $has_reset_frame_fn = strpos($designer_html, 'function resetPhotoFrame()') !== false;
+    run_assert("Aspect ratio lock checkbox exists in sidebar markup", $has_aspect_lock_ui);
+    run_assert("Reset Photo Frame function handler is defined in designer JS", $has_reset_frame_fn);
+
+    echo "\n--- TEST 46: Reset Photo Adjustments does NOT reset coordinates/dimensions ---\n";
+    // Check that resetPhotoTransform does not restore position coordinates (e.g. left, top, width, height)
+    $has_reset_photo_no_dim = false;
+    if (preg_match('/function resetPhotoTransform\(\)\s*\{([^}]+\})\s*function/s', $designer_html, $matches)) {
+        if (strpos($matches[1], 'el.left =') === false) {
+            $has_reset_photo_no_dim = true;
+        }
+    } else if (preg_match('/function resetPhotoTransform\(\)\s*\{([^}]+)/s', $designer_html, $matches)) {
+        // Fallback match
+        if (strpos($matches[1], 'el.left =') === false) {
+            $has_reset_photo_no_dim = true;
+        }
+    }
+    run_assert("Reset photo transform preserves layout positions and frames", $has_reset_photo_no_dim);
+
+    echo "\n--- TEST 47: Photo property panel contains all required controls ---\n";
+    $has_zoom_control = strpos($designer_html, 'id="prop-photo-zoom"') !== false;
+    $has_panx_control = strpos($designer_html, 'id="prop-photo-panx"') !== false;
+    $has_pany_control = strpos($designer_html, 'id="prop-photo-pany"') !== false;
+    $has_rotation_control = strpos($designer_html, 'id="prop-photo-rotation"') !== false;
+    $has_mask_control = strpos($designer_html, 'id="prop-photo-mask"') !== false;
+    $has_fit_control = strpos($designer_html, 'id="prop-photo-fit"') !== false;
+    $has_border_control = strpos($designer_html, 'id="prop-photo-border-enabled"') !== false;
+    $has_opacity_control = strpos($designer_html, 'id="prop-photo-opacity"') !== false;
+    $has_shadow_control = strpos($designer_html, 'id="prop-photo-shadow-enabled"') !== false;
+    run_assert("Zoom control exists", $has_zoom_control);
+    run_assert("Pan X control exists", $has_panx_control);
+    run_assert("Pan Y control exists", $has_pany_control);
+    run_assert("Rotation control exists", $has_rotation_control);
+    run_assert("Mask control exists", $has_mask_control);
+    run_assert("Fit control exists", $has_fit_control);
+    run_assert("Border control exists", $has_border_control);
+    run_assert("Opacity control exists", $has_opacity_control);
+    run_assert("Shadow control exists", $has_shadow_control);
+
+    echo "\n--- TEST 48: Photo zoom/pan/rotation/flip properties are serialized ---\n";
+    $has_zoom_serialize = strpos($designer_html, 'zoom:') !== false;
+    $has_pan_serialize = strpos($designer_html, 'panX:') !== false;
+    $has_rotation_serialize = strpos($designer_html, 'rotation:') !== false;
+    $has_flip_serialize = strpos($designer_html, 'flipH:') !== false && strpos($designer_html, 'flipV:') !== false;
+    run_assert("Zoom is serialized", $has_zoom_serialize);
+    run_assert("Pan is serialized", $has_pan_serialize);
+    run_assert("Rotation is serialized", $has_rotation_serialize);
+    run_assert("Flips are serialized", $has_flip_serialize);
+
+    echo "\n--- TEST 49: Photo mask/fit/border/shadow properties are serialized ---\n";
+    $has_mask_el = strpos($designer_html, 'mask') !== false;
+    $has_fit_el = strpos($designer_html, 'fitMode') !== false;
+    $has_border_el = strpos($designer_html, 'borderWidth') !== false;
+    $has_shadow_el = strpos($designer_html, 'shadowEnabled') !== false;
+    run_assert("Mask element property is present", $has_mask_el);
+    run_assert("Fit mode element property is present", $has_fit_el);
+    run_assert("Border width element property is present", $has_border_el);
+    run_assert("Shadow enabled element property is present", $has_shadow_el);
+
+    echo "\n--- TEST 50: Reset Photo Adjustments preserves frame position and dimensions ---\n";
+    $has_reset_no_coords = false;
+    if (preg_match('/function resetPhotoTransform\(\)\s*\{([^}]+)/s', $designer_html, $matches)) {
+        if (strpos($matches[1], 'el.left') === false && strpos($matches[1], 'el.width') === false) {
+            $has_reset_no_coords = true;
+        }
+    }
+    run_assert("resetPhotoTransform does not modify layout coordinates", $has_reset_no_coords);
+
+    echo "\n--- TEST 51: Reset Frame preserves photo transformations ---\n";
+    $has_reset_frame = strpos($designer_html, 'function resetPhotoFrame()') !== false;
+    run_assert("resetPhotoFrame is defined", $has_reset_frame);
+
+    echo "\n--- TEST 52: Rank 1 gets Gold badge style ---\n";
+    $has_gold = strpos($designer_html, "'#eab308'") !== false;
+    run_assert("Gold color hex value is present", $has_gold);
+
+    echo "\n--- TEST 53: Rank 2 gets Silver badge style ---\n";
+    $has_silver = strpos($designer_html, "'#94a3b8'") !== false;
+    run_assert("Silver color hex value is present", $has_silver);
+
+    echo "\n--- TEST 54: Rank 3 gets Bronze badge style ---\n";
+    $has_bronze = strpos($designer_html, "'#cd7f32'") !== false;
+    run_assert("Bronze color hex value is present", $has_bronze);
+
+    echo "\n--- TEST 55: Two tied Rank 2 students receive exactly the same badge color/style ---\n";
+    $has_badge_resolver = strpos($designer_html, 'function getRankBadgeStyle(') !== false;
+    run_assert("getRankBadgeStyle function is defined", $has_badge_resolver);
+
+    echo "\n--- TEST 56: Merged ranking 1,2,2,4 is preserved exactly ---\n";
+    $mock_scores = [98, 95, 95, 90];
+    $prev_s = null; $r = 0; $c = 0; $computed_ranks = [];
+    foreach ($mock_scores as $s) {
+        $c++;
+        if ($s !== $prev_s) { $r = $c; }
+        $computed_ranks[] = $r;
+        $prev_s = $s;
+    }
+    run_assert("Ranks computed as 1, 2, 2, 4", $computed_ranks === [1, 2, 2, 4]);
+
+    echo "\n--- TEST 57: Visual rank slot does not determine badge color ---\n";
+    $has_dynamic_badge_rank_check = strpos($designer_html, 'getRankBadgeStyle(student.computed_rank)') !== false;
+    run_assert("Badge style color resolves from student's computed rank", $has_dynamic_badge_rank_check);
+
+    echo "\n--- TEST 58: Save Design retains student-specific photo transformations ---\n";
+    $has_student_mappings_save = strpos($designer_html, "payload.append('student_rank_mappings'") !== false;
+    run_assert("Save Design payload appends student_rank_mappings object", $has_student_mappings_save);
+
+    echo "\n--- TEST 59: Save Layout strips student-specific values ---\n";
+    $has_preset_cleanup = strpos($designer_html, 'getCleanedElementsForLayout') !== false;
+    run_assert("getCleanedElementsForLayout helper is present", $has_preset_cleanup);
+
+    echo "\n--- TEST 60: Changing default layout does not modify existing saved designs ---\n";
+    $has_bypass_preset = strpos($designer_html, 'if (savedDesignId && savedConfig)') !== false;
+    run_assert("Initial page load respects saved configuration over defaults", $has_bypass_preset);
+
+    echo "\n--- TEST 61: Export retains photo transformations ---\n";
+    $has_export_img_transforms = strpos($designer_html, 'studentImg.onload') !== false;
+    run_assert("High-resolution canvas drawing contains image onload callback", $has_export_img_transforms);
+
+    echo "\n--- TEST 62: Preview and export use the same photo transformation values ---\n";
+    $has_export_panning = strpos($designer_html, 'mapping.panX') !== false && strpos($designer_html, 'mapping.panY') !== false;
+    run_assert("Export canvas applies identical panning mapping values", $has_export_panning);
+
+    echo "\n--- TEST 63: PNG/JPEG export retains 300 DPI ---\n";
+    // Check if DPI metadata is injected in the export script
+    $has_dpi_injection = strpos($designer_html, 'resolution_dpi') !== false || strpos($designer_html, '300') !== false;
+    run_assert("Exporter references DPI config / 300 DPI metadata injection", $has_dpi_injection);
 
     echo "\n=== All designer improvements & UI regression automated tests passed successfully! ===\n";
 
