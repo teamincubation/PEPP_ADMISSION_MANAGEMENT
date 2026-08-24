@@ -152,6 +152,7 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
                 $batch = $bs->fetch(PDO::FETCH_ASSOC);
                 $act['has_published_result'] = $batch ? true : false;
                 $act['published_version'] = $batch ? (int)$batch['version'] : 0;
+                $act['published_batch_id'] = $batch ? (int)$batch['id'] : 0;
             }
             unset($act);
             echo json_encode($activities);
@@ -443,6 +444,18 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
         $year = trim($_POST['academic_year'] ?? '');
         if ($activity_id <= 0 || $plan_id <= 0 || $course_id <= 0 || empty($year)) {
             echo json_encode(['success' => false, 'message' => 'Missing required selection parameters.']);
+            exit;
+        }
+
+        // Server-side duplicate upload prevention check
+        $stmt_cn = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
+        $stmt_cn->execute([$course_id]);
+        $course_name = $stmt_cn->fetchColumn();
+
+        $bs = $pdo->prepare("SELECT id FROM assessment_result_batches WHERE activity_id = ? AND (course_id = ? OR (course_name = ? AND course_name != '')) AND status = 'published' LIMIT 1");
+        $bs->execute([$activity_id, $course_id, $course_name]);
+        if ($bs->fetch()) {
+            echo json_encode(['success' => false, 'message' => 'Results have already been uploaded and published for this test. Please delete the existing results first.']);
             exit;
         }
         if (!isset($_FILES['result_file']) || $_FILES['result_file']['error'] !== UPLOAD_ERR_OK) {
@@ -915,6 +928,9 @@ include 'includes/admin_nav.php';
 .ar-test-card{border:1px solid var(--border);border-radius:var(--radius);padding:14px;cursor:pointer;transition:all .2s;background:#fff}
 .ar-test-card:hover{border-color:var(--accent);box-shadow:0 2px 8px rgba(139,92,246,.1)}
 .ar-test-card.selected{border-color:var(--accent);background:rgba(139,92,246,.04);box-shadow:0 0 0 2px rgba(139,92,246,.2)}
+.ar-test-card.has-results{border-color:#16a34a;background:rgba(34,197,94,0.04)}
+.ar-test-card.has-results:hover{border-color:#15803d;box-shadow:0 2px 8px rgba(34,197,94,0.12)}
+.ar-test-card.has-results.selected{border-color:#16a34a;background:rgba(34,197,94,0.08);box-shadow:0 0 0 2px rgba(34,197,94,0.15)}
 .ar-test-card .test-title{font-weight:700;font-size:.88rem;margin-bottom:6px}
 .ar-test-card .test-meta{display:flex;flex-wrap:wrap;gap:8px;font-size:.75rem;color:var(--muted-foreground)}
 .ar-test-card .test-meta span{display:flex;align-items:center;gap:4px}
@@ -1052,15 +1068,23 @@ include 'includes/admin_nav.php';
 
     <!-- Upload Zone -->
     <div id="ar-upload-container" style="display:none">
-        <div class="ar-xlsx-notice">
-            <i class="fas fa-info-circle"></i>
-            <span><strong>.XLSX support:</strong> If your file is .xlsx, it will be automatically converted to CSV in your browser before uploading. Both .csv and .xlsx are supported.</span>
+        <div id="ar-upload-warning" style="display:none; background:rgba(239,68,68,0.05); border:1px solid rgba(239,68,68,0.2); border-radius:8px; padding:20px; text-align:center; margin-bottom:16px;">
+            <i class="fas fa-circle-exclamation" style="font-size:2rem; color:#dc2626; margin-bottom:8px; display:block;"></i>
+            <h4 style="font-weight:700; color:#b91c1c; margin-bottom:6px; font-family:'Space Grotesk',sans-serif;">Results Already Uploaded</h4>
+            <p style="font-size:0.85rem; color:#7f1d1d; margin-bottom:12px;">This test already has published results. You cannot upload a new result file until the previous data is deleted.</p>
+            <div id="ar-warning-delete-btn-container"></div>
         </div>
-        <div class="ar-upload-zone" id="ar-drop-zone" onclick="document.getElementById('ar-file-input').click()" ondragover="event.preventDefault();this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')" ondrop="arHandleDrop(event)">
-            <i class="fas fa-cloud-arrow-up"></i>
-            <p><strong>Click to upload</strong> or drag & drop your result file here</p>
-            <p class="file-types">Supported: .csv, .xlsx</p>
-            <input type="file" id="ar-file-input" accept=".csv,.xlsx" style="display:none" onchange="arHandleFile(this.files[0])">
+        <div id="ar-upload-fields">
+            <div class="ar-xlsx-notice">
+                <i class="fas fa-info-circle"></i>
+                <span><strong>.XLSX support:</strong> If your file is .xlsx, it will be automatically converted to CSV in your browser before uploading. Both .csv and .xlsx are supported.</span>
+            </div>
+            <div class="ar-upload-zone" id="ar-drop-zone" onclick="document.getElementById('ar-file-input').click()" ondragover="event.preventDefault();this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')" ondrop="arHandleDrop(event)">
+                <i class="fas fa-cloud-arrow-up"></i>
+                <p><strong>Click to upload</strong> or drag & drop your result file here</p>
+                <p class="file-types">Supported: .csv, .xlsx</p>
+                <input type="file" id="ar-file-input" accept=".csv,.xlsx" style="display:none" onchange="arHandleFile(this.files[0])">
+            </div>
         </div>
         <div id="ar-upload-progress" style="display:none;margin-top:12px">
             <div class="ar-loading"><div class="spinner"></div> <span id="ar-upload-status">Processing file...</span></div>
@@ -1239,6 +1263,9 @@ function arSelectPlan(planId) {
             tests.forEach(t => {
                 const d = document.createElement('div');
                 d.className = 'ar-test-card'; d.dataset.activityId = t.id;
+                if (t.has_published_result) {
+                    d.classList.add('has-results');
+                }
                 d.onclick = () => arSelectTest(t);
                 let meta = '<span><i class="fas fa-tag"></i> '+escH(t.activity_type)+'</span>';
                 if (t.chapter) meta += '<span><i class="fas fa-book"></i> Chapter: '+escH(t.chapter)+'</span>';
@@ -1258,7 +1285,47 @@ function arSelectTest(test) {
     document.querySelectorAll('.ar-test-card').forEach(c => c.classList.remove('selected'));
     document.querySelector('.ar-test-card[data-activity-id="'+test.id+'"]').classList.add('selected');
     document.getElementById('ar-upload-container').style.display = 'block';
+
+    const warning = document.getElementById('ar-upload-warning');
+    const fields = document.getElementById('ar-upload-fields');
+    if (test.has_published_result) {
+        warning.style.display = 'block';
+        fields.style.display = 'none';
+        const warningDeleteBtnContainer = document.getElementById('ar-warning-delete-btn-container');
+        if (isSuperAdmin && test.published_batch_id) {
+            warningDeleteBtnContainer.innerHTML = '<button class="ar-btn danger" onclick="arDeleteBatchDirect(' + test.published_batch_id + ')"><i class="fas fa-trash"></i> Delete Existing Results & Re-upload</button>';
+        } else {
+            warningDeleteBtnContainer.innerHTML = '';
+        }
+    } else {
+        warning.style.display = 'none';
+        fields.style.display = 'block';
+    }
+
     arUpdateSteps(5);
+}
+
+function arDeleteBatchDirect(batchId) {
+    if (!confirm('Are you sure you want to delete the existing assessment results for this test? This action cannot be undone.')) {
+        return;
+    }
+    const fd = new FormData();
+    fd.append('batch_id', batchId);
+    fd.append('csrf_token', CSRF);
+    fd.append('action', 'delete_batch');
+
+    fetch('assessment-results.php?action=delete_batch', {method:'POST', body:fd, headers:{'X-Requested-With':'XMLHttpRequest'}})
+        .then(r => r.json()).then(data => {
+            if (data.success) {
+                arToast(data.message, 'success');
+                // Reload the tests grid to refresh statuses and unlock uploads
+                arSelectPlan(arSelectedPlanId);
+            } else {
+                arToast(data.message, 'error');
+            }
+        }).catch(err => {
+            arToast('Failed to delete results: ' + err.message, 'error');
+        });
 }
 
 // ── Step 5: File Upload ──

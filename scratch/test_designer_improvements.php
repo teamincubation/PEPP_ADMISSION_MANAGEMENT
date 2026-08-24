@@ -1627,6 +1627,30 @@ try {
     $hide_html = format_financial(12500, 0);
     run_assert("Restricted hidden admin gets blurred span", strpos($hide_html, 'filter: blur') !== false);
 
+    echo "\n--- TEST 202: Server-side duplicate upload prevention check ---\n";
+    // 1. Seed a course
+    $pdo->exec("INSERT OR IGNORE INTO pepp_courses (id, course_name, course_code, academic_year, status)
+                VALUES (888, 'Psychology Test Course', 'PSY-888', '2026-27', 'active')");
+    // 2. Seed a published batch for activity 999
+    $pdo->exec("INSERT OR IGNORE INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, course_id, course_name, status, version)
+                VALUES (9999, 999, 5, '2026-27', 888, 'Psychology Test Course', 'published', 1)");
+
+    // Run the check that our upload_validate code runs:
+    $activity_id = 999;
+    $course_id = 888;
+    $stmt_cn = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
+    $stmt_cn->execute([$course_id]);
+    $course_name = $stmt_cn->fetchColumn();
+
+    $bs = $pdo->prepare("SELECT id FROM assessment_result_batches WHERE activity_id = ? AND (course_id = ? OR (course_name = ? AND course_name != '')) AND status = 'published' LIMIT 1");
+    $bs->execute([$activity_id, $course_id, $course_name]);
+    $has_existing = $bs->fetch() ? true : false;
+    run_assert("Server detects existing published results batch for the test and course", $has_existing === true);
+
+    // Clean up
+    $pdo->exec("DELETE FROM pepp_courses WHERE id = 888");
+    $pdo->exec("DELETE FROM assessment_result_batches WHERE id = 9999");
+
     echo "\n=== All designer improvements & UI regression automated tests passed successfully! ===\n";
 
 } catch (Exception $e) {
