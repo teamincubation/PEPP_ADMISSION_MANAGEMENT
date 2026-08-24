@@ -135,7 +135,7 @@ if ($saved_id) {
 }
 
 // ── Check selection parameters ────────────
-if (!$activity_id || !$course_id || !$template_id) {
+if (!$activity_id || $course_id < 0 || !$template_id) {
     header('Location: cards.php?tab=test_results');
     exit;
 }
@@ -158,6 +158,35 @@ try {
     $stmt->execute([$activity_id]);
     $activity = $stmt->fetch();
 } catch (Exception $e) {}
+
+if (!$activity) {
+    // Fallback: load snapshot from assessment_result_batches
+    try {
+        $stmt_snap = $pdo->prepare("
+            SELECT
+                activity_title_snapshot AS activity_title,
+                activity_type_snapshot AS activity_type,
+                activity_date_snapshot AS activity_date,
+                chapter_snapshot AS chapter
+            FROM assessment_result_batches
+            WHERE activity_id = ? AND status = 'published'
+            LIMIT 1
+        ");
+        $stmt_snap->execute([$activity_id]);
+        $snap = $stmt_snap->fetch(PDO::FETCH_ASSOC);
+        if ($snap) {
+            $activity = [
+                'id' => $activity_id,
+                'study_plan_id' => $plan_id,
+                'activity_title' => $snap['activity_title'],
+                'activity_type' => $snap['activity_type'],
+                'activity_date' => $snap['activity_date'],
+                'chapter' => $snap['chapter'],
+                'day_number' => null
+            ];
+        }
+    } catch (Exception $e) {}
+}
 
 if (!$activity) {
     header('Location: cards.php?tab=test_results');
@@ -186,9 +215,12 @@ try {
         // Merged mode - Load all published batches for the activity
         $stmt_batches = $pdo->prepare("
             SELECT id FROM assessment_result_batches
-            WHERE activity_id = ? AND status = 'published'
+            WHERE activity_id = ?
+              AND study_plan_id = ?
+              AND academic_year = ?
+              AND status = 'published'
         ");
-        $stmt_batches->execute([$activity_id]);
+        $stmt_batches->execute([$activity_id, $plan_id, $year]);
         $batch_ids = $stmt_batches->fetchAll(PDO::FETCH_COLUMN);
     }
 

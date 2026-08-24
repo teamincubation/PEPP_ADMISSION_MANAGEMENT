@@ -586,7 +586,7 @@ include 'includes/admin_nav.php';
         <!-- tab: Test Result Cards -->
         <?php if ($active_tab === 'test_results'): ?>
             <!-- Selection Wizard -->
-            <div class="panel" style="margin-bottom: 20px;">
+            <div class="panel" style="margin-bottom: 20px; overflow: visible; position: relative; z-index: 10;">
                 <div class="panel-head">
                     <h3><i class="fas fa-magic" style="color:var(--accent);"></i> Design Test Result Card</h3>
                 </div>

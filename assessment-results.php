@@ -189,15 +189,55 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             $stmt_plan = $pdo->prepare("SELECT title FROM study_plans WHERE id = ?");
             $stmt_plan->execute([$plan_id]);
             $plan_title = $stmt_plan->fetchColumn();
+            if (!$plan_title) {
+                $plan_title = 'Study Plan #' . $plan_id;
+            }
 
             // Find activity details
-            $stmt_act = $pdo->prepare("SELECT activity_title, activity_type, activity_date, chapter FROM study_plan_activities WHERE id = ? AND study_plan_id = ?");
-            $stmt_act->execute([$activity_id, $plan_id]);
+            $stmt_act = $pdo->prepare("SELECT activity_title, activity_type, activity_date, chapter FROM study_plan_activities WHERE id = ?");
+            $stmt_act->execute([$activity_id]);
             $activity = $stmt_act->fetch(PDO::FETCH_ASSOC);
 
-            if (!$plan_title || !$activity) {
-                echo json_encode(['success' => false, 'message' => 'Test details not found.']);
-                exit;
+            if (!$activity) {
+                // Fallback: load snapshot from assessment_result_batches
+                $stmt_snap = $pdo->prepare("
+                    SELECT
+                        activity_title_snapshot AS activity_title,
+                        activity_type_snapshot AS activity_type,
+                        activity_date_snapshot AS activity_date,
+                        chapter_snapshot AS chapter
+                    FROM assessment_result_batches
+                    WHERE academic_year = ? AND study_plan_id = ? AND activity_id = ? AND status = 'published'
+                    LIMIT 1
+                ");
+                $stmt_snap->execute([$year, $plan_id, $activity_id]);
+                $activity = $stmt_snap->fetch(PDO::FETCH_ASSOC);
+            }
+
+            if (!$activity) {
+                // Hard fallback: query by activity_id snapshots from any batch
+                $stmt_snap2 = $pdo->prepare("
+                    SELECT
+                        activity_title_snapshot AS activity_title,
+                        activity_type_snapshot AS activity_type,
+                        activity_date_snapshot AS activity_date,
+                        chapter_snapshot AS chapter
+                    FROM assessment_result_batches
+                    WHERE activity_id = ? AND status = 'published'
+                    LIMIT 1
+                ");
+                $stmt_snap2->execute([$activity_id]);
+                $activity = $stmt_snap2->fetch(PDO::FETCH_ASSOC);
+            }
+
+            if (!$activity) {
+                // Final placeholder fallback
+                $activity = [
+                    'activity_title' => 'Logical Test #' . $activity_id,
+                    'activity_type' => 'Mock Test',
+                    'activity_date' => null,
+                    'chapter' => null
+                ];
             }
 
             // Find all assigned courses
@@ -310,8 +350,14 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
 
         try {
             // Find all active published batches for the activity
-            $stmt_batches = $pdo->prepare("SELECT id FROM assessment_result_batches WHERE activity_id = ? AND status = 'published'");
-            $stmt_batches->execute([$activity_id]);
+            $stmt_batches = $pdo->prepare("
+                SELECT id FROM assessment_result_batches
+                WHERE activity_id = ?
+                  AND study_plan_id = ?
+                  AND academic_year = ?
+                  AND status = 'published'
+            ");
+            $stmt_batches->execute([$activity_id, $plan_id, $year]);
             $batch_ids = $stmt_batches->fetchAll(PDO::FETCH_COLUMN);
 
             if (empty($batch_ids)) {
