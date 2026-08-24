@@ -552,7 +552,72 @@ try {
     run_assert("Test 21 CSRF protection verify statement is present in action handler", strpos($sd_content, 'csrf_verify()') !== false);
     run_assert("Test 21 HTML elements are not incorrectly nested inside update-attachments-modal", preg_match('/<\/form>\s*<\/div>\s*<\/div>\s*<!-- ── MIGRATE \/ UPGRADE COURSE MODAL ── -->/', $sd_content) === 1);
 
-    echo "🎉 ALL 21 TESTS COMPLETED SUCCESSFULLY! 🎉\n";
+    // -------------------------------------------------------------
+    // Test 22: Missing Migration Table Safety, Error Handling, and Recovery
+    // -------------------------------------------------------------
+    $setup_student('ST_22', 'Course A (Base)', 10000.00, 10000.00, 'One Time');
+
+    // 1. Temporarily drop student_course_migrations to simulate missing table in production
+    // Clear global active statements to release SQLite locks
+    $stmt = null;
+    $pdo->exec("DROP TABLE IF EXISTS student_course_migrations");
+
+    // 2. Run migration post and verify it returns the clean friendly error instead of raw SQL error
+    $res = simulate_migration_post($pdo, 'ST_22', [
+        'action' => 'migrate_course',
+        'target_course_id' => 20,
+        'payment_plan' => 'One Time',
+        'migration_reason' => 'Testing missing table safety'
+    ]);
+
+    run_assert("Test 22 Missing migration table returns user-friendly error",
+        !empty($res['error']) && strpos($res['error'], 'Course migration is temporarily unavailable because the migration database setup has not been completed. Please contact the Superadmin.') !== false,
+        $res['error']
+    );
+
+    // 3. Verify database transaction rolled back and user's course is still 'Course A (Base)'
+    $chk_user = $pdo->query("SELECT pepp_course FROM users WHERE user_id = 'ST_22'")->fetch();
+    run_assert("Test 22 Transaction rolled back course update on error", $chk_user['pepp_course'] === 'Course A (Base)');
+
+    // 4. Re-create the table to verify recovery/setup completion
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `student_course_migrations` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `user_id` TEXT NOT NULL,
+            `old_course` TEXT NOT NULL,
+            `old_course_id` INTEGER,
+            `old_course_fee` REAL,
+            `new_course` TEXT NOT NULL,
+            `new_course_id` INTEGER,
+            `new_course_fee` REAL,
+            `payment_plan` TEXT,
+            `paid_amount_at_migration` REAL,
+            `outstanding_before` REAL,
+            `outstanding_after` REAL,
+            `upgrade_amount` REAL,
+            `migration_reason` TEXT,
+            `migrated_by` TEXT,
+            `migrated_at` TEXT DEFAULT CURRENT_TIMESTAMP,
+            `status` TEXT DEFAULT 'completed'
+        )
+    ");
+
+    // 5. Re-run migration and verify it now succeeds
+    $res2 = simulate_migration_post($pdo, 'ST_22', [
+        'action' => 'migrate_course',
+        'target_course_id' => 20,
+        'payment_plan' => 'One Time',
+        'migration_reason' => 'Testing missing table safety recovery'
+    ]);
+
+    run_assert("Test 22 Migration succeeds after table re-creation", empty($res2['error']), $res2['error']);
+
+    // 6. Verify audit row created
+    $audit = $pdo->query("SELECT * FROM student_course_migrations WHERE user_id = 'ST_22'")->fetch();
+    run_assert("Test 22 Audit row created on migration success", !empty($audit));
+    run_assert("Test 22 Audit row correct new course details", $audit['new_course'] === 'Course B (Same)');
+
+    echo "🎉 ALL 22 TESTS COMPLETED SUCCESSFULLY! 🎉\n";
 
 } catch (Exception $e) {
     echo "❌ TEST RUN EXCEPTION: " . $e->getMessage() . "\n";

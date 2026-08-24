@@ -34,7 +34,7 @@ try {
     $backupFile = $backupDir . 'pepp_admissions_backup_' . time() . '.sql';
     
     // Attempt schema and table export using PDO
-    $tables = ['leads', 'communication_campaigns', 'communication_campaign_recipients', 'communication_queue'];
+    $tables = ['leads', 'communication_campaigns', 'communication_campaign_recipients', 'communication_queue', 'student_course_migrations'];
     $sqlDump = "";
     foreach ($tables as $t) {
         $tableExists = $pdo->query("SHOW TABLES LIKE '{$t}'")->fetch();
@@ -231,6 +231,24 @@ try {
     $testQueueQuery = $pdo->query("SELECT COUNT(*) FROM `communication_queue` WHERE channel = 'whatsapp'")->fetchColumn();
     echo "  - Total existing transactional WhatsApp queue items: {$testQueueQuery}\n";
     echo "🟢 Transactional integrity verified. Existing student campaigns and installment workflows remain untouched.\n\n";
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // STEP 8: RUN DATABASE UPDATE 31 (STUDENT COURSE MIGRATION HISTORY)
+    // ─────────────────────────────────────────────────────────────────────────
+    echo "STEP 8: Executing database-update-31.sql...\n";
+    $sqlFile31 = __DIR__ . '/../database-update-31.sql';
+    if (!file_exists($sqlFile31)) {
+        throw new Exception("Migration file not found: database-update-31.sql");
+    }
+
+    $queries31 = file_get_contents($sqlFile31);
+    $queriesList31 = array_filter(array_map('trim', explode(';', preg_replace('/(--.*)|(\/\*[\s\S]*?\*\/)/', '', $queries31))));
+
+    foreach ($queriesList31 as $q) {
+        if (empty($q)) continue;
+        $pdo->exec($q);
+    }
+    echo "🟢 database-update-31.sql executed successfully.\n\n";
 
     echo "========================================================================\n";
     echo "🟢 MIGRATION COMPLETED SUCCESSFULLY WITH ZERO SAFETY CONFLICTS!\n";

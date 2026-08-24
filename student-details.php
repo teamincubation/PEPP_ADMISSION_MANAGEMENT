@@ -978,7 +978,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'migra
         } catch (Exception $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             error_log('Course migration error: ' . $e->getMessage());
-            $error = 'Course migration could not be completed. ' . $e->getMessage();
+            if (strpos($e->getMessage(), 'student_course_migrations') !== false || strpos($e->getMessage(), '42S02') !== false || strpos($e->getMessage(), 'Base table or view not found') !== false) {
+                $error = 'Course migration is temporarily unavailable because the migration database setup has not been completed. Please contact the Superadmin.';
+            } else {
+                $error = 'Course migration could not be completed. ' . $e->getMessage();
+            }
         }
     }
     if (isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true') {
