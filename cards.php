@@ -1125,6 +1125,7 @@ include 'includes/admin_nav.php';
                                 </tr>
                             `;
                         });
+                    });
             }
 
             function downloadRankListPDF() {
