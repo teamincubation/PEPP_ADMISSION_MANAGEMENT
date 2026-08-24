@@ -911,12 +911,13 @@ include 'includes/admin_nav.php';
                     }
 
                     const testNo = t.day_number ? 'Test ' + t.day_number : 'Test #' + t.activity_id;
-                    const optionLabel = `${t.activity_title} | ${testNo} | ${t.plan_title}`;
+                    const chapterName = t.chapter ? t.chapter : t.activity_title;
+                    const optionLabel = `${testNo} — ${chapterName} ${dateStr ? '— ' + dateStr : ''}`;
 
                     div.innerHTML = `
                         <div style="font-weight: 700; color: #1e293b;">${optionLabel}</div>
                         <div style="font-size: 0.75rem; color: #64748b;">
-                            ${t.activity_type} ${t.chapter ? '• ' + t.chapter : ''} ${dateStr ? '• ' + dateStr : ''}
+                            ${t.activity_type || 'Test'}${t.plan_title ? ' • ' + t.plan_title : ''}
                         </div>
                     `;
                     div.onclick = () => {
@@ -964,12 +965,18 @@ include 'includes/admin_nav.php';
                 }
 
                 fetch('assessment-results.php?action=get_published_tests_by_year&year=' + encodeURIComponent(year))
-                    .then(r => r.json()).then(tests => {
+                    .then(r => {
+                        if (!r.ok) {
+                            throw new Error('HTTP status ' + r.status);
+                        }
+                        return r.json();
+                    })
+                    .then(tests => {
                         const menu = document.getElementById('test-dropdown-menu');
                         menu.innerHTML = '';
-                        if (tests.length === 0) {
-                            menu.innerHTML = '<div style="padding: 10px; color: #94a3b8; text-align: center;">— No Published Results —</div>';
-                            document.getElementById('test-search-input').placeholder = '— No Published Results —';
+                        if (!Array.isArray(tests) || tests.length === 0) {
+                            menu.innerHTML = '<div style="padding: 10px; color: #94a3b8; text-align: center;">— No Published Tests Available —</div>';
+                            document.getElementById('test-search-input').placeholder = '— No Published Tests Available —';
                             document.getElementById('test-search-input').disabled = true;
                             return;
                         }
@@ -977,6 +984,13 @@ include 'includes/admin_nav.php';
                         document.getElementById('test-search-input').placeholder = '🔍 Search published tests...';
                         window.publishedTestsList = tests;
                         renderDropdownOptions(tests);
+                    })
+                    .catch(err => {
+                        console.error('Failed to load published tests:', err);
+                        const menu = document.getElementById('test-dropdown-menu');
+                        menu.innerHTML = '<div style="padding: 10px; color: #ef4444; text-align: center;">Unable to load published tests. Please try again.</div>';
+                        document.getElementById('test-search-input').placeholder = '— Error loading tests —';
+                        document.getElementById('test-search-input').disabled = true;
                     });
             }
 

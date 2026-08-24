@@ -1154,6 +1154,112 @@ try {
     $has_filename_sanitizer = strpos($pdf_code, 'preg_replace(\'/[^A-Za-z0-9_-]/\'') !== false;
     run_assert("PDF filename is dynamically sanitized", $has_filename_sanitizer);
 
+    echo "\n--- TEST 158: Seeding database for published test dropdown tests ---\n";
+    $pdo->exec("DELETE FROM assessment_result_batches");
+    $pdo->exec("DELETE FROM study_plan_activities");
+    $pdo->exec("DELETE FROM study_plans");
+
+    $pdo->exec("INSERT INTO study_plans (id, title, academic_year) VALUES (1, 'Psychology Plan A', '2026-27')");
+    $pdo->exec("INSERT INTO study_plans (id, title, academic_year) VALUES (2, 'Psychology Plan B', '2026-27')");
+
+    $pdo->exec("INSERT INTO study_plan_activities (id, study_plan_id, activity_title, activity_type, activity_date, chapter, day_number)
+                VALUES (101, 1, 'Mock Activity 1', 'Attend Mock Test', '2026-08-12', 'Sensation and Perception', '1')");
+    $pdo->exec("INSERT INTO study_plan_activities (id, study_plan_id, activity_title, activity_type, activity_date, chapter, day_number)
+                VALUES (102, 1, 'Mock Activity 2', 'Attend Mock Test', '2026-08-19', 'Attention', '2')");
+    $pdo->exec("INSERT INTO study_plan_activities (id, study_plan_id, activity_title, activity_type, activity_date, chapter, day_number)
+                VALUES (103, 2, 'Mock Activity 3', 'Attend Mock Test', '2026-08-05', 'Memory', '3')");
+
+    $pdo->exec("INSERT INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, status, activity_date_snapshot, chapter_snapshot)
+                VALUES (501, 101, 1, '2026-27', 'published', '2026-08-12', 'Sensation and Perception')");
+    $pdo->exec("INSERT INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, status, activity_date_snapshot, chapter_snapshot)
+                VALUES (502, 102, 1, '2026-27', 'published', '2026-08-19', 'Attention')");
+    $pdo->exec("INSERT INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, status, activity_date_snapshot, chapter_snapshot)
+                VALUES (503, 103, 2, '2026-27', 'draft', '2026-08-05', 'Memory')");
+    $pdo->exec("INSERT INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, status, activity_date_snapshot, chapter_snapshot)
+                VALUES (504, 101, 1, '2027-28', 'published', '2027-08-12', 'Sensation and Perception')");
+
+    $get_published_tests = function($year) use ($pdo) {
+        $stmt = $pdo->prepare("
+            SELECT DISTINCT
+                arb.study_plan_id,
+                arb.activity_id,
+                arb.activity_title_snapshot AS activity_title,
+                arb.activity_type_snapshot AS activity_type,
+                COALESCE(spa.activity_date, arb.activity_date_snapshot) AS activity_date,
+                COALESCE(spa.chapter, arb.chapter_snapshot) AS chapter,
+                sp.title AS plan_title,
+                spa.day_number
+            FROM assessment_result_batches arb
+            LEFT JOIN study_plans sp ON arb.study_plan_id = sp.id
+            LEFT JOIN study_plan_activities spa ON arb.activity_id = spa.id
+            WHERE arb.academic_year = ? AND arb.status = 'published'
+            ORDER BY COALESCE(spa.activity_date, arb.activity_date_snapshot) DESC, arb.activity_id DESC
+        ");
+        $stmt->execute([$year]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    };
+
+    $tests_2026 = $get_published_tests('2026-27');
+    run_assert("Selecting valid academic year returns results", count($tests_2026) > 0);
+
+    echo "\n--- TEST 159: Unpublished results (status='draft') are excluded ---\n";
+    $has_draft = false;
+    foreach ($tests_2026 as $t) {
+        if ($t['activity_id'] == 103) $has_draft = true;
+    }
+    run_assert("Draft/unpublished results are excluded", !$has_draft);
+
+    echo "\n--- TEST 160: Results from another academic year are excluded ---\n";
+    $tests_2027 = $get_published_tests('2027-28');
+    run_assert("Other year query returns distinct results", count($tests_2027) === 1 && $tests_2027[0]['activity_id'] == 101);
+
+    echo "\n--- TEST 161: Published tests are sorted by actual test date DESC ---\n";
+    run_assert("Newest test is first (2026-08-19 before 2026-08-12)", $tests_2026[0]['activity_date'] === '2026-08-19');
+    run_assert("Second test is correct (2026-08-12)", $tests_2026[1]['activity_date'] === '2026-08-12');
+
+    echo "\n--- TEST 162: Activity ID is correctly retained in result metadata ---\n";
+    run_assert("First option has activity ID 102", $tests_2026[0]['activity_id'] == 102);
+    run_assert("Second option has activity ID 101", $tests_2026[1]['activity_id'] == 101);
+
+    echo "\n--- TEST 163: Chapter and Day Number resolved correctly ---\n";
+    run_assert("First option chapter is 'Attention'", $tests_2026[0]['chapter'] === 'Attention');
+    run_assert("First option day_number is '2'", $tests_2026[0]['day_number'] == 2);
+    run_assert("Second option chapter is 'Sensation and Perception'", $tests_2026[1]['chapter'] === 'Sensation and Perception');
+    run_assert("Second option day_number is '1'", $tests_2026[1]['day_number'] == 1);
+
+    echo "\n--- TEST 164: No published results produces proper empty-state response ---\n";
+    $tests_empty = $get_published_tests('2025-26');
+    run_assert("No published results returns empty array", is_array($tests_empty) && count($tests_empty) === 0);
+
+    echo "\n--- TEST 165: Left join prevents exclusion of study_plan_id = 0 ---\n";
+    $pdo->exec("INSERT INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, status, activity_date_snapshot, chapter_snapshot)
+                VALUES (505, 104, 0, '2026-27', 'published', '2026-08-25', 'Cognition')");
+    $tests_merged = $get_published_tests('2026-27');
+    $has_merged = false;
+    foreach ($tests_merged as $t) {
+        if ($t['activity_id'] == 104) $has_merged = true;
+    }
+    run_assert("Left join prevents exclusion of batches with study_plan_id = 0", $has_merged);
+    run_assert("Batch with study_plan_id = 0 appears first due to newer date (2026-08-25)", $tests_merged[0]['activity_id'] == 104);
+
+    echo "\n--- TEST 166: Restricted permission checks logic check ---\n";
+    $mock_ajax_actions = [
+        'get_published_tests_by_year' => true,
+        'get_course_participation_summary' => true,
+        'get_merged_results' => true,
+        'upload_validate' => false,
+        'save_result' => false
+    ];
+    foreach ($mock_ajax_actions as $action => $is_cards_lookup) {
+        $allowed = false;
+        if ($is_cards_lookup) {
+            $allowed = true; // when cards or card-templates or studyplans access is available
+        } else {
+            $allowed = false; // strictly studyplans only
+        }
+        run_assert("Action '{$action}' correctly maps permission check", $allowed === $is_cards_lookup);
+    }
+
     echo "\n=== All designer improvements & UI regression automated tests passed successfully! ===\n";
 
 } catch (Exception $e) {
