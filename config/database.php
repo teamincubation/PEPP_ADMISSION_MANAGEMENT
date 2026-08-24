@@ -49,6 +49,19 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 status TEXT,
                 updated_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS admins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE,
+                password_hash TEXT,
+                full_name TEXT,
+                role TEXT,
+                permissions TEXT,
+                status TEXT,
+                created_by TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT,
+                last_login_at TEXT
+            );
             CREATE TABLE IF NOT EXISTS card_templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT,
@@ -168,6 +181,14 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
             );
             CREATE TABLE IF NOT EXISTS study_plan_custom_types (
                 name TEXT PRIMARY KEY
+            );
+            CREATE TABLE IF NOT EXISTS card_template_admin_access (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id INTEGER NOT NULL,
+                admin_user_id INTEGER NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT,
+                UNIQUE(template_id, admin_user_id)
             );
 
             INSERT OR REPLACE INTO admin_settings (setting_name, setting_value) VALUES ('whatsapp_webhook_verify_token', 'test_verify_token');
@@ -355,6 +376,17 @@ try {
                 `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
                 `status` VARCHAR(20) NOT NULL DEFAULT 'active',
                 KEY `idx_clp_is_default` (`is_default`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `card_template_admin_access` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `template_id` INT NOT NULL,
+                `admin_user_id` INT NOT NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY `idx_template_admin` (`template_id`, `admin_user_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 

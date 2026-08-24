@@ -54,7 +54,14 @@ $GLOBALS['ADMIN_PAGES'] = [
 function admins_table_exists($pdo) {
     static $exists = null;
     if ($exists === null) {
-        try { $exists = (bool)$pdo->query("SHOW TABLES LIKE 'admins'")->fetchColumn(); }
+        try {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $exists = (bool)$pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='admins'")->fetchColumn();
+            } else {
+                $exists = (bool)$pdo->query("SHOW TABLES LIKE 'admins'")->fetchColumn();
+            }
+        }
         catch (Exception $e) { $exists = false; }
     }
     return $exists;
@@ -826,6 +833,31 @@ if (!function_exists('convertLeadFromApprovedAdmission')) {
             error_log("Failed to convert lead #{$leadId}: " . $e->getMessage());
             return false;
         }
+    }
+}
+
+function has_template_access($pdo, $admin_username, $template_id) {
+    if (is_super_admin()) {
+        return true;
+    }
+    if (!can_access('cards')) {
+        return false;
+    }
+    if (!$pdo) {
+        return false;
+    }
+    try {
+        $stmt = $pdo->prepare("SELECT id FROM admins WHERE username = ? AND status = 'active' LIMIT 1");
+        $stmt->execute([$admin_username]);
+        $admin_id = $stmt->fetchColumn();
+        if (!$admin_id) {
+            return false;
+        }
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM card_template_admin_access WHERE template_id = ? AND admin_user_id = ?");
+        $stmt->execute([$template_id, $admin_id]);
+        return (int)$stmt->fetchColumn() > 0;
+    } catch (Exception $e) {
+        return false;
     }
 }
 

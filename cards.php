@@ -3,6 +3,65 @@ require_once 'includes/auth.php';
 require_once 'config/database.php';
 require_once 'includes/file_helper.php';
 
+// AJAX: Save template admin access
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_GET['action'] ?? '') === 'save_template_access') {
+    header('Content-Type: application/json');
+    if (!csrf_verify()) {
+        echo json_encode(['success' => false, 'message' => 'Security token mismatch.']);
+        exit;
+    }
+    if (!is_super_admin()) {
+        echo json_encode(['success' => false, 'message' => 'Access denied. Only Superadmin can change template access.']);
+        exit;
+    }
+
+    $template_id = (int)($_POST['template_id'] ?? 0);
+    $admin_ids = $_POST['admin_ids'] ?? []; // Array of admin user IDs
+
+    if (!$template_id) {
+        echo json_encode(['success' => false, 'message' => 'Invalid template ID.']);
+        exit;
+    }
+
+    try {
+        $pdo->beginTransaction();
+
+        // Clear existing access records
+        $stmt_del = $pdo->prepare("DELETE FROM card_template_admin_access WHERE template_id = ?");
+        $stmt_del->execute([$template_id]);
+
+        // Insert new access records
+        $stmt_ins = $pdo->prepare("INSERT INTO card_template_admin_access (template_id, admin_user_id) VALUES (?, ?)");
+
+        $added_names = [];
+        foreach ($admin_ids as $adm_id) {
+            $adm_id = (int)$adm_id;
+            $stmt_ins->execute([$template_id, $adm_id]);
+
+            $stmt_u = $pdo->prepare("SELECT username FROM admins WHERE id = ?");
+            $stmt_u->execute([$adm_id]);
+            $u = $stmt_u->fetchColumn();
+            if ($u) {
+                $added_names[] = $u;
+            }
+        }
+
+        $pdo->commit();
+
+        // Log to Admin Activity Log
+        $added_str = empty($added_names) ? 'None' : implode(', ', $added_names);
+        log_admin_activity($pdo, $admin_username, 'template_access_changed', "Superadmin updated access list for Template ID #{$template_id} to: {$added_str}");
+
+        echo json_encode(['success' => true, 'message' => 'Card template access saved successfully.']);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
 function getSavedCardMetadata($designConfigJson) {
     $metadata = [
         'chapter' => null,
@@ -370,11 +429,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // ── Load Templates, Categories, and Fonts ────────────
 $active_tab = $_GET['tab'] ?? 'generate'; // 'generate', 'templates', or 'test_results'
+if (($active_tab === 'generate' || $active_tab === 'test_results') && !can_access('cards')) {
+    require_permission('cards');
+}
 if ($active_tab === 'templates' && !can_access('card-templates')) {
     $active_tab = 'generate';
-}
-if (($active_tab === 'generate' || $active_tab === 'test_results') && !can_access('cards')) {
-    $active_tab = 'templates';
 }
 
 // Load additional lists for Test Result Cards tab
@@ -1166,6 +1225,22 @@ include 'includes/admin_nav.php';
 
         <!-- tab: Generate -->
         <?php if ($active_tab === 'generate'): ?>
+            <?php
+            $admins_with_cards = [];
+            if (is_super_admin()) {
+                try {
+                    $stmt_adms = $pdo->query("SELECT id, username, full_name, role, permissions FROM admins WHERE status = 'active' ORDER BY username ASC");
+                    $all_adms = $stmt_adms->fetchAll(PDO::FETCH_ASSOC);
+                    foreach ($all_adms as $adm) {
+                        if ($adm['role'] === 'super_admin') continue;
+                        $perms = array_map('trim', explode(',', $adm['permissions']));
+                        if ($adm['permissions'] === 'ALL' || in_array('cards', $perms, true)) {
+                            $admins_with_cards[] = $adm;
+                        }
+                    }
+                } catch (Exception $e) {}
+            }
+            ?>
             <?php if (empty($active_templates)): ?>
                 <div class="empty-state" style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:40px;">
                     <i class="fas fa-id-card"></i>
@@ -1182,26 +1257,144 @@ include 'includes/admin_nav.php';
                         } else {
                             $bg_css = "background-image: url('../" . htmlspecialchars($bg_style) . "');";
                         }
+
+                        $has_access = has_template_access($pdo, $admin_username, $tpl['id']);
+                        $current_access_ids = [];
+                        if (is_super_admin()) {
+                            try {
+                                $stmt_access = $pdo->prepare("SELECT admin_user_id FROM card_template_admin_access WHERE template_id = ?");
+                                $stmt_access->execute([$tpl['id']]);
+                                $current_access_ids = $stmt_access->fetchAll(PDO::FETCH_COLUMN);
+                            } catch (Exception $e) {}
+                        }
                     ?>
-                        <div class="tpl-card">
+                        <div class="tpl-card" style="<?php echo !$has_access ? 'opacity: 0.85;' : ''; ?>">
                             <div class="tpl-preview" style="<?php echo $bg_css; ?>">
                                 <span class="tpl-badge"><?php echo htmlspecialchars($categories[$tpl['category']] ?? $tpl['category']); ?></span>
+                                <?php if (!$has_access): ?>
+                                    <span class="tpl-badge" style="background: #ef4444; color: #fff; left: auto; right: 10px;"><i class="fas fa-lock"></i> Restricted</span>
+                                <?php endif; ?>
                             </div>
                             <div class="tpl-details">
                                 <div>
-                                    <h3 class="tpl-title"><?php echo htmlspecialchars($tpl['title']); ?></h3>
+                                    <h3 class="tpl-title">
+                                        <?php echo htmlspecialchars($tpl['title']); ?>
+                                        <?php if (!$has_access): ?> <i class="fas fa-lock" style="color:#ef4444; font-size:0.8rem; margin-left:4px;"></i><?php endif; ?>
+                                    </h3>
                                     <p class="tpl-desc"><?php echo htmlspecialchars($tpl['description'] ?: 'Personalized promotional flyer.'); ?></p>
-                                </div>
-                                <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.75rem; color:#64748b;">
-                                    <span><?php echo $tpl['canvas_width'] . 'x' . $tpl['canvas_height']; ?> px</span>
-                                    <?php if (can_access('cards')): ?>
-                                        <a href="cards-generate.php?template_id=<?php echo (int)$tpl['id']; ?>" class="btn btn-sm btn-primary" style="padding: 4px 10px; font-size: 0.75rem;"><i class="fas fa-magic"></i> Generate</a>
+                                    <?php if (!$has_access): ?>
+                                        <p style="color:#ef4444; font-size:0.72rem; font-weight:700; margin-top:6px; display:flex; align-items:center; gap:4px;">
+                                            <i class="fas fa-circle-exclamation"></i>
+                                            <span>Access Restricted. Ask Superadmin for permission.</span>
+                                        </p>
                                     <?php endif; ?>
                                 </div>
+                                <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.75rem; color:#64748b; margin-top:8px;">
+                                    <span><?php echo $tpl['canvas_width'] . 'x' . $tpl['canvas_height']; ?> px</span>
+                                    <?php if (can_access('cards')): ?>
+                                        <?php if ($has_access): ?>
+                                            <a href="cards-generate.php?template_id=<?php echo (int)$tpl['id']; ?>" class="btn btn-sm btn-primary" style="padding: 4px 10px; font-size: 0.75rem;"><i class="fas fa-magic"></i> Generate</a>
+                                        <?php else: ?>
+                                            <button type="button" class="btn btn-sm btn-secondary" onclick="alert('Access denied. You do not currently have permission to use this card template. Please ask the Superadmin to grant you access.')" style="padding: 4px 10px; font-size: 0.75rem; opacity:0.6; cursor:not-allowed;"><i class="fas fa-lock"></i> Locked</button>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
+                                </div>
+
+                                <?php if (is_super_admin()): ?>
+                                    <div class="card-access-container" style="margin-top: 10px; border-top: 1px solid #f1f5f9; padding-top: 8px;">
+                                        <label style="font-size: 0.72rem; font-weight: 700; color: #475569; display: block; margin-bottom: 4px;">Card Access</label>
+                                        <div class="dropdown" style="position: relative; display: inline-block; width: 100%;">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" onclick="toggleAccessDropdown(<?php echo (int)$tpl['id']; ?>)" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; font-size: 0.75rem; text-align: left; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer;">
+                                                <span><?php echo count($current_access_ids); ?> Admins Selected</span>
+                                                <i class="fas fa-chevron-down" style="font-size: 0.65rem; color: #64748b;"></i>
+                                            </button>
+                                            <div id="access-dropdown-<?php echo (int)$tpl['id']; ?>" class="dropdown-menu" style="display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 100; min-width: 160px; max-height: 200px; overflow-y: auto; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-top: 4px; padding: 6px 0;">
+                                                <form onsubmit="saveTemplateAccess(event, <?php echo (int)$tpl['id']; ?>)">
+                                                    <?php foreach ($admins_with_cards as $adm):
+                                                        $checked = in_array($adm['id'], $current_access_ids) ? 'checked' : '';
+                                                    ?>
+                                                        <label style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 0.75rem; color: #334155; cursor: pointer; user-select: none; text-align: left;">
+                                                            <input type="checkbox" name="admin_ids[]" value="<?php echo (int)$adm['id']; ?>" <?php echo $checked; ?> style="width: 14px; height: 14px; accent-color: var(--accent);">
+                                                            <span><?php echo htmlspecialchars($adm['full_name'] ?: $adm['username']); ?></span>
+                                                        </label>
+                                                    <?php endforeach; ?>
+                                                    <?php if (empty($admins_with_cards)): ?>
+                                                        <div style="padding: 6px 12px; font-size: 0.75rem; color: #94a3b8; font-style: italic;">No admins with base cards permission</div>
+                                                    <?php else: ?>
+                                                        <div style="border-top: 1px solid #f1f5f9; padding: 6px 12px; display: flex; justify-content: flex-end; gap: 6px;">
+                                                            <button type="submit" class="btn btn-primary" style="padding: 2px 8px; font-size: 0.7rem; border-radius: 4px; background: var(--accent); color: #fff; border: none; cursor: pointer;">Save</button>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                </form>
+                                            </div>
+                                        </div>
+                                    </div>
+                                <?php endif; ?>
                             </div>
                         </div>
                     <?php endforeach; ?>
                 </div>
+
+                <script>
+                function toggleAccessDropdown(tplId) {
+                    const el = document.getElementById('access-dropdown-' + tplId);
+                    if (el) {
+                        if (el.style.display === 'none') {
+                            document.querySelectorAll('.dropdown-menu').forEach(menu => {
+                                if (menu.id !== 'access-dropdown-' + tplId) {
+                                    menu.style.display = 'none';
+                                }
+                            });
+                            el.style.display = 'block';
+                        } else {
+                            el.style.display = 'none';
+                        }
+                    }
+                }
+
+                document.addEventListener('click', function(e) {
+                    if (!e.target.closest('.dropdown')) {
+                        document.querySelectorAll('[id^="access-dropdown-"]').forEach(menu => {
+                            menu.style.display = 'none';
+                        });
+                    }
+                });
+
+                function saveTemplateAccess(event, tplId) {
+                    event.preventDefault();
+                    const form = event.target;
+                    const formData = new FormData(form);
+                    formData.append('template_id', tplId);
+                    formData.append('csrf_token', '<?php echo csrf_token(); ?>');
+
+                    fetch('cards.php?action=save_template_access', {
+                        method: 'POST',
+                        body: formData,
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            const checkedCount = form.querySelectorAll('input[type="checkbox"]:checked').length;
+                            const btnSpan = form.closest('.dropdown').querySelector('.dropdown-toggle span');
+                            if (btnSpan) {
+                                btnSpan.textContent = checkedCount + ' Admins Selected';
+                            }
+                            const dropdown = document.getElementById('access-dropdown-' + tplId);
+                            if (dropdown) dropdown.style.display = 'none';
+                            alert('Access updated successfully!');
+                        } else {
+                            alert(data.message || 'Failed to update access.');
+                        }
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        alert('Network error while saving template access.');
+                    });
+                }
+                </script>
             <?php endif; ?>
         <?php endif; ?>
 

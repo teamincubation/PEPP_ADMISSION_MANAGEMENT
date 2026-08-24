@@ -23,6 +23,23 @@ if (!$tpl) {
     exit;
 }
 
+// Server-side template access control check
+if (!has_template_access($pdo, $admin_username, $template_id)) {
+    http_response_code(403);
+    echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+       . '<title>Access Denied</title>'
+       . '<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&display=swap" rel="stylesheet">'
+       . '<style>body{font-family:"DM Sans",sans-serif;background:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}'
+       . '.card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:2.2rem;max-width:420px;text-align:center;box-shadow:0 10px 40px rgba(15,23,42,.08)}'
+       . '.icon{width:56px;height:56px;border-radius:50%;background:#fee2e2;color:#b91c1c;display:flex;align-items:center;justify-content:center;margin:0 auto 1rem;font-size:1.4rem}'
+       . 'h1{font-size:1.15rem;color:#1f2937;margin:0 0 .5rem}p{font-size:.875rem;color:#6b7280;margin:0 0 1.4rem}'
+       . 'a{display:inline-block;background:#8b5cf6;color:#fff;text-decoration:none;font-weight:600;font-size:.85rem;border-radius:9px;padding:10px 22px}</style></head>'
+       . '<body><div class="card"><div class="icon">&#9888;</div><h1>Access Denied</h1>'
+       . '<p>Access denied. You do not currently have permission to use this card template. Please ask the Superadmin to grant you access.</p>'
+       . '<a href="cards.php">Go to Card Management</a></div></body></html>';
+    exit;
+}
+
 // Handle AJAX logger for PDF generation
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'log_generation') {
     header('Content-Type: application/json');

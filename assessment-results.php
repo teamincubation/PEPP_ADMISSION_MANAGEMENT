@@ -990,11 +990,19 @@ include 'includes/admin_nav.php';
 </style>
 
 <!-- ─── PAGE CONTENT ────────────────────────────────────────────────── -->
-<div class="page-header">
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:20px;">
     <div>
         <h1><i class="fas fa-chart-column" style="color:var(--accent)"></i> <?php echo $page_title; ?></h1>
         <p class="page-subtitle"><?php echo $page_sub; ?></p>
     </div>
+    <?php if (can_access('cards')): ?>
+        <div>
+            <a href="cards.php?tab=test_results" class="btn btn-primary" style="display:inline-flex; align-items:center; gap:8px; text-decoration:none; background:var(--accent); color:#fff; padding:10px 18px; border-radius:8px; font-weight:600; font-size:0.875rem; box-shadow:0 4px 12px rgba(139,92,246,0.25); transition:all 0.2s ease;">
+                <i class="fas fa-id-card"></i>
+                <span>Generate Result Cards</span>
+            </a>
+        </div>
+    <?php endif; ?>
 </div>
 
 <!-- Upload Wizard -->

@@ -12,6 +12,11 @@ $_SESSION['admin_username'] = 'TestAdmin';
 
 $_SERVER['HTTP_X_TESTING_MODE'] = 'true';
 require_once dirname(__DIR__) . '/config/database.php';
+try {
+    $pdo->exec("INSERT OR IGNORE INTO admins (id, username, password_hash, full_name, role, permissions, status)
+                VALUES (1, 'TestAdmin', 'hash', 'Test Administrator', 'super_admin', 'ALL', 'active')");
+} catch (Exception $e) {}
+require_once dirname(__DIR__) . '/includes/auth.php';
 
 function run_assert($label, $assertion) {
     if ($assertion) {
@@ -1502,6 +1507,106 @@ try {
     }
     run_assert("Multi-page simulation results in 2 pages", $pages_mock === 2);
     run_assert("Serial number is continuous across pages and ends at 21", $sl_mock === 21);
+
+    echo "\n--- TEST 187: Superadmin always has card access ---\n";
+    $pdo->exec("INSERT OR IGNORE INTO card_templates (id, title, category, status, bg_image, canvas_width, canvas_height, elements_json, created_by)
+                VALUES (999, 'Test Template 999', 'Flyer', 'active', 'gradient', 800, 600, '[]', 'superadmin')");
+    $_SESSION['admin_role'] = 'super_admin';
+    $_SESSION['admin_username'] = 'superadmin';
+    $superadmin_access = has_template_access($pdo, 'superadmin', 999);
+    run_assert("Superadmin always has access to any template", $superadmin_access === true);
+
+    echo "\n--- TEST 188: Normal admin without Generate Cards permission is denied ---\n";
+    $pdo->exec("DELETE FROM admins WHERE username = 'admin_no_perm'");
+    $pdo->exec("INSERT INTO admins (id, username, password_hash, full_name, role, permissions, status)
+                VALUES (501, 'admin_no_perm', 'hash', 'No Perm', 'admin', 'approvals', 'active')");
+    $_SESSION['admin_role'] = 'admin';
+    $_SESSION['admin_username'] = 'admin_no_perm';
+    $admin_perms = 'approvals';
+    $no_perm_access = has_template_access($pdo, 'admin_no_perm', 999);
+    run_assert("Admin without cards permission is denied template access", $no_perm_access === false);
+
+    echo "\n--- TEST 189: Admin with Generate Cards permission appears in Card Access dropdown ---\n";
+    $pdo->exec("DELETE FROM admins WHERE username = 'admin_with_cards'");
+    $pdo->exec("INSERT INTO admins (id, username, password_hash, full_name, role, permissions, status)
+                VALUES (502, 'admin_with_cards', 'hash', 'With Cards', 'admin', 'cards,approvals', 'active')");
+    $stmt_adms = $pdo->query("SELECT id, username, role, permissions FROM admins WHERE status = 'active' ORDER BY username ASC");
+    $dropdown_users = [];
+    foreach ($stmt_adms->fetchAll(PDO::FETCH_ASSOC) as $adm) {
+        if ($adm['role'] === 'super_admin') continue;
+        $perms = array_map('trim', explode(',', $adm['permissions']));
+        if ($adm['permissions'] === 'ALL' || in_array('cards', $perms, true)) {
+            $dropdown_users[] = $adm['username'];
+        }
+    }
+    run_assert("Admin with cards permission is in the dropdown list", in_array('admin_with_cards', $dropdown_users));
+
+    echo "\n--- TEST 190: Admin without Generate Cards permission does NOT appear in dropdown ---\n";
+    run_assert("Admin without cards permission is NOT in the dropdown list", !in_array('admin_no_perm', $dropdown_users));
+
+    echo "\n--- TEST 191: New card template is locked by default ---\n";
+    $pdo->exec("INSERT OR IGNORE INTO card_templates (id, title, category, status, bg_image, canvas_width, canvas_height, elements_json, created_by)
+                VALUES (1000, 'Locked Template', 'Flyer', 'active', 'gradient', 800, 600, '[]', 'superadmin')");
+    $_SESSION['admin_role'] = 'admin';
+    $_SESSION['admin_username'] = 'admin_with_cards';
+    $admin_perms = 'cards,approvals';
+    $locked_by_default = has_template_access($pdo, 'admin_with_cards', 1000);
+    run_assert("New template is locked by default for normal admins", $locked_by_default === false);
+
+    echo "\n--- TEST 192: Superadmin can grant template access ---\n";
+    $pdo->exec("INSERT INTO card_template_admin_access (template_id, admin_user_id) VALUES (1000, 502)");
+    $granted_access = has_template_access($pdo, 'admin_with_cards', 1000);
+    run_assert("Admin now has template access after explicit grant", $granted_access === true);
+
+    echo "\n--- TEST 193: Superadmin can revoke template access ---\n";
+    $pdo->exec("DELETE FROM card_template_admin_access WHERE template_id = 1000 AND admin_user_id = 502");
+    $revoked_access = has_template_access($pdo, 'admin_with_cards', 1000);
+    run_assert("Admin template access is revoked successfully", $revoked_access === false);
+
+    echo "\n--- TEST 194: Multiple admins can be assigned to one template ---\n";
+    $pdo->exec("DELETE FROM admins WHERE username = 'admin_second'");
+    $pdo->exec("INSERT INTO admins (id, username, password_hash, full_name, role, permissions, status)
+                VALUES (503, 'admin_second', 'hash', 'Second Admin', 'admin', 'cards', 'active')");
+    $pdo->exec("INSERT INTO card_template_admin_access (template_id, admin_user_id) VALUES (1000, 502)");
+    $pdo->exec("INSERT INTO card_template_admin_access (template_id, admin_user_id) VALUES (1000, 503)");
+    run_assert("First admin has access", has_template_access($pdo, 'admin_with_cards', 1000) === true);
+    run_assert("Second admin has access", has_template_access($pdo, 'admin_second', 1000) === true);
+
+    echo "\n--- TEST 195: One admin can access multiple templates ---\n";
+    $pdo->exec("INSERT OR IGNORE INTO card_templates (id, title, category, status, bg_image, canvas_width, canvas_height, elements_json, created_by)
+                VALUES (1001, 'Second Template', 'Flyer', 'active', 'gradient', 800, 600, '[]', 'superadmin')");
+    $pdo->exec("INSERT INTO card_template_admin_access (template_id, admin_user_id) VALUES (1001, 502)");
+    run_assert("Admin can access template 1000", has_template_access($pdo, 'admin_with_cards', 1000) === true);
+    run_assert("Admin can access template 1001", has_template_access($pdo, 'admin_with_cards', 1001) === true);
+
+    echo "\n--- TEST 196: Admin can access Template A but not Template B ---\n";
+    $pdo->exec("DELETE FROM card_template_admin_access WHERE template_id = 1001 AND admin_user_id = 502");
+    run_assert("Admin can access template A", has_template_access($pdo, 'admin_with_cards', 1000) === true);
+    run_assert("Admin cannot access template B", has_template_access($pdo, 'admin_with_cards', 1001) === false);
+
+    echo "\n--- TEST 197: Removing Generate Cards permission immediately blocks access ---\n";
+    $admin_perms = 'approvals';
+    $pdo->exec("UPDATE admins SET permissions = 'approvals' WHERE id = 502");
+    run_assert("Template access blocked when base cards permission is revoked", has_template_access($pdo, 'admin_with_cards', 1000) === false);
+
+    echo "\n--- TEST 198: Re-enabling Generate Cards restores template permissions ---\n";
+    $admin_perms = 'cards,approvals';
+    $pdo->exec("UPDATE admins SET permissions = 'cards,approvals' WHERE id = 502");
+    run_assert("Template access restored when base permission is re-enabled", has_template_access($pdo, 'admin_with_cards', 1000) === true);
+
+    echo "\n--- TEST 199: Duplicate template/admin access records cannot be created ---\n";
+    $duplicate_caught = false;
+    try {
+        $pdo->exec("INSERT INTO card_template_admin_access (template_id, admin_user_id) VALUES (1000, 502)");
+    } catch (Exception $e) {
+        $duplicate_caught = true;
+    }
+    run_assert("Unique key constraint prevents duplicate template admin assignment", $duplicate_caught === true);
+
+    echo "\n--- TEST 200: Assessment-results -> cards navigation URL is correct ---\n";
+    $results_code = file_get_contents(dirname(__DIR__) . '/assessment-results.php');
+    $url_correct = (strpos($results_code, 'cards.php?tab=test_results') !== false);
+    run_assert("Cards tab redirection URL exists in results endpoint code", $url_correct === true);
 
     echo "\n=== All designer improvements & UI regression automated tests passed successfully! ===\n";
 
