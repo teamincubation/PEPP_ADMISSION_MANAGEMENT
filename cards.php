@@ -571,10 +571,12 @@ include 'includes/admin_nav.php';
     gap: 20px;
 }
 .tpl-card {
+    position: relative;
+    z-index: 1;
     background: #fff;
     border: 1px solid #e2e8f0;
     border-radius: 12px;
-    overflow: hidden;
+    overflow: visible;
     display: flex;
     flex-direction: column;
     box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
@@ -591,6 +593,8 @@ include 'includes/admin_nav.php';
     background-color: #f1f5f9;
     position: relative;
     border-bottom: 1px solid #e2e8f0;
+    border-top-left-radius: 11px;
+    border-top-right-radius: 11px;
 }
 .tpl-badge {
     position: absolute;
@@ -1301,31 +1305,50 @@ include 'includes/admin_nav.php';
                                 </div>
 
                                 <?php if (is_super_admin()): ?>
-                                    <div class="card-access-container" style="margin-top: 10px; border-top: 1px solid #f1f5f9; padding-top: 8px;">
-                                        <label style="font-size: 0.72rem; font-weight: 700; color: #475569; display: block; margin-bottom: 4px;">Card Access</label>
+                                    <div class="card-access-container" style="margin-top: 10px; border-top: 1px solid #f1f5f9; padding-top: 8px; position: relative;">
+                                        <label style="font-size: 0.75rem; font-weight: 600; color: #64748b; display: block; margin-bottom: 6px;">Card Access</label>
                                         <div class="dropdown" style="position: relative; display: inline-block; width: 100%;">
-                                            <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" onclick="toggleAccessDropdown(<?php echo (int)$tpl['id']; ?>)" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; font-size: 0.75rem; text-align: left; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer;">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" onclick="toggleAccessDropdown(<?php echo (int)$tpl['id']; ?>)" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; font-size: 0.8rem; text-align: left; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer; color: #1e293b; font-weight: 500; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='#e2e8f0'">
                                                 <span><?php echo count($current_access_ids); ?> Admins Selected</span>
-                                                <i class="fas fa-chevron-down" style="font-size: 0.65rem; color: #64748b;"></i>
+                                                <i class="fas fa-chevron-down" style="font-size: 0.7rem; color: #64748b;"></i>
                                             </button>
-                                            <div id="access-dropdown-<?php echo (int)$tpl['id']; ?>" class="dropdown-menu" style="display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 100; min-width: 160px; max-height: 200px; overflow-y: auto; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-top: 4px; padding: 6px 0;">
-                                                <form onsubmit="saveTemplateAccess(event, <?php echo (int)$tpl['id']; ?>)">
+                                            <div id="access-dropdown-<?php echo (int)$tpl['id']; ?>" class="dropdown-menu" style="display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 100; min-width: 250px; background: #fff; border: 1px solid #cbd5e1; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); margin-top: 6px; padding: 12px; box-sizing: border-box;">
+
+                                                <!-- Search Box -->
+                                                <div style="margin-bottom: 10px; position: relative;">
+                                                    <input type="text" placeholder="Search admins..." oninput="filterAdmins(this)" style="width: 100%; padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.8rem; box-sizing: border-box; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='#e2e8f0'">
+                                                </div>
+
+                                                <!-- Select All -->
+                                                <label style="display: flex; align-items: center; gap: 10px; padding: 6px 4px; font-size: 0.8rem; font-weight: 600; color: #1e293b; cursor: pointer; border-bottom: 1px solid #f1f5f9; margin-bottom: 6px;">
+                                                    <input type="checkbox" class="select-all-cb" onchange="toggleSelectAll(this)" style="width: 16px; height: 16px; accent-color: var(--accent); border-radius: 4px; cursor: pointer;">
+                                                    <span>Select All</span>
+                                                </label>
+
+                                                <!-- Admins List -->
+                                                <div class="admins-list" style="max-height: 150px; overflow-y: auto; margin-bottom: 12px; display: flex; flex-direction: column; gap: 4px;">
                                                     <?php foreach ($admins_with_cards as $adm):
                                                         $checked = in_array($adm['id'], $current_access_ids) ? 'checked' : '';
+                                                        $displayName = ($adm['full_name'] ?: $adm['username']) . ' (' . $adm['username'] . ')';
                                                     ?>
-                                                        <label style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 0.75rem; color: #334155; cursor: pointer; user-select: none; text-align: left;">
-                                                            <input type="checkbox" name="admin_ids[]" value="<?php echo (int)$adm['id']; ?>" <?php echo $checked; ?> style="width: 14px; height: 14px; accent-color: var(--accent);">
-                                                            <span><?php echo htmlspecialchars($adm['full_name'] ?: $adm['username']); ?></span>
+                                                        <label class="admin-item" style="display: flex; align-items: center; gap: 10px; padding: 6px 4px; font-size: 0.8rem; color: #334155; cursor: pointer; user-select: none; transition: background 0.2s; border-radius: 6px; text-align: left;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
+                                                            <input type="checkbox" name="admin_ids[]" value="<?php echo (int)$adm['id']; ?>" <?php echo $checked; ?> onchange="updateSelectedCount(this)" style="width: 16px; height: 16px; accent-color: var(--accent); border-radius: 4px; cursor: pointer;">
+                                                            <span><?php echo htmlspecialchars($displayName); ?></span>
                                                         </label>
                                                     <?php endforeach; ?>
                                                     <?php if (empty($admins_with_cards)): ?>
-                                                        <div style="padding: 6px 12px; font-size: 0.75rem; color: #94a3b8; font-style: italic;">No admins with base cards permission</div>
-                                                    <?php else: ?>
-                                                        <div style="border-top: 1px solid #f1f5f9; padding: 6px 12px; display: flex; justify-content: flex-end; gap: 6px;">
-                                                            <button type="submit" class="btn btn-primary" style="padding: 2px 8px; font-size: 0.7rem; border-radius: 4px; background: var(--accent); color: #fff; border: none; cursor: pointer;">Save</button>
-                                                        </div>
+                                                        <div style="padding: 6px 4px; font-size: 0.8rem; color: #94a3b8; font-style: italic; text-align: left;">No admins with base cards permission</div>
                                                     <?php endif; ?>
-                                                </form>
+                                                </div>
+
+                                                <!-- Footer -->
+                                                <div style="border-top: 1px solid #f1f5f9; padding-top: 10px; display: flex; justify-content: space-between; align-items: center;">
+                                                    <span class="selected-count" style="font-size: 0.75rem; color: #64748b; font-weight: 500;">0 selected</span>
+                                                    <div style="display: flex; gap: 8px;">
+                                                        <button type="button" onclick="closeAccessDropdown(<?php echo (int)$tpl['id']; ?>)" style="padding: 6px 12px; font-size: 0.75rem; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; cursor: pointer; font-weight: 500; color: #475569; transition: background 0.2s;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='#fff'">Cancel</button>
+                                                        <button type="button" onclick="saveTemplateAccessAjax(<?php echo (int)$tpl['id']; ?>)" style="padding: 6px 16px; font-size: 0.75rem; border-radius: 8px; background: var(--accent); color: #fff; border: none; cursor: pointer; font-weight: 600; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">Save</button>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -1336,9 +1359,56 @@ include 'includes/admin_nav.php';
                 </div>
 
                 <script>
+                function filterAdmins(input) {
+                    const query = input.value.toLowerCase().trim();
+                    const dropdown = input.closest('.dropdown-menu');
+                    const items = dropdown.querySelectorAll('.admin-item');
+                    items.forEach(item => {
+                        const text = item.textContent.toLowerCase();
+                        if (text.includes(query)) {
+                            item.style.display = 'flex';
+                        } else {
+                            item.style.display = 'none';
+                        }
+                    });
+                }
+
+                function toggleSelectAll(selectAllCb) {
+                    const dropdown = selectAllCb.closest('.dropdown-menu');
+                    const checkboxes = dropdown.querySelectorAll('.admins-list input[type="checkbox"]');
+                    checkboxes.forEach(cb => {
+                        if (cb.closest('.admin-item').style.display !== 'none') {
+                            cb.checked = selectAllCb.checked;
+                        }
+                    });
+                    updateDropdownSelectedCount(dropdown);
+                }
+
+                function updateSelectedCount(cb) {
+                    const dropdown = cb.closest('.dropdown-menu');
+                    updateDropdownSelectedCount(dropdown);
+                }
+
+                function updateDropdownSelectedCount(dropdown) {
+                    const checkedCount = dropdown.querySelectorAll('.admins-list input[type="checkbox"]:checked').length;
+                    const totalCount = dropdown.querySelectorAll('.admins-list input[type="checkbox"]').length;
+                    const countSpan = dropdown.querySelector('.selected-count');
+                    if (countSpan) {
+                        countSpan.textContent = checkedCount + ' selected';
+                    }
+                    const selectAllCb = dropdown.querySelector('.select-all-cb');
+                    if (selectAllCb) {
+                        selectAllCb.checked = (checkedCount === totalCount && totalCount > 0);
+                    }
+                }
+
                 function toggleAccessDropdown(tplId) {
                     const el = document.getElementById('access-dropdown-' + tplId);
                     if (el) {
+                        document.querySelectorAll('.tpl-card').forEach(card => {
+                            card.style.zIndex = '1';
+                        });
+
                         if (el.style.display === 'none') {
                             document.querySelectorAll('.dropdown-menu').forEach(menu => {
                                 if (menu.id !== 'access-dropdown-' + tplId) {
@@ -1346,8 +1416,24 @@ include 'includes/admin_nav.php';
                                 }
                             });
                             el.style.display = 'block';
+                            const activeCard = el.closest('.tpl-card');
+                            if (activeCard) {
+                                activeCard.style.zIndex = '50';
+                            }
+                            updateDropdownSelectedCount(el);
                         } else {
                             el.style.display = 'none';
+                        }
+                    }
+                }
+
+                function closeAccessDropdown(tplId) {
+                    const el = document.getElementById('access-dropdown-' + tplId);
+                    if (el) {
+                        el.style.display = 'none';
+                        const activeCard = el.closest('.tpl-card');
+                        if (activeCard) {
+                            activeCard.style.zIndex = '1';
                         }
                     }
                 }
@@ -1357,15 +1443,25 @@ include 'includes/admin_nav.php';
                         document.querySelectorAll('[id^="access-dropdown-"]').forEach(menu => {
                             menu.style.display = 'none';
                         });
+                        document.querySelectorAll('.tpl-card').forEach(card => {
+                            card.style.zIndex = '1';
+                        });
                     }
                 });
 
-                function saveTemplateAccess(event, tplId) {
-                    event.preventDefault();
-                    const form = event.target;
-                    const formData = new FormData(form);
+                function saveTemplateAccessAjax(tplId) {
+                    const dropdown = document.getElementById('access-dropdown-' + tplId);
+                    if (!dropdown) return;
+
+                    const checkboxes = dropdown.querySelectorAll('.admins-list input[type="checkbox"]:checked');
+                    const adminIds = Array.from(checkboxes).map(cb => cb.value);
+
+                    const formData = new FormData();
                     formData.append('template_id', tplId);
                     formData.append('csrf_token', '<?php echo csrf_token(); ?>');
+                    adminIds.forEach(id => {
+                        formData.append('admin_ids[]', id);
+                    });
 
                     fetch('cards.php?action=save_template_access', {
                         method: 'POST',
@@ -1377,13 +1473,11 @@ include 'includes/admin_nav.php';
                     .then(r => r.json())
                     .then(data => {
                         if (data.success) {
-                            const checkedCount = form.querySelectorAll('input[type="checkbox"]:checked').length;
-                            const btnSpan = form.closest('.dropdown').querySelector('.dropdown-toggle span');
+                            const btnSpan = dropdown.closest('.dropdown').querySelector('.dropdown-toggle span');
                             if (btnSpan) {
-                                btnSpan.textContent = checkedCount + ' Admins Selected';
+                                btnSpan.textContent = adminIds.length + ' Admins Selected';
                             }
-                            const dropdown = document.getElementById('access-dropdown-' + tplId);
-                            if (dropdown) dropdown.style.display = 'none';
+                            closeAccessDropdown(tplId);
                             alert('Access updated successfully!');
                         } else {
                             alert(data.message || 'Failed to update access.');
