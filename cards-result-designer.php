@@ -629,6 +629,10 @@ include 'includes/admin_nav.php';
                     </div>
                 </div>
                 <button class="btn btn-sm btn-outline" style="width: 100%; margin-top: 8px;" onclick="addNewStudentRankBlock()">+ Add Student Rank</button>
+                <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid #e2e8f0; padding-top: 12px;">
+                    <button class="btn btn-outline" style="width:100%;" onclick="saveDesign(false)"><i class="fas fa-floppy-disk"></i> Save Design Config</button>
+                    <button class="btn btn-primary" style="width:100%;" onclick="saveDesign(true)"><i class="fas fa-circle-down"></i> Generate & Download Card</button>
+                </div>
             </div>
 
             <!-- Layout Format Management -->
@@ -824,8 +828,6 @@ include 'includes/admin_nav.php';
 
             <!-- Footer Save and Export -->
             <div style="margin-top:auto; padding-top:14px; border-top:1px solid #e2e8f0; display:flex; flex-direction:column; gap:8px;">
-                <button class="btn btn-outline" style="width:100%;" onclick="saveDesign(false)"><i class="fas fa-floppy-disk"></i> Save Design Config</button>
-                <button class="btn btn-primary" style="width:100%;" onclick="saveDesign(true)"><i class="fas fa-circle-down"></i> Generate & Download Card</button>
                 <a href="cards.php?tab=test_results" class="btn btn-soft" style="width:100%; text-align:center;"><i class="fas fa-arrow-left"></i> Back to Dashboard</a>
             </div>
         </div>
