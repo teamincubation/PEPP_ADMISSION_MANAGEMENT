@@ -205,7 +205,7 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
             (id, title, category, description, bg_image, canvas_width, canvas_height, resolution_dpi, aspect_ratio, status, elements_json, created_by, created_at)
             VALUES
             (10, 'Mega Test Result Template', 'Achievement', 'Mega Test result announcement template with top 4 ranks.', 'uploads/card_templates/mega_test_result_template.jpg', 1671, 2048, 300, '1671:2048', 'active',
-            '[{\"id\":\"test_number\",\"name\":\"Test Number\",\"type\":\"text\",\"textContent\":\"1\",\"left\":1215,\"top\":165,\"width\":120,\"height\":120,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":110,\"fontWeight\":\"700\",\"color\":\"#ffffff\",\"textAlign\":\"center\",\"lineHeight\":1.0,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0},{\"id\":\"chapter_name\",\"name\":\"Chapter Name\",\"type\":\"text\",\"textContent\":\"Test Chapter\",\"left\":290,\"top\":340,\"width\":800,\"height\":80,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":48,\"fontWeight\":\"700\",\"color\":\"#f59e0b\",\"textAlign\":\"left\",\"lineHeight\":1.2,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0},{\"id\":\"rank_badge_1\",\"name\":\"Rank 1 Badge\",\"type\":\"text\",\"textContent\":\"1st\",\"left\":125,\"top\":510,\"width\":100,\"height\":50,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":36,\"fontWeight\":\"700\",\"color\":\"#ffffff\",\"textAlign\":\"center\",\"lineHeight\":1.0,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0},{\"id\":\"rank_photo_1\",\"name\":\"Rank 1 Photo\",\"type\":\"photo\",\"left\":260,\"top\":470,\"width\":170,\"height\":170,\"borderWidth\":0,\"borderColor\":\"#fecaca\",\"mask\":\"rounded\",\"opacity\":1,\"rotate\":0},{\"id\":\"rank_name_1\",\"name\":\"Rank 1 Student Name\",\"type\":\"text\",\"textContent\":\"Student Name\",\"left\":480,\"top\":495,\"width\":800,\"height\":55,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":42,\"fontWeight\":\"700\",\"color\":\"#1e293b\",\"textAlign\":\"left\",\"lineHeight\":1.2,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0},{\"id\":\"rank_institute_1\",\"name\":\"Rank 1 Institute\",\"type\":\"text\",\"textContent\":\"College Name\",\"left\":480,\"top\":555,\"width\":800,\"height\":45,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":30,\"fontWeight\":\"400\",\"color\":\"#64748b\",\"textAlign\":\"left\",\"lineHeight\":1.2,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0},{\"id\":\"metadata\",\"name\":\"Metadata\",\"type\":\"metadata\",\"coordinate_mode\":\"native\"}]',
+            '[{\"id\":\"test_number\",\"name\":\"Test Number\",\"type\":\"text\",\"textContent\":\"1\",\"left\":1215,\"top\":165,\"width\":120,\"height\":120,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":110,\"fontWeight\":\"700\",\"color\":\"#ffffff\",\"textAlign\":\"center\",\"lineHeight\":1.0,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0},{\"id\":\"chapter_name\",\"name\":\"Chapter Name\",\"type\":\"text\",\"textContent\":\"Test Chapter\",\"left\":290,\"top\":340,\"width\":800,\"height\":80,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":48,\"fontWeight\":\"700\",\"color\":\"#f59e0b\",\"textAlign\":\"left\",\"lineHeight\":1.2,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0},{\"id\":\"rank_badge_1\",\"name\":\"Rank 1 Badge\",\"type\":\"text\",\"textContent\":\"1st\",\"left\":125,\"top\":510,\"width\":90,\"height\":90,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":36,\"fontWeight\":\"700\",\"color\":\"#ffffff\",\"textAlign\":\"center\",\"lineHeight\":1.0,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0,\"showMarker\":true,\"markerColor\":\"#eab308\"},{\"id\":\"rank_photo_1\",\"name\":\"Rank 1 Photo\",\"type\":\"photo\",\"left\":260,\"top\":470,\"width\":170,\"height\":170,\"borderWidth\":0,\"borderColor\":\"#fecaca\",\"mask\":\"rounded\",\"opacity\":1,\"rotate\":0},{\"id\":\"rank_name_1\",\"name\":\"Rank 1 Student Name\",\"type\":\"text\",\"textContent\":\"Student Name\",\"left\":480,\"top\":495,\"width\":800,\"height\":55,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":42,\"fontWeight\":\"700\",\"color\":\"#1e293b\",\"textAlign\":\"left\",\"lineHeight\":1.2,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0},{\"id\":\"rank_institute_1\",\"name\":\"Rank 1 Institute\",\"type\":\"text\",\"textContent\":\"College Name\",\"left\":480,\"top\":555,\"width\":800,\"height\":45,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":30,\"fontWeight\":\"400\",\"color\":\"#64748b\",\"textAlign\":\"left\",\"lineHeight\":1.2,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0},{\"id\":\"metadata\",\"name\":\"Metadata\",\"type\":\"metadata\",\"coordinate_mode\":\"native\"}]',
             'system', DATETIME('now'));
         ");
         return;
@@ -371,6 +371,9 @@ try {
                 $suffix = ($r === 1) ? 'st' : (($r === 2) ? 'nd' : (($r === 3) ? 'rd' : 'th'));
                 $y_offset = 470 + ($r - 1) * 200;
 
+                $marker_colors = [1 => '#eab308', 2 => '#94a3b8', 3 => '#cd7f32', 4 => '#64748b'];
+                $m_color = $marker_colors[$r] ?? '#64748b';
+
                 $default_elements[] = [
                     "id" => "rank_badge_" . $r,
                     "name" => "Rank " . $r . " Badge",
@@ -378,8 +381,8 @@ try {
                     "textContent" => $r . $suffix,
                     "left" => 125,
                     "top" => $y_offset + 40,
-                    "width" => 100,
-                    "height" => 50,
+                    "width" => 90,
+                    "height" => 90,
                     "fontFamily" => "Google Sans Flex",
                     "fontSize" => 36,
                     "fontWeight" => "700",
@@ -388,7 +391,9 @@ try {
                     "lineHeight" => 1.0,
                     "letterSpacing" => 0,
                     "opacity" => 1,
-                    "rotate" => 0
+                    "rotate" => 0,
+                    "showMarker" => true,
+                    "markerColor" => $m_color
                 ];
 
                 $default_elements[] = [
@@ -473,19 +478,38 @@ try {
                 if ($tpl_row) {
                     $el_arr = json_decode($tpl_row['elements_json'], true) ?: [];
                     $has_metadata = false;
-                    foreach ($el_arr as $item) {
+                    $badge_updated = false;
+
+                    foreach ($el_arr as &$item) {
                         if (isset($item['id']) && $item['id'] === 'metadata') {
                             $has_metadata = true;
-                            break;
+                        }
+                        // Dynamic upgrade to circular filled badges for backwards compatibility
+                        if (isset($item['id']) && strpos($item['id'], 'rank_badge_') === 0) {
+                            if (!isset($item['showMarker'])) {
+                                $item['showMarker'] = true;
+                                $item['width'] = 90;
+                                $item['height'] = 90;
+                                $item['color'] = '#ffffff';
+                                $item['textAlign'] = 'center';
+                                $r_num = (int)str_replace('rank_badge_', '', $item['id']);
+                                $marker_colors = [1 => '#eab308', 2 => '#94a3b8', 3 => '#cd7f32', 4 => '#64748b'];
+                                $item['markerColor'] = $marker_colors[$r_num] ?? '#64748b';
+                                $badge_updated = true;
+                            }
                         }
                     }
-                    if (!$has_metadata) {
-                        $el_arr[] = [
-                            "id" => "metadata",
-                            "name" => "Metadata",
-                            "type" => "metadata",
-                            "coordinate_mode" => "native"
-                        ];
+                    unset($item);
+
+                    if (!$has_metadata || $badge_updated) {
+                        if (!$has_metadata) {
+                            $el_arr[] = [
+                                "id" => "metadata",
+                                "name" => "Metadata",
+                                "type" => "metadata",
+                                "coordinate_mode" => "native"
+                            ];
+                        }
                         $stmt_upd = $pdo->prepare("UPDATE card_templates SET elements_json = ? WHERE id = ?");
                         $stmt_upd->execute([json_encode($el_arr), $tpl_row['id']]);
                     }

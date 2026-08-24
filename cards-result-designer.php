@@ -544,6 +544,33 @@ include 'includes/admin_nav.php';
                         <div class="field" style="margin:0;">
                             <label>Letter Spacing (px)</label>
                             <input type="number" id="prop-text-spacing" step="0.5" value="0" oninput="updateActiveElementFromProps()">
+                    </div>
+                </div>
+
+                <!-- Rank Marker Settings -->
+                <div class="prop-section" id="prop-marker-settings" style="display:none; margin-top:12px;">
+                    <div class="prop-title">Circular Marker Settings</div>
+                    <div class="field-row">
+                        <div class="field" style="margin:0;">
+                            <label>Show Rank Marker</label>
+                            <select id="prop-marker-show" onchange="updateActiveElementFromProps()">
+                                <option value="false">OFF</option>
+                                <option value="true">ON</option>
+                            </select>
+                        </div>
+                        <div class="field" style="margin:0;">
+                            <label>Marker Color</label>
+                            <input type="color" id="prop-marker-color" style="height:32px; padding:0; border:none; width:100%;" oninput="updateActiveElementFromProps()">
+                        </div>
+                    </div>
+                    <div class="field-row" style="margin-top:8px;">
+                        <div class="field" style="margin:0;">
+                            <label>Border Width (px)</label>
+                            <input type="number" id="prop-marker-border-w" min="0" max="20" value="0" oninput="updateActiveElementFromProps()">
+                        </div>
+                        <div class="field" style="margin:0;">
+                            <label>Border Color</label>
+                            <input type="color" id="prop-marker-border-c" style="height:32px; padding:0; border:none; width:100%;" oninput="updateActiveElementFromProps()">
                         </div>
                     </div>
                 </div>
@@ -1058,6 +1085,19 @@ function drawElements() {
             else if (align === 'right') div.style.justifyContent = 'flex-end';
             else div.style.justifyContent = 'center';
 
+            if (el.showMarker) {
+                div.style.backgroundColor = el.markerColor || '#eab308';
+                div.style.borderRadius = '50%';
+                if (el.markerBorderWidth && el.markerBorderColor) {
+                    div.style.border = `${el.markerBorderWidth}px solid ${el.markerBorderColor}`;
+                } else {
+                    div.style.border = 'none';
+                }
+            } else {
+                div.style.backgroundColor = 'transparent';
+                div.style.borderRadius = '0';
+                div.style.border = 'none';
+            }
         } else if (el.type === 'photo') {
             const wrapper = document.createElement('div');
             wrapper.style.position = 'absolute';
@@ -1287,6 +1327,7 @@ function updatePropertiesPanel() {
 
     const textSettings = document.getElementById('prop-text-settings');
     const photoSettings = document.getElementById('prop-photo-settings');
+    const markerSettings = document.getElementById('prop-marker-settings');
 
     if (el.type === 'text') {
         textSettings.style.display = 'block';
@@ -1300,8 +1341,19 @@ function updatePropertiesPanel() {
         document.getElementById('prop-text-align').value = el.textAlign || 'left';
         document.getElementById('prop-text-spacing').value = el.letterSpacing || 0;
 
+        if (el.id && el.id.startsWith('rank_badge_')) {
+            markerSettings.style.display = 'block';
+            document.getElementById('prop-marker-show').value = el.showMarker ? 'true' : 'false';
+            document.getElementById('prop-marker-color').value = el.markerColor || '#eab308';
+            document.getElementById('prop-marker-border-w').value = el.markerBorderWidth || 0;
+            document.getElementById('prop-marker-border-c').value = el.markerBorderColor || '#ffffff';
+        } else {
+            markerSettings.style.display = 'none';
+        }
+
     } else if (el.type === 'photo') {
         textSettings.style.display = 'none';
+        markerSettings.style.display = 'none';
         photoSettings.style.display = 'block';
 
         const mapping = studentRankMappings[el.id] || { student_uid: '', zoom: 100, panX: 0, panY: 0 };
@@ -1332,6 +1384,13 @@ function updateActiveElementFromProps() {
         el.color = document.getElementById('prop-text-color').value;
         el.textAlign = document.getElementById('prop-text-align').value;
         el.letterSpacing = parseFloat(document.getElementById('prop-text-spacing').value) || 0;
+
+        if (el.id && el.id.startsWith('rank_badge_')) {
+            el.showMarker = document.getElementById('prop-marker-show').value === 'true';
+            el.markerColor = document.getElementById('prop-marker-color').value;
+            el.markerBorderWidth = parseInt(document.getElementById('prop-marker-border-w').value) || 0;
+            el.markerBorderColor = document.getElementById('prop-marker-border-c').value;
+        }
     } else if (el.type === 'photo') {
         el.mask = document.getElementById('prop-photo-mask').value;
     }
@@ -1452,6 +1511,9 @@ function addNewStudentRankBlock() {
     const suffix = (nextRank === 1) ? 'st' : ((nextRank === 2) ? 'nd' : ((nextRank === 3) ? 'rd' : 'th'));
     const yOffset = 470 + (nextRank - 1) * 200;
 
+    const markerColors = {1: '#eab308', 2: '#94a3b8', 3: '#cd7f32', 4: '#64748b'};
+    const markerColor = markerColors[nextRank] || '#64748b';
+
     const newItems = [
         {
             "id": "rank_badge_" + nextRank,
@@ -1460,8 +1522,8 @@ function addNewStudentRankBlock() {
             "textContent": nextRank + suffix,
             "left": 125,
             "top": yOffset + 40,
-            "width": 100,
-            "height": 50,
+            "width": 90,
+            "height": 90,
             "fontFamily": "Google Sans Flex",
             "fontSize": 36,
             "fontWeight": "700",
@@ -1470,7 +1532,9 @@ function addNewStudentRankBlock() {
             "lineHeight": 1.0,
             "letterSpacing": 0,
             "opacity": 1,
-            "rotate": 0
+            "rotate": 0,
+            "showMarker": true,
+            "markerColor": markerColor
         },
         {
             "id": "rank_photo_" + nextRank,
@@ -1771,6 +1835,24 @@ function saveDesign(isExporting = false) {
 
                     const totalTextH = linesArr.length * (el.fontSize * (el.lineHeight || 1.2));
                     let startY = el.top + (el.height - totalTextH) / 2; // Center vertically within the box bounding height
+
+                    if (el.showMarker) {
+                        const cx = el.left + el.width / 2;
+                        const cy = el.top + el.height / 2;
+                        const r = Math.min(el.width, el.height) / 2;
+
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+                        ctx.fillStyle = el.markerColor || '#eab308';
+                        ctx.fill();
+                        if (el.markerBorderWidth && el.markerBorderColor) {
+                            ctx.lineWidth = el.markerBorderWidth;
+                            ctx.strokeStyle = el.markerBorderColor;
+                            ctx.stroke();
+                        }
+                        // Restore fillStyle back to text color
+                        ctx.fillStyle = el.color || '#1e293b';
+                    }
 
                     linesArr.forEach(function(line, lIdx) {
                         const lineW = ctx.measureText(line).width;
