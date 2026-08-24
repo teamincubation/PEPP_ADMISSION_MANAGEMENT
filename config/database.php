@@ -534,6 +534,39 @@ try {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `student_course_migrations` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `user_id` VARCHAR(50) NOT NULL,
+                `old_course` VARCHAR(255) NOT NULL,
+                `old_course_id` INT NULL,
+                `old_course_fee` DECIMAL(10,2) NOT NULL,
+                `new_course` VARCHAR(255) NOT NULL,
+                `new_course_id` INT NULL,
+                `new_course_fee` DECIMAL(10,2) NOT NULL,
+                `payment_plan` VARCHAR(50) NOT NULL,
+                `paid_amount_at_migration` DECIMAL(10,2) NOT NULL,
+                `outstanding_before` DECIMAL(10,2) NOT NULL,
+                `outstanding_after` DECIMAL(10,2) NOT NULL,
+                `upgrade_amount` DECIMAL(10,2) NOT NULL,
+                `migration_reason` TEXT NOT NULL,
+                `migrated_by` VARCHAR(100) NOT NULL,
+                `migrated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `status` VARCHAR(30) NOT NULL DEFAULT 'completed',
+                `revised_installment_schedule` TEXT NULL,
+                KEY `idx_scm_uid` (`user_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        try {
+            $colCheck = $pdo->query("SHOW COLUMNS FROM `student_course_migrations` LIKE 'revised_installment_schedule'")->fetch();
+            if (!$colCheck) {
+                $pdo->exec("ALTER TABLE `student_course_migrations` ADD COLUMN `revised_installment_schedule` TEXT NULL");
+            }
+        } catch (Exception $colEx) {
+            // Ignore column issues if already exists or other error
+        }
+
         // Self-heal Mega Test Result template preset inside card_templates
         $stmt_check = $pdo->prepare("SELECT COUNT(*) FROM card_templates WHERE title = 'Mega Test Result Template'");
         $stmt_check->execute();
