@@ -1277,7 +1277,7 @@ try {
 
     echo "\n--- TEST 171: Font weights are correctly mapped ---\n";
     $pdf_code = file_get_contents(dirname(__DIR__) . '/download-rank-list-pdf.php');
-    $start = strpos($pdf_code, 'class MultiPagePDF');
+    $start = strpos($pdf_code, 'class TTFFontInfo');
     $end = strpos($pdf_code, '// ── Database Queries');
     if ($start !== false && $end !== false) {
         $class_block = substr($pdf_code, $start, $end - $start);
@@ -1293,6 +1293,19 @@ try {
     $pdf_out = $pdf_mock->output();
     run_assert("Regular text uses F1 font alias", strpos($pdf_out, "/F1") !== false);
     run_assert("Bold text uses F4 font alias", strpos($pdf_out, "/F4") !== false);
+
+    // Added specific font validation assertions
+    run_assert("PDF embeds GoogleSansFlex-Regular BaseFont", strpos($pdf_out, "/BaseFont /GoogleSansFlex-Regular") !== false);
+    run_assert("PDF embeds GoogleSansFlex-Medium BaseFont", strpos($pdf_out, "/BaseFont /GoogleSansFlex-Medium") !== false);
+    run_assert("PDF embeds GoogleSansFlex-SemiBold BaseFont", strpos($pdf_out, "/BaseFont /GoogleSansFlex-SemiBold") !== false);
+    run_assert("PDF embeds GoogleSansFlex-Bold BaseFont", strpos($pdf_out, "/BaseFont /GoogleSansFlex-Bold") !== false);
+    run_assert("TrueType font subtype is declared in output", strpos($pdf_out, "/Subtype /TrueType") !== false);
+
+    // Verify proportional widths in PDF output
+    $w_i = $pdf_mock->width("iiiiii", 12, 400);
+    $w_w = $pdf_mock->width("WWWWWW", 12, 400);
+    run_assert("Proportional spacing test ('W' is wider than 'i')", $w_w > $w_i * 2);
+    run_assert("No fixed 500-unit fallback width is applied for 'i'", $w_i < 30);
 
     echo "\n--- TEST 172: Not-attended students are detected ---\n";
     // Setup mock enrolled students and results

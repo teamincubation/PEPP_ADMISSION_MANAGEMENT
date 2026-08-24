@@ -27,6 +27,176 @@ if (empty($year) || $plan_id <= 0 || $activity_id <= 0) {
 }
 
 // ── Dependency-Free Multi-Page PDF Writer ─────────────────────────────
+class TTFFontInfo {
+    public $unitsPerEm = 1000;
+    public $ascent = 800;
+    public $descent = -200;
+    public $widths = [];
+    public $bbox = [-1000, -1000, 1000, 1000];
+
+    public function __construct($path) {
+        $data = @file_get_contents($path);
+        if (!$data) return;
+        $this->parse($data);
+    }
+
+    private function parse($data) {
+        $numTables = $this->unpackWord($data, 4);
+        $tables = [];
+        $offset = 12;
+        for ($i = 0; $i < $numTables; $i++) {
+            $tag = substr($data, $offset, 4);
+            $tableOffset = $this->unpackDWord($data, $offset + 8);
+            $length = $this->unpackDWord($data, $offset + 12);
+            $tables[$tag] = ['offset' => $tableOffset, 'length' => $length];
+            $offset += 16;
+        }
+
+        if (isset($tables['head'])) {
+            $headOffset = $tables['head']['offset'];
+            $this->unitsPerEm = $this->unpackWord($data, $headOffset + 18);
+            if ($this->unitsPerEm <= 0) $this->unitsPerEm = 1000;
+            $xMin = $this->unpackShort($data, $headOffset + 36);
+            $yMin = $this->unpackShort($data, $headOffset + 38);
+            $xMax = $this->unpackShort($data, $headOffset + 40);
+            $yMax = $this->unpackShort($data, $headOffset + 42);
+            $this->bbox = [
+                round(($xMin / $this->unitsPerEm) * 1000),
+                round(($yMin / $this->unitsPerEm) * 1000),
+                round(($xMax / $this->unitsPerEm) * 1000),
+                round(($yMax / $this->unitsPerEm) * 1000)
+            ];
+        }
+
+        $numberOfHMetrics = 0;
+        if (isset($tables['hhea'])) {
+            $hheaOffset = $tables['hhea']['offset'];
+            $asc = $this->unpackShort($data, $hheaOffset + 4);
+            $desc = $this->unpackShort($data, $hheaOffset + 6);
+            $this->ascent = round(($asc / $this->unitsPerEm) * 1000);
+            $this->descent = round(($desc / $this->unitsPerEm) * 1000);
+            $numberOfHMetrics = $this->unpackWord($data, $hheaOffset + 34);
+        }
+
+        $winAnsiToUnicode = [];
+        for ($c = 32; $c <= 255; $c++) {
+            if ($c >= 32 && $c <= 126) {
+                $winAnsiToUnicode[$c] = $c;
+            } else {
+                $winAnsiToUnicode[$c] = self::$winAnsiMap[$c] ?? 0;
+            }
+        }
+
+        $glyphMap = [];
+        if (isset($tables['cmap'])) {
+            $cmapOffset = $tables['cmap']['offset'];
+            $numSubtables = $this->unpackWord($data, $cmapOffset + 2);
+            $subtableOffset = 0;
+            for ($i = 0; $i < $numSubtables; $i++) {
+                $platformId = $this->unpackWord($data, $cmapOffset + 4 + $i * 8);
+                $encodingId = $this->unpackWord($data, $cmapOffset + 6 + $i * 8);
+                $offsetVal = $this->unpackDWord($data, $cmapOffset + 8 + $i * 8);
+                if (($platformId == 3 && $encodingId == 1) || $platformId == 0) {
+                    $subtableOffset = $cmapOffset + $offsetVal;
+                    break;
+                }
+            }
+
+            if ($subtableOffset > 0) {
+                $format = $this->unpackWord($data, $subtableOffset);
+                if ($format == 4) {
+                    $segCount2 = $this->unpackWord($data, $subtableOffset + 6);
+                    $segCount = $segCount2 / 2;
+                    $endCodesOffset = $subtableOffset + 14;
+                    $startCodesOffset = $endCodesOffset + $segCount2 + 2;
+                    $idDeltasOffset = $startCodesOffset + $segCount2;
+                    $idRangeOffsetsOffset = $idDeltasOffset + $segCount2;
+
+                    foreach ($winAnsiToUnicode as $c => $unicode) {
+                        if ($unicode == 0) {
+                            $glyphMap[$c] = 0;
+                            continue;
+                        }
+                        $glyphMap[$c] = 0;
+                        for ($seg = 0; $seg < $segCount; $seg++) {
+                            $endCode = $this->unpackWord($data, $endCodesOffset + $seg * 2);
+                            if ($unicode <= $endCode) {
+                                $startCode = $this->unpackWord($data, $startCodesOffset + $seg * 2);
+                                if ($unicode >= $startCode) {
+                                    $idDelta = $this->unpackShort($data, $idDeltasOffset + $seg * 2);
+                                    $idRangeOffset = $this->unpackWord($data, $idRangeOffsetsOffset + $seg * 2);
+                                    if ($idRangeOffset > 0) {
+                                        $glyphOffset = $idRangeOffsetsOffset + $seg * 2 + $idRangeOffset + ($unicode - $startCode) * 2;
+                                        $glyphIndex = $this->unpackWord($data, $glyphOffset);
+                                        if ($glyphIndex > 0) {
+                                            $glyphIndex = ($glyphIndex + $idDelta) & 0xFFFF;
+                                        }
+                                    } else {
+                                        $glyphIndex = ($unicode + $idDelta) & 0xFFFF;
+                                    }
+                                    $glyphMap[$c] = $glyphIndex;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (isset($tables['hmtx']) && $numberOfHMetrics > 0) {
+            $hmtxOffset = $tables['hmtx']['offset'];
+            foreach ($winAnsiToUnicode as $c => $unicode) {
+                $glyphIndex = $glyphMap[$c] ?? 0;
+                if ($glyphIndex < $numberOfHMetrics) {
+                    $width = $this->unpackWord($data, $hmtxOffset + $glyphIndex * 4);
+                } else {
+                    $width = $this->unpackWord($data, $hmtxOffset + ($numberOfHMetrics - 1) * 4);
+                }
+                $this->widths[$c] = round(($width / $this->unitsPerEm) * 1000);
+            }
+        } else {
+            for ($c = 32; $c <= 255; $c++) {
+                $this->widths[$c] = 500;
+            }
+        }
+    }
+
+    private function unpackWord($data, $offset) {
+        $arr = unpack('n', substr($data, $offset, 2));
+        return $arr[1];
+    }
+
+    private function unpackShort($data, $offset) {
+        $v = $this->unpackWord($data, $offset);
+        return ($v >= 0x8000) ? $v - 0x10000 : $v;
+    }
+
+    private function unpackDWord($data, $offset) {
+        $arr = unpack('N', substr($data, $offset, 4));
+        return $arr[1];
+    }
+
+    private static $winAnsiMap = [
+        127 => 0, 128 => 8364, 130 => 8218, 131 => 402, 132 => 8222, 133 => 8230, 134 => 8224, 135 => 8225,
+        136 => 710, 137 => 8240, 138 => 352, 139 => 8249, 140 => 338, 142 => 381, 145 => 8216, 146 => 8217,
+        147 => 8220, 148 => 8221, 149 => 8226, 150 => 8211, 151 => 8212, 152 => 732, 153 => 8482, 154 => 353,
+        155 => 8250, 156 => 339, 158 => 382, 159 => 376, 160 => 160, 161 => 161, 162 => 162, 163 => 163,
+        164 => 164, 165 => 165, 166 => 166, 167 => 167, 168 => 168, 169 => 169, 170 => 170, 171 => 171,
+        172 => 172, 173 => 173, 174 => 174, 175 => 175, 176 => 176, 177 => 177, 178 => 178, 179 => 179,
+        180 => 180, 181 => 181, 182 => 182, 183 => 183, 184 => 184, 185 => 185, 186 => 186, 187 => 187,
+        188 => 188, 189 => 189, 190 => 190, 191 => 191, 192 => 192, 193 => 193, 194 => 194, 195 => 195,
+        196 => 196, 197 => 197, 198 => 198, 199 => 199, 200 => 200, 201 => 201, 202 => 202, 203 => 203,
+        204 => 204, 205 => 205, 206 => 206, 207 => 207, 208 => 208, 209 => 209, 210 => 210, 211 => 211,
+        212 => 212, 213 => 213, 214 => 214, 215 => 215, 216 => 216, 217 => 217, 218 => 218, 219 => 219,
+        220 => 220, 221 => 221, 222 => 222, 223 => 223, 224 => 224, 225 => 225, 226 => 226, 227 => 227,
+        228 => 228, 229 => 229, 230 => 230, 231 => 231, 232 => 232, 233 => 233, 234 => 234, 235 => 235,
+        236 => 236, 237 => 237, 238 => 238, 239 => 239, 240 => 240, 241 => 241, 242 => 242, 243 => 243,
+        244 => 244, 245 => 245, 246 => 246, 247 => 247, 248 => 248, 249 => 249, 250 => 250, 251 => 251,
+        252 => 252, 253 => 253, 254 => 254, 255 => 255
+    ];
+}
+
 class MultiPagePDF {
     const W = 595.28; // A4 width in points
     const H = 841.89; // A4 height in points
@@ -35,9 +205,46 @@ class MultiPagePDF {
     private $currentPageIndex = -1;
     private $images = []; // filepath -> [alias, width, height, bytes]
     private $nextImageId = 1;
+    private $fonts = [];
 
     public function __construct() {
         $this->addPage();
+
+        $base_dir = __DIR__;
+        if (!file_exists($base_dir . '/assets/fonts/GoogleSansFlex-Regular.ttf')) {
+            $base_dir = 'd:/LABINC PVT LTD/PEPP Learning/PEPP/2026-27/Website 2027/Admin-Register-Installment/Antigravity/admissions';
+        }
+        $regularPath = $base_dir . '/assets/fonts/GoogleSansFlex-Regular.ttf';
+        $mediumPath  = $base_dir . '/assets/fonts/GoogleSansFlex-Medium.ttf';
+        $semiBoldPath = $base_dir . '/assets/fonts/GoogleSansFlex-SemiBold.ttf';
+        $boldPath    = $base_dir . '/assets/fonts/GoogleSansFlex-Bold.ttf';
+
+        global $pdo;
+        if (isset($pdo)) {
+            try {
+                $db_fonts = $pdo->query("SELECT font_name, font_file FROM custom_fonts")->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($db_fonts as $db_f) {
+                    $name = strtolower($db_f['font_name']);
+                    $file_path = __DIR__ . '/../' . $db_f['font_file'];
+                    if (file_exists($file_path)) {
+                        if (strpos($name, 'regular') !== false || (strpos($name, 'flex') !== false && strpos($name, 'bold') === false && strpos($name, 'medium') === false && strpos($name, 'semibold') === false)) {
+                            $regularPath = $file_path;
+                        } elseif (strpos($name, 'medium') !== false) {
+                            $mediumPath = $file_path;
+                        } elseif (strpos($name, 'semibold') !== false) {
+                            $semiBoldPath = $file_path;
+                        } elseif (strpos($name, 'bold') !== false) {
+                            $boldPath = $file_path;
+                        }
+                    }
+                }
+            } catch (Exception $e) {}
+        }
+
+        $this->fonts['F1'] = new TTFFontInfo($regularPath);
+        $this->fonts['F2'] = new TTFFontInfo($mediumPath);
+        $this->fonts['F3'] = new TTFFontInfo($semiBoldPath);
+        $this->fonts['F4'] = new TTFFontInfo($boldPath);
     }
 
     public function addPage() {
@@ -55,12 +262,35 @@ class MultiPagePDF {
         return str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], $s);
     }
 
-    public function width($txt, $size) {
-        return strlen((string)$txt) * $size * 0.5;
+    public function width($txt, $size, $weight = 400) {
+        if ($weight === true) {
+            $weight = 700;
+        } elseif ($weight === false || $weight === null) {
+            $weight = 400;
+        }
+
+        $f = 'F1';
+        if ($weight == 500) {
+            $f = 'F2';
+        } elseif ($weight == 600) {
+            $f = 'F3';
+        } elseif ($weight >= 700) {
+            $f = 'F4';
+        }
+
+        $font = $this->fonts[$f] ?? null;
+        $totalWidth = 0;
+        $len = strlen($txt);
+        for ($i = 0; $i < $len; $i++) {
+            $char = ord($txt[$i]);
+            $w = ($font && isset($font->widths[$char])) ? $font->widths[$char] : 500;
+            $totalWidth += $w;
+        }
+        return ($totalWidth / 1000) * $size;
     }
 
     public function text($x, $y, $size, $txt, $weight = 400, $align = 'L', $w = 0) {
-        $tw = $this->width($txt, $size);
+        $tw = $this->width($txt, $size, $weight);
         if ($align === 'C') $x += max(0, ($w - $tw) / 2);
         if ($align === 'R') $x += max(0, $w - $tw);
         $py = self::H - $y - $size * 0.78;
@@ -230,10 +460,14 @@ class MultiPagePDF {
 
         $kids = [];
 
-        $regularPath = __DIR__ . '/assets/fonts/GoogleSansFlex-Regular.ttf';
-        $mediumPath  = __DIR__ . '/assets/fonts/GoogleSansFlex-Medium.ttf';
-        $semiBoldPath = __DIR__ . '/assets/fonts/GoogleSansFlex-SemiBold.ttf';
-        $boldPath    = __DIR__ . '/assets/fonts/GoogleSansFlex-Bold.ttf';
+        $base_dir = __DIR__;
+        if (!file_exists($base_dir . '/assets/fonts/GoogleSansFlex-Regular.ttf')) {
+            $base_dir = 'd:/LABINC PVT LTD/PEPP Learning/PEPP/2026-27/Website 2027/Admin-Register-Installment/Antigravity/admissions';
+        }
+        $regularPath = $base_dir . '/assets/fonts/GoogleSansFlex-Regular.ttf';
+        $mediumPath  = $base_dir . '/assets/fonts/GoogleSansFlex-Medium.ttf';
+        $semiBoldPath = $base_dir . '/assets/fonts/GoogleSansFlex-SemiBold.ttf';
+        $boldPath    = $base_dir . '/assets/fonts/GoogleSansFlex-Bold.ttf';
 
         if ($pdo) {
             try {
@@ -296,23 +530,30 @@ class MultiPagePDF {
 
         $objs[2] = "<< /Type /Pages /Kids [" . implode(' ', $kids) . "] /Count " . count($this->pages) . " >>";
 
-        $widths = array_fill(0, 224, 500);
-        $widthsStr = "[" . implode(' ', $widths) . "]";
-
         foreach ($fontConfigs as $alias => $cfg) {
             $ttfBytes = @file_get_contents($cfg['path']);
             if (!$ttfBytes) {
                 $ttfBytes = @file_get_contents($fontConfigs['F1']['path']);
             }
 
-            if ($ttfBytes) {
+            $fontInfo = $this->fonts[$alias] ?? null;
+            $widthsStr = "[";
+            for ($c = 32; $c <= 255; $c++) {
+                $w = ($fontInfo && isset($fontInfo->widths[$c])) ? $fontInfo->widths[$c] : 500;
+                $widthsStr .= $w . " ";
+            }
+            $widthsStr = rtrim($widthsStr) . "]";
+
+            if ($ttfBytes && $fontInfo) {
                 $objs[$cfg['fontObj']] = "<< /Type /Font /Subtype /TrueType /BaseFont /" . $cfg['name']
                                        . " /FirstChar 32 /LastChar 255 /Widths " . $cfg['widthObj'] . " 0 R"
                                        . " /FontDescriptor " . $cfg['descObj'] . " 0 R /Encoding /WinAnsiEncoding >>";
 
                 $objs[$cfg['descObj']] = "<< /Type /FontDescriptor /FontName /" . $cfg['name']
-                                       . " /Flags 32 /FontBBox [-1000 -1000 1000 1000]"
-                                       . " /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80"
+                                       . " /Flags 32 /FontBBox [" . implode(' ', $fontInfo->bbox) . "]"
+                                       . " /ItalicAngle 0 /Ascent " . $fontInfo->ascent
+                                       . " /Descent " . $fontInfo->descent
+                                       . " /CapHeight 700 /StemV 80"
                                        . " /FontFile2 " . $cfg['fileObj'] . " 0 R >>";
 
                 $objs[$cfg['fileObj']] = "<< /Length " . strlen($ttfBytes) . " /Length1 " . strlen($ttfBytes) . " >>\nstream\n" . $ttfBytes . "\nendstream";
@@ -690,7 +931,7 @@ function draw_page_headers($pdf, $academic_year, $course_name, $chapter_name, $f
     // Chapter Title
     $pdf->text($lm, $y, 11, 'Test: ', 600);
     $pdf->setTextColor(234/255, 179/255, 8/255);
-    $pdf->text($lm + $pdf->width('Test: ', 11), $y, 11, $chapter_name, 700);
+    $pdf->text($lm + $pdf->width('Test: ', 11, 600), $y, 11, $chapter_name, 700);
     $pdf->setTextColor(0, 0, 0);
 
     $y += 15;
@@ -698,7 +939,7 @@ function draw_page_headers($pdf, $academic_year, $course_name, $chapter_name, $f
     // Test Date
     $pdf->text($lm, $y, 11, 'Test Date: ', 600);
     $pdf->setTextColor(234/255, 179/255, 8/255);
-    $pdf->text($lm + $pdf->width('Test Date: ', 11), $y, 11, $formatted_date, 700);
+    $pdf->text($lm + $pdf->width('Test Date: ', 11, 600), $y, 11, $formatted_date, 700);
     $pdf->setTextColor(0, 0, 0);
 
     $y += 18;
