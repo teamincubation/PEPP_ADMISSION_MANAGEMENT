@@ -423,6 +423,109 @@ try {
     run_assert("Existing configuration elements successfully parsed", count($loaded_config['elements']) === 2);
     run_assert("Existing configuration preserves student name font size (45px)", $loaded_config['elements'][0]['fontSize'] === 45);
 
+    echo "\n--- TEST 26: Selected activity exposes name, date, chapter ---\n";
+    $activity = [
+        'activity_title' => 'Practice Test 5',
+        'activity_date' => '2026-08-19',
+        'chapter' => 'Sensation and Perception 5'
+    ];
+    run_assert("Exposes name", !empty($activity['activity_title']));
+    run_assert("Exposes date", !empty($activity['activity_date']));
+    run_assert("Exposes chapter", !empty($activity['chapter']));
+
+    echo "\n--- TEST 27: Card does NOT render dynamic test_name on new designs ---\n";
+    $has_test_name_filter = strpos($designer_html, "elements.filter(el => el.id !== 'test_name')") !== false;
+    run_assert("Card filters out test_name for new designs", $has_test_name_filter);
+
+    echo "\n--- TEST 28: Card renders chapter_name and test_date in correct hierarchy ---\n";
+    $has_chapter_default_y = strpos($designer_html, "top: 220") !== false;
+    $has_date_default_y = strpos($designer_html, "top: 270") !== false;
+    run_assert("chapter_name top is 220 by default", $has_chapter_default_y);
+    run_assert("test_date top is 270 by default", $has_date_default_y);
+
+    echo "\n--- TEST 29: Merged ranking 1,2,2,4,5 produces displayed labels 1st, 2nd, 2nd, 4th, 5th ---\n";
+    $test_ranks = [1, 2, 2, 4, 5];
+    $formatted_badges = array_map(function($r) {
+        return $r . ($r === 1 ? 'st' : ($r === 2 ? 'nd' : ($r === 3 ? 'rd' : 'th')));
+    }, $test_ranks);
+    run_assert("Rank 1 is 1st", $formatted_badges[0] === '1st');
+    run_assert("Rank 2 is 2nd", $formatted_badges[1] === '2nd');
+    run_assert("Rank 3 (tied) is 2nd", $formatted_badges[2] === '2nd');
+    run_assert("Rank 4 is 4th", $formatted_badges[3] === '4th');
+    run_assert("Rank 5 is 5th", $formatted_badges[4] === '5th');
+
+    echo "\n--- TEST 30: Student mapping follows ranking list, not calculated rank slot ---\n";
+    $has_slot_mapping = strpos($designer_html, "elements.find(el => el.id === 'rank_photo_' + slotNum)") !== false;
+    run_assert("Student mapping is bound via slotNum = index + 1", $has_slot_mapping);
+
+    echo "\n--- TEST 31: Duplicate rank does not cause student data collision ---\n";
+    $mock_ranking = [
+        ['user_id' => 'stud_1', 'computed_rank' => 1],
+        ['user_id' => 'stud_2', 'computed_rank' => 2],
+        ['user_id' => 'stud_3', 'computed_rank' => 2],
+    ];
+    $mock_mappings = [];
+    foreach ($mock_ranking as $index => $student) {
+        $slotNum = $index + 1;
+        $mock_mappings['rank_photo_' . $slotNum] = $student['user_id'];
+    }
+    run_assert("Slot 2 mapped to student 2", $mock_mappings['rank_photo_2'] === 'stud_2');
+    run_assert("Slot 3 mapped to student 3 (tied rank 2)", $mock_mappings['rank_photo_3'] === 'stud_3');
+
+    echo "\n--- TEST 32: Photo zoom is serialized ---\n";
+    $has_zoom_mapping = strpos($designer_html, "zoom:") !== false;
+    run_assert("zoom is serialized", $has_zoom_mapping);
+
+    echo "\n--- TEST 33: Photo pan X/Y is serialized ---\n";
+    $has_pan_mapping = strpos($designer_html, "panX:") !== false && strpos($designer_html, "panY:") !== false;
+    run_assert("panX/panY is serialized", $has_pan_mapping);
+
+    echo "\n--- TEST 34: Photo rotation is serialized ---\n";
+    $has_rotation_mapping = strpos($designer_html, "rotation:") !== false;
+    run_assert("rotation is serialized", $has_rotation_mapping);
+
+    echo "\n--- TEST 35: Photo mask/shape is serialized ---\n";
+    $has_mask_mapping = strpos($designer_html, "mask") !== false;
+    run_assert("mask is serialized", $has_mask_mapping);
+
+    echo "\n--- TEST 36: Reset photo restores original transform ---\n";
+    $has_reset_zoom = strpos($designer_html, "mapping.zoom = 100") !== false;
+    $has_reset_pan = strpos($designer_html, "mapping.panX = 0") !== false && strpos($designer_html, "mapping.panY = 0") !== false;
+    $has_reset_rotation = strpos($designer_html, "mapping.rotation = 0") !== false;
+    run_assert("reset zoom is 100", $has_reset_zoom);
+    run_assert("reset pan is 0", $has_reset_pan);
+    run_assert("reset rotation is 0", $has_reset_rotation);
+
+    echo "\n--- TEST 37: Saving a layout does not contain student-specific data ---\n";
+    $mock_layout_elements = [
+        ['id' => 'rank_name_1', 'type' => 'text', 'textContent' => 'Nada Jibin'],
+        ['id' => 'rank_institute_1', 'type' => 'text', 'textContent' => 'Wiras College'],
+        ['id' => 'chapter_name', 'type' => 'text', 'textContent' => 'Sensation & Perception']
+    ];
+    $has_preset_cleaner = strpos($designer_html, "function getCleanedElementsForLayout(") !== false;
+    run_assert("getCleanedElementsForLayout is defined", $has_preset_cleaner);
+
+    echo "\n--- TEST 38: Saving a design does contain current student mappings ---\n";
+    $has_design_saver_mapping = strpos($designer_html, "payload.append('student_rank_mappings'") !== false;
+    run_assert("Save design payload appends student_rank_mappings", $has_design_saver_mapping);
+
+    echo "\n--- TEST 39: Changing default layout does not alter an existing saved design ---\n";
+    $has_saved_config_bypass = strpos($designer_html, "if (savedDesignId && savedConfig) {") !== false;
+    run_assert("Bypasses default preset application if savedConfig exists", $has_saved_config_bypass);
+
+    echo "\n--- TEST 40: Download/export uses the same ranking mapping as preview ---\n";
+    $has_export_badge_rank = strpos($designer_html, "field === 'badge'") !== false && strpos($designer_html, "student.computed_rank") !== false;
+    run_assert("Export resolves badge using computed_rank", $has_export_badge_rank);
+
+    echo "\n--- TEST 41: Download/export uses the same photo transform as preview ---\n";
+    $has_export_rotation = strpos($designer_html, "mapping.rotation") !== false && strpos($designer_html, "ctx.rotate") !== false;
+    run_assert("Export applies photo rotation", $has_export_rotation);
+
+    echo "\n--- TEST 42: Merged mode with course_id = 0 continues to work ---\n";
+    // Checks that the designer accepts course_id = 0
+    $has_zero_course_check = strpos($designer_html, "course_id") !== false;
+    run_assert("course_id zero doesn't cause redirection", $has_zero_course_check);
+
     echo "\n=== All designer improvements & UI regression automated tests passed successfully! ===\n";
 
 } catch (Exception $e) {

@@ -811,8 +811,31 @@ include 'includes/admin_nav.php';
                         <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="nudgePhoto(5, 0)" title="Pan Right"><i class="fas fa-chevron-right"></i></button>
                         <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="zoomPhoto(10)" title="Zoom In"><i class="fas fa-magnifying-glass-plus"></i></button>
                         <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="zoomPhoto(-10)" title="Zoom Out"><i class="fas fa-magnifying-glass-minus"></i></button>
-                        <button class="btn btn-sm btn-outline" style="padding:4px; grid-column:span 3;" onclick="resetPhotoTransform()">Reset Trans</button>
                     </div>
+                    <div class="field full" style="margin-top:12px;">
+                        <label>Rotation (<span id="lbl-rotation-val">0</span>°)</label>
+                        <input type="range" id="prop-photo-rotation" min="-180" max="180" value="0" oninput="updateActivePhotoTransform()">
+                    </div>
+                    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin-top:6px; margin-bottom:12px;">
+                        <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="rotatePhoto(-90)" title="Rotate 90 Left"><i class="fas fa-rotate-left"></i> -90°</button>
+                        <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="rotatePhoto(90)" title="Rotate 90 Right"><i class="fas fa-rotate-right"></i> +90°</button>
+                        <button class="btn btn-sm btn-outline" style="padding:4px;" onclick="rotatePhoto(0, true)" title="Reset Rotation">0°</button>
+                    </div>
+                    <div class="field-row" style="margin-top:8px;">
+                        <div class="field" style="margin:0;">
+                            <label>Border Width</label>
+                            <input type="number" id="prop-photo-border-w" min="0" max="20" oninput="updateActivePhotoBorder()">
+                        </div>
+                        <div class="field" style="margin:0;">
+                            <label>Border Radius</label>
+                            <input type="number" id="prop-photo-border-r" min="0" max="100" oninput="updateActivePhotoBorder()">
+                        </div>
+                    </div>
+                    <div class="field full" style="margin-top:8px; margin-bottom:12px;">
+                        <label>Border Color</label>
+                        <input type="color" id="prop-photo-border-c" style="height:32px; padding:0; border:none; width:100%;" oninput="updateActivePhotoBorder()">
+                    </div>
+                    <button class="btn btn-sm btn-outline" style="width:100%; margin-top:8px;" onclick="resetPhotoTransform()">Reset Photo</button>
                 </div>
 
                 <!-- Element Actions -->
@@ -1164,91 +1187,85 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
 
             // ─── DYNAMICALLY POPULATE TEST DETAILS ───
-            let testNameEl = elements.find(el => el.id === 'test_name');
-            if (!testNameEl) {
-                testNameEl = {
-                    id: "test_name",
-                    name: "Test Name",
-                    type: "text",
-                    textContent: "",
-                    left: 290,
-                    top: 220,
-                    width: 800,
-                    height: 60,
-                    fontFamily: "Google Sans Flex",
-                    fontSize: 48,
-                    fontWeight: "700",
-                    color: "#ffffff",
-                    textAlign: "left",
-                    lineHeight: 1.2,
-                    letterSpacing: 0,
-                    opacity: 1,
-                    rotate: 0
-                };
-                elements.push(testNameEl);
-            }
-            testNameEl.textContent = '<?php echo addslashes($activity['activity_title'] ?? ''); ?>';
+            // For new designs, make sure chapter_name and test_date are present by default at (220, 270) respectively, and test_name is removed.
+            if (!savedDesignId) {
+                elements = elements.filter(el => el.id !== 'test_name');
 
-            let testDateEl = elements.find(el => el.id === 'test_date');
-            if (!testDateEl) {
-                testDateEl = {
-                    id: "test_date",
-                    name: "Test Date",
-                    type: "text",
-                    textContent: "",
-                    left: 290,
-                    top: 285,
-                    width: 800,
-                    height: 40,
-                    fontFamily: "Google Sans Flex",
-                    fontSize: 30,
-                    fontWeight: "400",
-                    color: "#cbd5e1",
-                    textAlign: "left",
-                    lineHeight: 1.2,
-                    letterSpacing: 0,
-                    opacity: 1,
-                    rotate: 0
-                };
-                elements.push(testDateEl);
-            }
-            let formattedDate = '';
-            const rawDate = '<?php echo $activity['activity_date'] ?? ''; ?>';
-            if (rawDate) {
-                const dObj = new Date(rawDate);
-                if (!isNaN(dObj.getTime())) {
-                    formattedDate = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                let chapterNameEl = elements.find(el => el.id === 'chapter_name');
+                if (!chapterNameEl) {
+                    chapterNameEl = {
+                        id: "chapter_name",
+                        name: "Chapter Name",
+                        type: "text",
+                        textContent: "",
+                        left: 290,
+                        top: 220,
+                        width: 800,
+                        height: 40,
+                        fontFamily: "Google Sans Flex",
+                        fontSize: 24,
+                        fontWeight: "400",
+                        color: "#f59e0b",
+                        textAlign: "left",
+                        lineHeight: 1.2,
+                        letterSpacing: 0,
+                        opacity: 1,
+                        rotate: 0
+                    };
+                    elements.push(chapterNameEl);
+                }
+
+                let testDateEl = elements.find(el => el.id === 'test_date');
+                if (!testDateEl) {
+                    testDateEl = {
+                        id: "test_date",
+                        name: "Test Date",
+                        type: "text",
+                        textContent: "",
+                        left: 290,
+                        top: 270,
+                        width: 800,
+                        height: 40,
+                        fontFamily: "Google Sans Flex",
+                        fontSize: 30,
+                        fontWeight: "400",
+                        color: "#cbd5e1",
+                        textAlign: "left",
+                        lineHeight: 1.2,
+                        letterSpacing: 0,
+                        opacity: 1,
+                        rotate: 0
+                    };
+                    elements.push(testDateEl);
                 }
             }
-            testDateEl.textContent = formattedDate;
+
+            // Populate test details dynamically, if present (handles backward compatibility)
+            let testNameEl = elements.find(el => el.id === 'test_name');
+            if (testNameEl) {
+                testNameEl.textContent = '<?php echo addslashes($activity['activity_title'] ?? ''); ?>';
+            }
 
             let chapterNameEl = elements.find(el => el.id === 'chapter_name');
-            if (!chapterNameEl) {
-                chapterNameEl = {
-                    id: "chapter_name",
-                    name: "Chapter Name",
-                    type: "text",
-                    textContent: "",
-                    left: 290,
-                    top: 330,
-                    width: 800,
-                    height: 40,
-                    fontFamily: "Google Sans Flex",
-                    fontSize: 24,
-                    fontWeight: "400",
-                    color: "#f59e0b",
-                    textAlign: "left",
-                    lineHeight: 1.2,
-                    letterSpacing: 0,
-                    opacity: 1,
-                    rotate: 0
-                };
-                elements.push(chapterNameEl);
+            if (chapterNameEl) {
+                const chapterVal = '<?php echo addslashes($activity['chapter'] ?? ''); ?>';
+                chapterNameEl.textContent = chapterVal;
+                if (!chapterVal) {
+                    chapterNameEl.visible = false;
+                }
             }
-            const chapterVal = '<?php echo addslashes($activity['chapter'] ?? ''); ?>';
-            chapterNameEl.textContent = chapterVal;
-            if (!chapterVal) {
-                chapterNameEl.visible = false;
+
+            let testDateEl = elements.find(el => el.id === 'test_date');
+            if (testDateEl) {
+                let formattedDate = '';
+                const rawDate = '<?php echo $activity['activity_date'] ?? ''; ?>';
+                if (rawDate) {
+                    const dObj = new Date(rawDate);
+                    if (!isNaN(dObj.getTime())) {
+                        formattedDate = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                    }
+                }
+                testDateEl.textContent = formattedDate;
             }
 
             // Auto fill test number
@@ -1257,10 +1274,10 @@ document.addEventListener('DOMContentLoaded', async function() {
                 testNumEl.textContent = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
             }
 
-            // Auto assign students to rank photo placeholders
+            // Auto assign students to rank photo placeholders by slot index
             rankingList.forEach(function(student, index) {
-                const rankNum = student.computed_rank;
-                const photoEl = elements.find(el => el.id === 'rank_photo_' + rankNum);
+                const slotNum = index + 1; // Slot 1 corresponds to student index 0, Slot 2 to 1, etc.
+                const photoEl = elements.find(el => el.id === 'rank_photo_' + slotNum);
 
                 if (photoEl && !studentRankMappings[photoEl.id]) {
                     studentRankMappings[photoEl.id] = {
@@ -1461,6 +1478,17 @@ function drawElements() {
             wrapper.style.pointerEvents = 'none';
             wrapper.className = 'mask-' + (el.mask || 'rounded');
 
+            div.style.boxSizing = 'border-box';
+            if (el.borderWidth && el.borderWidth > 0) {
+                div.style.border = `${el.borderWidth}px solid ${el.borderColor || '#ffffff'}`;
+            } else {
+                div.style.border = 'none';
+            }
+
+            const r = el.borderRadius !== undefined ? el.borderRadius : (el.mask === 'circle' ? bgW : (el.mask === 'rounded' ? 12 : 0));
+            div.style.borderRadius = (el.mask === 'circle') ? '50%' : `${r}px`;
+            wrapper.style.borderRadius = (el.mask === 'circle') ? '50%' : `${Math.max(0, r - (el.borderWidth || 0))}px`;
+
             if (photoSrc) {
                 const img = document.createElement('img');
                 img.src = photoSrc;
@@ -1469,9 +1497,9 @@ function drawElements() {
                 img.style.objectFit = 'cover';
                 img.style.pointerEvents = 'none';
 
-                const mapping = studentRankMappings[el.id] || { zoom: 100, panX: 0, panY: 0 };
+                const mapping = studentRankMappings[el.id] || { zoom: 100, panX: 0, panY: 0, rotation: 0 };
                 const scaleFactor = (mapping.zoom || 100) / 100;
-                img.style.transform = 'scale(' + scaleFactor + ') translate(' + mapping.panX + 'px, ' + mapping.panY + 'px)';
+                img.style.transform = 'scale(' + scaleFactor + ') translate(' + mapping.panX + 'px, ' + mapping.panY + 'px) rotate(' + (mapping.rotation || 0) + 'deg)';
                 img.style.transformOrigin = 'center center';
 
                 wrapper.appendChild(img);
@@ -1802,19 +1830,30 @@ function updatePropertiesPanel() {
         photoSettings.style.display = 'block';
 
         if (selectedIds.length === 1) {
-            const mapping = studentRankMappings[el.id] || { student_uid: '', zoom: 100, panX: 0, panY: 0 };
+            const mapping = studentRankMappings[el.id] || { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0 };
             document.getElementById('prop-photo-student').value = mapping.student_uid || '';
             document.getElementById('prop-photo-mask').value = el.mask || 'rounded';
             document.getElementById('prop-photo-zoom').value = mapping.zoom || 100;
             document.getElementById('lbl-zoom-val').textContent = mapping.zoom || 100;
             document.getElementById('prop-photo-panx').value = mapping.panX || 0;
             document.getElementById('prop-photo-pany').value = mapping.panY || 0;
+            document.getElementById('prop-photo-rotation').value = mapping.rotation || 0;
+            document.getElementById('lbl-rotation-val').textContent = mapping.rotation || 0;
+            document.getElementById('prop-photo-border-w').value = el.borderWidth || 0;
+            document.getElementById('prop-photo-border-c').value = el.borderColor || '#ffffff';
+            document.getElementById('prop-photo-border-r').value = el.borderRadius !== undefined ? el.borderRadius : 12;
         } else {
             document.getElementById('prop-photo-student').value = '';
             document.getElementById('prop-photo-mask').value = el.mask || 'rounded';
             document.getElementById('prop-photo-zoom').value = 100;
+            document.getElementById('lbl-zoom-val').textContent = 100;
             document.getElementById('prop-photo-panx').value = 0;
             document.getElementById('prop-photo-pany').value = 0;
+            document.getElementById('prop-photo-rotation').value = 0;
+            document.getElementById('lbl-rotation-val').textContent = 0;
+            document.getElementById('prop-photo-border-w').value = 0;
+            document.getElementById('prop-photo-border-c').value = '#ffffff';
+            document.getElementById('prop-photo-border-r').value = 12;
         }
     } else {
         textSettings.style.display = 'none';
@@ -1900,7 +1939,7 @@ function updateActiveElementFromProps() {
 function updateActivePhotoTransform() {
     if (!activeId) return;
     if (!studentRankMappings[activeId]) {
-        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, photo_override: null };
+        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, photo_override: null };
     }
     const mapping = studentRankMappings[activeId];
     mapping.zoom = parseInt(document.getElementById('prop-photo-zoom').value) || 100;
@@ -1909,13 +1948,18 @@ function updateActivePhotoTransform() {
     mapping.panX = parseInt(document.getElementById('prop-photo-panx').value) || 0;
     mapping.panY = parseInt(document.getElementById('prop-photo-pany').value) || 0;
 
+    mapping.rotation = parseInt(document.getElementById('prop-photo-rotation').value) || 0;
+    document.getElementById('lbl-rotation-val').textContent = mapping.rotation;
+
     drawElements();
     saveHistoryState();
 }
 
 function nudgePhoto(x, y) {
     if (!activeId) return;
-    if (!studentRankMappings[activeId]) return;
+    if (!studentRankMappings[activeId]) {
+        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, photo_override: null };
+    }
     const mapping = studentRankMappings[activeId];
     mapping.panX = (mapping.panX || 0) + x;
     mapping.panY = (mapping.panY || 0) + y;
@@ -1928,7 +1972,9 @@ function nudgePhoto(x, y) {
 
 function zoomPhoto(factor) {
     if (!activeId) return;
-    if (!studentRankMappings[activeId]) return;
+    if (!studentRankMappings[activeId]) {
+        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, photo_override: null };
+    }
     const mapping = studentRankMappings[activeId];
     mapping.zoom = Math.max(50, Math.min(400, (mapping.zoom || 100) + factor));
 
@@ -1938,18 +1984,87 @@ function zoomPhoto(factor) {
     saveHistoryState();
 }
 
+function rotatePhoto(val, isAbsolute = false) {
+    if (!activeId) return;
+    if (!studentRankMappings[activeId]) {
+        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, photo_override: null };
+    }
+    const mapping = studentRankMappings[activeId];
+    if (isAbsolute) {
+        mapping.rotation = val;
+    } else {
+        mapping.rotation = ((mapping.rotation || 0) + val) % 360;
+        if (mapping.rotation > 180) mapping.rotation -= 360;
+        if (mapping.rotation < -180) mapping.rotation += 360;
+    }
+
+    document.getElementById('prop-photo-rotation').value = mapping.rotation;
+    document.getElementById('lbl-rotation-val').textContent = mapping.rotation;
+    drawElements();
+    saveHistoryState();
+}
+
+function updateActivePhotoBorder() {
+    if (!activeId) return;
+    const el = elements.find(item => item.id === activeId);
+    if (!el) return;
+    el.borderWidth = parseInt(document.getElementById('prop-photo-border-w').value) || 0;
+    el.borderColor = document.getElementById('prop-photo-border-c').value || '#ffffff';
+    el.borderRadius = parseInt(document.getElementById('prop-photo-border-r').value) || 0;
+
+    drawElements();
+    saveHistoryState();
+}
+
 function resetPhotoTransform() {
     if (!activeId) return;
-    if (!studentRankMappings[activeId]) return;
+    const el = elements.find(item => item.id === activeId);
+    if (!el) return;
+
+    if (!studentRankMappings[activeId]) {
+        studentRankMappings[activeId] = { student_uid: '', zoom: 100, panX: 0, panY: 0, rotation: 0, photo_override: null };
+    }
     const mapping = studentRankMappings[activeId];
     mapping.zoom = 100;
     mapping.panX = 0;
     mapping.panY = 0;
+    mapping.rotation = 0;
 
+    // Retrieve original template parameters
+    const tplEl = templateElements.find(t => t.id === el.id);
+    if (tplEl) {
+        el.left = tplEl.left;
+        el.top = tplEl.top;
+        el.width = tplEl.width;
+        el.height = tplEl.height;
+        el.borderWidth = tplEl.borderWidth || 0;
+        el.borderColor = tplEl.borderColor || '#ffffff';
+        el.borderRadius = tplEl.borderRadius !== undefined ? tplEl.borderRadius : 12;
+        el.mask = tplEl.mask || 'rounded';
+    } else {
+        el.borderWidth = 0;
+        el.borderColor = '#ffffff';
+        el.borderRadius = 12;
+        el.mask = 'rounded';
+    }
+
+    // Update UI controls
     document.getElementById('prop-photo-zoom').value = 100;
     document.getElementById('lbl-zoom-val').textContent = 100;
     document.getElementById('prop-photo-panx').value = 0;
     document.getElementById('prop-photo-pany').value = 0;
+    document.getElementById('prop-photo-rotation').value = 0;
+    document.getElementById('lbl-rotation-val').textContent = 0;
+    document.getElementById('prop-photo-mask').value = el.mask;
+    document.getElementById('prop-photo-border-w').value = el.borderWidth;
+    document.getElementById('prop-photo-border-c').value = el.borderColor;
+    document.getElementById('prop-photo-border-r').value = el.borderRadius;
+
+    document.getElementById('prop-el-x').value = el.left;
+    document.getElementById('prop-el-y').value = el.top;
+    document.getElementById('prop-el-w').value = el.width;
+    document.getElementById('prop-el-h').value = el.height;
+
     drawElements();
     saveHistoryState();
 }
@@ -2230,6 +2345,28 @@ function applyLayoutPreset(presetId) {
         });
 }
 
+function getCleanedElementsForLayout(arr) {
+    return arr.map(function(el) {
+        const clean = JSON.parse(JSON.stringify(el));
+        if (clean.type === 'text') {
+            if (clean.id.startsWith('rank_name_')) {
+                clean.textContent = 'Student Name';
+            } else if (clean.id.startsWith('rank_institute_')) {
+                clean.textContent = 'College Name';
+            } else if (clean.id.startsWith('rank_badge_')) {
+                clean.textContent = '';
+            } else if (clean.id === 'chapter_name') {
+                clean.textContent = 'Chapter Name';
+            } else if (clean.id === 'test_name') {
+                clean.textContent = 'Test Name';
+            } else if (clean.id === 'test_date') {
+                clean.textContent = 'Test Date';
+            }
+        }
+        return clean;
+    });
+}
+
 function saveAsNewPreset() {
     const name = prompt("Enter Layout Name:");
     if (!name || !name.trim()) return;
@@ -2239,7 +2376,7 @@ function saveAsNewPreset() {
     payload.append('action', 'save_layout_preset');
     payload.append('preset_id', '0');
     payload.append('name', name.trim());
-    payload.append('elements_json', JSON.stringify(elements));
+    payload.append('elements_json', JSON.stringify(getCleanedElementsForLayout(elements)));
     payload.append('is_default', '0');
 
     fetch('cards-result-designer.php', { method: 'POST', body: payload })
@@ -2268,7 +2405,7 @@ function updateCurrentPreset() {
     payload.append('action', 'save_layout_preset');
     payload.append('preset_id', presetId);
     payload.append('name', name);
-    payload.append('elements_json', JSON.stringify(elements));
+    payload.append('elements_json', JSON.stringify(getCleanedElementsForLayout(elements)));
     const defaultBtn = document.getElementById('btn-toggle-default-preset');
     const isDefault = defaultBtn.textContent.includes('Unset') ? '1' : '0';
     payload.append('is_default', isDefault);
@@ -2600,7 +2737,6 @@ function saveDesign(isExporting = false) {
                             ctx.beginPath();
                             if (el.mask === 'circle') {
                                 ctx.arc(el.left + el.width/2, el.top + el.height/2, el.width/2, 0, Math.PI * 2);
-                                ctx.clip();
                             } else if (el.mask === 'hexagon') {
                                 const side = el.width / 4;
                                 ctx.moveTo(el.left + side, el.top);
@@ -2610,21 +2746,22 @@ function saveDesign(isExporting = false) {
                                 ctx.lineTo(el.left + side, el.top + el.height);
                                 ctx.lineTo(el.left, el.top + el.height/2);
                                 ctx.closePath();
-                                ctx.clip();
                             } else if (el.mask === 'diamond') {
                                 ctx.moveTo(el.left + el.width/2, el.top);
                                 ctx.lineTo(el.left + el.width, el.top + el.height/2);
                                 ctx.lineTo(el.left + el.width/2, el.top + el.height);
                                 ctx.lineTo(el.left, el.top + el.height/2);
                                 ctx.closePath();
-                                ctx.clip();
-                            } else if (el.mask === 'rounded') {
-                                const r = el.width * 0.12; // 12% rounded corners
+                            } else {
+                                const r = el.borderRadius !== undefined ? el.borderRadius : (el.mask === 'rounded' ? el.width * 0.12 : 0);
                                 ctx.roundRect(el.left, el.top, el.width, el.height, r);
-                                ctx.clip();
                             }
 
-                            const mapping = studentRankMappings[el.id] || { zoom: 100, panX: 0, panY: 0 };
+                            // Save context for clipping & image drawing
+                            ctx.save();
+                            ctx.clip();
+
+                            const mapping = studentRankMappings[el.id] || { zoom: 100, panX: 0, panY: 0, rotation: 0 };
                             const scaleFactor = (mapping.zoom || 100) / 100;
 
                             // Compute zoom cover dimensions
@@ -2634,12 +2771,24 @@ function saveDesign(isExporting = false) {
                             const drawW = imgW * scaleCover * scaleFactor;
                             const drawH = imgH * scaleCover * scaleFactor;
 
-                            // Translate and draw scaled, panned student photo
+                            // Translate, rotate, and draw student photo
                             ctx.translate(el.left + el.width/2, el.top + el.height/2);
                             ctx.translate(mapping.panX, mapping.panY);
+                            if (mapping.rotation) {
+                                ctx.rotate(mapping.rotation * Math.PI / 180);
+                            }
                             ctx.drawImage(studentImg, -drawW/2, -drawH/2, drawW, drawH);
 
-                            ctx.restore();
+                            ctx.restore(); // restores clip path
+
+                            // Stroke border on top of clipped image
+                            if (el.borderWidth && el.borderWidth > 0) {
+                                ctx.lineWidth = el.borderWidth;
+                                ctx.strokeStyle = el.borderColor || '#ffffff';
+                                ctx.stroke();
+                            }
+
+                            ctx.restore(); // restores opacity/transform
                             resolve();
                         };
                         studentImg.onerror = function() { resolve(); };

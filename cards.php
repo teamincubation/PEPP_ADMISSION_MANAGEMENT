@@ -652,6 +652,14 @@ include 'includes/admin_nav.php';
                             <div id="summary-year" style="margin-top: 4px; font-size: 0.95rem; font-weight: 700; color: #334155;">—</div>
                         </div>
                         <div>
+                            <strong>Test Date:</strong>
+                            <div id="summary-test-date" style="margin-top: 4px; font-size: 0.95rem; font-weight: 700; color: #334155;">—</div>
+                        </div>
+                        <div>
+                            <strong>Chapter:</strong>
+                            <div id="summary-chapter" style="margin-top: 4px; font-size: 0.95rem; font-weight: 700; color: #334155;">—</div>
+                        </div>
+                        <div>
                             <strong>Assigned Courses:</strong>
                             <ul id="summary-assigned-courses-list" style="margin: 4px 0 0 0; padding-left: 20px; color: #334155;">
                                 <!-- Bullet list of courses populated dynamically -->
@@ -939,6 +947,18 @@ include 'includes/admin_nav.php';
                         document.getElementById('summary-test-title').innerText = data.activity_title;
                         document.getElementById('summary-plan-title').innerText = data.plan_title;
                         document.getElementById('summary-year').innerText = year;
+
+                        let formattedDate = '—';
+                        if (data.activity_date) {
+                            const dObj = new Date(data.activity_date);
+                            if (!isNaN(dObj.getTime())) {
+                                formattedDate = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                            } else {
+                                formattedDate = data.activity_date;
+                            }
+                        }
+                        document.getElementById('summary-test-date').innerText = formattedDate;
+                        document.getElementById('summary-chapter').innerText = data.chapter || '—';
 
                         // Display Table rows & Courses Bullet list
                         const tbody = document.getElementById('course-participation-tbody');
