@@ -1787,6 +1787,7 @@ function openStatusChangeModal(userId, name, status) {
             </div>
         </form>
     </div>
+</div>
 <!-- ── MIGRATE / UPGRADE COURSE MODAL ── -->
 <div class="modal-backdrop" id="migrate-course-modal">
     <div class="modal" style="max-width:640px; width:95%;">

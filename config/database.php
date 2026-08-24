@@ -320,11 +320,25 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
             INSERT OR REPLACE INTO admin_settings (setting_name, setting_value) VALUES ('whatsapp_webhook_verify_token', 'test_verify_token');
             INSERT OR REPLACE INTO admin_settings (setting_name, setting_value) VALUES ('whatsapp_app_secret', 'test_app_secret');
 
+            -- Seed Admins for testing login
+            INSERT OR REPLACE INTO admins (id, username, password_hash, role, permissions, status)
+            VALUES (1, 'admin', '', 'super_admin', 'ALL', 'active');
+
+            -- Seed payment accounts
+            INSERT OR REPLACE INTO payment_accounts (id, account_name, is_public, status)
+            VALUES (1, 'Main Bank', 1, 'active');
+
             -- Seed Academic Data
             INSERT OR REPLACE INTO academic_years (year, start_date, end_date) VALUES ('2026-27', '2026-06-01', '2027-05-31');
-            INSERT OR REPLACE INTO pepp_courses (id, course_name, course_code, academic_year, status) VALUES (1, 'CUET PG Psychology', 'CP101', '2026-27', 'active');
+            INSERT OR REPLACE INTO pepp_courses (id, course_name, course_code, academic_year, status, total_fee) VALUES (1, 'CUET PG Psychology', 'CP101', '2026-27', 'active', 10000.00);
+            INSERT OR REPLACE INTO pepp_courses (id, course_name, course_code, academic_year, status, total_fee) VALUES (2, 'Premium Course B', 'CP102', '2026-27', 'active', 15000.00);
+
             INSERT OR REPLACE INTO study_plans (id, title, academic_year, status, plan_type) VALUES (1, 'Psychology Prep Plan', '2026-27', 'published', 'regular');
             INSERT OR REPLACE INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value) VALUES (1, 'course', 'CUET PG Psychology');
+
+            -- Seed target student PEPP20268575
+            INSERT OR REPLACE INTO users (user_id, name, email, college_school, status, student_status, pepp_course, pepp_academic_year, total_fee, paid_amount, payment_plan, joined_date, created_at)
+            VALUES ('PEPP20268575', 'John Doe', 'johndoe@gmail.com', 'PEPP Academy', 'approved', 'active', 'CUET PG Psychology', '2026-27', 10000.00, 4000.00, '3 Installments', '2026-06-01', datetime('now'));
 
             -- Seed Test Activities
             -- Activity 30: Multi-student test (with tied ranks, long names, etc.)

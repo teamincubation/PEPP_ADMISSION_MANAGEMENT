@@ -16,37 +16,37 @@ require_once dirname(__DIR__) . '/config/database.php';
 // Helper for testing authorization blocks
 function simulate_migration_post($pdo, $user_id, $post_data, $admin_username = 'TestAdmin', $admin_role = 'super_admin', $admin_perms = 'ALL', $restricted_financials = false) {
     global $admin_credential_visibility, $admin_credential_visibility_scopes;
-    
+
     $_SESSION['admin_logged_in'] = true;
     $_SESSION['admin_username'] = $admin_username;
     $_SESSION['admin_role'] = $admin_role;
-    
+
     if (empty($_SESSION['csrf_token'])) {
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
     }
-    
+
     // Set globals for auth.php/student-details.php context
     $GLOBALS['admin_username'] = $admin_username;
     $GLOBALS['admin_role'] = $admin_role;
     $GLOBALS['admin_perms'] = $admin_perms;
     $GLOBALS['admin_credential_visibility'] = $restricted_financials ? 'hide' : 'visible';
     $GLOBALS['admin_credential_visibility_scopes'] = $restricted_financials ? 'financials' : '';
-    
+
     // Mock POST environment
     $_SERVER['REQUEST_METHOD'] = 'POST';
     $_POST = $post_data;
     $_POST['csrf_token'] = $_SESSION['csrf_token'];
     $_GET['user_id'] = $user_id;
-    
+
     // Initialize local variables to avoid undefined warnings, then include
     $error = '';
     $message = '';
-    
+
     // Execute the file inside a buffer to catch output/redirects
     ob_start();
     include dirname(__DIR__) . '/student-details.php';
     ob_end_clean();
-    
+
     return ['error' => $error, 'message' => $message];
 }
 
@@ -74,29 +74,29 @@ try {
     $pdo->exec("INSERT INTO pepp_courses (id, course_name, course_code, total_fee, academic_year, status) VALUES (30, 'Course C (Premium)', 'CC1', 15000.00, '2026-27', 'active')");
     $pdo->exec("INSERT INTO pepp_courses (id, course_name, course_code, total_fee, academic_year, status) VALUES (40, 'Course D (Inactive)', 'CD1', 15000.00, '2026-27', 'inactive')");
     $pdo->exec("INSERT INTO pepp_courses (id, course_name, course_code, total_fee, academic_year, status) VALUES (50, 'Course E (Different Year)', 'CE1', 15000.00, '2027-28', 'active')");
-    
+
     // Helper to seed active payment accounts
     $pdo->exec("DELETE FROM payment_accounts");
     $pdo->exec("INSERT INTO payment_accounts (id, account_name, is_public, status) VALUES (1, 'Main Bank', 1, 'active')");
-    
+
     // Seed admins table to pass active user checks
     $pdo->exec("DELETE FROM admins");
     $pdo->exec("INSERT INTO admins (username, status, role, permissions) VALUES ('TestAdmin', 'active', 'super_admin', 'ALL')");
     $pdo->exec("INSERT INTO admins (username, status, role, permissions) VALUES ('TestAdmin2', 'active', 'admin', 'peppkit,courses')");
     $pdo->exec("INSERT INTO admins (username, status, role, permissions) VALUES ('hacker', 'active', 'admin', 'peppkit')");
-    
+
     // Define clean student setup helper
     $setup_student = function($user_id, $course_name, $total_fee, $paid_amount, $plan, $installments_data = []) use ($pdo) {
         $pdo->prepare("DELETE FROM users WHERE user_id = ?")->execute([$user_id]);
         $pdo->prepare("DELETE FROM instalment_details WHERE user_id = ?")->execute([$user_id]);
         $pdo->prepare("DELETE FROM student_course_migrations WHERE user_id = ?")->execute([$user_id]);
-        
+
         $stmt = $pdo->prepare("
             INSERT INTO users (user_id, name, email, status, student_status, pepp_course, pepp_academic_year, total_fee, paid_amount, payment_plan, joined_date, created_at)
             VALUES (?, 'Test Student', 'student@test.com', 'approved', 'active', ?, '2026-27', ?, ?, ?, '2026-06-01', NOW())
         ");
         $stmt->execute([$user_id, $course_name, $total_fee, $paid_amount, $plan]);
-        
+
         $ins = $pdo->prepare("
             INSERT INTO instalment_details (user_id, instalment_number, amount, due_date, status, paid_amount, paid_date, payment_reference, payment_mode, payment_account_id, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
@@ -120,9 +120,9 @@ try {
         'payment_plan' => 'One Time',
         'migration_reason' => 'Wants Course B instead'
     ]);
-    
+
     run_assert("Test 1 Result Message set", empty($res['error']) && !empty($res['message']), $res);
-    
+
     // Verify user table updates
     $stmt = $pdo->prepare("SELECT * FROM users WHERE user_id = ?");
     $stmt->execute(['ST_01']);
@@ -145,7 +145,7 @@ try {
         'migration_reason' => 'Upgrade to Premium'
     ]);
     run_assert("Test 2 Blocked One Time migration with outstanding balance", !empty($res['error']));
-    
+
     // Succeed with 2 Installments, scheduling installment #2 for ₹5,000 due date
     $res = simulate_migration_post($pdo, 'ST_02', [
         'action' => 'migrate_course',
@@ -156,14 +156,14 @@ try {
         'migration_reason' => 'Upgrade to Premium'
     ]);
     run_assert("Test 2 Success with rescheduled installment", empty($res['error']));
-    
+
     $stmt = $pdo->prepare("SELECT * FROM users WHERE user_id = ?");
     $stmt->execute(['ST_02']);
     $u = $stmt->fetch();
     run_assert("Test 2 Course upgraded to Course C", $u['pepp_course'] === 'Course C (Premium)');
     run_assert("Test 2 Total fee updated to ₹15,000", (float)$u['total_fee'] === 15000.00);
     run_assert("Test 2 Payment plan is 2 Installments", $u['payment_plan'] === '2 Installments');
-    
+
     // Verify instalment table row created
     $stmt = $pdo->prepare("SELECT * FROM instalment_details WHERE user_id = ? AND instalment_number = 2");
     $stmt->execute(['ST_02']);
@@ -190,7 +190,7 @@ try {
         'migration_reason' => 'Course switch'
     ]);
     run_assert("Test 3 Same fee installment migration success", empty($res['error']));
-    
+
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM instalment_details WHERE user_id = ? AND status = 'pending'");
     $stmt->execute(['ST_03']);
     run_assert("Test 3 Pending installments preserved and rebuilt", (int)$stmt->fetchColumn() === 2);
@@ -215,7 +215,7 @@ try {
         'migration_reason' => 'Upgrade course'
     ]);
     run_assert("Test 4 Higher fee installment upgrade success", empty($res['error']));
-    
+
     $stmt = $pdo->prepare("SELECT SUM(amount) FROM instalment_details WHERE user_id = ?");
     $stmt->execute(['ST_04']);
     run_assert("Test 4 Total pending installments sum to ₹11,000", (float)$stmt->fetchColumn() === 11000.00);
@@ -291,7 +291,7 @@ try {
         'migration_reason' => 'Upgrade'
     ]);
     run_assert("Test 9 Migration succeeds", empty($res['error']));
-    
+
     // Verify paid installment #2 remains completely untouched
     $stmt = $pdo->prepare("SELECT * FROM instalment_details WHERE user_id = ? AND instalment_number = 2");
     $stmt->execute(['ST_09']);
@@ -346,7 +346,7 @@ try {
         'migration_reason' => 'Upgrade with immediate payment'
     ]);
     run_assert("Test 11 Success with immediate upgrade payment", empty($res['error']));
-    
+
     // Check that installment #2 has been generated and marked as approved
     $stmt = $pdo->prepare("SELECT * FROM instalment_details WHERE user_id = ? AND instalment_number = 2");
     $stmt->execute(['ST_11']);
@@ -409,7 +409,7 @@ try {
         'migration_reason' => 'Migration one'
     ]);
     run_assert("Test 14 First migration succeeds", empty($res1['error']));
-    
+
     // Attempt duplicate run using the same source (Course A is no longer student's current course)
     $res2 = simulate_migration_post($pdo, 'ST_14', [
         'action' => 'migrate_course',
@@ -439,7 +439,7 @@ try {
     $stmt = $pdo->prepare("SELECT pepp_course FROM users WHERE user_id = ?");
     $stmt->execute(['ST_15']);
     $prev_course = $stmt->fetchColumn();
-    
+
     // Throws downgrade validation exception
     $res = simulate_migration_post($pdo, 'ST_15', [
         'action' => 'migrate_course',
@@ -447,7 +447,7 @@ try {
         'payment_plan' => 'One Time',
         'migration_reason' => 'Downgrade'
     ]);
-    
+
     $stmt->execute(['ST_15']);
     $post_course = $stmt->fetchColumn();
     run_assert("Test 15 Database changes rolled back on exception", $prev_course === $post_course);
@@ -462,7 +462,7 @@ try {
         'payment_plan' => 'One Time',
         'migration_reason' => 'Need history check'
     ]);
-    
+
     $stmt = $pdo->prepare("SELECT * FROM student_course_migrations WHERE user_id = ?");
     $stmt->execute(['ST_16']);
     $migration_row = $stmt->fetch();
@@ -491,7 +491,7 @@ try {
         'inst_2_due_date' => '2026-09-01',
         'migration_reason' => 'Upgrade 2'
     ]);
-    
+
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM student_course_migrations WHERE user_id = ?");
     $stmt->execute(['ST_17']);
     run_assert("Test 17 Multiple migrations recorded independently", (int)$stmt->fetchColumn() === 2);
@@ -503,7 +503,7 @@ try {
     // Even if user's record has corrupted fee (e.g. users.total_fee was modified manually to ₹8,000),
     // the system must load current course fee from PEPP_COURSES (₹10,000).
     $pdo->prepare("UPDATE users SET total_fee = 8000.00 WHERE user_id = ?")->execute(['ST_18']);
-    
+
     // Target is Course B (fee ₹10,000). So difference is 0. Outstanding is 0.
     // If it retrieves current course fee as 10000, then target fee is 10000, difference is 0, outstanding is 0.
     $res = simulate_migration_post($pdo, 'ST_18', [
@@ -538,10 +538,21 @@ try {
         'payment_plan' => 'One Time',
         'migration_reason' => 'Direct post attack'
     ], 'hacker', 'admin', 'peppkit'); // role admin, peppkit permission (lacks 'students')
-    
+
     run_assert("Test 20 Unauthorized request rejected", !empty($res['error']) && strpos($res['error'], 'Access Denied') !== false);
-    
-    echo "🎉 ALL 20 TESTS COMPLETED SUCCESSFULLY! 🎉\n";
+
+    // -------------------------------------------------------------
+    // Test 21: UI Regression - Verify trigger button, modal elements, and JavaScript functions in student-details.php
+    // -------------------------------------------------------------
+    $sd_content = file_get_contents(dirname(__DIR__) . '/student-details.php');
+    run_assert("Test 21 Modal trigger function openMigrateCourseModal() exists", strpos($sd_content, 'function openMigrateCourseModal()') !== false);
+    run_assert("Test 21 Modal container id='migrate-course-modal' exists", strpos($sd_content, 'id="migrate-course-modal"') !== false);
+    run_assert("Test 21 Migrate course trigger button is bound to openMigrateCourseModal()", strpos($sd_content, 'onclick="openMigrateCourseModal()"') !== false);
+    run_assert("Test 21 Migrate course POST action handler exists", strpos($sd_content, 'migrate_course') !== false);
+    run_assert("Test 21 CSRF protection verify statement is present in action handler", strpos($sd_content, 'csrf_verify()') !== false);
+    run_assert("Test 21 HTML elements are not incorrectly nested inside update-attachments-modal", preg_match('/<\/form>\s*<\/div>\s*<\/div>\s*<!-- ── MIGRATE \/ UPGRADE COURSE MODAL ── -->/', $sd_content) === 1);
+
+    echo "🎉 ALL 21 TESTS COMPLETED SUCCESSFULLY! 🎉\n";
 
 } catch (Exception $e) {
     echo "❌ TEST RUN EXCEPTION: " . $e->getMessage() . "\n";
