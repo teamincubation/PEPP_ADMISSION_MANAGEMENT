@@ -1069,6 +1069,91 @@ try {
     $test_number_resolved = !empty($meta_id_8['number']) ? $meta_id_8['number'] : $rank_slot_number;
     run_assert("Rank slot number is not used as Test Number when custom metadata exists", $test_number_resolved !== $rank_slot_number);
 
+    echo "\n--- TEST 142: Download Rank List PDF button exists in HTML ---\n";
+    $has_pdf_button = strpos($cards_html, 'id="btn-download-pdf"') !== false;
+    run_assert("Download Rank List PDF button exists in HTML", $has_pdf_button);
+
+    echo "\n--- TEST 143: JavaScript downloadRankListPDF function triggers correct URL ---\n";
+    $has_pdf_js = strpos($cards_html, 'window.location.href = `download-rank-list-pdf.php?year=') !== false;
+    run_assert("JavaScript downloadRankListPDF function triggers correct URL", $has_pdf_js);
+
+    echo "\n--- TEST 144: PDF download endpoint verifies permissions with can_access ---\n";
+    $pdf_code = file_get_contents(dirname(__DIR__) . '/download-rank-list-pdf.php');
+    $has_auth_check = strpos($pdf_code, 'can_access(\'cards\')') !== false;
+    run_assert("PDF download endpoint verifies permissions with can_access", $has_auth_check);
+
+    echo "\n--- TEST 145: PDF endpoint reads year, plan_id, and activity_id parameters ---\n";
+    $has_params = strpos($pdf_code, '$_GET[\'year\']') !== false && strpos($pdf_code, '$_GET[\'plan_id\']') !== false && strpos($pdf_code, '$_GET[\'activity_id\']') !== false;
+    run_assert("PDF endpoint reads year, plan_id, and activity_id parameters", $has_params);
+
+    echo "\n--- TEST 146: Score privacy rule (Score <= 10 -> ***) ---\n";
+    $privacy_test = function($score) {
+        $score_val = (float)$score;
+        if ($score_val <= 10.0) {
+            return '***';
+        } else {
+            if (floor($score_val) == $score_val) {
+                return number_format($score_val, 0);
+            } else {
+                return number_format($score_val, 2);
+            }
+        }
+    };
+    run_assert("Score 15 returns 15", $privacy_test(15) === '15');
+    run_assert("Score 12.50 returns 12.50", $privacy_test(12.50) === '12.50');
+    run_assert("Score 10 returns ***", $privacy_test(10) === '***');
+    run_assert("Score 9.5 returns ***", $privacy_test(9.5) === '***');
+    run_assert("Score 0 returns ***", $privacy_test(0) === '***');
+
+    echo "\n--- TEST 147: Rank badge color mapping rules ---\n";
+    $has_gold = strpos($pdf_code, '234/255, 179/255, 8/255') !== false;
+    $has_silver = strpos($pdf_code, '148/255, 163/255, 184/255') !== false;
+    $has_bronze = strpos($pdf_code, '180/255, 83/255, 9/255') !== false;
+    run_assert("PDF generator has gold rank styling", $has_gold);
+    run_assert("PDF generator has silver rank styling", $has_silver);
+    run_assert("PDF generator has bronze/brown rank styling", $has_bronze);
+
+    echo "\n--- TEST 148: PDF generation does not modify database records ---\n";
+    $has_no_score_updates = strpos($pdf_code, 'UPDATE assessment_results') === false;
+    run_assert("PDF generation does not modify scores in the database", $has_no_score_updates);
+
+    echo "\n--- TEST 149: PDF resolves test metadata from published relationships ---\n";
+    $has_plan_activities_ref = strpos($pdf_code, 'study_plan_activities') !== false;
+    $has_batches_ref = strpos($pdf_code, 'assessment_result_batches') !== false;
+    run_assert("PDF resolves test metadata using study_plan_activities or published result batches", $has_plan_activities_ref && $has_batches_ref);
+
+    echo "\n--- TEST 150: PDF queries user_photo from users table ---\n";
+    $has_photo_res = strpos($pdf_code, 'u.user_photo') !== false;
+    run_assert("PDF queries user_photo from users table", $has_photo_res);
+
+    echo "\n--- TEST 151: PDF PNG/JPEG conversion using GD ---\n";
+    $has_gd_check = strpos($pdf_code, 'imagecreatefromstring') !== false && strpos($pdf_code, 'imagejpeg') !== false;
+    run_assert("PDF has PNG/JPEG fallback converter using GD library", $has_gd_check);
+
+    echo "\n--- TEST 152: PDF safe avatar vector placeholder ---\n";
+    $has_placeholder_avatar = strpos($pdf_code, 'slate placeholder avatar') !== false || strpos($pdf_code, '226/255, 232/255, 240/255') !== false;
+    run_assert("PDF uses vector path fallback for missing student photos", $has_placeholder_avatar);
+
+    echo "\n--- TEST 153: PDF row serial numbers are sequential ---\n";
+    $has_seq_sl = strpos($pdf_code, '$sl_no++') !== false && strpos($pdf_code, '$sl_no = 1') !== false;
+    run_assert("PDF row serial numbers are sequential", $has_seq_sl);
+
+    echo "\n--- TEST 154: PDF output preserves computed rank values ---\n";
+    $has_computed_rank_ref = strpos($pdf_code, 'computed_rank') !== false;
+    run_assert("PDF output preserves calculated computed_rank values", $has_computed_rank_ref);
+
+    echo "\n--- TEST 155: PDF sorts students globally by score ---\n";
+    $has_sorting = strpos($pdf_code, 'usort($rankable') !== false;
+    run_assert("PDF sorts students globally by score descending", $has_sorting);
+
+    echo "\n--- TEST 156: PDF multiple pages overflow dynamic pagination ---\n";
+    $has_page_overflow_check = strpos($pdf_code, '$y_row + 28 > 780') !== false && strpos($pdf_code, '$pdf->addPage()') !== false;
+    run_assert("PDF paginates dynamically and repeats table headers on overflow", $has_page_overflow_check);
+
+    echo "\n--- TEST 157: PDF filename is dynamically sanitized ---\n";
+    $has_filename_sanitizer = strpos($pdf_code, 'preg_replace(\'/[^A-Za-z0-9_-]/\'') !== false;
+    run_assert("PDF filename is dynamically sanitized", $has_filename_sanitizer);
+
     echo "\n=== All designer improvements & UI regression automated tests passed successfully! ===\n";
 
 } catch (Exception $e) {

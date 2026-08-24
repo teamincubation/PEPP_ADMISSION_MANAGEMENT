@@ -721,9 +721,14 @@ include 'includes/admin_nav.php';
             <div id="course-participation-panel" class="panel" style="display: none; margin-bottom: 20px;">
                 <div class="panel-head" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px;">
                     <h3 style="margin: 0;"><i class="fas fa-users" style="color:var(--accent);"></i> Course Participation Summary</h3>
-                    <button type="button" id="btn-view-merged" class="btn btn-secondary" onclick="toggleMergedResults()" style="display: none; font-size: 0.75rem; padding: 6px 12px;">
-                        <i class="fas fa-list-ol"></i> View Merged Result
-                    </button>
+                    <div style="display: flex; gap: 8px;">
+                        <button type="button" id="btn-view-merged" class="btn btn-secondary" onclick="toggleMergedResults()" style="display: none; font-size: 0.75rem; padding: 6px 12px;">
+                            <i class="fas fa-list-ol"></i> View Merged Result
+                        </button>
+                        <button type="button" id="btn-download-pdf" class="btn btn-soft-violet" onclick="downloadRankListPDF()" style="display: none; font-size: 0.75rem; padding: 6px 12px;">
+                            <i class="fas fa-file-pdf"></i> Download Rank List PDF
+                        </button>
+                    </div>
                 </div>
                 <div class="panel-body" style="padding: 0; overflow-x: auto;">
                     <table class="table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
@@ -948,6 +953,7 @@ include 'includes/admin_nav.php';
                 document.getElementById('selected-test-summary').style.display = 'none';
                 document.getElementById('course-participation-panel').style.display = 'none';
                 document.getElementById('btn-view-merged').style.display = 'none';
+                document.getElementById('btn-download-pdf').style.display = 'none';
                 document.getElementById('merged-results-panel').style.display = 'none';
 
                 updateStartButton();
@@ -984,6 +990,7 @@ include 'includes/admin_nav.php';
                     document.getElementById('selected-test-summary').style.display = 'none';
                     document.getElementById('course-participation-panel').style.display = 'none';
                     document.getElementById('btn-view-merged').style.display = 'none';
+                    document.getElementById('btn-download-pdf').style.display = 'none';
                     return;
                 }
 
@@ -1056,6 +1063,7 @@ include 'includes/admin_nav.php';
                         document.getElementById('selected-test-summary').style.display = 'block';
                         document.getElementById('course-participation-panel').style.display = 'block';
                         document.getElementById('btn-view-merged').style.display = 'inline-block';
+                        document.getElementById('btn-download-pdf').style.display = 'inline-block';
                     });
             }
 
@@ -1103,7 +1111,18 @@ include 'includes/admin_nav.php';
                                 </tr>
                             `;
                         });
-                    });
+            }
+
+            function downloadRankListPDF() {
+                const year = document.getElementById('sel-year').value;
+                const val = document.getElementById('sel-test').value;
+                if (!year || !val) return;
+
+                const parts = val.split('_');
+                const planId = parts[0];
+                const activityId = parts[1];
+
+                window.location.href = `download-rank-list-pdf.php?year=${encodeURIComponent(year)}&plan_id=${planId}&activity_id=${activityId}`;
             }
 
             function updateStartButton() {
