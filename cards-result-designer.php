@@ -837,31 +837,49 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         if (loader) loader.style.display = 'none';
 
+        // Check if template explicitly defines native coordinate mode (metadata node with coordinate_mode: native)
+        const isNative = templateElements.some(el => el.id === 'metadata' && el.coordinate_mode === 'native');
+
         if (savedDesignId && savedConfig) {
             elements = savedConfig.elements || [];
             studentRankMappings = savedMappings || {};
             document.getElementById('prop-ranks-count').value = savedConfig.ranksCount || '4';
             document.getElementById('prop-export-format').value = '<?php echo $saved_design ? addslashes($saved_design['output_format']) : "png"; ?>';
+
+            // Self-heal saved design elements that were previously corrupted/oversized by the percentage conversion bug
+            if (isNative) {
+                elements = elements.map(function(el) {
+                    const tplEl = templateElements.find(t => t.id === el.id);
+                    if (tplEl && el.type === 'text') {
+                        // Restore raw heights if they were converted and scaled to giant dimensions (> 2x raw height)
+                        if (el.height > tplEl.height * 2) {
+                            el.height = tplEl.height;
+                        }
+                        // Restore raw widths if they were converted and scaled to giant dimensions (> 2x raw width)
+                        if (el.width > tplEl.width * 2) {
+                            el.width = tplEl.width;
+                        }
+                    }
+                    return el;
+                });
+            }
         } else {
             // Initial setup from template
             elements = JSON.parse(JSON.stringify(templateElements));
 
-            // Convert template elements from percentage coordinates to native pixel coordinates if they are percentages
-            elements = elements.map(function(el) {
-                if (el.left <= 100) {
+            if (!isNative) {
+                // Convert percentage-based templates to native pixel coordinates
+                elements = elements.map(function(el) {
                     el.left = Math.round((el.left / 100) * bgW);
-                }
-                if (el.top <= 100) {
                     el.top = Math.round((el.top / 100) * bgH);
-                }
-                if (el.width <= 100) {
                     el.width = Math.round((el.width / 100) * bgW);
-                }
-                if (el.height <= 100) {
                     el.height = Math.round((el.height / 100) * bgH);
-                }
-                return el;
-            });
+                    return el;
+                });
+            } else {
+                // Remove the metadata node from visual layers array so it's not rendered
+                elements = elements.filter(el => el.id !== 'metadata');
+            }
 
             // Auto assign students to rank photo placeholders
             rankingList.forEach(function(student, index) {
