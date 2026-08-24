@@ -166,34 +166,64 @@ if (!$activity) {
 
 // ── Load Student Rankings from Published Batches ────────────
 try {
-    $stmt_batch = $pdo->prepare("
-        SELECT id FROM assessment_result_batches
-        WHERE activity_id = ? AND course_id = ? AND status = 'published'
-        ORDER BY version DESC LIMIT 1
-    ");
-    $stmt_batch->execute([$activity_id, $course_id]);
-    $batch_id = $stmt_batch->fetchColumn();
+    $batch_ids = [];
+    if ($course_id > 0) {
+        $stmt_cn = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
+        $stmt_cn->execute([$course_id]);
+        $course_name = $stmt_cn->fetchColumn();
 
-    if ($batch_id) {
+        $stmt_batch = $pdo->prepare("
+            SELECT id FROM assessment_result_batches
+            WHERE activity_id = ? AND (course_id = ? OR (course_name = ? AND course_name != '')) AND status = 'published'
+            ORDER BY version DESC LIMIT 1
+        ");
+        $stmt_batch->execute([$activity_id, $course_id, $course_name]);
+        $bid = $stmt_batch->fetchColumn();
+        if ($bid) {
+            $batch_ids[] = (int)$bid;
+        }
+    } else {
+        // Merged mode - Load all published batches for the activity
+        $stmt_batches = $pdo->prepare("
+            SELECT id FROM assessment_result_batches
+            WHERE activity_id = ? AND status = 'published'
+        ");
+        $stmt_batches->execute([$activity_id]);
+        $batch_ids = $stmt_batches->fetchAll(PDO::FETCH_COLUMN);
+    }
+
+    $results = [];
+    if (!empty($batch_ids)) {
+        $placeholders = implode(',', array_fill(0, count($batch_ids), '?'));
         $stmt_results = $pdo->prepare("
             SELECT ar.student_email, ar.score, ar.attendance_status,
                    COALESCE(u.name, ar.src_name) AS name,
                    COALESCE(u.college_school, '-') AS college_school,
-                   u.user_photo, u.user_id
+                   u.user_photo, u.user_id, u.pepp_course AS course_name
             FROM assessment_results ar
             LEFT JOIN users u ON (ar.user_id = u.user_id OR LOWER(ar.student_email) = LOWER(u.email))
-            WHERE ar.batch_id = ?
+            WHERE ar.batch_id IN ($placeholders)
         ");
-        $stmt_results->execute([$batch_id]);
+        $stmt_results->execute($batch_ids);
         $results = $stmt_results->fetchAll(PDO::FETCH_ASSOC);
+    }
 
-        // Calculate competition ranks
-        $rankable = [];
+    if (!empty($results)) {
+        // Deduplicate and filter attended students
+        $merged = [];
         foreach ($results as $r) {
             if ($r['attendance_status'] === 'attended' && $r['score'] !== null) {
-                $rankable[] = $r;
+                $uid = !empty($r['user_id']) ? $r['user_id'] : $r['student_email'];
+                if (empty($uid)) continue;
+
+                // Retain only highest score if duplicates exist
+                if (!isset($merged[$uid]) || $r['score'] > $merged[$uid]['score']) {
+                    $merged[$uid] = $r;
+                }
             }
         }
+
+        $rankable = array_values($merged);
         usort($rankable, function($a, $b) { return ($b['score'] ?? 0) <=> ($a['score'] ?? 0); });
 
         $prev_score = null; $rank = 0; $count = 0;

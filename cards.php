@@ -594,30 +594,22 @@ include 'includes/admin_nav.php';
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px;">
                         <div class="field" style="margin:0;">
                             <label>Academic Year <span style="color:#ef4444;">*</span></label>
-                            <select id="sel-year" onchange="loadCourses(this.value)">
+                            <select id="sel-year" onchange="loadPublishedTests(this.value)">
                                 <option value="">— Select Year —</option>
                                 <?php foreach ($academic_years as $y): ?>
                                     <option value="<?php echo htmlspecialchars($y); ?>"><?php echo htmlspecialchars($y); ?></option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
-                        <div class="field" style="margin:0;">
-                            <label>Course <span style="color:#ef4444;">*</span></label>
-                            <select id="sel-course" onchange="loadStudyPlans(this.value)" disabled>
-                                <option value="">— Select Course —</option>
-                            </select>
-                        </div>
-                        <div class="field" style="margin:0;">
-                            <label>Study Plan <span style="color:#ef4444;">*</span></label>
-                            <select id="sel-plan" onchange="loadTests(this.value)" disabled>
-                                <option value="">— Select Plan —</option>
-                            </select>
-                        </div>
-                        <div class="field" style="margin:0;">
+                        <div class="field" style="margin:0; position: relative;">
                             <label>Published Test / Result <span style="color:#ef4444;">*</span></label>
-                            <select id="sel-test" onchange="updateStartButton()" disabled>
-                                <option value="">— Select Test —</option>
-                            </select>
+                            <div id="searchable-test-dropdown" style="position: relative;">
+                                <input type="text" id="test-search-input" placeholder="— Select Academic Year First —" disabled style="width: 100%; border: 1px solid #cbd5e1; padding: 8px 12px; border-radius: 4px;" onfocus="showDropdownMenu()" oninput="filterDropdownMenu()">
+                                <input type="hidden" id="sel-test" onchange="selectPublishedTest(this.value)">
+                                <div class="dropdown-menu" id="test-dropdown-menu" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: #fff; border: 1px solid #cbd5e1; max-height: 250px; overflow-y: auto; z-index: 1000; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-radius: 0 0 4px 4px;">
+                                    <!-- Options populated dynamically -->
+                                </div>
+                            </div>
                         </div>
                         <div class="field" style="margin:0;">
                             <label>Background Template <span style="color:#ef4444;">*</span></label>
@@ -642,6 +634,93 @@ include 'includes/admin_nav.php';
                             <i class="fas fa-palette"></i> Start Designing
                         </button>
                     </div>
+                </div>
+            </div>
+
+            <!-- Selected Test Summary -->
+            <div id="selected-test-summary" class="panel" style="display: none; margin-bottom: 20px; border-left: 4px solid var(--accent);">
+                <div class="panel-body" style="padding: 16px;">
+                    <h4 style="margin: 0; font-size: 1.1rem; color: #1e293b; font-weight: 800;">SELECTED TEST</h4>
+                    <h3 id="summary-test-title" style="margin: 4px 0 12px 0; color: var(--accent); font-size: 1.4rem; font-weight: 800;">—</h3>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; font-size: 0.85rem; border-top: 1px solid #e2e8f0; padding-top: 12px;">
+                        <div>
+                            <strong>Study Plan:</strong>
+                            <div id="summary-plan-title" style="margin-top: 4px; font-size: 0.95rem; font-weight: 700; color: #334155;">—</div>
+                        </div>
+                        <div>
+                            <strong>Academic Year:</strong>
+                            <div id="summary-year" style="margin-top: 4px; font-size: 0.95rem; font-weight: 700; color: #334155;">—</div>
+                        </div>
+                        <div>
+                            <strong>Assigned Courses:</strong>
+                            <ul id="summary-assigned-courses-list" style="margin: 4px 0 0 0; padding-left: 20px; color: #334155;">
+                                <!-- Bullet list of courses populated dynamically -->
+                            </ul>
+                        </div>
+                        <div>
+                            <strong>Total Students:</strong>
+                            <div id="summary-total-students" style="margin-top: 4px; font-size: 1.1rem; font-weight: 800; color: var(--accent);">0</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Course-wise participation summary -->
+            <div id="course-participation-panel" class="panel" style="display: none; margin-bottom: 20px;">
+                <div class="panel-head" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px;">
+                    <h3 style="margin: 0;"><i class="fas fa-users" style="color:var(--accent);"></i> Course Participation Summary</h3>
+                    <button type="button" id="btn-view-merged" class="btn btn-secondary" onclick="toggleMergedResults()" style="display: none; font-size: 0.75rem; padding: 6px 12px;">
+                        <i class="fas fa-list-ol"></i> View Merged Result
+                    </button>
+                </div>
+                <div class="panel-body" style="padding: 0; overflow-x: auto;">
+                    <table class="table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                        <thead>
+                            <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0; text-align: left;">
+                                <th style="padding: 10px 16px;">Course</th>
+                                <th style="padding: 10px 16px; text-align: right;">Total Students</th>
+                                <th style="padding: 10px 16px; text-align: right;">Attended</th>
+                                <th style="padding: 10px 16px; text-align: right;">Unattended</th>
+                                <th style="padding: 10px 16px; text-align: center;">Result Available</th>
+                            </tr>
+                        </thead>
+                        <tbody id="course-participation-tbody">
+                            <!-- Courses rows loaded dynamically -->
+                        </tbody>
+                        <tfoot>
+                            <tr style="background: #f8fafc; border-top: 2px solid #cbd5e1; font-weight: bold;">
+                                <td style="padding: 12px 16px;">Total</td>
+                                <td style="padding: 12px 16px; text-align: right;" id="total-students-sum">0</td>
+                                <td style="padding: 12px 16px; text-align: right;" id="total-attended-sum">0</td>
+                                <td style="padding: 12px 16px; text-align: right;" id="total-unattended-sum">0</td>
+                                <td style="padding: 12px 16px;"></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Merged Results Table -->
+            <div id="merged-results-panel" class="panel" style="display: none; margin-bottom: 20px;">
+                <div class="panel-head" style="padding: 12px 16px;">
+                    <h3 style="margin: 0;"><i class="fas fa-trophy" style="color:var(--accent);"></i> Merged Ranking</h3>
+                </div>
+                <div class="panel-body" style="padding: 0; overflow-x: auto; max-height: 400px;">
+                    <table class="table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                        <thead>
+                            <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0; text-align: left;">
+                                <th style="padding: 10px 16px; width: 80px;">Rank</th>
+                                <th style="padding: 10px 16px;">Student ID</th>
+                                <th style="padding: 10px 16px;">Student Name</th>
+                                <th style="padding: 10px 16px;">Course Name</th>
+                                <th style="padding: 10px 16px;">College/School</th>
+                                <th style="padding: 10px 16px; text-align: right; width: 100px;">Score</th>
+                            </tr>
+                        </thead>
+                        <tbody id="merged-results-tbody">
+                            <!-- Merged rows loaded dynamically -->
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
@@ -711,106 +790,266 @@ include 'includes/admin_nav.php';
 
             <!-- JavaScript helper for selectors -->
             <script>
-            function loadCourses(year) {
-                const selCourse = document.getElementById('sel-course');
-                const selPlan = document.getElementById('sel-plan');
-                const selTest = document.getElementById('sel-test');
+            // Searchable Dropdown control
+            function showDropdownMenu() {
+                const year = document.getElementById('sel-year').value;
+                if (year) {
+                    document.getElementById('test-dropdown-menu').style.display = 'block';
+                }
+            }
 
-                selCourse.innerHTML = '<option value="">— Loading... —</option>'; selCourse.disabled = true;
-                selPlan.innerHTML = '<option value="">— Select Plan —</option>'; selPlan.disabled = true;
-                selTest.innerHTML = '<option value="">— Select Test —</option>'; selTest.disabled = true;
+            function hideDropdownMenu() {
+                setTimeout(() => {
+                    document.getElementById('test-dropdown-menu').style.display = 'none';
+                }, 250);
+            }
+
+            function filterDropdownMenu() {
+                const query = document.getElementById('test-search-input').value.toLowerCase().trim();
+                if (!window.publishedTestsList) return;
+
+                const filtered = window.publishedTestsList.filter(t => {
+                    const title = (t.activity_title || '').toLowerCase();
+                    const type = (t.activity_type || '').toLowerCase();
+                    const chapter = (t.chapter || '').toLowerCase();
+                    const plan = (t.plan_title || '').toLowerCase();
+                    const date = (t.activity_date || '').toLowerCase();
+                    const day = (t.day_number || '').toLowerCase();
+                    return title.includes(query) || type.includes(query) || chapter.includes(query) || plan.includes(query) || date.includes(query) || day.includes(query);
+                });
+                renderDropdownOptions(filtered);
+                showDropdownMenu();
+            }
+
+            function renderDropdownOptions(list) {
+                const menu = document.getElementById('test-dropdown-menu');
+                menu.innerHTML = '';
+                if (list.length === 0) {
+                    menu.innerHTML = '<div style="padding: 10px; color: #94a3b8; text-align: center;">No matching tests found</div>';
+                    return;
+                }
+                list.forEach(t => {
+                    const div = document.createElement('div');
+                    div.style.padding = '10px 12px';
+                    div.style.cursor = 'pointer';
+                    div.style.borderBottom = '1px solid #f1f5f9';
+                    div.style.fontSize = '0.85rem';
+
+                    let dateStr = '';
+                    if (t.activity_date) {
+                        const d = new Date(t.activity_date);
+                        dateStr = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                    }
+
+                    const testNo = t.day_number ? 'Test ' + t.day_number : 'Test #' + t.activity_id;
+                    const optionLabel = `${t.activity_title} | ${testNo} | ${t.plan_title}`;
+
+                    div.innerHTML = `
+                        <div style="font-weight: 700; color: #1e293b;">${optionLabel}</div>
+                        <div style="font-size: 0.75rem; color: #64748b;">
+                            ${t.activity_type} ${t.chapter ? '• ' + t.chapter : ''} ${dateStr ? '• ' + dateStr : ''}
+                        </div>
+                    `;
+                    div.onclick = () => {
+                        document.getElementById('test-search-input').value = optionLabel;
+                        const hiddenInput = document.getElementById('sel-test');
+                        const newVal = `${t.study_plan_id}_${t.activity_id}`;
+                        hiddenInput.value = newVal;
+
+                        // Trigger selectPublishedTest explicitly
+                        selectPublishedTest(newVal);
+                    };
+                    div.onmouseenter = () => { div.style.background = '#f8fafc'; };
+                    div.onmouseleave = () => { div.style.background = '#fff'; };
+                    menu.appendChild(div);
+                });
+            }
+
+            document.addEventListener('click', function(e) {
+                const container = document.getElementById('searchable-test-dropdown');
+                if (container && !container.contains(e.target)) {
+                    document.getElementById('test-dropdown-menu').style.display = 'none';
+                }
+            });
+
+            // Loading Published Tests
+            function loadPublishedTests(year) {
+                const hiddenInput = document.getElementById('sel-test');
+                hiddenInput.value = '';
+                document.getElementById('test-search-input').value = '';
+                document.getElementById('test-search-input').placeholder = '— Loading... —';
+                document.getElementById('test-search-input').disabled = true;
+
+                // Hide panels
+                document.getElementById('selected-test-summary').style.display = 'none';
+                document.getElementById('course-participation-panel').style.display = 'none';
+                document.getElementById('btn-view-merged').style.display = 'none';
+                document.getElementById('merged-results-panel').style.display = 'none';
+
                 updateStartButton();
 
                 if (!year) {
-                    selCourse.innerHTML = '<option value="">— Select Course —</option>';
+                    document.getElementById('test-search-input').placeholder = '— Select Academic Year First —';
                     return;
                 }
 
-                fetch('assessment-results.php?action=get_courses&year=' + encodeURIComponent(year))
-                    .then(r => r.json()).then(courses => {
-                        selCourse.innerHTML = '<option value="">— Select Course —</option>';
-                        courses.forEach(c => {
-                            selCourse.innerHTML += `<option value="${c.id}">${c.course_name}${c.course_code ? ' (' + c.course_code + ')' : ''}</option>`;
-                        });
-                        selCourse.disabled = false;
-                    });
-            }
-
-            function loadStudyPlans(courseId) {
-                const year = document.getElementById('sel-year').value;
-                const selPlan = document.getElementById('sel-plan');
-                const selTest = document.getElementById('sel-test');
-
-                selPlan.innerHTML = '<option value="">— Loading... —</option>'; selPlan.disabled = true;
-                selTest.innerHTML = '<option value="">— Select Test —</option>'; selTest.disabled = true;
-                updateStartButton();
-
-                if (!courseId) {
-                    selPlan.innerHTML = '<option value="">— Select Plan —</option>';
-                    return;
-                }
-
-                fetch('assessment-results.php?action=get_study_plans&year=' + encodeURIComponent(year) + '&course_id=' + courseId)
-                    .then(r => r.json()).then(plans => {
-                        selPlan.innerHTML = '<option value="">— Select Plan —</option>';
-                        plans.forEach(p => {
-                            selPlan.innerHTML += `<option value="${p.id}">${p.title} [${p.status}]</option>`;
-                        });
-                        selPlan.disabled = false;
-                    });
-            }
-
-            function loadTests(planId) {
-                const courseId = document.getElementById('sel-course').value;
-                const selTest = document.getElementById('sel-test');
-
-                selTest.innerHTML = '<option value="">— Loading... —</option>'; selTest.disabled = true;
-                updateStartButton();
-
-                if (!planId) {
-                    selTest.innerHTML = '<option value="">— Select Test —</option>';
-                    return;
-                }
-
-                fetch('assessment-results.php?action=get_tests&plan_id=' + planId + '&course_id=' + courseId)
+                fetch('assessment-results.php?action=get_published_tests_by_year&year=' + encodeURIComponent(year))
                     .then(r => r.json()).then(tests => {
-                        selTest.innerHTML = '<option value="">— Select Test —</option>';
-                        const publishedTests = tests.filter(t => t.has_published_result);
+                        const menu = document.getElementById('test-dropdown-menu');
+                        menu.innerHTML = '';
+                        if (tests.length === 0) {
+                            menu.innerHTML = '<div style="padding: 10px; color: #94a3b8; text-align: center;">— No Published Results —</div>';
+                            document.getElementById('test-search-input').placeholder = '— No Published Results —';
+                            document.getElementById('test-search-input').disabled = true;
+                            return;
+                        }
+                        document.getElementById('test-search-input').disabled = false;
+                        document.getElementById('test-search-input').placeholder = '🔍 Search published tests...';
+                        window.publishedTestsList = tests;
+                        renderDropdownOptions(tests);
+                    });
+            }
 
-                        if (publishedTests.length === 0) {
-                            selTest.innerHTML = '<option value="">— No Published Results —</option>';
+            // Test selection logic
+            function selectPublishedTest(val) {
+                const year = document.getElementById('sel-year').value;
+                document.getElementById('merged-results-panel').style.display = 'none';
+                updateStartButton();
+
+                if (!val) {
+                    document.getElementById('selected-test-summary').style.display = 'none';
+                    document.getElementById('course-participation-panel').style.display = 'none';
+                    document.getElementById('btn-view-merged').style.display = 'none';
+                    return;
+                }
+
+                const parts = val.split('_');
+                const planId = parts[0];
+                const activityId = parts[1];
+
+                // Fetch Summary & Courses
+                fetch(`assessment-results.php?action=get_course_participation_summary&year=${encodeURIComponent(year)}&plan_id=${planId}&activity_id=${activityId}`)
+                    .then(r => r.json()).then(data => {
+                        if (!data.success) {
+                            alert(data.message || 'Failed to load details.');
                             return;
                         }
 
-                        publishedTests.forEach(t => {
-                            let label = t.activity_title;
-                            if (t.chapter) label += ` (Ch: ${t.chapter})`;
-                            if (t.activity_date) label += ` [${t.activity_date}]`;
-                            selTest.innerHTML += `<option value="${t.id}">${label}</option>`;
+                        // Display Summary
+                        document.getElementById('summary-test-title').innerText = data.activity_title;
+                        document.getElementById('summary-plan-title').innerText = data.plan_title;
+                        document.getElementById('summary-year').innerText = year;
+
+                        // Display Table rows & Courses Bullet list
+                        const tbody = document.getElementById('course-participation-tbody');
+                        tbody.innerHTML = '';
+
+                        const listUl = document.getElementById('summary-assigned-courses-list');
+                        listUl.innerHTML = '';
+
+                        let totalStud = 0, totalAtt = 0, totalUnatt = 0;
+
+                        data.courses.forEach(c => {
+                            totalStud += c.total_students;
+                            totalAtt += c.attended;
+                            totalUnatt += c.unattended;
+
+                            // Add to assigned courses list
+                            const li = document.createElement('li');
+                            li.innerText = c.course_name;
+                            listUl.appendChild(li);
+
+                            tbody.innerHTML += `
+                                <tr style="border-bottom: 1px solid #f1f5f9; vertical-align: middle;">
+                                    <td style="padding: 10px 16px; font-weight: 700; color: #1e293b;">${c.course_name}</td>
+                                    <td style="padding: 10px 16px; text-align: right;">${c.total_students}</td>
+                                    <td style="padding: 10px 16px; text-align: right;">${c.attended}</td>
+                                    <td style="padding: 10px 16px; text-align: right;">${c.unattended}</td>
+                                    <td style="padding: 10px 16px; text-align: center;">
+                                        <span class="badge badge-${c.result_available === 'Yes' ? 'success' : 'danger'}">${c.result_available}</span>
+                                    </td>
+                                </tr>
+                            `;
                         });
-                        selTest.disabled = false;
+
+                        document.getElementById('summary-total-students').innerText = totalStud;
+                        document.getElementById('total-students-sum').innerText = totalStud;
+                        document.getElementById('total-attended-sum').innerText = totalAtt;
+                        document.getElementById('total-unattended-sum').innerText = totalUnatt;
+
+                        document.getElementById('selected-test-summary').style.display = 'block';
+                        document.getElementById('course-participation-panel').style.display = 'block';
+                        document.getElementById('btn-view-merged').style.display = 'inline-block';
+                    });
+            }
+
+            function toggleMergedResults() {
+                const panel = document.getElementById('merged-results-panel');
+                if (panel.style.display === 'block') {
+                    panel.style.display = 'none';
+                    return;
+                }
+
+                const year = document.getElementById('sel-year').value;
+                const val = document.getElementById('sel-test').value;
+                if (!val) return;
+
+                const parts = val.split('_');
+                const planId = parts[0];
+                const activityId = parts[1];
+
+                const tbody = document.getElementById('merged-results-tbody');
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:20px;">Loading merged ranking...</td></tr>';
+                panel.style.display = 'block';
+
+                fetch(`assessment-results.php?action=get_merged_results&year=${encodeURIComponent(year)}&plan_id=${planId}&activity_id=${activityId}`)
+                    .then(r => r.json()).then(data => {
+                        if (!data.success) {
+                            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#ef4444; padding:20px;">Failed to load rankings.</td></tr>';
+                            return;
+                        }
+
+                        tbody.innerHTML = '';
+                        if (data.results.length === 0) {
+                            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:20px; color:#94a3b8;">No results available to display.</td></tr>';
+                            return;
+                        }
+
+                        data.results.forEach(r => {
+                            tbody.innerHTML += `
+                                <tr style="border-bottom: 1px solid #f1f5f9; vertical-align: middle;">
+                                    <td style="padding: 10px 16px; font-weight: 700; color: var(--accent);"># ${r.computed_rank}</td>
+                                    <td style="padding: 10px 16px;">${r.user_id || '—'}</td>
+                                    <td style="padding: 10px 16px; font-weight: 700; color: #1e293b;">${r.name || '—'}</td>
+                                    <td style="padding: 10px 16px;">${r.course_name || '—'}</td>
+                                    <td style="padding: 10px 16px; color:#64748b;">${r.college_school || '—'}</td>
+                                    <td style="padding: 10px 16px; text-align: right; font-weight: 700; color: #0f172a;">${r.score}</td>
+                                </tr>
+                            `;
+                        });
                     });
             }
 
             function updateStartButton() {
                 const year = document.getElementById('sel-year').value;
-                const course = document.getElementById('sel-course').value;
-                const plan = document.getElementById('sel-plan').value;
-                const test = document.getElementById('sel-test').value;
+                const testVal = document.getElementById('sel-test').value;
                 const template = document.getElementById('sel-template').value;
 
                 const btn = document.getElementById('btn-start-design');
-                if (btn) btn.disabled = !(year && course && plan && test && template);
+                if (btn) btn.disabled = !(year && testVal && template);
             }
 
             function startResultDesigner() {
                 const year = document.getElementById('sel-year').value;
-                const course = document.getElementById('sel-course').value;
-                const plan = document.getElementById('sel-plan').value;
-                const test = document.getElementById('sel-test').value;
+                const testVal = document.getElementById('sel-test').value;
                 const template = document.getElementById('sel-template').value;
 
-                window.location.href = `cards-result-designer.php?year=${encodeURIComponent(year)}&course_id=${course}&plan_id=${plan}&activity_id=${test}&template_id=${template}`;
+                const parts = testVal.split('_');
+                const planId = parts[0];
+                const activityId = parts[1];
+
+                // course_id is set to 0 for merged context designer loading
+                window.location.href = `cards-result-designer.php?year=${encodeURIComponent(year)}&course_id=0&plan_id=${planId}&activity_id=${activityId}&template_id=${template}`;
             }
             </script>
         <?php endif; ?>

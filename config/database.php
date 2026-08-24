@@ -121,7 +121,14 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
             CREATE TABLE IF NOT EXISTS assessment_result_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 activity_id INTEGER,
+                study_plan_id INTEGER,
+                academic_year TEXT,
                 course_id INTEGER,
+                course_name TEXT,
+                activity_title_snapshot TEXT,
+                activity_type_snapshot TEXT,
+                activity_date_snapshot TEXT,
+                chapter_snapshot TEXT,
                 version INTEGER DEFAULT 1,
                 status TEXT DEFAULT 'published',
                 published_at TEXT,
@@ -138,12 +145,15 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 user_id INTEGER
             );
             CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT PRIMARY KEY,
                 name TEXT,
                 email TEXT,
                 college_school TEXT,
                 user_photo TEXT,
-                status TEXT DEFAULT 'approved'
+                status TEXT DEFAULT 'approved',
+                student_status TEXT DEFAULT 'active',
+                pepp_course TEXT,
+                pepp_academic_year TEXT
             );
             CREATE TABLE IF NOT EXISTS study_plan_custom_types (
                 name TEXT PRIMARY KEY

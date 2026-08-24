@@ -130,9 +130,14 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             ");
             $stmt->execute(array_merge([$plan_id], array_values($all_test_types)));
             $activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $stmt_cn = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
+            $stmt_cn->execute([$course_id]);
+            $course_name = $stmt_cn->fetchColumn();
+
             foreach ($activities as &$act) {
-                $bs = $pdo->prepare("SELECT id, version, status, published_at, published_by FROM assessment_result_batches WHERE activity_id = ? AND course_id = ? AND status = 'published' LIMIT 1");
-                $bs->execute([$act['id'], $course_id]);
+                $bs = $pdo->prepare("SELECT id, version, status, published_at, published_by FROM assessment_result_batches WHERE activity_id = ? AND (course_id = ? OR (course_name = ? AND course_name != '')) AND status = 'published' LIMIT 1");
+                $bs->execute([$act['id'], $course_id, $course_name]);
                 $batch = $bs->fetch(PDO::FETCH_ASSOC);
                 $act['has_published_result'] = $batch ? true : false;
                 $act['published_version'] = $batch ? (int)$batch['version'] : 0;
@@ -140,6 +145,232 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             unset($act);
             echo json_encode($activities);
         } catch (Exception $e) { echo json_encode([]); }
+        exit;
+    }
+
+    if ($ajax_action === 'get_published_tests_by_year') {
+        $year = trim($_GET['year'] ?? '');
+        if (empty($year)) { echo json_encode([]); exit; }
+        try {
+            $stmt = $pdo->prepare("
+                SELECT DISTINCT
+                    arb.study_plan_id,
+                    arb.activity_id,
+                    arb.activity_title_snapshot AS activity_title,
+                    arb.activity_type_snapshot AS activity_type,
+                    arb.activity_date_snapshot AS activity_date,
+                    arb.chapter_snapshot AS chapter,
+                    sp.title AS plan_title,
+                    spa.day_number
+                FROM assessment_result_batches arb
+                JOIN study_plans sp ON arb.study_plan_id = sp.id
+                LEFT JOIN study_plan_activities spa ON arb.activity_id = spa.id
+                WHERE arb.academic_year = ? AND arb.status = 'published'
+                ORDER BY sp.title ASC, arb.activity_title_snapshot ASC
+            ");
+            $stmt->execute([$year]);
+            echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+        } catch (Exception $e) { echo json_encode([]); }
+        exit;
+    }
+
+    if ($ajax_action === 'get_course_participation_summary') {
+        $year = trim($_GET['year'] ?? '');
+        $plan_id = (int)($_GET['plan_id'] ?? 0);
+        $activity_id = (int)($_GET['activity_id'] ?? 0);
+
+        if (empty($year) || $plan_id <= 0 || $activity_id <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Missing parameters.']);
+            exit;
+        }
+
+        try {
+            // Find study plan details
+            $stmt_plan = $pdo->prepare("SELECT title FROM study_plans WHERE id = ?");
+            $stmt_plan->execute([$plan_id]);
+            $plan_title = $stmt_plan->fetchColumn();
+
+            // Find activity details
+            $stmt_act = $pdo->prepare("SELECT activity_title, activity_type, activity_date, chapter FROM study_plan_activities WHERE id = ? AND study_plan_id = ?");
+            $stmt_act->execute([$activity_id, $plan_id]);
+            $activity = $stmt_act->fetch(PDO::FETCH_ASSOC);
+
+            if (!$plan_title || !$activity) {
+                echo json_encode(['success' => false, 'message' => 'Test details not found.']);
+                exit;
+            }
+
+            // Find all assigned courses
+            $stmt_assign = $pdo->prepare("SELECT assignment_type, assigned_value FROM study_plan_assignments WHERE study_plan_id = ?");
+            $stmt_assign->execute([$plan_id]);
+            $assignments = $stmt_assign->fetchAll(PDO::FETCH_ASSOC);
+
+            $is_all = false;
+            $assigned_names = [];
+            foreach ($assignments as $asg) {
+                if ($asg['assignment_type'] === 'all') {
+                    $is_all = true;
+                    break;
+                } elseif ($asg['assignment_type'] === 'course') {
+                    $assigned_names[] = $asg['assigned_value'];
+                }
+            }
+
+            if ($is_all) {
+                $stmt_courses = $pdo->prepare("SELECT id, course_name FROM pepp_courses WHERE academic_year = ? AND status = 'active' ORDER BY course_name ASC");
+                $stmt_courses->execute([$year]);
+            } else {
+                if (empty($assigned_names)) {
+                    $stmt_courses = null;
+                } else {
+                    $placeholders = implode(',', array_fill(0, count($assigned_names), '?'));
+                    $stmt_courses = $pdo->prepare("SELECT id, course_name FROM pepp_courses WHERE academic_year = ? AND status = 'active' AND course_name IN ($placeholders) ORDER BY course_name ASC");
+                    $stmt_courses->execute(array_merge([$year], $assigned_names));
+                }
+            }
+
+            $courses = $stmt_courses ? $stmt_courses->fetchAll(PDO::FETCH_ASSOC) : [];
+            $summary = [];
+
+            foreach ($courses as $c) {
+                // 1. Total Students enrolled in this course
+                $stmt_count = $pdo->prepare("SELECT COUNT(*) FROM users WHERE status = 'approved' AND student_status IN ('active','completed') AND LOWER(TRIM(pepp_course)) = LOWER(TRIM(?)) AND pepp_academic_year = ?");
+                $stmt_count->execute([$c['course_name'], $year]);
+                $total_students = (int)$stmt_count->fetchColumn();
+
+                // 2. Resolve result batches
+                $stmt_batches = $pdo->prepare("
+                    SELECT id FROM assessment_result_batches
+                    WHERE activity_id = ?
+                      AND (course_id = ? OR LOWER(TRIM(course_name)) = LOWER(TRIM(?)))
+                      AND status = 'published'
+                ");
+                $stmt_batches->execute([$activity_id, $c['id'], $c['course_name']]);
+                $batch_ids = $stmt_batches->fetchAll(PDO::FETCH_COLUMN);
+
+                $attended = 0;
+                $result_available = 'No';
+
+                if (!empty($batch_ids)) {
+                    $result_available = 'Yes';
+                    $placeholders_batches = implode(',', array_fill(0, count($batch_ids), '?'));
+                    // Count unique students enrolled in this course who attended
+                    $stmt_att = $pdo->prepare("
+                        SELECT COUNT(DISTINCT COALESCE(NULLIF(u.user_id, ''), ar.student_email))
+                        FROM assessment_results ar
+                        JOIN users u ON (ar.user_id = u.user_id OR LOWER(ar.student_email) = LOWER(u.email))
+                        WHERE ar.batch_id IN ($placeholders_batches)
+                          AND ar.attendance_status = 'attended'
+                          AND u.status = 'approved'
+                          AND u.student_status IN ('active','completed')
+                          AND LOWER(TRIM(u.pepp_course)) = LOWER(TRIM(?))
+                          AND u.pepp_academic_year = ?
+                    ");
+                    $stmt_att->execute(array_merge($batch_ids, [$c['course_name'], $year]));
+                    $attended = (int)$stmt_att->fetchColumn();
+                }
+
+                $unattended = max(0, $total_students - $attended);
+
+                $summary[] = [
+                    'course_id' => $c['id'],
+                    'course_name' => $c['course_name'],
+                    'total_students' => $total_students,
+                    'attended' => $attended,
+                    'unattended' => $unattended,
+                    'result_available' => $result_available
+                ];
+            }
+
+            echo json_encode([
+                'success' => true,
+                'plan_title' => $plan_title,
+                'activity_title' => $activity['activity_title'],
+                'activity_type' => $activity['activity_type'],
+                'activity_date' => $activity['activity_date'],
+                'chapter' => $activity['chapter'],
+                'courses' => $summary
+            ]);
+
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    if ($ajax_action === 'get_merged_results') {
+        $year = trim($_GET['year'] ?? '');
+        $plan_id = (int)($_GET['plan_id'] ?? 0);
+        $activity_id = (int)($_GET['activity_id'] ?? 0);
+
+        if (empty($year) || $plan_id <= 0 || $activity_id <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Missing parameters.']);
+            exit;
+        }
+
+        try {
+            // Find all active published batches for the activity
+            $stmt_batches = $pdo->prepare("SELECT id FROM assessment_result_batches WHERE activity_id = ? AND status = 'published'");
+            $stmt_batches->execute([$activity_id]);
+            $batch_ids = $stmt_batches->fetchAll(PDO::FETCH_COLUMN);
+
+            if (empty($batch_ids)) {
+                echo json_encode(['success' => true, 'results' => []]);
+                exit;
+            }
+
+            $placeholders = implode(',', array_fill(0, count($batch_ids), '?'));
+            $stmt_res = $pdo->prepare("
+                SELECT ar.student_email, ar.score, ar.attendance_status,
+                       COALESCE(u.name, ar.src_name) AS name,
+                       COALESCE(u.college_school, '-') AS college_school,
+                       u.user_id, u.pepp_course AS course_name
+                FROM assessment_results ar
+                LEFT JOIN users u ON (ar.user_id = u.user_id OR LOWER(ar.student_email) = LOWER(u.email))
+                WHERE ar.batch_id IN ($placeholders)
+            ");
+            $stmt_res->execute($batch_ids);
+            $results = $stmt_res->fetchAll(PDO::FETCH_ASSOC);
+
+            // Deduplicate and filter attended students
+            $merged = [];
+            foreach ($results as $r) {
+                if ($r['attendance_status'] !== 'attended' || $r['score'] === null) {
+                    continue;
+                }
+                $uid = !empty($r['user_id']) ? $r['user_id'] : $r['student_email'];
+                if (empty($uid)) continue;
+
+                // Retain only highest score if duplicates exist
+                if (!isset($merged[$uid]) || $r['score'] > $merged[$uid]['score']) {
+                    $merged[$uid] = $r;
+                }
+            }
+
+            $rankable = array_values($merged);
+            // Sort globally by score descending
+            usort($rankable, function($a, $b) { return ($b['score'] ?? 0) <=> ($a['score'] ?? 0); });
+
+            // Generate ranks
+            $ranking_list = [];
+            $prev_score = null;
+            $rank = 0;
+            $count = 0;
+            foreach ($rankable as $r) {
+                $count++;
+                if ($r['score'] !== $prev_score) {
+                    $rank = $count;
+                }
+                $r['computed_rank'] = $rank;
+                $ranking_list[] = $r;
+                $prev_score = $r['score'];
+            }
+
+            echo json_encode(['success' => true, 'results' => $ranking_list]);
+
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
         exit;
     }
 
