@@ -285,9 +285,18 @@ include 'includes/admin_nav.php';
     position: relative;
     height: 100%;
 }
-.canvas-container {
+.canvas-wrapper {
     position: relative;
     box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+    background-color: #fff;
+    flex-shrink: 0;
+    flex-grow: 0;
+}
+.canvas-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: top left;
     background-color: #fff;
     overflow: hidden;
 }
@@ -400,8 +409,10 @@ include 'includes/admin_nav.php';
 
     <!-- Center Workspace Canvas -->
     <div class="canvas-viewport" id="canvas-parent">
-        <div class="canvas-container" id="designer-canvas">
-            <!-- Background Image & Elements render here -->
+        <div class="canvas-wrapper" id="canvas-wrapper">
+            <div class="canvas-container" id="designer-canvas">
+                <!-- Background Image & Elements render here -->
+            </div>
         </div>
     </div>
 
@@ -437,6 +448,18 @@ include 'includes/admin_nav.php';
                         <select id="prop-export-format">
                             <option value="png">PNG</option>
                             <option value="jpeg">JPEG</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="field-row" style="margin-top: 8px;">
+                    <div class="field" style="margin:0; grid-column: span 2;">
+                        <label>Preview Zoom</label>
+                        <select id="zoom-control" onchange="initCanvasSize()">
+                            <option value="fit" selected>Fit to Workspace</option>
+                            <option value="fit-width">Fit Width</option>
+                            <option value="50">50%</option>
+                            <option value="75">75%</option>
+                            <option value="100">100% (Actual Size)</option>
                         </select>
                     </div>
                 </div>
@@ -781,70 +804,164 @@ let dragStartCoords = null;
 let dragElementState = null;
 let isDraggingPhoto = false;
 
+let resolvedBgUrl = bgUrl.startsWith('linear-gradient') || bgUrl.startsWith('radial-gradient') || bgUrl.startsWith('#') || bgUrl.startsWith('http') || bgUrl.startsWith('../') ? bgUrl : '../' + bgUrl;
+
+// Function to load template background image
+function loadBackgroundImage(url) {
+    return new Promise((resolve, reject) => {
+        if (url.startsWith('linear-gradient') || url.startsWith('radial-gradient') || url.startsWith('#')) {
+            // Gradient/Color background doesn't need an image load
+            resolve({ naturalWidth: bgW, naturalHeight: bgH });
+            return;
+        }
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = url;
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("Failed to load image from URL: " + url));
+    });
+}
+
 // ── 1. Page Initialization ────────────
-document.addEventListener('DOMContentLoaded', function() {
-    if (savedDesignId && savedConfig) {
-        elements = savedConfig.elements || [];
-        studentRankMappings = savedMappings || {};
-        document.getElementById('prop-ranks-count').value = savedConfig.ranksCount || '4';
-        document.getElementById('prop-export-format').value = '<?php echo $saved_design ? addslashes($saved_design['output_format']) : "png"; ?>';
-    } else {
-        // Initial setup from template
-        elements = JSON.parse(JSON.stringify(templateElements));
-
-        // Auto assign students to rank photo placeholders
-        rankingList.forEach(function(student, index) {
-            const rankNum = student.computed_rank;
-            const photoEl = elements.find(el => el.id === 'rank_photo_' + rankNum);
-
-            if (photoEl && !studentRankMappings[photoEl.id]) {
-                studentRankMappings[photoEl.id] = {
-                    student_uid: student.user_id || student.student_email,
-                    zoom: 100,
-                    panX: 0,
-                    panY: 0,
-                    photo_override: null
-                };
-            }
-        });
-
-        // Auto fill chapter name and test number
-        const testNumEl = elements.find(el => el.id === 'test_number');
-        if (testNumEl) {
-            testNumEl.textContent = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
-        }
-        const chapterEl = elements.find(el => el.id === 'chapter_name');
-        if (chapterEl) {
-            chapterEl.textContent = '<?php echo addslashes($activity['activity_title']); ?>';
-        }
+document.addEventListener('DOMContentLoaded', async function() {
+    // Show generation loader while loading background template image
+    const loader = document.getElementById('generation-loader');
+    const loaderMsg = document.getElementById('loader-message');
+    if (loader) {
+        if (loaderMsg) loaderMsg.textContent = 'Loading background template...';
+        loader.style.display = 'flex';
     }
 
-    // Set background layout image and size
-    const container = document.getElementById('designer-canvas');
-    container.style.width = bgW + 'px';
-    container.style.height = bgH + 'px';
+    try {
+        const bgImg = await loadBackgroundImage(resolvedBgUrl);
 
-    initCanvasSize();
-    saveHistoryState(true); // Save initial state
+        if (loader) loader.style.display = 'none';
 
-    window.addEventListener('resize', initCanvasSize);
+        if (savedDesignId && savedConfig) {
+            elements = savedConfig.elements || [];
+            studentRankMappings = savedMappings || {};
+            document.getElementById('prop-ranks-count').value = savedConfig.ranksCount || '4';
+            document.getElementById('prop-export-format').value = '<?php echo $saved_design ? addslashes($saved_design['output_format']) : "png"; ?>';
+        } else {
+            // Initial setup from template
+            elements = JSON.parse(JSON.stringify(templateElements));
+
+            // Convert template elements from percentage coordinates to native pixel coordinates if they are percentages
+            elements = elements.map(function(el) {
+                if (el.left <= 100) {
+                    el.left = Math.round((el.left / 100) * bgW);
+                }
+                if (el.top <= 100) {
+                    el.top = Math.round((el.top / 100) * bgH);
+                }
+                if (el.width <= 100) {
+                    el.width = Math.round((el.width / 100) * bgW);
+                }
+                if (el.height <= 100) {
+                    el.height = Math.round((el.height / 100) * bgH);
+                }
+                return el;
+            });
+
+            // Auto assign students to rank photo placeholders
+            rankingList.forEach(function(student, index) {
+                const rankNum = student.computed_rank;
+                const photoEl = elements.find(el => el.id === 'rank_photo_' + rankNum);
+
+                if (photoEl && !studentRankMappings[photoEl.id]) {
+                    studentRankMappings[photoEl.id] = {
+                        student_uid: student.user_id || student.student_email,
+                        zoom: 100,
+                        panX: 0,
+                        panY: 0,
+                        photo_override: null
+                    };
+                }
+            });
+
+            // Auto fill chapter name and test number
+            const testNumEl = elements.find(el => el.id === 'test_number');
+            if (testNumEl) {
+                testNumEl.textContent = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
+            }
+            const chapterEl = elements.find(el => el.id === 'chapter_name');
+            if (chapterEl) {
+                chapterEl.textContent = '<?php echo addslashes($activity['activity_title']); ?>';
+            }
+        }
+
+        // Initialize size and register resize listener
+        initCanvasSize();
+        saveHistoryState(true); // Save initial state
+        window.addEventListener('resize', initCanvasSize);
+
+    } catch (err) {
+        console.error(err);
+        if (loader) loader.style.display = 'none';
+
+        // Render full-screen error display in place of the canvas
+        const parent = document.getElementById('canvas-parent');
+        if (parent) {
+            parent.innerHTML = `
+                <div style="background: #fee2e2; border: 1px solid #fca5a5; padding: 24px; border-radius: 12px; max-width: 600px; color: #991b1b; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin: auto;">
+                    <i class="fas fa-exclamation-triangle" style="font-size: 3rem; margin-bottom: 16px; color: #dc2626;"></i>
+                    <h3 style="font-weight: 700; margin-bottom: 8px;">Template Background Load Failed</h3>
+                    <p style="font-size: 0.9rem; margin-bottom: 16px; line-height: 1.5;">The visual designer could not render the background template image. Please verify that the image exists at the path specified below.</p>
+                    <div style="background: #fff; border: 1px solid #f3f4f6; padding: 12px; border-radius: 8px; font-family: monospace; font-size: 0.8rem; text-align: left; word-break: break-all; margin-bottom: 16px;">
+                        <strong>Resolved Path:</strong> ${resolvedBgUrl}<br>
+                        <strong>Template ID:</strong> <?php echo $template_id; ?><br>
+                        <strong>Template Name:</strong> <?php echo addslashes($tpl['title']); ?><br>
+                        <strong>Database Path:</strong> ${bgUrl}<br>
+                        <strong>Error Message:</strong> ${err.message}
+                    </div>
+                    <a href="cards.php?tab=test_results" class="btn btn-sm btn-outline" style="color: #991b1b; border-color: #fca5a5; background: #fff; text-decoration: none; display: inline-block; padding: 8px 16px; border-radius: 6px;">Back to Dashboard</a>
+                </div>
+            `;
+        }
+    }
 });
 
 // Calculate CSS Scale transforms to scale canvas visually inside viewport
 function initCanvasSize() {
-    const parent = document.getElementById('canvas-parent');
-    const container = document.getElementById('designer-canvas');
+    const parent = document.getElementById('canvas-parent'); // .canvas-viewport
+    const wrapper = document.getElementById('canvas-wrapper');
+    const container = document.getElementById('designer-canvas'); // .canvas-container
 
+    if (!parent || !wrapper || !container) return;
+
+    // Get parent available width and height minus padding
     const viewportW = parent.clientWidth - 40;
     const viewportH = parent.clientHeight - 40;
 
-    const scale = Math.min(viewportW / bgW, viewportH / bgH, 1);
+    // Read Zoom control
+    const zoomSelect = document.getElementById('zoom-control');
+    let scale = Math.min(viewportW / bgW, viewportH / bgH, 1);
 
+    if (zoomSelect) {
+        const val = zoomSelect.value;
+        if (val === 'fit') {
+            scale = Math.min(viewportW / bgW, viewportH / bgH, 1);
+        } else if (val === 'fit-width') {
+            scale = viewportW / bgW;
+        } else {
+            scale = parseFloat(val) / 100;
+        }
+    }
+
+    // Scale wrapper to exactly the scaled width and height of the template
+    const visualWidth = bgW * scale;
+    const visualHeight = bgH * scale;
+
+    wrapper.style.width = Math.round(visualWidth) + 'px';
+    wrapper.style.height = Math.round(visualHeight) + 'px';
+
+    // Set the native canvas width and height
+    container.style.width = bgW + 'px';
+    container.style.height = bgH + 'px';
+
+    // Apply scaling transform on the native canvas
     container.style.transform = 'scale(' + scale + ')';
-    container.style.transformOrigin = 'center center';
-
-    // Adjust container parent height if scaled size overflows
-    container.parentElement.style.minHeight = (bgH * scale + 40) + 'px';
+    container.style.transformOrigin = 'top left';
 
     drawElements();
 }
@@ -862,7 +979,7 @@ function drawElements() {
     bg.style.left = '0';
     bg.style.width = bgW + 'px';
     bg.style.height = bgH + 'px';
-    bg.style.backgroundImage = 'url("../' + bgUrl + '")';
+    bg.style.backgroundImage = 'url("' + resolvedBgUrl + '")';
     bg.style.backgroundSize = '100% 100%';
     bg.style.zIndex = '1';
     bg.style.pointerEvents = 'none';
@@ -1575,7 +1692,7 @@ function saveDesign(isExporting = false) {
     // Load background image
     const bgImg = new Image();
     bgImg.crossOrigin = 'anonymous';
-    bgImg.src = '../' + bgUrl;
+    bgImg.src = resolvedBgUrl;
 
     bgImg.onload = function() {
         ctx.drawImage(bgImg, 0, 0, bgW, bgH);
