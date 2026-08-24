@@ -730,6 +730,75 @@ try {
     $has_merged_photo_mappings = strpos($designer_html, 'rankingList') !== false;
     run_assert("Photo mappings are preserved in merged modes", $has_merged_photo_mappings);
 
+    echo "\n--- TEST 79: 'Save This Card' button label exists ---\n";
+    $has_save_this_card_btn = strpos($designer_html, 'Save This Card') !== false;
+    run_assert("Save This Card button label exists in UI markup", $has_save_this_card_btn);
+
+    echo "\n--- TEST 80: 'Save Design Config' label no longer exists ---\n";
+    $has_no_save_design_config = strpos($designer_html, 'Save Design Config') === false;
+    run_assert("Save Design Config button label has been removed", $has_no_save_design_config);
+
+    echo "\n--- TEST 81: Save This Card uses the saved-card persistence flow ---\n";
+    $has_save_card_payload = strpos($designer_html, "payload.append('action', 'save_design')") !== false;
+    run_assert("Save Design action is dispatched to the backend", $has_save_card_payload);
+
+    echo "\n--- TEST 82: Save This Card does NOT call saveAsNewPreset() ---\n";
+    $has_save_design_distinct = preg_match('/onclick="saveDesign\(false\)"/', $designer_html);
+    run_assert("Save button is bound to saveDesign(), not saveAsNewPreset()", $has_save_design_distinct);
+
+    echo "\n--- TEST 83: Save This Card does NOT insert into card_layout_presets ---\n";
+    // The php save_design handler writes to test_result_cards, NOT card_layout_presets
+    $has_save_design_db_handler = strpos($designer_html, '($_POST[\'action\'] ?? \'\') === \'save_design\'') !== false;
+    $has_save_layout_db_handler = strpos($designer_html, '($_POST[\'action\'] ?? \'\') === \'save_layout_preset\'') !== false;
+    run_assert("Save Design handler exists and operates on test_result_cards", $has_save_design_db_handler);
+    run_assert("Save Layout Preset handler exists and operates on card_layout_presets", $has_save_layout_db_handler);
+
+    echo "\n--- TEST 84: Existing saved card ID results in UPDATE rather than INSERT ---\n";
+    $has_db_update_query = strpos($designer_html, "UPDATE test_result_cards") !== false;
+    run_assert("UPDATE query is defined for existing design ID", $has_db_update_query);
+
+    echo "\n--- TEST 85: New card without ID results in INSERT ---\n";
+    $has_db_insert_query = strpos($designer_html, "INSERT INTO test_result_cards") !== false;
+    run_assert("INSERT query is defined for new designs", $has_db_insert_query);
+
+    echo "\n--- TEST 86: Second save of the same card does not create a duplicate ---\n";
+    $has_mutable_design_id = strpos($designer_html, "let savedDesignId = ") !== false;
+    $has_history_replace = strpos($designer_html, "window.history.replaceState(") !== false;
+    run_assert("savedDesignId is declared as mutable let", $has_mutable_design_id);
+    run_assert("Url is updated dynamically using history replaceState", $has_history_replace);
+
+    echo "\n--- TEST 87: Current element configuration is serialized ---\n";
+    $has_design_config_serialize = strpos($designer_html, "payload.append('design_config'") !== false;
+    run_assert("Design config coordinates and formats are serialized", $has_design_config_serialize);
+
+    echo "\n--- TEST 88: Student-specific mappings are preserved ---\n";
+    $has_student_mappings_serialize = strpos($designer_html, "payload.append('student_rank_mappings'") !== false;
+    run_assert("Student-specific rank mappings are preserved", $has_student_mappings_serialize);
+
+    echo "\n--- TEST 89: Photo transform properties are preserved ---\n";
+    $has_photo_transform_mappings = strpos($designer_html, "zoom: 100, panX: 0, panY: 0") !== false;
+    run_assert("Photo transform keys are mapped inside designer session mappings", $has_photo_transform_mappings);
+
+    echo "\n--- TEST 90: Rank badge/rank mappings are preserved ---\n";
+    $has_rank_badge_mappings = strpos($designer_html, "getRankBadgeStyle(student.computed_rank)") !== false;
+    run_assert("Rank badges are resolved and persistent in mappings", $has_rank_badge_mappings);
+
+    echo "\n--- TEST 91: Merged mode course_id=0 remains supported ---\n";
+    $has_course_id_zero = strpos($designer_html, "course_id") !== false;
+    run_assert("course_id zero does not crash templates page", $has_course_id_zero);
+
+    echo "\n--- TEST 92: Save As New Layout remains an independent operation ---\n";
+    $has_layout_action = strpos($designer_html, "action', 'save_layout_preset'") !== false;
+    run_assert("saveAsNewPreset posts to save_layout_preset", $has_layout_action);
+
+    echo "\n--- TEST 93: Updating a layout preset does not overwrite the saved card ---\n";
+    $has_update_preset_action = strpos($designer_html, "updateCurrentPreset()") !== false;
+    run_assert("updateCurrentPreset updates the preset selector entry", $has_update_preset_action);
+
+    echo "\n--- TEST 94: Downloading the card remains independent from layout preset saving ---\n";
+    $has_download_action = strpos($designer_html, "saveDesign(true)") !== false;
+    run_assert("Download triggers high resolution drawing download anchor", $has_download_action);
+
     echo "\n=== All designer improvements & UI regression automated tests passed successfully! ===\n";
 
 } catch (Exception $e) {

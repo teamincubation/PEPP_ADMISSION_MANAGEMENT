@@ -631,7 +631,7 @@ include 'includes/admin_nav.php';
                 </div>
                 <button class="btn btn-sm btn-outline" style="width: 100%; margin-top: 8px;" onclick="addNewStudentRankBlock()">+ Add Student Rank</button>
                 <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid #e2e8f0; padding-top: 12px;">
-                    <button class="btn btn-outline" style="width:100%;" onclick="saveDesign(false)"><i class="fas fa-floppy-disk"></i> Save Design Config</button>
+                    <button class="btn btn-outline" style="width:100%;" onclick="saveDesign(false)"><i class="fas fa-floppy-disk"></i> Save This Card</button>
                     <button class="btn btn-primary" style="width:100%;" onclick="saveDesign(true)"><i class="fas fa-circle-down"></i> Generate & Download Card</button>
                 </div>
             </div>
@@ -1208,7 +1208,7 @@ const rankingList = <?php echo json_encode($ranking_list); ?>;
 const templateElements = <?php echo $tpl['elements_json'] ?: '[]'; ?>;
 
 // Saved design data if editing
-const savedDesignId = <?php echo $saved_id; ?>;
+let savedDesignId = <?php echo $saved_id; ?>;
 const savedConfig = <?php echo $saved_design ? $saved_design['design_config'] : 'null'; ?>;
 const savedMappings = <?php echo $saved_design ? $saved_design['student_rank_mappings'] : 'null'; ?>;
 
@@ -3465,9 +3465,10 @@ function saveDesign(isExporting = false) {
                         a.click();
                         document.body.removeChild(a);
                     }
-                    alert('Design configuration saved successfully.');
+                    alert('Card saved successfully.');
                     if (!savedDesignId) {
-                        window.location.href = 'cards-result-designer.php?id=' + res.id;
+                        savedDesignId = res.id;
+                        window.history.replaceState({}, '', 'cards-result-designer.php?id=' + res.id);
                     }
                 } else {
                     alert('Failed to save: ' + res.message);
