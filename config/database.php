@@ -17,6 +17,11 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
     try {
         $pdo = new PDO("sqlite::memory:");
         $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+            $pdo->sqliteCreateFunction('NOW', function() {
+                return date('Y-m-d H:i:s');
+            });
+        }
         $conn = $pdo;
         $pdo->exec("
             CREATE TABLE IF NOT EXISTS admin_settings (
@@ -60,7 +65,27 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 created_by TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT,
-                last_login_at TEXT
+                last_login_at TEXT,
+                credential_visibility TEXT DEFAULT 'visible',
+                credential_visibility_scopes TEXT DEFAULT '',
+                can_edit INTEGER DEFAULT 1,
+                can_delete INTEGER DEFAULT 1,
+                can_export INTEGER DEFAULT 1,
+                allow_copy_email INTEGER DEFAULT 1,
+                allow_whatsapp_chat INTEGER DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS admin_activity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_username TEXT,
+                action_type TEXT,
+                details TEXT,
+                ip_address TEXT,
+                location TEXT,
+                user_agent TEXT,
+                latitude REAL,
+                longitude REAL,
+                metadata TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS card_templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,7 +127,9 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 course_name TEXT,
                 course_code TEXT,
                 academic_year TEXT,
-                status TEXT DEFAULT 'active'
+                status TEXT DEFAULT 'active',
+                total_fee REAL DEFAULT 0.00,
+                course_type TEXT DEFAULT 'UG'
             );
             CREATE TABLE IF NOT EXISTS study_plans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -172,12 +199,92 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 user_id TEXT PRIMARY KEY,
                 name TEXT,
                 email TEXT,
+                whatsapp_country_code TEXT,
+                whatsapp_number TEXT,
+                mobile_number TEXT,
+                emergency_contact TEXT,
+                postal_address TEXT,
+                postal_pincode TEXT,
+                state TEXT,
+                district TEXT,
+                place_post_office TEXT,
                 college_school TEXT,
+                course TEXT,
+                university_board TEXT,
+                instagram_id TEXT,
+                payment_plan TEXT,
+                peppkit_eligible TEXT,
+                discount_amount REAL DEFAULT 0.00,
+                discount_remark TEXT,
                 user_photo TEXT,
+                payment_screenshot TEXT,
                 status TEXT DEFAULT 'approved',
                 student_status TEXT DEFAULT 'active',
                 pepp_course TEXT,
-                pepp_academic_year TEXT
+                pepp_academic_year TEXT,
+                total_fee REAL DEFAULT 0.00,
+                paid_amount REAL DEFAULT 0.00,
+                payment_account_id INTEGER,
+                paid_date TEXT,
+                joined_date TEXT,
+                approved_by TEXT,
+                approval_date TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS instalment_details (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                instalment_number INTEGER NOT NULL,
+                amount REAL NOT NULL,
+                due_date TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                paid_amount REAL,
+                paid_date TEXT,
+                payment_reference TEXT,
+                payment_mode TEXT,
+                payment_account_id INTEGER,
+                admin_remarks TEXT,
+                approved_by TEXT,
+                approved_at TEXT,
+                rejected_by TEXT,
+                rejected_at TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS payment_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_name TEXT NOT NULL,
+                account_type TEXT,
+                account_details TEXT,
+                banking_details TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'active',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS invoices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                invoice_no TEXT UNIQUE,
+                invoice_type TEXT,
+                user_id TEXT,
+                student_name TEXT,
+                email TEXT,
+                course TEXT,
+                payment_plan TEXT,
+                source TEXT,
+                source_ref INTEGER,
+                instalment_number INTEGER,
+                gross_amount REAL,
+                taxable_value REAL,
+                cgst_amount REAL,
+                sgst_amount REAL,
+                round_off REAL,
+                payment_account_id INTEGER,
+                payment_mode TEXT,
+                paid_date TEXT,
+                email_status TEXT DEFAULT 'skipped',
+                generated_by TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS study_plan_custom_types (
                 name TEXT PRIMARY KEY
@@ -189,6 +296,25 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT,
                 UNIQUE(template_id, admin_user_id)
+            );
+            CREATE TABLE IF NOT EXISTS student_course_migrations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                old_course TEXT NOT NULL,
+                old_course_id INTEGER,
+                old_course_fee REAL,
+                new_course TEXT NOT NULL,
+                new_course_id INTEGER,
+                new_course_fee REAL,
+                payment_plan TEXT,
+                paid_amount_at_migration REAL,
+                outstanding_before REAL,
+                outstanding_after REAL,
+                upgrade_amount REAL,
+                migration_reason TEXT,
+                migrated_by TEXT,
+                migrated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                status TEXT DEFAULT 'completed'
             );
 
             INSERT OR REPLACE INTO admin_settings (setting_name, setting_value) VALUES ('whatsapp_webhook_verify_token', 'test_verify_token');

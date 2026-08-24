@@ -68,6 +68,7 @@ function admins_table_exists($pdo) {
 }
 function ensure_credential_visibility_column($pdo) {
     if (!admins_table_exists($pdo)) return;
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') return;
     static $ensured = false;
     if ($ensured) return;
     try {

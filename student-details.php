@@ -49,17 +49,19 @@ $message = '';
 $error   = '';
 
 // ── Load student ─────────────────────────────────────────────────
-function load_student($pdo, $user_id) {
-    $stmt = $pdo->prepare("
-        SELECT u.*, pc.total_fee AS course_fee, pc.course_type,
-               pa.account_name AS payment_account_name
-        FROM users u
-        LEFT JOIN pepp_courses pc ON pc.course_name = u.pepp_course
-        LEFT JOIN payment_accounts pa ON pa.id = u.payment_account_id
-        WHERE u.user_id = ?
-    ");
-    $stmt->execute([$user_id]);
-    return $stmt->fetch();
+if (!function_exists('load_student')) {
+    function load_student($pdo, $user_id) {
+        $stmt = $pdo->prepare("
+            SELECT u.*, pc.total_fee AS course_fee, pc.course_type,
+                   pa.account_name AS payment_account_name
+            FROM users u
+            LEFT JOIN pepp_courses pc ON pc.course_name = u.pepp_course
+            LEFT JOIN payment_accounts pa ON pa.id = u.payment_account_id
+            WHERE u.user_id = ?
+        ");
+        $stmt->execute([$user_id]);
+        return $stmt->fetch();
+    }
 }
 
 try {
@@ -79,6 +81,31 @@ if (!$student) {
     exit();
 }
 
+// Load all active courses for migration compatibility
+$all_eligible_courses = [];
+try {
+    $stmt_courses = $pdo->prepare("
+        SELECT id, course_name, course_code, total_fee, course_type, academic_year
+        FROM pepp_courses
+        WHERE status = 'active'
+          AND academic_year = ?
+          AND course_name != ?
+        ORDER BY course_name ASC
+    ");
+    $stmt_courses->execute([$student['pepp_academic_year'], $student['pepp_course']]);
+    $all_eligible_courses = $stmt_courses->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    error_log("Failed to load courses for migration: " . $e->getMessage());
+}
+
+// Load all active payment accounts
+$all_payment_accounts = [];
+try {
+    $all_payment_accounts = $pdo->query("SELECT id, account_name, is_public, banking_details FROM payment_accounts WHERE status = 'active' ORDER BY account_name")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    error_log("Failed to load payment accounts: " . $e->getMessage());
+}
+
 /* ── EXPORT INSTALLMENTS TO EXCEL ── */
 if (isset($_GET['export']) && $_GET['export'] === 'excel') {
     if (!can_admin_export()) {
@@ -96,7 +123,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
         $out = fopen('php://output', 'w');
         fputs($out, "\xEF\xBB\xBF"); // UTF-8 BOM
         fputcsv($out, ['Student ID', 'Student Name', 'Installment #', 'Amount (₹)', 'Due Date', 'Status', 'Paid Date', 'Payment Reference']);
-        
+
         foreach ($rows as $r) {
             fputcsv($out, [
                 $student['user_id'],
@@ -125,9 +152,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
             require_once 'includes/file_helper.php';
             $photo_updated = false;
             $screenshot_updated = false;
-            
+
             $pdo->beginTransaction();
-            
+
             // Handle Photo Upload
             if (!empty($_FILES['user_photo']['name']) && $_FILES['user_photo']['error'] === UPLOAD_ERR_OK) {
                 $new_photo = handle_file_upload_with_replace('user_photo', 'photos', $student['user_photo'], ['jpg', 'jpeg', 'png', 'gif', 'webp']);
@@ -140,7 +167,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
                     throw new Exception("Failed to upload student photo. Only image formats (jpg, png, gif, webp) are allowed.");
                 }
             }
-            
+
             // Handle Screenshot Upload
             if (!empty($_FILES['payment_screenshot']['name']) && $_FILES['payment_screenshot']['error'] === UPLOAD_ERR_OK) {
                 $new_screenshot = handle_file_upload_with_replace('payment_screenshot', 'screenshots', $student['payment_screenshot'], ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf']);
@@ -153,9 +180,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
                     throw new Exception("Failed to upload receipt screenshot. Formats allowed: image or pdf.");
                 }
             }
-            
+
             $pdo->commit();
-            
+
             if ($photo_updated || $screenshot_updated) {
                 $message = "Attachments updated successfully.";
                 log_admin_activity($pdo, $admin_username, 'attachments_updated', "Updated attachments for student {$user_id}");
@@ -289,15 +316,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
                 $stmt = $pdo->prepare("UPDATE users SET student_status = ?, course_status = ? WHERE user_id = ?");
                 $course_status = $new_status === 'inactive' ? 'suspended' : ($new_status === 'completed' ? 'completed' : (($new_status === 'suspended' || $new_status === 'dropout') ? 'suspended' : 'active'));
                 $stmt->execute([$new_status, $course_status, $user_id]);
-                
+
                 if ($new_status === 'dropout') {
                     $pdo->prepare("DELETE FROM instalment_details WHERE user_id = ? AND status = 'pending' AND paid_date IS NULL")->execute([$user_id]);
                 }
-                
+
                 status_log($pdo, $user_id, $student['student_status'] ?: 'active', $new_status, trim($_POST['reason'] ?? 'Status updated by admin'), $admin_username);
                 track_record($pdo, $user_id, 'status_changed', "Student status: " . ($student['student_status'] ?: 'active') . " → {$new_status}", $admin_username);
                 $pdo->commit();
-                
+
                 $message = "Student status updated successfully.";
                 $student = load_student($pdo, $user_id);
             }
@@ -320,18 +347,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_
         try {
             $new_discount = max(0, floatval($_POST['discount_amount'] ?? 0));
             $new_plan = $_POST['payment_plan'] ?? 'One Time';
-            
+
             // Recalculate fees
             $course_fee = (float)($student['course_fee'] ?? 0);
             $new_total_fee = max(0, $course_fee - $new_discount);
             $reg_paid = (float)$student['paid_amount'];
-            
+
             // Calculate how many installments are paid/approved
             $paid_count = 1; // 1 for registration payment
             $stmt = $pdo->prepare("SELECT * FROM instalment_details WHERE user_id = ? ORDER BY instalment_number ASC");
             $stmt->execute([$user_id]);
             $current_installments = $stmt->fetchAll();
-            
+
             $already_paid = [];
             foreach ($current_installments as $inst) {
                 if (in_array($inst['status'], ['approved', 'paid'], true) || !empty($inst['paid_date'])) {
@@ -339,18 +366,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_
                     $already_paid[$inst['instalment_number']] = $inst;
                 }
             }
-            
+
             // Parse new plan count
             $new_count = 1;
             if ($new_plan !== 'One Time') {
                 $new_count = (int)explode(' ', $new_plan)[0];
             }
-            
+
             // Validations
             if ($new_count < $paid_count) {
                 throw new Exception("New plan term cannot be less than currently paid/approved installments count ($paid_count).");
             }
-            
+
             // Read input installment amounts and due dates from POST
             $new_installments_data = [];
             $sum_installments = 0.0;
@@ -385,23 +412,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_
                 ];
                 $sum_installments += $amt;
             }
-            
+
             // Total installment amounts assigned shouldn't overtake the total payable amount
             $max_installments_allowed = max(0.0, $new_total_fee - $reg_paid);
             if (round($sum_installments, 2) > round($max_installments_allowed, 2)) {
                 throw new Exception("Total scheduled installments (₹" . number_format($sum_installments) . ") cannot exceed the total payable balance (₹" . number_format($max_installments_allowed) . ").");
             }
-            
+
             // Proceed with updates
             $pdo->beginTransaction();
-            
+
             // 1. Update user columns: discount_amount, total_fee, payment_plan
             $stmt = $pdo->prepare("UPDATE users SET discount_amount = ?, total_fee = ?, payment_plan = ? WHERE user_id = ?");
             $stmt->execute([$new_discount, $new_total_fee, $new_plan, $user_id]);
-            
+
             // 2. Clear old installments except already paid/approved ones
             $pdo->prepare("DELETE FROM instalment_details WHERE user_id = ? AND status NOT IN ('approved', 'paid') AND paid_date IS NULL")->execute([$user_id]);
-            
+
             // 3. Insert or update the new installments
             $ins = $pdo->prepare("
                 INSERT INTO instalment_details (user_id, instalment_number, amount, due_date, status, paid_date, payment_reference, created_at, updated_at)
@@ -414,19 +441,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_
                     $data['status'], $data['paid_date'], $data['payment_reference']
                 ]);
             }
-            
+
             $pdo->commit();
-            
-            track_record($pdo, $user_id, 'installments_edited', 
+
+            track_record($pdo, $user_id, 'installments_edited',
                 "Updated plan to $new_plan, discount to ₹$new_discount. Total fee: ₹$new_total_fee", $admin_username);
             log_admin_activity($pdo, $admin_username, 'installments_edited',
                 "Edited installments configuration for student $user_id");
-            
+
             $message = 'Installment configuration updated successfully.';
-            
+
             // Reload page data
             $student = load_student($pdo, $user_id);
-            
+
         } catch (Exception $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             error_log('Edit installments: ' . $e->getMessage());
@@ -445,16 +472,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
             $sav  = isset($_POST['saved_to_contacts']) ? 'Yes' : 'No';
             $wa   = isset($_POST['added_whatsapp_groups']) ? 'Yes' : 'No';
             $sem  = isset($_POST['semester_guide_provided']) ? 'Yes' : 'No';
-            
+
             $all_checked = ($app === 'Yes' && $sav === 'Yes' && $wa === 'Yes' && $sem === 'Yes');
-            
+
             $pdo->beginTransaction();
-            
+
             // Check if onboarding row exists
             $stmt = $pdo->prepare("SELECT id FROM student_onboarding WHERE user_id = ?");
             $stmt->execute([$user_id]);
             $exists = $stmt->fetch();
-            
+
             if ($exists) {
                 $stmt = $pdo->prepare("
                     UPDATE student_onboarding SET
@@ -476,19 +503,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
                 ");
                 $stmt->execute([$user_id, $app, $sav, $wa, $sem, $admin_username]);
             }
-            
+
             $onb_status = $all_checked ? 'completed' : 'pending';
-            
+
             $stmt = $pdo->prepare("UPDATE users SET onboarding_status = ?, course_access_provided = ? WHERE user_id = ?");
             $stmt->execute([$onb_status, $app === 'Yes' ? 'yes' : 'no', $user_id]);
-            
+
             $pdo->commit();
-            
+
             track_record($pdo, $user_id, 'onboarding_updated',
                 "Onboarding checklist updated. App: $app, Contacts: $sav, WhatsApp: $wa, Sem Guide: $sem. Status: $onb_status", $admin_username);
             log_admin_activity($pdo, $admin_username, 'onboarding_updated',
                 "Updated onboarding checklist for student $user_id. Status: $onb_status");
-            
+
             $message = 'Onboarding checklist updated successfully.';
             $student = load_student($pdo, $user_id);
         } catch (Exception $e) {
@@ -508,7 +535,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_r
         $set_reminder = isset($_POST['set_reminder']);
         $rem_title = trim($_POST['reminder_title'] ?? '');
         $rem_time = $_POST['reminder_time'] ?? '';
-        
+
         if ($remark === '') {
             $error = 'Remark cannot be empty.';
         } else {
@@ -526,15 +553,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_r
                         $reminder_id = $pdo->lastInsertId();
                     }
                 }
-                
+
                 $stmt = $pdo->prepare("
                     INSERT INTO student_remarks (user_id, remark, created_by, reminder_id, created_at)
                     VALUES (?, ?, ?, ?, NOW())
                 ");
                 $stmt->execute([$user_id, $remark, $admin_username, $reminder_id]);
-                
+
                 $pdo->commit();
-                
+
                 track_record($pdo, $user_id, 'remark_added', "Remark: $remark" . ($reminder_id ? " (Reminder scheduled)" : ""), $admin_username);
                 log_admin_activity($pdo, $admin_username, 'remark_added', "Added remark/note for student $user_id");
                 $message = 'Remark/note saved successfully.';
@@ -605,7 +632,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
 }
 
 /* ── POST: edit core details (whitelist, CSRF, audit) ──────────── */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !in_array(($_POST['action'] ?? ''), ['delete_student', 'revert_to_pending', 'edit_installments', 'update_onboarding', 'add_remark', 'edit_remark', 'delete_remark'], true)) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !in_array(($_POST['action'] ?? ''), ['delete_student', 'revert_to_pending', 'edit_installments', 'update_onboarding', 'add_remark', 'edit_remark', 'delete_remark', 'migrate_course'], true)) {
     if (!csrf_verify()) {
         $error = 'Security token mismatch. Please retry.';
     } else {
@@ -635,7 +662,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !in_array(($_POST['action'] ?? ''),
             if ($set) {
                 $vals[] = $user_id;
                 $pdo->prepare("UPDATE users SET " . implode(', ', $set) . " WHERE user_id = ?")->execute($vals);
-                
+
                 if (in_array('whatsapp_number', $changed, true) || in_array('whatsapp_country_code', $changed, true)) {
                     try {
                         require_once 'includes/communication/CommunicationEngine.php';
@@ -651,7 +678,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !in_array(($_POST['action'] ?? ''),
                     $new_discount = max(0, floatval($_POST['discount_amount'] ?? 0));
                     $course_fee = (float)($student['course_fee'] ?? 0);
                     $new_total_fee = max(0, $course_fee - $new_discount);
-                    
+
                     $pdo->prepare("UPDATE users SET total_fee = ? WHERE user_id = ?")->execute([$new_total_fee, $user_id]);
                     $pdo->prepare("UPDATE coupon_redemptions SET discount_applied = ? WHERE user_id = ?")->execute([$new_discount, $user_id]);
                 }
@@ -666,6 +693,296 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !in_array(($_POST['action'] ?? ''),
             error_log('Profile edit: ' . $e->getMessage());
             $error = 'Error saving profile changes.';
         }
+    }
+}
+
+/* ── POST: migrate_course ── */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'migrate_course') {
+    if (!csrf_verify()) {
+        $error = 'Security token mismatch. Please retry.';
+    } elseif (!can_access('students') || is_credential_restricted('financials')) {
+        $error = 'Access Denied: You do not have permission to migrate or upgrade student courses.';
+    } else {
+        try {
+            $target_course_id = (int)($_POST['target_course_id'] ?? 0);
+            $new_plan = $_POST['payment_plan'] ?? 'One Time';
+            $migration_reason = trim($_POST['migration_reason'] ?? '');
+
+            if (empty($migration_reason)) {
+                throw new Exception("Migration reason is required.");
+            }
+
+            $pdo->beginTransaction();
+
+            $lock_sql = ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') ? "" : " FOR UPDATE";
+
+            // Lock and reload student details to prevent concurrent double-submissions
+            $stmt = $pdo->prepare("SELECT u.*, pc.total_fee AS course_fee, pc.id AS course_id FROM users u LEFT JOIN pepp_courses pc ON pc.course_name = u.pepp_course WHERE u.user_id = ?" . $lock_sql);
+            $stmt->execute([$user_id]);
+            $student_locked = $stmt->fetch();
+            if (!$student_locked) {
+                throw new Exception("Student not found.");
+            }
+            if ($student_locked['status'] !== 'approved') {
+                throw new Exception("Student is not approved.");
+            }
+
+            // Load target course details
+            $stmt_tc = $pdo->prepare("SELECT * FROM pepp_courses WHERE id = ?" . $lock_sql);
+            $stmt_tc->execute([$target_course_id]);
+            $target_course = $stmt_tc->fetch();
+            if (!$target_course || $target_course['status'] !== 'active') {
+                throw new Exception("Target course not found or inactive.");
+            }
+            if ($target_course['academic_year'] !== $student_locked['pepp_academic_year']) {
+                throw new Exception("Target course is not in the same academic year (" . $student_locked['pepp_academic_year'] . ").");
+            }
+            if ($target_course['course_name'] === $student_locked['pepp_course']) {
+                throw new Exception("Target course must be different from current course.");
+            }
+
+            $current_course_fee = (float)($student_locked['course_fee'] ?? 0);
+            $target_course_fee = (float)$target_course['total_fee'];
+            if ($target_course_fee < $current_course_fee) {
+                throw new Exception("Accidental downgrade blocked. Target course fee (₹" . number_format($target_course_fee) . ") is lower than current course fee (₹" . number_format($current_course_fee) . ").");
+            }
+
+            // Financial Ledger Calculations
+            $reg_paid = (float)$student_locked['paid_amount'];
+
+            // Fetch all installments
+            $stmt_insts = $pdo->prepare("SELECT * FROM instalment_details WHERE user_id = ? ORDER BY instalment_number ASC" . $lock_sql);
+            $stmt_insts->execute([$user_id]);
+            $current_installments = $stmt_insts->fetchAll();
+
+            $inst_paid = 0.0;
+            $paid_count = 1; // Registration payment is installment #1
+            $already_paid_data = [];
+            foreach ($current_installments as $inst) {
+                if (in_array($inst['status'], ['approved', 'paid'], true) || !empty($inst['paid_date'])) {
+                    $inst_paid += (float)($inst['paid_amount'] ?: $inst['amount']);
+                    $paid_count++;
+                    $already_paid_data[$inst['instalment_number']] = $inst;
+                }
+            }
+            $total_collected = $reg_paid + $inst_paid;
+            $new_outstanding = max(0.0, $target_course_fee - $total_collected);
+            $upgrade_amount = max(0.0, $target_course_fee - $current_course_fee);
+
+            $immediate_payment = isset($_POST['upgrade_paid_immediately']);
+            $immediate_amount = 0.0;
+            if ($immediate_payment) {
+                $immediate_amount = max(0.0, floatval($_POST['immediate_amount'] ?? 0));
+                if ($immediate_amount <= 0) {
+                    throw new Exception("Immediate payment amount must be greater than zero.");
+                }
+                if ($immediate_amount > $new_outstanding) {
+                    throw new Exception("Immediate payment (₹" . number_format($immediate_amount) . ") cannot exceed the new outstanding balance (₹" . number_format($new_outstanding) . ").");
+                }
+                $new_outstanding = max(0.0, $new_outstanding - $immediate_amount);
+            }
+
+            // Verify new plan counts
+            $new_count = 1;
+            if ($new_plan !== 'One Time') {
+                $new_count = (int)explode(' ', $new_plan)[0];
+            }
+
+            if ($new_outstanding > 0 && $new_plan === 'One Time') {
+                throw new Exception("Outstanding balance remaining. You must select an installment plan to schedule remaining payments.");
+            }
+            if ($new_count < $paid_count + ($immediate_payment ? 1 : 0)) {
+                $min_allowed = $paid_count + ($immediate_payment ? 1 : 0);
+                throw new Exception("New plan term cannot be less than currently paid/approved installments count ($min_allowed).");
+            }
+
+            // Rebuild schedule data
+            $new_installments_data = [];
+            $sum_installments = 0.0;
+
+            // Determine starting point for dynamic scheduled fields
+            $start_inst = 2;
+
+            // If immediate payment occurs, it consumes the next available installment number
+            $immediate_inst_num = null;
+            if ($immediate_payment) {
+                // Find next installment number that is not paid
+                $immediate_inst_num = $paid_count + 1;
+                $start_inst = $immediate_inst_num + 1;
+            }
+
+            for ($i = 2; $i <= $new_count; $i++) {
+                if (isset($already_paid_data[$i])) {
+                    // Paid installment: lock values
+                    $new_installments_data[$i] = [
+                        'amount' => (float)$already_paid_data[$i]['amount'],
+                        'due_date' => $already_paid_data[$i]['due_date'],
+                        'status' => $already_paid_data[$i]['status'],
+                        'paid_amount' => $already_paid_data[$i]['paid_amount'],
+                        'paid_date' => $already_paid_data[$i]['paid_date'],
+                        'payment_reference' => $already_paid_data[$i]['payment_reference'],
+                        'payment_mode' => $already_paid_data[$i]['payment_mode'],
+                        'payment_account_id' => $already_paid_data[$i]['payment_account_id']
+                    ];
+                } elseif ($i === $immediate_inst_num) {
+                    // This row is for the immediate upgrade payment
+                    $pay_mode = $_POST['immediate_payment_mode'] ?? 'Online';
+                    $pay_account = !empty($_POST['immediate_payment_account_id']) ? (int)$_POST['immediate_payment_account_id'] : null;
+                    $pay_date = $_POST['immediate_paid_date'] ?? date('Y-m-d');
+                    $pay_ref = trim($_POST['immediate_payment_reference'] ?? '');
+
+                    if (!in_array($pay_mode, ['Online','Cash','100% Scholarship','Pay later'], true)) {
+                        throw new Exception("Please select a valid payment mode.");
+                    }
+                    if (!$pay_account) {
+                        throw new Exception("Please select the payment account that received the money.");
+                    }
+
+                    $new_installments_data[$i] = [
+                        'amount' => $immediate_amount,
+                        'due_date' => $pay_date,
+                        'status' => 'approved',
+                        'paid_amount' => $immediate_amount,
+                        'paid_date' => $pay_date,
+                        'payment_reference' => $pay_ref ?: 'Immediate Upgrade Payment',
+                        'payment_mode' => $pay_mode,
+                        'payment_account_id' => $pay_account
+                    ];
+                } else {
+                    // Upcoming pending installment from modal post inputs
+                    $amt = max(0.0, floatval($_POST["inst_{$i}_amount"] ?? 0));
+                    $due = $_POST["inst_{$i}_due_date"] ?? '';
+                    if ($amt < 1) {
+                        throw new Exception("Installment #$i amount must be at least ₹1.");
+                    }
+                    if (empty($due)) {
+                        throw new Exception("Due date for installment #$i is required.");
+                    }
+                    $new_installments_data[$i] = [
+                        'amount' => $amt,
+                        'due_date' => $due,
+                        'status' => 'pending',
+                        'paid_amount' => null,
+                        'paid_date' => null,
+                        'payment_reference' => null,
+                        'payment_mode' => null,
+                        'payment_account_id' => null
+                    ];
+                    $sum_installments += $amt;
+                }
+            }
+
+            // Check that scheduled pending installments equal the expected balance
+            if ($new_outstanding > 0 && round($sum_installments, 2) !== round($new_outstanding, 2)) {
+                throw new Exception("Total scheduled installments (₹" . number_format($sum_installments, 2) . ") must exactly equal the remaining outstanding balance (₹" . number_format($new_outstanding, 2) . ").");
+            }
+
+            // --- WRITES START ---
+            $now_dt = date('Y-m-d H:i:s');
+
+            // 1. Delete all non-paid installments
+            $pdo->prepare("DELETE FROM instalment_details WHERE user_id = ? AND status NOT IN ('approved', 'paid') AND paid_date IS NULL")->execute([$user_id]);
+
+            // 2. Insert new/rebuilt schedule
+            $ins = $pdo->prepare("
+                INSERT INTO instalment_details (user_id, instalment_number, amount, due_date, status, paid_amount, paid_date, payment_reference, payment_mode, payment_account_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+
+            $immediate_inserted_id = null;
+            foreach ($new_installments_data as $num => $data) {
+                $ins->execute([
+                    $user_id, $num, $data['amount'], $data['due_date'],
+                    $data['status'], $data['paid_amount'], $data['paid_date'], $data['payment_reference'],
+                    $data['payment_mode'], $data['payment_account_id'], $now_dt, $now_dt
+                ]);
+                if ($num === $immediate_inst_num) {
+                    $immediate_inserted_id = (int)$pdo->lastInsertId();
+                }
+            }
+
+            // 3. Update student record
+            $stmt_upd = $pdo->prepare("
+                UPDATE users SET
+                    pepp_course = ?,
+                    total_fee = ?,
+                    discount_amount = 0,
+                    discount_remark = 'Discount reset during course migration',
+                    payment_plan = ?,
+                    updated_at = ?
+                WHERE user_id = ?
+            ");
+            $stmt_upd->execute([
+                $target_course['course_name'],
+                $target_course_fee,
+                $new_plan,
+                $now_dt,
+                $user_id
+            ]);
+
+            // 4. Record course migration history
+            $stmt_hist = $pdo->prepare("
+                INSERT INTO student_course_migrations
+                    (user_id, old_course, old_course_id, old_course_fee, new_course, new_course_id, new_course_fee, payment_plan, paid_amount_at_migration, outstanding_before, outstanding_after, upgrade_amount, migration_reason, migrated_by, migrated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $outstanding_before = max(0.0, $current_course_fee - $total_collected);
+            $stmt_hist->execute([
+                $user_id,
+                $student_locked['pepp_course'],
+                $student_locked['course_id'],
+                $current_course_fee,
+                $target_course['course_name'],
+                $target_course['id'],
+                $target_course_fee,
+                $new_plan,
+                $total_collected,
+                $outstanding_before,
+                $new_outstanding,
+                $immediate_payment ? $immediate_amount : $upgrade_amount,
+                $migration_reason,
+                $admin_username,
+                $now_dt
+            ]);
+
+            // 5. Generate invoice for immediate payment if completed
+            $invoice_note = '';
+            if ($immediate_payment && $immediate_inserted_id) {
+                require_once 'includes/invoice_helper.php';
+                [$inv_ok, $inv_msg, $inv_id, $inv_no] = generate_payment_invoice($pdo, [
+                    'source' => 'installment',
+                    'source_ref' => $immediate_inserted_id,
+                    'user_id' => $user_id,
+                    'amount' => $immediate_amount,
+                    'account_id' => $pay_account,
+                    'payment_mode' => $pay_mode,
+                    'paid_date' => $pay_date,
+                    'instalment_number' => $immediate_inst_num,
+                    'generated_by' => $admin_username,
+                    'send_email' => true
+                ]);
+                if ($inv_ok && $inv_no) {
+                    $invoice_note = " Invoice $inv_no generated.";
+                }
+            }
+
+            $pdo->commit();
+
+            status_log($pdo, $user_id, $student_locked['pepp_course'], $target_course['course_name'], "Course migrated: " . $migration_reason, $admin_username);
+            track_record($pdo, $user_id, 'course_migrated', "Migrated from {$student_locked['pepp_course']} to {$target_course['course_name']}. Plan: $new_plan.$invoice_note", $admin_username);
+            log_admin_activity($pdo, $admin_username, 'course_migrated', "Migrated student $user_id from {$student_locked['pepp_course']} to {$target_course['course_name']}");
+
+            $message = "Course migrated successfully.$invoice_note";
+            $student = load_student($pdo, $user_id);
+
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            error_log('Course migration error: ' . $e->getMessage());
+            $error = 'Course migration could not be completed. ' . $e->getMessage();
+        }
+    }
+    if (isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true') {
+        return;
     }
 }
 
@@ -737,10 +1054,10 @@ include 'includes/admin_nav.php';
         </span>
     <?php endif; ?>
     <div style="margin-left:auto; display:flex; gap:8px;">
-        <?php 
+        <?php
         $raw_wa = preg_replace('/\D/', '', $student['whatsapp_country_code'] . $student['whatsapp_number']);
         $use_wa = (is_credential_restricted('students') && !can_admin_whatsapp_chat()) ? '' : $raw_wa;
-        
+
         if (is_credential_restricted('students') && !can_admin_whatsapp_chat()): ?>
             <a class="btn btn-sm btn-whatsapp" href="javascript:void(0)" onclick="alert('Access to student WhatsApp chat is restricted.')" style="opacity:0.6; cursor:not-allowed;" title="WhatsApp chat denied"><i class="fab fa-whatsapp"></i> WhatsApp</a>
         <?php else: ?>
@@ -807,7 +1124,7 @@ include 'includes/admin_nav.php';
         <div class="detail-list" style="flex:1;">
             <div class="detail-row"><div class="dl">WhatsApp Number</div><div class="dv"><?php echo trim(($student['whatsapp_country_code'] ?? '') . ' ' . format_credential($student['whatsapp_number'], 'phone')); ?></div></div>
             <div class="detail-row"><div class="dl">Gender / DOB</div><div class="dv"><?php echo e($student['gender']); ?> · <?php echo $student['date_of_birth'] ? date('d M Y', strtotime($student['date_of_birth'])) : '-'; ?></div></div>
-            <div class="detail-row"><div class="dl">PEPP Course</div><div class="dv"><?php echo e($student['pepp_course']); ?> (<?php echo e($student['pepp_academic_year']); ?>)</div></div>
+            <div class="detail-row"><div class="dl">PEPP Course</div><div class="dv" style="display:flex; justify-content:space-between; align-items:center; width:100%;"><?php echo e($student['pepp_course']); ?> (<?php echo e($student['pepp_academic_year']); ?>) <?php if ($student['status'] === 'approved' && !is_credential_restricted('financials') && can_access('students')): ?><button class="btn btn-xs btn-soft-violet" onclick="openMigrateCourseModal()" style="font-size:0.75rem; padding: 2px 8px; margin-left:10px;"><i class="fas fa-shuffle"></i> Migrate / Upgrade</button><?php endif; ?></div></div>
             <div class="detail-row"><div class="dl">Joined</div><div class="dv"><?php echo $student['joined_date'] ? date('d M Y', strtotime($student['joined_date'])) : '-'; ?></div></div>
             <div class="detail-row"><div class="dl">Approved by</div><div class="dv"><?php echo e($student['approved_by'] ?: '-'); ?><?php echo $student['approval_date'] ? ' · ' . date('d M Y', strtotime($student['approval_date'])) : ''; ?></div></div>
             <div class="detail-row"><div class="dl">PEPP Kit</div><div class="dv"><?php echo e($student['peppkit_eligible'] ?: 'Not Eligible'); ?></div></div>
@@ -990,6 +1307,70 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- ── COURSE MIGRATION HISTORY ── -->
+<div class="panel">
+    <div class="panel-head">
+        <span class="head-icon" style="background:var(--violet-soft);color:var(--violet-ink);"><i class="fas fa-shuffle"></i></span>
+        <h2>Course Migration History</h2>
+    </div>
+    <div class="panel-body flush table-wrap">
+        <?php
+        $migrations = [];
+        try {
+            $stmt = $pdo->prepare("SELECT * FROM student_course_migrations WHERE user_id = ? ORDER BY migrated_at DESC");
+            $stmt->execute([$user_id]);
+            $migrations = $stmt->fetchAll();
+        } catch (Exception $e) {}
+
+        if (empty($migrations)):
+        ?>
+            <div class="empty-state"><i class="fas fa-shuffle"></i><p>No course migrations recorded.</p></div>
+        <?php else: ?>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Previous Course</th>
+                    <th>New Course</th>
+                    <th>Paid at Migration</th>
+                    <th>Upgrade Fee</th>
+                    <th>New Outstanding</th>
+                    <th>Reason</th>
+                    <th>By</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($migrations as $m): ?>
+                <tr>
+                    <td class="cell-sub"><?php echo date('d M Y, h:i A', strtotime($m['migrated_at'])); ?></td>
+                    <td>
+                        <?php echo e($m['old_course']); ?>
+                        <div class="cell-sub">Fee: <?php echo format_financial($m['old_course_fee'], 0); ?></div>
+                    </td>
+                    <td>
+                        <strong><?php echo e($m['new_course']); ?></strong>
+                        <div class="cell-sub">Fee: <?php echo format_financial($m['new_course_fee'], 0); ?></div>
+                    </td>
+                    <td class="cell-sub"><?php echo format_financial($m['paid_amount_at_migration'], 0); ?></td>
+                    <td>
+                        <?php echo format_financial($m['upgrade_amount'], 0); ?>
+                        <?php if ($m['outstanding_after'] > 0): ?>
+                            <div class="cell-sub">(Pending)</div>
+                        <?php else: ?>
+                            <div class="cell-sub" style="color:var(--green-ink);">(Paid)</div>
+                        <?php endif; ?>
+                    </td>
+                    <td class="cell-sub"><?php echo format_financial($m['outstanding_after'], 0); ?></td>
+                    <td class="cell-sub" style="word-break:break-word; max-width:200px;"><?php echo e($m['migration_reason']); ?></td>
+                    <td class="cell-sub"><?php echo e($m['migrated_by']); ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+    </div>
+</div>
+
 <!-- ── REMARKS & REMINDERS ── -->
 <div class="panel">
     <div class="panel-head">
@@ -1004,7 +1385,7 @@ include 'includes/admin_nav.php';
         $remarks = [];
         try {
             $stmt = $pdo->prepare("
-                SELECT sr.*, r.title AS reminder_title, r.remind_at, r.status AS reminder_status 
+                SELECT sr.*, r.title AS reminder_title, r.remind_at, r.status AS reminder_status
                 FROM student_remarks sr
                 LEFT JOIN reminders r ON r.id = sr.reminder_id
                 WHERE sr.user_id = ?
@@ -1013,7 +1394,7 @@ include 'includes/admin_nav.php';
             $stmt->execute([$user_id]);
             $remarks = $stmt->fetchAll();
         } catch (Exception $e) {}
-        
+
         if (empty($remarks)):
         ?>
             <div class="empty-state" style="padding:20px;"><i class="fas fa-clipboard"></i><p>No remarks or notes added yet.</p></div>
@@ -1152,7 +1533,7 @@ include 'includes/admin_nav.php';
                     Course Base Fee: <strong>₹<?php echo number_format($student['course_fee'] ?? 0, 2); ?></strong><br>
                     Registration Fee Paid: <strong>₹<?php echo number_format($student['paid_amount'] ?? 0, 2); ?></strong>
                 </div>
-                
+
                 <div class="form-grid">
                     <div class="field">
                         <label>Discount Amount (₹)</label>
@@ -1276,22 +1657,22 @@ function generateEIFields() {
     if (plan !== 'One Time') {
         count = parseInt(plan) || 1;
     }
-    
+
     var container = document.getElementById('ei-fields-container');
     container.innerHTML = '';
-    
+
     if (count <= 1) {
         container.innerHTML = '<div style="font-size:0.8rem; color:var(--text-muted);">One-time payment plan. No future installments scheduled.</div>';
         return;
     }
-    
+
     for (var i = 2; i <= count; i++) {
         var existing = EXISTING_INSTALLMENTS.find(inst => parseInt(inst.instalment_number) === i);
         var amt = existing ? parseFloat(existing.amount) : '';
         var due = existing ? existing.due_date : '';
         var status = existing ? existing.status : 'pending';
         var isLocked = existing && (status === 'approved' || status === 'paid' || existing.paid_date);
-        
+
         var row = document.createElement('div');
         row.style.display = 'flex';
         row.style.gap = '10px';
@@ -1406,6 +1787,392 @@ function openStatusChangeModal(userId, name, status) {
             </div>
         </form>
     </div>
+<!-- ── MIGRATE / UPGRADE COURSE MODAL ── -->
+<div class="modal-backdrop" id="migrate-course-modal">
+    <div class="modal" style="max-width:640px; width:95%;">
+        <div class="modal-head">
+            <h3><i class="fas fa-shuffle" style="color:var(--accent);"></i> Migrate / Upgrade Course</h3>
+            <button class="modal-close" onclick="closeModal('migrate-course-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST" id="migrate-course-form" onsubmit="return validateMigrationSubmit()">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="migrate_course">
+
+            <div class="modal-body">
+                <!-- Current Financial Snapshot -->
+                <div class="alert alert-info" style="margin-bottom:15px; font-size:0.85rem; line-height:1.5;">
+                    <div style="font-weight:700; margin-bottom:4px; font-size:0.9rem; color:var(--text-dark);">Current Enrollment:</div>
+                    Course: <strong><?php echo htmlspecialchars($student['pepp_course']); ?></strong><br>
+                    Current Fee: <strong>₹<?php echo number_format($student['course_fee'] ?? 0, 2); ?></strong><br>
+                    Total Paid/Credited: <strong>₹<?php echo number_format($total_collected, 2); ?></strong> (Reg ₹<?php echo number_format($reg_paid, 2); ?> + Inst ₹<?php echo number_format($inst_paid, 2); ?>)<br>
+                    Current Outstanding: <strong>₹<?php echo number_format($balance, 2); ?></strong> · Plan: <strong><?php echo htmlspecialchars($student['payment_plan'] ?: 'One Time'); ?></strong>
+                </div>
+
+                <div class="form-grid">
+                    <!-- Target Course Selection -->
+                    <div class="field full">
+                        <label>Select Target Course <span class="req">*</span></label>
+                        <select name="target_course_id" id="mc-target-course" required onchange="calculateMigration()">
+                            <option value="">-- Choose Course --</option>
+                            <?php foreach ($all_eligible_courses as $c):
+                                $isLower = (float)$c['total_fee'] < (float)($student['course_fee'] ?? 0);
+                                $displayFee = '₹' . number_format($c['total_fee'], 0);
+                                $optLabel = htmlspecialchars($c['course_name']) . " (" . $displayFee . ")";
+                                if ($isLower) {
+                                    $optLabel .= " - [Not eligible — lower fee]";
+                                }
+                            ?>
+                                <option value="<?php echo $c['id']; ?>" data-fee="<?php echo (float)$c['total_fee']; ?>" <?php echo $isLower ? 'disabled style="color:var(--text-muted); font-style:italic;"' : ''; ?>>
+                                    <?php echo $optLabel; ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <!-- Migration Summary (Calculated in real-time) -->
+                    <div class="field"><label>Target Course Fee</label><input type="text" id="mc-target-fee" readonly style="background:var(--gray-100);"></div>
+                    <div class="field"><label>Credit Carried Forward</label><input type="text" id="mc-credited" readonly style="background:var(--gray-100);" value="₹<?php echo number_format($total_collected, 2); ?>"></div>
+                    <div class="field"><label>Upgrade Difference</label><input type="text" id="mc-upgrade-diff" readonly style="background:var(--gray-100); font-weight:700;"></div>
+                    <div class="field"><label>New Outstanding Balance</label><input type="text" id="mc-new-outstanding" readonly style="background:var(--gray-100); font-weight:700; color:var(--accent);"></div>
+
+                    <!-- Immediate Payment Checkbox -->
+                    <div class="field full" id="mc-immediate-checkbox-row" style="display:none; margin: 4px 0;">
+                        <label style="display:inline-flex; align-items:center; gap:8px; font-weight:normal; margin:0; cursor:pointer;">
+                            <input type="checkbox" name="upgrade_paid_immediately" id="mc-immediate-chk" onchange="toggleImmediateFields()">
+                            Collect immediate upgrade payment
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Immediate Payment Input Fields -->
+                <div id="mc-immediate-fields" style="display:none; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:15px; background:var(--gray-50);">
+                    <div style="font-weight:700; font-size:0.85rem; margin-bottom:10px; color:var(--accent);"><i class="fas fa-receipt"></i> Record Immediate Payment</div>
+                    <div class="form-grid">
+                        <div class="field">
+                            <label>Payment Amount (₹) <span class="req">*</span></label>
+                            <input type="number" name="immediate_amount" id="mc-immediate-amount" min="1" step="0.01" oninput="calculateMigration()">
+                        </div>
+                        <div class="field">
+                            <label>Payment Mode <span class="req">*</span></label>
+                            <select name="immediate_payment_mode">
+                                <option value="Online">Online</option>
+                                <option value="Cash">Cash</option>
+                                <option value="100% Scholarship">100% Scholarship</option>
+                                <option value="Pay later">Pay later</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label>Payment Account <span class="req">*</span></label>
+                            <select name="immediate_payment_account_id">
+                                <option value="">-- Select Account --</option>
+                                <?php foreach ($all_payment_accounts as $acc): ?>
+                                    <option value="<?php echo $acc['id']; ?>"><?php echo htmlspecialchars($acc['account_name']); ?><?php echo $acc['banking_details'] ? " ({$acc['banking_details']})" : ""; ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label>Paid Date <span class="req">*</span></label>
+                            <input type="date" name="immediate_paid_date" value="<?php echo date('Y-m-d'); ?>">
+                        </div>
+                        <div class="field full">
+                            <label>Payment Reference / Transaction ID</label>
+                            <input type="text" name="immediate_payment_reference" placeholder="e.g. UPI Ref / Bank Reference Details">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Future Installments Recalculation -->
+                <div id="mc-installment-section" style="display:none; border-top:1px dashed var(--border); padding-top:12px; margin-top:12px;">
+                    <div class="form-grid" style="margin-bottom:10px;">
+                        <div class="field full">
+                            <label>Payment Plan <span class="req">*</span></label>
+                            <select name="payment_plan" id="mc-plan" onchange="generateMigrationEIFields()">
+                                <?php foreach (['One Time','2 Installments','3 Installments','4 Installments','5 Installments'] as $pl): ?>
+                                    <option value="<?php echo $pl; ?>"><?php echo $pl; ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="font-weight:700; font-size:0.85rem; margin-bottom:8px;">Revised Installment Breakdown</div>
+                    <div id="mc-fields-container"></div>
+                </div>
+
+                <!-- Migration Reason -->
+                <div class="field full" style="margin-top:15px; border-top:1px dashed var(--border); padding-top:12px;">
+                    <label>Reason for Migration / Upgrade <span class="req">*</span></label>
+                    <textarea name="migration_reason" rows="2" required placeholder="Describe the reason for this course migration / upgrade..."></textarea>
+                </div>
+            </div>
+
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('migrate-course-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Complete Migration</button>
+            </div>
+        </form>
+    </div>
 </div>
+
+<script>
+var MC_TOTAL_COLLECTED = <?php echo (float)$total_collected; ?>;
+var MC_CURRENT_FEE = <?php echo (float)($student['course_fee'] ?? 0); ?>;
+var MC_EXISTING_INSTALLMENTS = <?php echo json_encode($installments, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
+var MC_CURRENT_PLAN = <?php echo json_encode($student['payment_plan'] ?: 'One Time'); ?>;
+
+function openMigrateCourseModal() {
+    document.getElementById('mc-target-course').value = '';
+    document.getElementById('mc-target-fee').value = '';
+    document.getElementById('mc-upgrade-diff').value = '';
+    document.getElementById('mc-new-outstanding').value = '';
+    document.getElementById('mc-immediate-chk').checked = false;
+    document.getElementById('mc-immediate-amount').value = '';
+    document.getElementById('mc-immediate-checkbox-row').style.display = 'none';
+    document.getElementById('mc-immediate-fields').style.display = 'none';
+    document.getElementById('mc-installment-section').style.display = 'none';
+    document.getElementById('mc-plan').value = MC_CURRENT_PLAN;
+    openModal('migrate-course-modal');
+}
+
+function toggleImmediateFields() {
+    var checked = document.getElementById('mc-immediate-chk').checked;
+    document.getElementById('mc-immediate-fields').style.display = checked ? 'block' : 'none';
+    document.getElementById('mc-immediate-amount').required = checked;
+
+    // Set immediate payment amount to upgrade difference by default
+    if (checked) {
+        var opt = document.getElementById('mc-target-course').selectedOptions[0];
+        if (opt && opt.value) {
+            var targetFee = parseFloat(opt.getAttribute('data-fee')) || 0;
+            var diff = Math.max(0, targetFee - MC_CURRENT_FEE);
+            document.getElementById('mc-immediate-amount').value = diff.toFixed(2);
+        }
+    } else {
+        document.getElementById('mc-immediate-amount').value = '';
+    }
+
+    calculateMigration();
+}
+
+function calculateMigration() {
+    var select = document.getElementById('mc-target-course');
+    var opt = select.selectedOptions[0];
+    if (!opt || !opt.value) {
+        document.getElementById('mc-target-fee').value = '';
+        document.getElementById('mc-upgrade-diff').value = '';
+        document.getElementById('mc-new-outstanding').value = '';
+        document.getElementById('mc-immediate-checkbox-row').style.display = 'none';
+        document.getElementById('mc-installment-section').style.display = 'none';
+        return;
+    }
+
+    var targetFee = parseFloat(opt.getAttribute('data-fee')) || 0;
+    var diff = Math.max(0, targetFee - MC_CURRENT_FEE);
+    var newOutstanding = Math.max(0, targetFee - MC_TOTAL_COLLECTED);
+
+    document.getElementById('mc-target-fee').value = '₹' + targetFee.toLocaleString('en-IN', {minimumFractionDigits: 2});
+    document.getElementById('mc-upgrade-diff').value = '₹' + diff.toLocaleString('en-IN', {minimumFractionDigits: 2});
+
+    // Show immediate payment checkbox only if upgrade difference is greater than 0
+    if (diff > 0 && newOutstanding > 0) {
+        document.getElementById('mc-immediate-checkbox-row').style.display = 'block';
+    } else {
+        document.getElementById('mc-immediate-checkbox-row').style.display = 'none';
+        document.getElementById('mc-immediate-chk').checked = false;
+        document.getElementById('mc-immediate-fields').style.display = 'none';
+    }
+
+    // Deduct immediate payment if checked
+    var immediateAmt = 0;
+    if (document.getElementById('mc-immediate-chk').checked) {
+        immediateAmt = parseFloat(document.getElementById('mc-immediate-amount').value) || 0;
+        if (immediateAmt > newOutstanding) {
+            immediateAmt = newOutstanding;
+            document.getElementById('mc-immediate-amount').value = immediateAmt.toFixed(2);
+        }
+        newOutstanding = Math.max(0, newOutstanding - immediateAmt);
+    }
+
+    document.getElementById('mc-new-outstanding').value = '₹' + newOutstanding.toLocaleString('en-IN', {minimumFractionDigits: 2});
+
+    if (newOutstanding > 0) {
+        document.getElementById('mc-installment-section').style.display = 'block';
+        // Auto-shift plan from One Time if there is a remaining outstanding balance
+        if (document.getElementById('mc-plan').value === 'One Time') {
+            document.getElementById('mc-plan').value = '2 Installments';
+        }
+        generateMigrationEIFields();
+    } else {
+        document.getElementById('mc-installment-section').style.display = 'none';
+    }
+}
+
+function generateMigrationEIFields() {
+    var plan = document.getElementById('mc-plan').value;
+    var count = 1;
+    if (plan !== 'One Time') {
+        count = parseInt(plan) || 1;
+    }
+
+    var container = document.getElementById('mc-fields-container');
+    container.innerHTML = '';
+
+    var select = document.getElementById('mc-target-course');
+    var opt = select.selectedOptions[0];
+    if (!opt || !opt.value) return;
+
+    var targetFee = parseFloat(opt.getAttribute('data-fee')) || 0;
+    var newOutstanding = Math.max(0, targetFee - MC_TOTAL_COLLECTED);
+    var immediateAmt = 0;
+
+    var immediateActive = document.getElementById('mc-immediate-chk').checked;
+    if (immediateActive) {
+        immediateAmt = parseFloat(document.getElementById('mc-immediate-amount').value) || 0;
+        newOutstanding = Math.max(0, newOutstanding - immediateAmt);
+    }
+
+    if (count <= 1) {
+        container.innerHTML = '<div style="font-size:0.8rem; color:var(--text-muted);">One-time payment plan. No future installments scheduled.</div>';
+        return;
+    }
+
+    // Count paid/approved installments
+    var paidCount = 1; // Reg is always paid
+    var paidInstallments = [];
+    MC_EXISTING_INSTALLMENTS.forEach(function(inst) {
+        var status = inst.status;
+        var isPaid = (status === 'approved' || status === 'paid' || inst.paid_date);
+        if (isPaid) {
+            paidCount++;
+            paidInstallments.push(inst);
+        }
+    });
+
+    var immediateInstNum = null;
+    if (immediateActive) {
+        immediateInstNum = paidCount + 1;
+    }
+
+    // Distribute remaining outstanding evenly across upcoming pending installments
+    var pendingCount = count - paidCount - (immediateActive ? 1 : 0);
+    var valPerPending = pendingCount > 0 ? Math.floor(newOutstanding / pendingCount) : 0;
+    var lastPendingRemainder = pendingCount > 0 ? (newOutstanding - (valPerPending * pendingCount)) : 0;
+
+    var currentPendingIndex = 0;
+    for (var i = 2; i <= count; i++) {
+        var row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.gap = '10px';
+        row.style.alignItems = 'center';
+        row.style.marginBottom = '8px';
+
+        var existingPaid = MC_EXISTING_INSTALLMENTS.find(inst => parseInt(inst.instalment_number) === i && (inst.status === 'approved' || inst.status === 'paid' || inst.paid_date));
+
+        if (existingPaid) {
+            var amt = parseFloat(existingPaid.paid_amount || existingPaid.amount);
+            row.innerHTML = `
+                <div style="font-weight:700; font-size:0.8rem; width:100px;">Installment #${i}:</div>
+                <div style="flex:1;">
+                    <input type="number" readonly class="form-input" style="padding:6px 10px; background:var(--gray-100); color:var(--text-muted);" value="${amt}">
+                </div>
+                <div style="flex:1.2;">
+                    <input type="date" readonly class="form-input" style="padding:6px 10px; background:var(--gray-100); color:var(--text-muted);" value="${existingPaid.due_date}">
+                </div>
+                <div style="width:100px; font-size:0.75rem; text-align:right; font-weight:700;">
+                    <span class="badge green">Paid</span>
+                </div>
+            `;
+        } else if (i === immediateInstNum) {
+            row.innerHTML = `
+                <div style="font-weight:700; font-size:0.8rem; width:100px; color:var(--accent);">Upgrade Fee #${i}:</div>
+                <div style="flex:1;">
+                    <input type="number" readonly class="form-input" style="padding:6px 10px; background:var(--gray-100); color:var(--accent);" value="${immediateAmt}">
+                </div>
+                <div style="flex:1.2;">
+                    <input type="date" readonly class="form-input" style="padding:6px 10px; background:var(--gray-100); color:var(--accent);" value="${document.querySelector('[name=immediate_paid_date]').value}">
+                </div>
+                <div style="width:100px; font-size:0.75rem; text-align:right; font-weight:700;">
+                    <span class="badge green">Immediate Paid</span>
+                </div>
+            `;
+        } else {
+            currentPendingIndex++;
+            var calculatedAmt = valPerPending;
+            if (currentPendingIndex === pendingCount) {
+                calculatedAmt += lastPendingRemainder;
+            }
+
+            var existingInst = MC_EXISTING_INSTALLMENTS.find(inst => parseInt(inst.instalment_number) === i);
+            var dueVal = existingInst ? existingInst.due_date : '';
+
+            row.innerHTML = `
+                <div style="font-weight:700; font-size:0.8rem; width:100px;">Installment #${i}:</div>
+                <div style="flex:1;">
+                    <input type="number" name="inst_${i}_amount" class="form-input inst-amount-input" style="padding:6px 10px;" value="${calculatedAmt}" min="1" step="0.01" required>
+                </div>
+                <div style="flex:1.2;">
+                    <input type="date" name="inst_${i}_due_date" class="form-input" style="padding:6px 10px;" value="${dueVal}" required>
+                </div>
+                <div style="width:100px; font-size:0.75rem; text-align:right; font-weight:700;">
+                    <span class="badge gray">Pending</span>
+                </div>
+            `;
+        }
+        container.appendChild(row);
+    }
+}
+
+function validateMigrationSubmit() {
+    var select = document.getElementById('mc-target-course');
+    if (!select.value) {
+        alert('Please select a target course.');
+        return false;
+    }
+
+    var plan = document.getElementById('mc-plan').value;
+    var targetFee = parseFloat(select.selectedOptions[0].getAttribute('data-fee')) || 0;
+    var newOutstanding = Math.max(0, targetFee - MC_TOTAL_COLLECTED);
+
+    var immediateActive = document.getElementById('mc-immediate-chk').checked;
+    if (immediateActive) {
+        var immediateAmt = parseFloat(document.getElementById('mc-immediate-amount').value) || 0;
+        if (immediateAmt <= 0) {
+            alert('Immediate payment amount must be greater than zero.');
+            return false;
+        }
+        if (immediateAmt > newOutstanding) {
+            alert('Immediate payment cannot exceed the outstanding balance.');
+            return false;
+        }
+
+        var payAcc = document.querySelector('[name=immediate_payment_account_id]').value;
+        if (!payAcc) {
+            alert('Please select the payment account for the immediate payment.');
+            return false;
+        }
+        newOutstanding = Math.max(0, newOutstanding - immediateAmt);
+    }
+
+    if (newOutstanding > 0) {
+        if (plan === 'One Time') {
+            alert('Outstanding balance remains. You must select an installment plan.');
+            return false;
+        }
+
+        // Validate sum of pending installments
+        var sum = 0;
+        var inputs = document.querySelectorAll('.inst-amount-input');
+        inputs.forEach(function(inp) {
+            sum += parseFloat(inp.value) || 0;
+        });
+
+        if (Math.abs(sum - newOutstanding) > 0.01) {
+            alert('The sum of scheduled installments (₹' + sum.toFixed(2) + ') must exactly equal the remaining outstanding balance (₹' + newOutstanding.toFixed(2) + ').');
+            return false;
+        }
+    }
+
+    return confirm('Are you sure you want to execute this course migration? All pending installments will be rescheduled and this action will be logged.');
+}
+</script>
 
 <?php include 'includes/admin_footer.php'; ?>
