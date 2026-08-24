@@ -1790,7 +1790,7 @@ function openStatusChangeModal(userId, name, status) {
 </div>
 <!-- ── MIGRATE / UPGRADE COURSE MODAL ── -->
 <div class="modal-backdrop" id="migrate-course-modal">
-    <div class="modal" style="max-width:640px; width:95%;">
+    <div class="modal" style="max-width:920px; width:95%;">
         <div class="modal-head">
             <h3><i class="fas fa-shuffle" style="color:var(--accent);"></i> Migrate / Upgrade Course</h3>
             <button class="modal-close" onclick="closeModal('migrate-course-modal')"><i class="fas fa-xmark"></i></button>
@@ -1800,115 +1800,428 @@ function openStatusChangeModal(userId, name, status) {
             <input type="hidden" name="action" value="migrate_course">
 
             <div class="modal-body">
-                <!-- Current Financial Snapshot -->
-                <div class="alert alert-info" style="margin-bottom:15px; font-size:0.85rem; line-height:1.5;">
-                    <div style="font-weight:700; margin-bottom:4px; font-size:0.9rem; color:var(--text-dark);">Current Enrollment:</div>
-                    Course: <strong><?php echo htmlspecialchars($student['pepp_course']); ?></strong><br>
-                    Current Fee: <strong>₹<?php echo number_format($student['course_fee'] ?? 0, 2); ?></strong><br>
-                    Total Paid/Credited: <strong>₹<?php echo number_format($total_collected, 2); ?></strong> (Reg ₹<?php echo number_format($reg_paid, 2); ?> + Inst ₹<?php echo number_format($inst_paid, 2); ?>)<br>
-                    Current Outstanding: <strong>₹<?php echo number_format($balance, 2); ?></strong> · Plan: <strong><?php echo htmlspecialchars($student['payment_plan'] ?: 'One Time'); ?></strong>
+                <style>
+                #migrate-course-modal .modal-body {
+                    padding: 20px;
+                    font-family: sans-serif;
+                    color: #1e293b;
+                }
+                #migrate-course-modal .preview-card {
+                    background: #f5f3ff;
+                    border: 1px solid #ddd6fe;
+                    border-radius: 12px;
+                    padding: 16px;
+                    margin-bottom: 20px;
+                    display: flex;
+                    gap: 16px;
+                    align-items: stretch;
+                }
+                #migrate-course-modal .preview-section {
+                    flex: 1.2;
+                }
+                #migrate-course-modal .preview-title {
+                    font-size: 0.85rem;
+                    font-weight: 700;
+                    color: #6366f1;
+                    margin-bottom: 10px;
+                    text-transform: uppercase;
+                    letter-spacing: 0.5px;
+                }
+                #migrate-course-modal .preview-grid {
+                    display: grid;
+                    grid-template-columns: auto 1fr;
+                    row-gap: 6px;
+                    column-gap: 12px;
+                    font-size: 0.85rem;
+                }
+                #migrate-course-modal .preview-label {
+                    color: #64748b;
+                }
+                #migrate-course-modal .preview-value {
+                    font-weight: 600;
+                    text-align: right;
+                    color: #1e293b;
+                }
+                #migrate-course-modal .preview-arrow-col {
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: space-around;
+                    align-items: center;
+                    color: #a78bfa;
+                    font-weight: bold;
+                    padding: 18px 0;
+                }
+                #migrate-course-modal .preview-cards-col {
+                    width: 180px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 8px;
+                    justify-content: center;
+                }
+                #migrate-course-modal .mini-info-card {
+                    background: #ffffff;
+                    border: 1px solid #e9d5ff;
+                    border-radius: 8px;
+                    padding: 8px 10px;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+                #migrate-course-modal .mini-info-card i {
+                    color: #8b5cf6;
+                    background: #ede9fe;
+                    width: 26px;
+                    height: 26px;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 0.8rem;
+                }
+                #migrate-course-modal .mini-info-card .mic-label {
+                    font-size: 0.65rem;
+                    color: #64748b;
+                    margin-bottom: 1px;
+                }
+                #migrate-course-modal .mini-info-card .mic-val {
+                    font-size: 0.75rem;
+                    font-weight: 700;
+                    color: #1e293b;
+                }
+
+                #migrate-course-modal .four-cols-summary {
+                    display: grid;
+                    grid-template-columns: repeat(4, 1fr);
+                    gap: 12px;
+                    margin-bottom: 20px;
+                }
+                #migrate-course-modal .summary-box {
+                    background: #f8fafc;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                    padding: 10px 12px;
+                }
+                #migrate-course-modal .summary-box label {
+                    font-size: 0.65rem;
+                    font-weight: 700;
+                    color: #64748b;
+                    text-transform: uppercase;
+                    margin-bottom: 4px;
+                    display: block;
+                }
+                #migrate-course-modal .summary-box input {
+                    width: 100%;
+                    border: none;
+                    background: transparent;
+                    padding: 0;
+                    font-size: 0.9rem;
+                    font-weight: 700;
+                    color: #0f172a;
+                    outline: none;
+                }
+
+                #migrate-course-modal .immediate-pay-row {
+                    background: #ffffff;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                    padding: 12px 16px;
+                    margin-bottom: 20px;
+                }
+                #migrate-course-modal .immediate-fields-wrapper {
+                    display: grid;
+                    grid-template-columns: 1.2fr 1fr 1fr;
+                    gap: 12px;
+                    margin-top: 10px;
+                }
+                #migrate-course-modal .input-with-icon {
+                    position: relative;
+                    display: flex;
+                    align-items: center;
+                }
+                #migrate-course-modal .input-with-icon .prepend-icon {
+                    position: absolute;
+                    left: 10px;
+                    color: #64748b;
+                    font-size: 0.85rem;
+                }
+                #migrate-course-modal .input-with-icon input {
+                    padding-left: 24px;
+                }
+
+                #migrate-course-modal .plan-and-balance-row {
+                    display: grid;
+                    grid-template-columns: 2fr 1.2fr;
+                    gap: 16px;
+                    margin-bottom: 20px;
+                    align-items: end;
+                }
+                #migrate-course-modal .balance-highlight-box {
+                    background: #fff5f5;
+                    border: 1px solid #fed7d7;
+                    border-radius: 8px;
+                    padding: 8px 12px;
+                }
+                #migrate-course-modal .balance-highlight-box label {
+                    font-size: 0.65rem;
+                    font-weight: 700;
+                    color: #991b1b;
+                    text-transform: uppercase;
+                    margin-bottom: 2px;
+                    display: block;
+                }
+                #migrate-course-modal .balance-highlight-box .bal-val {
+                    font-size: 1rem;
+                    font-weight: 800;
+                    color: #dc2626;
+                }
+
+                #migrate-course-modal .breakdown-table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin-bottom: 12px;
+                }
+                #migrate-course-modal .breakdown-table th {
+                    background: #f1f5f9;
+                    color: #475569;
+                    font-size: 0.7rem;
+                    font-weight: 700;
+                    text-align: left;
+                    padding: 8px 12px;
+                    border-bottom: 1px solid #e2e8f0;
+                    text-transform: uppercase;
+                }
+                #migrate-course-modal .breakdown-table td {
+                    padding: 6px 12px;
+                    border-bottom: 1px solid #e2e8f0;
+                    font-size: 0.8rem;
+                    color: #1e293b;
+                    vertical-align: middle;
+                }
+                #migrate-course-modal .breakdown-total-row {
+                    background: #ecfdf5;
+                    border: 1px dashed #10b981;
+                    border-radius: 8px;
+                    padding: 10px 12px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    font-weight: 700;
+                    font-size: 0.85rem;
+                    color: #065f46;
+                    margin-bottom: 15px;
+                }
+
+                #migrate-course-modal .reason-character-counter {
+                    display: flex;
+                    justify-content: space-between;
+                    font-size: 0.7rem;
+                    color: #64748b;
+                    margin-top: 2px;
+                }
+
+                #migrate-course-modal .form-label-styled {
+                    font-size: 0.7rem;
+                    font-weight: 700;
+                    color: #475569;
+                    text-transform: uppercase;
+                    margin-bottom: 4px;
+                    display: block;
+                }
+                </style>
+
+                <!-- Current vs Target Enrollment Preview Card -->
+                <div class="preview-card">
+                    <!-- Current -->
+                    <div class="preview-section">
+                        <div class="preview-title">Current Enrollment</div>
+                        <div class="preview-grid">
+                            <div class="preview-label">Current Course</div>
+                            <div class="preview-value"><?php echo htmlspecialchars($student['pepp_course']); ?></div>
+
+                            <div class="preview-label">Course Fee (Catalog)</div>
+                            <div class="preview-value">₹<?php echo number_format($student['course_fee'] ?? 0, 2); ?></div>
+
+                            <div class="preview-label">Payment Plan</div>
+                            <div class="preview-value"><?php echo htmlspecialchars($student['payment_plan'] ?: 'One Time'); ?></div>
+
+                            <div class="preview-label">Total Collected</div>
+                            <div class="preview-value" style="color:var(--green-ink); font-weight:700;">₹<?php echo number_format($total_collected, 2); ?></div>
+
+                            <div class="preview-label">Outstanding</div>
+                            <div class="preview-value" style="color:#ef4444; font-weight:700;">₹<?php echo number_format($balance, 2); ?></div>
+                        </div>
+                    </div>
+
+                    <!-- Arrows -->
+                    <div class="preview-arrow-col">
+                        <div>&nbsp;</div>
+                        <div><i class="fas fa-arrow-right"></i></div>
+                        <div><i class="fas fa-arrow-right"></i></div>
+                        <div><i class="fas fa-arrow-right"></i></div>
+                        <div><i class="fas fa-arrow-right"></i></div>
+                    </div>
+
+                    <!-- Target Preview -->
+                    <div class="preview-section">
+                        <div class="preview-title">Target Enrollment (Preview)</div>
+                        <div class="preview-grid">
+                            <div class="preview-label">Target Course Fee</div>
+                            <div class="preview-value" id="mc-preview-target-fee">₹0.00</div>
+
+                            <div class="preview-label">Credit Carried Forward <i class="fas fa-circle-info" style="color:#6366f1; cursor:help;" title="Already collected balance being migrated to new course."></i></div>
+                            <div class="preview-value" style="color:var(--green-ink); font-weight:700;">₹<?php echo number_format($total_collected, 2); ?></div>
+
+                            <div class="preview-label">Upgrade Difference</div>
+                            <div class="preview-value" id="mc-preview-diff">₹0.00</div>
+
+                            <div class="preview-label">New Outstanding Balance</div>
+                            <div class="preview-value" id="mc-preview-new-outstanding" style="color:#ef4444; font-weight:700;">₹0.00</div>
+                        </div>
+                    </div>
+
+                    <!-- Right columns with cards -->
+                    <div class="preview-cards-col">
+                        <div class="mini-info-card">
+                            <i class="fas fa-user-graduate"></i>
+                            <div>
+                                <div class="mic-label">Academic Year</div>
+                                <div class="mic-val"><?php echo htmlspecialchars($student['pepp_academic_year']); ?></div>
+                            </div>
+                        </div>
+                        <div class="mini-info-card">
+                            <i class="fas fa-credit-card"></i>
+                            <div>
+                                <div class="mic-label">Current Plan</div>
+                                <div class="mic-val"><?php echo htmlspecialchars($student['payment_plan'] ?: 'One Time'); ?></div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="form-grid">
-                    <!-- Target Course Selection -->
-                    <div class="field full">
-                        <label>Select Target Course <span class="req">*</span></label>
-                        <select name="target_course_id" id="mc-target-course" required onchange="calculateMigration()">
-                            <option value="">-- Choose Course --</option>
-                            <?php foreach ($all_eligible_courses as $c):
-                                $isLower = (float)$c['total_fee'] < (float)($student['course_fee'] ?? 0);
-                                $displayFee = '₹' . number_format($c['total_fee'], 0);
-                                $optLabel = htmlspecialchars($c['course_name']) . " (" . $displayFee . ")";
-                                if ($isLower) {
-                                    $optLabel .= " - [Not eligible — lower fee]";
-                                }
-                            ?>
-                                <option value="<?php echo $c['id']; ?>" data-fee="<?php echo (float)$c['total_fee']; ?>" <?php echo $isLower ? 'disabled style="color:var(--text-muted); font-style:italic;"' : ''; ?>>
-                                    <?php echo $optLabel; ?>
-                                </option>
+                <!-- Target Course Selection -->
+                <div class="field full" style="margin-bottom: 20px;">
+                    <label class="form-label-styled">Select Target Course <span class="req">*</span></label>
+                    <select name="target_course_id" id="mc-target-course" required onchange="calculateMigration()" class="form-input" style="height: 38px;">
+                        <option value="">-- Choose Course --</option>
+                        <?php foreach ($all_eligible_courses as $c):
+                            $isLower = (float)$c['total_fee'] < (float)($student['course_fee'] ?? 0);
+                            $displayFee = '₹' . number_format($c['total_fee'], 0);
+                            $optLabel = htmlspecialchars($c['course_name']) . " (" . $displayFee . ")";
+                            if ($isLower) {
+                                $optLabel .= " - [Not eligible — lower fee]";
+                            }
+                        ?>
+                            <option value="<?php echo $c['id']; ?>" data-fee="<?php echo (float)$c['total_fee']; ?>" <?php echo $isLower ? 'disabled style="color:var(--text-muted); font-style:italic;"' : ''; ?>>
+                                <?php echo $optLabel; ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <!-- Summary Boxes -->
+                <div class="four-cols-summary">
+                    <div class="summary-box">
+                        <label>Target Course Fee</label>
+                        <input type="text" id="mc-target-fee" readonly>
+                    </div>
+                    <div class="summary-box">
+                        <label>Credit Carried Forward</label>
+                        <input type="text" id="mc-credited" readonly value="₹<?php echo number_format($total_collected, 2); ?>">
+                    </div>
+                    <div class="summary-box">
+                        <label>Upgrade Difference</label>
+                        <input type="text" id="mc-upgrade-diff" readonly style="color: #6366f1;">
+                    </div>
+                    <div class="summary-box">
+                        <label>New Outstanding Balance</label>
+                        <input type="text" id="mc-new-outstanding" readonly style="color: #ef4444;">
+                    </div>
+                </div>
+
+                <!-- Immediate Payment Options -->
+                <div class="immediate-pay-row">
+                    <label style="display:inline-flex; align-items:center; gap:8px; font-weight:700; font-size:0.75rem; color:#475569; margin:0; cursor:pointer; text-transform:uppercase;">
+                        <input type="checkbox" name="upgrade_paid_immediately" id="mc-immediate-chk" onchange="toggleImmediateFields()">
+                        Collect immediate upgrade payment (Optional) <i class="fas fa-circle-info" style="margin-left: 2px;" title="Record upgrade payment collection completed instantly during course migration."></i>
+                    </label>
+
+                    <div id="mc-immediate-fields" style="display:none; border-top:1px solid #e2e8f0; margin-top:12px; padding-top:12px;">
+                        <div class="immediate-fields-wrapper">
+                            <div>
+                                <label class="form-label-styled">Immediate Payment Amount</label>
+                                <div class="input-with-icon">
+                                    <span class="prepend-icon">₹</span>
+                                    <input type="number" name="immediate_amount" id="mc-immediate-amount" min="1" step="0.01" class="form-input" style="padding-left: 24px;" oninput="calculateMigration()">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="form-label-styled">Payment Mode</label>
+                                <select name="immediate_payment_mode" class="form-input" style="height: 38px;">
+                                    <option value="Online">Online</option>
+                                    <option value="Cash">Cash</option>
+                                    <option value="100% Scholarship">100% Scholarship</option>
+                                    <option value="Pay later">Pay later</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="form-label-styled">Payment Date</label>
+                                <input type="date" name="immediate_paid_date" class="form-input" value="<?php echo date('Y-m-d'); ?>" onchange="calculateMigration()">
+                            </div>
+                        </div>
+                        <div class="form-grid" style="margin-top: 10px; grid-template-columns: 1fr 1fr; gap: 12px;">
+                            <div class="field">
+                                <label class="form-label-styled">Payment Account <span class="req">*</span></label>
+                                <select name="immediate_payment_account_id" class="form-input" style="height: 38px;">
+                                    <option value="">-- Select Account --</option>
+                                    <?php foreach ($all_payment_accounts as $acc): ?>
+                                        <option value="<?php echo $acc['id']; ?>"><?php echo htmlspecialchars($acc['account_name']); ?><?php echo $acc['banking_details'] ? " ({$acc['banking_details']})" : ""; ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label class="form-label-styled">Payment Reference / Transaction ID</label>
+                                <input type="text" name="immediate_payment_reference" class="form-input" placeholder="e.g. UPI Ref / Bank Reference Details">
+                            </div>
+                        </div>
+                        <div style="font-size:0.75rem; color:var(--text-muted); margin-top:8px;" id="mc-amount-limit-note">
+                            Note: Amount must be between ₹0.00 and ₹0.00
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Plan and Balance Display -->
+                <div class="plan-and-balance-row" id="mc-installment-section" style="display:none;">
+                    <div>
+                        <label class="form-label-styled">Payment Plan After Migration <span class="req">*</span></label>
+                        <select name="payment_plan" id="mc-plan" onchange="generateMigrationEIFields()" class="form-input" style="height: 38px;">
+                            <?php foreach (['One Time','2 Installments','3 Installments','4 Installments','5 Installments'] as $pl): ?>
+                                <option value="<?php echo $pl; ?>"><?php echo $pl; ?></option>
                             <?php endforeach; ?>
                         </select>
                     </div>
-
-                    <!-- Migration Summary (Calculated in real-time) -->
-                    <div class="field"><label>Target Course Fee</label><input type="text" id="mc-target-fee" readonly style="background:var(--gray-100);"></div>
-                    <div class="field"><label>Credit Carried Forward</label><input type="text" id="mc-credited" readonly style="background:var(--gray-100);" value="₹<?php echo number_format($total_collected, 2); ?>"></div>
-                    <div class="field"><label>Upgrade Difference</label><input type="text" id="mc-upgrade-diff" readonly style="background:var(--gray-100); font-weight:700;"></div>
-                    <div class="field"><label>New Outstanding Balance</label><input type="text" id="mc-new-outstanding" readonly style="background:var(--gray-100); font-weight:700; color:var(--accent);"></div>
-
-                    <!-- Immediate Payment Checkbox -->
-                    <div class="field full" id="mc-immediate-checkbox-row" style="display:none; margin: 4px 0;">
-                        <label style="display:inline-flex; align-items:center; gap:8px; font-weight:normal; margin:0; cursor:pointer;">
-                            <input type="checkbox" name="upgrade_paid_immediately" id="mc-immediate-chk" onchange="toggleImmediateFields()">
-                            Collect immediate upgrade payment
-                        </label>
+                    <div class="balance-highlight-box">
+                        <label>Revised Outstanding Balance</label>
+                        <div class="bal-val" id="mc-revised-outstanding-display">₹0.00</div>
                     </div>
                 </div>
 
-                <!-- Immediate Payment Input Fields -->
-                <div id="mc-immediate-fields" style="display:none; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:15px; background:var(--gray-50);">
-                    <div style="font-weight:700; font-size:0.85rem; margin-bottom:10px; color:var(--accent);"><i class="fas fa-receipt"></i> Record Immediate Payment</div>
-                    <div class="form-grid">
-                        <div class="field">
-                            <label>Payment Amount (₹) <span class="req">*</span></label>
-                            <input type="number" name="immediate_amount" id="mc-immediate-amount" min="1" step="0.01" oninput="calculateMigration()">
-                        </div>
-                        <div class="field">
-                            <label>Payment Mode <span class="req">*</span></label>
-                            <select name="immediate_payment_mode">
-                                <option value="Online">Online</option>
-                                <option value="Cash">Cash</option>
-                                <option value="100% Scholarship">100% Scholarship</option>
-                                <option value="Pay later">Pay later</option>
-                            </select>
-                        </div>
-                        <div class="field">
-                            <label>Payment Account <span class="req">*</span></label>
-                            <select name="immediate_payment_account_id">
-                                <option value="">-- Select Account --</option>
-                                <?php foreach ($all_payment_accounts as $acc): ?>
-                                    <option value="<?php echo $acc['id']; ?>"><?php echo htmlspecialchars($acc['account_name']); ?><?php echo $acc['banking_details'] ? " ({$acc['banking_details']})" : ""; ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="field">
-                            <label>Paid Date <span class="req">*</span></label>
-                            <input type="date" name="immediate_paid_date" value="<?php echo date('Y-m-d'); ?>">
-                        </div>
-                        <div class="field full">
-                            <label>Payment Reference / Transaction ID</label>
-                            <input type="text" name="immediate_payment_reference" placeholder="e.g. UPI Ref / Bank Reference Details">
-                        </div>
-                    </div>
-                </div>
+                <!-- Installment Fields -->
+                <div id="mc-fields-container" style="margin-bottom: 20px;"></div>
 
-                <!-- Future Installments Recalculation -->
-                <div id="mc-installment-section" style="display:none; border-top:1px dashed var(--border); padding-top:12px; margin-top:12px;">
-                    <div class="form-grid" style="margin-bottom:10px;">
-                        <div class="field full">
-                            <label>Payment Plan <span class="req">*</span></label>
-                            <select name="payment_plan" id="mc-plan" onchange="generateMigrationEIFields()">
-                                <?php foreach (['One Time','2 Installments','3 Installments','4 Installments','5 Installments'] as $pl): ?>
-                                    <option value="<?php echo $pl; ?>"><?php echo $pl; ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div style="font-weight:700; font-size:0.85rem; margin-bottom:8px;">Revised Installment Breakdown</div>
-                    <div id="mc-fields-container"></div>
-                </div>
-
-                <!-- Migration Reason -->
+                <!-- Reason for Migration -->
                 <div class="field full" style="margin-top:15px; border-top:1px dashed var(--border); padding-top:12px;">
-                    <label>Reason for Migration / Upgrade <span class="req">*</span></label>
-                    <textarea name="migration_reason" rows="2" required placeholder="Describe the reason for this course migration / upgrade..."></textarea>
+                    <label class="form-label-styled">Reason for Migration / Upgrade <span class="req">*</span></label>
+                    <textarea name="migration_reason" id="mc-reason-textarea" rows="2" maxlength="255" required placeholder="Describe the reason for this course migration / upgrade..." class="form-input" oninput="updateCharCount()"></textarea>
+                    <div class="reason-character-counter">
+                        <span>Maximum 255 characters</span>
+                        <span id="mc-char-count">0 / 255</span>
+                    </div>
                 </div>
             </div>
 
             <div class="modal-foot">
                 <button type="button" class="btn btn-outline" onclick="closeModal('migrate-course-modal')">Cancel</button>
-                <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Complete Migration</button>
+                <button type="submit" class="btn btn-primary" style="background:#6366f1; border-color:#6366f1;"><i class="fas fa-shuffle"></i> Complete Migration</button>
             </div>
         </form>
     </div>
@@ -1925,11 +2238,16 @@ function openMigrateCourseModal() {
     document.getElementById('mc-target-fee').value = '';
     document.getElementById('mc-upgrade-diff').value = '';
     document.getElementById('mc-new-outstanding').value = '';
+    document.getElementById('mc-preview-target-fee').innerText = '₹0.00';
+    document.getElementById('mc-preview-diff').innerText = '₹0.00';
+    document.getElementById('mc-preview-new-outstanding').innerText = '₹0.00';
     document.getElementById('mc-immediate-chk').checked = false;
     document.getElementById('mc-immediate-amount').value = '';
-    document.getElementById('mc-immediate-checkbox-row').style.display = 'none';
     document.getElementById('mc-immediate-fields').style.display = 'none';
     document.getElementById('mc-installment-section').style.display = 'none';
+    document.getElementById('mc-fields-container').innerHTML = '';
+    document.getElementById('mc-reason-textarea').value = '';
+    updateCharCount();
     document.getElementById('mc-plan').value = MC_CURRENT_PLAN;
     openModal('migrate-course-modal');
 }
@@ -1961,7 +2279,9 @@ function calculateMigration() {
         document.getElementById('mc-target-fee').value = '';
         document.getElementById('mc-upgrade-diff').value = '';
         document.getElementById('mc-new-outstanding').value = '';
-        document.getElementById('mc-immediate-checkbox-row').style.display = 'none';
+        document.getElementById('mc-preview-target-fee').innerText = '₹0.00';
+        document.getElementById('mc-preview-diff').innerText = '₹0.00';
+        document.getElementById('mc-preview-new-outstanding').innerText = '₹0.00';
         document.getElementById('mc-installment-section').style.display = 'none';
         return;
     }
@@ -1973,13 +2293,15 @@ function calculateMigration() {
     document.getElementById('mc-target-fee').value = '₹' + targetFee.toLocaleString('en-IN', {minimumFractionDigits: 2});
     document.getElementById('mc-upgrade-diff').value = '₹' + diff.toLocaleString('en-IN', {minimumFractionDigits: 2});
 
-    // Show immediate payment checkbox only if upgrade difference is greater than 0
-    if (diff > 0 && newOutstanding > 0) {
-        document.getElementById('mc-immediate-checkbox-row').style.display = 'block';
-    } else {
-        document.getElementById('mc-immediate-checkbox-row').style.display = 'none';
-        document.getElementById('mc-immediate-chk').checked = false;
-        document.getElementById('mc-immediate-fields').style.display = 'none';
+    // Populate top target enrollment previews
+    document.getElementById('mc-preview-target-fee').innerText = '₹' + targetFee.toLocaleString('en-IN', {minimumFractionDigits: 2});
+    document.getElementById('mc-preview-diff').innerText = '₹' + diff.toLocaleString('en-IN', {minimumFractionDigits: 2});
+    document.getElementById('mc-preview-new-outstanding').innerText = '₹' + newOutstanding.toLocaleString('en-IN', {minimumFractionDigits: 2});
+
+    // Update note inside immediate payment fields
+    var noteEl = document.getElementById('mc-amount-limit-note');
+    if (noteEl) {
+        noteEl.innerHTML = 'Note: Amount must be between ₹0.00 and ₹' + newOutstanding.toLocaleString('en-IN', {minimumFractionDigits: 2});
     }
 
     // Deduct immediate payment if checked
@@ -1994,9 +2316,10 @@ function calculateMigration() {
     }
 
     document.getElementById('mc-new-outstanding').value = '₹' + newOutstanding.toLocaleString('en-IN', {minimumFractionDigits: 2});
+    document.getElementById('mc-revised-outstanding-display').innerText = '₹' + newOutstanding.toLocaleString('en-IN', {minimumFractionDigits: 2});
 
     if (newOutstanding > 0) {
-        document.getElementById('mc-installment-section').style.display = 'block';
+        document.getElementById('mc-installment-section').style.display = 'grid';
         // Auto-shift plan from One Time if there is a remaining outstanding balance
         if (document.getElementById('mc-plan').value === 'One Time') {
             document.getElementById('mc-plan').value = '2 Installments';
@@ -2004,6 +2327,7 @@ function calculateMigration() {
         generateMigrationEIFields();
     } else {
         document.getElementById('mc-installment-section').style.display = 'none';
+        document.getElementById('mc-fields-container').innerHTML = '';
     }
 }
 
@@ -2032,7 +2356,7 @@ function generateMigrationEIFields() {
     }
 
     if (count <= 1) {
-        container.innerHTML = '<div style="font-size:0.8rem; color:var(--text-muted);">One-time payment plan. No future installments scheduled.</div>';
+        container.innerHTML = '<div style="font-size:0.85rem; color:var(--text-muted); padding: 10px 0;">One-time payment plan. No future installments scheduled.</div>';
         return;
     }
 
@@ -2058,42 +2382,54 @@ function generateMigrationEIFields() {
     var valPerPending = pendingCount > 0 ? Math.floor(newOutstanding / pendingCount) : 0;
     var lastPendingRemainder = pendingCount > 0 ? (newOutstanding - (valPerPending * pendingCount)) : 0;
 
+    // Create table structure matching reference screenshot
+    var table = document.createElement('table');
+    table.className = 'breakdown-table';
+    table.style.width = '100%';
+    table.innerHTML = `
+        <thead>
+            <tr>
+                <th style="width: 50px;">#</th>
+                <th>Installment Date</th>
+                <th>Amount (₹)</th>
+                <th>Status</th>
+                <th style="width: 60px; text-align: center;">Actions</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    `;
+    var tbody = table.querySelector('tbody');
+
     var currentPendingIndex = 0;
     for (var i = 2; i <= count; i++) {
-        var row = document.createElement('div');
-        row.style.display = 'flex';
-        row.style.gap = '10px';
-        row.style.alignItems = 'center';
-        row.style.marginBottom = '8px';
+        var tr = document.createElement('tr');
 
         var existingPaid = MC_EXISTING_INSTALLMENTS.find(inst => parseInt(inst.instalment_number) === i && (inst.status === 'approved' || inst.status === 'paid' || inst.paid_date));
 
         if (existingPaid) {
             var amt = parseFloat(existingPaid.paid_amount || existingPaid.amount);
-            row.innerHTML = `
-                <div style="font-weight:700; font-size:0.8rem; width:100px;">Installment #${i}:</div>
-                <div style="flex:1;">
-                    <input type="number" readonly class="form-input" style="padding:6px 10px; background:var(--gray-100); color:var(--text-muted);" value="${amt}">
-                </div>
-                <div style="flex:1.2;">
-                    <input type="date" readonly class="form-input" style="padding:6px 10px; background:var(--gray-100); color:var(--text-muted);" value="${existingPaid.due_date}">
-                </div>
-                <div style="width:100px; font-size:0.75rem; text-align:right; font-weight:700;">
-                    <span class="badge green">Paid</span>
-                </div>
+            tr.innerHTML = `
+                <td style="font-weight:700;">${i}</td>
+                <td>
+                    <input type="date" readonly class="form-input" style="padding:6px 10px; background:var(--gray-100); color:var(--text-muted); border: 1px solid var(--border);" value="${existingPaid.due_date}">
+                </td>
+                <td>
+                    <input type="number" readonly class="form-input" style="padding:6px 10px; background:var(--gray-100); color:var(--text-muted); border: 1px solid var(--border);" value="${amt}">
+                </td>
+                <td><span class="badge green">Paid</span></td>
+                <td style="text-align: center;">-</td>
             `;
         } else if (i === immediateInstNum) {
-            row.innerHTML = `
-                <div style="font-weight:700; font-size:0.8rem; width:100px; color:var(--accent);">Upgrade Fee #${i}:</div>
-                <div style="flex:1;">
-                    <input type="number" readonly class="form-input" style="padding:6px 10px; background:var(--gray-100); color:var(--accent);" value="${immediateAmt}">
-                </div>
-                <div style="flex:1.2;">
-                    <input type="date" readonly class="form-input" style="padding:6px 10px; background:var(--gray-100); color:var(--accent);" value="${document.querySelector('[name=immediate_paid_date]').value}">
-                </div>
-                <div style="width:100px; font-size:0.75rem; text-align:right; font-weight:700;">
-                    <span class="badge green">Immediate Paid</span>
-                </div>
+            tr.innerHTML = `
+                <td style="font-weight:700; color:var(--accent);">${i}</td>
+                <td>
+                    <input type="date" readonly class="form-input" style="padding:6px 10px; background:var(--gray-100); color:var(--accent); border: 1px solid var(--border);" value="${document.querySelector('[name=immediate_paid_date]').value}">
+                </td>
+                <td>
+                    <input type="number" readonly class="form-input" style="padding:6px 10px; background:var(--gray-100); color:var(--accent); border: 1px solid var(--border);" value="${immediateAmt}">
+                </td>
+                <td><span class="badge green">Immediate Paid</span></td>
+                <td style="text-align: center;">-</td>
             `;
         } else {
             currentPendingIndex++;
@@ -2105,21 +2441,50 @@ function generateMigrationEIFields() {
             var existingInst = MC_EXISTING_INSTALLMENTS.find(inst => parseInt(inst.instalment_number) === i);
             var dueVal = existingInst ? existingInst.due_date : '';
 
-            row.innerHTML = `
-                <div style="font-weight:700; font-size:0.8rem; width:100px;">Installment #${i}:</div>
-                <div style="flex:1;">
-                    <input type="number" name="inst_${i}_amount" class="form-input inst-amount-input" style="padding:6px 10px;" value="${calculatedAmt}" min="1" step="0.01" required>
-                </div>
-                <div style="flex:1.2;">
-                    <input type="date" name="inst_${i}_due_date" class="form-input" style="padding:6px 10px;" value="${dueVal}" required>
-                </div>
-                <div style="width:100px; font-size:0.75rem; text-align:right; font-weight:700;">
-                    <span class="badge gray">Pending</span>
-                </div>
+            tr.innerHTML = `
+                <td style="font-weight:700;">${i}</td>
+                <td>
+                    <input type="date" name="inst_${i}_due_date" class="form-input" style="padding:6px 10px; border: 1px solid var(--border);" value="${dueVal}" required>
+                </td>
+                <td>
+                    <input type="number" name="inst_${i}_amount" class="form-input inst-amount-input" style="padding:6px 10px; border: 1px solid var(--border);" value="${calculatedAmt}" min="1" step="0.01" oninput="updatePendingTotal()" required>
+                </td>
+                <td><span class="badge gray">Pending</span></td>
+                <td style="text-align: center;">
+                    <button type="button" class="btn btn-xs" style="padding:4px 8px; border:none; background:transparent; color:#ef4444;" onclick="alert('To change the breakdown, select a different installment plan above or adjust the installment amounts directly.')"><i class="fas fa-trash-can"></i></button>
+                </td>
             `;
         }
-        container.appendChild(row);
+        tbody.appendChild(tr);
     }
+    container.appendChild(table);
+
+    // Add total row at the bottom
+    var totalDiv = document.createElement('div');
+    totalDiv.className = 'breakdown-total-row';
+    totalDiv.innerHTML = `
+        <span>Total Pending Amount</span>
+        <span id="mc-pending-total-val">₹0.00</span>
+    `;
+    container.appendChild(totalDiv);
+    updatePendingTotal();
+}
+
+function updatePendingTotal() {
+    var sum = 0;
+    var inputs = document.querySelectorAll('.inst-amount-input');
+    inputs.forEach(function(inp) {
+        sum += parseFloat(inp.value) || 0;
+    });
+    var el = document.getElementById('mc-pending-total-val');
+    if (el) {
+        el.innerText = '₹' + sum.toLocaleString('en-IN', {minimumFractionDigits: 2});
+    }
+}
+
+function updateCharCount() {
+    var val = document.getElementById('mc-reason-textarea').value;
+    document.getElementById('mc-char-count').innerText = val.length + ' / 255';
 }
 
 function validateMigrationSubmit() {
