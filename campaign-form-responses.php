@@ -606,6 +606,8 @@ include 'includes/admin_nav.php';
         border-radius: 20px;
         overflow-x: auto;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        width: 100%;
+        max-width: 100%;
     }
 </style>
 
@@ -745,7 +747,7 @@ include 'includes/admin_nav.php';
 
 <!-- ── DATA TABLE CARD ── -->
 <div class="table-responsive-card">
-    <table class="data-table" style="width:100%; border-collapse:collapse; min-width:800px;">
+    <table class="data-table" style="width: max-content; min-width: 100%; border-collapse: collapse;">
         <thead>
             <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:var(--input-bg);">
                 <th style="padding:15px; width:45px; text-align:center;"><input type="checkbox" id="select-all" onclick="toggleSelectAll(this)" style="accent-color:var(--accent);"></th>
