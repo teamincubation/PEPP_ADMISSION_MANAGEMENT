@@ -1219,7 +1219,7 @@ const templateElements = <?php echo $tpl['elements_json'] ?: '[]'; ?>;
 // Saved design data if editing
 let savedDesignId = <?php echo $saved_id; ?>;
 const savedConfig = <?php echo $saved_design ? $saved_design['design_config'] : 'null'; ?>;
-const savedMappings = <?php echo $saved_design ? $saved_design['student_rank_mappings'] : 'null'; ?>;
+const savedMappings = <?php echo ($saved_design && !empty($saved_design['student_rank_mappings'])) ? $saved_design['student_rank_mappings'] : 'null'; ?>;
 
 // Editor State variables
 let elements = [];
@@ -1276,6 +1276,25 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (savedDesignId && savedConfig) {
             elements = savedConfig.elements || [];
             studentRankMappings = savedMappings || {};
+            // Normalize studentRankMappings to ensure all mappings are object-based
+            for (let key in studentRankMappings) {
+                let m = studentRankMappings[key];
+                if (m && typeof m !== 'object') {
+                    studentRankMappings[key] = {
+                        student_uid: String(m),
+                        zoom: 100,
+                        panX: 0,
+                        panY: 0,
+                        rotation: 0,
+                        flipH: false,
+                        flipV: false,
+                        fitMode: 'cover',
+                        opacity: 1,
+                        mask: 'rounded',
+                        photo_override: null
+                    };
+                }
+            }
             document.getElementById('prop-ranks-count').value = savedConfig.ranksCount || '4';
             document.getElementById('prop-export-format').value = '<?php echo $saved_design ? addslashes($saved_design['output_format']) : "png"; ?>';
 
@@ -1395,7 +1414,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
 
             // ─── DYNAMICALLY POPULATE TEST DETAILS ───
-            // For new designs, make sure chapter_name and test_date are present by default at (220, 270) respectively, and test_name is removed.
+            // For new designs, make sure chapter_name and test_date are present by default, aligned left and styled, and test_name is removed.
             if (!savedDesignId) {
                 elements = elements.filter(el => el.id !== 'test_name');
 
@@ -1409,10 +1428,10 @@ document.addEventListener('DOMContentLoaded', async function() {
                         left: 290,
                         top: 220,
                         width: 800,
-                        height: 40,
+                        height: 80,
                         fontFamily: "Google Sans Flex",
-                        fontSize: 24,
-                        fontWeight: "400",
+                        fontSize: 48,
+                        fontWeight: "700",
                         color: "#f59e0b",
                         textAlign: "left",
                         lineHeight: 1.2,
@@ -1445,6 +1464,13 @@ document.addEventListener('DOMContentLoaded', async function() {
                         rotate: 0
                     };
                     elements.push(testDateEl);
+                }
+
+                // Unconditionally align test date directly under chapter name left-aligned with a +55px vertical offset
+                if (testDateEl && chapterNameEl) {
+                    testDateEl.left = chapterNameEl.left;
+                    testDateEl.top = chapterNameEl.top + 55;
+                    testDateEl.textAlign = "left";
                 }
             }
 
@@ -1480,14 +1506,17 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
         }
 
-        // Hide test name and test number elements safely for template compatibility (do not render as visible card content)
+        // Overwrite and restore Test Number element unconditionally, ensuring it remains visible
+        let testNumEl = elements.find(el => el.id === 'test_number');
+        if (testNumEl) {
+            testNumEl.textContent = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
+            testNumEl.visible = true;
+        }
+
+        // Hide test name safely (do not render as visible card content)
         let testNameEl = elements.find(el => el.id === 'test_name');
         if (testNameEl) {
             testNameEl.visible = false;
-        }
-        let testNumEl = elements.find(el => el.id === 'test_number');
-        if (testNumEl) {
-            testNumEl.visible = false;
         }
 
         // Fallback mapping assignment for legacy/empty card configs
@@ -2635,7 +2664,7 @@ function updateStudentAssignOverride(studentUid) {
         const slotNum = parseInt(rankMatch[1]);
         const badgeEl = elements.find(el => el.id === 'rank_badge_' + slotNum);
         if (badgeEl) {
-            const student = rankingList.find(s => (s.user_id === studentUid || s.student_email === studentUid));
+            const student = findStudentInList(studentUid);
             if (student) {
                 const style = getRankBadgeStyle(student.computed_rank);
                 badgeEl.markerColor = style.markerColor;

@@ -364,7 +364,9 @@ if ($active_tab === 'test_results') {
                    (SELECT activity_date_snapshot FROM assessment_result_batches
                     WHERE study_plan_id = trc.study_plan_id
                       AND activity_id = trc.activity_id
-                      AND status = 'published' LIMIT 1) AS test_date
+                      AND status = 'published' LIMIT 1) AS test_date,
+                   (SELECT day_number FROM study_plan_activities
+                    WHERE id = trc.activity_id LIMIT 1) AS test_number
             FROM test_result_cards trc
             LEFT JOIN card_templates ct ON trc.template_id = ct.id
             ORDER BY trc.created_at DESC
@@ -772,14 +774,15 @@ include 'includes/admin_nav.php';
                                         <td style="padding: 12px 16px; color: #64748b;">
                                             <?php echo htmlspecialchars($sc['template_title'] ?: 'Unknown'); ?>
                                         </td>
-                                        <td style="padding: 12px 16px; color: #64748b; font-size: 0.8rem; line-height: 1.4;">
+                                        <td style="padding: 12px 16px; color: #64748b; font-size: 0.8rem; line-height: 1.45;">
+                                            <strong>Year:</strong> <?php echo htmlspecialchars($sc['academic_year']); ?><br>
                                             <?php if (!empty($sc['chapter_name'])): ?>
-                                                <strong>Chapter:</strong> <?php echo htmlspecialchars($sc['chapter_name']); ?><br>
+                                                <strong>Chapter:</strong> <?php echo htmlspecialchars($sc['chapter_name']); ?><?php echo !empty($sc['test_number']) ? ' ' . htmlspecialchars($sc['test_number']) : ''; ?><br>
                                             <?php endif; ?>
                                             <?php if (!empty($sc['test_date'])): ?>
                                                 <strong>Test Date:</strong> <?php echo htmlspecialchars(date('d M Y', strtotime($sc['test_date']))); ?><br>
                                             <?php endif; ?>
-                                            <strong>Year:</strong> <?php echo htmlspecialchars($sc['academic_year']); ?> &middot; <strong>Test ID:</strong> <?php echo $sc['activity_id']; ?>
+                                            <strong>Test ID:</strong> <?php echo htmlspecialchars($sc['activity_id']); ?>
                                         </td>
                                         <td style="padding: 12px 16px; color: #64748b;">
                                             <?php echo htmlspecialchars($sc['created_by']); ?>
