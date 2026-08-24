@@ -37,6 +37,101 @@ if (isset($_GET['action']) && $_GET['action'] === 'search_students') {
     exit;
 }
 
+// ── Action: AJAX get layout presets (GET) ────────────
+if (isset($_GET['action']) && $_GET['action'] === 'get_layout_presets') {
+    header('Content-Type: application/json');
+    try {
+        $stmt = $pdo->query("SELECT id, name, is_default FROM card_layout_presets WHERE status = 'active' ORDER BY name ASC");
+        $presets = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        echo json_encode(['success' => true, 'presets' => $presets]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── Action: AJAX load layout preset (GET) ────────────
+if (isset($_GET['action']) && $_GET['action'] === 'load_layout_preset') {
+    header('Content-Type: application/json');
+    $preset_id = (int)($_GET['preset_id'] ?? 0);
+    try {
+        $stmt = $pdo->prepare("SELECT * FROM card_layout_presets WHERE id = ? AND status = 'active'");
+        $stmt->execute([$preset_id]);
+        $preset = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($preset) {
+            echo json_encode(['success' => true, 'preset' => $preset]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Preset not found.']);
+        }
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── Action: AJAX save layout preset (POST) ────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_layout_preset') {
+    header('Content-Type: application/json');
+    if (!csrf_verify()) {
+        echo json_encode(['success' => false, 'message' => 'Security token mismatch.']);
+        exit;
+    }
+    $preset_id = (int)($_POST['preset_id'] ?? 0);
+    $name = trim($_POST['name'] ?? '');
+    $elements_json = $_POST['elements_json'] ?? '';
+    $is_default = (int)($_POST['is_default'] ?? 0);
+
+    if (empty($name) || empty($elements_json)) {
+        echo json_encode(['success' => false, 'message' => 'Preset name and design elements are required.']);
+        exit;
+    }
+
+    try {
+        $pdo->beginTransaction();
+
+        if ($is_default) {
+            $pdo->exec("UPDATE card_layout_presets SET is_default = 0");
+        }
+
+        if ($preset_id > 0) {
+            $stmt = $pdo->prepare("UPDATE card_layout_presets SET name = ?, elements_json = ?, is_default = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+            $stmt->execute([$name, $elements_json, $is_default, $preset_id]);
+            $id = $preset_id;
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO card_layout_presets (name, elements_json, is_default, created_by, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)");
+            $stmt->execute([$name, $elements_json, $is_default, $_SESSION['admin_username'] ?? 'system']);
+            $id = $pdo->lastInsertId();
+        }
+
+        $pdo->commit();
+        echo json_encode(['success' => true, 'id' => $id, 'message' => 'Layout preset saved successfully.']);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── Action: AJAX delete layout preset (POST) ────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_layout_preset') {
+    header('Content-Type: application/json');
+    if (!csrf_verify()) {
+        echo json_encode(['success' => false, 'message' => 'Security token mismatch.']);
+        exit;
+    }
+    $preset_id = (int)($_POST['preset_id'] ?? 0);
+    try {
+        $stmt = $pdo->prepare("UPDATE card_layout_presets SET status = 'inactive' WHERE id = ?");
+        $stmt->execute([$preset_id]);
+        echo json_encode(['success' => true, 'message' => 'Layout preset deleted successfully.']);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // ── Action: Save Design (POST) ────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_design') {
     header('Content-Type: application/json');
@@ -132,6 +227,14 @@ if ($saved_id) {
     } catch (Exception $e) {
         $error_message = 'Failed to load saved card config: ' . $e->getMessage();
     }
+}
+
+$default_preset = null;
+if (!$saved_id) {
+    try {
+        $stmt_def = $pdo->query("SELECT * FROM card_layout_presets WHERE is_default = 1 AND status = 'active' LIMIT 1");
+        $default_preset = $stmt_def->fetch(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
 }
 
 // ── Check selection parameters ────────────
@@ -528,6 +631,24 @@ include 'includes/admin_nav.php';
                 <button class="btn btn-sm btn-outline" style="width: 100%; margin-top: 8px;" onclick="addNewStudentRankBlock()">+ Add Student Rank</button>
             </div>
 
+            <!-- Layout Format Management -->
+            <div class="prop-section" style="border-top: 1px solid #e2e8f0; padding-top: 12px; margin-top: 12px;">
+                <div class="prop-title">Layout Format</div>
+                <div class="field full" style="margin-bottom: 8px;">
+                    <select id="preset-selector" style="width: 100%; font-size: 0.8rem;" onchange="applyLayoutPreset(this.value)">
+                        <option value="">— Select Layout Format —</option>
+                    </select>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                    <button class="btn btn-sm btn-soft-violet" onclick="saveAsNewPreset()">Save as New Layout</button>
+                    <div style="display: flex; gap: 4px;">
+                        <button class="btn btn-sm btn-outline" style="flex: 1; padding: 4px; font-size: 0.75rem;" onclick="updateCurrentPreset()">Update Layout</button>
+                        <button class="btn btn-sm btn-outline" style="flex: 1; padding: 4px; font-size: 0.75rem; color: #dc2626; border-color: #fca5a5;" onclick="deleteCurrentPreset()">Delete Layout</button>
+                    </div>
+                    <button class="btn btn-sm btn-outline" id="btn-toggle-default-preset" onclick="toggleDefaultPreset()" style="font-size: 0.75rem;">Set as Default Layout</button>
+                </div>
+            </div>
+
             <!-- Active Selected Element Properties -->
             <div id="element-properties-panel" style="display: none;">
                 <div class="prop-section">
@@ -883,6 +1004,8 @@ const savedMappings = <?php echo $saved_design ? $saved_design['student_rank_map
 let elements = [];
 let studentRankMappings = {}; // mapping elementId/rank -> { student_uid, zoom, panX, panY, photo_override }
 let activeId = null;
+let selectedIds = [];
+const defaultPreset = <?php echo $default_preset ? json_encode($default_preset) : 'null'; ?>;
 
 // Undo/Redo Stacks
 let undoStack = [];
@@ -970,6 +1093,168 @@ document.addEventListener('DOMContentLoaded', async function() {
                 elements = elements.filter(el => el.id !== 'metadata');
             }
 
+            // ─── APPLY SYSTEM DEFAULT FORMATS & POSITIONS ───
+            // Apply default font sizes for new result-card designs:
+            // Student Name = 55 px
+            // Institute Name = 39 px
+            // Test Number = 157 px
+            elements = elements.map(function(el) {
+                if (el.type === 'text') {
+                    if (el.id.startsWith('rank_name_')) {
+                        el.fontSize = 55;
+                    } else if (el.id.startsWith('rank_institute_')) {
+                        el.fontSize = 39;
+                    } else if (el.id === 'test_number') {
+                        el.fontSize = 157;
+                    }
+                }
+                return el;
+            });
+
+            // Apply default content offset: move everything down slightly (e.g. +60px)
+            // applied exactly once when creating a new card
+            const defaultOffsetY = 60;
+            elements = elements.map(function(el) {
+                if (el.id !== 'test_number' && el.id !== 'chapter_name' && el.id !== 'test_name' && el.id !== 'test_date') {
+                    el.top += defaultOffsetY;
+                }
+                return el;
+            });
+
+            // ─── APPLY DEFAULT PRESET IF SET ───
+            if (defaultPreset && defaultPreset.elements_json) {
+                try {
+                    const presetElements = JSON.parse(defaultPreset.elements_json);
+                    // Map formatting and positioning using stable element IDs
+                    elements = elements.map(function(el) {
+                        const pe = presetElements.find(p => p.id === el.id);
+                        if (pe) {
+                            // Copy styling & coordinates
+                            el.left = pe.left;
+                            el.top = pe.top;
+                            el.width = pe.width;
+                            el.height = pe.height;
+                            el.fontFamily = pe.fontFamily;
+                            el.fontSize = pe.fontSize;
+                            el.fontWeight = pe.fontWeight;
+                            el.fontStyle = pe.fontStyle;
+                            el.color = pe.color;
+                            el.textAlign = pe.textAlign;
+                            el.lineHeight = pe.lineHeight;
+                            el.letterSpacing = pe.letterSpacing;
+                            el.opacity = pe.opacity;
+                            el.rotate = pe.rotate;
+                            if (el.type === 'photo') {
+                                el.mask = pe.mask;
+                            }
+                            if (pe.showMarker !== undefined) {
+                                el.showMarker = pe.showMarker;
+                                el.markerColor = pe.markerColor;
+                                el.markerBorderWidth = pe.markerBorderWidth;
+                                el.markerBorderColor = pe.markerBorderColor;
+                            }
+                        }
+                        return el;
+                    });
+                } catch(e) {
+                    console.error("Error applying default layout preset:", e);
+                }
+            }
+
+            // ─── DYNAMICALLY POPULATE TEST DETAILS ───
+            let testNameEl = elements.find(el => el.id === 'test_name');
+            if (!testNameEl) {
+                testNameEl = {
+                    id: "test_name",
+                    name: "Test Name",
+                    type: "text",
+                    textContent: "",
+                    left: 290,
+                    top: 220,
+                    width: 800,
+                    height: 60,
+                    fontFamily: "Google Sans Flex",
+                    fontSize: 48,
+                    fontWeight: "700",
+                    color: "#ffffff",
+                    textAlign: "left",
+                    lineHeight: 1.2,
+                    letterSpacing: 0,
+                    opacity: 1,
+                    rotate: 0
+                };
+                elements.push(testNameEl);
+            }
+            testNameEl.textContent = '<?php echo addslashes($activity['activity_title'] ?? ''); ?>';
+
+            let testDateEl = elements.find(el => el.id === 'test_date');
+            if (!testDateEl) {
+                testDateEl = {
+                    id: "test_date",
+                    name: "Test Date",
+                    type: "text",
+                    textContent: "",
+                    left: 290,
+                    top: 285,
+                    width: 800,
+                    height: 40,
+                    fontFamily: "Google Sans Flex",
+                    fontSize: 30,
+                    fontWeight: "400",
+                    color: "#cbd5e1",
+                    textAlign: "left",
+                    lineHeight: 1.2,
+                    letterSpacing: 0,
+                    opacity: 1,
+                    rotate: 0
+                };
+                elements.push(testDateEl);
+            }
+            let formattedDate = '';
+            const rawDate = '<?php echo $activity['activity_date'] ?? ''; ?>';
+            if (rawDate) {
+                const dObj = new Date(rawDate);
+                if (!isNaN(dObj.getTime())) {
+                    formattedDate = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                }
+            }
+            testDateEl.textContent = formattedDate;
+
+            let chapterNameEl = elements.find(el => el.id === 'chapter_name');
+            if (!chapterNameEl) {
+                chapterNameEl = {
+                    id: "chapter_name",
+                    name: "Chapter Name",
+                    type: "text",
+                    textContent: "",
+                    left: 290,
+                    top: 330,
+                    width: 800,
+                    height: 40,
+                    fontFamily: "Google Sans Flex",
+                    fontSize: 24,
+                    fontWeight: "400",
+                    color: "#f59e0b",
+                    textAlign: "left",
+                    lineHeight: 1.2,
+                    letterSpacing: 0,
+                    opacity: 1,
+                    rotate: 0
+                };
+                elements.push(chapterNameEl);
+            }
+            const chapterVal = '<?php echo addslashes($activity['chapter'] ?? ''); ?>';
+            chapterNameEl.textContent = chapterVal;
+            if (!chapterVal) {
+                chapterNameEl.visible = false;
+            }
+
+            // Auto fill test number
+            const testNumEl = elements.find(el => el.id === 'test_number');
+            if (testNumEl) {
+                testNumEl.textContent = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
+            }
+
             // Auto assign students to rank photo placeholders
             rankingList.forEach(function(student, index) {
                 const rankNum = student.computed_rank;
@@ -985,22 +1270,25 @@ document.addEventListener('DOMContentLoaded', async function() {
                     };
                 }
             });
-
-            // Auto fill chapter name and test number
-            const testNumEl = elements.find(el => el.id === 'test_number');
-            if (testNumEl) {
-                testNumEl.textContent = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
-            }
-            const chapterEl = elements.find(el => el.id === 'chapter_name');
-            if (chapterEl) {
-                chapterEl.textContent = '<?php echo addslashes($activity['activity_title']); ?>';
-            }
         }
 
         // Initialize size and register resize listener
         initCanvasSize();
         saveHistoryState(true); // Save initial state
         window.addEventListener('resize', initCanvasSize);
+
+        // Clear selection when clicking empty canvas areas
+        document.getElementById('designer-canvas').addEventListener('mousedown', function(e) {
+            if (e.target === this) {
+                selectedIds = [];
+                activeId = null;
+                drawElements();
+                updatePropertiesPanel();
+            }
+        });
+
+        // Load saved layout format presets dropdown list
+        loadPresets(defaultPreset ? defaultPreset.id : null);
 
     } catch (err) {
         console.error(err);
@@ -1122,7 +1410,7 @@ function drawElements() {
         }
 
         const div = document.createElement('div');
-        div.className = 'canvas-element' + (activeId === el.id ? ' selected' : '');
+        div.className = 'canvas-element' + (selectedIds.includes(el.id) ? ' selected' : '');
         div.style.left = el.left + 'px';
         div.style.top = el.top + 'px';
         div.style.width = el.width + 'px';
@@ -1196,12 +1484,13 @@ function drawElements() {
         // Drag handler listeners
         div.addEventListener('mousedown', function(e) {
             e.stopPropagation();
-            selectElement(el.id);
+            const isToggle = e.shiftKey || e.ctrlKey || e.metaKey;
+            selectElement(el.id, isToggle);
             startDraggingElement(e, el);
         });
 
-        // Display selection resize handles
-        if (activeId === el.id) {
+        // Display selection resize handles only if exactly 1 element is selected
+        if (selectedIds.length === 1 && activeId === el.id) {
             ['nw', 'ne', 'se', 'sw'].forEach(function(dir) {
                 const h = document.createElement('div');
                 h.className = 'resize-handle ' + dir;
@@ -1216,12 +1505,53 @@ function drawElements() {
         canvas.appendChild(div);
     });
 
+    // Render computed group border if multiple elements selected
+    if (selectedIds.length > 1) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        selectedIds.forEach(id => {
+            const selEl = elements.find(item => item.id === id);
+            if (selEl) {
+                minX = Math.min(minX, selEl.left);
+                minY = Math.min(minY, selEl.top);
+                maxX = Math.max(maxX, selEl.left + selEl.width);
+                maxY = Math.max(maxY, selEl.top + selEl.height);
+            }
+        });
+
+        if (minX !== Infinity) {
+            const groupBorder = document.createElement('div');
+            groupBorder.className = 'canvas-group-border';
+            groupBorder.style.position = 'absolute';
+            groupBorder.style.left = minX + 'px';
+            groupBorder.style.top = minY + 'px';
+            groupBorder.style.width = (maxX - minX) + 'px';
+            groupBorder.style.height = (maxY - minY) + 'px';
+            groupBorder.style.border = '2px dashed var(--accent, #7c3aed)';
+            groupBorder.style.pointerEvents = 'none';
+            groupBorder.style.zIndex = '9999';
+            canvas.appendChild(groupBorder);
+        }
+    }
+
     renderLayersSidebar();
 }
 
 // ── 3. Selection and Drag Logic ────────────
-function selectElement(id) {
-    activeId = id;
+function selectElement(id, toggleMode) {
+    if (toggleMode) {
+        if (selectedIds.includes(id)) {
+            selectedIds = selectedIds.filter(x => x !== id);
+            if (activeId === id) {
+                activeId = selectedIds[selectedIds.length - 1] || null;
+            }
+        } else {
+            selectedIds.push(id);
+            activeId = id;
+        }
+    } else {
+        selectedIds = [id];
+        activeId = id;
+    }
     drawElements();
     updatePropertiesPanel();
 }
@@ -1233,16 +1563,30 @@ function startDraggingElement(e, el) {
     const scale = transform && transform !== 'none' ? parseFloat(transform.split(',')[0].split('(')[1]) : 1;
 
     dragStartCoords = { x: e.clientX, y: e.clientY };
-    dragElementState = { left: el.left, top: el.top };
+
+    // Record initial layout positions for all selected elements
+    const dragStates = {};
+    selectedIds.forEach(function(id) {
+        const selEl = elements.find(item => item.id === id);
+        if (selEl) {
+            dragStates[id] = { left: selEl.left, top: selEl.top };
+        }
+    });
 
     // Check if dragging inside photo pan override mode
-    isDraggingPhoto = e.altKey || e.shiftKey;
+    isDraggingPhoto = e.altKey || (e.shiftKey && selectedIds.length === 1 && el.type === 'photo');
+
+    let hasDragged = false;
 
     const onMouseMove = function(event) {
         const deltaX = (event.clientX - dragStartCoords.x) / scale;
         const deltaY = (event.clientY - dragStartCoords.y) / scale;
 
-        if (isDraggingPhoto && el.type === 'photo') {
+        if (Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1) {
+            hasDragged = true;
+        }
+
+        if (isDraggingPhoto && selectedIds.length === 1 && el.type === 'photo') {
             if (!studentRankMappings[el.id]) studentRankMappings[el.id] = { zoom: 100, panX: 0, panY: 0 };
             const m = studentRankMappings[el.id];
             m.panX = Math.round((m.panX || 0) + deltaX / 5);
@@ -1250,8 +1594,15 @@ function startDraggingElement(e, el) {
             dragStartCoords = { x: event.clientX, y: event.clientY };
             drawElements();
         } else {
-            el.left = Math.round(dragElementState.left + deltaX);
-            el.top = Math.round(dragElementState.top + deltaY);
+            // Drag all selected elements in unison
+            selectedIds.forEach(function(id) {
+                const selEl = elements.find(item => item.id === id);
+                const startState = dragStates[id];
+                if (selEl && startState) {
+                    selEl.left = Math.round(startState.left + deltaX);
+                    selEl.top = Math.round(startState.top + deltaY);
+                }
+            });
             drawElements();
         }
         updatePropertiesPanel();
@@ -1260,6 +1611,16 @@ function startDraggingElement(e, el) {
     const onMouseUp = function() {
         document.removeEventListener('mousemove', onMouseMove);
         document.removeEventListener('mouseup', onMouseUp);
+
+        // If the user did a simple click (no dragging) without holding modifier keys,
+        // select only the clicked element on mouseup.
+        if (!hasDragged && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+            selectedIds = [el.id];
+            activeId = el.id;
+            drawElements();
+            updatePropertiesPanel();
+        }
+
         saveHistoryState();
     };
 
@@ -1369,7 +1730,8 @@ function updatePropertiesPanel() {
     const propPanel = document.getElementById('element-properties-panel');
     const noSelectMsg = document.getElementById('no-element-selected-message');
 
-    if (!activeId) {
+    if (selectedIds.length === 0) {
+        activeId = null;
         propPanel.style.display = 'none';
         noSelectMsg.style.display = 'block';
         return;
@@ -1378,10 +1740,20 @@ function updatePropertiesPanel() {
     propPanel.style.display = 'block';
     noSelectMsg.style.display = 'none';
 
+    // Ensure activeId is aligned with selectedIds
+    if (!selectedIds.includes(activeId)) {
+        activeId = selectedIds[selectedIds.length - 1];
+    }
+
     const el = elements.find(item => item.id === activeId);
     if (!el) return;
 
-    document.getElementById('prop-element-header').textContent = el.name;
+    if (selectedIds.length > 1) {
+        document.getElementById('prop-element-header').textContent = "Multiple Selected (" + selectedIds.length + ")";
+    } else {
+        document.getElementById('prop-element-header').textContent = el.name;
+    }
+
     document.getElementById('prop-el-x').value = el.left;
     document.getElementById('prop-el-y').value = el.top;
     document.getElementById('prop-el-w').value = el.width;
@@ -1391,11 +1763,21 @@ function updatePropertiesPanel() {
     const photoSettings = document.getElementById('prop-photo-settings');
     const markerSettings = document.getElementById('prop-marker-settings');
 
-    if (el.type === 'text') {
+    const allText = selectedIds.every(id => {
+        const item = elements.find(e => e.id === id);
+        return item && item.type === 'text';
+    });
+
+    const allPhoto = selectedIds.every(id => {
+        const item = elements.find(e => e.id === id);
+        return item && item.type === 'photo';
+    });
+
+    if (allText) {
         textSettings.style.display = 'block';
         photoSettings.style.display = 'none';
 
-        document.getElementById('prop-text-content').value = el.textContent || '';
+        document.getElementById('prop-text-content').value = selectedIds.length === 1 ? (el.textContent || '') : '— Multiple Values —';
         document.getElementById('prop-text-size').value = el.fontSize || 30;
         document.getElementById('prop-text-weight').value = el.fontWeight || '400';
         document.getElementById('prop-text-font').value = el.fontFamily || 'Google Sans Flex';
@@ -1403,7 +1785,7 @@ function updatePropertiesPanel() {
         document.getElementById('prop-text-align').value = el.textAlign || 'left';
         document.getElementById('prop-text-spacing').value = el.letterSpacing || 0;
 
-        if (el.id && el.id.startsWith('rank_badge_')) {
+        if (selectedIds.length === 1 && el.id && el.id.startsWith('rank_badge_')) {
             markerSettings.style.display = 'block';
             document.getElementById('prop-marker-show').value = el.showMarker ? 'true' : 'false';
             document.getElementById('prop-marker-color').value = el.markerColor || '#eab308';
@@ -1412,49 +1794,100 @@ function updatePropertiesPanel() {
         } else {
             markerSettings.style.display = 'none';
         }
-
-    } else if (el.type === 'photo') {
+    } else if (allPhoto) {
         textSettings.style.display = 'none';
         markerSettings.style.display = 'none';
         photoSettings.style.display = 'block';
 
-        const mapping = studentRankMappings[el.id] || { student_uid: '', zoom: 100, panX: 0, panY: 0 };
-        document.getElementById('prop-photo-student').value = mapping.student_uid || '';
-        document.getElementById('prop-photo-mask').value = el.mask || 'rounded';
-        document.getElementById('prop-photo-zoom').value = mapping.zoom || 100;
-        document.getElementById('lbl-zoom-val').textContent = mapping.zoom || 100;
-        document.getElementById('prop-photo-panx').value = mapping.panX || 0;
-        document.getElementById('prop-photo-pany').value = mapping.panY || 0;
+        if (selectedIds.length === 1) {
+            const mapping = studentRankMappings[el.id] || { student_uid: '', zoom: 100, panX: 0, panY: 0 };
+            document.getElementById('prop-photo-student').value = mapping.student_uid || '';
+            document.getElementById('prop-photo-mask').value = el.mask || 'rounded';
+            document.getElementById('prop-photo-zoom').value = mapping.zoom || 100;
+            document.getElementById('lbl-zoom-val').textContent = mapping.zoom || 100;
+            document.getElementById('prop-photo-panx').value = mapping.panX || 0;
+            document.getElementById('prop-photo-pany').value = mapping.panY || 0;
+        } else {
+            document.getElementById('prop-photo-student').value = '';
+            document.getElementById('prop-photo-mask').value = el.mask || 'rounded';
+            document.getElementById('prop-photo-zoom').value = 100;
+            document.getElementById('prop-photo-panx').value = 0;
+            document.getElementById('prop-photo-pany').value = 0;
+        }
+    } else {
+        textSettings.style.display = 'none';
+        photoSettings.style.display = 'none';
+        markerSettings.style.display = 'none';
     }
 }
 
 function updateActiveElementFromProps() {
-    if (!activeId) return;
-    const el = elements.find(item => item.id === activeId);
-    if (!el) return;
+    if (selectedIds.length === 0) return;
 
-    el.left = parseInt(document.getElementById('prop-el-x').value) || 0;
-    el.top = parseInt(document.getElementById('prop-el-y').value) || 0;
-    el.width = parseInt(document.getElementById('prop-el-w').value) || 20;
-    el.height = parseInt(document.getElementById('prop-el-h').value) || 20;
+    if (selectedIds.length > 1) {
+        const activeEl = elements.find(item => item.id === activeId);
+        if (activeEl) {
+            const newX = parseInt(document.getElementById('prop-el-x').value) || 0;
+            const newY = parseInt(document.getElementById('prop-el-y').value) || 0;
+            const newW = parseInt(document.getElementById('prop-el-w').value) || 20;
+            const newH = parseInt(document.getElementById('prop-el-h').value) || 20;
 
-    if (el.type === 'text') {
-        el.textContent = document.getElementById('prop-text-content').value;
-        el.fontSize = parseInt(document.getElementById('prop-text-size').value) || 12;
-        el.fontWeight = document.getElementById('prop-text-weight').value;
-        el.fontFamily = document.getElementById('prop-text-font').value;
-        el.color = document.getElementById('prop-text-color').value;
-        el.textAlign = document.getElementById('prop-text-align').value;
-        el.letterSpacing = parseFloat(document.getElementById('prop-text-spacing').value) || 0;
+            const deltaX = newX - activeEl.left;
+            const deltaY = newY - activeEl.top;
 
-        if (el.id && el.id.startsWith('rank_badge_')) {
-            el.showMarker = document.getElementById('prop-marker-show').value === 'true';
-            el.markerColor = document.getElementById('prop-marker-color').value;
-            el.markerBorderWidth = parseInt(document.getElementById('prop-marker-border-w').value) || 0;
-            el.markerBorderColor = document.getElementById('prop-marker-border-c').value;
+            selectedIds.forEach(id => {
+                const el = elements.find(item => item.id === id);
+                if (el) {
+                    if (id === activeId) {
+                        el.left = newX;
+                        el.top = newY;
+                        el.width = newW;
+                        el.height = newH;
+                    } else {
+                        el.left += deltaX;
+                        el.top += deltaY;
+                    }
+
+                    if (el.type === 'text') {
+                        el.fontSize = parseInt(document.getElementById('prop-text-size').value) || 12;
+                        el.fontWeight = document.getElementById('prop-text-weight').value;
+                        el.fontFamily = document.getElementById('prop-text-font').value;
+                        el.color = document.getElementById('prop-text-color').value;
+                        el.textAlign = document.getElementById('prop-text-align').value;
+                        el.letterSpacing = parseFloat(document.getElementById('prop-text-spacing').value) || 0;
+                    } else if (el.type === 'photo') {
+                        el.mask = document.getElementById('prop-photo-mask').value;
+                    }
+                }
+            });
         }
-    } else if (el.type === 'photo') {
-        el.mask = document.getElementById('prop-photo-mask').value;
+    } else {
+        const el = elements.find(item => item.id === activeId);
+        if (!el) return;
+
+        el.left = parseInt(document.getElementById('prop-el-x').value) || 0;
+        el.top = parseInt(document.getElementById('prop-el-y').value) || 0;
+        el.width = parseInt(document.getElementById('prop-el-w').value) || 20;
+        el.height = parseInt(document.getElementById('prop-el-h').value) || 20;
+
+        if (el.type === 'text') {
+            el.textContent = document.getElementById('prop-text-content').value;
+            el.fontSize = parseInt(document.getElementById('prop-text-size').value) || 12;
+            el.fontWeight = document.getElementById('prop-text-weight').value;
+            el.fontFamily = document.getElementById('prop-text-font').value;
+            el.color = document.getElementById('prop-text-color').value;
+            el.textAlign = document.getElementById('prop-text-align').value;
+            el.letterSpacing = parseFloat(document.getElementById('prop-text-spacing').value) || 0;
+
+            if (el.id && el.id.startsWith('rank_badge_')) {
+                el.showMarker = document.getElementById('prop-marker-show').value === 'true';
+                el.markerColor = document.getElementById('prop-marker-color').value;
+                el.markerBorderWidth = parseInt(document.getElementById('prop-marker-border-w').value) || 0;
+                el.markerBorderColor = document.getElementById('prop-marker-border-c').value;
+            }
+        } else if (el.type === 'photo') {
+            el.mask = document.getElementById('prop-photo-mask').value;
+        }
     }
 
     drawElements();
@@ -1709,6 +2142,204 @@ function duplicateActiveElement() {
     selectElement(clone.id);
 }
 
+// ── 7.5. Layout Preset management JS functions ────────────
+function loadPresets(selectedId) {
+    fetch('cards-result-designer.php?action=get_layout_presets')
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                const selector = document.getElementById('preset-selector');
+                selector.innerHTML = '<option value="">— Select Layout Format —</option>';
+                data.presets.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.id;
+                    opt.textContent = p.name + (parseInt(p.is_default) ? ' (Default)' : '');
+                    if (selectedId && p.id == selectedId) {
+                        opt.selected = true;
+                    }
+                    selector.appendChild(opt);
+                });
+
+                // Update default button text if current is selected
+                const val = selector.value;
+                const currentPreset = data.presets.find(p => p.id == val);
+                const defaultBtn = document.getElementById('btn-toggle-default-preset');
+                if (currentPreset) {
+                    defaultBtn.textContent = parseInt(currentPreset.is_default) ? 'Unset Default Layout' : 'Set as Default Layout';
+                } else {
+                    defaultBtn.textContent = 'Set as Default Layout';
+                }
+            }
+        });
+}
+
+function applyLayoutPreset(presetId) {
+    if (!presetId) return;
+    fetch('cards-result-designer.php?action=load_layout_preset&preset_id=' + presetId)
+        .then(res => res.json())
+        .then(data => {
+            if (data.success && data.preset) {
+                try {
+                    const presetElements = JSON.parse(data.preset.elements_json);
+
+                    // Apply formatting and positioning using stable element IDs
+                    elements = elements.map(function(el) {
+                        const pe = presetElements.find(p => p.id === el.id);
+                        if (pe) {
+                            el.left = pe.left;
+                            el.top = pe.top;
+                            el.width = pe.width;
+                            el.height = pe.height;
+                            el.fontFamily = pe.fontFamily;
+                            el.fontSize = pe.fontSize;
+                            el.fontWeight = pe.fontWeight;
+                            el.fontStyle = pe.fontStyle;
+                            el.color = pe.color;
+                            el.textAlign = pe.textAlign;
+                            el.lineHeight = pe.lineHeight;
+                            el.letterSpacing = pe.letterSpacing;
+                            el.opacity = pe.opacity;
+                            el.rotate = pe.rotate;
+                            if (el.type === 'photo') {
+                                el.mask = pe.mask;
+                            }
+                            if (pe.showMarker !== undefined) {
+                                el.showMarker = pe.showMarker;
+                                el.markerColor = pe.markerColor;
+                                el.markerBorderWidth = pe.markerBorderWidth;
+                                el.markerBorderColor = pe.markerBorderColor;
+                            }
+                        }
+                        return el;
+                    });
+
+                    drawElements();
+                    updatePropertiesPanel();
+
+                    // Update default button text
+                    const defaultBtn = document.getElementById('btn-toggle-default-preset');
+                    defaultBtn.textContent = parseInt(data.preset.is_default) ? 'Unset Default Layout' : 'Set as Default Layout';
+                } catch(e) {
+                    alert("Error parsing layout preset: " + e.message);
+                }
+            } else {
+                alert("Error loading layout: " + (data.message || 'Unknown error'));
+            }
+        });
+}
+
+function saveAsNewPreset() {
+    const name = prompt("Enter Layout Name:");
+    if (!name || !name.trim()) return;
+
+    const payload = new FormData();
+    payload.append('csrf_token', '<?php echo csrf_token(); ?>');
+    payload.append('action', 'save_layout_preset');
+    payload.append('preset_id', '0');
+    payload.append('name', name.trim());
+    payload.append('elements_json', JSON.stringify(elements));
+    payload.append('is_default', '0');
+
+    fetch('cards-result-designer.php', { method: 'POST', body: payload })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                alert(data.message);
+                loadPresets(data.id);
+            } else {
+                alert("Error: " + data.message);
+            }
+        });
+}
+
+function updateCurrentPreset() {
+    const selector = document.getElementById('preset-selector');
+    const presetId = selector.value;
+    if (!presetId) {
+        alert("Please select a layout format to update.");
+        return;
+    }
+    const name = selector.options[selector.selectedIndex].textContent.replace(' (Default)', '');
+
+    const payload = new FormData();
+    payload.append('csrf_token', '<?php echo csrf_token(); ?>');
+    payload.append('action', 'save_layout_preset');
+    payload.append('preset_id', presetId);
+    payload.append('name', name);
+    payload.append('elements_json', JSON.stringify(elements));
+    const defaultBtn = document.getElementById('btn-toggle-default-preset');
+    const isDefault = defaultBtn.textContent.includes('Unset') ? '1' : '0';
+    payload.append('is_default', isDefault);
+
+    fetch('cards-result-designer.php', { method: 'POST', body: payload })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                alert(data.message);
+                loadPresets(presetId);
+            } else {
+                alert("Error: " + data.message);
+            }
+        });
+}
+
+function deleteCurrentPreset() {
+    const selector = document.getElementById('preset-selector');
+    const presetId = selector.value;
+    if (!presetId) {
+        alert("Please select a layout format to delete.");
+        return;
+    }
+    if (!confirm("Are you sure you want to delete this layout format?")) return;
+
+    const payload = new FormData();
+    payload.append('csrf_token', '<?php echo csrf_token(); ?>');
+    payload.append('action', 'delete_layout_preset');
+    payload.append('preset_id', presetId);
+
+    fetch('cards-result-designer.php', { method: 'POST', body: payload })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                alert(data.message);
+                loadPresets();
+            } else {
+                alert("Error: " + data.message);
+            }
+        });
+}
+
+function toggleDefaultPreset() {
+    const selector = document.getElementById('preset-selector');
+    const presetId = selector.value;
+    if (!presetId) {
+        alert("Please select a layout format first.");
+        return;
+    }
+    const name = selector.options[selector.selectedIndex].textContent.replace(' (Default)', '');
+    const defaultBtn = document.getElementById('btn-toggle-default-preset');
+    const makeDefault = defaultBtn.textContent.includes('Set as') ? '1' : '0';
+
+    const payload = new FormData();
+    payload.append('csrf_token', '<?php echo csrf_token(); ?>');
+    payload.append('action', 'save_layout_preset');
+    payload.append('preset_id', presetId);
+    payload.append('name', name);
+    payload.append('elements_json', JSON.stringify(elements));
+    payload.append('is_default', makeDefault);
+
+    fetch('cards-result-designer.php', { method: 'POST', body: payload })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                alert(data.message);
+                loadPresets(presetId);
+            } else {
+                alert("Error: " + data.message);
+            }
+        });
+}
+
 // ── 8. Render layers list in sidebar ────────────
 function renderLayersSidebar() {
     const list = document.getElementById('layers-list');
@@ -1718,8 +2349,11 @@ function renderLayersSidebar() {
     [...elements].reverse().forEach(function(el) {
         if (el.visible === false) return;
         const item = document.createElement('div');
-        item.className = 'layer-item' + (activeId === el.id ? ' active' : '');
-        item.onclick = () => selectElement(el.id);
+        item.className = 'layer-item' + (selectedIds.includes(el.id) ? ' active' : '');
+        item.onclick = (e) => {
+            const isToggle = e.shiftKey || e.ctrlKey || e.metaKey;
+            selectElement(el.id, isToggle);
+        };
 
         item.innerHTML = `
             <span><i class="fas ${el.type === 'text' ? 'fa-font' : 'fa-image'}" style="margin-right:6px; color:#64748b;"></i> ${el.name}</span>
@@ -1734,36 +2368,57 @@ function renderLayersSidebar() {
 function deleteElementById(id) {
     saveHistoryState();
     elements = elements.filter(item => item.id !== id);
-    if (activeId === id) activeId = null;
+    selectedIds = selectedIds.filter(x => x !== id);
+    if (activeId === id) {
+        activeId = selectedIds[selectedIds.length - 1] || null;
+    }
     drawElements();
     updatePropertiesPanel();
 }
 
 // ── 9. Keyboard Shortcuts nudge support ────────────
 window.addEventListener('keydown', function(e) {
-    if (!activeId) return;
+    if (selectedIds.length === 0) return;
 
     // Disable nudge triggers when focused inside textareas/inputs
     const activeTag = document.activeElement.tagName.toLowerCase();
     if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') return;
-
-    const el = elements.find(item => item.id === activeId);
-    if (!el) return;
 
     let step = 1;
     if (e.shiftKey) step = 10;
 
     let moved = false;
     if (e.key === 'ArrowUp') {
-        el.top -= step; moved = true;
+        selectedIds.forEach(id => {
+            const el = elements.find(x => x.id === id);
+            if (el) el.top -= step;
+        });
+        moved = true;
     } else if (e.key === 'ArrowDown') {
-        el.top += step; moved = true;
+        selectedIds.forEach(id => {
+            const el = elements.find(x => x.id === id);
+            if (el) el.top += step;
+        });
+        moved = true;
     } else if (e.key === 'ArrowLeft') {
-        el.left -= step; moved = true;
+        selectedIds.forEach(id => {
+            const el = elements.find(x => x.id === id);
+            if (el) el.left -= step;
+        });
+        moved = true;
     } else if (e.key === 'ArrowRight') {
-        el.left += step; moved = true;
+        selectedIds.forEach(id => {
+            const el = elements.find(x => x.id === id);
+            if (el) el.left += step;
+        });
+        moved = true;
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        deleteActiveElement();
+        saveHistoryState();
+        elements = elements.filter(item => !selectedIds.includes(item.id));
+        selectedIds = [];
+        activeId = null;
+        drawElements();
+        updatePropertiesPanel();
         e.preventDefault();
         return;
     }

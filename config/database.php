@@ -134,6 +134,17 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 published_at TEXT,
                 published_by TEXT
             );
+            CREATE TABLE IF NOT EXISTS card_layout_presets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                elements_json TEXT NOT NULL,
+                is_default INTEGER DEFAULT 0,
+                created_by TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT,
+                status TEXT DEFAULT 'active'
+            );
             CREATE TABLE IF NOT EXISTS assessment_results (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 batch_id INTEGER,
@@ -329,6 +340,21 @@ try {
                 `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
                 KEY `idx_trc_activity` (`activity_id`),
                 KEY `idx_trc_template` (`template_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `card_layout_presets` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `name` VARCHAR(255) NOT NULL,
+                `description` TEXT NULL,
+                `elements_json` LONGTEXT NOT NULL,
+                `is_default` TINYINT(1) DEFAULT 0,
+                `created_by` VARCHAR(100) NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+                `status` VARCHAR(20) NOT NULL DEFAULT 'active',
+                KEY `idx_clp_is_default` (`is_default`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 
