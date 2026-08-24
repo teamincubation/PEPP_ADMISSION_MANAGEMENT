@@ -22,6 +22,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $code = trim($_POST['course_code'] ?? '');
                 $year = trim($_POST['academic_year'] ?? '');
                 $fee  = (float)($_POST['total_fee'] ?? 0);
+                if (is_credential_restricted('financials')) {
+                    $fee = 0;
+                }
                 $type = in_array($_POST['course_type'] ?? '', ['UG','PG','NCET','NET','KESA'], true) ? $_POST['course_type'] : 'UG';
                 if ($name === '') {
                     $error_message = 'Course name is required.';
@@ -42,6 +45,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $code = trim($_POST['course_code'] ?? '');
                 $year = trim($_POST['academic_year'] ?? '');
                 $fee  = (float)($_POST['total_fee'] ?? 0);
+                if (is_credential_restricted('financials') && $id) {
+                    $stmt_orig = $pdo->prepare("SELECT total_fee FROM pepp_courses WHERE id = ?");
+                    $stmt_orig->execute([$id]);
+                    $fee = (float)$stmt_orig->fetchColumn();
+                }
                 $type = in_array($_POST['course_type'] ?? '', ['UG','PG','NCET','NET','KESA'], true) ? $_POST['course_type'] : 'UG';
                 if ($id && $name !== '') {
                     // Keep enrolled students linked: pepp_course stores the name, so update it too
@@ -143,7 +151,11 @@ include 'includes/admin_nav.php';
                     <select name="course_type"><?php foreach (['UG','PG','NCET','NET','KESA'] as $t) echo "<option>$t</option>"; ?></select></div>
                 <div class="field"><label>Academic Year</label>
                     <select name="academic_year"><option value="All years">All years</option><?php foreach ($years as $y) echo '<option>' . e($y) . '</option>'; ?></select></div>
-                <div class="field"><label>Total Fee (₹)</label><input type="number" name="total_fee" min="0" step="0.01" value="0"></div>
+                <?php if (is_credential_restricted('financials')): ?>
+                    <div class="field"><label>Total Fee (₹)</label><input type="text" disabled value="***" style="background:#f1f5f9; cursor:not-allowed;"></div>
+                <?php else: ?>
+                    <div class="field"><label>Total Fee (₹)</label><input type="number" name="total_fee" min="0" step="0.01" value="0"></div>
+                <?php endif; ?>
             </div>
             <div style="display:flex; justify-content:flex-end; margin-top:14px;">
                 <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Add Course</button>
@@ -170,7 +182,7 @@ include 'includes/admin_nav.php';
                     </td>
                     <td><span class="badge violet"><?php echo e($c['course_type']); ?></span></td>
                     <td class="cell-sub"><?php echo e($c['academic_year']); ?></td>
-                    <td class="cell-main">₹<?php echo number_format((float)$c['total_fee'], 0); ?></td>
+                    <td class="cell-main"><?php echo format_financial($c['total_fee'], 0); ?></td>
                     <td>
                         <?php if ((int)$c['student_count'] > 0): ?>
                             <span class="badge blue"><?php echo (int)$c['student_count']; ?> enrolled</span>
@@ -224,7 +236,11 @@ include 'includes/admin_nav.php';
                         <select name="course_type" id="ed-type"><?php foreach (['UG','PG','NCET','NET','KESA'] as $t) echo "<option>$t</option>"; ?></select></div>
                     <div class="field"><label>Academic Year</label>
                         <select name="academic_year" id="ed-year"><option value="All years">All years</option><?php foreach ($years as $y) echo '<option>' . e($y) . '</option>'; ?></select></div>
-                    <div class="field"><label>Total Fee (₹)</label><input type="number" name="total_fee" id="ed-fee" min="0" step="0.01"></div>
+                    <?php if (is_credential_restricted('financials')): ?>
+                        <div class="field"><label>Total Fee (₹)</label><input type="text" disabled value="***" style="background:#f1f5f9; cursor:not-allowed;"></div>
+                    <?php else: ?>
+                        <div class="field"><label>Total Fee (₹)</label><input type="number" name="total_fee" id="ed-fee" min="0" step="0.01"></div>
+                    <?php endif; ?>
                 </div>
                 <div class="alert alert-warn" style="margin-top:12px; margin-bottom:0;">
                     <i class="fas fa-circle-info"></i>
@@ -247,7 +263,7 @@ function openEdit(c) {
     document.getElementById('ed-code').value = c.code;
     document.getElementById('ed-type').value = c.type;
     document.getElementById('ed-year').value = c.year;
-    document.getElementById('ed-fee').value = c.fee;
+    var edFee = document.getElementById('ed-fee'); if (edFee) edFee.value = c.fee;
     openModal('edit-modal');
 }
 </script>";

@@ -40,6 +40,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($action === 'approve') {
+            if (is_credential_restricted('financials')) {
+                echo json_encode(['success' => false, 'message' => 'Access Denied: You do not have permission to approve financial setups.']);
+                exit;
+            }
 
             if ($student['status'] === 'approved') {
                 echo json_encode(['success' => false, 'message' => 'This student application has already been approved.']);
@@ -425,20 +429,20 @@ include 'includes/admin_nav.php';
                     </td>
                     <td>
                         <div class="cell-main" style="font-size:.82rem;"><?php echo e($s['pepp_course']); ?></div>
-                        <div class="cell-sub"><?php echo e($s['pepp_academic_year']); ?> &middot; Fee ₹<?php echo number_format((float)($s['course_fee'] ?? 0), 0); ?></div>
+                        <div class="cell-sub"><?php echo e($s['pepp_academic_year']); ?> &middot; Fee <?php echo format_financial($s['course_fee'] ?? 0, 0); ?></div>
                     </td>
                     <td>
-                        <div class="cell-main">₹<?php echo number_format((float)$s['paid_amount'], 0); ?></div>
+                        <div class="cell-main"><?php echo format_financial($s['paid_amount'], 0); ?></div>
                         <div class="cell-sub"><?php echo $s['paid_date'] ? date('d M Y', strtotime($s['paid_date'])) : '-'; ?></div>
                         <?php if ((float)($s['coupon_discount'] ?? 0) > 0): ?>
                             <div style="margin-top: 4px;">
                                 <?php if (!empty($s['referral_code'])): ?>
                                     <span class="badge violet" title="Referral Code Applied" style="font-size: 0.72rem; padding: 2px 6px; display: inline-flex; align-items: center; gap: 4px;">
-                                        <i class="fas fa-gift"></i> <?php echo e($s['referral_code']); ?> (-₹<?php echo number_format((float)$s['coupon_discount'], 0); ?>)
+                                        <i class="fas fa-gift"></i> <?php echo e($s['referral_code']); ?> (-<?php echo format_financial($s['coupon_discount'], 0); ?>)
                                     </span>
                                 <?php elseif (!empty($s['applied_coupon'])): ?>
                                     <span class="badge green" title="Coupon Applied" style="font-size: 0.72rem; padding: 2px 6px; display: inline-flex; align-items: center; gap: 4px;">
-                                        <i class="fas fa-ticket"></i> <?php echo e($s['applied_coupon']); ?> (-₹<?php echo number_format((float)$s['coupon_discount'], 0); ?>)
+                                        <i class="fas fa-ticket"></i> <?php echo e($s['applied_coupon']); ?> (-<?php echo format_financial($s['coupon_discount'], 0); ?>)
                                     </span>
                                 <?php endif; ?>
                             </div>
@@ -452,14 +456,16 @@ include 'includes/admin_nav.php';
                     <td class="cell-sub"><?php echo date('d M, h:i A', strtotime($s['created_at'])); ?></td>
                     <td style="text-align:right; white-space:nowrap;">
                         <a class="btn btn-sm btn-outline" href="nonapproval-studentdetails.php?id=<?php echo urlencode($s['user_id']); ?>" title="View / edit details"><i class="fas fa-eye"></i></a>
-                        <button class="btn btn-sm btn-soft-green" onclick='openApproveModal(<?php echo json_encode([
-                            "user_id" => $s["user_id"], "name" => $s["name"],
-                            "course" => $s["pepp_course"], "fee" => (float)($s["course_fee"] ?? 0),
-                            "paid" => (float)$s["paid_amount"],
-                            "applied_coupon" => $s["applied_coupon"] ?? "",
-                            "referral_code" => $s["referral_code"] ?? "",
-                            "coupon_discount" => (float)($s["coupon_discount"] ?? 0)
-                        ], JSON_HEX_APOS | JSON_HEX_QUOT); ?>)'><i class="fas fa-check"></i> Approve</button>
+                        <?php if (!is_credential_restricted('financials')): ?>
+                            <button class="btn btn-sm btn-soft-green" onclick='openApproveModal(<?php echo json_encode([
+                                "user_id" => $s["user_id"], "name" => $s["name"],
+                                "course" => $s["pepp_course"], "fee" => (float)($s["course_fee"] ?? 0),
+                                "paid" => (float)$s["paid_amount"],
+                                "applied_coupon" => $s["applied_coupon"] ?? "",
+                                "referral_code" => $s["referral_code"] ?? "",
+                                "coupon_discount" => (float)($s["coupon_discount"] ?? 0)
+                            ], JSON_HEX_APOS | JSON_HEX_QUOT); ?>)'><i class="fas fa-check"></i> Approve</button>
+                        <?php endif; ?>
                         <button class="btn btn-sm btn-soft-red" onclick="rejectStudent('<?php echo e($s['user_id']); ?>', '<?php echo e(addslashes($s['name'])); ?>')"><i class="fas fa-xmark"></i></button>
                         <?php if (can_delete()): ?><button class="btn btn-sm btn-outline" onclick="deleteStudent('<?php echo e($s['user_id']); ?>', '<?php echo e(addslashes($s['name'])); ?>')" title="Delete registration (Super Admin)"><i class="fas fa-trash"></i></button><?php endif; ?>
                     </td>

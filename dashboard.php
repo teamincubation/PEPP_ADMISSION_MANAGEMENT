@@ -197,8 +197,8 @@ include 'includes/admin_nav.php';
             <span class="stat-label">Today's Revenue</span>
             <span class="stat-icon green"><i class="fas fa-indian-rupee-sign"></i></span>
         </div>
-        <div class="stat-value">₹<?php echo number_format($today_total, 0); ?></div>
-        <div class="stat-hint">Reg: ₹<?php echo number_format($today_reg, 0); ?> &middot; Inst: ₹<?php echo number_format($today_inst, 0); ?></div>
+        <div class="stat-value"><?php echo format_financial($today_total, 0); ?></div>
+        <div class="stat-hint">Reg: <?php echo format_financial($today_reg, 0); ?> &middot; Inst: <?php echo format_financial($today_inst, 0); ?></div>
     </div>
 
     <div class="stat-card">
@@ -206,8 +206,8 @@ include 'includes/admin_nav.php';
             <span class="stat-label">Collected (this month)</span>
             <span class="stat-icon green"><i class="fas fa-indian-rupee-sign"></i></span>
         </div>
-        <div class="stat-value">₹<?php echo number_format($month_total, 0); ?></div>
-        <div class="stat-hint">Registrations ₹<?php echo number_format($month_reg, 0); ?> &middot; Installments ₹<?php echo number_format($month_inst, 0); ?></div>
+        <div class="stat-value"><?php echo format_financial($month_total, 0); ?></div>
+        <div class="stat-hint">Registrations <?php echo format_financial($month_reg, 0); ?> &middot; Installments <?php echo format_financial($month_inst, 0); ?></div>
     </div>
 
     <div class="stat-card">
@@ -215,8 +215,8 @@ include 'includes/admin_nav.php';
             <span class="stat-label">Collected (all time)</span>
             <span class="stat-icon teal"><i class="fas fa-vault"></i></span>
         </div>
-        <div class="stat-value">₹<?php echo number_format($alltime_total, 0); ?></div>
-        <div class="stat-hint">Registrations ₹<?php echo number_format($total_reg, 0); ?> &middot; Installments ₹<?php echo number_format($total_inst, 0); ?></div>
+        <div class="stat-value"><?php echo format_financial($alltime_total, 0); ?></div>
+        <div class="stat-hint">Registrations <?php echo format_financial($total_reg, 0); ?> &middot; Installments <?php echo format_financial($total_inst, 0); ?></div>
     </div>
 
     <div class="stat-card">
@@ -224,7 +224,7 @@ include 'includes/admin_nav.php';
             <span class="stat-label">Outstanding (active)</span>
             <span class="stat-icon <?php echo $outstanding_total > 0 ? 'amber' : 'green'; ?>"><i class="fas fa-scale-balanced"></i></span>
         </div>
-        <div class="stat-value">₹<?php echo number_format($outstanding_total, 0); ?></div>
+        <div class="stat-value"><?php echo format_financial($outstanding_total, 0); ?></div>
         <div class="stat-hint">Yet to collect from active students</div>
     </div>
 </div>
@@ -246,9 +246,9 @@ include 'includes/admin_nav.php';
                 <?php else: foreach ($monthly_report as $m): ?>
                     <tr>
                         <td class="cell-main"><?php echo date('M Y', strtotime($m['ym'] . '-01')); ?></td>
-                        <td>₹<?php echo number_format((float)$m['reg'], 0); ?></td>
-                        <td>₹<?php echo number_format((float)$m['inst'], 0); ?></td>
-                        <td class="cell-main">₹<?php echo number_format((float)$m['reg'] + (float)$m['inst'], 0); ?></td>
+                        <td><?php echo format_financial($m['reg'], 0); ?></td>
+                        <td><?php echo format_financial($m['inst'], 0); ?></td>
+                        <td class="cell-main"><?php echo format_financial((float)$m['reg'] + (float)$m['inst'], 0); ?></td>
                     </tr>
                 <?php endforeach; endif; ?>
                 </tbody>
@@ -268,10 +268,10 @@ include 'includes/admin_nav.php';
                     <tr>
                         <td class="cell-main" style="max-width:260px;"><?php echo e($c['pepp_course']); ?></td>
                         <td><?php echo (int)$c['students']; ?></td>
-                        <td>₹<?php echo number_format($payable_c, 0); ?></td>
-                        <td>₹<?php echo number_format($collected_c, 0); ?>
-                            <div class="cell-sub">Reg ₹<?php echo number_format((float)$c['reg_collected'], 0); ?> · Inst ₹<?php echo number_format((float)$c['inst_collected'], 0); ?></div></td>
-                        <td><?php if ((float)$c['outstanding'] > 0): ?><span class="badge amber">₹<?php echo number_format((float)$c['outstanding'], 0); ?></span><?php else: ?><span class="badge green">Cleared</span><?php endif; ?></td>
+                        <td><?php echo format_financial($payable_c, 0); ?></td>
+                        <td><?php echo format_financial($collected_c, 0); ?>
+                            <div class="cell-sub">Reg <?php echo format_financial($c['reg_collected'], 0); ?> · Inst <?php echo format_financial($c['inst_collected'], 0); ?></div></td>
+                        <td><?php if ((float)$c['outstanding'] > 0): ?><span class="badge amber"><?php echo format_financial($c['outstanding'], 0); ?></span><?php else: ?><span class="badge green">Cleared</span><?php endif; ?></td>
                         <td style="min-width:120px;">
                             <div style="background:var(--card);border-radius:50px;height:8px;overflow:hidden;">
                                 <div style="background:var(--green);height:100%;width:<?php echo $pct; ?>%;"></div>
@@ -340,7 +340,7 @@ include 'includes/admin_nav.php';
                     </td>
                     <td><?php echo e($app['pepp_course']); ?></td>
                     <td><?php echo e($app['pepp_academic_year']); ?></td>
-                    <td>₹<?php echo number_format((float)$app['paid_amount'], 0); ?></td>
+                    <td><?php echo format_financial($app['paid_amount'], 0); ?></td>
                     <td><span class="badge <?php echo $badge; ?>"><?php echo ucfirst($status); ?></span></td>
                     <td class="cell-sub"><?php echo date('d M Y, h:i A', strtotime($app['created_at'])); ?></td>
                     <td><a class="btn btn-sm btn-outline" href="<?php echo $link; ?>"><i class="fas fa-eye"></i></a></td>
@@ -382,7 +382,7 @@ include 'includes/admin_nav.php';
                         <div class="cell-sub"><?php echo e($pay['user_id']); ?></div>
                     </td>
                     <td>#<?php echo (int)$pay['instalment_number']; ?></td>
-                    <td>₹<?php echo number_format((float)$pay['amount'], 0); ?></td>
+                    <td><?php echo format_financial($pay['amount'], 0); ?></td>
                     <td class="cell-sub"><?php echo $pay['paid_date'] ? date('d M Y', strtotime($pay['paid_date'])) : '-'; ?></td>
                     <td><span class="badge <?php echo $badge; ?>"><?php echo $label; ?></span></td>
                     <td>

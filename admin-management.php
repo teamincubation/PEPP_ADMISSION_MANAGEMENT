@@ -350,6 +350,9 @@ include 'includes/admin_nav.php';
                         <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
                             <input type="checkbox" name="credential_visibility_scopes[]" value="student-study-reports" style="width:16px; height:16px; accent-color:var(--accent);"> Student Reports
                         </label>
+                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                            <input type="checkbox" name="credential_visibility_scopes[]" value="financials" style="width:16px; height:16px; accent-color:var(--accent);"> Financials
+                        </label>
                     </div>
                 </div>
                 <div class="field" style="grid-column: span 2; margin-top:-4px; margin-bottom:12px;">
@@ -452,6 +455,9 @@ include 'includes/admin_nav.php';
                             </label>
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
                                 <input type="checkbox" name="credential_visibility_scopes[]" value="student-study-reports" class="pm-scope" data-scope="student-study-reports" style="width:16px; height:16px; accent-color:var(--accent);"> Student Reports
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="financials" class="pm-scope" data-scope="financials" style="width:16px; height:16px; accent-color:var(--accent);"> Financials
                             </label>
                         </div>
                     </div>

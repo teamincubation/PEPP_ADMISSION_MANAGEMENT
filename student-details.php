@@ -314,6 +314,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_
     if (!csrf_verify()) {
         $error = 'Security token mismatch. Please retry.';
     } else {
+        if (is_credential_restricted('financials')) {
+            throw new Exception("Access Denied: You do not have permission to modify financial details.");
+        }
         try {
             $new_discount = max(0, floatval($_POST['discount_amount'] ?? 0));
             $new_plan = $_POST['payment_plan'] ?? 'One Time';
@@ -616,6 +619,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !in_array(($_POST['action'] ?? ''),
             $set = []; $vals = []; $changed = [];
             foreach ($editable as $f) {
                 if (!isset($_POST[$f])) continue;
+                if (is_credential_restricted('financials') && $f === 'discount_amount') continue;
                 $v = trim((string)$_POST[$f]);
                 if (!is_super_admin() && ($admin_credential_visibility === 'hide' || $admin_credential_visibility === 'mask')) {
                     if (in_array($f, ['email', 'whatsapp_number', 'mobile_number', 'postal_address'], true)) {
@@ -757,18 +761,18 @@ include 'includes/admin_nav.php';
 <div class="stats-grid">
     <div class="stat-card">
         <div class="stat-top"><span class="stat-label">Net Payable</span><span class="stat-icon violet"><i class="fas fa-tag"></i></span></div>
-        <div class="stat-value">₹<?php echo number_format($net_payable, 0); ?></div>
-        <div class="stat-hint">After ₹<?php echo number_format((float)$student['discount_amount'], 0); ?> discount</div>
+        <div class="stat-value"><?php echo format_financial($net_payable, 0); ?></div>
+        <div class="stat-hint">After <?php echo format_financial($student['discount_amount'], 0); ?> discount</div>
     </div>
     <div class="stat-card">
         <div class="stat-top"><span class="stat-label">Collected</span><span class="stat-icon green"><i class="fas fa-indian-rupee-sign"></i></span></div>
-        <div class="stat-value">₹<?php echo number_format($total_collected, 0); ?></div>
-        <div class="stat-hint">Reg ₹<?php echo number_format($reg_paid, 0); ?> · Installments ₹<?php echo number_format($inst_paid, 0); ?></div>
+        <div class="stat-value"><?php echo format_financial($total_collected, 0); ?></div>
+        <div class="stat-hint">Reg <?php echo format_financial($reg_paid, 0); ?> · Installments <?php echo format_financial($inst_paid, 0); ?></div>
     </div>
     <div class="stat-card">
         <div class="stat-top"><span class="stat-label">Balance</span><span class="stat-icon <?php echo $balance > 0 ? 'amber' : 'green'; ?>"><i class="fas fa-scale-balanced"></i></span></div>
-        <div class="stat-value">₹<?php echo number_format($balance, 0); ?></div>
-        <div class="stat-hint">Scheduled installments ₹<?php echo number_format($inst_due, 0); ?></div>
+        <div class="stat-value"><?php echo format_financial($balance, 0); ?></div>
+        <div class="stat-hint">Scheduled installments <?php echo format_financial($inst_due, 0); ?></div>
     </div>
     <div class="stat-card">
         <div class="stat-top"><span class="stat-label">Plan</span><span class="stat-icon blue"><i class="fas fa-calendar-days"></i></span></div>
@@ -814,9 +818,9 @@ include 'includes/admin_nav.php';
             <div class="detail-row"><div class="dl">Registered</div><div class="dv"><?php echo date('d M Y, h:i A', strtotime($student['created_at'])); ?><?php echo $student['ip_address'] ? ' · IP ' . e($student['ip_address']) : ''; ?></div></div>
             <div class="detail-row"><div class="dl">Source</div><div class="dv"><?php echo e($student['how_know_pepp'] ?: '-'); ?></div></div>
             <?php if (!empty($student['referral_code'])): ?>
-                <div class="detail-row"><div class="dl">Referral Code</div><div class="dv"><span class="badge violet" style="font-size:0.75rem; padding: 2px 8px; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-gift"></i> <?php echo e($student['referral_code']); ?></span> (₹<?php echo number_format((float)$student['coupon_discount'], 0); ?> discount)</div></div>
+                <div class="detail-row"><div class="dl">Referral Code</div><div class="dv"><span class="badge violet" style="font-size:0.75rem; padding: 2px 8px; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-gift"></i> <?php echo e($student['referral_code']); ?></span> (<?php echo format_financial($student['coupon_discount'], 0); ?> discount)</div></div>
             <?php elseif (!empty($student['applied_coupon'])): ?>
-                <div class="detail-row"><div class="dl">Applied Coupon</div><div class="dv"><span class="badge green" style="font-size:0.75rem; padding: 2px 8px; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-ticket"></i> <?php echo e($student['applied_coupon']); ?></span> (₹<?php echo number_format((float)$student['coupon_discount'], 0); ?> discount)</div></div>
+                <div class="detail-row"><div class="dl">Applied Coupon</div><div class="dv"><span class="badge green" style="font-size:0.75rem; padding: 2px 8px; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-ticket"></i> <?php echo e($student['applied_coupon']); ?></span> (<?php echo format_financial($student['coupon_discount'], 0); ?> discount)</div></div>
             <?php endif; ?>
         </div>
     </div>
@@ -831,7 +835,7 @@ include 'includes/admin_nav.php';
             <?php if (can_admin_export()): ?>
                 <a class="btn btn-sm btn-soft-green" href="?user_id=<?php echo urlencode($student['user_id']); ?>&export=excel"><i class="fas fa-file-excel"></i> Export to Excel</a>
             <?php endif; ?>
-            <?php if ($student['status'] === 'approved'): ?>
+            <?php if ($student['status'] === 'approved' && !is_credential_restricted('financials')): ?>
                 <button class="btn btn-sm btn-primary" onclick="openEditInstallmentsModal()"><i class="fas fa-edit"></i> Edit Installments</button>
             <?php endif; ?>
             <a class="btn btn-sm btn-outline" href="phpinstalmentpaymentupdate.php">All payments <i class="fas fa-arrow-right"></i></a>
@@ -853,7 +857,12 @@ include 'includes/admin_nav.php';
             ?>
                 <tr>
                     <td class="cell-main">#<?php echo (int)$i['instalment_number']; ?></td>
-                    <td>₹<?php echo number_format((float)$i['amount'], 0); ?><?php if ($i['paid_amount'] && (float)$i['paid_amount'] !== (float)$i['amount']): ?><div class="cell-sub">paid ₹<?php echo number_format((float)$i['paid_amount'], 0); ?></div><?php endif; ?></td>
+                    <td>
+                        <?php echo format_financial($i['amount'], 0); ?>
+                        <?php if ($i['paid_amount'] && (float)$i['paid_amount'] !== (float)$i['amount']): ?>
+                            <div class="cell-sub">paid <?php echo format_financial($i['paid_amount'], 0); ?></div>
+                        <?php endif; ?>
+                    </td>
                     <td class="cell-sub"><?php echo date('d M Y', strtotime($i['due_date'])); ?></td>
                     <td class="cell-sub"><?php echo $i['paid_date'] ? date('d M Y', strtotime($i['paid_date'])) : '-'; ?></td>
                     <td><?php if ($i['payment_reference']): ?><a class="proof-link" href="<?php echo e($i['payment_reference']); ?>" target="_blank"><i class="fas fa-receipt"></i> View</a><?php else: ?><span class="cell-sub">-</span><?php endif; ?></td>
@@ -901,7 +910,11 @@ include 'includes/admin_nav.php';
                         <option value="Not Eligible" <?php echo $student['peppkit_eligible'] !== 'Eligible' ? 'selected' : ''; ?>>Not Eligible</option>
                         <option value="Eligible" <?php echo $student['peppkit_eligible'] === 'Eligible' ? 'selected' : ''; ?>>Eligible</option>
                     </select></div>
-                <div class="field"><label>Discount (₹)</label><input type="number" name="discount_amount" min="0" step="0.01" value="<?php echo e($student['discount_amount']); ?>"></div>
+                <?php if (is_credential_restricted('financials')): ?>
+                    <div class="field"><label>Discount (₹)</label><input type="text" disabled value="***" style="background:#f1f5f9; cursor:not-allowed;"></div>
+                <?php else: ?>
+                    <div class="field"><label>Discount (₹)</label><input type="number" name="discount_amount" min="0" step="0.01" value="<?php echo e($student['discount_amount']); ?>"></div>
+                <?php endif; ?>
                 <div class="field"><label>Discount Remark</label><input type="text" name="discount_remark" value="<?php echo e($student['discount_remark']); ?>"></div>
             </div>
             <div style="display:flex; justify-content:flex-end; margin-top:16px;">
@@ -966,7 +979,7 @@ include 'includes/admin_nav.php';
                     <td class="cell-sub"><?php echo e($h['approved_by']); ?></td>
                     <td class="cell-sub"><?php echo e($h['payment_mode']); ?><?php echo $h['account_name'] ? ' · ' . e($h['account_name']) : ''; ?></td>
                     <td class="cell-sub"><?php echo e($h['payment_plan']); ?></td>
-                    <td class="cell-sub">₹<?php echo number_format((float)$h['discount_amount'], 0); ?></td>
+                    <td class="cell-sub"><?php echo format_financial($h['discount_amount'], 0); ?></td>
                     <td class="cell-sub"><?php echo date('d M Y, h:i A', strtotime($h['approval_date'])); ?></td>
                     <td class="cell-sub"><?php echo e($h['notes'] ?: $h['discount_remark'] ?: '-'); ?></td>
                 </tr>
@@ -1238,8 +1251,8 @@ include 'includes/admin_nav.php';
 </div>
 
 <script>
-var COURSE_FEE = <?php echo (float)($student['course_fee'] ?? 0); ?>;
-var REG_PAID = <?php echo (float)($student['paid_amount'] ?? 0); ?>;
+var COURSE_FEE = <?php echo is_credential_restricted('financials') ? '0' : (float)($student['course_fee'] ?? 0); ?>;
+var REG_PAID = <?php echo is_credential_restricted('financials') ? '0' : (float)($student['paid_amount'] ?? 0); ?>;
 var EXISTING_INSTALLMENTS = <?php echo json_encode($installments, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>;
 var CURRENT_PLAN = <?php echo json_encode($student['payment_plan'] ?: 'One Time'); ?>;
 

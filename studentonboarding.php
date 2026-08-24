@@ -281,7 +281,7 @@ include 'includes/admin_nav.php';
                     </td>
                     <td>
                         <div style="font-size:.82rem;font-weight:600;"><?php echo e($s['pepp_course']); ?></div>
-                        <div class="cell-sub"><?php echo e($s['pepp_academic_year']); ?> &middot; Access End: <?php echo $s['course_duration_date'] ? date('d M Y', strtotime($s['course_duration_date'])) : 'Not Set'; ?> &middot; Reg: ₹<?php echo number_format((float)$s['paid_amount'], 2); ?></div>
+                        <div class="cell-sub"><?php echo e($s['pepp_academic_year']); ?> &middot; Access End: <?php echo $s['course_duration_date'] ? date('d M Y', strtotime($s['course_duration_date'])) : 'Not Set'; ?> &middot; Reg: <?php echo format_financial($s['paid_amount'], 2); ?></div>
                     </td>
                     <td class="cell-sub"><?php echo $s['approval_date'] ? date('d M Y', strtotime($s['approval_date'])) : '-'; ?></td>
                     <td style="white-space:nowrap;">

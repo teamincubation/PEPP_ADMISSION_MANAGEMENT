@@ -1608,6 +1608,25 @@ try {
     $url_correct = (strpos($results_code, 'cards.php?tab=test_results') !== false);
     run_assert("Cards tab redirection URL exists in results endpoint code", $url_correct === true);
 
+    echo "\n--- TEST 201: Financial Visibility Masking ---\n";
+    // Unrestricted super admin
+    $_SESSION['admin_role'] = 'super_admin';
+    $admin_credential_visibility = 'visible';
+    $admin_credential_visibility_scopes = '';
+    run_assert("Superadmin formats amount normally with currency prefix", format_financial(12500, 0) === '₹12,500');
+    run_assert("Superadmin formats decimal amount normally with currency prefix", format_financial(450.75, 2) === '₹450.75');
+
+    // Restricted normal admin with mask
+    $_SESSION['admin_role'] = 'admin';
+    $admin_credential_visibility = 'mask';
+    $admin_credential_visibility_scopes = 'financials';
+    run_assert("Restricted masked admin gets asterisks with currency prefix", format_financial(12500, 0) === '₹***');
+
+    // Restricted normal admin with hide
+    $admin_credential_visibility = 'hide';
+    $hide_html = format_financial(12500, 0);
+    run_assert("Restricted hidden admin gets blurred span", strpos($hide_html, 'filter: blur') !== false);
+
     echo "\n=== All designer improvements & UI regression automated tests passed successfully! ===\n";
 
 } catch (Exception $e) {

@@ -678,6 +678,23 @@ function format_credential_text($value, $type, $scope = 'students') {
     return $value;
 }
 
+function format_financial($amount, $decimals = 2, $currency = '₹', $scope = 'financials') {
+    if (is_credential_restricted($scope)) {
+        global $admin_credential_visibility;
+        $vis = $admin_credential_visibility ?? 'visible';
+        if ($vis === 'hide') {
+            return '<span style="filter: blur(4.5px); -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none; pointer-events: none; display: inline-block;">' . ($currency ? $currency : '') . 'xx,xxx.xx</span>';
+        }
+        if ($vis === 'mask') {
+            return ($currency ? $currency : '') . '***';
+        }
+    }
+    if ($amount === null || $amount === '') return '';
+    $formatted = (is_numeric($amount) ? number_format((float)$amount, $decimals) : $amount);
+    return ($currency ? $currency : '') . $formatted;
+}
+
+
 function ld_tables_exist($pdo) {
     static $exists = null;
     if ($exists === null) {

@@ -75,9 +75,9 @@ try {
             'pepp_course' => $student['pepp_course'],
             'pepp_academic_year' => $student['pepp_academic_year'],
             'status' => $student['status'],
-            'total_fee' => number_format($totalPayable),
-            'total_paid' => number_format($collected),
-            'balance' => number_format($balance),
+            'total_fee' => is_credential_restricted('financials') ? (($admin_credential_visibility ?? 'visible') === 'hide' ? 'x,xxx' : '***') : number_format($totalPayable),
+            'total_paid' => is_credential_restricted('financials') ? (($admin_credential_visibility ?? 'visible') === 'hide' ? 'x,xxx' : '***') : number_format($collected),
+            'balance' => is_credential_restricted('financials') ? (($admin_credential_visibility ?? 'visible') === 'hide' ? 'x,xxx' : '***') : number_format($balance),
             'next_due_date' => $nextDueDate
         ],
         'active_reminders' => $queueItems

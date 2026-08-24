@@ -395,7 +395,7 @@ include 'includes/admin_nav.php';
     </div>
     <div class="stat-card">
         <div class="stat-top"><span class="stat-label">Collected</span><span class="stat-icon violet"><i class="fas fa-indian-rupee-sign"></i></span></div>
-        <div class="stat-value">₹<?php echo number_format($stats['collected'], 0); ?></div>
+        <div class="stat-value"><?php echo format_financial($stats['collected'], 0); ?></div>
         <div class="stat-hint">Total installment revenue</div>
     </div>
 </div>
@@ -471,9 +471,10 @@ include 'includes/admin_nav.php';
                         <div class="cell-sub"><?php echo e($r['pepp_academic_year']); ?></div>
                     </td>
                     <td class="cell-main">#<?php echo (int)$r['instalment_number']; ?></td>
-                    <td>₹<?php echo number_format((float)$r['amount'], 0); ?>
+                    <td>
+                        <?php echo format_financial($r['amount'], 0); ?>
                         <?php if ($r['paid_amount'] && (float)$r['paid_amount'] !== (float)$r['amount']): ?>
-                            <div class="cell-sub">paid ₹<?php echo number_format((float)$r['paid_amount'], 0); ?></div>
+                            <div class="cell-sub">paid <?php echo format_financial($r['paid_amount'], 0); ?></div>
                         <?php endif; ?>
                     </td>
                     <td>

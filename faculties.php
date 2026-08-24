@@ -59,10 +59,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
                     $error_message = 'Please enter a valid email address (or leave blank).';
                 } else {
+                    $rate_live = (float)($_POST['rate_live'] ?? 0);
+                    $rate_qpd = (float)($_POST['rate_qpd'] ?? 0);
+                    $rate_recorded = (float)($_POST['rate_recorded'] ?? 0);
+                    $rate_offline = (float)($_POST['rate_offline'] ?? 0);
+
+                    if (is_credential_restricted('financials')) {
+                        if ($action === 'edit_faculty') {
+                            $fid = (int)($_POST['faculty_id'] ?? 0);
+                            $stmt = $pdo->prepare("SELECT rate_live, rate_qpd, rate_recorded, rate_offline FROM faculties WHERE id = ?");
+                            $stmt->execute([$fid]);
+                            $orig_rates = $stmt->fetch();
+                            if ($orig_rates) {
+                                $rate_live = (float)$orig_rates['rate_live'];
+                                $rate_qpd = (float)$orig_rates['rate_qpd'];
+                                $rate_recorded = (float)$orig_rates['rate_recorded'];
+                                $rate_offline = (float)$orig_rates['rate_offline'];
+                            }
+                        } else {
+                            $rate_live = 0;
+                            $rate_qpd = 0;
+                            $rate_recorded = 0;
+                            $rate_offline = 0;
+                        }
+                    }
+
                     $vals = [
                         $name, $mobile, $email ?: null,
-                        (float)($_POST['rate_live'] ?? 0), (float)($_POST['rate_qpd'] ?? 0),
-                        (float)($_POST['rate_recorded'] ?? 0), (float)($_POST['rate_offline'] ?? 0),
+                        $rate_live, $rate_qpd, $rate_recorded, $rate_offline,
                         trim($_POST['academic_year'] ?? '') ?: null,
                         in_array($_POST['status'] ?? '', ['active', 'inactive'], true) ? $_POST['status'] : 'active',
                     ];
@@ -177,9 +201,9 @@ include 'includes/admin_nav.php';
 
 <div class="stats-grid">
     <div class="stat-card"><div class="stat-top"><span class="stat-label">Completed Schedules</span><span class="stat-icon green"><i class="fas fa-circle-check"></i></span></div><div class="stat-value"><?php echo (int)$detail_calc['completed']; ?></div><div class="stat-hint"><?php echo (int)$detail_calc['pending']; ?> pending</div></div>
-    <div class="stat-card"><div class="stat-top"><span class="stat-label">Total Earned</span><span class="stat-icon violet"><i class="fas fa-indian-rupee-sign"></i></span></div><div class="stat-value">₹<?php echo number_format($detail_calc['earned'], 0); ?></div><div class="stat-hint">From completed sessions</div></div>
-    <div class="stat-card"><div class="stat-top"><span class="stat-label">Paid</span><span class="stat-icon green"><i class="fas fa-money-bill-wave"></i></span></div><div class="stat-value">₹<?php echo number_format($detail_calc['paid'], 0); ?></div><div class="stat-hint">Total paid out</div></div>
-    <div class="stat-card"><div class="stat-top"><span class="stat-label">Payment Pending</span><span class="stat-icon amber"><i class="fas fa-hourglass-half"></i></span></div><div class="stat-value">₹<?php echo number_format($detail_calc['due'], 0); ?></div><div class="stat-hint">Earned minus paid</div></div>
+    <div class="stat-card"><div class="stat-top"><span class="stat-label">Total Earned</span><span class="stat-icon violet"><i class="fas fa-indian-rupee-sign"></i></span></div><div class="stat-value"><?php echo format_financial($detail_calc['earned'], 0); ?></div><div class="stat-hint">From completed sessions</div></div>
+    <div class="stat-card"><div class="stat-top"><span class="stat-label">Paid</span><span class="stat-icon green"><i class="fas fa-money-bill-wave"></i></span></div><div class="stat-value"><?php echo format_financial($detail_calc['paid'], 0); ?></div><div class="stat-hint">Total paid out</div></div>
+    <div class="stat-card"><div class="stat-top"><span class="stat-label">Payment Pending</span><span class="stat-icon amber"><i class="fas fa-hourglass-half"></i></span></div><div class="stat-value"><?php echo format_financial($detail_calc['due'], 0); ?></div><div class="stat-hint">Earned minus paid</div></div>
 </div>
 
 <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start;" class="fac-grid">
@@ -191,13 +215,17 @@ include 'includes/admin_nav.php';
             </div>
         </div>
         <div class="panel-body">
-            <div class="alert alert-info"><i class="fas fa-circle-info"></i><span>Payment pending: <strong>₹<?php echo number_format($detail_calc['due'], 2); ?></strong></span></div>
+            <div class="alert alert-info"><i class="fas fa-circle-info"></i><span>Payment pending: <strong><?php echo format_financial($detail_calc['due'], 2); ?></strong></span></div>
             <form method="POST">
                 <?php echo csrf_field(); ?>
                 <input type="hidden" name="action" value="add_payment">
                 <input type="hidden" name="faculty_id" value="<?php echo $view_id; ?>">
                 <div class="form-grid">
-                    <div class="field"><label>Amount (₹) <span class="req">*</span></label><input type="number" step="0.01" min="0" name="amount" required value="<?php echo $detail_calc['due'] > 0 ? round($detail_calc['due'], 2) : ''; ?>"></div>
+                    <?php if (is_credential_restricted('financials')): ?>
+                        <div class="field"><label>Amount (₹) <span class="req">*</span></label><input type="text" disabled value="***" style="background:#f1f5f9; cursor:not-allowed;"></div>
+                    <?php else: ?>
+                        <div class="field"><label>Amount (₹) <span class="req">*</span></label><input type="number" step="0.01" min="0" name="amount" required value="<?php echo $detail_calc['due'] > 0 ? round($detail_calc['due'], 2) : ''; ?>"></div>
+                    <?php endif; ?>
                     <div class="field"><label>Payment Account</label><select name="payment_account_id"><option value="">-</option><?php foreach ($payment_accounts as $a): ?><option value="<?php echo (int)$a['id']; ?>"><?php echo e($a['account_name']); ?></option><?php endforeach; ?></select></div>
                     <div class="field"><label>Paid Date</label><input type="date" name="paid_date" value="<?php echo date('Y-m-d'); ?>"></div>
                     <div class="field"><label>Remarks</label><input type="text" name="remarks" placeholder="Optional"></div>
@@ -210,7 +238,7 @@ include 'includes/admin_nav.php';
                 <?php if (empty($detail_payments)): ?><div class="cell-sub">No payments yet.</div><?php else: ?>
                 <table class="data-table"><thead><tr><th>Date</th><th>Amount</th><th>Account</th><th>Remarks</th></tr></thead><tbody>
                 <?php foreach ($detail_payments as $p): ?>
-                    <tr><td class="cell-sub"><?php echo $p['paid_date'] ? date('d M Y', strtotime($p['paid_date'])) : '-'; ?></td><td class="cell-main">₹<?php echo number_format((float)$p['amount'], 0); ?></td><td class="cell-sub"><?php echo e($p['account_name'] ?: '-'); ?></td><td class="cell-sub"><?php echo e($p['remarks'] ?: '-'); ?></td></tr>
+                    <tr><td class="cell-sub"><?php echo $p['paid_date'] ? date('d M Y', strtotime($p['paid_date'])) : '-'; ?></td><td class="cell-main"><?php echo format_financial($p['amount'], 0); ?></td><td class="cell-sub"><?php echo e($p['account_name'] ?: '-'); ?></td><td class="cell-sub"><?php echo e($p['remarks'] ?: '-'); ?></td></tr>
                 <?php endforeach; ?>
                 </tbody></table>
                 <?php endif; ?>
@@ -260,11 +288,17 @@ include 'includes/admin_nav.php';
             ?>
                 <tr>
                     <td><div class="cell-main"><?php echo e($f['name']); ?></div><div class="cell-sub"><?php echo format_credential($f['mobile'], 'phone', 'faculties') ?: '-'; ?><?php echo $f['email'] ? ' · ' . format_credential($f['email'], 'email', 'faculties') : ''; ?></div></td>
-                    <td class="cell-sub">₹<?php echo (int)$f['rate_live']; ?> / ₹<?php echo (int)$f['rate_qpd']; ?> / ₹<?php echo (int)$f['rate_recorded']; ?> / ₹<?php echo (int)$f['rate_offline']; ?></td>
+                    <td class="cell-sub">
+                        <?php if (is_credential_restricted('financials')): ?>
+                            *** / *** / *** / ***
+                        <?php else: ?>
+                            ₹<?php echo (int)$f['rate_live']; ?> / ₹<?php echo (int)$f['rate_qpd']; ?> / ₹<?php echo (int)$f['rate_recorded']; ?> / ₹<?php echo (int)$f['rate_offline']; ?>
+                        <?php endif; ?>
+                    </td>
                     <td class="cell-sub"><?php echo e($f['academic_year'] ?: '-'); ?></td>
-                    <td>₹<?php echo number_format($calc['earned'], 0); ?></td>
-                    <td>₹<?php echo number_format($paid, 0); ?></td>
-                    <td><?php echo $due > 0 ? '<span class="badge amber">₹' . number_format($due, 0) . '</span>' : '<span class="badge green">Clear</span>'; ?></td>
+                    <td><?php echo format_financial($calc['earned'], 0); ?></td>
+                    <td><?php echo format_financial($paid, 0); ?></td>
+                    <td><?php echo $due > 0 ? (is_credential_restricted('financials') ? '<span class="badge amber">' . format_financial($due, 0) . '</span>' : '<span class="badge amber">₹' . number_format($due, 0) . '</span>') : '<span class="badge green">Clear</span>'; ?></td>
                     <td><span class="badge <?php echo $f['status'] === 'active' ? 'green' : 'gray'; ?>"><?php echo ucfirst($f['status']); ?></span></td>
                     <td style="text-align:right; white-space:nowrap;">
                         <a class="btn btn-sm btn-primary" href="faculties.php?view=<?php echo (int)$f['id']; ?>" title="Schedules & payments"><i class="fas fa-arrow-right"></i></a>
@@ -308,10 +342,17 @@ include 'includes/admin_nav.php';
                 </div>
                 <div class="cell-sub" style="font-weight:700; margin:14px 0 6px;">Charge / hour by session type</div>
                 <div class="form-grid">
-                    <div class="field"><label>Live Session (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_live" id="fac-rate_live" value="0"></div>
-                    <div class="field"><label>QPD (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_qpd" id="fac-rate_qpd" value="0"></div>
-                    <div class="field"><label>Recorded (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_recorded" id="fac-rate_recorded" value="0"></div>
-                    <div class="field"><label>Offline Session (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_offline" id="fac-rate_offline" value="0"></div>
+                    <?php if (is_credential_restricted('financials')): ?>
+                        <div class="field"><label>Live Session (₹/hr)</label><input type="text" disabled value="***" style="background:#f1f5f9; cursor:not-allowed;"></div>
+                        <div class="field"><label>QPD (₹/hr)</label><input type="text" disabled value="***" style="background:#f1f5f9; cursor:not-allowed;"></div>
+                        <div class="field"><label>Recorded (₹/hr)</label><input type="text" disabled value="***" style="background:#f1f5f9; cursor:not-allowed;"></div>
+                        <div class="field"><label>Offline Session (₹/hr)</label><input type="text" disabled value="***" style="background:#f1f5f9; cursor:not-allowed;"></div>
+                    <?php else: ?>
+                        <div class="field"><label>Live Session (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_live" id="fac-rate_live" value="0"></div>
+                        <div class="field"><label>QPD (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_qpd" id="fac-rate_qpd" value="0"></div>
+                        <div class="field"><label>Recorded (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_recorded" id="fac-rate_recorded" value="0"></div>
+                        <div class="field"><label>Offline Session (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_offline" id="fac-rate_offline" value="0"></div>
+                    <?php endif; ?>
                     <div class="field"><label>Status</label><select name="status" id="fac-status"><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
                 </div>
             </div>
@@ -326,7 +367,7 @@ function openFacModal() {
     document.getElementById('fac-action').value = 'add_faculty';
     document.getElementById('fac-modal-title').innerHTML = '<i class=\\\"fas fa-chalkboard-user\\\" style=\\\"color:var(--accent)\\\"></i> Add Faculty';
     ['id','name','mobile','email','year'].forEach(function(k){ var el=document.getElementById('fac-'+k); if(el) el.value=''; });
-    ['rate_live','rate_qpd','rate_recorded','rate_offline'].forEach(function(k){ document.getElementById('fac-'+k).value='0'; });
+    ['rate_live','rate_qpd','rate_recorded','rate_offline'].forEach(function(k){ var el = document.getElementById('fac-'+k); if (el) el.value='0'; });
     document.getElementById('fac-status').value='active';
     openModal('fac-modal');
 }
@@ -338,10 +379,10 @@ function editFac(f) {
     document.getElementById('fac-mobile').value = f.mobile || '';
     document.getElementById('fac-email').value = f.email || '';
     document.getElementById('fac-year').value = f.academic_year || '';
-    document.getElementById('fac-rate_live').value = f.rate_live;
-    document.getElementById('fac-rate_qpd').value = f.rate_qpd;
-    document.getElementById('fac-rate_recorded').value = f.rate_recorded;
-    document.getElementById('fac-rate_offline').value = f.rate_offline;
+    var rLive = document.getElementById('fac-rate_live'); if (rLive) rLive.value = f.rate_live;
+    var rQpd = document.getElementById('fac-rate_qpd'); if (rQpd) rQpd.value = f.rate_qpd;
+    var rRec = document.getElementById('fac-rate_recorded'); if (rRec) rRec.value = f.rate_recorded;
+    var rOff = document.getElementById('fac-rate_offline'); if (rOff) rOff.value = f.rate_offline;
     document.getElementById('fac-status').value = f.status;
     openModal('fac-modal');
 }
