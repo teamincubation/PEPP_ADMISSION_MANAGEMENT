@@ -1369,7 +1369,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                                 el.shadowY = pe.shadowY !== undefined ? pe.shadowY : 4;
                                 el.shadowBlur = pe.shadowBlur !== undefined ? pe.shadowBlur : 8;
                                 el.shadowOpacity = pe.shadowOpacity !== undefined ? pe.shadowOpacity : 0.3;
-                                el.opacity = pe.opacity !== undefined ? pe.opacity : 100;
+                                el.opacity = pe.opacity !== undefined ? (pe.opacity > 1 ? pe.opacity / 100 : pe.opacity) : 1;
                             }
                             if (pe.showMarker !== undefined) {
                                 el.showMarker = pe.showMarker;
@@ -1699,7 +1699,7 @@ function drawElements() {
             wrapper.className = 'mask-' + (el.mask || 'rounded');
 
             div.style.boxSizing = 'border-box';
-            div.style.opacity = el.opacity !== undefined ? (el.opacity / 100) : 1;
+            div.style.opacity = el.opacity !== undefined ? (el.opacity > 1 ? el.opacity / 100 : el.opacity) : 1;
 
             // Border style, color, and width
             const hasBorder = el.borderEnabled !== false && el.borderWidth && el.borderWidth > 0;
@@ -2130,8 +2130,9 @@ function updatePropertiesPanel() {
             document.getElementById('prop-photo-border-r').value = el.borderRadius !== undefined ? el.borderRadius : 12;
             document.getElementById('prop-photo-border-s').value = el.borderStyle || 'solid';
 
-            document.getElementById('prop-photo-opacity').value = el.opacity !== undefined ? el.opacity : 100;
-            document.getElementById('lbl-opacity-val').textContent = el.opacity !== undefined ? el.opacity : 100;
+            const opPercent = el.opacity !== undefined ? Math.round((el.opacity <= 1 ? el.opacity * 100 : el.opacity)) : 100;
+            document.getElementById('prop-photo-opacity').value = opPercent;
+            document.getElementById('lbl-opacity-val').textContent = opPercent;
 
             document.getElementById('prop-photo-shadow-enabled').checked = el.shadowEnabled || false;
             document.getElementById('prop-photo-shadow-x').value = el.shadowX !== undefined ? el.shadowX : 0;
@@ -2374,8 +2375,8 @@ function updateActivePhotoAppearance() {
     const el = elements.find(item => item.id === activeId);
     if (!el || el.type !== 'photo') return;
 
-    el.opacity = parseInt(document.getElementById('prop-photo-opacity').value) ?? 100;
-    document.getElementById('lbl-opacity-val').textContent = el.opacity;
+    el.opacity = parseFloat(document.getElementById('prop-photo-opacity').value) / 100;
+    document.getElementById('lbl-opacity-val').textContent = Math.round(el.opacity * 100);
 
     el.shadowEnabled = document.getElementById('prop-photo-shadow-enabled').checked;
     el.shadowX = parseInt(document.getElementById('prop-photo-shadow-x').value) || 0;
@@ -2391,7 +2392,7 @@ function resetOpacityPhoto() {
     if (!activeId) return;
     const el = elements.find(item => item.id === activeId);
     if (!el || el.type !== 'photo') return;
-    el.opacity = 100;
+    el.opacity = 1;
     document.getElementById('prop-photo-opacity').value = 100;
     document.getElementById('lbl-opacity-val').textContent = 100;
     drawElements();
@@ -2577,7 +2578,7 @@ function resetPhotoTransform() {
     el.borderStyle = tplEl.borderStyle || 'solid';
     el.mask = tplEl.mask || 'rounded';
     el.fitMode = tplEl.fitMode || 'cover';
-    el.opacity = tplEl.opacity !== undefined ? tplEl.opacity : 100;
+    el.opacity = tplEl.opacity !== undefined ? (tplEl.opacity > 1 ? tplEl.opacity / 100 : tplEl.opacity) : 1;
     el.shadowEnabled = tplEl.shadowEnabled !== undefined ? tplEl.shadowEnabled : false;
     el.shadowX = tplEl.shadowX !== undefined ? tplEl.shadowX : 0;
     el.shadowY = tplEl.shadowY !== undefined ? tplEl.shadowY : 4;
@@ -2864,7 +2865,7 @@ function applyLayoutPreset(presetId) {
                                 el.shadowY = pe.shadowY !== undefined ? pe.shadowY : 4;
                                 el.shadowBlur = pe.shadowBlur !== undefined ? pe.shadowBlur : 8;
                                 el.shadowOpacity = pe.shadowOpacity !== undefined ? pe.shadowOpacity : 0.3;
-                                el.opacity = pe.opacity !== undefined ? pe.opacity : 100;
+                                el.opacity = pe.opacity !== undefined ? (pe.opacity > 1 ? pe.opacity / 100 : pe.opacity) : 1;
                             }
                             if (pe.showMarker !== undefined) {
                                 el.showMarker = pe.showMarker;
@@ -3283,7 +3284,7 @@ function saveDesign(isExporting = false) {
                         studentImg.src = photoSrc;
                         studentImg.onload = function() {
                             ctx.save();
-                            ctx.globalAlpha = (el.opacity !== undefined ? el.opacity : 100) / 100;
+                            ctx.globalAlpha = el.opacity !== undefined ? (el.opacity > 1 ? el.opacity / 100 : el.opacity) : 1;
 
                             // Draw shadow first using the mask path
                             if (el.shadowEnabled) {

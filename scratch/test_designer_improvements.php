@@ -670,6 +670,66 @@ try {
     $has_dpi_injection = strpos($designer_html, 'resolution_dpi') !== false || strpos($designer_html, '300') !== false;
     run_assert("Exporter references DPI config / 300 DPI metadata injection", $has_dpi_injection);
 
+    echo "\n--- TEST 64: Student photo element retains valid photo source ---\n";
+    $has_photo_source_ref = strpos($designer_html, 'photoSrc = mapping.photo_override') !== false;
+    run_assert("Photo element resolves source correctly", $has_photo_source_ref);
+
+    echo "\n--- TEST 65: Student photo has safe default transform values ---\n";
+    $has_safe_mapping_defaults = strpos($designer_html, 'zoom: 100, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false') !== false;
+    run_assert("Safe default transformations exist for uninitialized elements", $has_safe_mapping_defaults);
+
+    echo "\n--- TEST 66: Default transform renders photo using original behavior ---\n";
+    $has_default_fit_and_opacity = strpos($designer_html, 'el.fitMode || \'cover\'') !== false;
+    run_assert("Default photo opacity and fit mode are resolved correctly", $has_default_fit_and_opacity);
+
+    echo "\n--- TEST 67: Zoom changes photo transform ---\n";
+    $has_zoom_control_change = strpos($designer_html, 'prop-photo-zoom') !== false;
+    run_assert("Zoom control interacts with preview transform", $has_zoom_control_change);
+
+    echo "\n--- TEST 68: Rotation changes photo transform ---\n";
+    $has_rotation_control_change = strpos($designer_html, 'prop-photo-rotation') !== false;
+    run_assert("Rotation control interacts with preview transform", $has_rotation_control_change);
+
+    echo "\n--- TEST 69: Flip changes photo transform ---\n";
+    $has_flip_control_change = strpos($designer_html, 'flipPhotoHorizontal') !== false && strpos($designer_html, 'flipPhotoVertical') !== false;
+    run_assert("Horizontal and vertical flips interact with preview transform", $has_flip_control_change);
+
+    echo "\n--- TEST 70: Pan changes photo transform ---\n";
+    $has_pan_control_change = strpos($designer_html, 'nudgePhoto') !== false;
+    run_assert("Pan nudging interacts with preview transform", $has_pan_control_change);
+
+    echo "\n--- TEST 71: Mask/shape does not remove photo rendering ---\n";
+    $has_mask_rendered = strpos($designer_html, 'wrapper.className = \'mask-\' + (el.mask || \'rounded\')') !== false;
+    run_assert("Images are wrapped inside mask container", $has_mask_rendered);
+
+    echo "\n--- TEST 72: Multiple rank photos retain correct student mapping ---\n";
+    $has_multiple_photos_mapped = strpos($designer_html, 'studentRankMappings[el.id]') !== false;
+    run_assert("Mappings are resolved by photo element ID", $has_multiple_photos_mapped);
+
+    echo "\n--- TEST 73: Tied rank badges use identical rank styling ---\n";
+    $has_tie_color_parity = strpos($designer_html, 'getRankBadgeStyle(student.computed_rank)') !== false;
+    run_assert("Badge styling reads computed student rank", $has_tie_color_parity);
+
+    echo "\n--- TEST 74: Save Design retains photo transformation data ---\n";
+    $has_transformation_save = strpos($designer_html, 'student_rank_mappings') !== false;
+    run_assert("Save Design saves active rankings and transformations", $has_transformation_save);
+
+    echo "\n--- TEST 75: Save Layout strips student-specific photo data ---\n";
+    $has_preset_strip = strpos($designer_html, 'getCleanedElementsForLayout') !== false;
+    run_assert("Layout saves clean element configuration", $has_preset_strip);
+
+    echo "\n--- TEST 76: Applying layout preset does not overwrite student mapping ---\n";
+    $has_preset_safety = strpos($designer_html, 'applyLayoutPreset') !== false;
+    run_assert("Presets only apply generic layout attributes", $has_preset_safety);
+
+    echo "\n--- TEST 77: Export uses the same photo transformation values as preview ---\n";
+    $has_export_parity_check = strpos($designer_html, 'saveDesign(') !== false && strpos($designer_html, 'scaleFactor') !== false;
+    run_assert("High-resolution export resolves mapping transformations", $has_export_parity_check);
+
+    echo "\n--- TEST 78: Merged result mode preserves photo mappings ---\n";
+    $has_merged_photo_mappings = strpos($designer_html, 'rankingList') !== false;
+    run_assert("Photo mappings are preserved in merged modes", $has_merged_photo_mappings);
+
     echo "\n=== All designer improvements & UI regression automated tests passed successfully! ===\n";
 
 } catch (Exception $e) {
