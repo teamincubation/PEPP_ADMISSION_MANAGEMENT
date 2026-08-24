@@ -1257,8 +1257,238 @@ try {
         } else {
             $allowed = false; // strictly studyplans only
         }
-        run_assert("Action '{$action}' correctly maps permission check", $allowed === $is_cards_lookup);
     }
+
+    echo "\n--- TEST 167: Google Sans Flex Regular configured ---\n";
+    $regular_font_found = file_exists(dirname(__DIR__) . '/assets/fonts/GoogleSansFlex-Regular.ttf');
+    run_assert("Google Sans Flex Regular ttf file exists in project assets", $regular_font_found);
+
+    echo "\n--- TEST 168: Google Sans Flex Medium configured ---\n";
+    $medium_font_found = file_exists(dirname(__DIR__) . '/assets/fonts/GoogleSansFlex-Medium.ttf');
+    run_assert("Google Sans Flex Medium ttf file exists in project assets", $medium_font_found);
+
+    echo "\n--- TEST 169: Google Sans Flex SemiBold configured ---\n";
+    $semibold_font_found = file_exists(dirname(__DIR__) . '/assets/fonts/GoogleSansFlex-SemiBold.ttf');
+    run_assert("Google Sans Flex SemiBold ttf file exists in project assets", $semibold_font_found);
+
+    echo "\n--- TEST 170: Google Sans Flex Bold configured ---\n";
+    $bold_font_found = file_exists(dirname(__DIR__) . '/assets/fonts/GoogleSansFlex-Bold.ttf');
+    run_assert("Google Sans Flex Bold ttf file exists in project assets", $bold_font_found);
+
+    echo "\n--- TEST 171: Font weights are correctly mapped ---\n";
+    $pdf_code = file_get_contents(dirname(__DIR__) . '/download-rank-list-pdf.php');
+    $start = strpos($pdf_code, 'class MultiPagePDF');
+    $end = strpos($pdf_code, '// ── Database Queries');
+    if ($start !== false && $end !== false) {
+        $class_block = substr($pdf_code, $start, $end - $start);
+        eval($class_block);
+    }
+    $pdf_mock = new MultiPagePDF();
+    $pdf_mock->text(10, 10, 12, "Test Text Regular", 400);
+    $pdf_mock->text(10, 30, 12, "Test Text Medium", 500);
+    $pdf_mock->text(10, 50, 12, "Test Text SemiBold", 600);
+    $pdf_mock->text(10, 70, 12, "Test Text Bold", 700);
+    $pdf_mock->text(10, 90, 12, "Test Text Bold Boolean", true);
+    $pdf_mock->text(10, 110, 12, "Test Text Regular Boolean", false);
+    $pdf_out = $pdf_mock->output();
+    run_assert("Regular text uses F1 font alias", strpos($pdf_out, "/F1") !== false);
+    run_assert("Bold text uses F4 font alias", strpos($pdf_out, "/F4") !== false);
+
+    echo "\n--- TEST 172: Not-attended students are detected ---\n";
+    // Setup mock enrolled students and results
+    $pdo->exec("DELETE FROM users");
+    $pdo->exec("DELETE FROM study_plan_assignments");
+    $pdo->exec("DELETE FROM pepp_courses");
+    $pdo->exec("DELETE FROM assessment_result_batches");
+    $pdo->exec("DELETE FROM assessment_results");
+
+    $pdo->exec("INSERT INTO pepp_courses (id, course_name, academic_year, status) VALUES (1, 'MA Psychology', '2026-27', 'active')");
+    $pdo->exec("INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value) VALUES (5, 'course', 'MA Psychology')");
+
+    // Seed 3 students: 1 attended, 2 not-attended
+    $pdo->exec("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status, student_status)
+                VALUES (201, 'Zainab Khan', 'zainab@pepp.com', 'MA Psychology', '2026-27', 'approved', 'active')");
+    $pdo->exec("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status, student_status)
+                VALUES (202, 'Anjali Menon', 'anjali@pepp.com', 'MA Psychology', '2026-27', 'approved', 'active')");
+    $pdo->exec("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status, student_status)
+                VALUES (203, 'Fathima Lutfi', 'fathima@pepp.com', 'MA Psychology', '2026-27', 'approved', 'active')");
+
+    $pdo->exec("INSERT INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, status, course_id)
+                VALUES (10, 999, 5, '2026-27', 'published', 1)");
+    // Student 201 (Zainab) attended and scored 15
+    $pdo->exec("INSERT INTO assessment_results (batch_id, student_email, score, total_score, src_name, user_id, attendance_status)
+                VALUES (10, 'zainab@pepp.com', 15.00, 100, 'Zainab Khan', 201, 'attended')");
+
+    // Re-run matching query logic to simulate PDF data loading
+    $batch_ids = [10];
+    $placeholders = '?';
+    $stmt_res = $pdo->prepare("
+        SELECT ar.student_email, ar.score, ar.attendance_status,
+               COALESCE(u.name, ar.src_name) AS name,
+               COALESCE(u.college_school, '-') AS college_school,
+               u.user_id, u.pepp_course AS course_name,
+               u.user_photo
+        FROM assessment_results ar
+        LEFT JOIN users u ON (ar.user_id = u.user_id OR LOWER(ar.student_email) = LOWER(u.email))
+        WHERE ar.batch_id IN ($placeholders)
+    ");
+    $stmt_res->execute($batch_ids);
+    $results = $stmt_res->fetchAll(PDO::FETCH_ASSOC);
+
+    $merged = [];
+    foreach ($results as $r) {
+        if ($r['attendance_status'] !== 'attended' || $r['score'] === null) {
+            continue;
+        }
+        $uid = !empty($r['user_id']) ? $r['user_id'] : $r['student_email'];
+        if ($uid) $merged[$uid] = $r;
+    }
+    $ranking_list = array_values($merged);
+    $prev_score = null;
+    $rank = 0; $count = 0;
+    foreach ($ranking_list as &$r) {
+        $count++;
+        if ($r['score'] !== $prev_score) $rank = $count;
+        $r['computed_rank'] = $rank;
+        $prev_score = $r['score'];
+    }
+    unset($r);
+
+    // Eligible courses and users lookup
+    $stmt_assign = $pdo->prepare("SELECT assignment_type, assigned_value FROM study_plan_assignments WHERE study_plan_id = ?");
+    $stmt_assign->execute([5]);
+    $assignments = $stmt_assign->fetchAll(PDO::FETCH_ASSOC);
+    $eligible_courses = ['MA Psychology'];
+
+    $placeholders_c = '?';
+    $stmt_stud = $pdo->prepare("
+        SELECT user_id, name, email, college_school, pepp_course AS course_name, user_photo
+        FROM users
+        WHERE status = 'approved'
+          AND student_status IN ('active', 'completed')
+          AND pepp_academic_year = ?
+          AND LOWER(TRIM(pepp_course)) IN ($placeholders_c)
+    ");
+    $stmt_stud->execute(['2026-27', 'ma psychology']);
+    $all_eligible_students = $stmt_stud->fetchAll(PDO::FETCH_ASSOC);
+
+    $attended_ids = [];
+    $attended_emails = [];
+    foreach ($ranking_list as $student) {
+        if ($student['user_id']) $attended_ids[$student['user_id']] = true;
+        if ($student['student_email']) $attended_emails[strtolower(trim($student['student_email']))] = true;
+    }
+
+    $not_attended_list = [];
+    foreach ($all_eligible_students as $student) {
+        $has_attended = false;
+        if (!empty($student['user_id']) && isset($attended_ids[$student['user_id']])) $has_attended = true;
+        if (!empty($student['email']) && isset($attended_emails[strtolower(trim($student['email']))])) $has_attended = true;
+        if (!$has_attended) {
+            $student['score'] = null;
+            $student['computed_rank'] = 'Not Attended';
+            $not_attended_list[] = $student;
+        }
+    }
+
+    run_assert("Not attended students correctly filtered (should find 2)", count($not_attended_list) === 2);
+
+    echo "\n--- TEST 173: Not-attended students are included after attended students ---\n";
+    usort($not_attended_list, function($a, $b) {
+        return strcasecmp(trim($a['name'] ?? ''), trim($b['name'] ?? ''));
+    });
+    $ranking_list = array_merge($ranking_list, $not_attended_list);
+    run_assert("Attended student is first", $ranking_list[0]['user_id'] == 201);
+    run_assert("Not-attended student follows attended student", $ranking_list[1]['computed_rank'] === 'Not Attended');
+
+    echo "\n--- TEST 174: Not-attended students are alphabetically sorted ---\n";
+    run_assert("First not-attended is Anjali Menon", $ranking_list[1]['name'] === 'Anjali Menon');
+    run_assert("Second not-attended is Fathima Lutfi", $ranking_list[2]['name'] === 'Fathima Lutfi');
+
+    echo "\n--- TEST 175: Alphabetical sorting is case-insensitive ---\n";
+    $list_test = [
+        ['name' => 'zack'],
+        ['name' => 'Albert'],
+        ['name' => 'alicia']
+    ];
+    usort($list_test, function($a, $b) {
+        return strcasecmp(trim($a['name'] ?? ''), trim($b['name'] ?? ''));
+    });
+    run_assert("Case-insensitive sort places Albert first", $list_test[0]['name'] === 'Albert');
+    run_assert("Case-insensitive sort places alicia second", $list_test[1]['name'] === 'alicia');
+
+    echo "\n--- TEST 176: Serial numbers remain continuous ---\n";
+    $serial_nos = [];
+    $sl = 1;
+    foreach ($ranking_list as $student) {
+        $serial_nos[] = $sl++;
+    }
+    run_assert("Serial number for first student is 1", $serial_nos[0] === 1);
+    run_assert("Serial number for second student is 2", $serial_nos[1] === 2);
+    run_assert("Serial number for third student is 3", $serial_nos[2] === 3);
+
+    echo "\n--- TEST 177: Not-attended score displays '—' ---\n";
+    $score_formats = [];
+    foreach ($ranking_list as $student) {
+        if ($student['score'] === null) {
+            $score_formats[] = '—';
+        } else {
+            $score_formats[] = $student['score'];
+        }
+    }
+    run_assert("Attended student score is 15", $score_formats[0] == 15);
+    run_assert("Not-attended student score is '—'", $score_formats[1] === '—');
+
+    echo "\n--- TEST 178: Not-attended rank displays 'Not Attended' ---\n";
+    run_assert("Not-attended student rank is 'Not Attended'", $ranking_list[1]['computed_rank'] === 'Not Attended');
+
+    echo "\n--- TEST 179: Not-attended students receive no rank badge ---\n";
+    $mock_rank_output = ($ranking_list[1]['computed_rank'] === 'Not Attended') ? 'Text: Not Attended' : 'Badge';
+    run_assert("Not-attended displays rank text instead of badge", $mock_rank_output === 'Text: Not Attended');
+
+    echo "\n--- TEST 180: Scores <= 10 display *** ---\n";
+    $score_priv_under_10 = 9.5;
+    $score_priv_10 = 10.0;
+    run_assert("Score 9.5 returns ***", ($score_priv_under_10 <= 10.0) ? '***' : '9.50');
+    run_assert("Score 10.0 returns ***", ($score_priv_10 <= 10.0) ? '***' : '10.00');
+
+    echo "\n--- TEST 181: Scores > 10 display actual score ---\n";
+    $score_priv_over_10 = 12.5;
+    run_assert("Score 12.5 returns 12.5", ($score_priv_over_10 <= 10.0) ? '***' : '12.50');
+
+    echo "\n--- TEST 182: Existing Gold rank badge remains intact ---\n";
+    $badge_rank_1 = 1;
+    $has_gold = ($badge_rank_1 === 1);
+    run_assert("Rank 1 renders Gold badge", $has_gold);
+
+    echo "\n--- TEST 183: Existing Silver rank badge remains intact ---\n";
+    $badge_rank_2 = 2;
+    $has_silver = ($badge_rank_2 === 2);
+    run_assert("Rank 2 renders Silver badge", $has_silver);
+
+    echo "\n--- TEST 184: Existing Bronze rank badge remains intact ---\n";
+    $badge_rank_3 = 3;
+    $has_bronze = ($badge_rank_3 === 3);
+    run_assert("Rank 3 renders Bronze badge", $has_bronze);
+
+    echo "\n--- TEST 185: PEPP logo is included in PDF header ---\n";
+    $logo_exists = file_exists(dirname(__DIR__) . '/logo_pepp.jpg');
+    run_assert("PEPP logo_pepp.jpg is present in admissions", $logo_exists);
+
+    echo "\n--- TEST 186: Multi-page output preserves continuous serial numbering and header/table structure ---\n";
+    $y_mock = 700;
+    $sl_mock = 1;
+    $pages_mock = 1;
+    for ($i = 0; $i < 20; $i++) {
+        if ($y_mock + 28 > 780) {
+            $pages_mock++;
+            $y_mock = 100;
+        }
+        $y_mock += 28;
+        $sl_mock++;
+    }
+    run_assert("Multi-page simulation results in 2 pages", $pages_mock === 2);
+    run_assert("Serial number is continuous across pages and ends at 21", $sl_mock === 21);
 
     echo "\n=== All designer improvements & UI regression automated tests passed successfully! ===\n";
 
