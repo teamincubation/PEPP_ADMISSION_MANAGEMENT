@@ -921,10 +921,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'migra
             ]);
 
             // 4. Record course migration history
+            $revised_schedule = 'One Time payment plan, no outstanding balance.';
+            $pending_installments = [];
+            foreach ($new_installments_data as $iNum => $inst) {
+                if ($inst['status'] === 'pending') {
+                    $pending_installments[] = $inst;
+                }
+            }
+            if (!empty($pending_installments)) {
+                $cnt = count($pending_installments);
+                $first = $pending_installments[0];
+                $formattedAmt = number_format((float)$first['amount']);
+                $formattedDate = date('d M Y', strtotime($first['due_date']));
+                if ($cnt === 1) {
+                    $revised_schedule = "1 installment of ₹{$formattedAmt}, due {$formattedDate}";
+                } else {
+                    $revised_schedule = "{$cnt} installments of ₹{$formattedAmt} each, starting {$formattedDate}";
+                }
+            }
+
             $stmt_hist = $pdo->prepare("
                 INSERT INTO student_course_migrations
-                    (user_id, old_course, old_course_id, old_course_fee, new_course, new_course_id, new_course_fee, payment_plan, paid_amount_at_migration, outstanding_before, outstanding_after, upgrade_amount, migration_reason, migrated_by, migrated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (user_id, old_course, old_course_id, old_course_fee, new_course, new_course_id, new_course_fee, payment_plan, paid_amount_at_migration, outstanding_before, outstanding_after, upgrade_amount, migration_reason, migrated_by, migrated_at, revised_installment_schedule)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
             $outstanding_before = max(0.0, $current_course_fee - $total_collected);
             $stmt_hist->execute([
@@ -942,7 +961,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'migra
                 $immediate_payment ? $immediate_amount : $upgrade_amount,
                 $migration_reason,
                 $admin_username,
-                $now_dt
+                $now_dt,
+                $revised_schedule
             ]);
 
             // 5. Generate invoice for immediate payment if completed
@@ -967,6 +987,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'migra
             }
 
             $pdo->commit();
+
+            // WhatsApp Course Migration Auto-Notification (After Commit)
+            try {
+                require_once 'includes/communication/CommunicationEngine.php';
+                $commEngine = CommunicationEngine::getInstance($pdo);
+
+                $migration_log_id = (int)$pdo->query("SELECT id FROM student_course_migrations WHERE user_id = " . $pdo->quote($user_id) . " ORDER BY id DESC LIMIT 1")->fetchColumn();
+
+                if ($migration_log_id > 0) {
+                    // Check duplicate send protection
+                    $stmtCheckDup = $pdo->prepare("
+                        SELECT COUNT(*) FROM communication_queue
+                        WHERE student_uid = ?
+                          AND event_name = 'course_migration_completed'
+                          AND template_data LIKE ?
+                    ");
+                    $stmtCheckDup->execute([$user_id, '%"migration_id":' . $migration_log_id . '%']);
+                    $already_sent = (int)$stmtCheckDup->fetchColumn() > 0;
+
+                    if (!$already_sent) {
+                        $phone = ($student_locked['whatsapp_country_code'] ?? '') . ($student_locked['whatsapp_number'] ?? '');
+
+                        if (!empty($phone)) {
+                            $contextData = [
+                                'student_uid' => $user_id,
+                                'student_name' => $student_locked['name'] ?? '',
+                                'student_id' => $user_id,
+                                'whatsapp_number' => $phone,
+                                'student_email' => $student_locked['email'] ?? '',
+                                'current_course_name' => $target_course['course_name'],
+                                'previous_course_name' => $student_locked['pepp_course'],
+                                'new_course_name' => $target_course['course_name'],
+                                'current_course_fee' => number_format($target_course_fee),
+                                'previous_course_fee' => number_format($current_course_fee),
+                                'new_course_fee' => number_format($target_course_fee),
+                                'migration_amount_paid' => number_format($immediate_payment ? $immediate_amount : 0.0),
+                                'upgrade_amount' => number_format($upgrade_amount),
+                                'outstanding_balance' => number_format($outstanding_before),
+                                'new_outstanding_balance' => number_format($new_outstanding),
+                                'migration_date' => date('d M Y', strtotime($now_dt)),
+                                'migration_reason' => $migration_reason,
+                                'total_paid' => number_format($total_collected),
+                                'registration_fee_paid' => number_format((float)($student_locked['paid_amount'] ?? 0)),
+                                'installment_paid' => number_format(max(0.0, $total_collected - (float)($student_locked['paid_amount'] ?? 0))),
+                                'payment_plan' => $new_plan,
+                                'academic_year' => $student_locked['pepp_academic_year'] ?? '',
+                                'previous_academic_year' => $student_locked['pepp_academic_year'] ?? '',
+                                'new_academic_year' => $student_locked['pepp_academic_year'] ?? '',
+                                'updated_payment_details' => $revised_schedule,
+                                'migration_id' => $migration_log_id
+                            ];
+
+                            $commEngine->sendEventNotification('course_migration_completed', $phone, $contextData, $admin_username);
+                        }
+                    }
+                }
+            } catch (Exception $commEx) {
+                error_log("Failed to queue WhatsApp course migration completed notification: " . $commEx->getMessage());
+            }
 
             status_log($pdo, $user_id, $student_locked['pepp_course'], $target_course['course_name'], "Course migrated: " . $migration_reason, $admin_username);
             track_record($pdo, $user_id, 'course_migrated', "Migrated from {$student_locked['pepp_course']} to {$target_course['course_name']}. Plan: $new_plan.$invoice_note", $admin_username);
@@ -1339,6 +1418,7 @@ include 'includes/admin_nav.php';
                     <th>Paid at Migration</th>
                     <th>Upgrade Fee</th>
                     <th>New Outstanding</th>
+                    <th>Payment Schedule</th>
                     <th>Reason</th>
                     <th>By</th>
                 </tr>
@@ -1365,6 +1445,7 @@ include 'includes/admin_nav.php';
                         <?php endif; ?>
                     </td>
                     <td class="cell-sub"><?php echo format_financial($m['outstanding_after'], 0); ?></td>
+                    <td class="cell-sub" style="font-size:0.8rem; color:#4b5563; font-weight:500;"><?php echo e($m['revised_installment_schedule'] ?? 'One Time / None'); ?></td>
                     <td class="cell-sub" style="word-break:break-word; max-width:200px;"><?php echo e($m['migration_reason']); ?></td>
                     <td class="cell-sub"><?php echo e($m['migrated_by']); ?></td>
                 </tr>

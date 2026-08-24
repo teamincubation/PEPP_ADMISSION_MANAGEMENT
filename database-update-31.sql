@@ -22,5 +22,6 @@ CREATE TABLE IF NOT EXISTS `student_course_migrations` (
     `migrated_by` VARCHAR(100) NOT NULL,
     `migrated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `status` VARCHAR(30) NOT NULL DEFAULT 'completed',
+    `revised_installment_schedule` TEXT NULL,
     KEY `idx_scm_uid` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

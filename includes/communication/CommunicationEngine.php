@@ -74,18 +74,18 @@ class CommunicationEngine {
         // Permanent recipient failure suppression check for automatic actions
         if ($channel === 'whatsapp' && !empty($normalizedRecipient) && in_array($sentBy, ['system', 'system_scheduler', 'system_test'], true)) {
             $stmtSupp = $this->pdo->prepare("
-                SELECT error_message FROM communication_queue 
-                WHERE recipient = ? AND status = 'failed' 
+                SELECT error_message FROM communication_queue
+                WHERE recipient = ? AND status = 'failed'
                   AND retry_count >= 2
                   AND (
-                    error_message LIKE '%healthy ecosystem engagement%' OR 
-                    error_message LIKE '%131026%' OR 
-                    error_message LIKE '%policy%' OR 
-                    error_message LIKE '%not in allowed list%' OR 
-                    error_message LIKE '%invalid phone number%' OR 
-                    error_message LIKE '%does not exist%' OR 
-                    error_message LIKE '%recipient%' OR 
-                    error_message LIKE '%undeliverable%' OR 
+                    error_message LIKE '%healthy ecosystem engagement%' OR
+                    error_message LIKE '%131026%' OR
+                    error_message LIKE '%policy%' OR
+                    error_message LIKE '%not in allowed list%' OR
+                    error_message LIKE '%invalid phone number%' OR
+                    error_message LIKE '%does not exist%' OR
+                    error_message LIKE '%recipient%' OR
+                    error_message LIKE '%undeliverable%' OR
                     error_message LIKE '%not a whatsapp number%' OR
                     error_message LIKE '%Suppressed%'
                   )
@@ -121,8 +121,8 @@ class CommunicationEngine {
         }
 
         $stmt = $this->pdo->prepare("
-            INSERT INTO communication_queue 
-            (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at) 
+            INSERT INTO communication_queue
+            (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ");
 
@@ -159,7 +159,7 @@ class CommunicationEngine {
                 $lng = isset($_COOKIE['pepp_lng']) && is_numeric($_COOKIE['pepp_lng']) ? (float)$_COOKIE['pepp_lng'] : null;
                 $meta = $_COOKIE['pepp_meta'] ?? null;
                 $legacyStmt = $this->pdo->prepare("
-                    INSERT INTO whatsapp_notifications (phone, message, student_name, sent_by, status, latitude, longitude, metadata, created_at, updated_at) 
+                    INSERT INTO whatsapp_notifications (phone, message, student_name, sent_by, status, latitude, longitude, metadata, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ");
                 $legacyStmt->execute([
@@ -173,7 +173,7 @@ class CommunicationEngine {
                     $meta
                 ]);
                 $legacyId = (int)$this->pdo->lastInsertId();
-                
+
                 // Store legacy ID mapping inside our queue data
                 $updateStmt = $this->pdo->prepare("UPDATE communication_queue SET error_message = ? WHERE id = ?");
                 $updateStmt->execute([
@@ -232,11 +232,11 @@ class CommunicationEngine {
         try {
             // Atomically lock and claim the queue item to prevent concurrency issues
             $this->pdo->beginTransaction();
-            
+
             $procStmt = $this->pdo->prepare("
-                UPDATE communication_queue 
-                SET status = 'processing', worker_started_at = NOW(), updated_at = NOW() 
-                WHERE id = ? 
+                UPDATE communication_queue
+                SET status = 'processing', worker_started_at = NOW(), updated_at = NOW()
+                WHERE id = ?
                   AND status IN ('pending', 'scheduled', 'failed')
                   AND next_attempt_at <= NOW()
                   AND (
@@ -247,14 +247,14 @@ class CommunicationEngine {
             ");
             $procStmt->execute([$queueId]);
             $affected = $procStmt->rowCount();
-            
+
             if ($affected === 0) {
                 $this->pdo->rollBack();
                 return false;
             }
 
             error_log("[QUEUE_CLAIM] queue_id={$queueId} claimed by worker.");
-            
+
             // Retrieve item details securely
             $stmt = $this->pdo->prepare("SELECT * FROM communication_queue WHERE id = ?");
             $stmt->execute([$queueId]);
@@ -264,19 +264,19 @@ class CommunicationEngine {
             if ($item && $item['channel'] === 'whatsapp' && in_array($item['sent_by'] ?? 'system', ['system', 'system_scheduler', 'system_test'], true)) {
                 $normalizedRecipient = self::normalizePhone($item['recipient']);
                 $stmtSupp = $this->pdo->prepare("
-                    SELECT id FROM communication_queue 
-                    WHERE recipient = ? AND status = 'failed' 
+                    SELECT id FROM communication_queue
+                    WHERE recipient = ? AND status = 'failed'
                       AND id != ?
                       AND retry_count >= 2
                       AND (
-                        error_message LIKE '%healthy ecosystem engagement%' OR 
-                        error_message LIKE '%131026%' OR 
-                        error_message LIKE '%policy%' OR 
-                        error_message LIKE '%not in allowed list%' OR 
-                        error_message LIKE '%invalid phone number%' OR 
-                        error_message LIKE '%does not exist%' OR 
-                        error_message LIKE '%recipient%' OR 
-                        error_message LIKE '%undeliverable%' OR 
+                        error_message LIKE '%healthy ecosystem engagement%' OR
+                        error_message LIKE '%131026%' OR
+                        error_message LIKE '%policy%' OR
+                        error_message LIKE '%not in allowed list%' OR
+                        error_message LIKE '%invalid phone number%' OR
+                        error_message LIKE '%does not exist%' OR
+                        error_message LIKE '%recipient%' OR
+                        error_message LIKE '%undeliverable%' OR
                         error_message LIKE '%not a whatsapp number%' OR
                         error_message LIKE '%Suppressed%'
                       )
@@ -287,11 +287,11 @@ class CommunicationEngine {
 
                 if ($hasFailedBefore) {
                     $updSupp = $this->pdo->prepare("
-                        UPDATE communication_queue 
-                        SET status = 'failed', 
-                            retry_count = 3, 
-                            error_message = 'Suppressed: WhatsApp recipient previously failed permanently', 
-                            updated_at = NOW() 
+                        UPDATE communication_queue
+                        SET status = 'failed',
+                            retry_count = 3,
+                            error_message = 'Suppressed: WhatsApp recipient previously failed permanently',
+                            updated_at = NOW()
                         WHERE id = ?
                     ");
                     $updSupp->execute([$queueId]);
@@ -323,20 +323,20 @@ class CommunicationEngine {
                     if ($currentPhone !== $queuedPhone) {
                         // Mark old queue item as failed / superseded (storing the exact mismatch reason)
                         $updStale = $this->pdo->prepare("
-                            UPDATE communication_queue 
-                            SET status = 'failed', 
-                                error_message = 'Superseded: Recipient number changed', 
-                                updated_at = NOW() 
+                            UPDATE communication_queue
+                            SET status = 'failed',
+                                error_message = 'Superseded: Recipient number changed',
+                                updated_at = NOW()
                             WHERE id = ?
                         ");
                         $updStale->execute([$queueId]);
-                        
+
                         // Try to re-enqueue for the new phone number (with duplicate check)
                         $dupStmt = $this->pdo->prepare("
-                            SELECT COUNT(*) FROM communication_queue 
-                            WHERE student_uid = ? 
+                            SELECT COUNT(*) FROM communication_queue
+                            WHERE student_uid = ?
                               AND (event_name = ? OR (event_name IS NULL AND ? IS NULL))
-                              AND recipient = ? 
+                              AND recipient = ?
                               AND status IN ('pending', 'processing', 'sent', 'delivered', 'read')
                         ");
                         $dupStmt->execute([$item['student_uid'], $item['event_name'], $item['event_name'], $currentPhone]);
@@ -344,8 +344,8 @@ class CommunicationEngine {
 
                         if ($exists === 0) {
                             $insStmt = $this->pdo->prepare("
-                                INSERT INTO communication_queue 
-                                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at) 
+                                INSERT INTO communication_queue
+                                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, ?, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                             ");
                             $insStmt->execute([
@@ -364,25 +364,25 @@ class CommunicationEngine {
                                 $item['invoice_id']
                             ]);
                             $newQueueId = (int)$this->pdo->lastInsertId();
-                            
+
                             // Update tracking table installment_whatsapp_reminders
                             $updTrack = $this->pdo->prepare("
-                                UPDATE installment_whatsapp_reminders 
-                                SET queue_id = ? 
+                                UPDATE installment_whatsapp_reminders
+                                SET queue_id = ?
                                 WHERE queue_id = ?
                             ");
                             $updTrack->execute([$newQueueId, $queueId]);
                             error_log("[QUEUE_REENQUEUED] old_queue_id={$queueId} new_queue_id={$newQueueId} student_id={$item['student_uid']} recipient={$currentPhone}");
                         }
-                        
+
                         error_log("[QUEUE_RECIPIENT_MISMATCH] queue_id={$queueId} student_uid={$item['student_uid']} queued_phone={$queuedPhone} current_phone={$currentPhone} action=superseded");
-                        
+
                         $this->pdo->commit();
                         return false; // Stop execution
                     }
                 }
             }
-            
+
             // Check campaign status and compliance if this queue item is part of a bulk campaign
             $campStmt = $this->pdo->prepare("
                 SELECT c.id as campaign_id, c.status as campaign_status, c.target_audience, r.lead_id, r.id as recipient_id
@@ -392,7 +392,7 @@ class CommunicationEngine {
             ");
             $campStmt->execute([$queueId]);
             $campInfo = $campStmt->fetch();
-            
+
             if ($campInfo) {
                 $campStatus = $campInfo['campaign_status'];
                 if ($campStatus === 'paused') {
@@ -405,36 +405,36 @@ class CommunicationEngine {
                     // Cancel queue item
                     $cancelStmt = $this->pdo->prepare("UPDATE communication_queue SET status = 'cancelled', error_message = 'Campaign cancelled', updated_at = NOW() WHERE id = ?");
                     $cancelStmt->execute([$queueId]);
-                    
+
                     // Mark recipient failed
                     $recipStmt = $this->pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = 'Campaign cancelled' WHERE id = ?");
                     $recipStmt->execute([$campInfo['recipient_id']]);
-                    
+
                     $this->pdo->commit();
                     return false;
                 }
-                
+
                 // Pre-dispatch compliance opt-out check for lead campaigns
                 if ($campInfo['target_audience'] === 'leads' && !empty($campInfo['lead_id'])) {
                     $optOutStmt = $this->pdo->prepare("SELECT is_opted_out FROM leads WHERE id = ? LIMIT 1");
                     $optOutStmt->execute([$campInfo['lead_id']]);
                     $leadOptedOut = (int)$optOutStmt->fetchColumn();
-                    
+
                     if ($leadOptedOut === 1) {
                         // Cancel queue item
                         $cancelStmt = $this->pdo->prepare("UPDATE communication_queue SET status = 'cancelled', error_message = 'Lead opted out before dispatch', updated_at = NOW() WHERE id = ?");
                         $cancelStmt->execute([$queueId]);
-                        
+
                         // Mark campaign recipient as failed/skipped
                         $recipStmt = $this->pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = 'Lead opted out before dispatch' WHERE id = ?");
                         $recipStmt->execute([$campInfo['recipient_id']]);
-                        
+
                         $this->pdo->commit();
                         return false;
                     }
                 }
             }
-            
+
             $this->pdo->commit();
 
             // ── MODE-ERA GUARD: Prevent stale/mode-incompatible WhatsApp dispatches ──
@@ -461,8 +461,8 @@ class CommunicationEngine {
                     // Mode B: META API — check if item predates the current META activation
                     try {
                         $eraStmt = $this->pdo->prepare("
-                            SELECT changed_at FROM whatsapp_mode_audit 
-                            WHERE new_mode = 'meta_api' 
+                            SELECT changed_at FROM whatsapp_mode_audit
+                            WHERE new_mode = 'meta_api'
                             ORDER BY id DESC LIMIT 1
                         ");
                         $eraStmt->execute();
@@ -479,19 +479,19 @@ class CommunicationEngine {
 
                 if ($cancelReason !== null) {
                     $cancelStmt = $this->pdo->prepare("
-                        UPDATE communication_queue 
-                        SET status = 'cancelled', 
-                            error_message = CONCAT(IFNULL(error_message, ''), ' | ', ?), 
-                            updated_at = NOW() 
+                        UPDATE communication_queue
+                        SET status = 'cancelled',
+                            error_message = CONCAT(IFNULL(error_message, ''), ' | ', ?),
+                            updated_at = NOW()
                         WHERE id = ?
                     ");
                     $cancelStmt->execute([$cancelReason, $queueId]);
-                    
+
                     // UPDATE tracking status for installment reminders to failed (only if matching and currently queued)
                     try {
                         $updRemStmt = $this->pdo->prepare("
-                            UPDATE installment_whatsapp_reminders 
-                            SET status = 'failed' 
+                            UPDATE installment_whatsapp_reminders
+                            SET status = 'failed'
                             WHERE queue_id = ? AND status = 'queued'
                         ");
                         $updRemStmt->execute([$queueId]);
@@ -506,7 +506,7 @@ class CommunicationEngine {
             $subject = $item['subject'];
             $bodyHtml = $item['body_html'];
             $bodyText = $item['body_text'];
-            
+
             $attachments = $item['attachments'] ? json_decode($item['attachments'], true) : [];
             $templateData = $item['template_data'] ? json_decode($item['template_data'], true) : [];
 
@@ -521,13 +521,13 @@ class CommunicationEngine {
                 if (strtolower($template['status']) !== 'approved') {
                     throw new Exception("Template '{$item['template_name']}' status is '{$template['status']}' (not approved). Dispatch cancelled.");
                 }
-                
+
                 // Count placeholders in template BODY
                 $meta = json_decode($template['meta_data'], true) ?: [];
                 $bodyTpl = $meta['body_text'] ?? '';
                 preg_match_all('/\{\{(\d+)\}\}/', $bodyTpl, $matches);
                 $expectedParamsCount = !empty($matches[1]) ? max(array_map('intval', $matches[1])) : 0;
-                
+
                 $providedParams = $templateData['parameters'] ?? [];
                 if (count($providedParams) < $expectedParamsCount) {
                     throw new Exception("Parameter count mismatch: Template expects {$expectedParamsCount} parameters, only " . count($providedParams) . " provided.");
@@ -548,7 +548,7 @@ class CommunicationEngine {
             }
 
             $provider = $this->getProvider($channel);
-            
+
             // Race-condition revalidation right before Meta API dispatch
             $checkStmt = $this->pdo->prepare("SELECT status, recipient, student_uid, event_name, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, sent_by, invoice_id FROM communication_queue WHERE id = ?");
             $checkStmt->execute([$queueId]);
@@ -577,10 +577,10 @@ class CommunicationEngine {
 
                         // Enqueue replacement for new number
                         $dupStmt = $this->pdo->prepare("
-                            SELECT COUNT(*) FROM communication_queue 
-                            WHERE student_uid = ? 
+                            SELECT COUNT(*) FROM communication_queue
+                            WHERE student_uid = ?
                               AND (event_name = ? OR (event_name IS NULL AND ? IS NULL))
-                              AND recipient = ? 
+                              AND recipient = ?
                               AND status IN ('pending', 'processing', 'sent', 'delivered', 'read')
                         ");
                         $dupStmt->execute([$chkItem['student_uid'], $chkItem['event_name'], $chkItem['event_name'], $currentPhone]);
@@ -588,8 +588,8 @@ class CommunicationEngine {
 
                         if ($exists === 0) {
                             $insStmt = $this->pdo->prepare("
-                                INSERT INTO communication_queue 
-                                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at) 
+                                INSERT INTO communication_queue
+                                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, ?, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                             ");
                             $insStmt->execute([
@@ -611,7 +611,7 @@ class CommunicationEngine {
 
                             // Update tracking table installment_whatsapp_reminders
                             $updTrack = $this->pdo->prepare("
-                                UPDATE installment_whatsapp_reminders 
+                                UPDATE installment_whatsapp_reminders
                                 SET queue_id = ?, status = 'queued'
                                 WHERE queue_id = ?
                             ");
@@ -622,13 +622,13 @@ class CommunicationEngine {
                     }
                 }
             }
-            
+
             // Log API request time
             $updReqStmt = $this->pdo->prepare("UPDATE communication_queue SET api_requested_at = NOW() WHERE id = ?");
             $updReqStmt->execute([$queueId]);
-            
+
             $res = $provider->sendMessage($recipient, $subject, $bodyHtml, $bodyText, $attachments, $templateData);
-            
+
             // Log API response time
             $updRespStmt = $this->pdo->prepare("UPDATE communication_queue SET api_responded_at = NOW() WHERE id = ?");
             $updRespStmt->execute([$queueId]);
@@ -636,10 +636,10 @@ class CommunicationEngine {
             if ($res && isset($res['success']) && $res['success'] === true) {
                 // Sent successfully
                 $msgId = $res['message_id'];
-                
+
                 $doneStmt = $this->pdo->prepare("
-                    UPDATE communication_queue 
-                    SET status = 'sent', message_id = ?, error_message = NULL, updated_at = NOW() 
+                    UPDATE communication_queue
+                    SET status = 'sent', message_id = ?, error_message = NULL, updated_at = NOW()
                     WHERE id = ?
                 ");
                 $doneStmt->execute([$msgId, $queueId]);
@@ -666,14 +666,14 @@ class CommunicationEngine {
 
                         $studentMatch = null;
                         $stmtMatch = $this->pdo->prepare("
-                            SELECT id, user_id, name, whatsapp_country_code, whatsapp_number 
-                            FROM users 
-                            WHERE status = 'approved' 
+                            SELECT id, user_id, name, whatsapp_country_code, whatsapp_number
+                            FROM users
+                            WHERE status = 'approved'
                               AND whatsapp_number LIKE ?
                         ");
                         $stmtMatch->execute(['%' . $last10]);
                         $allMatches = $stmtMatch->fetchAll(PDO::FETCH_ASSOC);
-                        
+
                         foreach ($allMatches as $u) {
                             $uClean = preg_replace('/\D/', '', $u['whatsapp_country_code'] . $u['whatsapp_number']);
                             $uLast10 = substr(preg_replace('/\D/', '', $u['whatsapp_number']), -10);
@@ -686,7 +686,7 @@ class CommunicationEngine {
                         $contactName = $studentMatch['name'] ?? 'Unknown WhatsApp Contact';
                         $studentUid = $studentMatch['user_id'] ?? null;
                         $studentUserId = $studentMatch['id'] ?? null;
-                        
+
                         $this->pdo->beginTransaction();
 
                         // Find or create conversation
@@ -696,12 +696,12 @@ class CommunicationEngine {
 
                         $bodyText = $item['body_text'] ?? '';
                         $renderedText = null;
-                        
+
                         if (!empty($item['template_name'])) {
                             try {
                                 $tplData = json_decode($item['template_data'] ?? '', true) ?: [];
                                 $params = $tplData['parameters'] ?? [];
-                                
+
                                 // Fetch template definition
                                 $stmtTpl = $this->pdo->prepare("SELECT meta_data FROM communication_templates WHERE template_name = ? LIMIT 1");
                                 $stmtTpl->execute([$item['template_name']]);
@@ -722,7 +722,7 @@ class CommunicationEngine {
                                 error_log("Failed to render template message at send time: " . $tplEx->getMessage());
                             }
                         }
-                        
+
                         if ($renderedText === null) {
                             $renderedText = $bodyText;
                         }
@@ -736,13 +736,13 @@ class CommunicationEngine {
                             $convId = (int)$this->pdo->lastInsertId();
                         } else {
                             $updConv = $this->pdo->prepare("
-                                UPDATE whatsapp_conversations 
-                                SET student_uid = ?, 
-                                    student_user_id = ?, 
-                                    contact_name = ?, 
-                                    last_message_text = ?, 
-                                    last_message_at = NOW(), 
-                                    updated_at = NOW() 
+                                UPDATE whatsapp_conversations
+                                SET student_uid = ?,
+                                    student_user_id = ?,
+                                    contact_name = ?,
+                                    last_message_text = ?,
+                                    last_message_at = NOW(),
+                                    updated_at = NOW()
                                 WHERE id = ?
                             ");
                             $updConv->execute([$studentUid, $studentUserId, $contactName, $renderedText, $convId]);
@@ -782,7 +782,7 @@ class CommunicationEngine {
             if ($this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
-            
+
             // Ensure api_responded_at is filled if the request was made but failed/threw exception
             try {
                 $checkStmt = $this->pdo->prepare("SELECT api_requested_at, api_responded_at FROM communication_queue WHERE id = ?");
@@ -793,7 +793,7 @@ class CommunicationEngine {
                     $updRespStmt->execute([$queueId]);
                 }
             } catch (Exception $ex_resp) {}
-            
+
             $errMsg = $e->getMessage();
             $errCode = 0;
             if (isset($provider) && $provider instanceof WhatsAppCloudProvider) {
@@ -802,7 +802,7 @@ class CommunicationEngine {
 
             $retryCount = $item ? ((int)$item['retry_count'] + 1) : 1;
             $maxRetries = ($item && $item['channel'] === 'email') ? 5 : 3;
-            
+
             $isPermanentFailure = false;
             $chan = $item ? $item['channel'] : 'whatsapp';
             if ($chan === 'whatsapp') {
@@ -834,8 +834,8 @@ class CommunicationEngine {
             }
 
             $failStmt = $this->pdo->prepare("
-                UPDATE communication_queue 
-                SET status = ?, retry_count = ?, last_retry_at = NOW(), next_attempt_at = ?, error_message = ?, updated_at = NOW() 
+                UPDATE communication_queue
+                SET status = ?, retry_count = ?, last_retry_at = NOW(), next_attempt_at = ?, error_message = ?, updated_at = NOW()
                 WHERE id = ?
             ");
             $failStmt->execute([
@@ -883,27 +883,27 @@ class CommunicationEngine {
         $stmt = $this->pdo->prepare("SELECT * FROM communication_event_mappings WHERE event_name = ? LIMIT 1");
         $stmt->execute([$eventName]);
         $mapping = $stmt->fetch();
-        
+
         if (!$mapping || empty($mapping['template_name'])) {
             return null; // Event not mapped or mapping is disabled
         }
-        
+
         $templateName = $mapping['template_name'];
-        
+
         $stmtTpl = $this->pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
         $stmtTpl->execute([$templateName]);
         $template = $stmtTpl->fetch();
-        
+
         if (!$template) {
             throw new Exception("Mapped template '{$templateName}' not found in database.");
         }
-        
+
         if (strtolower($template['status']) !== 'approved') {
             throw new Exception("Mapped template '{$templateName}' status is '{$template['status']}' (not approved).");
         }
-        
+
         $langCode = $template['language'] ?? 'en';
-        
+
         // Fetch student details from ERP if studentUid is provided
         $student = null;
         if ($studentUid) {
@@ -911,10 +911,10 @@ class CommunicationEngine {
             $stmtStud->execute([$studentUid]);
             $student = $stmtStud->fetch();
         }
-        
+
         $parameterMappings = json_decode($mapping['parameter_mappings'], true) ?: [];
         $resolvedParameters = [];
-        
+
         // Sort keys numerically to match template parameter indexes (e.g. 1, 2, 3...)
         ksort($parameterMappings);
 
@@ -926,17 +926,17 @@ class CommunicationEngine {
             try {
                 $instStmt = $this->pdo->prepare("
                     SELECT COALESCE(SUM(COALESCE(paid_amount, amount)), 0)
-                    FROM instalment_details 
+                    FROM instalment_details
                     WHERE user_id = ? AND status IN ('approved', 'paid')
                 ");
                 $instStmt->execute([$student['user_id']]);
                 $instPaid = (float)$instStmt->fetchColumn();
                 $collected += $instPaid;
             } catch (Exception $e) {}
-            
+
             try {
                 $dueStmt = $this->pdo->prepare("
-                    SELECT due_date FROM instalment_details 
+                    SELECT due_date FROM instalment_details
                     WHERE user_id = ? AND status = 'pending' AND due_date >= CURRENT_DATE
                     ORDER BY instalment_number ASC LIMIT 1
                 ");
@@ -947,11 +947,11 @@ class CommunicationEngine {
                 }
             } catch (Exception $e) {}
         }
-        
+
         foreach ($parameterMappings as $idx => $mapInfo) {
             $type = $mapInfo['type'] ?? 'variable';
             $val = $mapInfo['value'] ?? '';
-            
+
             if ($type === 'custom') {
                 $resolvedParameters[] = $val;
             } else {
@@ -961,22 +961,71 @@ class CommunicationEngine {
                 } elseif ($student) {
                     if ($val === 'student_name') {
                         $resolvedVal = $student['name'] ?? '';
+                    } elseif ($val === 'student_id') {
+                        $resolvedVal = $student['user_id'] ?? '';
+                    } elseif ($val === 'whatsapp_number') {
+                        $resolvedVal = ($student['whatsapp_country_code'] ?? '') . ($student['whatsapp_number'] ?? '');
+                    } elseif ($val === 'student_email') {
+                        $resolvedVal = $student['email'] ?? '';
+                    } elseif ($val === 'current_course_name') {
+                        $resolvedVal = $student['pepp_course'] ?? '';
+                    } elseif ($val === 'current_course_fee') {
+                        $courseFee = (float)($student['total_fee'] ?? 0) + (float)($student['discount_amount'] ?? 0);
+                        $resolvedVal = number_format($courseFee);
+                    } elseif ($val === 'total_paid') {
+                        $resolvedVal = number_format($collected);
+                    } elseif ($val === 'registration_fee_paid') {
+                        $resolvedVal = number_format((float)($student['paid_amount'] ?? 0));
+                    } elseif ($val === 'installment_paid') {
+                        $resolvedVal = number_format(max(0.0, $collected - (float)($student['paid_amount'] ?? 0)));
+                    } elseif ($val === 'payment_plan') {
+                        $resolvedVal = $student['payment_plan'] ?? '';
+                    } elseif ($val === 'number_of_installments') {
+                        try {
+                            $cntStmt = $this->pdo->prepare("SELECT COUNT(*) FROM instalment_details WHERE user_id = ?");
+                            $cntStmt->execute([$student['user_id']]);
+                            $resolvedVal = (string)$cntStmt->fetchColumn();
+                        } catch (Exception $e) {
+                            $resolvedVal = '0';
+                        }
+                    } elseif ($val === 'academic_year') {
+                        $resolvedVal = $student['pepp_academic_year'] ?? '';
+                    } elseif ($val === 'previous_academic_year') {
+                        $resolvedVal = $student['pepp_academic_year'] ?? '';
+                    } elseif ($val === 'new_academic_year') {
+                        $resolvedVal = $student['pepp_academic_year'] ?? '';
+                    } elseif ($val === 'previous_course_name') {
+                        $resolvedVal = $student['pepp_course'] ?? '';
+                    } elseif ($val === 'new_course_name') {
+                        $resolvedVal = $student['pepp_course'] ?? '';
+                    } elseif ($val === 'previous_course_fee') {
+                        $resolvedVal = '0.00';
+                    } elseif ($val === 'new_course_fee') {
+                        $resolvedVal = number_format((float)($student['total_fee'] ?? 0));
+                    } elseif ($val === 'migration_amount_paid') {
+                        $resolvedVal = '0.00';
+                    } elseif ($val === 'upgrade_amount') {
+                        $resolvedVal = '0.00';
+                    } elseif ($val === 'outstanding_balance') {
+                        $balance = max(0, (float)($student['total_fee'] ?? 0) - $collected);
+                        $resolvedVal = number_format($balance);
+                    } elseif ($val === 'new_outstanding_balance') {
+                        $balance = max(0, (float)($student['total_fee'] ?? 0) - $collected);
+                        $resolvedVal = number_format($balance);
+                    } elseif ($val === 'migration_date') {
+                        $resolvedVal = date('d M Y');
+                    } elseif ($val === 'migration_reason') {
+                        $resolvedVal = '';
                     } elseif ($val === 'application_id') {
                         $resolvedVal = $student['user_id'] ?? '';
                     } elseif ($val === 'course_name') {
                         $resolvedVal = $student['pepp_course'] ?? '';
                     } elseif ($val === 'student_phone') {
                         $resolvedVal = ($student['whatsapp_country_code'] ?? '') . ($student['whatsapp_number'] ?? '');
-                    } elseif ($val === 'student_email') {
-                        $resolvedVal = $student['email'] ?? '';
-                    } elseif ($val === 'academic_year') {
-                        $resolvedVal = $student['pepp_academic_year'] ?? '';
                     } elseif ($val === 'payment_amount' || $val === 'paid_amount') {
                         $resolvedVal = number_format((float)($student['paid_amount'] ?? 0));
                     } elseif ($val === 'paid_date') {
                         $resolvedVal = !empty($student['paid_date']) ? date('d M Y', strtotime($student['paid_date'])) : '';
-                    } elseif ($val === 'payment_plan') {
-                        $resolvedVal = $student['payment_plan'] ?? '';
                     } elseif ($val === 'payment_mode') {
                         $resolvedVal = $student['payment_mode'] ?? '';
                     } elseif ($val === 'course_fee') {
@@ -986,8 +1035,6 @@ class CommunicationEngine {
                         $resolvedVal = number_format((float)($student['discount_amount'] ?? 0));
                     } elseif ($val === 'total_payable') {
                         $resolvedVal = number_format((float)($student['total_fee'] ?? 0));
-                    } elseif ($val === 'total_paid') {
-                        $resolvedVal = number_format($collected);
                     } elseif ($val === 'balance_amount') {
                         $balance = max(0, (float)($student['total_fee'] ?? 0) - $collected);
                         $resolvedVal = number_format($balance);
@@ -1019,20 +1066,73 @@ class CommunicationEngine {
                         } catch (Exception $e) {
                             $resolvedVal = '';
                         }
+                    } elseif ($val === 'updated_payment_details') {
+                        try {
+                            $stmtInst = $this->pdo->prepare("SELECT amount, due_date FROM instalment_details WHERE user_id = ? AND status = 'pending' AND paid_date IS NULL ORDER BY instalment_number ASC");
+                            $stmtInst->execute([$student['user_id']]);
+                            $pendingInst = $stmtInst->fetchAll();
+                            if (empty($pendingInst)) {
+                                $resolvedVal = 'One Time payment plan, no outstanding balance.';
+                            } else {
+                                $count = count($pendingInst);
+                                $firstInst = $pendingInst[0];
+                                $formattedAmount = number_format((float)$firstInst['amount']);
+                                $formattedDate = date('d M Y', strtotime($firstInst['due_date']));
+                                if ($count === 1) {
+                                    $resolvedVal = "1 installment of ₹{$formattedAmount}, due {$formattedDate}";
+                                } else {
+                                    $resolvedVal = "{$count} installments of ₹{$formattedAmount} each, starting {$formattedDate}";
+                                }
+                            }
+                        } catch (Exception $e) {
+                            $resolvedVal = 'Rescheduled installments schedule';
+                        }
+                    }
+
+                    // Retrieve dynamically from migration history as fallback
+                    if (in_array($val, ['previous_course_name', 'new_course_name', 'previous_course_fee', 'new_course_fee', 'migration_amount_paid', 'upgrade_amount', 'outstanding_balance', 'new_outstanding_balance', 'migration_date', 'migration_reason', 'previous_academic_year', 'new_academic_year'], true)) {
+                        try {
+                            $migStmt = $this->pdo->prepare("SELECT * FROM student_course_migrations WHERE user_id = ? ORDER BY migrated_at DESC LIMIT 1");
+                            $migStmt->execute([$student['user_id']]);
+                            $lastMig = $migStmt->fetch();
+                            if ($lastMig) {
+                                if ($val === 'previous_course_name') {
+                                    $resolvedVal = $lastMig['old_course'];
+                                } elseif ($val === 'new_course_name') {
+                                    $resolvedVal = $lastMig['new_course'];
+                                } elseif ($val === 'previous_course_fee') {
+                                    $resolvedVal = number_format((float)$lastMig['old_course_fee']);
+                                } elseif ($val === 'new_course_fee') {
+                                    $resolvedVal = number_format((float)$lastMig['new_course_fee']);
+                                } elseif ($val === 'migration_amount_paid') {
+                                    $resolvedVal = number_format((float)$lastMig['upgrade_amount']);
+                                } elseif ($val === 'upgrade_amount') {
+                                    $resolvedVal = number_format((float)$lastMig['upgrade_amount']);
+                                } elseif ($val === 'outstanding_balance') {
+                                    $resolvedVal = number_format((float)$lastMig['outstanding_before']);
+                                } elseif ($val === 'new_outstanding_balance') {
+                                    $resolvedVal = number_format((float)$lastMig['outstanding_after']);
+                                } elseif ($val === 'migration_date') {
+                                    $resolvedVal = date('d M Y', strtotime($lastMig['migrated_at']));
+                                } elseif ($val === 'migration_reason') {
+                                    $resolvedVal = $lastMig['migration_reason'];
+                                }
+                            }
+                        } catch (Exception $e) {}
                     }
                 }
-                
+
                 // Fallbacks
                 if ($resolvedVal === '') {
                     if ($val === 'current_datetime') {
                         $resolvedVal = date('d M Y h:i A');
                     }
                 }
-                
+
                 $resolvedParameters[] = $resolvedVal;
             }
         }
-        
+
         $result = [
             'name' => $templateName,
             'language' => $langCode,
@@ -1061,8 +1161,8 @@ class CommunicationEngine {
             if (!$invoiceId && $student) {
                 try {
                     $invStmt = $this->pdo->prepare("
-                        SELECT id FROM invoices 
-                        WHERE user_id = ? AND source = 'registration' 
+                        SELECT id FROM invoices
+                        WHERE user_id = ? AND source = 'registration'
                         ORDER BY id DESC LIMIT 1
                     ");
                     $invStmt->execute([$student['user_id']]);
@@ -1092,7 +1192,7 @@ class CommunicationEngine {
         $this->lastError = null;
         $studentUid = $contextData['student_uid'] ?? null;
         $invoiceId = $contextData['invoice_id'] ?? null;
-        
+
         try {
             $resolved = $this->resolveEventTemplate($eventName, $studentUid, $contextData);
             if (!$resolved) {
@@ -1104,7 +1204,7 @@ class CommunicationEngine {
             if ($studentUid && $eventName && $resolved['name'] && !in_array($eventName, ['installment_reminder', 'installment_overdue'], true)) {
                 if ($eventName === 'payment_receipt' && $invoiceId) {
                     $dupStmt = $this->pdo->prepare("
-                        SELECT COUNT(*) FROM communication_queue 
+                        SELECT COUNT(*) FROM communication_queue
                         WHERE student_uid = ? AND event_name = ? AND template_name = ? AND invoice_id = ?
                           AND status IN ('pending', 'processing', 'sent', 'delivered', 'read')
                     ");
@@ -1112,15 +1212,15 @@ class CommunicationEngine {
                 } elseif ($eventName === 'payment_rejection' && $invoiceId) {
                     // Tie duplicate check to the specific installment rejection request ID
                     $dupStmt = $this->pdo->prepare("
-                        SELECT COUNT(*) FROM communication_queue 
+                        SELECT COUNT(*) FROM communication_queue
                         WHERE student_uid = ? AND event_name = ? AND template_name = ? AND invoice_id = ?
                           AND status IN ('pending', 'processing')
                     ");
                     $dupStmt->execute([$studentUid, $eventName, $resolved['name'], $invoiceId]);
                 } else {
                     $dupStmt = $this->pdo->prepare("
-                        SELECT COUNT(*) FROM communication_queue 
-                        WHERE student_uid = ? AND event_name = ? AND template_name = ? 
+                        SELECT COUNT(*) FROM communication_queue
+                        WHERE student_uid = ? AND event_name = ? AND template_name = ?
                           AND status IN ('pending', 'processing', 'sent', 'delivered', 'read')
                     ");
                     $dupStmt->execute([$studentUid, $eventName, $resolved['name']]);
@@ -1132,13 +1232,13 @@ class CommunicationEngine {
                     return null;
                 }
             }
-            
+
             // Build simple fallback text representation
             $bodyText = "WhatsApp Template: " . $resolved['name'] . "\nParameters:\n";
             foreach ($resolved['parameters'] as $i => $p) {
                 $bodyText .= "Param " . ($i + 1) . ": " . $p . "\n";
             }
-            
+
             $queueId = $this->queueMessage(
                 'whatsapp',
                 $recipient,
@@ -1189,18 +1289,18 @@ class CommunicationEngine {
             $phpBinary = '/opt/alt/php82/usr/bin/php';
         }
         $cronScript = dirname(dirname(__DIR__)) . '/cron-queue.php';
-        
+
         if (!file_exists($cronScript)) {
             error_log("Async Dispatch Error: cron-queue.php not found at {$cronScript}");
             return false;
         }
-        
+
         if (substr(php_uname(), 0, 7) === "Windows") {
             $cmd = "start /B " . $phpBinary . " " . escapeshellarg($cronScript) . " " . (int)$queueId . " > NUL 2>&1";
         } else {
             $cmd = $phpBinary . " " . escapeshellarg($cronScript) . " " . (int)$queueId . " > /dev/null 2>&1 &";
         }
-        
+
         if (!function_exists('proc_open')) {
             error_log("Async Dispatch: proc_open is disabled. Falling back to synchronous execution for queue item #{$queueId}");
             return $this->processQueueItem($queueId);
@@ -1211,7 +1311,7 @@ class CommunicationEngine {
             1 => ["file", "/dev/null", "w"],
             2 => ["file", "/dev/null", "w"]
         ];
-        
+
         try {
             $process = @proc_open($cmd, $descriptorspec, $pipes);
             if (is_resource($process)) {
@@ -1291,8 +1391,8 @@ class CommunicationEngine {
 
             // Find all eligible future/pending/retryable queue items for this student
             $stmt = $this->pdo->prepare("
-                SELECT * FROM communication_queue 
-                WHERE student_uid = ? 
+                SELECT * FROM communication_queue
+                WHERE student_uid = ?
                   AND status IN ('pending', 'scheduled', 'failed')
                   AND channel = 'whatsapp'
             ");
@@ -1307,10 +1407,10 @@ class CommunicationEngine {
 
                 // Check for duplicate queue protection on the new number for this specific event/installment/invoice
                 $dupStmt = $this->pdo->prepare("
-                    SELECT COUNT(*) FROM communication_queue 
-                    WHERE student_uid = ? 
+                    SELECT COUNT(*) FROM communication_queue
+                    WHERE student_uid = ?
                       AND (event_name = ? OR (event_name IS NULL AND ? IS NULL))
-                      AND recipient = ? 
+                      AND recipient = ?
                       AND status IN ('pending', 'processing', 'sent', 'delivered', 'read')
                 ");
                 $dupStmt->execute([$studentUid, $item['event_name'], $item['event_name'], $newPhone]);
@@ -1319,8 +1419,8 @@ class CommunicationEngine {
                 if ($exists === 0) {
                     // Clone queue item targeting the new number
                     $insStmt = $this->pdo->prepare("
-                        INSERT INTO communication_queue 
-                        (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at) 
+                        INSERT INTO communication_queue
+                        (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, ?, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     ");
                     $insStmt->execute([
@@ -1342,8 +1442,8 @@ class CommunicationEngine {
 
                     // Update tracking table installment_whatsapp_reminders
                     $updTrack = $this->pdo->prepare("
-                        UPDATE installment_whatsapp_reminders 
-                        SET queue_id = ? 
+                        UPDATE installment_whatsapp_reminders
+                        SET queue_id = ?
                         WHERE queue_id = ?
                     ");
                     $updTrack->execute([$newQueueId, $item['id']]);
@@ -1352,10 +1452,10 @@ class CommunicationEngine {
 
                 // Supersede the old queue item
                 $updOld = $this->pdo->prepare("
-                    UPDATE communication_queue 
-                    SET status = 'failed', 
-                        error_message = 'Superseded: Recipient number changed', 
-                        updated_at = CURRENT_TIMESTAMP 
+                    UPDATE communication_queue
+                    SET status = 'failed',
+                        error_message = 'Superseded: Recipient number changed',
+                        updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                 ");
                 $updOld->execute([$item['id']]);

@@ -314,7 +314,8 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 migration_reason TEXT,
                 migrated_by TEXT,
                 migrated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                status TEXT DEFAULT 'completed'
+                status TEXT DEFAULT 'completed',
+                revised_installment_schedule TEXT
             );
 
             INSERT OR REPLACE INTO admin_settings (setting_name, setting_value) VALUES ('whatsapp_webhook_verify_token', 'test_verify_token');

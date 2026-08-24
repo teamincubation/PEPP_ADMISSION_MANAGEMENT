@@ -67,6 +67,54 @@ global $pdo;
 echo "=== Running Course Migration / Upgrade Automated Test Suite ===\n";
 
 try {
+    // Ensure communication tables exist in testing SQLite DB
+    $pdo->exec("
+        DROP TABLE IF EXISTS communication_queue;
+        CREATE TABLE communication_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel TEXT,
+            recipient TEXT,
+            recipient_name TEXT,
+            subject TEXT,
+            body_html TEXT,
+            body_text TEXT,
+            status TEXT DEFAULT 'pending',
+            retry_count INTEGER DEFAULT 0,
+            message_id TEXT,
+            error_message TEXT,
+            template_name TEXT,
+            template_data TEXT,
+            attachments TEXT,
+            next_attempt_at TEXT,
+            sent_by TEXT,
+            student_uid TEXT,
+            event_name TEXT,
+            invoice_id INTEGER,
+            worker_started_at TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS communication_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel TEXT,
+            template_name TEXT UNIQUE,
+            language TEXT,
+            status TEXT,
+            category TEXT,
+            quality_status TEXT,
+            rejection_reason TEXT,
+            meta_data TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS communication_event_mappings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_name TEXT UNIQUE,
+            template_name TEXT,
+            parameter_mappings TEXT,
+            updated_at TEXT
+        );
+    ");
+
     // Helper to seed courses
     $pdo->exec("DELETE FROM pepp_courses");
     $pdo->exec("INSERT INTO pepp_courses (id, course_name, course_code, total_fee, academic_year, status) VALUES (10, 'Course A (Base)', 'CA1', 10000.00, '2026-27', 'active')");
@@ -92,8 +140,8 @@ try {
         $pdo->prepare("DELETE FROM student_course_migrations WHERE user_id = ?")->execute([$user_id]);
 
         $stmt = $pdo->prepare("
-            INSERT INTO users (user_id, name, email, status, student_status, pepp_course, pepp_academic_year, total_fee, paid_amount, payment_plan, joined_date, created_at)
-            VALUES (?, 'Test Student', 'student@test.com', 'approved', 'active', ?, '2026-27', ?, ?, ?, '2026-06-01', NOW())
+            INSERT INTO users (user_id, name, email, status, student_status, pepp_course, pepp_academic_year, total_fee, paid_amount, payment_plan, joined_date, created_at, whatsapp_country_code, whatsapp_number)
+            VALUES (?, 'Test Student', 'student@test.com', 'approved', 'active', ?, '2026-27', ?, ?, ?, '2026-06-01', NOW(), '91', '9876543210')
         ");
         $stmt->execute([$user_id, $course_name, $total_fee, $paid_amount, $plan]);
 
@@ -598,7 +646,8 @@ try {
             `migration_reason` TEXT,
             `migrated_by` TEXT,
             `migrated_at` TEXT DEFAULT CURRENT_TIMESTAMP,
-            `status` TEXT DEFAULT 'completed'
+            `status` TEXT DEFAULT 'completed',
+            `revised_installment_schedule` TEXT
         )
     ");
 
@@ -617,7 +666,143 @@ try {
     run_assert("Test 22 Audit row created on migration success", !empty($audit));
     run_assert("Test 22 Audit row correct new course details", $audit['new_course'] === 'Course B (Same)');
 
-    echo "🎉 ALL 22 TESTS COMPLETED SUCCESSFULLY! 🎉\n";
+    // -------------------------------------------------------------
+    // Test 23: WhatsApp Template Mappings and Variable Catalogue
+    // -------------------------------------------------------------
+    require_once dirname(__DIR__) . '/includes/communication/CommunicationHelper.php';
+    $erpVars = CommunicationHelper::getERPVariables();
+    run_assert("Test 23 student_name exists in ERP variable catalogue", isset($erpVars['student_name']));
+    run_assert("Test 23 previous_course_name exists in ERP variable catalogue", isset($erpVars['previous_course_name']));
+    run_assert("Test 23 new_outstanding_balance exists in ERP variable catalogue", isset($erpVars['new_outstanding_balance']));
+    run_assert("Test 23 getERPVariables contains correct samples", $erpVars['student_name']['sample'] === 'John Doe');
+
+    // -------------------------------------------------------------
+    // Test 24: WhatsApp Event Template Resolution for course_migration_completed
+    // -------------------------------------------------------------
+    // Seed approved template for course_migration_completed
+    $tplMeta = [
+        'components' => [
+            [
+                'type' => 'BODY',
+                'text' => "Dear *{{1}}*, previous course: *{{2}}*, new: *{{3}}*, old fee: ₹{{4}}, new fee: ₹{{5}}, paid: ₹{{6}}, balance: ₹{{7}}"
+            ]
+        ],
+        'body_text' => "Dear *{{1}}*, previous course: *{{2}}*, new: *{{3}}*, old fee: ₹{{4}}, new fee: ₹{{5}}, paid: ₹{{6}}, balance: ₹{{7}}",
+        'header_text' => '',
+        'footer_text' => ''
+    ];
+    $pdo->prepare("INSERT OR REPLACE INTO communication_templates (channel, template_name, language, status, category, meta_data, updated_at) VALUES ('whatsapp', 'course_migration_completed', 'en', 'approved', 'utility', ?, datetime('now'))")->execute([json_encode($tplMeta)]);
+
+    // Seed mapping
+    $pMaps = [
+        1 => ['type' => 'variable', 'value' => 'student_name'],
+        2 => ['type' => 'variable', 'value' => 'previous_course_name'],
+        3 => ['type' => 'variable', 'value' => 'new_course_name'],
+        4 => ['type' => 'variable', 'value' => 'new_course_fee'],
+        5 => ['type' => 'variable', 'value' => 'migration_amount_paid'],
+        6 => ['type' => 'variable', 'value' => 'new_outstanding_balance'],
+        7 => ['type' => 'variable', 'value' => 'updated_payment_details']
+    ];
+    $pdo->prepare("INSERT OR REPLACE INTO communication_event_mappings (event_name, template_name, parameter_mappings, updated_at) VALUES ('course_migration_completed', 'course_migration_completed', ?, datetime('now'))")->execute([json_encode($pMaps)]);
+
+    // Resolve event template with context data
+    require_once dirname(__DIR__) . '/includes/communication/CommunicationEngine.php';
+    $engine = CommunicationEngine::getInstance($pdo);
+
+    $context = [
+        'student_name' => 'Alice Dev',
+        'previous_course_name' => 'Basic Class',
+        'new_course_name' => 'Advanced Class',
+        'new_course_fee' => '10,000',
+        'migration_amount_paid' => '2,000',
+        'new_outstanding_balance' => '3,000',
+        'updated_payment_details' => '1 installment of ₹3,000'
+    ];
+    $resolved = $engine->resolveEventTemplate('course_migration_completed', null, $context);
+    run_assert("Test 24 Successfully resolved event template", !empty($resolved));
+    run_assert("Test 24 Parameters mapped in exact Meta order", count($resolved['parameters']) === 7);
+    run_assert("Test 24 Parameter 1 resolves to student_name", $resolved['parameters'][0] === 'Alice Dev');
+    run_assert("Test 24 Parameter 4 resolves to new_course_fee", $resolved['parameters'][3] === '10,000');
+    run_assert("Test 24 Parameter 7 resolves to updated_payment_details", $resolved['parameters'][6] === '1 installment of ₹3,000');
+
+    // -------------------------------------------------------------
+    // Test 25: WhatsApp parameter resolution database fallbacks
+    // -------------------------------------------------------------
+    $setup_student('ST_25', 'Course A (Base)', 10000.00, 10000.00, 'One Time');
+    $pdo->exec("DELETE FROM communication_queue");
+
+    $res3 = simulate_migration_post($pdo, 'ST_25', [
+        'action' => 'migrate_course',
+        'target_course_id' => 30, // Upgrade to ₹15,000
+        'payment_plan' => '2 Installments',
+        'inst_2_amount' => 5000.00,
+        'inst_2_due_date' => '2026-09-01',
+        'migration_reason' => 'Database fallback check'
+    ]);
+    run_assert("Test 25 Migration upgrade completed", empty($res3['error']), $res3['error'] ?? '');
+
+    // Verify WhatsApp template notification enqueued in communication_queue
+    $queueItem = $pdo->query("SELECT * FROM communication_queue WHERE student_uid = 'ST_25' AND event_name = 'course_migration_completed'")->fetch();
+    run_assert("Test 25 Auto WhatsApp notification enqueued on migration success", !empty($queueItem));
+
+    $tplData = json_decode($queueItem['template_data'], true);
+    run_assert("Test 25 Parameters present in queue payload", !empty($tplData['parameters']));
+    run_assert("Test 25 Parameter 1 matches student name", $tplData['parameters'][0] === 'Test Student');
+    run_assert("Test 25 Parameter 2 matches previous course", $tplData['parameters'][1] === 'Course A (Base)');
+    run_assert("Test 25 Parameter 3 matches new course", $tplData['parameters'][2] === 'Course C (Premium)');
+    run_assert("Test 25 Parameter 4 matches new course fee", $tplData['parameters'][3] === '15,000');
+    run_assert("Test 25 Parameter 5 matches migration amount paid", $tplData['parameters'][4] === '0');
+    run_assert("Test 25 Parameter 6 matches new outstanding balance", $tplData['parameters'][5] === '5,000');
+    run_assert("Test 25 Parameter 7 matches updated payment details schedule", $tplData['parameters'][6] === '1 installment of ₹5,000, due 01 Sep 2026');
+
+    // -------------------------------------------------------------
+    // Test 26: Duplicate send protection
+    // -------------------------------------------------------------
+    $pdo->exec("DELETE FROM communication_queue");
+    $phone = '919876543210';
+    $logId = 12345;
+
+    // Add mock log entry in queue with the migration_id in template_data
+    $mockTplData = [
+        'name' => 'course_migration_completed',
+        'parameters' => ['Test Student', 'Course A', 'Course B', '10,000', '15,000', '0', '5,000'],
+        'migration_id' => $logId
+    ];
+    $pdo->prepare("
+        INSERT INTO communication_queue (channel, recipient, status, retry_count, student_uid, event_name, template_name, template_data, updated_at)
+        VALUES ('whatsapp', ?, 'pending', 0, 'ST_25', 'course_migration_completed', 'course_migration_completed', ?, datetime('now'))
+    ")->execute([$phone, json_encode($mockTplData)]);
+
+    // Check duplicate send protection
+    $stmtCheckDup = $pdo->prepare("
+        SELECT COUNT(*) FROM communication_queue
+        WHERE student_uid = ?
+          AND event_name = 'course_migration_completed'
+          AND template_data LIKE ?
+    ");
+    $stmtCheckDup->execute(['ST_25', '%"migration_id":' . $logId . '%']);
+    $already_sent = (int)$stmtCheckDup->fetchColumn() > 0;
+
+    run_assert("Test 26 Duplicate check correctly flags duplicate migration_id", $already_sent === true);
+
+    // -------------------------------------------------------------
+    // Test 27: Failed migration does not send WhatsApp
+    // -------------------------------------------------------------
+    $setup_student('ST_27', 'Course A (Base)', 10000.00, 10000.00, 'One Time');
+    $pdo->exec("DELETE FROM communication_queue");
+
+    $res4 = simulate_migration_post($pdo, 'ST_27', [
+        'action' => 'migrate_course',
+        'target_course_id' => 9999, // Non-existent course
+        'payment_plan' => 'One Time',
+        'migration_reason' => 'Fail post'
+    ]);
+    run_assert("Test 27 Migration failed as expected", !empty($res4['error']));
+
+    $queueCount = (int)$pdo->query("SELECT COUNT(*) FROM communication_queue WHERE student_uid = 'ST_27'")->fetchColumn();
+    run_assert("Test 27 No WhatsApp notification queued on transaction rollback", $queueCount === 0);
+
+    echo "🎉 ALL 27 TESTS COMPLETED SUCCESSFULLY! 🎉\n";
 
 } catch (Exception $e) {
     echo "❌ TEST RUN EXCEPTION: " . $e->getMessage() . "\n";

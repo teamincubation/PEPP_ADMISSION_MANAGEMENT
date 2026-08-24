@@ -22,7 +22,7 @@ try {
         $pdo->exec($sql);
         $success_message = 'Database tables for Communication Engine initialized successfully.';
     }
-    
+
     // Check and add columns to communication_templates
     $cols = $pdo->query("SHOW COLUMNS FROM communication_templates")->fetchAll(PDO::FETCH_COLUMN);
     if (!in_array('quality_status', $cols)) {
@@ -47,10 +47,72 @@ try {
     }
 
     // Seed default event mappings
-    $events = ['student_registration', 'student_approval', 'student_rejection', 'installment_reminder', 'payment_receipt', 'session_scheduled', 'payment_rejection', 'installment_overdue'];
+    $events = ['student_registration', 'student_approval', 'student_rejection', 'installment_reminder', 'payment_receipt', 'session_scheduled', 'payment_rejection', 'installment_overdue', 'course_migration_completed'];
     $stmtSeed = $pdo->prepare("INSERT IGNORE INTO communication_event_mappings (event_name) VALUES (?)");
     foreach ($events as $ev) {
         $stmtSeed->execute([$ev]);
+    }
+
+    // Cross-DB upsert for the course_migration_completed template to ensure it is locally present
+    $stmtTplCheck = $pdo->prepare("SELECT COUNT(*) FROM communication_templates WHERE template_name = 'course_migration_completed'");
+    $stmtTplCheck->execute();
+    $tplExists = (int)$stmtTplCheck->fetchColumn() > 0;
+
+    $tplMeta = [
+        'components' => [
+            [
+                'type' => 'BODY',
+                'text' => "Dear *{{1}}*, 🎉 Your course migration/upgrade has been successfully completed.\nPrevious Course: *{{2}}*\n🔴 New Course: *{{3}}*\n🟩 Previous Fee: ₹{{4}}\n↔️ New Course Fee: ₹{{5}}\n💳 Amount Paid: ₹{{6}}\nOutstanding Balance: ₹{{7}}\nYour updated course and payment details are now reflected in your PEPP Learning account. Thank you."
+            ]
+        ],
+        'body_text' => "Dear *{{1}}*, 🎉 Your course migration/upgrade has been successfully completed.\nPrevious Course: *{{2}}*\n🔴 New Course: *{{3}}*\n🟩 Previous Fee: ₹{{4}}\n↔️ New Course Fee: ₹{{5}}\n💳 Amount Paid: ₹{{6}}\nOutstanding Balance: ₹{{7}}\nYour updated course and payment details are now reflected in your PEPP Learning account. Thank you.",
+        'header_text' => '',
+        'footer_text' => ''
+    ];
+    $tplMetaJson = json_encode($tplMeta);
+
+    if ($tplExists) {
+        $stmtTplUpdate = $pdo->prepare("
+            UPDATE communication_templates
+            SET status = 'approved', category = 'utility', meta_data = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE template_name = 'course_migration_completed'
+        ");
+        $stmtTplUpdate->execute([$tplMetaJson]);
+    } else {
+        $stmtTplInsert = $pdo->prepare("
+            INSERT INTO communication_templates (channel, template_name, language, status, category, quality_status, meta_data, updated_at)
+            VALUES ('whatsapp', 'course_migration_completed', 'en', 'approved', 'utility', 'green', ?, CURRENT_TIMESTAMP)
+        ");
+        $stmtTplInsert->execute([$tplMetaJson]);
+    }
+
+    // Set default mapping for course_migration_completed if it is blank or outdated
+    $stmtCheck = $pdo->prepare("SELECT template_name, parameter_mappings FROM communication_event_mappings WHERE event_name = 'course_migration_completed'");
+    $stmtCheck->execute();
+    $migMap = $stmtCheck->fetch();
+    $needsUpdate = false;
+    if ($migMap) {
+        if (empty($migMap['template_name'])) {
+            $needsUpdate = true;
+        } else {
+            $currentParams = json_decode($migMap['parameter_mappings'], true) ?: [];
+            if (!isset($currentParams[7]) || ($currentParams[7]['value'] ?? '') !== 'updated_payment_details' || ($currentParams[4]['value'] ?? '') !== 'new_course_fee') {
+                $needsUpdate = true;
+            }
+        }
+    }
+    if ($needsUpdate) {
+        $defaultParams = [
+            1 => ['type' => 'variable', 'value' => 'student_name'],
+            2 => ['type' => 'variable', 'value' => 'previous_course_name'],
+            3 => ['type' => 'variable', 'value' => 'new_course_name'],
+            4 => ['type' => 'variable', 'value' => 'new_course_fee'],
+            5 => ['type' => 'variable', 'value' => 'migration_amount_paid'],
+            6 => ['type' => 'variable', 'value' => 'new_outstanding_balance'],
+            7 => ['type' => 'variable', 'value' => 'updated_payment_details']
+        ];
+        $stmtUpdateDefault = $pdo->prepare("UPDATE communication_event_mappings SET template_name = 'course_migration_completed', parameter_mappings = ? WHERE event_name = 'course_migration_completed'");
+        $stmtUpdateDefault->execute([json_encode($defaultParams)]);
     }
 } catch (Exception $e) {
     $error_message = 'Self-healing database setup failed. Error: ' . $e->getMessage();
@@ -97,8 +159,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $pdo->beginTransaction();
                 try {
                     $stmtUpsert = $pdo->prepare("
-                        INSERT INTO communication_templates (channel, template_name, language, status, category, quality_status, rejection_reason, meta_data, updated_at) 
-                        VALUES ('whatsapp', ?, ?, ?, ?, ?, ?, ?, NOW()) 
+                        INSERT INTO communication_templates (channel, template_name, language, status, category, quality_status, rejection_reason, meta_data, updated_at)
+                        VALUES ('whatsapp', ?, ?, ?, ?, ?, ?, ?, NOW())
                         ON DUPLICATE KEY UPDATE status = VALUES(status), category = VALUES(category), quality_status = VALUES(quality_status), rejection_reason = VALUES(rejection_reason), meta_data = VALUES(meta_data), updated_at = NOW()
                     ");
 
@@ -109,7 +171,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         $category = $tpl['category'] ?? '';
                         $qualityStatus = strtolower($tpl['quality_score']['score'] ?? 'unknown');
                         $rejectedReason = $tpl['rejected_reason'] ?? null;
-                        
+
                         // Extract text body and components metadata
                         $bodyText = '';
                         $headerText = '';
@@ -161,30 +223,104 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $error_message = 'Security token mismatch. Please try again.';
     } else {
         $posted_mappings = $_POST['mappings'] ?? [];
-        $pdo->beginTransaction();
-        try {
-            $stmtUp = $pdo->prepare("UPDATE communication_event_mappings SET template_name = ?, parameter_mappings = ? WHERE event_name = ?");
-            foreach ($posted_mappings as $evName => $data) {
-                $tplName = !empty($data['template_name']) ? $data['template_name'] : null;
-                
-                $rawParams = $data['parameters'] ?? [];
-                $params = [];
-                foreach ($rawParams as $idx => $param) {
-                    $params[(int)$idx] = [
-                        'type' => $param['type'] ?? 'variable',
-                        'value' => trim($param['value'] ?? '')
-                    ];
+
+        // Fetch all approved templates for validation lookup
+        $stmtTpls = $pdo->query("SELECT template_name, status, meta_data FROM communication_templates WHERE channel = 'whatsapp'");
+        $allTpls = $stmtTpls->fetchAll(PDO::FETCH_UNIQUE|PDO::FETCH_ASSOC);
+
+        // Fetch valid ERP variables list
+        require_once 'includes/communication/CommunicationHelper.php';
+        $validERPKeys = array_keys(CommunicationHelper::getERPVariables());
+
+        $validationError = '';
+        foreach ($posted_mappings as $evName => $data) {
+            $tplName = !empty($data['template_name']) ? $data['template_name'] : null;
+            if ($tplName) {
+                if (!isset($allTpls[$tplName])) {
+                    $validationError = "Selected template '{$tplName}' for event '{$evName}' does not exist.";
+                    break;
                 }
-                
-                $stmtUp->execute([$tplName, json_encode($params), $evName]);
+
+                $tpl = $allTpls[$tplName];
+                if (strtolower($tpl['status']) !== 'approved') {
+                    $validationError = "Selected template '{$tplName}' for event '{$evName}' is not APPROVED (Current status: {$tpl['status']}).";
+                    break;
+                }
+
+                // Get parameter count from Meta template definition
+                $meta = json_decode($tpl['meta_data'], true) ?: [];
+                $bodyTpl = $meta['body_text'] ?? '';
+                preg_match_all('/\{\{(\d+)\}\}/', $bodyTpl, $matches);
+                $expectedParamsCount = !empty($matches[1]) ? max(array_map('intval', $matches[1])) : 0;
+
+                $rawParams = $data['parameters'] ?? [];
+
+                // Ensure all expected parameters are mapped
+                for ($i = 1; $i <= $expectedParamsCount; $i++) {
+                    if (!isset($rawParams[$i])) {
+                        $validationError = "Parameter {{{$i}}} is required but missing in mapping for template '{$tplName}'.";
+                        break 2;
+                    }
+
+                    $paramType = $rawParams[$i]['type'] ?? 'variable';
+                    $paramVal = trim($rawParams[$i]['value'] ?? '');
+
+                    if ($paramType === 'variable') {
+                        if (empty($paramVal)) {
+                            $validationError = "Please select an ERP variable for parameter {{{$i}}} of template '{$tplName}'.";
+                            break 2;
+                        }
+                        if (!in_array($paramVal, $validERPKeys, true)) {
+                            $validationError = "Invalid ERP variable key '{$paramVal}' for parameter {{{$i}}} of template '{$tplName}'.";
+                            break 2;
+                        }
+                    } else {
+                        // Custom text validation
+                        if ($paramVal === '') {
+                            $validationError = "Custom text for parameter {{{$i}}} of template '{$tplName}' cannot be empty.";
+                            break 2;
+                        }
+                    }
+                }
+
+                // Ensure no extra parameters beyond expected count are sent
+                foreach ($rawParams as $idx => $param) {
+                    if ((int)$idx < 1 || (int)$idx > $expectedParamsCount) {
+                        $validationError = "Invalid variable index '{{{$idx}}}' for template '{$tplName}' (expects maximum {$expectedParamsCount} variables).";
+                        break 2;
+                    }
+                }
             }
-            $pdo->commit();
-            $success_message = 'Event template mappings updated successfully!';
-            // Reload event mappings
-            $eventMappings = $pdo->query("SELECT * FROM communication_event_mappings ORDER BY id ASC")->fetchAll();
-        } catch (Exception $e) {
-            $pdo->rollBack();
-            $error_message = 'Failed to save mappings: ' . $e->getMessage();
+        }
+
+        if ($validationError !== '') {
+            $error_message = $validationError;
+        } else {
+            $pdo->beginTransaction();
+            try {
+                $stmtUp = $pdo->prepare("UPDATE communication_event_mappings SET template_name = ?, parameter_mappings = ? WHERE event_name = ?");
+                foreach ($posted_mappings as $evName => $data) {
+                    $tplName = !empty($data['template_name']) ? $data['template_name'] : null;
+
+                    $rawParams = $data['parameters'] ?? [];
+                    $params = [];
+                    foreach ($rawParams as $idx => $param) {
+                        $params[(int)$idx] = [
+                            'type' => $param['type'] ?? 'variable',
+                            'value' => trim($param['value'] ?? '')
+                        ];
+                    }
+
+                    $stmtUp->execute([$tplName, json_encode($params), $evName]);
+                }
+                $pdo->commit();
+                $success_message = 'Event template mappings updated successfully!';
+                // Reload event mappings
+                $eventMappings = $pdo->query("SELECT * FROM communication_event_mappings ORDER BY id ASC")->fetchAll();
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                $error_message = 'Failed to save mappings: ' . $e->getMessage();
+            }
         }
     }
 }
@@ -198,7 +334,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $phone = trim($_POST['test_phone'] ?? '');
         $tplName = trim($_POST['test_template_name'] ?? '');
         $paramsInput = $_POST['test_params'] ?? [];
-        
+
         if (empty($phone) || empty($tplName)) {
             $error_message = 'Please specify both recipient phone and template.';
         } else {
@@ -207,35 +343,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
                 $stmtTpl->execute([$tplName]);
                 $template = $stmtTpl->fetch();
-                
+
                 if (!$template) {
                     throw new Exception("Template '{$tplName}' not found.");
                 }
-                
+
                 if (strtolower($template['status']) !== 'approved') {
                     throw new Exception("Template '{$tplName}' is not approved (Status: {$template['status']}).");
                 }
-                
+
                 // Parse parameters
                 $resolvedParams = [];
                 ksort($paramsInput);
                 foreach ($paramsInput as $idx => $val) {
                     $resolvedParams[] = trim($val);
                 }
-                
+
                 $templateData = [
                     'name' => $tplName,
                     'language' => $template['language'] ?? 'en',
                     'parameters' => $resolvedParams
                 ];
-                
+
                 require_once 'includes/communication/CommunicationEngine.php';
                 $engine = CommunicationEngine::getInstance($pdo);
                 $provider = $engine->getProvider('whatsapp');
-                
+
                 // Trigger send directly via provider for instant feedback
                 $res = $provider->sendMessage($phone, 'Test Dispatch', '', '', [], $templateData);
-                
+
                 if ($res && isset($res['success']) && $res['success'] === true) {
                     $success_message = "Test WhatsApp template '{$tplName}' successfully sent to {$phone}! Message ID: " . $res['message_id'];
                     $test_response = $res['response'];
@@ -305,7 +441,8 @@ include 'includes/admin_nav.php';
         'payment_receipt' => 'Triggered when a student payment is received and approved.',
         'session_scheduled' => 'Triggered when a live learning session or activity is scheduled.',
         'payment_rejection' => 'Triggered when a student payment proof is rejected by accounts.',
-        'installment_overdue' => 'Triggered when a student installment payment due date has passed (overdue reminder).'
+        'installment_overdue' => 'Triggered when a student installment payment due date has passed (overdue reminder).',
+        'course_migration_completed' => 'Triggered when a student course migration or upgrade is successfully completed.'
     ];
 
     // Build array of approved templates for JS
@@ -316,7 +453,7 @@ include 'includes/admin_nav.php';
             $bodyTpl = $meta['body_text'] ?? '';
             preg_match_all('/\{\{(\d+)\}\}/', $bodyTpl, $matches);
             $expectedParamsCount = !empty($matches[1]) ? max(array_map('intval', $matches[1])) : 0;
-            
+
             $approvedTemplates[$tpl['template_name']] = [
                 'name' => $tpl['template_name'],
                 'language' => $tpl['language'],
@@ -332,14 +469,14 @@ include 'includes/admin_nav.php';
         <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:24px; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
             <h3 style="margin:0 0 12px; font-size:1.1rem; font-weight:700; color:#1f2937;"><i class="fas fa-link" style="color:#4f46e5; margin-right:4px;"></i> PEPP ERP Event Mappings</h3>
             <p style="margin:0 0 20px; font-size:0.8rem; color:#6b7280;">Map PEPP ERP core notification events to Meta-approved message templates and configure parameter interpolation.</p>
-            
+
             <form method="POST">
                 <?php echo csrf_field(); ?>
                 <input type="hidden" name="action" value="save_event_mappings">
-                
+
                 <div style="display:flex; flex-direction:column; gap:20px;">
                     <?php foreach ($eventMappings as $mapping): ?>
-                        <?php 
+                        <?php
                             $eventName = $mapping['event_name'];
                             $mappedTpl = $mapping['template_name'] ?? '';
                             $paramMappings = json_decode($mapping['parameter_mappings'], true) ?: [];
@@ -361,13 +498,13 @@ include 'includes/admin_nav.php';
                                     </select>
                                 </div>
                             </div>
-                            
+
                             <!-- Parameter Fields Container -->
                             <div id="mapping-params-<?php echo htmlspecialchars($eventName); ?>" style="display: <?php echo !empty($mappedTpl) ? 'block' : 'none'; ?>; border-top:1px dashed #e5e7eb; padding-top:12px; margin-top:8px;">
                                 <h5 style="margin:0 0 8px; font-size:0.8rem; font-weight:600; color:#4b5563;">Parameter Values Mappings</h5>
                                 <div class="params-list" style="display:flex; flex-direction:column; gap:8px;">
                                     <?php if (!empty($mappedTpl) && isset($approvedTemplates[$mappedTpl])): ?>
-                                        <?php 
+                                        <?php
                                             $tplInfo = $approvedTemplates[$mappedTpl];
                                             for ($i = 1; $i <= $tplInfo['param_count']; $i++):
                                                 $mType = $paramMappings[$i]['type'] ?? 'variable';
@@ -379,71 +516,76 @@ include 'includes/admin_nav.php';
                                                     <option value="variable" <?php echo $mType === 'variable' ? 'selected' : ''; ?>>ERP Variable</option>
                                                     <option value="custom" <?php echo $mType === 'custom' ? 'selected' : ''; ?>>Custom Text</option>
                                                 </select>
-                                                
-                                                <!-- Variable selector -->
-                                                <select name="mappings[<?php echo htmlspecialchars($eventName); ?>][parameters][<?php echo $i; ?>][value]" class="form-control value-field-variable" id="val-var-<?php echo htmlspecialchars($eventName); ?>-<?php echo $i; ?>" style="flex:1; font-size:0.75rem; display: <?php echo $mType === 'variable' ? 'inline-block' : 'none'; ?>;">
-                                                    <option value="student_name" <?php echo $mVal === 'student_name' ? 'selected' : ''; ?>>Student Name</option>
-                                                    <option value="student_email" <?php echo $mVal === 'student_email' ? 'selected' : ''; ?>>Student Email</option>
-                                                    <option value="application_id" <?php echo $mVal === 'application_id' ? 'selected' : ''; ?>>Application ID / Roll No</option>
-                                                    <option value="course_name" <?php echo $mVal === 'course_name' ? 'selected' : ''; ?>>Course Name</option>
-                                                    <option value="academic_year" <?php echo $mVal === 'academic_year' ? 'selected' : ''; ?>>Academic Year</option>
-                                                    <option value="payment_amount" <?php echo $mVal === 'payment_amount' ? 'selected' : ''; ?>>Payment Amount</option>
-                                                    <option value="paid_date" <?php echo $mVal === 'paid_date' ? 'selected' : ''; ?>>Payment Date</option>
-                                                    <option value="payment_plan" <?php echo $mVal === 'payment_plan' ? 'selected' : ''; ?>>Payment Plan</option>
-                                                    <option value="payment_mode" <?php echo $mVal === 'payment_mode' ? 'selected' : ''; ?>>Payment Mode</option>
-                                                    <option value="course_fee" <?php echo $mVal === 'course_fee' ? 'selected' : ''; ?>>Course Fee</option>
-                                                    <option value="discount_amount" <?php echo $mVal === 'discount_amount' ? 'selected' : ''; ?>>Discount Amount</option>
-                                                    <option value="total_payable" <?php echo $mVal === 'total_payable' ? 'selected' : ''; ?>>Total Payable</option>
-                                                    <option value="total_paid" <?php echo $mVal === 'total_paid' ? 'selected' : ''; ?>>Total Paid / Collected</option>
-                                                    <option value="balance_amount" <?php echo $mVal === 'balance_amount' ? 'selected' : ''; ?>>Balance Amount</option>
-                                                    <option value="installment_number" <?php echo $mVal === 'installment_number' ? 'selected' : ''; ?>>Installment Count / Installment Number</option>
-                                                    <option value="installment_amount" <?php echo $mVal === 'installment_amount' ? 'selected' : ''; ?>>Installment Amount</option>
-                                                    <option value="installment_due_date" <?php echo $mVal === 'installment_due_date' ? 'selected' : ''; ?>>Installment Due Date</option>
-                                                    <option value="next_due_date" <?php echo $mVal === 'next_due_date' ? 'selected' : ''; ?>>Next Due Date</option>
-                                                    <option value="banking_details" <?php echo $mVal === 'banking_details' ? 'selected' : ''; ?>>Banking Details</option>
-                                                    <option value="invoice_number" <?php echo $mVal === 'invoice_number' ? 'selected' : ''; ?>>Invoice Number</option>
-                                                    <option value="invoice_link" <?php echo $mVal === 'invoice_link' ? 'selected' : ''; ?>>Secure Invoice Link</option>
-                                                    <option value="session_date" <?php echo $mVal === 'session_date' ? 'selected' : ''; ?>>Session Date</option>
-                                                    <option value="trainer_name" <?php echo $mVal === 'trainer_name' ? 'selected' : ''; ?>>Trainer Name</option>
-                                                    <option value="meeting_link" <?php echo $mVal === 'meeting_link' ? 'selected' : ''; ?>>Meeting Link</option>
-                                                    <option value="rejection_reason" <?php echo $mVal === 'rejection_reason' ? 'selected' : ''; ?>>Rejection Reason</option>
-                                                    <option value="new_access_end" <?php echo $mVal === 'new_access_end' ? 'selected' : ''; ?>>New Access End Date</option>
-                                                    <option value="current_datetime" <?php echo $mVal === 'current_datetime' ? 'selected' : ''; ?>>Current Date/Time</option>
 
+                                                           <select name="mappings[<?php echo htmlspecialchars($eventName); ?>][parameters][<?php echo $i; ?>][value]" class="form-control value-field-variable" id="val-var-<?php echo htmlspecialchars($eventName); ?>-<?php echo $i; ?>" style="flex:1; font-size:0.75rem; display: <?php echo $mType === 'variable' ? 'inline-block' : 'none'; ?>;" onchange="updatePreviews('<?php echo htmlspecialchars($eventName); ?>')">
+                                                    <option value="">-- Select Variable --</option>
+                                                    <?php
+                                                    require_once 'includes/communication/CommunicationHelper.php';
+                                                    foreach (CommunicationHelper::getERPVariables() as $k => $varInfo): ?>
+                                                        <option value="<?php echo htmlspecialchars($k); ?>" <?php echo $mVal === $k ? 'selected' : ''; ?> title="<?php echo htmlspecialchars($varInfo['description']); ?>">
+                                                            <?php echo htmlspecialchars($varInfo['label']); ?> — <?php echo htmlspecialchars($k); ?>
+                                                        </option>
+                                                    <?php endforeach; ?>
                                                 </select>
-                                                
+
                                                 <!-- Custom string input -->
-                                                <input type="text" name="mappings[<?php echo htmlspecialchars($eventName); ?>][parameters][<?php echo $i; ?>][value]" class="form-control value-field-custom" id="val-cust-<?php echo htmlspecialchars($eventName); ?>-<?php echo $i; ?>" value="<?php echo $mType === 'custom' ? htmlspecialchars($mVal) : ''; ?>" placeholder="Enter custom value..." style="flex:1; font-size:0.75rem; display: <?php echo $mType === 'custom' ? 'inline-block' : 'none'; ?>;" <?php echo $mType !== 'custom' ? 'disabled' : ''; ?>>
+                                                <input type="text" name="mappings[<?php echo htmlspecialchars($eventName); ?>][parameters][<?php echo $i; ?>][value]" class="form-control value-field-custom" id="val-cust-<?php echo htmlspecialchars($eventName); ?>-<?php echo $i; ?>" value="<?php echo $mType === 'custom' ? htmlspecialchars($mVal) : ''; ?>" placeholder="Enter custom value..." style="flex:1; font-size:0.75rem; display: <?php echo $mType === 'custom' ? 'inline-block' : 'none'; ?>;" <?php echo $mType !== 'custom' ? 'disabled' : ''; ?> oninput="updatePreviews('<?php echo htmlspecialchars($eventName); ?>')">
+                                            </div>
+
+                                            <!-- Field Detail Description Info under dropdown -->
+                                            <div id="desc-container-<?php echo htmlspecialchars($eventName); ?>-<?php echo $i; ?>" style="font-size:0.7rem; color:#6b7280; padding-left:48px; margin-top:-4px; margin-bottom:4px; display:<?php echo $mType === 'variable' ? 'block' : 'none'; ?>;">
+                                                <?php
+                                                if ($mType === 'variable' && isset(CommunicationHelper::getERPVariables()[$mVal])) {
+                                                    echo '<i class="fas fa-info-circle"></i> ' . htmlspecialchars(CommunicationHelper::getERPVariables()[$mVal]['description']);
+                                                }
+                                                ?>
                                             </div>
                                         <?php endfor; ?>
                                     <?php endif; ?>
+                                </div>
+
+                                <!-- Mapping Preview Card -->
+                                <div id="mapping-preview-card-<?php echo htmlspecialchars($eventName); ?>" style="display: <?php echo !empty($mappedTpl) ? 'block' : 'none'; ?>; border: 1px solid #e5e7eb; background: #fff; padding: 14px; border-radius: 8px; margin-top: 15px;">
+                                    <h6 style="margin: 0 0 8px 0; font-size: 0.8rem; font-weight: 700; color: #4b5563;"><i class="fas fa-eye" style="color: #10b981;"></i> Dynamic Mapping Preview: <span class="preview-template-name" style="color: #4f46e5;"><?php echo htmlspecialchars($mappedTpl); ?></span></h6>
+                                    <table style="width: 100%; border-collapse: collapse; font-size: 0.75rem; color: #374151;">
+                                        <thead>
+                                            <tr style="border-bottom: 1px solid #e5e7eb; text-align: left;">
+                                                <th style="padding: 4px 8px; font-weight: 700; width: 25%;">Meta Variable</th>
+                                                <th style="padding: 4px 8px; font-weight: 700; width: 35%;">ERP Variable Key</th>
+                                                <th style="padding: 4px 8px; font-weight: 700; width: 40%;">Actual Example</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="preview-tbody" id="preview-tbody-<?php echo htmlspecialchars($eventName); ?>">
+                                            <!-- Dynamically populated by updatePreviews() -->
+                                        </tbody>
+                                    </table>
                                 </div>
                             </div>
                         </div>
                     <?php endforeach; ?>
                 </div>
-                
+
                 <div style="margin-top:20px; text-align:right;">
                     <button type="submit" class="btn btn-primary" style="padding:10px 20px; border-radius:8px;"><i class="fas fa-check"></i> Save Event Mappings</button>
                 </div>
             </form>
         </div>
-        
+
         <!-- Test Dispatch Form -->
         <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:24px; box-shadow:0 1px 3px rgba(0,0,0,0.05); height:fit-content;">
             <h3 style="margin:0 0 12px; font-size:1.1rem; font-weight:700; color:#1f2937;"><i class="fas fa-paper-plane" style="color:#10b981; margin-right:4px;"></i> Send Test Template</h3>
             <p style="margin:0 0 20px; font-size:0.8rem; color:#6b7280;">Test template parameters routing and validation directly via Meta APIs in real time.</p>
-            
+
             <form method="POST">
                 <?php echo csrf_field(); ?>
                 <input type="hidden" name="action" value="send_test_template">
-                
+
                 <div style="display:flex; flex-direction:column; gap:16px;">
                     <div class="field">
                         <label style="font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:4px; display:block;">Recipient Phone <span style="color:#ef4444;">*</span></label>
                         <input type="text" name="test_phone" class="form-control" style="width:100%; border-radius:8px;" placeholder="e.g. 919876543210" required>
                     </div>
-                    
+
                     <div class="field">
                         <label style="font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:4px; display:block;">Template Name <span style="color:#ef4444;">*</span></label>
                         <select name="test_template_name" id="test-tpl-select" class="form-control" style="width:100%; border-radius:8px;" onchange="onTestTemplateSelect(this.value)" required>
@@ -453,19 +595,19 @@ include 'includes/admin_nav.php';
                             <?php endforeach; ?>
                         </select>
                     </div>
-                    
+
                     <!-- Dynamic Test Parameters List -->
                     <div id="test-params-section" style="display:none; border-top:1px solid #f3f4f6; padding-top:16px;">
                         <h5 style="margin:0 0 8px; font-size:0.8rem; font-weight:700; color:#374151;">Parameter Values</h5>
                         <div id="test-params-list" style="display:flex; flex-direction:column; gap:12px;"></div>
                     </div>
-                    
+
                     <button type="submit" class="btn btn-success" style="width:100%; padding:10px; font-weight:700; border-radius:8px; margin-top:8px;">
                         <i class="fas fa-paper-plane"></i> Send Test Message
                     </button>
                 </div>
             </form>
-            
+
             <!-- Raw API Logs if response exists -->
             <?php if ($test_response): ?>
                 <div style="margin-top:20px; border-top:1px solid #f3f4f6; padding-top:16px;">
@@ -481,7 +623,7 @@ include 'includes/admin_nav.php';
         <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px;">
             <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;"><i class="fas fa-list" style="margin-right:4px;"></i> Synchronized Templates (<?php echo count($localTemplates); ?>)</h3>
         </div>
-        
+
         <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
             <thead>
                 <tr style="background:#f9fafb; text-align:left; border-bottom:1px solid #e5e7eb;">
@@ -500,15 +642,15 @@ include 'includes/admin_nav.php';
                     </tr>
                 <?php else: ?>
                     <?php foreach ($localTemplates as $tpl): ?>
-                        <?php 
-                            $meta = json_decode($tpl['meta_data'], true); 
+                        <?php
+                            $meta = json_decode($tpl['meta_data'], true);
                             $bodyText = $meta['body_text'] ?? '';
                             $headerText = $meta['header_text'] ?? '';
                             $footerText = $meta['footer_text'] ?? '';
-                            
+
                             preg_match_all('/\{\{(\d+)\}\}/', $bodyText, $matches);
                             $expectedParamsCount = !empty($matches[1]) ? max(array_map('intval', $matches[1])) : 0;
-                            
+
                             $qColor = 'gray';
                             $qStatus = $tpl['quality_status'] ?? 'unknown';
                             if ($qStatus === 'high' || $qStatus === 'green') $qColor = 'green';
@@ -543,7 +685,7 @@ include 'includes/admin_nav.php';
                             </td>
                             <td style="padding:12px;">
                                 <button type="button" class="btn btn-sm btn-outline" onclick="openPreviewModal('<?php echo htmlspecialchars($tpl['template_name']); ?>')" style="padding:4px 8px; border-radius:6px; font-size:0.75rem;"><i class="fas fa-eye"></i> View Structure</button>
-                                
+
                                 <!-- Hidden Preview Content -->
                                 <div id="tpl-preview-<?php echo htmlspecialchars($tpl['template_name']); ?>" style="display:none;">
                                     <div style="background:#f8fafc; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-top:12px; font-family:sans-serif; max-width:400px; box-shadow:0 4px 12px rgba(0,0,0,0.05);">
@@ -554,6 +696,33 @@ include 'includes/admin_nav.php';
                                         <?php if ($footerText): ?>
                                             <div style="font-size:0.75rem; color:#9ca3af; margin-top:8px; border-top:1px dashed #e5e7eb; padding-top:4px;"><?php echo htmlspecialchars($footerText); ?></div>
                                         <?php endif; ?>
+
+                                        <!-- Mapped variables info -->
+                                        <div style="margin-top: 15px; border-top: 1px solid #e5e7eb; padding-top: 10px;">
+                                            <h6 style="margin: 0 0 6px 0; font-size: 0.75rem; font-weight: 700; color: #4b5563;">Current ERP Variable Mapping:</h6>
+                                            <ul style="margin: 0; padding-left: 15px; font-size: 0.75rem; color: #4b5563; list-style-type: disc;">
+                                                <?php
+                                                // Find if any event uses this template
+                                                $stmtEvUse = $pdo->prepare("SELECT event_name, parameter_mappings FROM communication_event_mappings WHERE template_name = ?");
+                                                $stmtEvUse->execute([$tpl['template_name']]);
+                                                $evUses = $stmtEvUse->fetchAll();
+                                                if (empty($evUses)): ?>
+                                                    <li>Not mapped to any event</li>
+                                                <?php else:
+                                                    foreach ($evUses as $use):
+                                                        $pMaps = json_decode($use['parameter_mappings'], true) ?: [];
+                                                        ksort($pMaps);
+                                                        foreach ($pMaps as $idx => $pInfo):
+                                                            $pVal = $pInfo['value'] ?? '';
+                                                            $pLabel = isset(CommunicationHelper::getERPVariables()[$pVal]) ? CommunicationHelper::getERPVariables()[$pVal]['label'] : $pVal;
+                                                            if (isset($pInfo['type']) && $pInfo['type'] === 'custom') $pLabel = 'Custom: "' . $pVal . '"';
+                                                        ?>
+                                                            <li><code>{{<?php echo $idx; ?>}}</code> &rarr; <strong><?php echo htmlspecialchars($pLabel ?: 'Not mapped'); ?></strong></li>
+                                                        <?php endforeach;
+                                                    endforeach;
+                                                endif; ?>
+                                            </ul>
+                                        </div>
                                     </div>
                                 </div>
                             </td>
@@ -597,66 +766,72 @@ window.onclick = function(event) {
 }
 
 const approvedTemplates = <?php echo json_encode($approvedTemplates); ?>;
+const erpVariables = <?php echo json_encode(CommunicationHelper::getERPVariables()); ?>;
 
 function onMappingTemplateChange(eventName, selectedTemplateName) {
     const container = document.getElementById('mapping-params-' + eventName);
+    const previewCard = document.getElementById('mapping-preview-card-' + eventName);
+
     if (!selectedTemplateName) {
         container.style.display = 'none';
+        if (previewCard) previewCard.style.display = 'none';
         container.querySelector('.params-list').innerHTML = '';
         return;
     }
-    
+
     container.style.display = 'block';
+    if (previewCard) {
+        previewCard.style.display = 'block';
+        previewCard.querySelector('.preview-template-name').innerText = selectedTemplateName;
+    }
+
     const tplInfo = approvedTemplates[selectedTemplateName];
     const paramList = container.querySelector('.params-list');
     paramList.innerHTML = '';
-    
+
+    let selectOptionsHtml = '<option value="">-- Select Variable --</option>';
+    for (const [key, varInfo] of Object.entries(erpVariables)) {
+        selectOptionsHtml += `<option value="${key}" title="${varInfo.description}">${varInfo.label} — ${key}</option>`;
+    }
+
     if (tplInfo && tplInfo.param_count > 0) {
         for (let i = 1; i <= tplInfo.param_count; i++) {
+            const paramContainer = document.createElement('div');
+            paramContainer.style.display = 'flex';
+            paramContainer.style.flexDirection = 'column';
+            paramContainer.style.gap = '4px';
+            paramContainer.style.marginBottom = '8px';
+
             const row = document.createElement('div');
             row.style.display = 'flex';
             row.style.alignItems = 'center';
             row.style.gap = '8px';
-            
+
             row.innerHTML = `
                 <span style="font-size:0.75rem; font-weight:700; color:#4b5563; min-width:40px;">{{${i}}} :</span>
-                <select name="mappings[${eventName}][parameters][${i}][type]" class="form-control" style="width:110px; font-size:0.75rem;" onchange="onParamTypeChange('${eventName}', ${i}, this.value)">
+                <select name="mappings[${eventName}][parameters][${i}][type]" class="form-control" style="width:110px; font-size:0.75rem;" onchange="onParamTypeChange('${eventName}', ${i}, this.value); updatePreviews('${eventName}');">
                     <option value="variable" selected>ERP Variable</option>
                     <option value="custom">Custom Text</option>
                 </select>
-                <select name="mappings[${eventName}][parameters][${i}][value]" class="form-control value-field-variable" id="val-var-${eventName}-${i}" style="flex:1; font-size:0.75rem;">
-                    <option value="student_name" selected>Student Name</option>
-                    <option value="student_email">Student Email</option>
-                    <option value="application_id">Application ID / Roll No</option>
-                    <option value="course_name">Course Name</option>
-                    <option value="academic_year">Academic Year</option>
-                    <option value="payment_amount">Payment Amount</option>
-                    <option value="paid_date">Payment Date</option>
-                    <option value="payment_plan">Payment Plan</option>
-                    <option value="payment_mode">Payment Mode</option>
-                    <option value="course_fee">Course Fee</option>
-                    <option value="discount_amount">Discount Amount</option>
-                    <option value="total_payable">Total Payable</option>
-                    <option value="total_paid">Total Paid / Collected</option>
-                    <option value="balance_amount">Balance Amount</option>
-                    <option value="installment_number">Installment Count / Installment Number</option>
-                    <option value="installment_amount">Installment Amount</option>
-                    <option value="installment_due_date">Installment Due Date</option>
-                    <option value="next_due_date">Next Due Date</option>
-                    <option value="banking_details">Banking Details</option>
-                    <option value="invoice_number">Invoice Number</option>
-                    <option value="invoice_link">Secure Invoice Link</option>
-                    <option value="session_date">Session Date</option>
-                    <option value="trainer_name">Trainer Name</option>
-                    <option value="meeting_link">Meeting Link</option>
-                    <option value="rejection_reason">Rejection Reason</option>
-                    <option value="new_access_end">New Access End Date</option>
-                    <option value="current_datetime">Current Date/Time</option>
+                <select name="mappings[${eventName}][parameters][${i}][value]" class="form-control value-field-variable" id="val-var-${eventName}-${i}" style="flex:1; font-size:0.75rem;" onchange="updatePreviews('${eventName}');">
+                    ${selectOptionsHtml}
                 </select>
 
-                <input type="text" name="mappings[${eventName}][parameters][${i}][value]" class="form-control value-field-custom" id="val-cust-${eventName}-${i}" placeholder="Enter custom value..." style="flex:1; font-size:0.75rem; display:none;" disabled>
+                <input type="text" name="mappings[${eventName}][parameters][${i}][value]" class="form-control value-field-custom" id="val-cust-${eventName}-${i}" placeholder="Enter custom value..." style="flex:1; font-size:0.75rem; display:none;" disabled oninput="updatePreviews('${eventName}');">
             `;
-            paramList.appendChild(row);
+
+            const descRow = document.createElement('div');
+            descRow.id = `desc-container-${eventName}-${i}`;
+            descRow.style.fontSize = '0.7rem';
+            descRow.style.color = '#6b7280';
+            descRow.style.paddingLeft = '48px';
+            descRow.style.marginTop = '-4px';
+            descRow.style.marginBottom = '4px';
+            descRow.style.display = 'none';
+
+            paramContainer.appendChild(row);
+            paramContainer.appendChild(descRow);
+            paramList.appendChild(paramContainer);
         }
     } else {
         paramList.innerHTML = '<span style="font-size:0.75rem; color:#9ca3af;">No parameters required for this template.</span>';
@@ -666,17 +841,89 @@ function onMappingTemplateChange(eventName, selectedTemplateName) {
 function onParamTypeChange(eventName, paramIdx, selectedType) {
     const varSelect = document.getElementById('val-var-' + eventName + '-' + paramIdx);
     const custInput = document.getElementById('val-cust-' + eventName + '-' + paramIdx);
-    
+    const descRow = document.getElementById('desc-container-' + eventName + '-' + paramIdx);
+
     if (selectedType === 'variable') {
         varSelect.style.display = 'inline-block';
         varSelect.disabled = false;
         custInput.style.display = 'none';
         custInput.disabled = true;
+        if (descRow) descRow.style.display = 'block';
     } else {
         varSelect.style.display = 'none';
         varSelect.disabled = true;
         custInput.style.display = 'inline-block';
         custInput.disabled = false;
+        if (descRow) descRow.style.display = 'none';
+    }
+}
+
+function updatePreviews(eventName) {
+    const previewCard = document.getElementById('mapping-preview-card-' + eventName);
+    if (!previewCard) return;
+
+    const tbody = document.getElementById('preview-tbody-' + eventName);
+    if (!tbody) return;
+
+    tbody.innerHTML = '';
+
+    const mappingSelect = document.querySelector(`select[name="mappings[${eventName}][template_name]"]`);
+    const selectedTemplate = mappingSelect ? mappingSelect.value : '';
+
+    if (!selectedTemplate) {
+        previewCard.style.display = 'none';
+        return;
+    }
+
+    previewCard.style.display = 'block';
+    const tplInfo = approvedTemplates[selectedTemplate];
+    if (!tplInfo) return;
+
+    for (let i = 1; i <= tplInfo.param_count; i++) {
+        const typeSelect = document.querySelector(`select[name="mappings[${eventName}][parameters][${i}][type]"]`);
+        const type = typeSelect ? typeSelect.value : 'variable';
+
+        let erpValueLabel = 'Not Mapped';
+        let sampleValue = 'N/A';
+
+        const descContainer = document.getElementById(`desc-container-${eventName}-${i}`);
+
+        if (type === 'variable') {
+            const varSelect = document.getElementById(`val-var-${eventName}-${i}`);
+            const val = varSelect ? varSelect.value : '';
+
+            if (val && erpVariables[val]) {
+                erpValueLabel = `${erpVariables[val].label} — ${val}`;
+                sampleValue = erpVariables[val].sample || 'N/A';
+                if (descContainer) {
+                    descContainer.innerHTML = `<i class="fas fa-info-circle"></i> ${erpVariables[val].description}`;
+                    descContainer.style.display = 'block';
+                }
+            } else {
+                if (descContainer) {
+                    descContainer.innerHTML = '';
+                    descContainer.style.display = 'none';
+                }
+            }
+        } else {
+            const custInput = document.getElementById(`val-cust-${eventName}-${i}`);
+            const val = custInput ? custInput.value : '';
+            erpValueLabel = 'Custom Text';
+            sampleValue = val ? `"${val}"` : 'Empty custom text';
+            if (descContainer) {
+                descContainer.innerHTML = '';
+                descContainer.style.display = 'none';
+            }
+        }
+
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid #f3f4f6';
+        tr.innerHTML = `
+            <td style="padding: 6px 8px; font-weight: 700; color: #4b5563;">{{${i}}}</td>
+            <td style="padding: 6px 8px; color: #1f2937;">${erpValueLabel}</td>
+            <td style="padding: 6px 8px; color: #059669; font-weight: 600;">${sampleValue}</td>
+        `;
+        tbody.appendChild(tr);
     }
 }
 
@@ -684,15 +931,15 @@ function onTestTemplateSelect(selectedTemplateName) {
     const section = document.getElementById('test-params-section');
     const paramList = document.getElementById('test-params-list');
     paramList.innerHTML = '';
-    
+
     if (!selectedTemplateName) {
         section.style.display = 'none';
         return;
     }
-    
+
     section.style.display = 'block';
     const tplInfo = approvedTemplates[selectedTemplateName];
-    
+
     if (tplInfo && tplInfo.param_count > 0) {
         for (let i = 1; i <= tplInfo.param_count; i++) {
             const div = document.createElement('div');
@@ -708,6 +955,14 @@ function onTestTemplateSelect(selectedTemplateName) {
         paramList.innerHTML = '<span style="font-size:0.75rem; color:#9ca3af;">No parameters required.</span>';
     }
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Initial previews load for all events
+    const eventNames = <?php echo json_encode($events); ?>;
+    eventNames.forEach(evName => {
+        updatePreviews(evName);
+    });
+});
 </script>
 
 <?php include 'includes/admin_footer.php'; ?>
