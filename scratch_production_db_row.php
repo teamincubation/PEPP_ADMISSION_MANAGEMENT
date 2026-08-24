@@ -9,23 +9,38 @@ try {
     
     echo "DATABASE CONNECTION SUCCESSFUL\n\n";
     
-    echo "ACADEMIC YEARS:\n";
-    $stmt = $pdo->query("SELECT * FROM academic_years");
+    // 1. Query study plans
+    echo "STUDY PLANS FOR ID 5:\n";
+    $stmt = $pdo->prepare("SELECT * FROM study_plans WHERE id = 5");
+    $stmt->execute();
     print_r($stmt->fetchAll(PDO::FETCH_ASSOC));
     
-    echo "\nASSESSMENT RESULT BATCHES count for 2026-27:\n";
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM assessment_result_batches WHERE academic_year = ?");
-    $stmt->execute(['2026-27']);
-    echo "Total: " . $stmt->fetchColumn() . "\n";
+    // 2. Query study plan activities
+    echo "\nSTUDY PLAN ACTIVITIES FOR IDs 26305, 26335, 26343:\n";
+    $stmt = $pdo->prepare("SELECT id, study_plan_id, activity_title, activity_type, activity_date, chapter, day_number FROM study_plan_activities WHERE id IN (26305, 26335, 26343)");
+    $stmt->execute();
+    print_r($stmt->fetchAll(PDO::FETCH_ASSOC));
     
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM assessment_result_batches WHERE academic_year = ? AND status = 'published'");
+    // 3. Run the exact query used in assessment-results.php
+    echo "\nEXACT ENDPOINT SQL QUERY OUTPUT FOR 2026-27:\n";
+    $stmt = $pdo->prepare("
+        SELECT DISTINCT
+            arb.study_plan_id,
+            arb.activity_id,
+            arb.activity_title_snapshot AS activity_title,
+            arb.activity_type_snapshot AS activity_type,
+            COALESCE(spa.activity_date, arb.activity_date_snapshot) AS activity_date,
+            COALESCE(spa.chapter, arb.chapter_snapshot) AS chapter,
+            sp.title AS plan_title,
+            spa.day_number
+        FROM assessment_result_batches arb
+        LEFT JOIN study_plans sp ON arb.study_plan_id = sp.id
+        LEFT JOIN study_plan_activities spa ON arb.activity_id = spa.id
+        WHERE arb.academic_year = ? AND arb.status = 'published'
+        ORDER BY COALESCE(spa.activity_date, arb.activity_date_snapshot) DESC, arb.activity_id DESC
+    ");
     $stmt->execute(['2026-27']);
-    echo "Published: " . $stmt->fetchColumn() . "\n";
-    
-    $stmt = $pdo->prepare("SELECT id, activity_id, study_plan_id, academic_year, status, activity_title_snapshot, activity_date_snapshot, chapter_snapshot FROM assessment_result_batches WHERE academic_year = ? AND status = 'published'");
-    $stmt->execute(['2026-27']);
-    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    print_r($rows);
+    print_r($stmt->fetchAll(PDO::FETCH_ASSOC));
 
 } catch (Exception $e) {
     echo "ERROR: " . $e->getMessage() . "\n";
