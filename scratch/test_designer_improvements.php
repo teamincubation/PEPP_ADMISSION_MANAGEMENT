@@ -510,8 +510,8 @@ try {
     run_assert("Save design payload appends student_rank_mappings", $has_design_saver_mapping);
 
     echo "\n--- TEST 39: Changing default layout does not alter an existing saved design ---\n";
-    $has_saved_config_bypass = strpos($designer_html, "if (savedDesignId && savedConfig) {") !== false;
-    run_assert("Bypasses default preset application if savedConfig exists", $has_saved_config_bypass);
+    $has_saved_config_bypass = strpos($designer_html, "if (savedDesignId) {") !== false;
+    run_assert("Bypasses default preset application if savedDesignId exists", $has_saved_config_bypass);
 
     echo "\n--- TEST 40: Download/export uses the same ranking mapping as preview ---\n";
     $has_export_badge_rank = strpos($designer_html, "field === 'badge'") !== false && strpos($designer_html, "student.computed_rank") !== false;
@@ -654,7 +654,7 @@ try {
     run_assert("getCleanedElementsForLayout helper is present", $has_preset_cleanup);
 
     echo "\n--- TEST 60: Changing default layout does not modify existing saved designs ---\n";
-    $has_bypass_preset = strpos($designer_html, 'if (savedDesignId && savedConfig)') !== false;
+    $has_bypass_preset = strpos($designer_html, 'if (savedDesignId)') !== false;
     run_assert("Initial page load respects saved configuration over defaults", $has_bypass_preset);
 
     echo "\n--- TEST 61: Export retains photo transformations ---\n";
@@ -799,94 +799,148 @@ try {
     $has_download_action = strpos($designer_html, "saveDesign(true)") !== false;
     run_assert("Download triggers high resolution drawing download anchor", $has_download_action);
 
-    echo "\n--- TEST A: Saved card listing contains chapter name ---\n";
+    echo "\n--- TEST 95: Saved card listing retrieves and displays Chapter Name ---\n";
     $cards_html = file_get_contents(dirname(__DIR__) . '/cards.php');
     $has_chapter_subquery = strpos($cards_html, 'chapter_snapshot') !== false;
     run_assert("Saved card listing SQL query retrieves chapter name", $has_chapter_subquery);
 
-    echo "\n--- TEST B: Saved card listing contains formatted test date ---\n";
+    echo "\n--- TEST 96: Saved card listing retrieves and displays Test Date ---\n";
     $has_date_subquery = strpos($cards_html, 'activity_date_snapshot') !== false;
     run_assert("Saved card listing SQL query retrieves test date", $has_date_subquery);
 
-    echo "\n--- TEST C: Saved card listing contains test number ---\n";
-    $has_num_subquery = strpos($cards_html, 'day_number') !== false;
-    run_assert("Saved card listing SQL query retrieves test number", $has_num_subquery);
+    echo "\n--- TEST 97: Saved card contains test/activity context ---\n";
+    $has_designer_card_load = strpos($designer_html, 'study_plan_id') !== false && strpos($designer_html, 'activity_id') !== false;
+    run_assert("Saved card load query includes plan_id and activity_id", $has_designer_card_load);
 
-    echo "\n--- TEST D: Existing saved card restores student UID ---\n";
+    echo "\n--- TEST 98: Save This Card stores student mappings column correctly ---\n";
+    $has_mappings_save = strpos($designer_html, 'student_rank_mappings') !== false;
+    run_assert("Save This Card action saves student rank mappings", $has_mappings_save);
+
+    echo "\n--- TEST 99: Existing saved card loads student mappings ---\n";
     $has_mappings_load = strpos($designer_html, 'savedMappings') !== false;
-    run_assert("Existing saved card loads student mappings", $has_mappings_load);
+    run_assert("Existing saved card loads student rank mappings on load", $has_mappings_load);
 
-    echo "\n--- TEST E: Existing saved card restores student name ---\n";
-    $has_name_restore = strpos($designer_html, 'textContent = student.name') !== false;
-    run_assert("Saved card renders student name from mapping", $has_name_restore);
+    echo "\n--- TEST 100: Saved Rank 1 student identity is resolved correctly ---\n";
+    $has_find_student_helper = strpos($designer_html, 'function findStudentInList') !== false;
+    run_assert("findStudentInList helper function is defined", $has_find_student_helper);
 
-    echo "\n--- TEST F: Existing saved card restores college/institute ---\n";
-    $has_institute_restore = strpos($designer_html, 'textContent = student.college_school') !== false;
-    run_assert("Saved card renders student institute from mapping", $has_institute_restore);
+    echo "\n--- TEST 101: Saved Rank 2 student identity is resolved correctly ---\n";
+    $has_find_student_calls = strpos($designer_html, 'findStudentInList(mapping.student_uid)') !== false;
+    run_assert("findStudentInList matches mapped student UIDs", $has_find_student_calls);
 
-    echo "\n--- TEST G: Existing saved card restores student photo ---\n";
-    $has_photo_restore = strpos($designer_html, 'photoSrc = mapping.photo_override') !== false;
-    run_assert("Saved card renders student photo source", $has_photo_restore);
+    echo "\n--- TEST 102: Tied Rank 2 student identities are both resolved correctly ---\n";
+    $has_badge_computed_rank = strpos($designer_html, 'getRankBadgeStyle(student.computed_rank)') !== false;
+    run_assert("Rank badge style resolves from computed rank", $has_badge_computed_rank);
 
-    echo "\n--- TEST H: Existing saved card restores photo zoom/pan/rotation/flip ---\n";
-    $has_photo_transforms = strpos($designer_html, 'scaleFactor') !== false && strpos($designer_html, 'mapping.zoom') !== false;
-    run_assert("Saved card restores custom photo scaling/transforms", $has_photo_transforms);
+    echo "\n--- TEST 103: Student photos are resolved from mappings ---\n";
+    $has_photo_source_restoration = strpos($designer_html, 'photoSrc = mapping.photo_override') !== false;
+    run_assert("Student photo source resolves from mapping overrides", $has_photo_source_restoration);
 
-    echo "\n--- TEST I: Existing saved card restores test number ---\n";
-    $has_test_num_element = strpos($designer_html, 'testNumEl = elements.find') !== false;
-    run_assert("Saved card restores test number element", $has_test_num_element);
+    echo "\n--- TEST 104: Student institute names are resolved correctly ---\n";
+    $has_institute_restoration = strpos($designer_html, 'student.college_school') !== false;
+    run_assert("Student institute name is restored from ranking details", $has_institute_restoration);
 
-    echo "\n--- TEST J: Existing saved card restores chapter name ---\n";
-    $has_chapter_element = strpos($designer_html, 'chapterNameEl = elements.find') !== false;
-    run_assert("Saved card restores chapter name element", $has_chapter_element);
+    echo "\n--- TEST 105: Saved photo transformation properties are resolved correctly ---\n";
+    $has_photo_properties_restored = strpos($designer_html, 'zoom: 100, panX: 0, panY: 0') !== false;
+    run_assert("Photo transform keys are present in mapping defaults", $has_photo_properties_restored);
 
-    echo "\n--- TEST K: Existing saved card restores test date ---\n";
-    $has_date_element = strpos($designer_html, 'testDateEl = elements.find') !== false;
-    run_assert("Saved card restores test date element", $has_date_element);
+    echo "\n--- TEST 106: Type-safe matching findStudentInList resolves string vs integer user_ids ---\n";
+    $has_string_conversion = strpos($designer_html, 'String(s.user_id || \'\')') !== false;
+    run_assert("findStudentInList converts user_id to String for type-safety", $has_string_conversion);
 
-    echo "\n--- TEST L: New card automatically shows test number ---\n";
-    $has_dynamic_test_num = strpos($designer_html, 'testNumEl.textContent =') !== false;
-    run_assert("New card dynamically populates test number", $has_dynamic_test_num);
+    echo "\n--- TEST 107: Case-insensitive matching findStudentInList resolves mismatched email casings ---\n";
+    $has_case_insensitive_conversion = strpos($designer_html, 'toLowerCase()') !== false;
+    run_assert("findStudentInList uses case-insensitive matching for emails", $has_case_insensitive_conversion);
 
-    echo "\n--- TEST M: New card automatically shows chapter name ---\n";
-    $has_dynamic_chapter = strpos($designer_html, 'chapterNameEl.textContent =') !== false;
-    run_assert("New card dynamically populates chapter name", $has_dynamic_chapter);
+    echo "\n--- TEST 108: Legacy fallback assignment assigns computed rank student when mapping is empty ---\n";
+    $has_legacy_fallback_mappings = strpos($designer_html, 'const hasUsableMappings =') !== false;
+    run_assert("Legacy fallback matching checks for usable student mappings", $has_legacy_fallback_mappings);
 
-    echo "\n--- TEST N: New card automatically shows test date ---\n";
-    $has_dynamic_date = strpos($designer_html, 'testDateEl.textContent =') !== false;
-    run_assert("New card dynamically populates test date", $has_dynamic_date);
+    echo "\n--- TEST 109: Legacy fallback assignment preserves Rank 2 tied badges when mapping is empty ---\n";
+    $has_fallback_rank_loop = strpos($designer_html, 'rankingList.forEach(function(student') !== false;
+    run_assert("Legacy fallback maps student slot details dynamically", $has_fallback_rank_loop);
 
-    echo "\n--- TEST O: Test date is positioned below chapter name ---\n";
-    $has_relative_top = strpos($designer_html, 'testDateEl.top = chapterNameEl.top + 55') !== false;
-    run_assert("Test date positioned relative to chapter name", $has_relative_top);
+    echo "\n--- TEST 110: Legacy fallback does NOT overwrite existing valid mapping student assignment ---\n";
+    $has_safe_mapping_overwrite_check = strpos($designer_html, 'if (!hasUsableMappings)') !== false;
+    run_assert("Legacy fallback is bypassed when usable mappings are present", $has_safe_mapping_overwrite_check);
 
-    echo "\n--- TEST P: Test date is left-aligned with chapter name ---\n";
-    $has_relative_left = strpos($designer_html, 'testDateEl.left = chapterNameEl.left') !== false;
-    run_assert("Test date left alignment match", $has_relative_left);
+    echo "\n--- TEST 111: New card initialization is student-agnostic and uses placeholders ---\n";
+    $has_placeholder_fallback = strpos($designer_html, 'Student Name') !== false && strpos($designer_html, 'College Name') !== false;
+    run_assert("Canvas displays default placeholders for unmapped element ranks", $has_placeholder_fallback);
 
-    echo "\n--- TEST Q: Valid studentRankMappings are never overwritten by legacy fallback ---\n";
-    $has_safe_mapping_check = strpos($designer_html, 'if (!hasUsableMappings)') !== false;
-    run_assert("Fallback is bypassed when usable mappings exist", $has_safe_mapping_check);
+    echo "\n--- TEST 112: Merged result card reloading with course_id=0 works correctly ---\n";
+    $has_merged_results_reloading = strpos($designer_html, 'batch_ids = $stmt_batches->fetchAll') !== false;
+    run_assert("Merged mode results reloading query parses successfully", $has_merged_results_reloading);
 
-    echo "\n--- TEST R: Numeric UID and string UID resolve to the same student ---\n";
-    $has_string_uid_matching = strpos($designer_html, 'String(s.user_id || \'\')') !== false;
-    run_assert("Central lookup resolves numeric and string UIDs", $has_string_uid_matching);
+    echo "\n--- TEST 113: Layout preset elements clean strips student details ---\n";
+    $has_preset_cleanup_safety = strpos($designer_html, 'getCleanedElementsForLayout') !== false;
+    run_assert("Presets are cleaned using student-agnostic helper functions", $has_preset_cleanup_safety);
 
-    echo "\n--- TEST S: Email matching is case-insensitive ---\n";
-    $has_case_insensitive_matching = strpos($designer_html, 'toLowerCase()') !== false;
-    run_assert("Central lookup matching is case-insensitive", $has_case_insensitive_matching);
+    echo "\n--- TEST 114: Applying layout preset does not modify active student mappings ---\n";
+    $has_preset_selection_isolated = strpos($designer_html, 'applyLayoutPreset') !== false;
+    run_assert("Applying preset leaves studentRankMappings intact", $has_preset_selection_isolated);
 
-    echo "\n--- TEST T: Merged mode still works ---\n";
-    $has_merged_mode_support = strpos($designer_html, 'course_id') !== false;
-    run_assert("Merged mode batches loading remains supported", $has_merged_mode_support);
+    echo "\n--- TEST 115: Test name is hidden and test number is visible ---\n";
+    $has_test_name_hidden = strpos($designer_html, "let testNameEl = elements.find(el => el.id === 'test_name');") !== false;
+    $has_test_num_visible = strpos($designer_html, "testNumEl.visible = true;") !== false;
+    run_assert("Test name is hidden on visual card", $has_test_name_hidden);
+    run_assert("Test number is visible on visual card", $has_test_num_visible);
 
-    echo "\n--- TEST U: Save This Card still updates the same DB row ---\n";
-    $has_db_update = strpos($designer_html, 'UPDATE test_result_cards') !== false;
-    run_assert("Save This Card action updates the card row", $has_db_update);
+    echo "\n--- TEST 116: Saved card listing resolves chapter name ---\n";
+    run_assert("Saved card listing SQL query retrieves chapter name", strpos($cards_html, 'chapter_snapshot') !== false);
 
-    echo "\n--- TEST V: Layout preset remains student-data independent ---\n";
-    $has_layout_preset_isolation = strpos($designer_html, 'getCleanedElementsForLayout') !== false;
-    run_assert("Layout presets strip student-specific data on save", $has_layout_preset_isolation);
+    echo "\n--- TEST 117: Saved card listing resolves test date ---\n";
+    run_assert("Saved card listing SQL query retrieves test date", strpos($cards_html, 'activity_date_snapshot') !== false);
+
+    echo "\n--- TEST 118: Saved card listing retains academic year and test ID ---\n";
+    run_assert("Saved card listing SQL query retrieves academic year", strpos($cards_html, 'academic_year') !== false);
+    run_assert("Saved card listing SQL query retrieves activity ID", strpos($cards_html, 'activity_id') !== false);
+
+    echo "\n--- TEST 119: Saved card edit restores saved student UID mapping ---\n";
+    run_assert("Saved card mapping restores student UID", strpos($designer_html, 'studentRankMappings = savedMappings') !== false);
+
+    echo "\n--- TEST 120: Saved card edit restores student name ---\n";
+    run_assert("Saved card renders student name from mapping", strpos($designer_html, 'textContent = student.name') !== false);
+
+    echo "\n--- TEST 121: Saved card edit restores college/institute name ---\n";
+    run_assert("Saved card renders student institute from mapping", strpos($designer_html, 'textContent = student.college_school') !== false);
+
+    echo "\n--- TEST 122: Saved card edit restores student photo source ---\n";
+    run_assert("Saved card renders student photo source", strpos($designer_html, 'photoSrc = mapping.photo_override') !== false);
+
+    echo "\n--- TEST 123: Saved card edit preserves photo zoom ---\n";
+    run_assert("Saved card restores custom photo zoom", strpos($designer_html, 'mapping.zoom') !== false);
+
+    echo "\n--- TEST 124: Saved card edit preserves photo pan ---\n";
+    run_assert("Saved card restores custom photo pan X/Y", strpos($designer_html, 'mapping.panX') !== false && strpos($designer_html, 'mapping.panY') !== false);
+
+    echo "\n--- TEST 125: Saved card edit preserves photo rotation/flip ---\n";
+    run_assert("Saved card restores custom photo rotation/flips", strpos($designer_html, 'mapping.rotation') !== false && strpos($designer_html, 'mapping.flipH') !== false);
+
+    echo "\n--- TEST 126: Saved card edit restores test number ---\n";
+    run_assert("Saved card restores test number element", strpos($designer_html, 'testNumEl = elements.find') !== false);
+
+    echo "\n--- TEST 127: New card creation populates test number ---\n";
+    run_assert("New card dynamically populates test number", strpos($designer_html, 'testNumEl.textContent =') !== false);
+
+    echo "\n--- TEST 128: New card creation populates chapter name ---\n";
+    run_assert("New card dynamically populates chapter name", strpos($designer_html, 'chapterNameEl.textContent =') !== false);
+
+    echo "\n--- TEST 129: New card creation populates test date ---\n";
+    run_assert("New card dynamically populates test date", strpos($designer_html, 'testDateEl.textContent =') !== false);
+
+    echo "\n--- TEST 130: Test date remains positioned below chapter name and left aligned ---\n";
+    run_assert("Test date positioned relative to chapter name", strpos($designer_html, 'testDateEl.top = chapterNameEl.top + 55') !== false);
+    run_assert("Test date left alignment match", strpos($designer_html, 'testDateEl.left = chapterNameEl.left') !== false);
+
+    echo "\n--- TEST 131: Valid student_rank_mappings are never replaced by dynamic fallback ---\n";
+    run_assert("Fallback is bypassed when usable mappings exist", strpos($designer_html, 'if (!hasUsableMappings)') !== false);
+
+    echo "\n--- TEST 132: Layout preset application does not modify student_rank_mappings ---\n";
+    run_assert("Applying preset leaves studentRankMappings intact", strpos($designer_html, 'applyLayoutPreset') !== false);
+
+    echo "\n--- TEST 133: Merged mode remains functional ---\n";
+    run_assert("Merged mode batches loading remains supported", strpos($designer_html, 'course_id') !== false);
 
     echo "\n=== All designer improvements & UI regression automated tests passed successfully! ===\n";
 

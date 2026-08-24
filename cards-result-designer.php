@@ -327,6 +327,18 @@ try {
         $batch_ids = $stmt_batches->fetchAll(PDO::FETCH_COLUMN);
     }
 
+    if (empty($batch_ids)) {
+        try {
+            $stmt_fallback = $pdo->prepare("
+                SELECT id FROM assessment_result_batches
+                WHERE activity_id = ?
+                  AND status = 'published'
+            ");
+            $stmt_fallback->execute([$activity_id]);
+            $batch_ids = $stmt_fallback->fetchAll(PDO::FETCH_COLUMN);
+        } catch (Exception $e) {}
+    }
+
     $results = [];
     if (!empty($batch_ids)) {
         $placeholders = implode(',', array_fill(0, count($batch_ids), '?'));
@@ -1273,8 +1285,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Check if template explicitly defines native coordinate mode (metadata node with coordinate_mode: native)
         const isNative = templateElements.some(el => el.id === 'metadata' && el.coordinate_mode === 'native');
 
-        if (savedDesignId && savedConfig) {
-            elements = savedConfig.elements || [];
+        if (savedDesignId) {
+            elements = (savedConfig && savedConfig.elements) ? savedConfig.elements : JSON.parse(JSON.stringify(templateElements));
             studentRankMappings = savedMappings || {};
             // Normalize studentRankMappings to ensure all mappings are object-based
             for (let key in studentRankMappings) {
@@ -1295,7 +1307,9 @@ document.addEventListener('DOMContentLoaded', async function() {
                     };
                 }
             }
-            document.getElementById('prop-ranks-count').value = savedConfig.ranksCount || '4';
+            if (savedConfig) {
+                document.getElementById('prop-ranks-count').value = savedConfig.ranksCount || '4';
+            }
             document.getElementById('prop-export-format').value = '<?php echo $saved_design ? addslashes($saved_design['output_format']) : "png"; ?>';
 
             // Self-heal saved design elements that were previously corrupted/oversized by the percentage conversion bug
@@ -1520,7 +1534,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
 
         // Fallback mapping assignment for legacy/empty card configs
-        const hasUsableMappings = Object.keys(studentRankMappings).length > 0 && Object.values(studentRankMappings).some(m => m && m.student_uid);
+        const hasUsableMappings = Object.keys(studentRankMappings).length > 0 && Object.values(studentRankMappings).some(m => {
+            if (!m) return false;
+            if (typeof m === 'object') {
+                return !!m.student_uid;
+            }
+            return String(m).trim() !== '';
+        });
         if (!hasUsableMappings) {
             studentRankMappings = {};
             rankingList.forEach(function(student, index) {

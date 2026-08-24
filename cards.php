@@ -775,13 +775,10 @@ include 'includes/admin_nav.php';
                                             <?php echo htmlspecialchars($sc['template_title'] ?: 'Unknown'); ?>
                                         </td>
                                         <td style="padding: 12px 16px; color: #64748b; font-size: 0.8rem; line-height: 1.45;">
+                                            <strong>Chapter:</strong> <?php echo !empty($sc['chapter_name']) ? htmlspecialchars($sc['chapter_name']) : '&mdash;'; ?><br>
+                                            <strong>Test Date:</strong> <?php echo !empty($sc['test_date']) ? htmlspecialchars(date('d M Y', strtotime($sc['test_date']))) : '&mdash;'; ?><br>
+                                            <strong>Test No:</strong> <?php echo !empty($sc['test_number']) ? htmlspecialchars($sc['test_number']) : '&mdash;'; ?><br>
                                             <strong>Year:</strong> <?php echo htmlspecialchars($sc['academic_year']); ?><br>
-                                            <?php if (!empty($sc['chapter_name'])): ?>
-                                                <strong>Chapter:</strong> <?php echo htmlspecialchars($sc['chapter_name']); ?><?php echo !empty($sc['test_number']) ? ' ' . htmlspecialchars($sc['test_number']) : ''; ?><br>
-                                            <?php endif; ?>
-                                            <?php if (!empty($sc['test_date'])): ?>
-                                                <strong>Test Date:</strong> <?php echo htmlspecialchars(date('d M Y', strtotime($sc['test_date']))); ?><br>
-                                            <?php endif; ?>
                                             <strong>Test ID:</strong> <?php echo htmlspecialchars($sc['activity_id']); ?>
                                         </td>
                                         <td style="padding: 12px 16px; color: #64748b;">
