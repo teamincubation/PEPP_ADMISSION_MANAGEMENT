@@ -1205,6 +1205,15 @@ const bgUrl = '<?php echo addslashes($tpl['bg_image']); ?>';
 
 // Loaded database data
 const rankingList = <?php echo json_encode($ranking_list); ?>;
+function findStudentInList(uidOrEmail) {
+    if (!uidOrEmail) return null;
+    const target = String(uidOrEmail).trim().toLowerCase();
+    return rankingList.find(s => {
+        const sUid = String(s.user_id || '').trim().toLowerCase();
+        const sEmail = String(s.student_email || '').trim().toLowerCase();
+        return (sUid && sUid === target) || (sEmail && sEmail === target);
+    });
+}
 const templateElements = <?php echo $tpl['elements_json'] ?: '[]'; ?>;
 
 // Saved design data if editing
@@ -1439,54 +1448,62 @@ document.addEventListener('DOMContentLoaded', async function() {
                 }
             }
 
-            // Populate test details dynamically, if present (handles backward compatibility)
-            let testNameEl = elements.find(el => el.id === 'test_name');
-            if (testNameEl) {
-                testNameEl.textContent = '<?php echo addslashes($activity['activity_title'] ?? ''); ?>';
-            }
+        }
 
-            let chapterNameEl = elements.find(el => el.id === 'chapter_name');
-            if (chapterNameEl) {
-                const chapterVal = '<?php echo addslashes($activity['chapter'] ?? ''); ?>';
-                chapterNameEl.textContent = chapterVal;
-                if (!chapterVal) {
-                    chapterNameEl.visible = false;
+        // Unconditional authoritative text elements overwrite (for both new and saved designs)
+        let chapterNameEl = elements.find(el => el.id === 'chapter_name');
+        if (chapterNameEl) {
+            const chapterVal = '<?php echo addslashes($activity['chapter'] ?? ''); ?>';
+            chapterNameEl.textContent = chapterVal;
+            if (!chapterVal) {
+                chapterNameEl.visible = false;
+            } else {
+                chapterNameEl.visible = true;
+            }
+        }
+
+        let testDateEl = elements.find(el => el.id === 'test_date');
+        if (testDateEl) {
+            let formattedDate = '';
+            const rawDate = '<?php echo $activity['activity_date'] ?? ''; ?>';
+            if (rawDate) {
+                const dObj = new Date(rawDate);
+                if (!isNaN(dObj.getTime())) {
+                    formattedDate = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
                 }
             }
-
-            let testDateEl = elements.find(el => el.id === 'test_date');
-            if (testDateEl) {
-                let formattedDate = '';
-                const rawDate = '<?php echo $activity['activity_date'] ?? ''; ?>';
-                if (rawDate) {
-                    const dObj = new Date(rawDate);
-                    if (!isNaN(dObj.getTime())) {
-                        formattedDate = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-                    }
-                }
-                testDateEl.textContent = formattedDate;
+            testDateEl.textContent = formattedDate;
+            if (!formattedDate) {
+                testDateEl.visible = false;
+            } else {
+                testDateEl.visible = true;
             }
+        }
 
-            // Auto fill test number
-            const testNumEl = elements.find(el => el.id === 'test_number');
-            if (testNumEl) {
-                testNumEl.textContent = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
-            }
+        // Hide test name and test number elements safely for template compatibility (do not render as visible card content)
+        let testNameEl = elements.find(el => el.id === 'test_name');
+        if (testNameEl) {
+            testNameEl.visible = false;
+        }
+        let testNumEl = elements.find(el => el.id === 'test_number');
+        if (testNumEl) {
+            testNumEl.visible = false;
+        }
 
-            // Auto assign students to rank photo placeholders by slot index
+        // Fallback mapping assignment for legacy/empty card configs
+        const hasUsableMappings = Object.keys(studentRankMappings).length > 0 && Object.values(studentRankMappings).some(m => m && m.student_uid);
+        if (!hasUsableMappings) {
+            studentRankMappings = {};
             rankingList.forEach(function(student, index) {
-                const slotNum = index + 1; // Slot 1 corresponds to student index 0, Slot 2 to 1, etc.
-                const photoEl = elements.find(el => el.id === 'rank_photo_' + slotNum);
-
-                if (photoEl && !studentRankMappings[photoEl.id]) {
-                    studentRankMappings[photoEl.id] = {
-                        student_uid: student.user_id || student.student_email,
-                        zoom: 100,
-                        panX: 0,
-                        panY: 0,
-                        photo_override: null
-                    };
-                }
+                const slotNum = index + 1;
+                const photoElId = 'rank_photo_' + slotNum;
+                studentRankMappings[photoElId] = {
+                    student_uid: student.user_id || student.student_email,
+                    zoom: 100,
+                    panX: 0,
+                    panY: 0,
+                    photo_override: null
+                };
             });
         }
 
@@ -1621,7 +1638,7 @@ function drawElements() {
             const mapping = studentRankMappings[photoElId];
 
             if (mapping && mapping.student_uid) {
-                const student = rankingList.find(s => (s.user_id === mapping.student_uid || s.student_email === mapping.student_uid));
+                const student = findStudentInList(mapping.student_uid);
                 if (student) {
                     if (field === 'name') textContent = student.name;
                     else if (field === 'institute') textContent = student.college_school;
@@ -1638,7 +1655,7 @@ function drawElements() {
             const photoElId = 'rank_photo_' + slotNum;
             const mapping = studentRankMappings[photoElId];
             if (mapping && mapping.student_uid) {
-                const student = rankingList.find(s => (s.user_id === mapping.student_uid || s.student_email === mapping.student_uid));
+                const student = findStudentInList(mapping.student_uid);
                 if (student) {
                     const style = getRankBadgeStyle(student.computed_rank);
                     if (!savedDesignId || !el.markerColorManuallySet) {
@@ -3197,7 +3214,7 @@ function saveDesign(isExporting = false) {
                     const photoElId = 'rank_photo_' + rankNum;
                     const mapping = studentRankMappings[photoElId];
                     if (mapping && mapping.student_uid) {
-                        const student = rankingList.find(s => (s.user_id === mapping.student_uid || s.student_email === mapping.student_uid));
+                        const student = findStudentInList(mapping.student_uid);
                         if (student) {
                             if (field === 'name') textContent = student.name;
                             else if (field === 'institute') textContent = student.college_school;

@@ -356,7 +356,15 @@ if ($active_tab === 'test_results') {
     } catch(Exception $e){}
     try {
         $saved_cards = $pdo->query("
-            SELECT trc.*, ct.title AS template_title
+            SELECT trc.*, ct.title AS template_title,
+                   (SELECT chapter_snapshot FROM assessment_result_batches
+                    WHERE study_plan_id = trc.study_plan_id
+                      AND activity_id = trc.activity_id
+                      AND status = 'published' LIMIT 1) AS chapter_name,
+                   (SELECT activity_date_snapshot FROM assessment_result_batches
+                    WHERE study_plan_id = trc.study_plan_id
+                      AND activity_id = trc.activity_id
+                      AND status = 'published' LIMIT 1) AS test_date
             FROM test_result_cards trc
             LEFT JOIN card_templates ct ON trc.template_id = ct.id
             ORDER BY trc.created_at DESC
@@ -764,9 +772,14 @@ include 'includes/admin_nav.php';
                                         <td style="padding: 12px 16px; color: #64748b;">
                                             <?php echo htmlspecialchars($sc['template_title'] ?: 'Unknown'); ?>
                                         </td>
-                                        <td style="padding: 12px 16px; color: #64748b; font-size: 0.8rem;">
-                                            <strong>Year:</strong> <?php echo htmlspecialchars($sc['academic_year']); ?><br>
-                                            <strong>Test ID:</strong> <?php echo $sc['activity_id']; ?>
+                                        <td style="padding: 12px 16px; color: #64748b; font-size: 0.8rem; line-height: 1.4;">
+                                            <?php if (!empty($sc['chapter_name'])): ?>
+                                                <strong>Chapter:</strong> <?php echo htmlspecialchars($sc['chapter_name']); ?><br>
+                                            <?php endif; ?>
+                                            <?php if (!empty($sc['test_date'])): ?>
+                                                <strong>Test Date:</strong> <?php echo htmlspecialchars(date('d M Y', strtotime($sc['test_date']))); ?><br>
+                                            <?php endif; ?>
+                                            <strong>Year:</strong> <?php echo htmlspecialchars($sc['academic_year']); ?> &middot; <strong>Test ID:</strong> <?php echo $sc['activity_id']; ?>
                                         </td>
                                         <td style="padding: 12px 16px; color: #64748b;">
                                             <?php echo htmlspecialchars($sc['created_by']); ?>
