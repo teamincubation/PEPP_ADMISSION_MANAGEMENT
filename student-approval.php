@@ -235,21 +235,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 cleanup_referral_and_coupon_for_user($pdo, $user_id);
             }
 
-            $stmt = $pdo->prepare("UPDATE users SET status = 'rejected', approved_by = ?, approval_date = NOW() WHERE user_id = ?");
-            $stmt->execute([$admin_username, $user_id]);
-
+            // Save history record before user row is deleted
             $stmt = $pdo->prepare("
                 INSERT INTO student_approval_history (user_id, action, approved_by, payment_mode, approval_date, notes)
                 VALUES (?, 'rejected', ?, 'Online', NOW(), ?)
             ");
             $stmt->execute([$user_id, $admin_username, $reason]);
 
-            $pdo->commit();
-
             status_log($pdo, $user_id, 'pending', 'rejected', $reason, $admin_username);
             track_record($pdo, $user_id, 'student_rejected', $reason, $admin_username);
 
-            // Trigger Student Rejection WhatsApp Notification (META API mode only)
+            // Trigger Rejection Notification BEFORE deleting the user row
             if (whatsapp_outbound_mode($pdo) === 'meta_api') {
                 try {
                     require_once 'includes/communication/CommunicationEngine.php';
@@ -274,6 +270,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     error_log('Failed to trigger student_rejection notification: ' . $ex->getMessage());
                 }
             }
+
+            // Delete child rows and users row to allow student to re-register
+            $pdo->prepare("DELETE FROM instalment_details WHERE user_id = ?")->execute([$user_id]);
+            $pdo->prepare("DELETE FROM installment_configuration WHERE user_id = ?")->execute([$user_id]);
+            $pdo->prepare("DELETE FROM student_onboarding WHERE user_id = ?")->execute([$user_id]);
+            $pdo->prepare("DELETE FROM users WHERE user_id = ?")->execute([$user_id]);
+
+            $pdo->commit();
 
             echo json_encode(['success' => true, 'message' => 'Student application rejected.']);
             exit;

@@ -34,16 +34,8 @@ try {
         exit();
     }
     
-    // Update student status
-    $stmt = $pdo->prepare("
-        UPDATE users 
-        SET status = 'rejected', 
-            admin_notes = ?,
-            rejected_at = NOW()
-        WHERE user_id = ?
-    ");
-    
-    $stmt->execute([$rejection_reason, $user_id]);
+    // Delete student data after logging approval history to allow re-registration
+    $pdo->beginTransaction();
     
     // Add to approval history
     $stmt = $pdo->prepare("
@@ -52,6 +44,14 @@ try {
         VALUES (?, 'rejected', ?, ?, NOW())
     ");
     $stmt->execute([$user_id, $_SESSION['admin_id'] ?? 1, $rejection_reason]);
+
+    // Clean up related rows
+    $pdo->prepare("DELETE FROM instalment_details WHERE user_id = ?")->execute([$user_id]);
+    $pdo->prepare("DELETE FROM installment_configuration WHERE user_id = ?")->execute([$user_id]);
+    $pdo->prepare("DELETE FROM student_onboarding WHERE user_id = ?")->execute([$user_id]);
+    $pdo->prepare("DELETE FROM users WHERE user_id = ?")->execute([$user_id]);
+
+    $pdo->commit();
     
     // Get WhatsApp message template
     $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'user_rejection_wp_message'");
