@@ -127,6 +127,7 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
     if ($ajax_action === 'get_tests') {
         $plan_id = (int)($_GET['plan_id'] ?? 0);
         $course_id = (int)($_GET['course_id'] ?? 0);
+        $year = trim($_GET['year'] ?? '');
         if ($plan_id <= 0 || $course_id <= 0) { echo json_encode([]); exit; }
         $test_types = ['Attend Mock Test','Attend Mega Test','Attend Weekly Test','Practice Test','Previous Year Questions','Daily Quiz','Self-Assessment'];
         try {
@@ -150,6 +151,32 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
                 $bs = $pdo->prepare("SELECT id, version, status, published_at, published_by FROM assessment_result_batches WHERE activity_id = ? AND (course_id = ? OR (course_name = ? AND course_name != '')) AND status = 'published' LIMIT 1");
                 $bs->execute([$act['id'], $course_id, $course_name]);
                 $batch = $bs->fetch(PDO::FETCH_ASSOC);
+
+                if (!$batch && !empty($year)) {
+                    // Fallback: match by title, type, chapter, academic year, and course
+                    $bs_fallback = $pdo->prepare("
+                        SELECT id, version, status, published_at, published_by
+                        FROM assessment_result_batches
+                        WHERE LOWER(TRIM(activity_title_snapshot)) = LOWER(TRIM(?))
+                          AND LOWER(TRIM(activity_type_snapshot)) = LOWER(TRIM(?))
+                          AND (LOWER(TRIM(chapter_snapshot)) = LOWER(TRIM(?)) OR (chapter_snapshot IS NULL AND ? = ''))
+                          AND academic_year = ?
+                          AND (course_id = ? OR (course_name = ? AND course_name != ''))
+                          AND status = 'published'
+                        LIMIT 1
+                    ");
+                    $bs_fallback->execute([
+                        $act['activity_title'],
+                        $act['activity_type'],
+                        $act['chapter'] ?? '',
+                        $act['chapter'] ?? '',
+                        $year,
+                        $course_id,
+                        $course_name
+                    ]);
+                    $batch = $bs_fallback->fetch(PDO::FETCH_ASSOC);
+                }
+
                 $act['has_published_result'] = $batch ? true : false;
                 $act['published_version'] = $batch ? (int)$batch['version'] : 0;
                 $act['published_batch_id'] = $batch ? (int)$batch['id'] : 0;
@@ -454,7 +481,39 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
 
         $bs = $pdo->prepare("SELECT id FROM assessment_result_batches WHERE activity_id = ? AND (course_id = ? OR (course_name = ? AND course_name != '')) AND status = 'published' LIMIT 1");
         $bs->execute([$activity_id, $course_id, $course_name]);
-        if ($bs->fetch()) {
+        $has_existing = $bs->fetch() ? true : false;
+
+        if (!$has_existing) {
+            // Retrieve activity details for fallback comparison
+            $stmt_act = $pdo->prepare("SELECT activity_title, activity_type, chapter FROM study_plan_activities WHERE id = ?");
+            $stmt_act->execute([$activity_id]);
+            $act = $stmt_act->fetch(PDO::FETCH_ASSOC);
+            if ($act) {
+                $bs_fallback = $pdo->prepare("
+                    SELECT id
+                    FROM assessment_result_batches
+                    WHERE LOWER(TRIM(activity_title_snapshot)) = LOWER(TRIM(?))
+                      AND LOWER(TRIM(activity_type_snapshot)) = LOWER(TRIM(?))
+                      AND (LOWER(TRIM(chapter_snapshot)) = LOWER(TRIM(?)) OR (chapter_snapshot IS NULL AND ? = ''))
+                      AND academic_year = ?
+                      AND (course_id = ? OR (course_name = ? AND course_name != ''))
+                      AND status = 'published'
+                    LIMIT 1
+                ");
+                $bs_fallback->execute([
+                    $act['activity_title'],
+                    $act['activity_type'],
+                    $act['chapter'] ?? '',
+                    $act['chapter'] ?? '',
+                    $year,
+                    $course_id,
+                    $course_name
+                ]);
+                $has_existing = $bs_fallback->fetch() ? true : false;
+            }
+        }
+
+        if ($has_existing) {
             echo json_encode(['success' => false, 'message' => 'Results have already been uploaded and published for this test. Please delete the existing results first.']);
             exit;
         }
@@ -1256,7 +1315,7 @@ function arSelectPlan(planId) {
     arUpdateSteps(4);
     tc.style.display = 'block';
     tg.innerHTML = '<div class="ar-loading"><div class="spinner"></div> Loading tests...</div>';
-    fetch('assessment-results.php?action=get_tests&plan_id='+arSelectedPlanId+'&course_id='+arSelectedCourseId)
+    fetch('assessment-results.php?action=get_tests&plan_id='+arSelectedPlanId+'&course_id='+arSelectedCourseId+'&year='+encodeURIComponent(arSelectedYear))
         .then(r => r.json()).then(tests => {
             if (!tests.length) { tg.innerHTML = '<div class="ar-empty"><i class="fas fa-flask-vial"></i><p>No test/assessment activities found in this Study Plan.</p></div>'; return; }
             tg.innerHTML = '';

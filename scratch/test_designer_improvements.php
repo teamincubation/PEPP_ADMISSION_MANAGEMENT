@@ -1651,6 +1651,52 @@ try {
     $pdo->exec("DELETE FROM pepp_courses WHERE id = 888");
     $pdo->exec("DELETE FROM assessment_result_batches WHERE id = 9999");
 
+    // 3. Seed an activity and a batch with mismatched activity_id to test fallback matching
+    $pdo->exec("INSERT OR IGNORE INTO pepp_courses (id, course_name, course_code, academic_year, status)
+                VALUES (888, 'Psychology Test Course', 'PSY-888', '2026-27', 'active')");
+    $pdo->exec("INSERT OR IGNORE INTO study_plan_activities (id, study_plan_id, activity_title, activity_type, chapter)
+                VALUES (40754, 5, 'Mega Test', 'Attend Mega Test', 'Sensation and Perception')");
+    $pdo->exec("INSERT OR IGNORE INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, course_id, course_name, activity_title_snapshot, activity_type_snapshot, chapter_snapshot, status, version)
+                VALUES (9998, 26343, 5, '2026-27', 888, 'Psychology Test Course', 'Mega Test', 'Attend Mega Test', 'Sensation and Perception', 'published', 1)");
+
+    // Run fallback check:
+    $act_id = 40754;
+    $course_id = 888;
+    $stmt_cn = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
+    $stmt_cn->execute([$course_id]);
+    $course_name = $stmt_cn->fetchColumn();
+
+    $stmt_act = $pdo->prepare("SELECT activity_title, activity_type, chapter FROM study_plan_activities WHERE id = ?");
+    $stmt_act->execute([$act_id]);
+    $act = $stmt_act->fetch(PDO::FETCH_ASSOC);
+
+    $bs_fallback = $pdo->prepare("
+        SELECT id
+        FROM assessment_result_batches
+        WHERE LOWER(TRIM(activity_title_snapshot)) = LOWER(TRIM(?))
+          AND LOWER(TRIM(activity_type_snapshot)) = LOWER(TRIM(?))
+          AND (LOWER(TRIM(chapter_snapshot)) = LOWER(TRIM(?)) OR (chapter_snapshot IS NULL AND ? = ''))
+          AND academic_year = ?
+          AND (course_id = ? OR (course_name = ? AND course_name != ''))
+          AND status = 'published'
+        LIMIT 1
+    ");
+    $bs_fallback->execute([
+        $act['activity_title'],
+        $act['activity_type'],
+        $act['chapter'] ?? '',
+        $act['chapter'] ?? '',
+        '2026-27',
+        $course_id,
+        $course_name
+    ]);
+    $has_fallback_existing = $bs_fallback->fetch() ? true : false;
+    run_assert("Fallback query matches when activity_id has changed due to re-sync", $has_fallback_existing === true);
+
+    $pdo->exec("DELETE FROM pepp_courses WHERE id = 888");
+    $pdo->exec("DELETE FROM study_plan_activities WHERE id = 40754");
+    $pdo->exec("DELETE FROM assessment_result_batches WHERE id = 9998");
+
     echo "\n=== All designer improvements & UI regression automated tests passed successfully! ===\n";
 
 } catch (Exception $e) {
