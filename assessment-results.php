@@ -102,33 +102,87 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
 
     if ($ajax_action === 'get_study_plans') {
         $year = trim($_GET['year'] ?? '');
-        $course_id = (int)($_GET['course_id'] ?? 0);
-        if (empty($year) || $course_id <= 0) { echo json_encode([]); exit; }
+        if (empty($year)) { echo json_encode([]); exit; }
         try {
-            $stmt_cn = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
-            $stmt_cn->execute([$course_id]);
-            $course_name = $stmt_cn->fetchColumn();
-            if (!$course_name) { echo json_encode([]); exit; }
             $stmt = $pdo->prepare("
                 SELECT DISTINCT sp.id, sp.title, sp.start_date, sp.end_date, sp.status, sp.plan_type
                 FROM study_plans sp
                 JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
                 WHERE sp.academic_year = ?
                   AND sp.status IN ('published','draft')
-                  AND (sa.assignment_type = 'all' OR (sa.assignment_type = 'course' AND sa.assigned_value = ?))
+                  AND sp.is_deleted = 0
+                  AND sa.is_deleted = 0
                 ORDER BY sp.title ASC
             ");
-            $stmt->execute([$year, $course_name]);
+            $stmt->execute([$year]);
             echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
         } catch (Exception $e) { echo json_encode([]); }
         exit;
     }
 
+    if ($ajax_action === 'get_plan_info') {
+        $plan_id = (int)($_GET['plan_id'] ?? 0);
+        $year = trim($_GET['year'] ?? '');
+        if ($plan_id <= 0 || empty($year)) { echo json_encode(['success' => false]); exit; }
+        try {
+            $stmt_assign = $pdo->prepare("SELECT assignment_type, assigned_value FROM study_plan_assignments WHERE study_plan_id = ? AND is_deleted = 0");
+            $stmt_assign->execute([$plan_id]);
+            $assignments = $stmt_assign->fetchAll(PDO::FETCH_ASSOC);
+
+            $is_all = false;
+            $assigned_names = [];
+            foreach ($assignments as $asg) {
+                if ($asg['assignment_type'] === 'all') {
+                    $is_all = true;
+                    break;
+                } elseif ($asg['assignment_type'] === 'course') {
+                    $assigned_names[] = $asg['assigned_value'];
+                }
+            }
+
+            if ($is_all) {
+                $stmt_courses = $pdo->prepare("SELECT id, course_name FROM pepp_courses WHERE academic_year = ? AND status = 'active' ORDER BY course_name ASC");
+                $stmt_courses->execute([$year]);
+            } else {
+                if (empty($assigned_names)) {
+                    $stmt_courses = null;
+                } else {
+                    $placeholders = implode(',', array_fill(0, count($assigned_names), '?'));
+                    $stmt_courses = $pdo->prepare("SELECT id, course_name FROM pepp_courses WHERE academic_year = ? AND status = 'active' AND course_name IN ($placeholders) ORDER BY course_name ASC");
+                    $stmt_courses->execute(array_merge([$year], $assigned_names));
+                }
+            }
+            $courses = $stmt_courses ? $stmt_courses->fetchAll(PDO::FETCH_ASSOC) : [];
+            $course_names = array_column($courses, 'course_name');
+
+            $student_count = 0;
+            if (!empty($course_names)) {
+                $placeholders_courses = implode(',', array_fill(0, count($course_names), '?'));
+                $stmt_count = $pdo->prepare("
+                    SELECT COUNT(*) FROM users
+                    WHERE status = 'approved'
+                      AND student_status IN ('active','completed')
+                      AND pepp_academic_year = ?
+                      AND TRIM(pepp_course) IN ($placeholders_courses)
+                ");
+                $stmt_count->execute(array_merge([$year], $course_names));
+                $student_count = (int)$stmt_count->fetchColumn();
+            }
+
+            echo json_encode([
+                'success' => true,
+                'courses_count' => count($courses),
+                'students_count' => $student_count,
+                'courses' => $courses
+            ]);
+        } catch (Exception $e) { echo json_encode(['success' => false, 'message' => $e->getMessage()]); }
+        exit;
+    }
+
     if ($ajax_action === 'get_tests') {
         $plan_id = (int)($_GET['plan_id'] ?? 0);
-        $course_id = (int)($_GET['course_id'] ?? 0);
         $year = trim($_GET['year'] ?? '');
-        if ($plan_id <= 0 || $course_id <= 0) { echo json_encode([]); exit; }
+        if ($plan_id <= 0) { echo json_encode([]); exit; }
         $test_types = ['Attend Mock Test','Attend Mega Test','Attend Weekly Test','Practice Test','Previous Year Questions','Daily Quiz','Self-Assessment'];
         try {
             $custom_stmt = $pdo->query("SELECT name FROM study_plan_custom_types ORDER BY name ASC");
@@ -137,45 +191,16 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             $placeholders = implode(',', array_fill(0, count($all_test_types), '?'));
             $stmt = $pdo->prepare("
                 SELECT id, activity_title, activity_type, activity_date, chapter, subject, topic, day_number
-                FROM study_plan_activities WHERE study_plan_id = ? AND activity_type IN ($placeholders)
+                FROM study_plan_activities WHERE study_plan_id = ? AND activity_type IN ($placeholders) AND is_deleted = 0
                 ORDER BY activity_date ASC, sort_order ASC, day_number ASC
             ");
             $stmt->execute(array_merge([$plan_id], array_values($all_test_types)));
             $activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            $stmt_cn = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
-            $stmt_cn->execute([$course_id]);
-            $course_name = $stmt_cn->fetchColumn();
-
             foreach ($activities as &$act) {
-                $bs = $pdo->prepare("SELECT id, version, status, published_at, published_by FROM assessment_result_batches WHERE activity_id = ? AND (course_id = ? OR (course_name = ? AND course_name != '')) AND status = 'published' LIMIT 1");
-                $bs->execute([$act['id'], $course_id, $course_name]);
+                $bs = $pdo->prepare("SELECT id, version, status, published_at, published_by FROM assessment_result_batches WHERE activity_id = ? AND study_plan_id = ? AND status = 'published' LIMIT 1");
+                $bs->execute([$act['id'], $plan_id]);
                 $batch = $bs->fetch(PDO::FETCH_ASSOC);
-
-                if (!$batch && !empty($year)) {
-                    // Fallback: match by title, type, chapter, academic year, and course
-                    $bs_fallback = $pdo->prepare("
-                        SELECT id, version, status, published_at, published_by
-                        FROM assessment_result_batches
-                        WHERE LOWER(TRIM(activity_title_snapshot)) = LOWER(TRIM(?))
-                          AND LOWER(TRIM(activity_type_snapshot)) = LOWER(TRIM(?))
-                          AND (LOWER(TRIM(chapter_snapshot)) = LOWER(TRIM(?)) OR (chapter_snapshot IS NULL AND ? = ''))
-                          AND academic_year = ?
-                          AND (course_id = ? OR (course_name = ? AND course_name != ''))
-                          AND status = 'published'
-                        LIMIT 1
-                    ");
-                    $bs_fallback->execute([
-                        $act['activity_title'],
-                        $act['activity_type'],
-                        $act['chapter'] ?? '',
-                        $act['chapter'] ?? '',
-                        $year,
-                        $course_id,
-                        $course_name
-                    ]);
-                    $batch = $bs_fallback->fetch(PDO::FETCH_ASSOC);
-                }
 
                 $act['has_published_result'] = $batch ? true : false;
                 $act['published_version'] = $batch ? (int)$batch['version'] : 0;
@@ -317,14 +342,14 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
                 $stmt_count->execute([$c['course_name'], $year]);
                 $total_students = (int)$stmt_count->fetchColumn();
 
-                // 2. Resolve result batches
+                // 2. Resolve result batches (new study-plan scoped or legacy course-scoped)
                 $stmt_batches = $pdo->prepare("
                     SELECT id FROM assessment_result_batches
                     WHERE activity_id = ?
-                      AND (course_id = ? OR LOWER(TRIM(course_name)) = LOWER(TRIM(?)))
+                      AND (study_plan_id = ? OR course_id = ? OR LOWER(TRIM(course_name)) = LOWER(TRIM(?)))
                       AND status = 'published'
                 ");
-                $stmt_batches->execute([$activity_id, $c['id'], $c['course_name']]);
+                $stmt_batches->execute([$activity_id, $plan_id, $c['id'], $c['course_name']]);
                 $batch_ids = $stmt_batches->fetchAll(PDO::FETCH_COLUMN);
 
                 $attended = 0;
@@ -467,53 +492,18 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
         }
         $activity_id = (int)($_POST['activity_id'] ?? 0);
         $plan_id = (int)($_POST['plan_id'] ?? 0);
-        $course_id = (int)($_POST['course_id'] ?? 0);
         $year = trim($_POST['academic_year'] ?? '');
-        if ($activity_id <= 0 || $plan_id <= 0 || $course_id <= 0 || empty($year)) {
+        if ($activity_id <= 0 || $plan_id <= 0 || empty($year)) {
             echo json_encode(['success' => false, 'message' => 'Missing required selection parameters.']);
             exit;
         }
 
         // Server-side duplicate upload prevention check
-        $stmt_cn = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
-        $stmt_cn->execute([$course_id]);
-        $course_name = $stmt_cn->fetchColumn();
+        $bs = $pdo->prepare("SELECT id, version, status FROM assessment_result_batches WHERE activity_id = ? AND study_plan_id = ? AND status = 'published' LIMIT 1");
+        $bs->execute([$activity_id, $plan_id]);
+        $existing_batch = $bs->fetch(PDO::FETCH_ASSOC);
 
-        $bs = $pdo->prepare("SELECT id FROM assessment_result_batches WHERE activity_id = ? AND (course_id = ? OR (course_name = ? AND course_name != '')) AND status = 'published' LIMIT 1");
-        $bs->execute([$activity_id, $course_id, $course_name]);
-        $has_existing = $bs->fetch() ? true : false;
-
-        if (!$has_existing) {
-            // Retrieve activity details for fallback comparison
-            $stmt_act = $pdo->prepare("SELECT activity_title, activity_type, chapter FROM study_plan_activities WHERE id = ?");
-            $stmt_act->execute([$activity_id]);
-            $act = $stmt_act->fetch(PDO::FETCH_ASSOC);
-            if ($act) {
-                $bs_fallback = $pdo->prepare("
-                    SELECT id
-                    FROM assessment_result_batches
-                    WHERE LOWER(TRIM(activity_title_snapshot)) = LOWER(TRIM(?))
-                      AND LOWER(TRIM(activity_type_snapshot)) = LOWER(TRIM(?))
-                      AND (LOWER(TRIM(chapter_snapshot)) = LOWER(TRIM(?)) OR (chapter_snapshot IS NULL AND ? = ''))
-                      AND academic_year = ?
-                      AND (course_id = ? OR (course_name = ? AND course_name != ''))
-                      AND status = 'published'
-                    LIMIT 1
-                ");
-                $bs_fallback->execute([
-                    $act['activity_title'],
-                    $act['activity_type'],
-                    $act['chapter'] ?? '',
-                    $act['chapter'] ?? '',
-                    $year,
-                    $course_id,
-                    $course_name
-                ]);
-                $has_existing = $bs_fallback->fetch() ? true : false;
-            }
-        }
-
-        if ($has_existing) {
+        if ($existing_batch) {
             echo json_encode(['success' => false, 'message' => 'Results have already been uploaded and published for this test. Please delete the existing results first.']);
             exit;
         }
@@ -565,18 +555,60 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             echo json_encode(['success' => false, 'message' => 'Unexpected extra columns found: ' . implode(', ', $extra_cols) . '. The file must contain exactly the 17 required columns.']);
             exit;
         }
-        $stmt_cn = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
-        $stmt_cn->execute([$course_id]);
-        $course_name = $stmt_cn->fetchColumn();
-        if (!$course_name) { echo json_encode(['success' => false, 'message' => 'Course not found.']); exit; }
-        $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ? AND study_plan_id = ?");
+
+        $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ? AND study_plan_id = ? AND is_deleted = 0");
         $stmt_act->execute([$activity_id, $plan_id]);
         $activity = $stmt_act->fetch(PDO::FETCH_ASSOC);
         if (!$activity) { echo json_encode(['success' => false, 'message' => 'Activity not found in the selected Study Plan.']); exit; }
-        $stmt_elig = $pdo->prepare("SELECT user_id, LOWER(TRIM(email)) as email, name FROM users WHERE status = 'approved' AND LOWER(TRIM(pepp_course)) = LOWER(TRIM(?)) AND pepp_academic_year = ? AND student_status IN ('active','completed')");
-        $stmt_elig->execute([$course_name, $year]);
+
+        // Find all assigned courses to this Study Plan
+        $stmt_assign = $pdo->prepare("SELECT assignment_type, assigned_value FROM study_plan_assignments WHERE study_plan_id = ? AND is_deleted = 0");
+        $stmt_assign->execute([$plan_id]);
+        $assignments = $stmt_assign->fetchAll(PDO::FETCH_ASSOC);
+
+        $is_all = false;
+        $assigned_names = [];
+        foreach ($assignments as $asg) {
+            if ($asg['assignment_type'] === 'all') {
+                $is_all = true;
+                break;
+            } elseif ($asg['assignment_type'] === 'course') {
+                $assigned_names[] = $asg['assigned_value'];
+            }
+        }
+
+        if ($is_all) {
+            $stmt_courses = $pdo->prepare("SELECT id, course_name FROM pepp_courses WHERE academic_year = ? AND status = 'active' ORDER BY course_name ASC");
+            $stmt_courses->execute([$year]);
+        } else {
+            if (empty($assigned_names)) {
+                $stmt_courses = null;
+            } else {
+                $placeholders = implode(',', array_fill(0, count($assigned_names), '?'));
+                $stmt_courses = $pdo->prepare("SELECT id, course_name FROM pepp_courses WHERE academic_year = ? AND status = 'active' AND course_name IN ($placeholders) ORDER BY course_name ASC");
+                $stmt_courses->execute(array_merge([$year], $assigned_names));
+            }
+        }
+        $courses = $stmt_courses ? $stmt_courses->fetchAll(PDO::FETCH_ASSOC) : [];
+        $course_names = array_column($courses, 'course_name');
+
         $eligible_students = [];
-        while ($row = $stmt_elig->fetch(PDO::FETCH_ASSOC)) { $eligible_students[$row['email']] = $row; }
+        if (!empty($course_names)) {
+            $placeholders_courses = implode(',', array_fill(0, count($course_names), '?'));
+            $stmt_elig = $pdo->prepare("
+                SELECT user_id, LOWER(TRIM(email)) as email, name, pepp_course, pepp_academic_year
+                FROM users
+                WHERE status = 'approved'
+                  AND student_status IN ('active','completed')
+                  AND pepp_academic_year = ?
+                  AND TRIM(pepp_course) IN ($placeholders_courses)
+            ");
+            $stmt_elig->execute(array_merge([$year], $course_names));
+            while ($row = $stmt_elig->fetch(PDO::FETCH_ASSOC)) {
+                $eligible_students[strtolower(trim($row['email']))] = $row;
+            }
+        }
+
         // Parse data rows
         $parsed_rows = [];
         $excluded_emails = [];
@@ -594,7 +626,7 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
                 continue;
             }
             $src_name = trim($cols[$col_map['name']] ?? '');
-            // Check if the student belongs to the selected Course and Academic Year
+            // Check if the student belongs to any assigned courses
             if (!isset($eligible_students[$email])) {
                 $excluded_emails[] = ['email' => $email, 'name' => $src_name];
                 continue;
@@ -678,12 +710,10 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
         $highest = !empty($att_scores) ? max($att_scores) : null;
         $lowest = !empty($att_scores) ? min($att_scores) : null;
         $avg = !empty($att_scores) ? round(array_sum($att_scores)/count($att_scores),2) : null;
-        $existing_stmt = $pdo->prepare("SELECT id, version, published_at FROM assessment_result_batches WHERE activity_id = ? AND course_id = ? AND status = 'published' LIMIT 1");
-        $existing_stmt->execute([$activity_id, $course_id]);
-        $existing_batch = $existing_stmt->fetch(PDO::FETCH_ASSOC);
+
         $_SESSION['ar_preview'] = [
-            'activity_id'=>$activity_id, 'plan_id'=>$plan_id, 'course_id'=>$course_id,
-            'course_name'=>$course_name, 'academic_year'=>$year, 'activity'=>$activity,
+            'activity_id'=>$activity_id, 'plan_id'=>$plan_id, 'course_id'=>0,
+            'course_name'=>'All Courses', 'academic_year'=>$year, 'activity'=>$activity,
             'results'=>$all_results, 'filename'=>$file['name'],
             'stats'=>['total_rows'=>$total_csv_rows,'attended'=>$attended_count,
                 'in_progress'=>$in_progress_count,'not_attended'=>count($not_attended),
@@ -740,10 +770,13 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             
             // ── Concurrency protection for ALL publications (first and replacement) ──
             // Use SELECT FOR UPDATE to lock any existing published batch for this activity.
-            // This prevents two concurrent first-time publications from both succeeding,
-            // and ensures replacement logic remains safe.
-            $concurrent_check = $pdo->prepare("SELECT id, status, version FROM assessment_result_batches WHERE activity_id = ? AND course_id = ? AND status = 'published' FOR UPDATE");
-            $concurrent_check->execute([$preview['activity_id'], $preview['course_id']]);
+            $db_driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            $sql_lock = "SELECT id, status, version FROM assessment_result_batches WHERE activity_id = ? AND study_plan_id = ? AND status = 'published'";
+            if ($db_driver === 'mysql') {
+                $sql_lock .= " FOR UPDATE";
+            }
+            $concurrent_check = $pdo->prepare($sql_lock);
+            $concurrent_check->execute([$preview['activity_id'], $preview['plan_id']]);
             $existing_published = $concurrent_check->fetch(PDO::FETCH_ASSOC);
             
             if ($is_replacement) {
@@ -758,10 +791,9 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
                 $pdo->rollBack();
                 echo json_encode(['success'=>false,'message'=>'Another administrator published results for this activity (Version '.$existing_published['version'].') while you were preparing yours. Please refresh and re-upload if you need to replace.']); exit;
             }
-            $batch_stmt = $pdo->prepare("INSERT INTO assessment_result_batches (activity_id,study_plan_id,academic_year,course_id,course_name,activity_title_snapshot,activity_type_snapshot,activity_date_snapshot,chapter_snapshot,version,status,source_filename,total_rows,matched_students,unmatched_emails,attended_count,not_attended_count,in_progress_count,review_required_count,uploaded_by,published_by,published_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,'published',?,?,?,?,?,?,?,?,?,?,NOW(),NOW())");
+            $batch_stmt = $pdo->prepare("INSERT INTO assessment_result_batches (activity_id,study_plan_id,academic_year,course_id,course_name,activity_title_snapshot,activity_type_snapshot,activity_date_snapshot,chapter_snapshot,version,status,source_filename,total_rows,matched_students,unmatched_emails,attended_count,not_attended_count,in_progress_count,review_required_count,uploaded_by,published_by,published_at,created_at) VALUES (?,?,?,0,'All Courses',?,?,?,?,?,'published',?,?,?,?,?,?,?,?,?,?,NOW(),NOW())");
             $batch_stmt->execute([
                 $preview['activity_id'],$preview['plan_id'],$preview['academic_year'],
-                $preview['course_id'],$preview['course_name'],
                 $preview['activity']['activity_title'],$preview['activity']['activity_type'],
                 $preview['activity']['activity_date']?:null,$preview['activity']['chapter']??null,
                 $new_version,$preview['filename'],
@@ -789,7 +821,7 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
                 ]);
             }
             $atype = $is_replacement ? 'assessment_result_replaced' : 'assessment_result_published';
-            $details = ($is_replacement?"Replaced":"Published")." assessment results for '{$preview['activity']['activity_title']}' (Activity #{$preview['activity_id']}, Plan #{$preview['plan_id']}, Course: {$preview['course_name']}, Year: {$preview['academic_year']}, Version: {$new_version}, Batch #{$new_batch_id}, Attended: {$preview['stats']['attended']}, Not Attended: {$preview['stats']['not_attended']})";
+            $details = ($is_replacement?"Replaced":"Published")." assessment results for '{$preview['activity']['activity_title']}' (Activity #{$preview['activity_id']}, Plan #{$preview['plan_id']}, Course: All Courses, Year: {$preview['academic_year']}, Version: {$new_version}, Batch #{$new_batch_id}, Attended: {$preview['stats']['attended']}, Not Attended: {$preview['stats']['not_attended']})";
             if ($is_replacement) $details .= ". Reason: {$replace_reason}";
             log_admin_activity($pdo, $admin_username, $atype, $details);
             $pdo->commit();
@@ -880,7 +912,23 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
         $year = trim($_GET['year'] ?? ''); $cid = (int)($_GET['course_id'] ?? 0);
         $w = ['1=1']; $p = [];
         if (!empty($year)) { $w[] = "arb.academic_year = ?"; $p[] = $year; }
-        if ($cid > 0) { $w[] = "arb.course_id = ?"; $p[] = $cid; }
+        if ($cid > 0) {
+            $stmt_cn = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
+            $stmt_cn->execute([$cid]);
+            $course_name = $stmt_cn->fetchColumn();
+            if ($course_name) {
+                $w[] = "(arb.course_id = ? OR (arb.course_id = 0 AND arb.study_plan_id IN (
+                    SELECT study_plan_id FROM study_plan_assignments
+                    WHERE (assignment_type = 'all' OR (assignment_type = 'course' AND LOWER(TRIM(assigned_value)) = LOWER(TRIM(?))))
+                      AND is_deleted = 0
+                )))";
+                $p[] = $cid;
+                $p[] = $course_name;
+            } else {
+                $w[] = "arb.course_id = ?";
+                $p[] = $cid;
+            }
+        }
         try {
             $stmt = $pdo->prepare("SELECT arb.*, sp.title as plan_title FROM assessment_result_batches arb LEFT JOIN study_plans sp ON arb.study_plan_id = sp.id WHERE ".implode(' AND ',$w)." ORDER BY arb.created_at DESC");
             $stmt->execute($p);
@@ -894,7 +942,24 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
         $email = strtolower(trim($_GET['email'] ?? ''));
         if (empty($email)) { echo json_encode([]); exit; }
         try {
-            $stmt = $pdo->prepare("SELECT ar.*, arb.activity_title_snapshot, arb.activity_type_snapshot, arb.activity_date_snapshot, arb.chapter_snapshot, arb.course_name, arb.academic_year, arb.version, arb.status as batch_status FROM assessment_results ar JOIN assessment_result_batches arb ON ar.batch_id = arb.id WHERE ar.student_email = ? AND arb.status = 'published' ORDER BY arb.activity_date_snapshot DESC");
+            $stmt = $pdo->prepare("
+                SELECT ar.*, arb.activity_title_snapshot, arb.activity_type_snapshot, arb.activity_date_snapshot, arb.chapter_snapshot, arb.course_name, arb.academic_year, arb.version, arb.status as batch_status
+                FROM assessment_results ar
+                JOIN assessment_result_batches arb ON ar.batch_id = arb.id
+                JOIN users u ON LOWER(ar.student_email) = LOWER(u.email)
+                WHERE ar.student_email = ?
+                  AND arb.status = 'published'
+                  AND (
+                      arb.course_id = 0
+                      OR LOWER(TRIM(arb.course_name)) = LOWER(TRIM(u.pepp_course))
+                      OR arb.study_plan_id IN (
+                          SELECT study_plan_id FROM study_plan_assignments
+                          WHERE (assignment_type = 'all' OR (assignment_type = 'course' AND LOWER(TRIM(assigned_value)) = LOWER(TRIM(u.pepp_course))))
+                            AND is_deleted = 0
+                      )
+                  )
+                ORDER BY arb.activity_date_snapshot DESC
+            ");
             $stmt->execute([$email]);
             $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
             foreach ($results as &$r) {
@@ -1086,13 +1151,11 @@ include 'includes/admin_nav.php';
     <div class="ar-steps" id="ar-steps">
         <div class="ar-step active" data-step="1"><span class="num">1</span> Academic Year</div>
         <span class="ar-step-arrow"><i class="fas fa-chevron-right"></i></span>
-        <div class="ar-step" data-step="2"><span class="num">2</span> Course</div>
+        <div class="ar-step" data-step="2"><span class="num">2</span> Study Plan</div>
         <span class="ar-step-arrow"><i class="fas fa-chevron-right"></i></span>
-        <div class="ar-step" data-step="3"><span class="num">3</span> Study Plan</div>
+        <div class="ar-step" data-step="3"><span class="num">3</span> Test</div>
         <span class="ar-step-arrow"><i class="fas fa-chevron-right"></i></span>
-        <div class="ar-step" data-step="4"><span class="num">4</span> Test</div>
-        <span class="ar-step-arrow"><i class="fas fa-chevron-right"></i></span>
-        <div class="ar-step" data-step="5"><span class="num">5</span> Upload</div>
+        <div class="ar-step" data-step="4"><span class="num">4</span> Upload</div>
     </div>
 
     <div class="ar-selectors">
@@ -1106,16 +1169,11 @@ include 'includes/admin_nav.php';
             </select>
         </div>
         <div class="field">
-            <label>Course</label>
-            <select id="ar-course" onchange="arSelectCourse(this.value)" disabled>
-                <option value="">— Select Course —</option>
-            </select>
-        </div>
-        <div class="field">
             <label>Study Plan</label>
             <select id="ar-plan" onchange="arSelectPlan(this.value)" disabled>
                 <option value="">— Select Plan —</option>
             </select>
+            <div id="ar-plan-info" style="display:none; margin-top: 10px; font-size: 0.82rem; color: var(--accent); font-weight: 600;"></div>
         </div>
     </div>
 
@@ -1258,20 +1316,23 @@ function arUpdateSteps(step) {
 
 // ── Step 1: Academic Year ──
 function arSelectYear(year) {
-    arSelectedYear = year; arSelectedCourseId = 0; arSelectedPlanId = 0; arSelectedActivityId = 0;
-    const cs = document.getElementById('ar-course');
+    arSelectedYear = year; arSelectedPlanId = 0; arSelectedActivityId = 0;
     const ps = document.getElementById('ar-plan');
-    cs.innerHTML = '<option value="">— Loading... —</option>'; cs.disabled = true;
     ps.innerHTML = '<option value="">— Select Plan —</option>'; ps.disabled = true;
     document.getElementById('ar-tests-container').style.display = 'none';
     document.getElementById('ar-upload-container').style.display = 'none';
+    const infoDiv = document.getElementById('ar-plan-info');
+    if (infoDiv) infoDiv.style.display = 'none';
     arUpdateSteps(year ? 2 : 1);
     if (!year) return;
-    fetch('assessment-results.php?action=get_courses&year=' + encodeURIComponent(year))
-        .then(r => r.json()).then(courses => {
-            cs.innerHTML = '<option value="">— Select Course —</option>';
-            courses.forEach(c => { cs.innerHTML += '<option value="'+c.id+'">'+escH(c.course_name)+(c.course_code?' ('+escH(c.course_code)+')':'')+'</option>'; });
-            cs.disabled = false;
+    fetch('assessment-results.php?action=get_study_plans&year=' + encodeURIComponent(year))
+        .then(r => r.json()).then(plans => {
+            ps.innerHTML = '<option value="">— Select Plan —</option>';
+            plans.forEach(p => {
+                const badge = p.status === 'published' ? ' [Published]' : ' [Draft]';
+                ps.innerHTML += '<option value="'+p.id+'">'+escH(p.title)+badge+'</option>';
+            });
+            ps.disabled = false;
         });
     // Also load management courses
     fetch('assessment-results.php?action=get_courses&year=' + encodeURIComponent(year))
@@ -1282,40 +1343,38 @@ function arSelectYear(year) {
         });
 }
 
-// ── Step 2: Course ──
-function arSelectCourse(courseId) {
-    arSelectedCourseId = parseInt(courseId) || 0; arSelectedPlanId = 0; arSelectedActivityId = 0;
-    const ps = document.getElementById('ar-plan');
-    ps.innerHTML = '<option value="">— Loading... —</option>'; ps.disabled = true;
-    document.getElementById('ar-tests-container').style.display = 'none';
-    document.getElementById('ar-upload-container').style.display = 'none';
-    arUpdateSteps(arSelectedCourseId ? 3 : 2);
-    if (!arSelectedCourseId) return;
-    // Save course name
-    const opt = document.getElementById('ar-course').selectedOptions[0];
-    arSelectedCourseName = opt ? opt.textContent.trim() : '';
-    fetch('assessment-results.php?action=get_study_plans&year='+encodeURIComponent(arSelectedYear)+'&course_id='+arSelectedCourseId)
-        .then(r => r.json()).then(plans => {
-            ps.innerHTML = '<option value="">— Select Plan —</option>';
-            plans.forEach(p => {
-                const badge = p.status === 'published' ? ' [Published]' : ' [Draft]';
-                ps.innerHTML += '<option value="'+p.id+'">'+escH(p.title)+badge+'</option>';
-            });
-            ps.disabled = false;
-        });
-}
-
-// ── Step 3: Study Plan ──
+// ── Step 2: Study Plan ──
 function arSelectPlan(planId) {
     arSelectedPlanId = parseInt(planId) || 0; arSelectedActivityId = 0;
     document.getElementById('ar-upload-container').style.display = 'none';
     const tc = document.getElementById('ar-tests-container');
     const tg = document.getElementById('ar-tests-grid');
-    if (!arSelectedPlanId) { tc.style.display = 'none'; arUpdateSteps(3); return; }
-    arUpdateSteps(4);
+    const infoDiv = document.getElementById('ar-plan-info');
+    if (!arSelectedPlanId) {
+        tc.style.display = 'none';
+        if (infoDiv) infoDiv.style.display = 'none';
+        arUpdateSteps(2);
+        return;
+    }
+    arUpdateSteps(3);
     tc.style.display = 'block';
     tg.innerHTML = '<div class="ar-loading"><div class="spinner"></div> Loading tests...</div>';
-    fetch('assessment-results.php?action=get_tests&plan_id='+arSelectedPlanId+'&course_id='+arSelectedCourseId+'&year='+encodeURIComponent(arSelectedYear))
+
+    if (infoDiv) {
+        infoDiv.style.display = 'block';
+        infoDiv.innerHTML = '<div class="ar-loading"><div class="spinner"></div> Loading assigned courses info...</div>';
+        fetch('assessment-results.php?action=get_plan_info&plan_id=' + arSelectedPlanId + '&year=' + encodeURIComponent(arSelectedYear))
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    infoDiv.innerHTML = `<i class="fas fa-info-circle"></i> ${data.courses_count} Course(s) • ${data.students_count} Student(s) assigned to this Study Plan`;
+                } else {
+                    infoDiv.style.display = 'none';
+                }
+            });
+    }
+
+    fetch('assessment-results.php?action=get_tests&plan_id='+arSelectedPlanId+'&year='+encodeURIComponent(arSelectedYear))
         .then(r => r.json()).then(tests => {
             if (!tests.length) { tg.innerHTML = '<div class="ar-empty"><i class="fas fa-flask-vial"></i><p>No test/assessment activities found in this Study Plan.</p></div>'; return; }
             tg.innerHTML = '';
@@ -1338,7 +1397,7 @@ function arSelectPlan(planId) {
         });
 }
 
-// ── Step 4: Test ──
+// ── Step 3: Test ──
 function arSelectTest(test) {
     arSelectedActivityId = test.id;
     document.querySelectorAll('.ar-test-card').forEach(c => c.classList.remove('selected'));
@@ -1361,7 +1420,7 @@ function arSelectTest(test) {
         fields.style.display = 'block';
     }
 
-    arUpdateSteps(5);
+    arUpdateSteps(4);
 }
 
 function arDeleteBatchDirect(batchId) {
@@ -1432,7 +1491,7 @@ function arUploadCSV(file) {
     fd.append('result_file', file);
     fd.append('activity_id', arSelectedActivityId);
     fd.append('plan_id', arSelectedPlanId);
-    fd.append('course_id', arSelectedCourseId);
+    fd.append('course_id', 0);
     fd.append('academic_year', arSelectedYear);
     fd.append('csrf_token', CSRF);
     fd.append('action', 'upload_validate');

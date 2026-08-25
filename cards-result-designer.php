@@ -366,17 +366,7 @@ try {
         $batch_ids = $stmt_batches->fetchAll(PDO::FETCH_COLUMN);
     }
 
-    if (empty($batch_ids)) {
-        try {
-            $stmt_fallback = $pdo->prepare("
-                SELECT id FROM assessment_result_batches
-                WHERE activity_id = ?
-                  AND status = 'published'
-            ");
-            $stmt_fallback->execute([$activity_id]);
-            $batch_ids = $stmt_fallback->fetchAll(PDO::FETCH_COLUMN);
-        } catch (Exception $e) {}
-    }
+    // Fallback removed to enforce strict study plan activity scoping
 
     $results = [];
     if (!empty($batch_ids)) {

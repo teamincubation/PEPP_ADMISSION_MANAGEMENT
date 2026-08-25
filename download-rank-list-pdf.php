@@ -621,14 +621,25 @@ if (empty($batch_ids)) {
 // Fetch and format course name batch
 $course_name = '';
 if (!empty($batches)) {
-    try {
-        $stmt_course = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
-        $stmt_course->execute([$batches[0]['course_id']]);
-        $raw_course = $stmt_course->fetchColumn();
-        if ($raw_course) {
-            $course_name = trim(preg_replace('/\s*\([^)]+\)/', '', $raw_course));
-        }
-    } catch (Exception $e) {}
+    if ((int)$batches[0]['course_id'] === 0) {
+        try {
+            $stmt_plan = $pdo->prepare("SELECT title FROM study_plans WHERE id = ?");
+            $stmt_plan->execute([$plan_id]);
+            $plan_title = $stmt_plan->fetchColumn();
+            if ($plan_title) {
+                $course_name = $plan_title;
+            }
+        } catch (Exception $e) {}
+    } else {
+        try {
+            $stmt_course = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
+            $stmt_course->execute([$batches[0]['course_id']]);
+            $raw_course = $stmt_course->fetchColumn();
+            if ($raw_course) {
+                $course_name = trim(preg_replace('/\s*\([^)]+\)/', '', $raw_course));
+            }
+        } catch (Exception $e) {}
+    }
 }
 
 // Load test details from study_plan_activities or fallback snapshot
