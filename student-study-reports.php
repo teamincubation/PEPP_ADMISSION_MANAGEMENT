@@ -582,6 +582,38 @@ if (isset($_GET['action'])) {
             $stmt_act->execute([$plan_id]);
             $activities = $stmt_act->fetchAll(PDO::FETCH_ASSOC);
 
+            // Fetch all completions for this student in this plan, including soft-deleted and orphans
+            $stmt_logs = $pdo->prepare("
+                SELECT an.*,
+                       act.id as act_table_id, act.activity_title as act_title, act.activity_type as act_type,
+                       act.activity_date as act_date, act.day_number as act_day, act.chapter as act_chap,
+                       act.subject as act_subj, act.topic as act_topic, act.faculty as act_fac,
+                       act.resource_links as act_resource, act.is_deleted as act_deleted
+                FROM study_plan_analytics an
+                LEFT JOIN study_plan_activities act ON (
+                    (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
+                    OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
+                )
+                WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed'
+                ORDER BY an.id ASC
+            ");
+            $stmt_logs->execute([$email, $plan_id]);
+            $logs = $stmt_logs->fetchAll(PDO::FETCH_ASSOC);
+
+            $log_by_uid = [];
+            $log_by_id = [];
+            $matched_log_ids = [];
+            $matched_keys = [];
+
+            foreach ($logs as $l) {
+                if (!empty($l['activity_uid'])) {
+                    $log_by_uid[$l['activity_uid']] = $l;
+                }
+                if (!empty($l['activity_id'])) {
+                    $log_by_id[(int)$l['activity_id']] = $l;
+                }
+            }
+
             // Create a mapping of dates to day numbers for date_wise plans
             $date_to_day_map = [];
             if ($plan_type === 'date_wise') {
@@ -604,30 +636,24 @@ if (isset($_GET['action'])) {
             $faculty_stats = [];
 
             foreach ($activities as $a) {
-                // Fetch logged actions safely
-                $anal_cols = get_table_columns_safe($pdo, 'study_plan_analytics');
-                $select_fields = ['id', 'created_at', 'ip_address'];
-                if (in_array('latitude', $anal_cols)) $select_fields[] = 'latitude';
-                if (in_array('longitude', $anal_cols)) $select_fields[] = 'longitude';
-                if (in_array('resolved_place', $anal_cols)) $select_fields[] = 'resolved_place';
-                if (in_array('completion_status', $anal_cols)) $select_fields[] = 'completion_status';
-                if (in_array('cleared_by', $anal_cols)) $select_fields[] = 'cleared_by';
-                if (in_array('cleared_at', $anal_cols)) $select_fields[] = 'cleared_at';
-                if (in_array('clear_reason', $anal_cols)) $select_fields[] = 'clear_reason';
-
-                $fields_str = implode(', ', $select_fields);
-                $stmt_log = $pdo->prepare("
-                    SELECT $fields_str
-                    FROM study_plan_analytics
-                    WHERE student_email = ? AND study_plan_id = ? AND activity_id = ? AND action_type = 'complete_activity'
-                    ORDER BY id DESC
-                    LIMIT 1
-                ");
-                $stmt_log->execute([$email, $plan_id, $a['id']]);
-                $log = $stmt_log->fetch(PDO::FETCH_ASSOC);
+                // Find matching log for active activity
+                $log = null;
+                if (!empty($a['activity_uid']) && isset($log_by_uid[$a['activity_uid']])) {
+                    $log = $log_by_uid[$a['activity_uid']];
+                } else if (isset($log_by_id[(int)$a['id']])) {
+                    $log = $log_by_id[(int)$a['id']];
+                }
 
                 $is_completed_now = ($log && ($log['completion_status'] ?? 'completed') === 'completed');
                 $is_cleared_now = ($log && ($log['completion_status'] ?? 'completed') === 'cleared');
+
+                if ($log) {
+                    $matched_log_ids[$log['id']] = true;
+                    if (!empty($a['activity_uid'])) {
+                        $matched_keys[$a['activity_uid']] = true;
+                    }
+                    $matched_keys[(int)$a['id']] = true;
+                }
 
                 $is_upcoming = false;
                 $status = 'Pending';
@@ -680,7 +706,8 @@ if (isset($_GET['action'])) {
                     'is_cleared' => $is_cleared_now,
                     'cleared_by' => $is_cleared_now ? r_esc($log['cleared_by']) : '',
                     'cleared_at' => $is_cleared_now && $log['cleared_at'] ? date('d M Y h:i A', strtotime($log['cleared_at'])) : '',
-                    'clear_reason' => $is_cleared_now ? r_esc($log['clear_reason']) : ''
+                    'clear_reason' => $is_cleared_now ? r_esc($log['clear_reason']) : '',
+                    'classification' => 'CURRENT_ACTIVITY'
                 ];
 
                 // Accumulate stats for subject/chapter/faculty completion graphs
@@ -698,6 +725,109 @@ if (isset($_GET['action'])) {
                 if (!isset($faculty_stats[$fac])) $faculty_stats[$fac] = ['total' => 0, 'comp' => 0];
                 $faculty_stats[$fac]['total']++;
                 if ($log) $faculty_stats[$fac]['comp']++;
+            }
+
+            // Append soft-deleted and genuine historical orphan completion records to the timeline
+            foreach ($logs as $log) {
+                if (isset($matched_log_ids[$log['id']])) {
+                    continue; // already processed in active activities
+                }
+
+                // Skip duplicate completions for the same activity
+                if (!empty($log['activity_uid']) && isset($matched_keys[$log['activity_uid']])) {
+                    continue;
+                }
+                if (!empty($log['activity_id']) && isset($matched_keys[(int)$log['activity_id']])) {
+                    continue;
+                }
+
+                // Register this activity key as matched
+                if (!empty($log['activity_uid'])) {
+                    $matched_keys[$log['activity_uid']] = true;
+                }
+                if (!empty($log['activity_id'])) {
+                    $matched_keys[(int)$log['activity_id']] = true;
+                }
+
+                $is_deleted = ($log['act_deleted'] == 1);
+                $is_orphan = ($log['act_table_id'] === null);
+
+                if (!$is_deleted && !$is_orphan) {
+                    continue; // Skip duplicate completion logs for active tasks
+                }
+
+                $title = '';
+                $chapter = '';
+                $subject = '';
+                $topic = '';
+                $type = 'Reading';
+                $faculty = 'N/A';
+                $resource = 'Standard Materials';
+                $classification = 'CURRENT_ACTIVITY';
+
+                if ($is_deleted) {
+                    // Soft-deleted activity: details exist in the database
+                    $classification = 'ARCHIVED_ACTIVITY';
+                    $title = '[Archived] ' . ($log['act_title'] ?: 'Archived Activity');
+                    $chapter = $log['act_chap'] ?: 'Archived';
+                    $subject = $log['act_subj'] ?: 'Archived';
+                    $topic = $log['act_topic'] ?: 'Archived';
+                    $type = $log['act_type'] ?: 'Reading';
+                    $faculty = $log['act_fac'] ?: 'N/A';
+                    $resource = $log['act_resource'] ?: 'Standard Materials';
+                } else if ($is_orphan) {
+                    // Genuine historical legacy orphan
+                    $classification = 'LEGACY_HISTORICAL_ORPHAN';
+                    if (!empty($log['activity_title_snapshot'])) {
+                        $title = '[Archived] ' . $log['activity_title_snapshot'];
+                        $chapter = $log['chapter_snapshot'] ?: 'Archived';
+                        $subject = $log['subject_snapshot'] ?: 'Archived';
+                        $topic = $log['topic_snapshot'] ?: 'Archived';
+                        $type = $log['activity_type_snapshot'] ?: 'Reading';
+                        $faculty = 'N/A';
+                        $resource = 'Standard Materials';
+                    } else {
+                        // Details completely missing (legacy records)
+                        $title = 'Previously Completed — Activity No Longer Available';
+                        $chapter = 'This activity was part of an earlier version of your study plan. The original activity is no longer available, but your completion history has been preserved.';
+                        $subject = 'Original activity details unavailable — historical completion preserved.';
+                        $topic = 'Original activity details unavailable — historical completion preserved.';
+                        $type = 'Archived';
+                        $faculty = 'Original activity details unavailable — historical completion preserved.';
+                        $resource = 'Original activity details unavailable — historical completion preserved.';
+                    }
+                }
+
+                $day_num = $log['act_day'] ?: ($log['day_number_snapshot'] ?: 1);
+
+                $timeline[] = [
+                    'day' => $day_num,
+                    'date' => $log['created_at'] ? strtoupper(date('d M Y (D)', strtotime($log['created_at']))) : 'TBD',
+                    'start_time' => '',
+                    'end_time' => '',
+                    'chapter' => r_esc($chapter),
+                    'subject' => r_esc($subject),
+                    'topic' => r_esc($topic),
+                    'title' => r_esc($title),
+                    'type' => r_esc($type),
+                    'faculty' => r_esc($faculty),
+                    'resource' => r_esc($resource),
+                    'status' => 'Completed',
+                    'status_class' => 'green',
+                    'is_upcoming' => false,
+                    'analytics_id' => (int)$log['id'],
+                    'completed_at' => date('d M Y h:i A', strtotime($log['created_at'])),
+                    'ip' => $log['ip_address'],
+                    'browser' => 'Chrome/Safari',
+                    'device' => 'Web App',
+                    'location' => (($log['latitude'] && $log['longitude']) ? ($log['latitude'] . ',' . $log['longitude']) : ($log['resolved_place'] ?? '')),
+                    'duration' => '15 mins',
+                    'is_cleared' => false,
+                    'cleared_by' => '',
+                    'cleared_at' => '',
+                    'clear_reason' => '',
+                    'classification' => $classification
+                ];
             }
 
             echo json_encode([
@@ -2190,8 +2320,8 @@ if ($source === 'courses') {
         'total_custom_forms' => db_count($pdo, "SELECT COUNT(*) FROM campaign_forms WHERE status = 'published'"),
         'total_submissions' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions s JOIN users u ON s.respondent_identifier = u.email WHERE s.is_deleted = 0 AND u.status = 'approved' AND $assigned_plans_subquery"),
         'total_assignments' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_assignments WHERE is_deleted = 0"),
-        'learning_started' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM users u JOIN study_plan_analytics an ON u.email = an.student_email JOIN study_plan_activities act ON ((an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '') OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))) WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0 AND $assigned_plans_subquery"),
-        'total_checklist_completions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email JOIN study_plan_activities act ON ((an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '') OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))) WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0 AND $assigned_plans_subquery"),
+        'learning_started' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM users u JOIN study_plan_analytics an ON u.email = an.student_email LEFT JOIN study_plan_activities act ON ((an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '') OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))) WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND (act.id IS NULL OR act.is_deleted = 0 OR act.is_deleted = 1) AND $assigned_plans_subquery"),
+        'total_checklist_completions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email LEFT JOIN study_plan_activities act ON ((an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '') OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))) WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND (act.id IS NULL OR act.is_deleted = 0 OR act.is_deleted = 1) AND $assigned_plans_subquery"),
         'total_views' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'view' AND $assigned_plans_subquery"),
         'total_downloads' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'download' AND $assigned_plans_subquery"),
         'active_today' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND DATE(an.created_at) = CURDATE() AND $assigned_plans_subquery"),
