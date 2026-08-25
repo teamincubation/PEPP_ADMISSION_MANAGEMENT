@@ -84,7 +84,7 @@ if ($is_logged_in) {
             SELECT DISTINCT sp.* 
             FROM study_plans sp
             JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-            WHERE sp.status = 'published' AND (
+            WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND (
                 sa.assignment_type = 'all' OR
                 (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
                 (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
@@ -118,7 +118,7 @@ if ($is_logged_in && $selected_plan_id > 0) {
     
     if ($selected_plan) {
         try {
-            $stmt = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? ORDER BY activity_date ASC, sort_order ASC");
+            $stmt = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 ORDER BY activity_date ASC, sort_order ASC");
             $stmt->execute([$selected_plan_id]);
             $activities = $stmt->fetchAll();
             

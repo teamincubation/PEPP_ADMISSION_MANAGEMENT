@@ -9,78 +9,118 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_completion') {
         echo json_encode(['success' => false, 'message' => 'Unauthorized']);
         exit();
     }
-    
+
     $activity_id = (int)($_POST['activity_id'] ?? 0);
     $plan_id = (int)($_POST['study_plan_id'] ?? 0);
     $latitude = !empty($_POST['latitude']) ? trim($_POST['latitude']) : null;
     $longitude = !empty($_POST['longitude']) ? trim($_POST['longitude']) : null;
     $email = $_SESSION['sp_email'];
-    
+
     if ($activity_id <= 0 || $plan_id <= 0) {
         echo json_encode(['success' => false, 'message' => 'Invalid parameters']);
         exit();
     }
-    
+
     try {
         $pdo->beginTransaction();
-        
-        // 1. Lock the active completed record for update (student_email + activity_id + action_type = 'complete_activity' + completion_status = 'completed')
-        $stmt = $pdo->prepare("
-            SELECT id, created_at 
-            FROM study_plan_analytics 
-            WHERE student_email = ? AND study_plan_id = ? AND activity_id = ? 
-              AND action_type = 'complete_activity' AND completion_status = 'completed' 
-            LIMIT 1 FOR UPDATE
-        ");
-        $stmt->execute([$email, $plan_id, $activity_id]);
-        $existing = $stmt->fetch();
-        
+
+        // Authoritatively verify the activity exists, belongs to this plan and is not deleted
+        $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ? AND is_deleted = 0");
+        $stmt_act->execute([$activity_id]);
+        $act = $stmt_act->fetch(PDO::FETCH_ASSOC);
+
+        if (!$act) {
+            $pdo->rollBack();
+            echo json_encode(['success' => false, 'message' => 'Activity not found or deleted']);
+            exit();
+        }
+
+        if ((int)$act['study_plan_id'] !== $plan_id) {
+            $pdo->rollBack();
+            echo json_encode(['success' => false, 'message' => 'Security Error: Activity belongs to another study plan']);
+            exit();
+        }
+
+        // Prevent duplicate completions (student + activity_uid) using transactions and FOR UPDATE on MySQL
+        $query = "
+            SELECT id, created_at
+            FROM study_plan_analytics
+            WHERE student_email = ? AND study_plan_id = ? AND activity_uid = ?
+              AND action_type = 'complete_activity' AND completion_status = 'completed'
+            LIMIT 1
+        ";
+        if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
+            $query .= " FOR UPDATE";
+        }
+
+        $stmt_check = $pdo->prepare($query);
+        $stmt_check->execute([$email, $plan_id, $act['activity_uid']]);
+        $existing = $stmt_check->fetch();
+
         if ($existing) {
             $pdo->commit();
             $completed_at = date('d M Y h:i A', strtotime($existing['created_at']));
             echo json_encode([
-                'success' => true, 
-                'completed' => true, 
-                'already_completed' => true, 
+                'success' => true,
+                'completed' => true,
+                'already_completed' => true,
                 'timestamp' => $completed_at
             ]);
         } else {
-            // 2. Insert new completion record with explicit Asia/Kolkata timezone timestamp
+            // Record completion and freeze snapshots of activity metadata
             $stmt_ins = $pdo->prepare("
-                INSERT INTO study_plan_analytics 
-                (study_plan_id, student_email, action_type, activity_id, ip_address, latitude, longitude, completion_status, created_at) 
-                VALUES (?, ?, 'complete_activity', ?, ?, ?, ?, 'completed', ?)
+                INSERT INTO study_plan_analytics
+                (study_plan_id, student_email, action_type, activity_id, activity_uid, ip_address, latitude, longitude, completion_status, created_at,
+                 activity_title_snapshot, activity_type_snapshot, activity_date_snapshot, day_number_snapshot, chapter_snapshot, subject_snapshot, topic_snapshot)
+                VALUES (?, ?, 'complete_activity', ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            $stmt_ins->execute([$plan_id, $email, $activity_id, $_SERVER['REMOTE_ADDR'], $latitude, $longitude, date('Y-m-d H:i:s')]);
-            
+
+            $stmt_ins->execute([
+                $plan_id,
+                $email,
+                $act['id'],
+                $act['activity_uid'],
+                $_SERVER['REMOTE_ADDR'],
+                $latitude,
+                $longitude,
+                date('Y-m-d H:i:s'),
+                $act['activity_title'],
+                $act['activity_type'],
+                $act['activity_date'],
+                (int)$act['day_number'],
+                $act['chapter'] ?? null,
+                $act['subject'] ?? null,
+                $act['topic'] ?? null
+            ]);
+
             $pdo->commit();
             $completed_at = date('d M Y h:i A');
             echo json_encode([
-                'success' => true, 
-                'completed' => true, 
-                'already_completed' => false, 
+                'success' => true,
+                'completed' => true,
+                'already_completed' => false,
                 'timestamp' => $completed_at
             ]);
         }
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
-        
-        // Handle duplicate key violation (SQLSTATE 23000) gracefully
+
+        // Handle duplicate key violation gracefully
         if ($e->getCode() == 23000 || strpos($e->getMessage(), '23000') !== false || strpos($e->getMessage(), 'Duplicate entry') !== false) {
             try {
                 $stmt_existing = $pdo->prepare("
-                    SELECT created_at FROM study_plan_analytics 
-                    WHERE student_email = ? AND study_plan_id = ? AND activity_id = ? 
+                    SELECT created_at FROM study_plan_analytics
+                    WHERE student_email = ? AND study_plan_id = ? AND activity_uid = ?
                       AND action_type = 'complete_activity' AND completion_status = 'completed'
                     LIMIT 1
                 ");
-                $stmt_existing->execute([$email, $plan_id, $activity_id]);
+                $stmt_existing->execute([$email, $plan_id, $act['activity_uid']]);
                 $ex_row = $stmt_existing->fetch();
                 $completed_at = $ex_row ? date('d M Y h:i A', strtotime($ex_row['created_at'])) : date('d M Y h:i A');
             } catch (Exception $ex_inner) {
                 $completed_at = date('d M Y h:i A');
             }
-            
+
             echo json_encode([
                 'success' => true,
                 'completed' => true,
@@ -89,7 +129,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_completion') {
             ]);
             exit();
         }
-        
+
         echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
     }
     exit();
@@ -102,12 +142,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'log_location') {
         echo json_encode(['success' => false]);
         exit();
     }
-    
+
     $plan_id = (int)($_POST['study_plan_id'] ?? 0);
     $latitude = trim($_POST['latitude'] ?? '');
     $longitude = trim($_POST['longitude'] ?? '');
     $email = $_SESSION['sp_email'];
-    
+
     if ($plan_id > 0 && !empty($latitude) && !empty($longitude)) {
         try {
             $stmt = $pdo->prepare("INSERT INTO study_plan_analytics (study_plan_id, student_email, action_type, ip_address, latitude, longitude, created_at) VALUES (?, ?, 'view', ?, ?, ?, NOW())");
@@ -140,24 +180,24 @@ function get_valid_url($url) {
 $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'login') {
     $email = trim($_POST['email'] ?? '');
-    
+
     if (empty($email)) {
         $error = 'Email Address is required.';
     } else {
         try {
             // 1. Check Course Enrolled Students
             $stmt = $pdo->prepare("
-                SELECT u.* 
+                SELECT u.*
                 FROM users u
-                WHERE u.email = ? AND u.status = 'approved' 
+                WHERE u.email = ? AND u.status = 'approved'
                 LIMIT 1
             ");
             $stmt->execute([$email]);
             $student = $stmt->fetch();
-            
+
             // 2. Check Custom Campaign Form Submissions
             $stmt_form = $pdo->prepare("
-                SELECT DISTINCT s.*, f.title as form_title 
+                SELECT DISTINCT s.*, f.title as form_title
                 FROM campaign_form_submissions s
                 JOIN campaign_forms f ON s.form_id = f.id
                 LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
@@ -166,7 +206,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ");
             $stmt_form->execute([$email, $email]);
             $form_user = $stmt_form->fetch();
-            
+
             if ($student || $form_user) {
                 // Fetch real name from answers if custom form user
                 $name = 'Student';
@@ -175,7 +215,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 } elseif ($form_user) {
                     // Try to resolve Name from answers
                     $stmt_name = $pdo->prepare("
-                        SELECT a.answer_text 
+                        SELECT a.answer_text
                         FROM campaign_form_answers a
                         JOIN campaign_form_fields f ON a.field_id = f.id
                         WHERE a.submission_id = ? AND (f.label LIKE '%name%' OR f.field_name LIKE '%name%')
@@ -193,7 +233,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $_SESSION['sp_course'] = $student ? $student['pepp_course'] : null;
                 $_SESSION['sp_year'] = $student ? $student['academic_year'] : null;
                 $_SESSION['sp_student_id'] = $student ? $student['user_id'] : null;
-                
+
                 header('Location: studyplan.php');
                 exit();
             } else {
@@ -249,15 +289,15 @@ $my_forms = [];
 if ($is_logged_in) {
     try {
         $email = $_SESSION['sp_email'];
-        
+
         $stmt_courses = $pdo->prepare("SELECT DISTINCT pepp_course FROM users WHERE email = ? AND status = 'approved' AND pepp_course IS NOT NULL AND pepp_course != ''");
         $stmt_courses->execute([$email]);
         $my_courses = $stmt_courses->fetchAll(PDO::FETCH_COLUMN);
-        
+
         $stmt_forms = $pdo->prepare("
-            SELECT DISTINCT f.id, f.title 
-            FROM campaign_form_submissions s 
-            JOIN campaign_forms f ON s.form_id = f.id 
+            SELECT DISTINCT f.id, f.title
+            FROM campaign_form_submissions s
+            JOIN campaign_forms f ON s.form_id = f.id
             LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
             WHERE (s.respondent_identifier = ? OR a.answer_text = ?) AND s.is_deleted = 0
         ");
@@ -272,20 +312,20 @@ if ($is_logged_in) {
     try {
         if (isset($_GET['course_name'])) {
             $stmt = $pdo->prepare("
-                SELECT DISTINCT sp.* 
+                SELECT DISTINCT sp.*
                 FROM study_plans sp
                 JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                WHERE sp.status = 'published' AND sa.assignment_type = 'course' AND sa.assigned_value = ?
+                WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND sa.assignment_type = 'course' AND sa.assigned_value = ?
                 ORDER BY sp.start_date ASC
             ");
             $stmt->execute([$_GET['course_name']]);
             $plans = $stmt->fetchAll();
         } elseif (isset($_GET['form_id'])) {
             $stmt = $pdo->prepare("
-                SELECT DISTINCT sp.* 
+                SELECT DISTINCT sp.*
                 FROM study_plans sp
                 JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                WHERE sp.status = 'published' AND sa.assignment_type = 'form' AND sa.assigned_value = ?
+                WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND sa.assignment_type = 'form' AND sa.assigned_value = ?
                 ORDER BY sp.start_date ASC
             ");
             $stmt->execute([$_GET['form_id']]);
@@ -306,10 +346,10 @@ if ($is_logged_in && $selected_plan_id > 0) {
         // Validate student has access to this plan
         $email = $_SESSION['sp_email'];
         $stmt_validate = $pdo->prepare("
-            SELECT DISTINCT sp.* 
+            SELECT DISTINCT sp.*
             FROM study_plans sp
             JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-            WHERE sp.id = ? AND sp.status = 'published' AND (
+            WHERE sp.id = ? AND sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND (
                 sa.assignment_type = 'all' OR
                 (sa.assignment_type = 'course' AND sa.assigned_value IN (
                     SELECT pepp_course FROM users WHERE email = ? AND status = 'approved'
@@ -326,21 +366,25 @@ if ($is_logged_in && $selected_plan_id > 0) {
         ");
         $stmt_validate->execute([$selected_plan_id, $email, $email, $email, $email]);
         $selected_plan = $stmt_validate->fetch();
-        
+
         if ($selected_plan) {
-            $stmt = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? ORDER BY activity_date ASC, sort_order ASC");
+            $stmt = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 ORDER BY activity_date ASC, sort_order ASC");
             $stmt->execute([$selected_plan_id]);
             $activities = $stmt->fetchAll();
-            
-            // Fetch completions
+
+            // Fetch completions using activity_uid mapping, falling back to activity_id for legacy records
             $stmt_comp = $pdo->prepare("
-                SELECT an.activity_id, MIN(an.created_at) as created_at 
-                FROM study_plan_analytics an 
-                JOIN study_plan_activities act ON an.activity_id = act.id 
-                WHERE an.student_email = ? AND an.study_plan_id = ? 
-                  AND an.action_type = 'complete_activity' 
+                SELECT act.id, MIN(an.created_at) as created_at
+                FROM study_plan_analytics an
+                JOIN study_plan_activities act ON (
+                    (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
+                    OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
+                )
+                WHERE an.student_email = ? AND an.study_plan_id = ?
+                  AND an.action_type = 'complete_activity'
                   AND an.completion_status = 'completed'
-                GROUP BY an.activity_id
+                  AND act.is_deleted = 0
+                GROUP BY act.id
             ");
             $stmt_comp->execute([$email, $selected_plan_id]);
             $completions = $stmt_comp->fetchAll(PDO::FETCH_KEY_PAIR);
@@ -570,13 +614,13 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
         .layout-magazine .activity-item:last-child {
             border-bottom: none;
         }
-        
+
         * {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
         }
-        
+
         body {
             font-family: var(--font-family);
             background-color: var(--bg);
@@ -584,7 +628,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             line-height: 1.5;
             -webkit-tap-highlight-color: transparent;
         }
-        
+
         .container {
             width: 100%;
             max-width: 480px;
@@ -598,7 +642,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             box-shadow: 0 0 20px rgba(0,0,0,0.05);
             transition: all 0.3s ease;
         }
-        
+
         /* Header styling */
         header {
             background: var(--card-bg);
@@ -611,7 +655,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             justify-content: space-between;
             align-items: center;
         }
-        
+
         .header-logo {
             display: flex;
             align-items: center;
@@ -621,11 +665,11 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             font-size: 1.1rem;
             color: var(--accent);
         }
-        
+
         .header-logo img {
             height: 28px;
         }
-        
+
         /* Login Screen */
         .login-screen {
             flex: 1;
@@ -635,7 +679,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             padding: 2.2rem;
             background: radial-gradient(circle at 10% 20%, rgba(232, 152, 12, 0.05) 0%, transparent 90%);
         }
-        
+
         .login-card {
             background: var(--card-bg);
             border: 1px solid var(--border);
@@ -644,7 +688,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             box-shadow: 0 10px 30px rgba(0,0,0,0.03);
             text-align: center;
         }
-        
+
         .login-icon {
             width: 60px;
             height: 60px;
@@ -658,26 +702,26 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             margin-bottom: 1.2rem;
             border: 1.5px solid rgba(232, 152, 12, 0.15);
         }
-        
+
         .login-title {
             font-family: var(--header-font);
             font-weight: 700;
             font-size: 1.4rem;
             margin-bottom: 6px;
         }
-        
+
         .login-subtitle {
             color: var(--text-muted);
             font-size: 0.85rem;
             margin-bottom: 1.8rem;
             line-height: 1.4;
         }
-        
+
         .form-group {
             text-align: left;
             margin-bottom: 1.5rem;
         }
-        
+
         .form-group label {
             display: block;
             font-weight: 700;
@@ -687,7 +731,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             color: var(--text-muted);
             margin-bottom: 6px;
         }
-        
+
         .form-input {
             width: 100%;
             padding: 11px 14px;
@@ -698,12 +742,12 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             outline: none;
             transition: all 0.2s;
         }
-        
+
         .form-input:focus {
             border-color: var(--accent);
             box-shadow: 0 0 0 3px var(--accent-soft);
         }
-        
+
         .btn-submit {
             width: 100%;
             padding: 12px;
@@ -720,11 +764,11 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             justify-content: center;
             gap: 8px;
         }
-        
+
         .btn-submit:hover {
             background: var(--accent-hover);
         }
-        
+
         .error-message {
             background: rgba(239, 68, 68, 0.08);
             border: 1px solid rgba(239, 68, 68, 0.2);
@@ -735,7 +779,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             margin-bottom: 1.2rem;
             text-align: left;
         }
-        
+
         /* Dashboard Portal Styles */
         .portal-body {
             flex: 1;
@@ -744,7 +788,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             flex-direction: column;
             gap: 1rem;
         }
-        
+
         .student-welcome {
             background: linear-gradient(135deg, #1e293b, #0f172a);
             color: #fff;
@@ -754,7 +798,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             justify-content: space-between;
             align-items: center;
         }
-        
+
         .plan-row-card {
             background: var(--card-bg);
             border: 1.5px solid var(--border);
@@ -768,12 +812,12 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             transition: all 0.2s;
             margin-bottom: 8px;
         }
-        
+
         .plan-row-card:hover {
             border-color: var(--accent);
             transform: translateY(-2px);
         }
-        
+
         /* Timeline View */
         .timeline-wrapper {
             position: relative;
@@ -785,11 +829,11 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             gap: 1.5rem;
             margin-top: 1rem;
         }
-        
+
         .timeline-day-node {
             position: relative;
         }
-        
+
         .timeline-badge {
             position: absolute;
             left: -21px;
@@ -801,7 +845,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             border: 2px solid #fff;
             box-shadow: 0 0 0 3px var(--accent-soft);
         }
-        
+
         .timeline-card {
             background: var(--card-bg);
             border: 1px solid var(--border);
@@ -810,7 +854,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             box-shadow: 0 2px 8px rgba(0,0,0,0.02);
             transition: all 0.25s ease;
         }
-        
+
         .timeline-date-label {
             font-family: var(--header-font);
             font-size: 0.8rem;
@@ -818,7 +862,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             color: var(--accent);
             text-transform: uppercase;
         }
-        
+
         .activity-item {
             display: flex;
             align-items: center;
@@ -826,12 +870,12 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             padding: 8px 0;
             border-bottom: 1px solid var(--border);
         }
-        
+
         .activity-item:last-child {
             border-bottom: none;
             padding-bottom: 0;
         }
-        
+
         .activity-icon-wrap {
             width: 32px;
             height: 32px;
@@ -842,7 +886,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             color: #fff;
             font-size: 0.85rem;
         }
-        
+
         .print-btn-float {
             position: fixed;
             bottom: 20px;
@@ -861,7 +905,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
             cursor: pointer;
             z-index: 100;
         }
-        
+
         @media print {
             .container {
                 max-width: 100% !important;
@@ -871,7 +915,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                 display: none !important;
             }
         }
-        
+
         .pulsing-live-badge {
             display: inline-flex;
             align-items: center;
@@ -910,7 +954,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                 box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
             }
         }
-        
+
         @media (min-width: 769px) {
             .portal-mobile-only { display: none !important; }
             .portal-desktop-only { display: block !important; }
@@ -939,23 +983,23 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
         <div class="login-screen">
             <form method="POST" action="" class="login-card">
                 <input type="hidden" name="action" value="login">
-                
+
                 <div class="login-icon">
                     <i class="fas fa-route"></i>
                 </div>
-                
+
                 <h3 class="login-title">Student Study Portal</h3>
                 <p class="login-subtitle">Enter your registered email address to access your custom courses study plans.</p>
-                
+
                 <?php if ($error): ?>
                     <div class="error-message"><?php echo p_esc($error); ?></div>
                 <?php endif; ?>
-                
+
                 <div class="form-group">
                     <label>Registered Email Address</label>
                     <input type="email" name="email" class="form-input" placeholder="e.g. student@example.com" required>
                 </div>
-                
+
                 <button type="submit" class="btn-submit"><i class="fas fa-arrow-right-to-bracket"></i> Retrieve Study Journey</button>
             </form>
 
@@ -999,7 +1043,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                 <h3 style="font-family:var(--header-font); font-weight:700; font-size:0.9rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px;">Your Course &amp; Form Registrations</h3>
                 <div style="display:grid; grid-template-columns:1fr; gap:10px; margin-bottom:12px;">
                     <!-- Course Cards -->
-                    <?php foreach ($my_courses as $cname): 
+                    <?php foreach ($my_courses as $cname):
                         $isSelected = isset($_GET['course_name']) && $_GET['course_name'] === $cname;
                     ?>
                         <a href="?course_name=<?php echo urlencode($cname); ?>" style="display:block; text-decoration:none; color:inherit; background: <?php echo $isSelected ? 'var(--accent-soft)' : 'var(--card-bg)'; ?>; border: 2px solid <?php echo $isSelected ? 'var(--accent)' : 'var(--border)'; ?>; padding: 12px; border-radius: 12px; transition: all 0.2s;">
@@ -1007,9 +1051,9 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                             <div style="font-size:0.95rem; font-weight:700; color:var(--text-main);"><?php echo p_esc($cname); ?></div>
                         </a>
                     <?php endforeach; ?>
-                    
+
                     <!-- Form Cards -->
-                    <?php foreach ($my_forms as $form_card): 
+                    <?php foreach ($my_forms as $form_card):
                         $isSelected = isset($_GET['form_id']) && $_GET['form_id'] == $form_card['id'];
                     ?>
                         <a href="?form_id=<?php echo $form_card['id']; ?>" style="display:block; text-decoration:none; color:inherit; background: <?php echo $isSelected ? 'var(--accent-soft)' : 'var(--card-bg)'; ?>; border: 2px solid <?php echo $isSelected ? 'var(--accent)' : 'var(--border)'; ?>; padding: 12px; border-radius: 12px; transition: all 0.2s;">
@@ -1022,7 +1066,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                 <!-- List plans assigned to selected target -->
                 <?php if (isset($_GET['course_name']) || isset($_GET['form_id'])): ?>
                     <h3 style="font-family:var(--header-font); font-weight:700; font-size:0.9rem; color:var(--text-muted); text-transform:uppercase; margin-top:0.5rem; letter-spacing:0.5px;">Available Study Plans</h3>
-                    
+
                     <?php if (empty($plans)): ?>
                         <div style="text-align:center; padding:3rem; border:1px dashed var(--border); border-radius:16px; color:var(--text-muted);">
                             <i class="fas fa-calendar-xmark" style="font-size:2.5rem; margin-bottom:8px; display:block;"></i>
@@ -1030,7 +1074,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                         </div>
                     <?php else: ?>
                         <div style="display:flex; flex-direction:column; gap:12px;">
-                            <?php foreach ($plans as $p): 
+                            <?php foreach ($plans as $p):
                                 $is_active_plan = false;
                                 if (($p['plan_type'] ?? 'date_wise') === 'date_wise') {
                                     $p_start = strtotime($p['start_date']);
@@ -1070,7 +1114,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                         Please select a course or custom form card above to view available study plans.
                     </div>
                 <?php endif; ?>
-            <?php else: 
+            <?php else:
                 // Calculate percentage stats
                 $total_tasks = count($activities);
                 $completed_tasks = 0;
@@ -1099,7 +1143,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                     <div style="text-align: center;">
                         <span style="font-size: 0.7rem; text-transform: uppercase; font-weight: 700; color: #10b981; display: block;">Completed</span>
                         <strong style="font-size: 1.2rem; font-weight: 800; color: #10b981;">
-                            <span id="header-completed-tasks"><?php echo $completed_tasks; ?></span> 
+                            <span id="header-completed-tasks"><?php echo $completed_tasks; ?></span>
                             (<span id="header-completed-pct"><?php echo $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0; ?></span>%)
                         </strong>
                     </div>
@@ -1107,14 +1151,14 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                     <div style="text-align: center;">
                         <span style="font-size: 0.7rem; text-transform: uppercase; font-weight: 700; color: var(--accent); display: block;">Pending</span>
                         <strong style="font-size: 1.2rem; font-weight: 800; color: var(--accent);">
-                            <span id="header-pending-tasks"><?php echo $pending_tasks; ?></span> 
+                            <span id="header-pending-tasks"><?php echo $pending_tasks; ?></span>
                             (<span id="header-pending-pct"><?php echo $total_tasks > 0 ? 100 - round(($completed_tasks / $total_tasks) * 100) : 0; ?></span>%)
                         </strong>
                     </div>
                 </div>
-                
+
                 <h3 style="font-family:var(--header-font); font-weight:800; font-size:1.15rem;"><?php echo p_esc($selected_plan['title']); ?></h3>
-                
+
                 <?php if ($selected_plan['description']): ?>
                     <p style="font-size:0.85rem; color:var(--text-muted);"><?php echo p_esc($selected_plan['description']); ?></p>
                 <?php endif; ?>
@@ -1126,30 +1170,30 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                     </div>
                 <?php else: ?>
                     <div class="timeline-wrapper">
-                        <?php 
+                        <?php
                         $grouped = [];
                         foreach ($activities as $act) {
                             $grouped[$act['activity_date']][] = $act;
                         }
-                        
+
                         $is_day_wise = ($selected_plan['plan_type'] ?? 'date_wise') === 'day_wise';
-                        
+
                         // Default timezone setup for India (IST)
                         date_default_timezone_set('Asia/Kolkata');
                         $today_str = date('Y-m-d');
-                        
+
                         foreach ($grouped as $date => $items):
                             $date_lbl = date('d M Y (D)', strtotime($date));
                             if ($is_day_wise) {
                                 $dayNum = !empty($items[0]['day_number']) ? $items[0]['day_number'] : 1;
                                 $date_lbl = "Day " . str_pad($dayNum, 2, '0', STR_PAD_LEFT);
                             }
-                            
+
                             $is_open = true; // Always expanded for day-wise
                             if (!$is_day_wise) {
                                 $is_open = ($date === $today_str);
                             }
-                            
+
                             $total_date_tasks = count($items);
                             $completed_date_tasks = 0;
                             foreach ($items as $it) {
@@ -1173,7 +1217,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                                         </div>
                                     </div>
                                     <div id="activities-group-<?php echo $date; ?>" style="display:<?php echo $is_open ? 'flex' : 'none'; ?>; flex-direction:column; gap:10px;">
-                                        <?php foreach ($items as $it): 
+                                        <?php foreach ($items as $it):
                                             $t_conf = $types_config[$it['activity_type']] ?? ['icon' => 'fa-book-open', 'color' => '#64748b'];
                                             $is_completed = isset($completions[$it['id']]);
                                             $comp_time = $is_completed ? date('d M Y h:i A', strtotime($completions[$it['id']])) : '';
@@ -1189,11 +1233,11 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                                                             <i class="fa-regular fa-circle"></i>
                                                         </div>
                                                     <?php endif; ?>
-                                                    
+
                                                     <div class="activity-icon-wrap" style="background:<?php echo $t_conf['color']; ?>; flex-shrink: 0;">
                                                         <i class="fas <?php echo $t_conf['icon']; ?>"></i>
                                                     </div>
-                                                    
+
                                                     <div>
                                                         <div style="font-size:0.85rem; font-weight:700; color:var(--text-main);">
                                                             <?php if (!empty($it['resource_links'])): ?>
@@ -1222,7 +1266,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                             </div>
                         <?php endforeach; ?>
                     </div>
-                    
+
                     <button class="print-btn-float" onclick="window.print()"><i class="fas fa-print"></i></button>
                 <?php endif; ?>
             <?php endif; ?>
@@ -1235,7 +1279,7 @@ function toggleDateCollapse(dateStr) {
     var el = document.getElementById('activities-group-' + dateStr);
     var arrow = document.getElementById('arrow-' + dateStr);
     if (!el) return;
-    
+
     if (el.style.display === 'none') {
         el.style.display = 'flex';
         if (arrow) {
@@ -1259,13 +1303,13 @@ if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(function(position) {
         currentLat = position.coords.latitude;
         currentLon = position.coords.longitude;
-        
+
         <?php if ($selected_plan_id > 0): ?>
         var fd = new FormData();
         fd.append('study_plan_id', <?php echo $selected_plan_id; ?>);
         fd.append('latitude', currentLat);
         fd.append('longitude', currentLon);
-        
+
         fetch('studyplan.php?action=log_location', {
             method: 'POST',
             body: fd
@@ -1281,7 +1325,7 @@ function toggleTaskCompletion(activityId, planId) {
     var btn = row.querySelector('.chk-circle-btn i');
     var label = row.querySelector('.comp-time-lbl');
     var timeSpan = row.querySelector('.time-val');
-    
+
     var fd = new FormData();
     fd.append('activity_id', activityId);
     fd.append('study_plan_id', planId);
@@ -1289,7 +1333,7 @@ function toggleTaskCompletion(activityId, planId) {
         fd.append('latitude', currentLat);
         fd.append('longitude', currentLon);
     }
-    
+
     fetch('studyplan.php?action=toggle_completion', {
         method: 'POST',
         body: fd
@@ -1308,7 +1352,7 @@ function toggleTaskCompletion(activityId, planId) {
                 row.style.opacity = '0.75';
                 timeSpan.innerText = data.timestamp;
                 label.style.display = 'block';
-                
+
                 if (!data.already_completed) {
                     completed++;
                 }
@@ -1317,7 +1361,7 @@ function toggleTaskCompletion(activityId, planId) {
             // Update Sticky Header Numbers
             var completedPct = total > 0 ? Math.round((completed / total) * 100) : 0;
             var pendingPct = total > 0 ? (100 - completedPct) : 0;
-            
+
             document.getElementById('header-completed-tasks').innerText = completed;
             document.getElementById('header-completed-pct').innerText = completedPct;
             document.getElementById('header-pending-tasks').innerText = total - completed;

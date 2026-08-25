@@ -138,13 +138,22 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 status TEXT DEFAULT 'published',
                 start_date TEXT,
                 end_date TEXT,
-                plan_type TEXT
+                plan_type TEXT,
+                version INTEGER DEFAULT 1,
+                updated_at TEXT,
+                is_deleted INTEGER DEFAULT 0,
+                deleted_at TEXT,
+                deleted_by TEXT,
+                deletion_reason TEXT
             );
             CREATE TABLE IF NOT EXISTS study_plan_assignments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 study_plan_id INTEGER,
                 assignment_type TEXT,
-                assigned_value TEXT
+                assigned_value TEXT,
+                is_deleted INTEGER DEFAULT 0,
+                deleted_at TEXT,
+                deleted_by TEXT
             );
             CREATE TABLE IF NOT EXISTS study_plan_activities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,7 +165,12 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 subject TEXT,
                 topic TEXT,
                 day_number TEXT,
-                sort_order INTEGER
+                sort_order INTEGER,
+                activity_uid TEXT,
+                is_deleted INTEGER DEFAULT 0,
+                deleted_at TEXT,
+                deleted_by TEXT,
+                deletion_reason TEXT
             );
             CREATE TABLE IF NOT EXISTS assessment_result_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -291,6 +305,112 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
             );
             CREATE TABLE IF NOT EXISTS study_plan_custom_types (
                 name TEXT PRIMARY KEY
+            );
+            CREATE TABLE IF NOT EXISTS study_plan_analytics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                study_plan_id INTEGER NOT NULL,
+                student_email TEXT,
+                action_type TEXT NOT NULL,
+                activity_id INTEGER,
+                activity_uid TEXT,
+                ip_address TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                completion_status TEXT DEFAULT 'completed',
+                cleared_by TEXT DEFAULT NULL,
+                cleared_at TEXT DEFAULT NULL,
+                clear_reason TEXT DEFAULT NULL,
+                latitude TEXT DEFAULT NULL,
+                longitude TEXT DEFAULT NULL,
+                resolved_place TEXT DEFAULT NULL,
+                activity_title_snapshot TEXT DEFAULT NULL,
+                activity_type_snapshot TEXT DEFAULT NULL,
+                activity_date_snapshot TEXT DEFAULT NULL,
+                day_number_snapshot INTEGER DEFAULT NULL,
+                chapter_snapshot TEXT DEFAULT NULL,
+                subject_snapshot TEXT DEFAULT NULL,
+                topic_snapshot TEXT DEFAULT NULL
+            );
+            CREATE TABLE IF NOT EXISTS study_plan_activity_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                activity_id INTEGER NOT NULL,
+                activity_uid TEXT NOT NULL,
+                study_plan_id INTEGER NOT NULL,
+                version_number INTEGER NOT NULL,
+                activity_date TEXT NOT NULL,
+                day_number INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                chapter TEXT,
+                subject TEXT,
+                topic TEXT,
+                subtopic TEXT,
+                activity_title TEXT NOT NULL,
+                activity_description TEXT,
+                activity_type TEXT NOT NULL,
+                faculty TEXT,
+                mentor TEXT,
+                estimated_duration INTEGER,
+                priority TEXT DEFAULT 'medium',
+                difficulty_level TEXT DEFAULT 'medium',
+                resource_links TEXT,
+                custom_activity_badge TEXT,
+                custom_activity_color TEXT,
+                custom_activity_icon TEXT,
+                created_by TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                change_type TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS study_plan_analytics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                study_plan_id INTEGER NOT NULL,
+                student_email TEXT,
+                action_type TEXT NOT NULL,
+                activity_id INTEGER,
+                activity_uid TEXT,
+                ip_address TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                completion_status TEXT DEFAULT 'completed',
+                cleared_by TEXT DEFAULT NULL,
+                cleared_at TEXT DEFAULT NULL,
+                clear_reason TEXT DEFAULT NULL,
+                latitude TEXT DEFAULT NULL,
+                longitude TEXT DEFAULT NULL,
+                resolved_place TEXT DEFAULT NULL,
+                activity_title_snapshot TEXT DEFAULT NULL,
+                activity_type_snapshot TEXT DEFAULT NULL,
+                activity_date_snapshot TEXT DEFAULT NULL,
+                day_number_snapshot INTEGER DEFAULT NULL,
+                chapter_snapshot TEXT DEFAULT NULL,
+                subject_snapshot TEXT DEFAULT NULL,
+                topic_snapshot TEXT DEFAULT NULL
+            );
+            CREATE TABLE IF NOT EXISTS study_plan_activity_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                activity_id INTEGER NOT NULL,
+                activity_uid TEXT NOT NULL,
+                study_plan_id INTEGER NOT NULL,
+                version_number INTEGER NOT NULL,
+                activity_date TEXT NOT NULL,
+                day_number INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                chapter TEXT,
+                subject TEXT,
+                topic TEXT,
+                subtopic TEXT,
+                activity_title TEXT NOT NULL,
+                activity_description TEXT,
+                activity_type TEXT NOT NULL,
+                faculty TEXT,
+                mentor TEXT,
+                estimated_duration INTEGER,
+                priority TEXT DEFAULT 'medium',
+                difficulty_level TEXT DEFAULT 'medium',
+                resource_links TEXT,
+                custom_activity_badge TEXT,
+                custom_activity_color TEXT,
+                custom_activity_icon TEXT,
+                created_by TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                change_type TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS card_template_admin_access (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -936,9 +1056,14 @@ try {
               `version` INT NOT NULL DEFAULT 1,
               `is_template` TINYINT(1) NOT NULL DEFAULT 0,
               `custom_settings` LONGTEXT NULL,
+              `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+              `deleted_at` DATETIME DEFAULT NULL,
+              `deleted_by` VARCHAR(100) DEFAULT NULL,
+              `deletion_reason` TEXT DEFAULT NULL,
               `created_by` VARCHAR(100) NOT NULL,
               `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-              `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP
+              `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+              KEY `idx_study_plans_deleted` (`is_deleted`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 
@@ -965,8 +1090,15 @@ try {
               `custom_activity_badge` VARCHAR(100) NULL,
               `custom_activity_color` VARCHAR(50) NULL,
               `custom_activity_icon` VARCHAR(100) NULL,
+              `activity_uid` VARCHAR(100) DEFAULT NULL,
+              `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+              `deleted_at` DATETIME DEFAULT NULL,
+              `deleted_by` VARCHAR(100) DEFAULT NULL,
+              `deletion_reason` TEXT DEFAULT NULL,
               KEY `idx_spa_plan` (`study_plan_id`),
               KEY `idx_spa_date` (`activity_date`),
+              KEY `idx_spa_uid` (`activity_uid`),
+              KEY `idx_spa_plan_date` (`study_plan_id`, `activity_date`),
               CONSTRAINT `fk_spa_plan` FOREIGN KEY (`study_plan_id`) REFERENCES `study_plans` (`id`) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
@@ -977,8 +1109,12 @@ try {
               `study_plan_id` INT NOT NULL,
               `assignment_type` ENUM('all','course','batch','student','form') NOT NULL,
               `assigned_value` VARCHAR(255) NOT NULL,
+              `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+              `deleted_at` DATETIME DEFAULT NULL,
+              `deleted_by` VARCHAR(100) DEFAULT NULL,
               `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
               KEY `idx_spa_assign_plan` (`study_plan_id`),
+              KEY `idx_assignments_deleted` (`is_deleted`),
               CONSTRAINT `fk_spa_assign_plan` FOREIGN KEY (`study_plan_id`) REFERENCES `study_plans` (`id`) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
@@ -1019,7 +1155,52 @@ try {
               `cleared_by` VARCHAR(255) DEFAULT NULL,
               `cleared_at` DATETIME DEFAULT NULL,
               `clear_reason` TEXT DEFAULT NULL,
-              KEY `idx_sp_anal_plan` (`study_plan_id`)
+              `latitude` VARCHAR(50) DEFAULT NULL,
+              `longitude` VARCHAR(50) DEFAULT NULL,
+              `resolved_place` VARCHAR(255) DEFAULT NULL,
+              `activity_uid` VARCHAR(100) DEFAULT NULL,
+              `activity_title_snapshot` VARCHAR(255) DEFAULT NULL,
+              `activity_type_snapshot` VARCHAR(100) DEFAULT NULL,
+              `activity_date_snapshot` DATE DEFAULT NULL,
+              `day_number_snapshot` INT DEFAULT NULL,
+              `chapter_snapshot` VARCHAR(255) DEFAULT NULL,
+              `subject_snapshot` VARCHAR(255) DEFAULT NULL,
+              `topic_snapshot` VARCHAR(255) DEFAULT NULL,
+              KEY `idx_sp_anal_plan` (`study_plan_id`),
+              KEY `idx_anal_uid` (`activity_uid`),
+              KEY `idx_anal_email_uid` (`student_email`(191), `activity_uid`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+            CREATE TABLE IF NOT EXISTS `study_plan_activity_versions` (
+              `id` INT AUTO_INCREMENT PRIMARY KEY,
+              `activity_id` INT NOT NULL,
+              `activity_uid` VARCHAR(100) NOT NULL,
+              `study_plan_id` INT NOT NULL,
+              `version_number` INT NOT NULL,
+              `activity_date` DATE NOT NULL,
+              `day_number` INT NOT NULL,
+              `sort_order` INT NOT NULL DEFAULT 0,
+              `chapter` VARCHAR(255) DEFAULT NULL,
+              `subject` VARCHAR(255) DEFAULT NULL,
+              `topic` VARCHAR(255) DEFAULT NULL,
+              `subtopic` VARCHAR(255) DEFAULT NULL,
+              `activity_title` VARCHAR(255) NOT NULL,
+              `activity_description` TEXT DEFAULT NULL,
+              `activity_type` VARCHAR(100) NOT NULL,
+              `faculty` VARCHAR(255) DEFAULT NULL,
+              `mentor` VARCHAR(255) DEFAULT NULL,
+              `estimated_duration` INT DEFAULT NULL,
+              `priority` VARCHAR(50) NOT NULL DEFAULT 'medium',
+              `difficulty_level` VARCHAR(50) NOT NULL DEFAULT 'medium',
+              `resource_links` TEXT DEFAULT NULL,
+              `custom_activity_badge` VARCHAR(100) DEFAULT NULL,
+              `custom_activity_color` VARCHAR(50) DEFAULT NULL,
+              `custom_activity_icon` VARCHAR(100) DEFAULT NULL,
+              `created_by` VARCHAR(100) NOT NULL,
+              `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              `change_type` VARCHAR(50) NOT NULL,
+              KEY `idx_spav_act` (`activity_id`),
+              KEY `idx_spav_uid` (`activity_uid`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 
@@ -1062,6 +1243,36 @@ try {
             $cols_plan = $pdo->query("SHOW COLUMNS FROM study_plans LIKE 'plan_type'")->fetch();
             if (!$cols_plan) {
                 $pdo->exec("ALTER TABLE study_plans ADD COLUMN `plan_type` ENUM('date_wise', 'day_wise') NOT NULL DEFAULT 'date_wise', ADD COLUMN `total_days` INT DEFAULT NULL");
+            }
+        } catch (Exception $e) {}
+
+        try {
+            $cols_version = $pdo->query("SHOW COLUMNS FROM study_plans LIKE 'version'")->fetch();
+            if (!$cols_version) {
+                $pdo->exec("ALTER TABLE study_plans ADD COLUMN `version` INT NOT NULL DEFAULT 1");
+            }
+        } catch (Exception $e) {}
+
+        try {
+            $cols_plan_deleted = $pdo->query("SHOW COLUMNS FROM study_plans LIKE 'is_deleted'")->fetch();
+            if (!$cols_plan_deleted) {
+                $pdo->exec("ALTER TABLE study_plans
+                    ADD COLUMN `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+                    ADD COLUMN `deleted_at` DATETIME DEFAULT NULL,
+                    ADD COLUMN `deleted_by` VARCHAR(100) DEFAULT NULL,
+                    ADD COLUMN `deletion_reason` TEXT DEFAULT NULL,
+                    ADD INDEX `idx_study_plans_deleted` (`is_deleted`)");
+            }
+        } catch (Exception $e) {}
+
+        try {
+            $cols_assign_deleted = $pdo->query("SHOW COLUMNS FROM study_plan_assignments LIKE 'is_deleted'")->fetch();
+            if (!$cols_assign_deleted) {
+                $pdo->exec("ALTER TABLE study_plan_assignments
+                    ADD COLUMN `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+                    ADD COLUMN `deleted_at` DATETIME DEFAULT NULL,
+                    ADD COLUMN `deleted_by` VARCHAR(100) DEFAULT NULL,
+                    ADD INDEX `idx_assignments_deleted` (`is_deleted`)");
             }
         } catch (Exception $e) {}
 
@@ -1154,6 +1365,43 @@ try {
                     UNIQUE KEY `uq_ar_batch_email` (`batch_id`, `student_email`(191))
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             ");
+
+            // Upgrade study_plan_activities for MySQL
+            try {
+                if ($pdo->query("SHOW TABLES LIKE 'study_plan_activities'")->fetchColumn()) {
+                    $cols = $pdo->query("SHOW COLUMNS FROM study_plan_activities LIKE 'activity_uid'")->fetch();
+                    if (!$cols) {
+                        $pdo->exec("ALTER TABLE study_plan_activities
+                            ADD COLUMN activity_uid VARCHAR(100) DEFAULT NULL,
+                            ADD COLUMN is_deleted TINYINT(1) NOT NULL DEFAULT 0,
+                            ADD COLUMN deleted_at DATETIME DEFAULT NULL,
+                            ADD COLUMN deleted_by VARCHAR(100) DEFAULT NULL,
+                            ADD COLUMN deletion_reason TEXT DEFAULT NULL,
+                            ADD INDEX idx_spa_uid (activity_uid),
+                            ADD INDEX idx_spa_plan_date (study_plan_id, activity_date)");
+                    }
+                }
+            } catch (Exception $exUpd) {}
+
+            // Upgrade study_plan_analytics for MySQL
+            try {
+                if ($pdo->query("SHOW TABLES LIKE 'study_plan_analytics'")->fetchColumn()) {
+                    $cols = $pdo->query("SHOW COLUMNS FROM study_plan_analytics LIKE 'activity_uid'")->fetch();
+                    if (!$cols) {
+                        $pdo->exec("ALTER TABLE study_plan_analytics
+                            ADD COLUMN activity_uid VARCHAR(100) DEFAULT NULL,
+                            ADD COLUMN activity_title_snapshot VARCHAR(255) DEFAULT NULL,
+                            ADD COLUMN activity_type_snapshot VARCHAR(100) DEFAULT NULL,
+                            ADD COLUMN activity_date_snapshot DATE DEFAULT NULL,
+                            ADD COLUMN day_number_snapshot INT DEFAULT NULL,
+                            ADD COLUMN chapter_snapshot VARCHAR(255) DEFAULT NULL,
+                            ADD COLUMN subject_snapshot VARCHAR(255) DEFAULT NULL,
+                            ADD COLUMN topic_snapshot VARCHAR(255) DEFAULT NULL,
+                            ADD INDEX idx_anal_uid (activity_uid),
+                            ADD INDEX idx_anal_email_uid (student_email(191), activity_uid)");
+                    }
+                }
+            } catch (Exception $exUpd) {}
         } catch (Exception $e) {}
 
         // Self-healing columns for Admin Geolocation and Metadata tracking
@@ -1202,6 +1450,43 @@ try {
                     KEY `idx_ap_seen` (`last_seen`)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             ");
+
+            // Upgrade study_plan_activities for MySQL
+            try {
+                if ($pdo->query("SHOW TABLES LIKE 'study_plan_activities'")->fetchColumn()) {
+                    $cols = $pdo->query("SHOW COLUMNS FROM study_plan_activities LIKE 'activity_uid'")->fetch();
+                    if (!$cols) {
+                        $pdo->exec("ALTER TABLE study_plan_activities
+                            ADD COLUMN activity_uid VARCHAR(100) DEFAULT NULL,
+                            ADD COLUMN is_deleted TINYINT(1) NOT NULL DEFAULT 0,
+                            ADD COLUMN deleted_at DATETIME DEFAULT NULL,
+                            ADD COLUMN deleted_by VARCHAR(100) DEFAULT NULL,
+                            ADD COLUMN deletion_reason TEXT DEFAULT NULL,
+                            ADD INDEX idx_spa_uid (activity_uid),
+                            ADD INDEX idx_spa_plan_date (study_plan_id, activity_date)");
+                    }
+                }
+            } catch (Exception $exUpd) {}
+
+            // Upgrade study_plan_analytics for MySQL
+            try {
+                if ($pdo->query("SHOW TABLES LIKE 'study_plan_analytics'")->fetchColumn()) {
+                    $cols = $pdo->query("SHOW COLUMNS FROM study_plan_analytics LIKE 'activity_uid'")->fetch();
+                    if (!$cols) {
+                        $pdo->exec("ALTER TABLE study_plan_analytics
+                            ADD COLUMN activity_uid VARCHAR(100) DEFAULT NULL,
+                            ADD COLUMN activity_title_snapshot VARCHAR(255) DEFAULT NULL,
+                            ADD COLUMN activity_type_snapshot VARCHAR(100) DEFAULT NULL,
+                            ADD COLUMN activity_date_snapshot DATE DEFAULT NULL,
+                            ADD COLUMN day_number_snapshot INT DEFAULT NULL,
+                            ADD COLUMN chapter_snapshot VARCHAR(255) DEFAULT NULL,
+                            ADD COLUMN subject_snapshot VARCHAR(255) DEFAULT NULL,
+                            ADD COLUMN topic_snapshot VARCHAR(255) DEFAULT NULL,
+                            ADD INDEX idx_anal_uid (activity_uid),
+                            ADD INDEX idx_anal_email_uid (student_email(191), activity_uid)");
+                    }
+                }
+            } catch (Exception $exUpd) {}
         } catch (Exception $e) {}
     } catch (Exception $dbEx) {
         error_log("PEPP self-healing DB check failed: " . $dbEx->getMessage());

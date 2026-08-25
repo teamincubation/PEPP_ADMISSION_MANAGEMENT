@@ -7,15 +7,15 @@ $search = trim($_GET['search'] ?? '');
 $status_filter = trim($_GET['status'] ?? '');
 $course_filter = trim($_GET['course_id'] ?? '');
 
-$where = ['1=1'];
+$where = ['sp.is_deleted = 0'];
 $params = [];
 
 if ($search !== '') {
-    $where[] = "title LIKE ?";
+    $where[] = "sp.title LIKE ?";
     $params[] = "%$search%";
 }
 if ($status_filter !== '') {
-    $where[] = "status = ?";
+    $where[] = "sp.status = ?";
     $params[] = $status_filter;
 }
 if ($course_filter !== '') {
@@ -23,7 +23,7 @@ if ($course_filter !== '') {
     $c_stmt->execute([(int)$course_filter]);
     $filter_course_name = $c_stmt->fetchColumn();
     if ($filter_course_name) {
-        $where[] = "sp.id IN (SELECT study_plan_id FROM study_plan_assignments WHERE assignment_type = 'course' AND assigned_value = ?)";
+        $where[] = "sp.id IN (SELECT study_plan_id FROM study_plan_assignments WHERE assignment_type = 'course' AND assigned_value = ? AND is_deleted = 0)";
         $params[] = $filter_course_name;
     } else {
         $where[] = "1=0";
@@ -38,7 +38,7 @@ try {
         SELECT sp.*, 
                (SELECT GROUP_CONCAT(assigned_value SEPARATOR ', ') 
                 FROM study_plan_assignments 
-                WHERE study_plan_id = sp.id AND assignment_type = 'course') as course_name
+                WHERE study_plan_id = sp.id AND assignment_type = 'course' AND is_deleted = 0) as course_name
         FROM study_plans sp
         WHERE {$where_clause}
         ORDER BY sp.created_at DESC
@@ -48,10 +48,10 @@ try {
     
     // Fetch stats
     $stats = [
-        'total' => (int)$pdo->query("SELECT COUNT(*) FROM study_plans")->fetchColumn(),
-        'active' => (int)$pdo->query("SELECT COUNT(*) FROM study_plans WHERE status = 'published'")->fetchColumn(),
-        'draft' => (int)$pdo->query("SELECT COUNT(*) FROM study_plans WHERE status = 'draft'")->fetchColumn(),
-        'templates' => (int)$pdo->query("SELECT COUNT(*) FROM study_plans WHERE is_template = 1")->fetchColumn(),
+        'total' => (int)$pdo->query("SELECT COUNT(*) FROM study_plans WHERE is_deleted = 0")->fetchColumn(),
+        'active' => (int)$pdo->query("SELECT COUNT(*) FROM study_plans WHERE status = 'published' AND is_deleted = 0")->fetchColumn(),
+        'draft' => (int)$pdo->query("SELECT COUNT(*) FROM study_plans WHERE status = 'draft' AND is_deleted = 0")->fetchColumn(),
+        'templates' => (int)$pdo->query("SELECT COUNT(*) FROM study_plans WHERE is_template = 1 AND is_deleted = 0")->fetchColumn(),
     ];
 } catch (Exception $e) {
     error_log("Studyplans dashboard load error: " . $e->getMessage());
@@ -188,7 +188,7 @@ include 'includes/admin_nav.php';
                                 <button class="btn btn-sm btn-outline" title="Copy Public URL" onclick="copyPublicUrl(<?php echo $p['id']; ?>)"><i class="fas fa-link"></i> Link</button>
                                 <button class="btn btn-sm btn-soft-green" title="Send Email Update Notification" onclick="sendEmailNotification(<?php echo $p['id']; ?>)"><i class="fas fa-paper-plane"></i> Send Notify</button>
                             <?php endif; ?>
-                            <button class="btn btn-sm btn-soft-red" title="Delete Plan" onclick="deletePlan(<?php echo $p['id']; ?>, '<?php echo htmlspecialchars(addslashes($p['title'])); ?>')"><i class="fas fa-trash"></i></button>
+                            <button class="btn btn-sm btn-soft-red" title="Delete Plan" onclick="deletePlan(<?php echo $p['id']; ?>, '<?php echo htmlspecialchars(addslashes($p['title'])); ?>', <?php echo (int)$p['version']; ?>)"><i class="fas fa-trash"></i></button>
                         </td>
                     </tr>
                     <?php endforeach; ?>
@@ -252,7 +252,7 @@ include 'includes/admin_nav.php';
         });
     }
 
-    function deletePlan(id, title) {
+    function deletePlan(id, title, version) {
         var conf = prompt('To permanently delete study plan "' + title + '", type "DELETE" below:');
         if (conf !== 'DELETE') return;
         
@@ -260,6 +260,7 @@ include 'includes/admin_nav.php';
         fd.append('action', 'delete_plan');
         fd.append('id', id);
         fd.append('confirm', conf);
+        fd.append('version', version);
         fd.append('csrf_token', '<?php echo csrf_token(); ?>');
         
         fetch('api/studyplans-api.php', {

@@ -54,13 +54,13 @@ function get_student_mentoring_details($pdo, $student) {
         SELECT sp.id, sp.title, sp.plan_type
         FROM study_plans sp
         JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-        WHERE sp.status = 'published' AND (
+        WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND (
             sa.assignment_type = 'all' OR
             (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
             (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
             (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
             (sa.assignment_type = 'form' AND EXISTS (
-                SELECT 1 FROM campaign_form_submissions s 
+                SELECT 1 FROM campaign_form_submissions s
                 WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
             ))
         )
@@ -75,16 +75,22 @@ function get_student_mentoring_details($pdo, $student) {
     $overdue_tasks = 0;
 
     foreach ($plans as $p) {
-        // Fetch activities
-        $stmt_act = $pdo->prepare("SELECT id, day_number, activity_date FROM study_plan_activities WHERE study_plan_id = ?");
+        // Fetch activities (non-deleted only)
+        $stmt_act = $pdo->prepare("SELECT id, day_number, activity_date FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0");
         $stmt_act->execute([$p['id']]);
         $activities = $stmt_act->fetchAll(PDO::FETCH_ASSOC);
 
-        // Fetch completed analytics
+        // Fetch completed analytics (non-deleted tasks only, using UID-matching with ID fallback)
         $stmt_comp = $pdo->prepare("
-            SELECT DISTINCT activity_id 
-            FROM study_plan_analytics 
-            WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity' AND completion_status = 'completed'
+            SELECT DISTINCT act.id
+            FROM study_plan_analytics an
+            JOIN study_plan_activities act ON (
+                (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
+                OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
+            )
+            WHERE an.student_email = ? AND an.study_plan_id = ?
+              AND an.action_type = 'complete_activity' AND an.completion_status = 'completed'
+              AND act.is_deleted = 0
         ");
         $stmt_comp->execute([$email, $p['id']]);
         $completed_ids = $stmt_comp->fetchAll(PDO::FETCH_COLUMN);
@@ -131,7 +137,7 @@ function get_student_mentoring_details($pdo, $student) {
         if ($plan_streak > $max_streak) {
             $max_streak = $plan_streak;
         }
-        
+
         $total_streak_target += count($day_tasks);
     }
 
@@ -320,10 +326,10 @@ if (mentor_tables_exist($pdo)) {
     } else {
         try {
             $stmt = $pdo->prepare("
-                SELECT pc.id, pc.course_name 
-                FROM mentor_course_assignments mca 
-                JOIN pepp_courses pc ON mca.course_name = pc.course_name 
-                WHERE mca.admin_id = ? AND pc.status = 'active' 
+                SELECT pc.id, pc.course_name
+                FROM mentor_course_assignments mca
+                JOIN pepp_courses pc ON mca.course_name = pc.course_name
+                WHERE mca.admin_id = ? AND pc.status = 'active'
                 ORDER BY pc.course_name
             ");
             $stmt->execute([$admin_id]);
@@ -374,9 +380,9 @@ if (mentor_tables_exist($pdo)) {
         try {
             if ($selected_course_name !== '') {
                 $stmt = $pdo->prepare("
-                    SELECT mca.*, a.username, a.full_name 
-                    FROM mentor_course_assignments mca 
-                    LEFT JOIN admins a ON mca.admin_id = a.id 
+                    SELECT mca.*, a.username, a.full_name
+                    FROM mentor_course_assignments mca
+                    LEFT JOIN admins a ON mca.admin_id = a.id
                     WHERE mca.course_name = ?
                     ORDER BY mca.course_name, a.username
                 ");
@@ -392,26 +398,26 @@ if (mentor_tables_exist($pdo)) {
     if ($selected_course_name !== '') {
         try {
             $stmt = $pdo->prepare("
-                SELECT u.user_id, u.name AS full_name, u.email, u.whatsapp_country_code, u.whatsapp_number, u.pepp_course AS course, u.status, u.pepp_academic_year 
-                FROM users u 
-                WHERE u.pepp_course = ? AND u.status IN ('approved','active') 
+                SELECT u.user_id, u.name AS full_name, u.email, u.whatsapp_country_code, u.whatsapp_number, u.pepp_course AS course, u.status, u.pepp_academic_year
+                FROM users u
+                WHERE u.pepp_course = ? AND u.status IN ('approved','active')
                 ORDER BY u.name
             ");
             $stmt->execute([$selected_course_name]);
             $raw_students = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
+
             $students_with_metrics = [];
             foreach ($raw_students as $s) {
                 $m = get_student_mentoring_details($pdo, $s);
                 $s['metrics'] = $m;
                 $students_with_metrics[] = $s;
             }
-            
+
             // Sort by completion percentage (progress) descending
             usort($students_with_metrics, function($a, $b) {
                 return $b['metrics']['progress'] <=> $a['metrics']['progress'];
             });
-            
+
             $students = $students_with_metrics;
         } catch (Exception $e) {}
 
@@ -419,18 +425,18 @@ if (mentor_tables_exist($pdo)) {
         try {
             if (is_super_admin()) {
                 $stmt = $pdo->prepare("
-                    SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number, u.email 
-                    FROM mentor_call_logs mcl 
-                    JOIN users u ON mcl.student_user_id = u.user_id 
+                    SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number, u.email
+                    FROM mentor_call_logs mcl
+                    JOIN users u ON mcl.student_user_id = u.user_id
                     WHERE u.pepp_course = ?
                     ORDER BY mcl.call_timestamp DESC LIMIT 100
                 ");
                 $stmt->execute([$selected_course_name]);
             } else {
                 $stmt = $pdo->prepare("
-                    SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number, u.email 
-                    FROM mentor_call_logs mcl 
-                    JOIN users u ON mcl.student_user_id = u.user_id 
+                    SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number, u.email
+                    FROM mentor_call_logs mcl
+                    JOIN users u ON mcl.student_user_id = u.user_id
                     WHERE u.pepp_course = ? AND mcl.admin_id = ?
                     ORDER BY mcl.call_timestamp DESC LIMIT 50
                 ");
@@ -443,19 +449,19 @@ if (mentor_tables_exist($pdo)) {
         try {
             if (is_super_admin()) {
                 $stmt = $pdo->prepare("
-                    SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number 
-                    FROM mentor_remarks mr 
-                    JOIN users u ON mr.student_user_id = u.user_id 
-                    WHERE u.pepp_course = ? 
+                    SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number
+                    FROM mentor_remarks mr
+                    JOIN users u ON mr.student_user_id = u.user_id
+                    WHERE u.pepp_course = ?
                     ORDER BY mr.created_at DESC LIMIT 100
                 ");
                 $stmt->execute([$selected_course_name]);
             } else {
                 $stmt = $pdo->prepare("
-                    SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number 
-                    FROM mentor_remarks mr 
-                    JOIN users u ON mr.student_user_id = u.user_id 
-                    WHERE u.pepp_course = ? AND mr.admin_id = ? 
+                    SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number
+                    FROM mentor_remarks mr
+                    JOIN users u ON mr.student_user_id = u.user_id
+                    WHERE u.pepp_course = ? AND mr.admin_id = ?
                     ORDER BY mr.created_at DESC LIMIT 50
                 ");
                 $stmt->execute([$selected_course_name, $admin_id]);
@@ -594,7 +600,7 @@ include 'includes/admin_nav.php';
             <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-users"></i></span>
             <h2>My Students (<?= e($selected_course_name) ?>)</h2>
         </div>
-        
+
         <!-- Filters Toolbar for Student Search and Attributes -->
         <div class="panel-body" style="padding:15px; border-bottom:1px solid var(--border); background:#f8fafc;">
             <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
@@ -655,12 +661,12 @@ include 'includes/admin_nav.php';
                     </tr>
                 </thead>
                 <tbody>
-                <?php 
-                foreach ($students as $s): 
+                <?php
+                foreach ($students as $s):
                     $m = $s['metrics'];
                     $wa_phone = preg_replace('/\D/', '', ($s['whatsapp_country_code'] ?: '+91') . $s['whatsapp_number']);
                 ?>
-                <tr class="student-row" 
+                <tr class="student-row"
                     data-name="<?= e(strtolower($s['full_name'])) ?>"
                     data-email="<?= e(strtolower($s['email'])) ?>"
                     data-mobile="<?= e($s['whatsapp_number']) ?>"
@@ -758,13 +764,13 @@ include 'includes/admin_nav.php';
                 <td class="cell-sub"><?php echo date('d M Y, h:i A', strtotime($cl['call_timestamp'])); ?></td>
                 <td style="max-width:300px;"><?php echo e($cl['notes'] ?? '—'); ?></td>
                 <td style="text-align:right; white-space:nowrap;">
-                    <?php 
-                    $cl_wa = preg_replace('/\D/', '', ($cl['whatsapp_country_code'] ?: '+91') . $cl['whatsapp_number']); 
+                    <?php
+                    $cl_wa = preg_replace('/\D/', '', ($cl['whatsapp_country_code'] ?: '+91') . $cl['whatsapp_number']);
                     if ($cl_wa):
                     ?>
                     <a href="https://wa.me/<?php echo $cl_wa; ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
                     <?php endif; ?>
-                    
+
                     <?php if (is_super_admin()): ?>
                     <button type="button" class="btn btn-sm btn-outline" style="color:var(--blue-ink); border-color:var(--blue-soft); padding: 4px 8px;" onclick="openEditCall('<?php echo $cl['id']; ?>', '<?php echo e($cl['student_name'] ?: $cl['student_user_id']); ?>', '<?php echo $cl['call_timestamp']; ?>', '<?php echo e($cl['notes']); ?>')" title="Edit Log"><i class="fas fa-edit"></i></button>
                     <form method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete this call log?');">
@@ -831,13 +837,13 @@ include 'includes/admin_nav.php';
                 <td style="max-width:350px;"><?php echo e($rm['remark']); ?></td>
                 <td class="cell-sub"><?php echo date('d M Y, h:i A', strtotime($rm['created_at'])); ?></td>
                 <td style="text-align:right; white-space:nowrap;">
-                    <?php 
-                    $rm_wa = preg_replace('/\D/', '', ($rm['whatsapp_country_code'] ?: '+91') . $rm['whatsapp_number']); 
+                    <?php
+                    $rm_wa = preg_replace('/\D/', '', ($rm['whatsapp_country_code'] ?: '+91') . $rm['whatsapp_number']);
                     if ($rm_wa):
                     ?>
                     <a href="https://wa.me/<?php echo $rm_wa; ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
                     <?php endif; ?>
-                    
+
                     <?php if (is_super_admin()): ?>
                     <button type="button" class="btn btn-sm btn-outline" style="color:var(--blue-ink); border-color:var(--blue-soft); padding: 4px 8px;" onclick="openEditRemark('<?php echo $rm['id']; ?>', '<?php echo e($rm['student_name'] ?: $rm['student_user_id']); ?>', '<?php echo e($rm['remark']); ?>')" title="Edit Remark"><i class="fas fa-edit"></i></button>
                     <form method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete this remark?');">
@@ -1037,12 +1043,12 @@ function openCall(id, name) {
 function openRemark(id, name) {
     document.getElementById('remarkStudentId').value = id;
     document.getElementById('remarkStudentName').textContent = 'Student: ' + name + ' (' + id + ')';
-    
+
     const remarksContainer = document.getElementById('previousRemarksList');
     if (remarksContainer) {
         remarksContainer.innerHTML = '<div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:8px;"><i class="fas fa-spinner fa-spin"></i> Loading previous remarks...</div>';
     }
-    
+
     fetch(`student-mentoring.php?get_remarks_student_user_id=${encodeURIComponent(id)}`)
         .then(r => r.json())
         .then(res => {
@@ -1110,7 +1116,7 @@ function applyStudentFilters() {
     const pending = document.getElementById('filter-pending') ? document.getElementById('filter-pending').value : 'ALL';
     const overdue = document.getElementById('filter-overdue') ? document.getElementById('filter-overdue').value : 'ALL';
     const attendance = document.getElementById('filter-attendance') ? document.getElementById('filter-attendance').value : 'ALL';
-    
+
     const rows = document.querySelectorAll('.student-row');
     rows.forEach(row => {
         const name = row.dataset.name || '';
@@ -1123,14 +1129,14 @@ function applyStudentFilters() {
         const pendingVal = parseInt(row.dataset.pending) || 0;
         const overdueVal = parseInt(row.dataset.overdue) || 0;
         const attendanceVal = parseInt(row.dataset.attendance) || 0;
-        
+
         let show = true;
-        
+
         // Search filter
         if (q && !name.includes(q) && !email.includes(q) && !mobile.includes(q) && !userId.includes(q)) {
             show = false;
         }
-        
+
         // Performance filter
         if (show && perf !== 'ALL') {
             if (perf === 'EXCELLENT' && progress < 85) show = false;
@@ -1138,39 +1144,39 @@ function applyStudentFilters() {
             else if (perf === 'AVERAGE' && (progress < 50 || progress >= 70)) show = false;
             else if (perf === 'NEEDS_IMPROVEMENT' && progress >= 50) show = false;
         }
-        
+
         // Streak filter
         if (show && streak !== 'ALL') {
             if (streak === 'ACTIVE' && streakVal <= 0) show = false;
             else if (streak === 'HIGH' && streakVal < 5) show = false;
             else if (streak === 'NONE' && streakVal > 0) show = false;
         }
-        
+
         // Completed Tasks filter
         if (show && completed !== 'ALL') {
             if (completed === 'HIGH' && completedVal < 10) show = false;
             else if (completed === 'SOME' && (completedVal < 1 || completedVal >= 10)) show = false;
             else if (completed === 'NONE' && completedVal > 0) show = false;
         }
-        
+
         // Pending Tasks filter
         if (show && pending !== 'ALL') {
             if (pending === 'YES' && pendingVal <= 0) show = false;
             else if (pending === 'NONE' && pendingVal > 0) show = false;
         }
-        
+
         // Overdue Tasks filter
         if (show && overdue !== 'ALL') {
             if (overdue === 'YES' && overdueVal <= 0) show = false;
             else if (overdue === 'NONE' && overdueVal > 0) show = false;
         }
-        
+
         // Attendance Rate filter
         if (show && attendance !== 'ALL') {
             if (attendance === 'HIGH' && attendanceVal < 75) show = false;
             else if (attendance === 'LOW' && attendanceVal >= 75) show = false;
         }
-        
+
         row.style.display = show ? '' : 'none';
     });
 }

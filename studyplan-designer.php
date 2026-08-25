@@ -10,20 +10,20 @@ $activities_json = '[]';
 
 if ($plan_id > 0) {
     // Fetch existing plan
-    $stmt = $pdo->prepare("SELECT * FROM study_plans WHERE id = ?");
+    $stmt = $pdo->prepare("SELECT * FROM study_plans WHERE id = ? AND is_deleted = 0");
     $stmt->execute([$plan_id]);
     $plan = $stmt->fetch();
     if (!$plan) {
         die("<h3>Study plan not found</h3>");
     }
-    
+
     // Fetch assignments
     $stmt_assign = $pdo->prepare("SELECT * FROM study_plan_assignments WHERE study_plan_id = ?");
     $stmt_assign->execute([$plan_id]);
     $assigned = $stmt_assign->fetchAll();
-    
-    // Fetch activities
-    $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? ORDER BY activity_date ASC, sort_order ASC");
+
+    // Fetch activities (non-deleted only)
+    $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 ORDER BY activity_date ASC, sort_order ASC");
     $stmt_act->execute([$plan_id]);
     $activities = $stmt_act->fetchAll();
     $activities_json = json_encode($activities);
@@ -72,7 +72,7 @@ foreach ($custom_types as $ct) {
 $preset_chapters = [];
 try {
     $preset_chapters = $pdo->query("
-        SELECT * FROM study_plan_chapters 
+        SELECT * FROM study_plan_chapters
         ORDER BY chapter_code ASC, chapter_name ASC
     ")->fetchAll();
 } catch (Exception $e) {}
@@ -644,7 +644,7 @@ include 'includes/admin_nav.php';
                         <label>End Date <span class="req">*</span></label>
                         <input type="date" id="plan-end" value="<?php echo $plan['end_date'] ?? date('Y-m-d', strtotime('+7 days')); ?>" onchange="regenerateDatesPreview()">
                     </div>
-                    
+
                     <div class="field" id="day-wise-days-wrap" style="display:none;">
                         <label>Total Number of Days <span class="req">*</span></label>
                         <input type="number" id="plan-total-days" min="1" max="365" value="<?php echo $plan['total_days'] ?? 7; ?>" onchange="regenerateDatesPreview()">
@@ -686,7 +686,7 @@ include 'includes/admin_nav.php';
                 <div class="field full access-rules-container">
                     <label style="font-weight: 800; font-size: 0.95rem; color: #0f172a; display: flex; align-items: center; gap: 8px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px;"><i class="fas fa-lock" style="color:#4f46e5;"></i> Visibility &amp; Access Rules</label>
                     <p style="font-size: 0.8rem; color: #64748b; margin-bottom: 16px; line-height: 1.4;">Select who can access this study plan via the public link. They will authenticate using their registered email.</p>
-                    
+
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                         <div class="access-rules-card">
                             <div class="access-rules-header">
@@ -694,7 +694,7 @@ include 'includes/admin_nav.php';
                                 <span class="access-rules-badge" id="courses-count-badge">0 Selected</span>
                             </div>
                             <div class="modern-scroll-box">
-                                <?php foreach ($courses as $c): 
+                                <?php foreach ($courses as $c):
                                     $isChecked = false;
                                     foreach ($assigned as $a) {
                                         if ($a['assignment_type'] === 'course' && $a['assigned_value'] === $c['course_name']) {
@@ -709,14 +709,14 @@ include 'includes/admin_nav.php';
                                 <?php endforeach; ?>
                             </div>
                         </div>
-                        
+
                         <div class="access-rules-card">
                             <div class="access-rules-header">
                                 <span class="access-rules-title"><i class="fab fa-wpforms"></i> Registered in Custom Forms</span>
                                 <span class="access-rules-badge" id="forms-count-badge">0 Selected</span>
                             </div>
                             <div class="modern-scroll-box">
-                                <?php foreach ($campaign_forms as $f): 
+                                <?php foreach ($campaign_forms as $f):
                                     $isChecked = false;
                                     foreach ($assigned as $a) {
                                         if ($a['assignment_type'] === 'form' && $a['assigned_value'] === (string)$f['id']) {
@@ -781,6 +781,27 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- Modal: Delete Confirmation Warning -->
+<div class="modal-backdrop" id="delete-warning-modal">
+    <div class="modal" style="max-width:450px; padding:1.5rem; border-radius: 16px;">
+        <div style="text-align:center; font-size:3rem; color:#ef4444; margin-bottom:12px;" id="delete-warning-icon">
+            <i class="fas fa-triangle-exclamation"></i>
+        </div>
+        <h3 style="font-weight:800; font-size:1.2rem; margin-bottom:8px; color: #1e293b; text-align:center;" id="delete-warning-title">Delete Activity</h3>
+        <div style="color:#64748b; font-size:0.9rem; margin-bottom:20px; text-align:center; line-height: 1.5;" id="delete-warning-message">
+            Are you sure you want to delete this activity?
+        </div>
+        <div style="margin-bottom:15px; display:none;" id="delete-reason-container">
+            <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:4px;">Reason for Deletion:</label>
+            <input type="text" id="delete-reason-input" class="form-control" style="width:100%; border:1px solid #cbd5e1; padding:6px; border-radius:6px; font-size:0.85rem;" placeholder="e.g., Task no longer needed" value="Admin deleted">
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px;">
+            <button type="button" class="btn btn-outline" onclick="closeModal('delete-warning-modal')">Cancel</button>
+            <button type="button" class="btn btn-danger" id="confirm-delete-btn" style="background:#ef4444; border-color:#ef4444; color:#fff;" onclick="executeDeleteActivity()"><i class="fas fa-trash"></i> Delete Activity</button>
+        </div>
+    </div>
+</div>
+
 <!-- Modal: Excel/CSV Bulk Import -->
 <div class="modal-backdrop" id="import-modal">
     <div class="modal" style="max-width:540px;">
@@ -804,6 +825,27 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- Modal: Delete Confirmation Warning -->
+<div class="modal-backdrop" id="delete-warning-modal">
+    <div class="modal" style="max-width:450px; padding:1.5rem; border-radius: 16px;">
+        <div style="text-align:center; font-size:3rem; color:#ef4444; margin-bottom:12px;" id="delete-warning-icon">
+            <i class="fas fa-triangle-exclamation"></i>
+        </div>
+        <h3 style="font-weight:800; font-size:1.2rem; margin-bottom:8px; color: #1e293b; text-align:center;" id="delete-warning-title">Delete Activity</h3>
+        <div style="color:#64748b; font-size:0.9rem; margin-bottom:20px; text-align:center; line-height: 1.5;" id="delete-warning-message">
+            Are you sure you want to delete this activity?
+        </div>
+        <div style="margin-bottom:15px; display:none;" id="delete-reason-container">
+            <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:4px;">Reason for Deletion:</label>
+            <input type="text" id="delete-reason-input" class="form-control" style="width:100%; border:1px solid #cbd5e1; padding:6px; border-radius:6px; font-size:0.85rem;" placeholder="e.g., Task no longer needed" value="Admin deleted">
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px;">
+            <button type="button" class="btn btn-outline" onclick="closeModal('delete-warning-modal')">Cancel</button>
+            <button type="button" class="btn btn-danger" id="confirm-delete-btn" style="background:#ef4444; border-color:#ef4444; color:#fff;" onclick="executeDeleteActivity()"><i class="fas fa-trash"></i> Delete Activity</button>
+        </div>
+    </div>
+</div>
+
 <!-- Modal: Add/Edit Activity -->
 <div class="modal-backdrop" id="activity-modal">
     <div class="modal" style="max-width:480px;">
@@ -814,7 +856,7 @@ include 'includes/admin_nav.php';
         <div class="modal-body" style="display:grid; grid-template-columns:1fr; gap:12px;">
             <input type="hidden" id="act-edit-index">
             <input type="hidden" id="act-edit-date">
-            
+
             <div class="field">
                 <label>Activity Title <span class="req">*</span></label>
                 <input type="text" id="act-title" value="Read Material">
@@ -896,6 +938,27 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- Modal: Delete Confirmation Warning -->
+<div class="modal-backdrop" id="delete-warning-modal">
+    <div class="modal" style="max-width:450px; padding:1.5rem; border-radius: 16px;">
+        <div style="text-align:center; font-size:3rem; color:#ef4444; margin-bottom:12px;" id="delete-warning-icon">
+            <i class="fas fa-triangle-exclamation"></i>
+        </div>
+        <h3 style="font-weight:800; font-size:1.2rem; margin-bottom:8px; color: #1e293b; text-align:center;" id="delete-warning-title">Delete Activity</h3>
+        <div style="color:#64748b; font-size:0.9rem; margin-bottom:20px; text-align:center; line-height: 1.5;" id="delete-warning-message">
+            Are you sure you want to delete this activity?
+        </div>
+        <div style="margin-bottom:15px; display:none;" id="delete-reason-container">
+            <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:4px;">Reason for Deletion:</label>
+            <input type="text" id="delete-reason-input" class="form-control" style="width:100%; border:1px solid #cbd5e1; padding:6px; border-radius:6px; font-size:0.85rem;" placeholder="e.g., Task no longer needed" value="Admin deleted">
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px;">
+            <button type="button" class="btn btn-outline" onclick="closeModal('delete-warning-modal')">Cancel</button>
+            <button type="button" class="btn btn-danger" id="confirm-delete-btn" style="background:#ef4444; border-color:#ef4444; color:#fff;" onclick="executeDeleteActivity()"><i class="fas fa-trash"></i> Delete Activity</button>
+        </div>
+    </div>
+</div>
+
 <!-- Modal: Exit Confirmation -->
 <div class="modal-backdrop" id="exit-confirm-modal">
     <div class="modal" style="max-width:400px; text-align:center; padding:1.5rem; border-radius: 16px;">
@@ -910,8 +973,49 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- Modal: Delete Confirmation Warning -->
+<div class="modal-backdrop" id="delete-warning-modal">
+    <div class="modal" style="max-width:450px; padding:1.5rem; border-radius: 16px;">
+        <div style="text-align:center; font-size:3rem; color:#ef4444; margin-bottom:12px;" id="delete-warning-icon">
+            <i class="fas fa-triangle-exclamation"></i>
+        </div>
+        <h3 style="font-weight:800; font-size:1.2rem; margin-bottom:8px; color: #1e293b; text-align:center;" id="delete-warning-title">Delete Activity</h3>
+        <div style="color:#64748b; font-size:0.9rem; margin-bottom:20px; text-align:center; line-height: 1.5;" id="delete-warning-message">
+            Are you sure you want to delete this activity?
+        </div>
+        <div style="margin-bottom:15px; display:none;" id="delete-reason-container">
+            <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:4px;">Reason for Deletion:</label>
+            <input type="text" id="delete-reason-input" class="form-control" style="width:100%; border:1px solid #cbd5e1; padding:6px; border-radius:6px; font-size:0.85rem;" placeholder="e.g., Task no longer needed" value="Admin deleted">
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px;">
+            <button type="button" class="btn btn-outline" onclick="closeModal('delete-warning-modal')">Cancel</button>
+            <button type="button" class="btn btn-danger" id="confirm-delete-btn" style="background:#ef4444; border-color:#ef4444; color:#fff;" onclick="executeDeleteActivity()"><i class="fas fa-trash"></i> Delete Activity</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Stale Version Conflict Warning -->
+<div class="modal-backdrop" id="stale-warning-modal">
+    <div class="modal" style="max-width:450px; padding:1.5rem; border-radius: 16px;">
+        <div style="text-align:center; font-size:3rem; color:#f59e0b; margin-bottom:12px;">
+            <i class="fas fa-arrows-rotate"></i>
+        </div>
+        <h3 style="font-weight:800; font-size:1.2rem; margin-bottom:8px; color: #1e293b; text-align:center;">Version Conflict</h3>
+        <div style="color:#64748b; font-size:0.9rem; margin-bottom:20px; text-align:center; line-height: 1.5;">
+            This study plan was updated by another administrator.<br><br>
+            Your changes were not saved to prevent overwriting the latest updates.<br><br>
+            Please reload the study plan and review the latest version before making further changes.
+        </div>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+            <button type="button" class="btn btn-primary" style="background:#f59e0b; border-color:#f59e0b; color:#fff; font-weight:700;" onclick="location.reload()"><i class="fas fa-arrows-rotate"></i> Reload Latest Version</button>
+            <button type="button" class="btn btn-outline" onclick="closeModal('stale-warning-modal')">Cancel</button>
+        </div>
+    </div>
+</div>
+
 <script>
     var studyPlanId = <?php echo $plan_id; ?>;
+    var studyPlanVersion = <?php echo (int)($plan['version'] ?? 1); ?>;
     var activities = <?php echo $activities_json; ?>;
     var predefinedTypes = <?php echo json_encode($all_types); ?>;
     var allChapters = <?php echo json_encode($preset_chapters); ?>;
@@ -925,7 +1029,7 @@ include 'includes/admin_nav.php';
         var isDraft = document.getElementById('status-draft').checked;
         var lblDraft = document.getElementById('label-status-draft');
         var lblPublished = document.getElementById('label-status-published');
-        
+
         if (isDraft) {
             lblDraft.style.background = '#64748b';
             lblDraft.style.color = '#ffffff';
@@ -945,11 +1049,11 @@ include 'includes/admin_nav.php';
             var cid = courseNameToIdMap[el.value];
             if (cid) selectedCourseIds.push(String(cid));
         });
-        
+
         var datalist = document.getElementById('preset-chapters-list');
         if (!datalist) return;
         datalist.innerHTML = '';
-        
+
         var addedNames = new Set();
         allChapters.forEach(function(ch) {
             var chCourseIds = ch.course_id ? ch.course_id.split(',') : [];
@@ -979,7 +1083,7 @@ include 'includes/admin_nav.php';
     function updateAccessCounts() {
         var coursesCount = document.querySelectorAll('input[name="access_courses[]"]:checked').length;
         var formsCount = document.querySelectorAll('input[name="access_forms[]"]:checked').length;
-        
+
         var cBadge = document.getElementById('courses-count-badge');
         if (cBadge) {
             cBadge.textContent = coursesCount + ' Selected';
@@ -993,7 +1097,7 @@ include 'includes/admin_nav.php';
                 cBadge.style.borderColor = '#e2e8f0';
             }
         }
-        
+
         var fBadge = document.getElementById('forms-count-badge');
         if (fBadge) {
             fBadge.textContent = formsCount + ' Selected';
@@ -1014,7 +1118,7 @@ include 'includes/admin_nav.php';
             // Pre-select theme/layout
             document.getElementById('plan-theme').value = "<?php echo $plan['theme'] ?? 'default'; ?>";
             document.getElementById('plan-layout').value = "<?php echo $plan['layout'] ?? 'timeline'; ?>";
-            
+
             // Set plan type state
             var pType = "<?php echo $plan['plan_type'] ?? 'date_wise'; ?>";
             if (pType === 'day_wise') {
@@ -1031,12 +1135,12 @@ include 'includes/admin_nav.php';
                 document.getElementById('status-draft').checked = true;
             }
         }
-        
+
         togglePlanTypeView();
         populateChapterDatalist();
         updateStatusToggle();
         updateAccessCounts();
-        
+
         // Bind change listeners to detect unsaved settings changes
         ['plan-title', 'plan-desc', 'plan-quote'].forEach(id => {
             var el = document.getElementById(id);
@@ -1085,7 +1189,7 @@ include 'includes/admin_nav.php';
                         var diffT = dummyD - offsetD;
                         var diffDays = Math.floor(diffT / (1000 * 60 * 60 * 24));
                         if (diffDays < 0) diffDays = 0;
-                        
+
                         var newD = new Date(baseDate);
                         newD.setDate(newD.getDate() + diffDays);
                         var yyyy = newD.getFullYear();
@@ -1122,7 +1226,7 @@ include 'includes/admin_nav.php';
                         var diffT = actD - baseDate;
                         var diffDays = Math.floor(diffT / (1000 * 60 * 60 * 24));
                         if (diffDays < 0) diffDays = 0;
-                        
+
                         var newD = new Date('2000-01-01');
                         newD.setDate(newD.getDate() + diffDays);
                         var yyyy = newD.getFullYear();
@@ -1140,7 +1244,7 @@ include 'includes/admin_nav.php';
     function switchDesignerTab(tab) {
         document.querySelectorAll('.designer-tab').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.designer-tab-content').forEach(c => c.style.display = 'none');
-        
+
         event.target.classList.add('active');
         document.getElementById('tab-' + tab).style.display = 'block';
     }
@@ -1148,7 +1252,7 @@ include 'includes/admin_nav.php';
     function regenerateDatesPreview() {
         var isDateWise = document.getElementById('type-date-wise').checked;
         var startInput, endInput, totalDays;
-        
+
         if (isDateWise) {
             startInput = document.getElementById('plan-start').value;
             endInput = document.getElementById('plan-end').value;
@@ -1163,45 +1267,45 @@ include 'includes/admin_nav.php';
             var dd = String(endD.getDate()).padStart(2, '0');
             endInput = yyyy + '-' + mm + '-' + dd;
         }
-        
+
         var start = new Date(startInput);
         var end = new Date(endInput);
         var wrapper = document.getElementById('activities-dates-wrapper');
         wrapper.innerHTML = '';
-        
+
         var curr = new Date(start);
         var dayNum = 1;
-        
+
         while (curr <= end) {
             var yyyy = curr.getFullYear();
             var mm = String(curr.getMonth() + 1).padStart(2, '0');
             var dd = String(curr.getDate()).padStart(2, '0');
             var dateStr = yyyy + '-' + mm + '-' + dd;
-            
+
             var dayLabel = "Day " + String(dayNum).padStart(2, '0');
             if (isDateWise) {
                 dayLabel += " (" + curr.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }) + ")";
             }
-            
+
             var dayContainer = document.createElement('div');
             dayContainer.className = 'day-container';
             dayContainer.id = 'day-group-' + dateStr;
-            
+
             var dayHeader = document.createElement('div');
             dayHeader.className = 'day-header';
             dayHeader.innerHTML = '<span><i class="fas fa-calendar-day" style="color:var(--accent);"></i> ' + dayLabel + '</span>' +
                                   '<button class="btn btn-sm btn-secondary" style="padding:2px 8px; font-size:0.72rem;" onclick="addActivityToDate(\'' + dateStr + '\', ' + dayNum + ')"><i class="fas fa-plus"></i> Add Item</button>';
-            
+
             var activitiesList = document.createElement('div');
             activitiesList.className = 'activities-list';
             activitiesList.id = 'list-' + dateStr;
             activitiesList.setAttribute('data-date', dateStr);
             activitiesList.setAttribute('data-day', dayNum);
-            
+
             dayContainer.appendChild(dayHeader);
             dayContainer.appendChild(activitiesList);
             wrapper.appendChild(dayContainer);
-            
+
             // Initialize SortableJS drag and drop
             new Sortable(activitiesList, {
                 group: 'activities-shared',
@@ -1210,11 +1314,11 @@ include 'includes/admin_nav.php';
                     reindexSortOrder();
                 }
             });
-            
+
             curr.setDate(curr.getDate() + 1);
             dayNum++;
         }
-        
+
         // Populate existing items
         renderActivitiesList();
         updateLivePreview();
@@ -1223,16 +1327,22 @@ include 'includes/admin_nav.php';
     function renderActivitiesList() {
         // Clear all days
         document.querySelectorAll('.activities-list').forEach(l => l.innerHTML = '');
-        
+
         activities.forEach(function(act, index) {
             var targetList = document.getElementById('list-' + act.activity_date);
             if (targetList) {
                 var card = document.createElement('div');
                 card.className = 'activity-card';
                 card.setAttribute('data-index', index);
-                
+                if (act.id) {
+                    card.setAttribute('data-activity-id', act.id);
+                }
+                if (act.activity_uid) {
+                    card.setAttribute('data-activity-uid', act.activity_uid);
+                }
+
                 var typeConf = predefinedTypes[act.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
-                
+
                 card.innerHTML = '<div style="display:flex; align-items:center; gap:8px;">' +
                                     '<i class="fas ' + typeConf.icon + '" style="color:' + typeConf.color + '; font-size:1.1rem; width:20px;"></i>' +
                                     '<div>' +
@@ -1243,7 +1353,7 @@ include 'includes/admin_nav.php';
                                  '<div style="display:flex; gap:6px;">' +
                                     '<button class="btn btn-sm btn-outline" style="padding:2px 6px;" title="Edit" onclick="editActivityRow(' + index + ')"><i class="fas fa-pencil"></i></button>' +
                                     '<button class="btn btn-sm btn-outline" style="padding:2px 6px;" title="Clone / Duplicate" onclick="cloneActivityRow(' + index + ')"><i class="fas fa-copy"></i></button>' +
-                                    '<button class="btn btn-sm btn-soft-red" style="padding:2px 6px;" title="Delete" onclick="deleteActivityRow(' + index + ')"><i class="fas fa-trash"></i></button>' +
+                                    '<button class="btn btn-sm btn-soft-red" id="act-delete-btn-' + index + '" style="padding:2px 6px;" title="Delete" onclick="deleteActivityRow(' + index + ')"><i class="fas fa-trash"></i></button>' +
                                  '</div>';
                 targetList.appendChild(card);
             }
@@ -1255,19 +1365,19 @@ include 'includes/admin_nav.php';
         document.querySelectorAll('.activities-list').forEach(function(list) {
             var dateStr = list.getAttribute('data-date');
             var dayNum = parseInt(list.getAttribute('data-day'));
-            
+
             var cards = list.querySelectorAll('.activity-card');
             cards.forEach(function(card, order) {
                 var oldIndex = parseInt(card.getAttribute('data-index'));
                 var act = activities[oldIndex];
-                
+
                 act.activity_date = dateStr;
                 act.day_number = dayNum;
                 act.sort_order = order;
                 updatedActivities.push(act);
             });
         });
-        
+
         activities = updatedActivities;
         renderActivitiesList();
         updateLivePreview();
@@ -1277,7 +1387,7 @@ include 'includes/admin_nav.php';
     function addActivityToDate(dateStr, dayNum) {
         document.getElementById('act-edit-index').value = "-1";
         document.getElementById('act-edit-date').value = dateStr;
-        
+
         document.getElementById('act-title').value = 'Read Study Material';
         document.getElementById('act-chapter').value = '';
         document.getElementById('act-subject').value = '';
@@ -1288,7 +1398,7 @@ include 'includes/admin_nav.php';
         document.getElementById('act-duration').value = '60';
         document.getElementById('act-difficulty').value = 'medium';
         document.getElementById('act-resources').value = '';
-        
+
         openModal('activity-modal');
     }
 
@@ -1296,7 +1406,7 @@ include 'includes/admin_nav.php';
         var act = activities[index];
         document.getElementById('act-edit-index').value = index;
         document.getElementById('act-edit-date').value = act.activity_date;
-        
+
         document.getElementById('act-title').value = act.activity_title;
         document.getElementById('act-type').value = act.activity_type;
         document.getElementById('act-chapter').value = act.chapter || '';
@@ -1308,14 +1418,14 @@ include 'includes/admin_nav.php';
         document.getElementById('act-duration').value = act.estimated_duration || '60';
         document.getElementById('act-difficulty').value = act.difficulty_level || 'medium';
         document.getElementById('act-resources').value = act.resource_links || '';
-        
+
         openModal('activity-modal');
     }
 
     function saveActivityRow() {
         var index = parseInt(document.getElementById('act-edit-index').value);
         var dateStr = document.getElementById('act-edit-date').value;
-        
+
         var actObj = {
             activity_date: dateStr,
             day_number: 1,
@@ -1333,31 +1443,170 @@ include 'includes/admin_nav.php';
             resource_links: document.getElementById('act-resources').value,
             priority: 'medium'
         };
-        
+
         if (index >= 0) {
+            // Keep permanent database ID and UID stable across edits
+            if (activities[index].id) actObj.id = activities[index].id;
+            if (activities[index].activity_uid) actObj.activity_uid = activities[index].activity_uid;
             activities[index] = actObj;
         } else {
             activities.push(actObj);
         }
-        
+
         closeModal('activity-modal');
         renderActivitiesList();
         updateLivePreview();
         autoSaveActivities();
     }
 
+    var deleteIndex = -1;
+    var deleteToken = '';
+    var deleteExpectedCount = 0;
+
     function deleteActivityRow(index) {
-        if (confirm('Delete this study activity?')) {
-            activities.splice(index, 1);
-            renderActivitiesList();
-            updateLivePreview();
-            autoSaveActivities();
+        var act = activities[index];
+
+        // If it's a new unsaved activity, remove it locally immediately
+        if (!act.id || act.id <= 0) {
+            if (confirm('Delete this new study activity?')) {
+                activities.splice(index, 1);
+                renderActivitiesList();
+                updateLivePreview();
+                autoSaveActivities();
+            }
+            return;
         }
+
+        deleteIndex = index;
+
+        // Set loading state on the trigger delete button
+        var deleteBtn = document.getElementById('act-delete-btn-' + index);
+        if (deleteBtn) {
+            deleteBtn.disabled = true;
+            deleteBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        }
+
+        var formData = new FormData();
+        formData.append('activity_id', act.id);
+
+        fetch('api/studyplans-api.php?action=check_activity_delete', {
+            method: 'POST',
+            body: formData
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (deleteBtn) {
+                deleteBtn.disabled = false;
+                deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
+            }
+
+            if (data.success) {
+                deleteToken = data.confirmation_token;
+                deleteExpectedCount = data.student_count;
+
+                var titleEl = document.getElementById('delete-warning-title');
+                var msgEl = document.getElementById('delete-warning-message');
+                var iconEl = document.getElementById('delete-warning-icon');
+                var confirmBtn = document.getElementById('confirm-delete-btn');
+                var reasonContainer = document.getElementById('delete-reason-container');
+                var reasonInput = document.getElementById('delete-reason-input');
+
+                reasonInput.value = 'Admin deleted';
+
+                if (data.student_count > 0) {
+                    titleEl.innerText = 'Delete Activity — Student Data Warning';
+                    iconEl.innerHTML = '<i class="fas fa-triangle-exclamation"></i>';
+                    iconEl.style.color = '#ef4444';
+                    msgEl.innerHTML = `⚠️ <strong>${data.student_count}</strong> student(s) have completed this activity.<br><br>The activity will be removed from the active study plan, but historical student completion records will be preserved for reporting.<br><br>This action cannot be automatically undone.`;
+                    reasonContainer.style.display = 'block';
+                } else {
+                    titleEl.innerText = 'Delete Activity';
+                    iconEl.innerHTML = '<i class="fas fa-circle-question"></i>';
+                    iconEl.style.color = '#3b82f6';
+                    msgEl.innerHTML = 'Are you sure you want to delete this activity?<br><br>No student completion data has been recorded yet.';
+                    reasonContainer.style.display = 'block';
+                }
+
+                openModal('delete-warning-modal');
+            } else {
+                alert(data.message || 'Error checking activity deletion.');
+            }
+        })
+        .catch(err => {
+            if (deleteBtn) {
+                deleteBtn.disabled = false;
+                deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
+            }
+            console.error(err);
+            alert('Connection error occurred while checking activity.');
+        });
+    }
+
+    function executeDeleteActivity() {
+        if (deleteIndex < 0 || !deleteToken) return;
+
+        var confirmBtn = document.getElementById('confirm-delete-btn');
+        var reasonInput = document.getElementById('delete-reason-input');
+
+        confirmBtn.disabled = true;
+        confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
+
+        var formData = new FormData();
+        formData.append('activity_id', activities[deleteIndex].id);
+        formData.append('confirmation_token', deleteToken);
+        formData.append('expected_count', deleteExpectedCount);
+        formData.append('deletion_reason', reasonInput.value);
+        formData.append('version', studyPlanVersion);
+
+        fetch('api/studyplans-api.php?action=delete_activity', {
+            method: 'POST',
+            body: formData
+        })
+        .then(r => r.json())
+        .then(data => {
+            confirmBtn.disabled = false;
+            confirmBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Activity';
+
+            if (data.success) {
+                if (data.version) {
+                    studyPlanVersion = data.version;
+                }
+                activities.splice(deleteIndex, 1);
+                renderActivitiesList();
+                updateLivePreview();
+                closeModal('delete-warning-modal');
+
+                deleteIndex = -1;
+                deleteToken = null;
+                deleteExpectedCount = 0;
+            } else if (data.error_code === 'STALE_STUDY_PLAN') {
+                closeModal('delete-warning-modal');
+                openModal('stale-warning-modal');
+            } else if (data.count_changed) {
+                alert(data.message);
+                // Re-open warning dialog to get the fresh token & count
+                closeModal('delete-warning-modal');
+                deleteActivityRow(deleteIndex);
+            } else {
+                alert(data.message || 'Error deleting activity.');
+            }
+        })
+        .catch(err => {
+            confirmBtn.disabled = false;
+            confirmBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Activity';
+            console.error(err);
+            alert('Connection error occurred while deleting activity.');
+        });
     }
 
     function cloneActivityRow(index) {
         var act = activities[index];
         var cloned = JSON.parse(JSON.stringify(act));
+
+        // Strip out database ID and permanent UID so the clone represents a brand-new task
+        delete cloned.id;
+        delete cloned.activity_uid;
+
         // Insert right after the original item
         activities.splice(index + 1, 0, cloned);
         renderActivitiesList();
@@ -1375,12 +1624,12 @@ include 'includes/admin_nav.php';
             alert('Please select a file first.');
             return;
         }
-        
+
         var formData = new FormData();
         formData.append('action', 'import_activities');
         formData.append('file', fileEl.files[0]);
         formData.append('csrf_token', '<?php echo csrf_token(); ?>');
-        
+
         fetch('api/studyplans-api.php', {
             method: 'POST',
             body: formData
@@ -1406,14 +1655,14 @@ include 'includes/admin_nav.php';
         var wrapper = document.getElementById('live-preview-wrapper');
         var theme = document.getElementById('plan-theme').value;
         var layout = document.getElementById('plan-layout').value;
-        
+
         var title = document.getElementById('plan-title').value;
         var desc = document.getElementById('plan-desc').value;
         var quote = document.getElementById('plan-quote').value;
-        
+
         // Reset classes
         wrapper.className = 'preview-phone-frame theme-' + theme + ' layout-' + layout;
-        
+
         var html = '<div style="padding:10px; border-bottom:1px solid var(--border); margin-bottom:16px; display:flex; align-items:center; gap:8px;">' +
                         '<div style="width:36px; height:36px; border-radius:50%; background:var(--accent-soft); display:flex; align-items:center; justify-content:center; color:var(--accent); font-weight:800;">P</div>' +
                         '<div>' +
@@ -1421,13 +1670,13 @@ include 'includes/admin_nav.php';
                             '<small style="color:var(--text-muted); font-size:0.75rem;">PEPP Journey Plan</small>' +
                         '</div>' +
                    '</div>';
-                   
+
         if (quote) {
             html += '<div style="background:var(--accent-soft); border-left:4px solid var(--accent); padding:10px; border-radius:4px; font-style:italic; font-size:0.8rem; margin-bottom:16px; color:var(--text-main);">' +
                         '"' + quote + '"' +
                     '</div>';
         }
-        
+
         if (activities.length === 0) {
             html += '<div style="text-align:center; padding:3rem 0; color:var(--text-muted); font-size:0.85rem;"><i class="fas fa-calendar-day" style="font-size:2rem; margin-bottom:6px; display:block;"></i>No schedules added yet. Use designer panel to populate items.</div>';
         } else {
@@ -1437,7 +1686,7 @@ include 'includes/admin_nav.php';
                 if (!grouped[act.activity_date]) grouped[act.activity_date] = [];
                 grouped[act.activity_date].push(act);
             });
-            
+
             var isDateWise = document.getElementById('type-date-wise').checked;
 
             html += '<div class="timeline-wrapper">';
@@ -1453,13 +1702,13 @@ include 'includes/admin_nav.php';
                         dateLabel = dObj.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
                     } catch(e) {}
                 }
-                
+
                 html += '<div class="timeline-day-node">' +
                             '<div class="timeline-badge"></div>' +
                             '<div class="timeline-card">' +
                                 '<div class="timeline-date-label">' + dateLabel + '</div>' +
                                 '<div style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;">';
-                                
+
                 items.forEach(function(it) {
                     var conf = predefinedTypes[it.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
                     html += '<div class="activity-item" style="display:flex; align-items:center; justify-content:space-between; gap:10px; border-bottom:1px solid var(--border); padding:8px 0;">' +
@@ -1475,24 +1724,24 @@ include 'includes/admin_nav.php';
                                 '<span style="margin-left:auto; background:var(--accent-soft); border-radius:4px; font-size:0.65rem; font-weight:700; padding:2px 6px; color:var(--accent); flex-shrink:0;">' + (it.estimated_duration || 60) + 'm</span>' +
                             '</div>';
                 });
-                
+
                 html += '</div></div></div>';
             });
             html += '</div>';
         }
-        
+
         wrapper.innerHTML = html;
     }
 
     function saveStudyPlan() {
         var title = document.getElementById('plan-title').value;
         var year = document.getElementById('plan-year').value;
-        
+
         if (!title || !year) {
             alert('Study Plan Title and Academic Year are required.');
             return;
         }
-        
+
         var assignments = [];
         document.querySelectorAll('input[name="access_courses[]"]:checked').forEach(function(el) {
             assignments.push({ type: 'course', value: el.value });
@@ -1505,7 +1754,7 @@ include 'includes/admin_nav.php';
         var startInput = isDateWise ? document.getElementById('plan-start').value : '2000-01-01';
         var endInput = '2000-01-01';
         var totalDays = parseInt(document.getElementById('plan-total-days').value) || 7;
-        
+
         if (isDateWise) {
             endInput = document.getElementById('plan-end').value;
         } else {
@@ -1519,6 +1768,7 @@ include 'includes/admin_nav.php';
 
         var planData = {
             id: studyPlanId,
+            version: studyPlanVersion,
             title: title,
             academic_year: year,
             course_id: document.getElementById('plan-course').value,
@@ -1536,7 +1786,7 @@ include 'includes/admin_nav.php';
                 quote: document.getElementById('plan-quote').value
             }
         };
-        
+
         // Save plan first, then save activities list
         fetch('api/studyplans-api.php?action=save_plan', {
             method: 'POST',
@@ -1547,12 +1797,16 @@ include 'includes/admin_nav.php';
         .then(data => {
             if (data.success) {
                 var newPlanId = data.plan_id;
+                if (data.version) {
+                    studyPlanVersion = data.version;
+                }
                 // Save activities
                 fetch('api/studyplans-api.php?action=save_activities', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         study_plan_id: newPlanId,
+                        version: studyPlanVersion,
                         activities: activities
                     })
                 })
@@ -1562,14 +1816,17 @@ include 'includes/admin_nav.php';
                         hasUnsavedChanges = false;
                         alert('Study Plan & all schedules saved successfully!');
                         window.location.href = 'studyplans.php';
+                    } else if (data2.error_code === 'STALE_STUDY_PLAN') {
+                        openModal('stale-warning-modal');
                     } else if (data2.requires_assessment_confirm) {
                         if (confirm('⚠️ Assessment Results Warning\n\n' + data2.message + '\n\nClick OK to proceed or Cancel to abort.')) {
                             fetch('api/studyplans-api.php?action=save_activities', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ study_plan_id: newPlanId, activities: activities, confirm_activity_replace: true })
+                                body: JSON.stringify({ study_plan_id: newPlanId, version: studyPlanVersion, activities: activities, confirm_activity_replace: true })
                             }).then(r3 => r3.json()).then(data3 => {
                                 if (data3.success) { hasUnsavedChanges = false; alert('Study Plan & all schedules saved successfully!'); window.location.href = 'studyplans.php'; }
+                                else if (data3.error_code === 'STALE_STUDY_PLAN') { openModal('stale-warning-modal'); }
                                 else { alert('Failed to save activities: ' + data3.message); }
                             });
                         }
@@ -1577,6 +1834,8 @@ include 'includes/admin_nav.php';
                         alert('Failed to save activities: ' + data2.message);
                     }
                 });
+            } else if (data.error_code === 'STALE_STUDY_PLAN') {
+                openModal('stale-warning-modal');
             } else {
                 alert('Save failed: ' + data.message);
             }
@@ -1599,14 +1858,14 @@ include 'includes/admin_nav.php';
             hasUnsavedChanges = true;
             return;
         }
-        
+
         var indicator = document.getElementById('autosave-indicator');
         if (indicator) {
             indicator.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Auto-saving...';
             indicator.style.color = '#f59e0b';
             indicator.style.display = 'inline-flex';
         }
-        
+
         fetch('api/studyplans-api.php?action=save_activities', {
             method: 'POST',
             headers: {
@@ -1614,12 +1873,24 @@ include 'includes/admin_nav.php';
             },
             body: JSON.stringify({
                 study_plan_id: studyPlanId,
+                version: studyPlanVersion,
                 activities: activities
             })
         })
         .then(r => r.json())
         .then(data => {
             if (data.success) {
+                if (data.version) {
+                    studyPlanVersion = data.version;
+                }
+                // Map the newly assigned database IDs & UIDs back to the local array
+                if (data.activities && activities.length === data.activities.length) {
+                    for (var i = 0; i < activities.length; i++) {
+                        activities[i].id = data.activities[i].id;
+                        activities[i].activity_uid = data.activities[i].activity_uid;
+                    }
+                    renderActivitiesList();
+                }
                 if (indicator) {
                     indicator.innerHTML = '<i class="fas fa-circle-check"></i> Changes saved';
                     indicator.style.color = '#10b981';
@@ -1630,14 +1901,38 @@ include 'includes/admin_nav.php';
                     }, 3000);
                 }
                 hasUnsavedChanges = false;
+            } else if (data.error_code === 'STALE_STUDY_PLAN') {
+                if (indicator) {
+                    indicator.innerHTML = '<i class="fas fa-triangle-exclamation"></i> Conflict: Stale Version';
+                    indicator.style.color = '#f59e0b';
+                }
+                openModal('stale-warning-modal');
+                hasUnsavedChanges = true;
             } else if (data.requires_assessment_confirm) {
                 if (indicator) { indicator.innerHTML = '<i class="fas fa-triangle-exclamation"></i> Confirmation needed'; indicator.style.color = '#f59e0b'; }
                 if (confirm('⚠️ Assessment Results Warning\n\n' + data.message + '\n\nClick OK to proceed or Cancel to abort.')) {
                     fetch('api/studyplans-api.php?action=save_activities', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ study_plan_id: studyPlanId, activities: activities, confirm_activity_replace: true })
+                        body: JSON.stringify({ study_plan_id: studyPlanId, version: studyPlanVersion, activities: activities, confirm_activity_replace: true })
                     }).then(r2 => r2.json()).then(d2 => {
-                        if (d2.success) { if (indicator) { indicator.innerHTML = '<i class="fas fa-circle-check"></i> Changes saved'; indicator.style.color = '#10b981'; } hasUnsavedChanges = false; }
+                        if (d2.success) {
+                            if (d2.version) {
+                                studyPlanVersion = d2.version;
+                            }
+                            if (d2.activities && activities.length === d2.activities.length) {
+                                for (var i = 0; i < activities.length; i++) {
+                                    activities[i].id = d2.activities[i].id;
+                                    activities[i].activity_uid = d2.activities[i].activity_uid;
+                                }
+                                renderActivitiesList();
+                            }
+                            if (indicator) { indicator.innerHTML = '<i class="fas fa-circle-check"></i> Changes saved'; indicator.style.color = '#10b981'; }
+                            hasUnsavedChanges = false;
+                        } else if (d2.error_code === 'STALE_STUDY_PLAN') {
+                            if (indicator) { indicator.innerHTML = '<i class="fas fa-triangle-exclamation"></i> Conflict: Stale Version'; indicator.style.color = '#f59e0b'; }
+                            openModal('stale-warning-modal');
+                            hasUnsavedChanges = true;
+                        }
                         else { if (indicator) { indicator.innerHTML = '<i class="fas fa-circle-xmark"></i> Save failed'; indicator.style.color = '#ef4444'; } }
                     });
                 } else { if (indicator) { indicator.innerHTML = '<i class="fas fa-ban"></i> Save cancelled'; indicator.style.color = '#ef4444'; } }

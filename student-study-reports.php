@@ -64,9 +64,9 @@ if (!function_exists('reverse_geocode_nominatim')) {
         $lat = trim((string)$lat);
         $lon = trim((string)$lon);
         if (empty($lat) || empty($lon)) return '';
-        
+
         $url = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=" . urlencode($lat) . "&lon=" . urlencode($lon) . "&zoom=14";
-        
+
         $opts = [
             'http' => [
                 'method' => "GET",
@@ -132,7 +132,7 @@ if (!function_exists('student_has_plans')) {
                 (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
                 (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
                 (sa.assignment_type = 'form' AND EXISTS (
-                    SELECT 1 FROM campaign_form_submissions s 
+                    SELECT 1 FROM campaign_form_submissions s
                     WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
                 ))
             )
@@ -143,7 +143,7 @@ if (!function_exists('student_has_plans')) {
 // AJAX ACTION HANDLERS
 if (isset($_GET['action'])) {
     header('Content-Type: application/json');
-    
+
     // Clear student completion (Super Admin only, CSRF-protected POST request)
     if ($_GET['action'] === 'clear_student_activity_completion') {
         if (!is_super_admin()) {
@@ -154,10 +154,10 @@ if (isset($_GET['action'])) {
             echo json_encode(['success' => false, 'message' => 'Security token mismatch. Please reload and try again.']);
             exit;
         }
-        
+
         $analytics_id = (int)($_POST['analytics_id'] ?? 0);
         $clear_reason = trim($_POST['clear_reason'] ?? '');
-        
+
         if ($analytics_id <= 0) {
             echo json_encode(['success' => false, 'message' => 'Invalid completion ID.']);
             exit;
@@ -166,7 +166,7 @@ if (isset($_GET['action'])) {
             echo json_encode(['success' => false, 'message' => 'Clear reason is required.']);
             exit;
         }
-        
+
         try {
             $stmt = $pdo->prepare("SELECT * FROM study_plan_analytics WHERE id = ? LIMIT 1");
             $stmt->execute([$analytics_id]);
@@ -183,28 +183,28 @@ if (isset($_GET['action'])) {
                 echo json_encode(['success' => false, 'message' => 'This completion is already cleared.']);
                 exit;
             }
-            
+
             $pdo->beginTransaction();
-            
+
             // Non-destructively set status to cleared with explicit Asia/Kolkata timezone timestamp
             $stmt_up = $pdo->prepare("
-                UPDATE study_plan_analytics 
-                SET completion_status = 'cleared', 
-                    cleared_by = ?, 
-                    cleared_at = ?, 
-                    clear_reason = ? 
+                UPDATE study_plan_analytics
+                SET completion_status = 'cleared',
+                    cleared_by = ?,
+                    cleared_at = ?,
+                    clear_reason = ?
                 WHERE id = ?
             ");
             $stmt_up->execute([$_SESSION['admin_username'] ?? 'Super Admin', date('Y-m-d H:i:s'), $clear_reason, $analytics_id]);
-            
+
             // Audit record using PEPP's existing activity log
             log_admin_activity(
-                $pdo, 
-                $_SESSION['admin_username'] ?? 'Super Admin', 
-                'clear_study_plan_completion', 
+                $pdo,
+                $_SESSION['admin_username'] ?? 'Super Admin',
+                'clear_study_plan_completion',
                 "Cleared task completion ID {$analytics_id} (Student: {$row['student_email']}, Activity: {$row['activity_id']}). Reason: {$clear_reason}"
             );
-            
+
             $pdo->commit();
             echo json_encode(['success' => true, 'message' => 'Completion cleared successfully.']);
         } catch (Exception $e) {
@@ -221,9 +221,9 @@ if (isset($_GET['action'])) {
         if ($student_user_id !== '') {
             try {
                 $stmt = $pdo->prepare("
-                    SELECT id, admin_username, call_timestamp, notes 
-                    FROM mentor_call_logs 
-                    WHERE student_user_id = ? 
+                    SELECT id, admin_username, call_timestamp, notes
+                    FROM mentor_call_logs
+                    WHERE student_user_id = ?
                     ORDER BY call_timestamp DESC
                 ");
                 $stmt->execute([$student_user_id]);
@@ -241,9 +241,9 @@ if (isset($_GET['action'])) {
         if ($student_user_id !== '') {
             try {
                 $stmt = $pdo->prepare("
-                    SELECT id, admin_username, remark, created_at 
-                    FROM mentor_remarks 
-                    WHERE student_user_id = ? 
+                    SELECT id, admin_username, remark, created_at
+                    FROM mentor_remarks
+                    WHERE student_user_id = ?
                     ORDER BY created_at DESC
                 ");
                 $stmt->execute([$student_user_id]);
@@ -253,7 +253,7 @@ if (isset($_GET['action'])) {
         echo json_encode($results);
         exit;
     }
-    
+
     // 1. Global student autocomplete search
     if ($_GET['action'] === 'global_student_search') {
         $q = trim($_GET['q'] ?? '');
@@ -262,8 +262,8 @@ if (isset($_GET['action'])) {
             $like = "%{$q}%";
             try {
                 $stmt = $pdo->prepare("
-                    SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year 
-                    FROM users 
+                    SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year
+                    FROM users
                     WHERE (name LIKE ? OR email LIKE ? OR phone LIKE ? OR user_id LIKE ?) AND status = 'approved'
                     LIMIT 20
                 ");
@@ -294,8 +294,8 @@ if (isset($_GET['action'])) {
         $email = trim($_GET['email'] ?? '');
         try {
             $stmt = $pdo->prepare("
-                SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year, created_at, student_status, user_photo 
-                FROM users 
+                SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year, created_at, student_status, user_photo
+                FROM users
                 WHERE email = ? AND status = 'approved' LIMIT 1
             ");
             $stmt->execute([$email]);
@@ -307,16 +307,16 @@ if (isset($_GET['action'])) {
 
             // Quick calculations for learning statistics
             $stmt_as = $pdo->prepare("
-                SELECT sp.*, sa.assignment_type, sa.assigned_value 
+                SELECT sp.*, sa.assignment_type, sa.assigned_value
                 FROM study_plans sp
                 JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                WHERE sp.status = 'published' AND (
+                WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND (
                     sa.assignment_type = 'all' OR
                     (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
                     (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
                     (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
                     (sa.assignment_type = 'form' AND EXISTS (
-                        SELECT 1 FROM campaign_form_submissions s 
+                        SELECT 1 FROM campaign_form_submissions s
                         WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
                     ))
                 )
@@ -332,7 +332,7 @@ if (isset($_GET['action'])) {
             // Performance calculations:
             $perf_total_tasks = 0;
             $perf_completed_tasks = 0;
-            
+
             // Streak calculations:
             $plan_streaks = [];
 
@@ -342,16 +342,20 @@ if (isset($_GET['action'])) {
 
                 $plan_type = $p['plan_type'] ?? 'date_wise';
 
-                // Get all activities of this plan
-                $stmt_act = $pdo->prepare("SELECT id, day_number, activity_date FROM study_plan_activities WHERE study_plan_id = ?");
+                // Get all activities of this plan (non-deleted only)
+                $stmt_act = $pdo->prepare("SELECT id, day_number, activity_date FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0");
                 $stmt_act->execute([$p['id']]);
                 $activities = $stmt_act->fetchAll(PDO::FETCH_ASSOC);
 
-                // Get all completed activity IDs for this student in this plan
+                // Get all completed activity IDs for this student in this plan (non-deleted tasks, matched by UID/ID)
                 $stmt_comp = $pdo->prepare("
-                    SELECT DISTINCT activity_id 
-                    FROM study_plan_analytics 
-                    WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity' AND completion_status = 'completed'
+                    SELECT DISTINCT act.id
+                    FROM study_plan_analytics an
+                    JOIN study_plan_activities act ON (
+                        (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
+                        OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
+                    )
+                    WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0
                 ");
                 $stmt_comp->execute([$email, $p['id']]);
                 $completed_ids = $stmt_comp->fetchAll(PDO::FETCH_COLUMN);
@@ -446,9 +450,9 @@ if (isset($_GET['action'])) {
             $online = false;
             $presence = 'Offline';
             $stmt_pres = $pdo->prepare("
-                SELECT created_at, action_type, study_plan_id 
-                FROM study_plan_analytics 
-                WHERE student_email = ? 
+                SELECT created_at, action_type, study_plan_id
+                FROM study_plan_analytics
+                WHERE student_email = ?
                 ORDER BY created_at DESC LIMIT 1
             ");
             $stmt_pres->execute([$email]);
@@ -464,14 +468,14 @@ if (isset($_GET['action'])) {
             // Group plans by course name
             $courses_data = [];
             $primary_course = $student['pepp_course'] ?: 'General Program';
-            
+
             // Build the course list
             foreach ($plans_data as $plan) {
                 $plan_course = $primary_course;
                 if (!empty($plan['assignment_type']) && $plan['assignment_type'] === 'course') {
                     $plan_course = $plan['assigned_value'];
                 }
-                
+
                 if (!isset($courses_data[$plan_course])) {
                     $courses_data[$plan_course] = [
                         'name' => $plan_course,
@@ -487,21 +491,21 @@ if (isset($_GET['action'])) {
                         'plans' => []
                     ];
                 }
-                
+
                 $courses_data[$plan_course]['plans'][] = $plan;
                 $courses_data[$plan_course]['plans_count']++;
                 $courses_data[$plan_course]['total_tasks'] += $plan['total_tasks'];
                 $courses_data[$plan_course]['completed'] += $plan['completed'];
                 $courses_data[$plan_course]['pending'] += $plan['pending'];
-                
+
                 if ($plan['last_updated'] !== 'Never') {
-                    if ($courses_data[$plan_course]['last_updated'] === 'Never' || 
+                    if ($courses_data[$plan_course]['last_updated'] === 'Never' ||
                         strtotime($plan['last_updated']) > strtotime($courses_data[$plan_course]['last_updated'])) {
                         $courses_data[$plan_course]['last_updated'] = $plan['last_updated'];
                     }
                 }
             }
-            
+
             if (empty($courses_data)) {
                 $courses_data[$primary_course] = [
                     'name' => $primary_course,
@@ -517,7 +521,7 @@ if (isset($_GET['action'])) {
                     'plans' => []
                 ];
             }
-            
+
             foreach ($courses_data as $cname => &$c) {
                 $c['pct'] = $c['total_tasks'] > 0 ? round(($c['completed'] / $c['total_tasks']) * 100) : 0;
                 $perf = get_performance_status($c['pct']);
@@ -566,13 +570,13 @@ if (isset($_GET['action'])) {
             $stmt_plan->execute([$plan_id]);
             $plan_type = $stmt_plan->fetchColumn() ?: 'date_wise';
 
-            $order_by = ($plan_type === 'date_wise') 
-                ? "activity_date ASC, sort_order ASC, id ASC" 
+            $order_by = ($plan_type === 'date_wise')
+                ? "activity_date ASC, sort_order ASC, id ASC"
                 : "day_number ASC, sort_order ASC, id ASC";
 
             $stmt_act = $pdo->prepare("
-                SELECT * FROM study_plan_activities 
-                WHERE study_plan_id = ? 
+                SELECT * FROM study_plan_activities
+                WHERE study_plan_id = ? AND is_deleted = 0
                 ORDER BY $order_by
             ");
             $stmt_act->execute([$plan_id]);
@@ -610,11 +614,11 @@ if (isset($_GET['action'])) {
                 if (in_array('cleared_by', $anal_cols)) $select_fields[] = 'cleared_by';
                 if (in_array('cleared_at', $anal_cols)) $select_fields[] = 'cleared_at';
                 if (in_array('clear_reason', $anal_cols)) $select_fields[] = 'clear_reason';
-                
+
                 $fields_str = implode(', ', $select_fields);
                 $stmt_log = $pdo->prepare("
-                    SELECT $fields_str 
-                    FROM study_plan_analytics 
+                    SELECT $fields_str
+                    FROM study_plan_analytics
                     WHERE student_email = ? AND study_plan_id = ? AND activity_id = ? AND action_type = 'complete_activity'
                     ORDER BY id DESC
                     LIMIT 1
@@ -671,7 +675,7 @@ if (isset($_GET['action'])) {
                     'device' => $is_completed_now ? 'Web App' : '',
                     'location' => $is_completed_now ? (($log['latitude'] && $log['longitude']) ? ($log['latitude'] . ',' . $log['longitude']) : ($log['resolved_place'] ?? '')) : '',
                     'duration' => $is_completed_now ? '15 mins' : '',
-                    
+
                     // Cleared metadata fields
                     'is_cleared' => $is_cleared_now,
                     'cleared_by' => $is_cleared_now ? r_esc($log['cleared_by']) : '',
@@ -714,7 +718,7 @@ if (isset($_GET['action'])) {
         try {
             // Stats
             $total_plans = db_count($pdo, "SELECT COUNT(DISTINCT study_plan_id) FROM study_plan_assignments WHERE assignment_type = 'course' AND assigned_value = ?", [$course_name]);
-            
+
             // Get Plan IDs
             $stmt_pids = $pdo->prepare("SELECT DISTINCT study_plan_id FROM study_plan_assignments WHERE assignment_type = 'course' AND assigned_value = ?");
             $stmt_pids->execute([$course_name]);
@@ -722,15 +726,15 @@ if (isset($_GET['action'])) {
 
             $total_students = db_count($pdo, "SELECT COUNT(*) FROM users WHERE pepp_course = ? AND status = 'approved'", [$course_name]);
             $active_students = db_count($pdo, "
-                SELECT COUNT(DISTINCT u.email) 
-                FROM study_plan_analytics an 
-                JOIN users u ON an.student_email = u.email 
+                SELECT COUNT(DISTINCT u.email)
+                FROM study_plan_analytics an
+                JOIN users u ON an.student_email = u.email
                 WHERE u.pepp_course = ? AND u.status = 'approved' AND an.created_at >= DATE_SUB(NOW(), INTERVAL 30 SECOND)
             ", [$course_name]);
 
             // Calculate total available tasks for this course (tasks per plan * students assigned to that plan)
             $total_tasks = db_count($pdo, "
-                SELECT COUNT(*) 
+                SELECT COUNT(*)
                 FROM users u
                 JOIN study_plan_assignments sa ON (
                     sa.assignment_type = 'all' OR
@@ -740,15 +744,19 @@ if (isset($_GET['action'])) {
                 )
                 JOIN study_plans sp ON sa.study_plan_id = sp.id
                 JOIN study_plan_activities act ON sp.id = act.study_plan_id
-                WHERE u.pepp_course = ? AND u.status = 'approved' AND sp.status = 'published'
+                WHERE u.pepp_course = ? AND u.status = 'approved' AND sp.status = 'published' AND act.is_deleted = 0
             ", [$course_name]);
 
             // Calculate total completed tasks by students in this course
             $completed_tasks = db_count($pdo, "
-                SELECT COUNT(*) 
+                SELECT COUNT(*)
                 FROM study_plan_analytics an
                 JOIN users u ON an.student_email = u.email
-                WHERE u.pepp_course = ? AND u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed'
+                JOIN study_plan_activities act ON (
+                    (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
+                    OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
+                )
+                WHERE u.pepp_course = ? AND u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0
             ", [$course_name]);
 
             $avg_comp = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
@@ -777,7 +785,7 @@ if (isset($_GET['action'])) {
         $course_name = trim($_GET['course_name'] ?? '');
         try {
             $stmt = $pdo->prepare("
-                SELECT sp.* 
+                SELECT sp.*
                 FROM study_plans sp
                 JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
                 WHERE sa.assignment_type = 'course' AND sa.assigned_value = ?
@@ -790,9 +798,9 @@ if (isset($_GET['action'])) {
             $today = date('Y-m-d');
             foreach ($plans as $p) {
                 $is_active = ($today >= $p['start_date'] && $today <= $p['end_date'] && $p['status'] === 'published');
-                
-                $tasks_cnt = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ?", [$p['id']]);
-                
+
+                $tasks_cnt = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0", [$p['id']]);
+
                 // Fetch completed vs pending student counts
                 $stmt_std = $pdo->prepare("SELECT email FROM users WHERE pepp_course = ? AND status = 'approved'");
                 $stmt_std->execute([$course_name]);
@@ -803,7 +811,7 @@ if (isset($_GET['action'])) {
                 $total_completed_tasks_sum = 0;
 
                 foreach ($stds as $email) {
-                    $comp = db_count($pdo, "SELECT COUNT(DISTINCT an.activity_id) FROM study_plan_analytics an JOIN study_plan_activities act ON an.activity_id = act.id WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed'", [$email, $p['id']]);
+                    $comp = db_count($pdo, "SELECT COUNT(DISTINCT act.id) FROM study_plan_analytics an JOIN study_plan_activities act ON ((an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '') OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))) WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0", [$email, $p['id']]);
                     $total_completed_tasks_sum += $comp;
                     if ($tasks_cnt > 0 && $comp === $tasks_cnt) {
                         $completed_std_cnt++;
@@ -848,7 +856,7 @@ if (isset($_GET['action'])) {
             if (!empty($pids)) {
                 $in_clause = implode(',', array_fill(0, count($pids), '?'));
                 $stmt = $pdo->prepare("
-                    SELECT a.id, a.day_number, a.activity_date, a.chapter, a.subject, a.topic, a.activity_title as title, a.faculty, sp.title as plan_title 
+                    SELECT a.id, a.day_number, a.activity_date, a.chapter, a.subject, a.topic, a.activity_title as title, a.faculty, sp.title as plan_title, sp.is_deleted as plan_deleted
                     FROM study_plan_activities a
                     JOIN study_plans sp ON a.study_plan_id = sp.id
                     WHERE a.study_plan_id IN ($in_clause)
@@ -861,16 +869,16 @@ if (isset($_GET['action'])) {
 
                 foreach ($tasks as $t) {
                     $comp = db_count($pdo, "
-                        SELECT COUNT(*) 
+                        SELECT COUNT(*)
                         FROM study_plan_analytics an
                         JOIN users u ON an.student_email = u.email
                         WHERE an.activity_id = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND u.pepp_course = ? AND u.status = 'approved'
                     ", [$t['id'], $course_name]);
                     $pending = $total_students - $comp;
-                    
+
                     $data[] = [
                         'id' => $t['id'],
-                        'plan' => r_esc($t['plan_title']),
+                        'plan' => ((int)$t['plan_deleted'] === 1 ? '[Archived / Deleted] ' : '') . r_esc($t['plan_title']),
                         'day' => $t['day_number'],
                         'date' => $t['activity_date'] ? date('d M Y', strtotime($t['activity_date'])) : 'TBD',
                         'chapter' => r_esc($t['chapter']),
@@ -898,15 +906,15 @@ if (isset($_GET['action'])) {
         $course_name = trim($_GET['course_name'] ?? '');
         try {
             $anal_cols = get_table_columns_safe($pdo, 'study_plan_analytics');
-            
+
             $an_fields = ['an.created_at', 'an.ip_address'];
             if (in_array('browser', $anal_cols)) $an_fields[] = 'an.browser';
             if (in_array('device', $anal_cols)) $an_fields[] = 'an.device';
             if (in_array('latitude', $anal_cols)) $an_fields[] = 'an.latitude';
             if (in_array('longitude', $anal_cols)) $an_fields[] = 'an.longitude';
-            
+
             $select_str = implode(', ', $an_fields);
-            
+
             $stmt = $pdo->prepare("
                 SELECT u.name, u.email, {$select_str}
                 FROM study_plan_analytics an
@@ -923,7 +931,7 @@ if (isset($_GET['action'])) {
                 if (isset($r['latitude']) && isset($r['longitude']) && $r['latitude'] && $r['longitude']) {
                     $location = $r['latitude'] . ',' . $r['longitude'];
                 }
-                
+
                 $data[] = [
                     'name' => r_esc($r['name']),
                     'masked_email' => format_credential_text($r['email'], 'email', 'student-study-reports'),
@@ -953,7 +961,7 @@ if (isset($_GET['action'])) {
 
             // Get all approved students in this course who are assigned to this study plan
             $stmt_students = $pdo->prepare("
-                SELECT DISTINCT u.name, u.email, u.phone 
+                SELECT DISTINCT u.name, u.email, u.phone
                 FROM users u
                 JOIN study_plan_assignments sa ON (
                     sa.study_plan_id = ? AND (
@@ -962,7 +970,7 @@ if (isset($_GET['action'])) {
                         (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
                         (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
                         (sa.assignment_type = 'form' AND EXISTS (
-                            SELECT 1 FROM campaign_form_submissions s 
+                            SELECT 1 FROM campaign_form_submissions s
                             WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
                         ))
                     )
@@ -982,7 +990,7 @@ if (isset($_GET['action'])) {
 
             foreach ($students as $s) {
                 // Check if completed
-                $comp = db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE activity_id = ? AND student_email = ? AND action_type = 'complete_activity' AND completion_status = 'completed'", [$activity_id, $s['email']]);
+                $comp = db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE (activity_uid = ? OR (activity_id = ? AND (activity_uid IS NULL OR activity_uid = ''))) AND student_email = ? AND action_type = 'complete_activity' AND completion_status = 'completed'", [$act['activity_uid'], $activity_id, $s['email']]);
                 if ($comp === 0) {
                     $data[] = [
                         'name' => r_esc($s['name']),
@@ -1017,7 +1025,7 @@ if (isset($_GET['action'])) {
             foreach ($forms as $f) {
                 $sub_cnt = db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = ? AND is_deleted = 0", [$f['id']]);
                 $conv_cnt = db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = ? AND is_deleted = 0 AND is_converted_lead = 1", [$f['id']]);
-                
+
                 $form_data[] = [
                     'id' => $f['id'],
                     'title' => r_esc($f['title']),
@@ -1066,7 +1074,7 @@ if (isset($_GET['action'])) {
             $submissions = db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = ? AND is_deleted = 0", [$form_id]);
             // Converted leads
             $conversions = db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = ? AND is_deleted = 0 AND is_converted_lead = 1", [$form_id]);
-            
+
             // Approved students
             $stmt_emails = $pdo->prepare("
                 SELECT u.email, u.user_id, u.pepp_course, u.pepp_academic_year
@@ -1074,7 +1082,7 @@ if (isset($_GET['action'])) {
                 JOIN campaign_form_submissions s ON (
                     u.email = s.respondent_identifier OR
                     EXISTS (
-                        SELECT 1 FROM campaign_form_answers fa 
+                        SELECT 1 FROM campaign_form_answers fa
                         WHERE fa.submission_id = s.id AND fa.answer_text = u.email
                     )
                 )
@@ -1083,7 +1091,7 @@ if (isset($_GET['action'])) {
             $stmt_emails->execute([$form_id]);
             $students = $stmt_emails->fetchAll(PDO::FETCH_ASSOC);
             $respondents_count = count($students);
-            
+
             // Assigned plans IDs (either direct or via student courses)
             $stmt_pids = $pdo->prepare("
                 SELECT DISTINCT sp.id
@@ -1092,12 +1100,12 @@ if (isset($_GET['action'])) {
                 WHERE (
                     (sa.assignment_type = 'form' AND sa.assigned_value = ?) OR
                     (sa.assignment_type = 'course' AND sa.assigned_value IN (
-                        SELECT DISTINCT u.pepp_course 
+                        SELECT DISTINCT u.pepp_course
                         FROM users u
                         JOIN campaign_form_submissions s ON (
                             u.email = s.respondent_identifier OR
                             EXISTS (
-                                SELECT 1 FROM campaign_form_answers fa 
+                                SELECT 1 FROM campaign_form_answers fa
                                 WHERE fa.submission_id = s.id AND fa.answer_text = u.email
                             )
                         )
@@ -1107,24 +1115,24 @@ if (isset($_GET['action'])) {
             ");
             $stmt_pids->execute([(string)$form_id, $form_id]);
             $pids = $stmt_pids->fetchAll(PDO::FETCH_COLUMN);
-            
+
             $plans_count = count($pids);
-            
+
             $total_available_tasks = 0;
             $total_completed_tasks = 0;
             $active_30d = 0;
-            
+
             if (!empty($pids) && !empty($students)) {
                 $in_clause = implode(',', array_fill(0, count($pids), '?'));
-                
+
                 // Count total available tasks for all assigned plans (multiplied by eligible students)
                 foreach ($pids as $pid) {
-                    $tasks_in_plan = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ?", [$pid]);
-                    
+                    $tasks_in_plan = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0", [$pid]);
+
                     $assigned_students_count = 0;
                     foreach ($students as $s) {
                         $is_assigned = db_count($pdo, "
-                            SELECT COUNT(*) 
+                            SELECT COUNT(*)
                             FROM study_plan_assignments sa
                             WHERE sa.study_plan_id = ? AND (
                                 sa.assignment_type = 'all' OR
@@ -1134,43 +1142,43 @@ if (isset($_GET['action'])) {
                                 (sa.assignment_type = 'form' AND sa.assigned_value = ?)
                             )
                         ", [$pid, $s['pepp_course'], $s['pepp_academic_year'], $s['user_id'], (string)$form_id]) > 0;
-                        
+
                         if ($is_assigned) {
                             $assigned_students_count++;
                         }
                     }
                     $total_available_tasks += $tasks_in_plan * $assigned_students_count;
                 }
-                
+
                 // Count completions by these students for activities in these plans
                 $student_emails = array_map(fn($s) => $s['email'], $students);
                 $email_placeholders = implode(',', array_fill(0, count($student_emails), '?'));
                 $plan_placeholders = implode(',', array_fill(0, count($pids), '?'));
-                
+
                 $stmt_comp_cnt = $pdo->prepare("
-                    SELECT COUNT(*) 
-                    FROM study_plan_analytics 
-                    WHERE student_email IN ($email_placeholders) 
-                      AND study_plan_id IN ($plan_placeholders) 
+                    SELECT COUNT(*)
+                    FROM study_plan_analytics
+                    WHERE student_email IN ($email_placeholders)
+                      AND study_plan_id IN ($plan_placeholders)
                       AND action_type = 'complete_activity'
                       AND completion_status = 'completed'
                 ");
                 $stmt_comp_cnt->execute(array_merge($student_emails, $pids));
                 $total_completed_tasks = (int)$stmt_comp_cnt->fetchColumn();
-                
+
                 // Active in last 30 days
                 $stmt_active = $pdo->prepare("
-                    SELECT COUNT(DISTINCT student_email) 
-                    FROM study_plan_analytics 
-                    WHERE student_email IN ($email_placeholders) 
+                    SELECT COUNT(DISTINCT student_email)
+                    FROM study_plan_analytics
+                    WHERE student_email IN ($email_placeholders)
                       AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
                 ");
                 $stmt_active->execute($student_emails);
                 $active_30d = (int)$stmt_active->fetchColumn();
             }
-            
+
             $avg_completion_rate = $total_available_tasks > 0 ? round(($total_completed_tasks / $total_available_tasks) * 100, 1) : 0;
-            
+
             echo json_encode([
                 'submissions' => $submissions,
                 'conversions' => $conversions,
@@ -1192,18 +1200,18 @@ if (isset($_GET['action'])) {
         try {
             // Get assigned plans (either direct or via student courses)
             $stmt_plans = $pdo->prepare("
-                SELECT DISTINCT sp.id, sp.title, sp.status, sp.start_date, sp.end_date
-                FROM study_plans sp
-                JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                WHERE (
+                 SELECT DISTINCT sp.id, sp.title, sp.status, sp.start_date, sp.end_date
+                 FROM study_plans sp
+                 JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
+                 WHERE sp.is_deleted = 0 AND sa.is_deleted = 0 AND (
                     (sa.assignment_type = 'form' AND sa.assigned_value = ?) OR
                     (sa.assignment_type = 'course' AND sa.assigned_value IN (
-                        SELECT DISTINCT u.pepp_course 
+                        SELECT DISTINCT u.pepp_course
                         FROM users u
                         JOIN campaign_form_submissions s ON (
                             u.email = s.respondent_identifier OR
                             EXISTS (
-                                SELECT 1 FROM campaign_form_answers fa 
+                                SELECT 1 FROM campaign_form_answers fa
                                 WHERE fa.submission_id = s.id AND fa.answer_text = u.email
                             )
                         )
@@ -1214,7 +1222,7 @@ if (isset($_GET['action'])) {
             ");
             $stmt_plans->execute([(string)$form_id, $form_id]);
             $plans = $stmt_plans->fetchAll(PDO::FETCH_ASSOC);
-            
+
             // Fetch approved students to count eligible ones for each plan
             $stmt_students = $pdo->prepare("
                 SELECT u.email, u.user_id, u.pepp_course, u.pepp_academic_year
@@ -1222,7 +1230,7 @@ if (isset($_GET['action'])) {
                 JOIN campaign_form_submissions s ON (
                     u.email = s.respondent_identifier OR
                     EXISTS (
-                        SELECT 1 FROM campaign_form_answers fa 
+                        SELECT 1 FROM campaign_form_answers fa
                         WHERE fa.submission_id = s.id AND fa.answer_text = u.email
                     )
                 )
@@ -1230,16 +1238,16 @@ if (isset($_GET['action'])) {
             ");
             $stmt_students->execute([$form_id]);
             $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
-            
+
             $data = [];
             foreach ($plans as $p) {
-                $tasks_count = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ?", [$p['id']]);
-                
+                $tasks_count = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0", [$p['id']]);
+
                 // Find which students are assigned to this study plan
                 $assigned_students = [];
                 foreach ($students as $s) {
                     $is_assigned = db_count($pdo, "
-                        SELECT COUNT(*) 
+                        SELECT COUNT(*)
                         FROM study_plan_assignments sa
                         WHERE sa.study_plan_id = ? AND (
                             sa.assignment_type = 'all' OR
@@ -1249,25 +1257,25 @@ if (isset($_GET['action'])) {
                             (sa.assignment_type = 'form' AND sa.assigned_value = ?)
                         )
                     ", [$p['id'], $s['pepp_course'], $s['pepp_academic_year'], $s['user_id'], (string)$form_id]) > 0;
-                    
+
                     if ($is_assigned) {
                         $assigned_students[] = $s['email'];
                     }
                 }
-                
+
                 $total_possible = $tasks_count * count($assigned_students);
                 $completions_count = 0;
                 if (!empty($assigned_students)) {
                     $placeholders = implode(',', array_fill(0, count($assigned_students), '?'));
                     $stmt_comp = $pdo->prepare("
-                       SELECT COUNT(*) 
-                       FROM study_plan_analytics 
+                       SELECT COUNT(*)
+                       FROM study_plan_analytics
                        WHERE study_plan_id = ? AND student_email IN ($placeholders) AND action_type = 'complete_activity' AND completion_status = 'completed'
                     ");
                     $stmt_comp->execute(array_merge([$p['id']], $assigned_students));
                     $completions_count = (int)$stmt_comp->fetchColumn();
                 }
-                
+
                 $data[] = [
                     'id' => $p['id'],
                     'title' => r_esc($p['title']),
@@ -1297,7 +1305,7 @@ if (isset($_GET['action'])) {
                 JOIN campaign_form_submissions s ON (
                     u.email = s.respondent_identifier OR
                     EXISTS (
-                        SELECT 1 FROM campaign_form_answers fa 
+                        SELECT 1 FROM campaign_form_answers fa
                         WHERE fa.submission_id = s.id AND fa.answer_text = u.email
                     )
                 )
@@ -1306,7 +1314,7 @@ if (isset($_GET['action'])) {
             ");
             $stmt_students->execute([$form_id]);
             $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
-            
+
             // Assigned plans IDs (either direct or via student courses)
             $stmt_pids = $pdo->prepare("
                 SELECT DISTINCT sp.id
@@ -1315,12 +1323,12 @@ if (isset($_GET['action'])) {
                 WHERE (
                     (sa.assignment_type = 'form' AND sa.assigned_value = ?) OR
                     (sa.assignment_type = 'course' AND sa.assigned_value IN (
-                        SELECT DISTINCT u.pepp_course 
+                        SELECT DISTINCT u.pepp_course
                         FROM users u
                         JOIN campaign_form_submissions s ON (
                             u.email = s.respondent_identifier OR
                             EXISTS (
-                                SELECT 1 FROM campaign_form_answers fa 
+                                SELECT 1 FROM campaign_form_answers fa
                                 WHERE fa.submission_id = s.id AND fa.answer_text = u.email
                             )
                         )
@@ -1330,14 +1338,14 @@ if (isset($_GET['action'])) {
             ");
             $stmt_pids->execute([(string)$form_id, $form_id]);
             $pids = $stmt_pids->fetchAll(PDO::FETCH_COLUMN);
-            
+
             $data = [];
             foreach ($students as $s) {
                 // Filter plans assigned to this specific student
                 $assigned_pids = [];
                 foreach ($pids as $pid) {
                     $is_assigned = db_count($pdo, "
-                        SELECT COUNT(*) 
+                        SELECT COUNT(*)
                         FROM study_plan_assignments sa
                         WHERE sa.study_plan_id = ? AND (
                             sa.assignment_type = 'all' OR
@@ -1347,38 +1355,42 @@ if (isset($_GET['action'])) {
                             (sa.assignment_type = 'form' AND sa.assigned_value = ?)
                         )
                     ", [$pid, $s['pepp_course'], $s['pepp_academic_year'], $s['user_id'], (string)$form_id]) > 0;
-                    
+
                     if ($is_assigned) {
                         $assigned_pids[] = $pid;
                     }
                 }
-                
+
                 $tasks_count = 0;
                 $comp = 0;
                 if (!empty($assigned_pids)) {
                     $in_clause = implode(',', array_fill(0, count($assigned_pids), '?'));
-                    $stmt_tasks_cnt = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)");
+                    $stmt_tasks_cnt = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause) AND is_deleted = 0");
                     $stmt_tasks_cnt->execute($assigned_pids);
                     $tasks_count = (int)$stmt_tasks_cnt->fetchColumn();
-                    
+
                     $stmt_comp = $pdo->prepare("
-                        SELECT COUNT(*) 
-                        FROM study_plan_analytics 
-                        WHERE student_email = ? AND study_plan_id IN ($in_clause) AND action_type = 'complete_activity' AND completion_status = 'completed'
+                        SELECT COUNT(DISTINCT act.id)
+                        FROM study_plan_analytics an
+                        JOIN study_plan_activities act ON (
+                            (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
+                            OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
+                        )
+                        WHERE an.student_email = ? AND an.study_plan_id IN ($in_clause) AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0
                     ");
                     $stmt_comp->execute(array_merge([$s['email']], $assigned_pids));
                     $comp = (int)$stmt_comp->fetchColumn();
                 }
-                
+
                 $streak = 0;
                 $score = $comp * 10;
-                
+
                 $data[] = [
                     'user_id' => $s['user_id'],
                     'name' => r_esc($s['name']),
                     'email' => $s['email'],
                     'masked_email' => format_credential_text($s['email'], 'email', 'student-study-reports'),
-                    'phone' => format_credential_text($s['phone'], 'phone', 'student-study-reports'),
+                    'masked_phone' => format_credential_text($s['phone'], 'phone', 'student-study-reports'),
                     'joined' => date('d M Y', strtotime($s['created_at'])),
                     'converted' => $s['is_converted_lead'] ? 'Yes' : 'No',
                     'completed' => $comp,
@@ -1407,12 +1419,12 @@ if (isset($_GET['action'])) {
                 WHERE (
                     (sa.assignment_type = 'form' AND sa.assigned_value = ?) OR
                     (sa.assignment_type = 'course' AND sa.assigned_value IN (
-                        SELECT DISTINCT u.pepp_course 
+                        SELECT DISTINCT u.pepp_course
                         FROM users u
                         JOIN campaign_form_submissions s ON (
                             u.email = s.respondent_identifier OR
                             EXISTS (
-                                SELECT 1 FROM campaign_form_answers fa 
+                                SELECT 1 FROM campaign_form_answers fa
                                 WHERE fa.submission_id = s.id AND fa.answer_text = u.email
                             )
                         )
@@ -1422,7 +1434,7 @@ if (isset($_GET['action'])) {
             ");
             $stmt_pids->execute([(string)$form_id, $form_id]);
             $pids = $stmt_pids->fetchAll(PDO::FETCH_COLUMN);
-            
+
             // Campaign Respondents (approved students)
             $stmt_students = $pdo->prepare("
                 SELECT u.email, u.user_id, u.pepp_course, u.pepp_academic_year
@@ -1430,7 +1442,7 @@ if (isset($_GET['action'])) {
                 JOIN campaign_form_submissions s ON (
                     u.email = s.respondent_identifier OR
                     EXISTS (
-                        SELECT 1 FROM campaign_form_answers fa 
+                        SELECT 1 FROM campaign_form_answers fa
                         WHERE fa.submission_id = s.id AND fa.answer_text = u.email
                     )
                 )
@@ -1438,26 +1450,26 @@ if (isset($_GET['action'])) {
             ");
             $stmt_students->execute([$form_id]);
             $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
-            
+
             $data = [];
             if (!empty($pids)) {
                 $in_clause = implode(',', array_fill(0, count($pids), '?'));
                 $stmt_tasks = $pdo->prepare("
-                    SELECT a.id, a.study_plan_id, a.day_number, a.activity_date, a.chapter, a.subject, a.topic, a.activity_title as title, a.faculty, sp.title as plan_title 
+                    SELECT a.id, a.activity_uid, a.study_plan_id, a.day_number, a.activity_date, a.chapter, a.subject, a.topic, a.activity_title as title, a.faculty, sp.title as plan_title, sp.is_deleted as plan_deleted
                     FROM study_plan_activities a
                     JOIN study_plans sp ON a.study_plan_id = sp.id
-                    WHERE a.study_plan_id IN ($in_clause)
+                    WHERE a.study_plan_id IN ($in_clause) AND a.is_deleted = 0
                     ORDER BY sp.title ASC, a.day_number ASC
                 ");
                 $stmt_tasks->execute($pids);
                 $tasks = $stmt_tasks->fetchAll(PDO::FETCH_ASSOC);
-                
+
                 foreach ($tasks as $t) {
                     // Only count students assigned to this task's plan
                     $assigned_students = [];
                     foreach ($students as $s) {
                         $is_assigned = db_count($pdo, "
-                            SELECT COUNT(*) 
+                            SELECT COUNT(*)
                             FROM study_plan_assignments sa
                             WHERE sa.study_plan_id = ? AND (
                                 sa.assignment_type = 'all' OR
@@ -1467,27 +1479,27 @@ if (isset($_GET['action'])) {
                                 (sa.assignment_type = 'form' AND sa.assigned_value = ?)
                             )
                         ", [$t['study_plan_id'], $s['pepp_course'], $s['pepp_academic_year'], $s['user_id'], (string)$form_id]) > 0;
-                        
+
                         if ($is_assigned) {
                             $assigned_students[] = $s['email'];
                         }
                     }
-                    
+
                     $total_assigned = count($assigned_students);
                     $comp = 0;
                     if ($total_assigned > 0) {
                         $placeholders = implode(',', array_fill(0, $total_assigned, '?'));
                         $stmt_comp = $pdo->prepare("
-                            SELECT COUNT(*) 
-                            FROM study_plan_analytics 
-                            WHERE activity_id = ? AND action_type = 'complete_activity' AND completion_status = 'completed' AND student_email IN ($placeholders)
+                            SELECT COUNT(*)
+                            FROM study_plan_analytics
+                            WHERE (activity_uid = ? OR (activity_id = ? AND (activity_uid IS NULL OR activity_uid = ''))) AND action_type = 'complete_activity' AND completion_status = 'completed' AND student_email IN ($placeholders)
                         ");
-                        $stmt_comp->execute(array_merge([$t['id']], $assigned_students));
+                        $stmt_comp->execute(array_merge([$t['activity_uid'], $t['id']], $assigned_students));
                         $comp = (int)$stmt_comp->fetchColumn();
                     }
-                    
+
                     $pending = $total_assigned - $comp;
-                    
+
                     $data[] = [
                        'id' => $t['id'],
                        'day' => $t['day_number'],
@@ -1497,7 +1509,7 @@ if (isset($_GET['action'])) {
                        'chapter' => r_esc($t['chapter']),
                        'topic' => r_esc($t['topic']),
                        'faculty' => r_esc($t['faculty']),
-                       'plan' => r_esc($t['plan_title']),
+                       'plan' => ((int)$t['plan_deleted'] === 1 ? '[Archived / Deleted] ' : '') . r_esc($t['plan_title']),
                        'completed' => $comp,
                        'pending' => $pending,
                        'pct' => $total_assigned > 0 ? round(($comp / $total_assigned) * 100) : 0
@@ -1517,15 +1529,15 @@ if (isset($_GET['action'])) {
         $form_id = (int)($_GET['form_id'] ?? 0);
         try {
             $anal_cols = get_table_columns_safe($pdo, 'study_plan_analytics');
-            
+
             $an_fields = ['an.created_at', 'an.ip_address'];
             if (in_array('browser', $anal_cols)) $an_fields[] = 'an.browser';
             if (in_array('device', $anal_cols)) $an_fields[] = 'an.device';
             if (in_array('latitude', $anal_cols)) $an_fields[] = 'an.latitude';
             if (in_array('longitude', $anal_cols)) $an_fields[] = 'an.longitude';
-            
+
             $select_str = implode(', ', $an_fields);
-            
+
             $stmt = $pdo->prepare("
                 SELECT u.name, u.email, {$select_str}
                 FROM study_plan_analytics an
@@ -1533,15 +1545,15 @@ if (isset($_GET['action'])) {
                 JOIN campaign_form_submissions s ON (
                     u.email = s.respondent_identifier OR
                     EXISTS (
-                        SELECT 1 FROM campaign_form_answers fa 
+                        SELECT 1 FROM campaign_form_answers fa
                         WHERE fa.submission_id = s.id AND fa.answer_text = u.email
                     )
                 )
-                WHERE an.activity_id = ? 
-                  AND an.action_type = 'complete_activity' 
+                WHERE an.activity_id = ?
+                  AND an.action_type = 'complete_activity'
                   AND an.completion_status = 'completed'
-                  AND s.form_id = ? 
-                  AND s.is_deleted = 0 
+                  AND s.form_id = ?
+                  AND s.is_deleted = 0
                   AND u.status = 'approved'
                 ORDER BY an.created_at DESC
             ");
@@ -1554,7 +1566,7 @@ if (isset($_GET['action'])) {
                 if (isset($r['latitude']) && isset($r['longitude']) && $r['latitude'] && $r['longitude']) {
                     $location = $r['latitude'] . ',' . $r['longitude'];
                 }
-                
+
                 $data[] = [
                     'name' => r_esc($r['name']),
                     'masked_email' => format_credential_text($r['email'], 'email', 'student-study-reports'),
@@ -1584,12 +1596,12 @@ if (isset($_GET['action'])) {
 
             // Get all approved students in this campaign who are assigned to this study plan
             $stmt_students = $pdo->prepare("
-                SELECT DISTINCT u.name, u.email, u.phone 
+                SELECT DISTINCT u.name, u.email, u.phone
                 FROM users u
                 JOIN campaign_form_submissions s ON (
                     u.email = s.respondent_identifier OR
                     EXISTS (
-                        SELECT 1 FROM campaign_form_answers fa 
+                        SELECT 1 FROM campaign_form_answers fa
                         WHERE fa.submission_id = s.id AND fa.answer_text = u.email
                     )
                 )
@@ -1617,7 +1629,7 @@ if (isset($_GET['action'])) {
 
             foreach ($students as $s) {
                 // Check if completed
-                $comp = db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE activity_id = ? AND student_email = ? AND action_type = 'complete_activity' AND completion_status = 'completed'", [$activity_id, $s['email']]);
+                $comp = db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE (activity_uid = ? OR (activity_id = ? AND (activity_uid IS NULL OR activity_uid = ''))) AND student_email = ? AND action_type = 'complete_activity' AND completion_status = 'completed'", [$act['activity_uid'], $activity_id, $s['email']]);
                 if ($comp === 0) {
                     $data[] = [
                         'name' => r_esc($s['name']),
@@ -1642,7 +1654,7 @@ if (isset($_GET['action'])) {
         $data = [];
         $title = '';
         $headers = [];
-        
+
         $assigned_plans_subquery = "
             EXISTS (
                 SELECT 1 FROM study_plan_assignments sa
@@ -1653,7 +1665,7 @@ if (isset($_GET['action'])) {
                     (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
                     (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
                     (sa.assignment_type = 'form' AND EXISTS (
-                        SELECT 1 FROM campaign_form_submissions s 
+                        SELECT 1 FROM campaign_form_submissions s
                         WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
                     ))
                 )
@@ -1666,8 +1678,8 @@ if (isset($_GET['action'])) {
                     $title = 'Total Registered Students with Study Plans';
                     $headers = ['Student Name', 'Email', 'Course', 'Academic Year', 'Plans Assigned'];
                     $stmt = $pdo->prepare("
-                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year 
-                        FROM users u 
+                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year
+                        FROM users u
                         WHERE u.status = 'approved' AND $assigned_plans_subquery
                         ORDER BY u.name ASC
                     ");
@@ -1683,12 +1695,12 @@ if (isset($_GET['action'])) {
                                 (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
                                 (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
                                 (sa.assignment_type = 'form' AND EXISTS (
-                                    SELECT 1 FROM campaign_form_submissions s 
+                                    SELECT 1 FROM campaign_form_submissions s
                                     WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
                                 ))
                             )
                         ", [$r['pepp_course'], $r['academic_year'], $r['user_id'], $r['email']]);
-                        
+
                         $data[] = [
                             r_esc($r['name']),
                             format_credential_text($r['email'], 'email', 'student-study-reports'),
@@ -1698,18 +1710,18 @@ if (isset($_GET['action'])) {
                         ];
                     }
                     break;
-                    
+
                 case 'active_students':
                     $title = 'Online & Active Enrolled Students';
                     $headers = ['Student Name', 'Email', 'Course', 'Academic Year', 'Registered Place', 'Last Activity Status', 'Location Map'];
                     $stmt = $pdo->prepare("
-                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year, u.place_post_office, u.district, u.last_visit_location 
-                        FROM users u 
+                        SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year, u.place_post_office, u.district, u.last_visit_location
+                        FROM users u
                         WHERE u.status = 'approved' AND $assigned_plans_subquery
                     ");
                     $stmt->execute();
                     $rows = $stmt->fetchAll();
-                    
+
                     $student_rows = [];
                     foreach ($rows as $r) {
                         // Get latest activity log safely
@@ -1718,35 +1730,35 @@ if (isset($_GET['action'])) {
                         if (in_array('latitude', $anal_cols)) $select_fields[] = 'latitude';
                         if (in_array('longitude', $anal_cols)) $select_fields[] = 'longitude';
                         if (in_array('resolved_place', $anal_cols)) $select_fields[] = 'resolved_place';
-                        
+
                         $fields_str = implode(', ', $select_fields);
                         $stmt_act = $pdo->prepare("
-                            SELECT $fields_str 
-                            FROM study_plan_analytics 
-                            WHERE student_email = ? 
+                            SELECT $fields_str
+                            FROM study_plan_analytics
+                            WHERE student_email = ?
                             ORDER BY created_at DESC LIMIT 1
                         ");
                         $stmt_act->execute([$r['email']]);
                         $act = $stmt_act->fetch(PDO::FETCH_ASSOC);
-                        
+
                         $is_online = false;
                         $status_html = 'Never';
                         $sort_weight = 0;
                         $last_timestamp = 0;
-                        
+
                         // Registered place
                         $reg_place = trim($r['place_post_office'] ?? '');
                         if (!empty($r['district'])) {
                             $reg_place = $reg_place ? $reg_place . ', ' . $r['district'] : $r['district'];
                         }
                         if (empty($reg_place)) $reg_place = 'N/A';
-                        
+
                         $map_html = '-';
                         if ($act) {
                             $last_time = $act['created_at'];
                             $last_timestamp = strtotime($last_time);
                             $diff = time() - $last_timestamp;
-                            
+
                             if ($diff <= 30) {
                                 $is_online = true;
                                 $status_html = '<span class="badge green" style="font-size:0.7rem; font-weight:700; text-transform:uppercase;"><span class="pulse-dot" style="margin-right:4px; width:6px; height:6px;"></span>Online Now</span>';
@@ -1755,7 +1767,7 @@ if (isset($_GET['action'])) {
                                 $status_html = time_ago($last_time);
                                 $sort_weight = 1; // offline second
                             }
-                            
+
                             $lat_val = $act['latitude'] ?? '';
                             $lng_val = $act['longitude'] ?? '';
                             if (!empty($lat_val) && !empty($lng_val)) {
@@ -1777,12 +1789,12 @@ if (isset($_GET['action'])) {
                                 if (empty($live_place)) {
                                     $live_place = 'Unknown Location';
                                 }
-                                
+
                                 $map_html = '<a href="https://www.google.com/maps?q=' . urlencode($lat_val . ',' . $lng_val) . '" target="_blank" title="View logged location" style="margin-right:6px; display:inline-flex; align-items:center; vertical-align:middle;"><i class="fas fa-map-marker-alt" style="color:#ef4444; font-size:1.1rem;"></i></a>';
                                 $map_html .= '<span style="font-size:0.75rem; color:var(--text-muted); font-weight:500; vertical-align:middle;">' . r_esc($live_place) . '</span>';
                             }
                         }
-                        
+
                         $student_rows[] = [
                             'name' => r_esc($r['name']),
                             'email' => format_credential_text($r['email'], 'email', 'student-study-reports'),
@@ -1796,7 +1808,7 @@ if (isset($_GET['action'])) {
                             'raw_name' => $r['name']
                         ];
                     }
-                    
+
                     // Sort by sort_weight desc, last_timestamp desc, name asc
                     usort($student_rows, function($a, $b) {
                         if ($b['sort_weight'] !== $a['sort_weight']) {
@@ -1807,7 +1819,7 @@ if (isset($_GET['action'])) {
                         }
                         return strcasecmp($a['raw_name'], $b['raw_name']);
                     });
-                    
+
                     foreach ($student_rows as $row) {
                         $data[] = [
                             $row['name'],
@@ -1820,20 +1832,20 @@ if (isset($_GET['action'])) {
                         ];
                     }
                     break;
-                    
+
                 case 'total_courses':
                     $title = 'Academic Courses Active Status';
                     $headers = ['Course Name', 'Total Enrolled Students', 'Study Plans Assigned', 'Total Checklist Tasks'];
-                    
+
                     // Fetch unique pepp_courses that have at least one study plan assigned
                     $stmt_c = $pdo->query("
-                        SELECT DISTINCT sa.assigned_value as course_name 
+                        SELECT DISTINCT sa.assigned_value as course_name
                         FROM study_plan_assignments sa
                         JOIN study_plans sp ON sa.study_plan_id = sp.id
                         WHERE sa.assignment_type = 'course' AND sp.status = 'published'
                     ");
                     $courses = $stmt_c->fetchAll(PDO::FETCH_COLUMN);
-                    
+
                     foreach ($courses as $cname) {
                         $stds = db_count($pdo, "SELECT COUNT(*) FROM users u WHERE u.pepp_course = ? AND u.status = 'approved'", [$cname]);
                         $plans = db_count($pdo, "
@@ -1841,7 +1853,7 @@ if (isset($_GET['action'])) {
                             JOIN study_plans sp ON sa.study_plan_id = sp.id
                             WHERE sa.assignment_type = 'course' AND sa.assigned_value = ? AND sp.status = 'published'
                         ", [$cname]);
-                        
+
                         $pids_stmt = $pdo->prepare("SELECT DISTINCT study_plan_id FROM study_plan_assignments WHERE assignment_type = 'course' AND assigned_value = ?");
                         $pids_stmt->execute([$cname]);
                         $pids = $pids_stmt->fetchAll(PDO::FETCH_COLUMN);
@@ -1850,7 +1862,7 @@ if (isset($_GET['action'])) {
                             $in = implode(',', array_fill(0, count($pids), '?'));
                             $tasks = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in)", $pids);
                         }
-                        
+
                         $data[] = [
                             r_esc($cname),
                             $stds,
@@ -1864,21 +1876,21 @@ if (isset($_GET['action'])) {
                     $title = 'Active Published Study Plans';
                     $headers = ['Plan Title', 'Start Date', 'End Date', 'Total Days', 'Assigned Value', 'Total Daily Tasks'];
                     $stmt = $pdo->query("
-                        SELECT sp.*, sa.assignment_type, sa.assigned_value 
-                        FROM study_plans sp
-                        LEFT JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                        WHERE sp.status = 'published' AND (sa.assignment_type IS NULL OR sa.assignment_type != 'form')
-                        ORDER BY sp.created_at DESC
+                         SELECT DISTINCT sp.id, sp.title, sp.plan_type, sp.start_date, sp.end_date, sa.assignment_type, sa.assigned_value
+                         FROM study_plans sp
+                         LEFT JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
+                         WHERE sp.status = 'published' AND sp.is_deleted = 0 AND (sa.is_deleted = 0 OR sa.is_deleted IS NULL) AND (sa.assignment_type IS NULL OR sa.assignment_type != 'form')
+                         ORDER BY sp.created_at DESC
                     ");
                     $rows = $stmt->fetchAll();
                     foreach ($rows as $r) {
                         $tasks = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ?", [$r['id']]);
-                        
+
                         $plan_type = $r['plan_type'] ?? 'date_wise';
                         if ($plan_type === 'date_wise') {
                             $start_date = !empty($r['start_date']) && $r['start_date'] !== '0000-00-00' ? date('d M Y', strtotime($r['start_date'])) : '-';
                             $end_date = !empty($r['end_date']) && $r['end_date'] !== '0000-00-00' ? date('d M Y', strtotime($r['end_date'])) : '-';
-                            
+
                             if ($start_date !== '-' && $end_date !== '-') {
                                 $start = strtotime($r['start_date']);
                                 $end = strtotime($r['end_date']);
@@ -1892,7 +1904,7 @@ if (isset($_GET['action'])) {
                             $end_date = '-';
                             $total_days = (!empty($r['total_days']) ? $r['total_days'] : '0') . ' Days';
                         }
-                        
+
                         $data[] = [
                             r_esc($r['title']),
                             $start_date,
@@ -1908,11 +1920,14 @@ if (isset($_GET['action'])) {
                     $title = 'Checklist Completions Logs';
                     $headers = ['Student Name', 'Email', 'Plan Title', 'Subject', 'Chapter', 'Task Title', 'Completed Time'];
                     $stmt = $pdo->query("
-                        SELECT u.name, u.email, sp.title as plan_title, act.subject, act.chapter, act.activity_title as task_title, an.created_at
-                        FROM study_plan_analytics an
-                        JOIN users u ON an.student_email = u.email
-                        JOIN study_plans sp ON an.study_plan_id = sp.id
-                        JOIN study_plan_activities act ON an.activity_id = act.id
+                         SELECT u.name, u.email, sp.title as plan_title, sp.is_deleted as plan_deleted, act.subject, act.chapter, act.activity_title as task_title, an.created_at
+                         FROM study_plan_analytics an
+                         JOIN users u ON an.student_email = u.email
+                         JOIN study_plans sp ON an.study_plan_id = sp.id
+                         JOIN study_plan_activities act ON (
+                             (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
+                             OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
+                         )
                         WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed'
                         ORDER BY an.created_at DESC LIMIT 30
                     ");
@@ -1921,7 +1936,7 @@ if (isset($_GET['action'])) {
                         $data[] = [
                             r_esc($r['name']),
                             format_credential_text($r['email'], 'email', 'student-study-reports'),
-                            r_esc($r['plan_title']),
+                            ((int)$r['plan_deleted'] === 1 ? '[Archived / Deleted] ' : '') . r_esc($r['plan_title']),
                             r_esc($r['subject'] ?: '-'),
                             r_esc($r['chapter'] ?: '-'),
                             r_esc($r['task_title']),
@@ -1949,24 +1964,24 @@ if (isset($_GET['action'])) {
                                 (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
                                 (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
                                 (sa.assignment_type = 'form' AND EXISTS (
-                                    SELECT 1 FROM campaign_form_submissions s 
+                                    SELECT 1 FROM campaign_form_submissions s
                                     WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
                                 ))
                             )
                         ");
                         $stmt_plans->execute([$std['pepp_course'], $std['academic_year'], $std['user_id'], $std['email']]);
                         $pids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
-                        
+
                         $total = 0;
                         $comp = 0;
                         if (!empty($pids)) {
                             $in = implode(',', array_fill(0, count($pids), '?'));
-                            $total = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in)", $pids);
-                            $comp = db_count($pdo, "SELECT COUNT(DISTINCT an.activity_id) FROM study_plan_analytics an JOIN study_plan_activities act ON an.activity_id = act.id WHERE an.student_email = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND an.study_plan_id IN ($in)", array_merge([$std['email']], $pids));
+                            $total = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in) AND is_deleted = 0", $pids);
+                            $comp = db_count($pdo, "SELECT COUNT(DISTINCT act.id) FROM study_plan_analytics an JOIN study_plan_activities act ON ((an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '') OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))) WHERE an.student_email = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0 AND an.study_plan_id IN ($in)", array_merge([$std['email']], $pids));
                         }
-                        
+
                         $pct = $total > 0 ? round(($comp / $total) * 100) : 0;
-                        
+
                         $data[] = [
                             r_esc($std['name']),
                             format_credential_text($std['email'], 'email', 'student-study-reports'),
@@ -1980,7 +1995,7 @@ if (isset($_GET['action'])) {
                     });
                     $data = array_slice($data, 0, 50);
                     break;
-                    
+
                 default:
                     $title = 'Dynamic Drilldown Report';
                     $headers = ['Logs Timestamp', 'Event / Action Type', 'Category', 'Description'];
@@ -1989,7 +2004,7 @@ if (isset($_GET['action'])) {
                     ];
                     break;
             }
-            
+
             echo json_encode([
                 'title' => $title,
                 'headers' => $headers,
@@ -2007,9 +2022,9 @@ if (isset($_GET['action'])) {
         $form_filter = isset($_GET['form_id']) ? (int)$_GET['form_id'] : null;
         $search = trim($_GET['search'] ?? '');
         $status = $_GET['perf_status'] ?? '';
-        
+
         $export_list = [];
-        
+
         $assigned_plans_subquery = "
             EXISTS (
                 SELECT 1 FROM study_plan_assignments sa
@@ -2020,7 +2035,7 @@ if (isset($_GET['action'])) {
                     (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
                     (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
                     (sa.assignment_type = 'form' AND EXISTS (
-                        SELECT 1 FROM campaign_form_submissions s 
+                        SELECT 1 FROM campaign_form_submissions s
                         WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
                     ))
                 )
@@ -2030,8 +2045,8 @@ if (isset($_GET['action'])) {
         try {
             if ($form_filter) {
                 $stmt = $pdo->prepare("
-                    SELECT DISTINCT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year 
-                    FROM users u 
+                    SELECT DISTINCT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year
+                    FROM users u
                     JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
                     WHERE s.form_id = ? AND u.status = 'approved' AND $assigned_plans_subquery
                 ");
@@ -2039,26 +2054,26 @@ if (isset($_GET['action'])) {
                 $stds = $stmt->fetchAll();
             } else {
                 $stmt = $pdo->prepare("
-                    SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year 
-                    FROM users u 
+                    SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year
+                    FROM users u
                     WHERE u.pepp_course = ? AND u.status = 'approved' AND $assigned_plans_subquery
                 ");
                 $stmt->execute([$course_filter]);
                 $stds = $stmt->fetchAll();
             }
-            
+
             foreach ($stds as $std) {
                 $stmt_plans = $pdo->prepare("
-                    SELECT DISTINCT sa.study_plan_id 
-                    FROM study_plan_assignments sa 
-                    JOIN study_plans sp ON sa.study_plan_id = sp.id 
+                    SELECT DISTINCT sa.study_plan_id
+                    FROM study_plan_assignments sa
+                    JOIN study_plans sp ON sa.study_plan_id = sp.id
                     WHERE sp.status = 'published' AND (
                         sa.assignment_type = 'all' OR
                         (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
                         (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
                         (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
                         (sa.assignment_type = 'form' AND EXISTS (
-                            SELECT 1 FROM campaign_form_submissions s 
+                            SELECT 1 FROM campaign_form_submissions s
                             WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
                         ))
                     )
@@ -2066,22 +2081,26 @@ if (isset($_GET['action'])) {
                 $stmt_plans->execute([$std['pepp_course'], $std['academic_year'], $std['user_id'], $std['email']]);
                 $plan_ids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
                 $plans_count = count($plan_ids);
-                
+
                 $total_tasks = 0;
                 $completed = 0;
                 $last_active = null;
-                
+
                 if ($plans_count > 0) {
                     $in_clause = implode(',', array_fill(0, $plans_count, '?'));
-                    $stmt_tasks = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause)");
+                    $stmt_tasks = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause) AND is_deleted = 0");
                     $stmt_tasks->execute($plan_ids);
                     $total_tasks = (int)$stmt_tasks->fetchColumn();
-                    
+
                     if ($total_tasks > 0) {
                         $stmt_comp = $pdo->prepare("
-                            SELECT COUNT(DISTINCT activity_id), MAX(created_at) 
-                            FROM study_plan_analytics 
-                            WHERE student_email = ? AND action_type = 'complete_activity' AND completion_status = 'completed' AND study_plan_id IN ($in_clause)
+                            SELECT COUNT(DISTINCT act.id), MAX(an.created_at)
+                            FROM study_plan_analytics an
+                            JOIN study_plan_activities act ON (
+                                (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
+                                OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
+                            )
+                            WHERE an.student_email = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0 AND an.study_plan_id IN ($in_clause)
                         ");
                         $stmt_comp->execute(array_merge([$std['email']], $plan_ids));
                         $res = $stmt_comp->fetch(PDO::FETCH_NUM);
@@ -2089,13 +2108,13 @@ if (isset($_GET['action'])) {
                         $last_active = $res[1] ?? null;
                     }
                 }
-                
+
                 $pct = $total_tasks > 0 ? round(($completed / $total_tasks) * 100) : 0;
                 $perf = get_performance_status($pct);
-                
+
                 if ($search !== '' && stripos($std['name'], $search) === false && stripos($std['email'], $search) === false) continue;
                 if ($status !== '' && strcasecmp($perf['label'], $status) !== 0) continue;
-                
+
                 $export_list[] = [
                     'name' => $std['name'],
                     'email' => format_credential_text($std['email'], 'email', 'student-study-reports'),
@@ -2107,7 +2126,7 @@ if (isset($_GET['action'])) {
                 ];
             }
         } catch (Exception $e) {}
-        
+
         header('Content-Type: text/csv');
         header('Content-Disposition: attachment; filename="pepp_student_study_report_' . date('Ymd_His') . '.csv"');
         $out = fopen('php://output', 'w');
@@ -2145,7 +2164,7 @@ if ($source === 'courses') {
                 (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
                 (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
                 (sa.assignment_type = 'form' AND EXISTS (
-                    SELECT 1 FROM campaign_form_submissions s 
+                    SELECT 1 FROM campaign_form_submissions s
                     WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
                 ))
             )
@@ -2155,24 +2174,24 @@ if ($source === 'courses') {
     $kpis = [
         'total_students' => db_count($pdo, "SELECT COUNT(*) FROM users u WHERE u.status = 'approved' AND $assigned_plans_subquery"),
         'active_students' => db_count($pdo, "
-            SELECT COUNT(DISTINCT u.email) 
-            FROM study_plan_analytics an 
-            JOIN users u ON an.student_email = u.email 
+            SELECT COUNT(DISTINCT u.email)
+            FROM study_plan_analytics an
+            JOIN users u ON an.student_email = u.email
             WHERE u.status = 'approved' AND an.created_at >= DATE_SUB(NOW(), INTERVAL 30 SECOND) AND $assigned_plans_subquery
         "),
         'total_courses' => db_count($pdo, "SELECT COUNT(DISTINCT u.pepp_course) FROM users u WHERE u.pepp_course IS NOT NULL AND u.pepp_course != '' AND u.status = 'approved' AND $assigned_plans_subquery"),
-        'total_study_plans' => db_count($pdo, "SELECT COUNT(*) FROM study_plans"),
+        'total_study_plans' => db_count($pdo, "SELECT COUNT(*) FROM study_plans WHERE is_deleted = 0"),
         'active_study_plans' => db_count($pdo, "
-            SELECT COUNT(DISTINCT sp.id) 
+            SELECT COUNT(DISTINCT sp.id)
             FROM study_plans sp
             LEFT JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-            WHERE sp.status = 'published' AND (sa.assignment_type IS NULL OR sa.assignment_type != 'form')
+            WHERE sp.status = 'published' AND sp.is_deleted = 0 AND (sa.is_deleted = 0 OR sa.is_deleted IS NULL) AND (sa.assignment_type IS NULL OR sa.assignment_type != 'form')
         "),
         'total_custom_forms' => db_count($pdo, "SELECT COUNT(*) FROM campaign_forms WHERE status = 'published'"),
         'total_submissions' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions s JOIN users u ON s.respondent_identifier = u.email WHERE s.is_deleted = 0 AND u.status = 'approved' AND $assigned_plans_subquery"),
-        'total_assignments' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_assignments"),
-        'learning_started' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM users u JOIN study_plan_analytics an ON u.email = an.student_email JOIN study_plan_activities act ON an.activity_id = act.id WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND $assigned_plans_subquery"),
-        'total_checklist_completions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email JOIN study_plan_activities act ON an.activity_id = act.id WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND $assigned_plans_subquery"),
+        'total_assignments' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_assignments WHERE is_deleted = 0"),
+        'learning_started' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM users u JOIN study_plan_analytics an ON u.email = an.student_email JOIN study_plan_activities act ON ((an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '') OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))) WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0 AND $assigned_plans_subquery"),
+        'total_checklist_completions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email JOIN study_plan_activities act ON ((an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '') OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))) WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0 AND $assigned_plans_subquery"),
         'total_views' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'view' AND $assigned_plans_subquery"),
         'total_downloads' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'download' AND $assigned_plans_subquery"),
         'active_today' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND DATE(an.created_at) = CURDATE() AND $assigned_plans_subquery"),
@@ -2180,14 +2199,14 @@ if ($source === 'courses') {
         'active_monthly' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND $assigned_plans_subquery"),
         'logins_today' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'view' AND DATE(an.created_at) = CURDATE() AND $assigned_plans_subquery"),
         'leads_converted' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions s JOIN users u ON s.respondent_identifier = u.email WHERE s.is_converted_lead = 1 AND u.status = 'approved' AND $assigned_plans_subquery"),
-        'total_faculty' => db_count($pdo, "SELECT COUNT(DISTINCT faculty) FROM study_plan_activities WHERE faculty IS NOT NULL AND faculty != ''"),
-        'pending_activities' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities a LEFT JOIN study_plan_analytics an ON a.id = an.activity_id AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' WHERE an.id IS NULL"),
-        'upcoming_sessions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE activity_date >= CURDATE()")
+        'total_faculty' => db_count($pdo, "SELECT COUNT(DISTINCT faculty) FROM study_plan_activities WHERE faculty IS NOT NULL AND faculty != '' AND is_deleted = 0"),
+        'pending_activities' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities a LEFT JOIN study_plan_analytics an ON ((an.activity_uid = a.activity_uid AND a.activity_uid IS NOT NULL AND a.activity_uid != '') OR (an.activity_id = a.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR a.activity_uid IS NULL OR a.activity_uid = ''))) AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' WHERE a.is_deleted = 0 AND an.id IS NULL"),
+        'upcoming_sessions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE activity_date >= CURDATE() AND is_deleted = 0")
     ];
 
     // Calculated metrics
     $total_available_tasks = db_count($pdo, "
-        SELECT COUNT(*) 
+        SELECT COUNT(*)
         FROM users u
         JOIN study_plan_assignments sa ON (
             sa.assignment_type = 'all' OR
@@ -2197,16 +2216,20 @@ if ($source === 'courses') {
         )
         JOIN study_plans sp ON sa.study_plan_id = sp.id
         JOIN study_plan_activities act ON sp.id = act.study_plan_id
-        WHERE u.status = 'approved' AND sp.status = 'published'
+        WHERE u.status = 'approved' AND sp.status = 'published' AND act.is_deleted = 0
     ");
-    
+
     $total_completed_tasks = db_count($pdo, "
-        SELECT COUNT(*) 
+        SELECT COUNT(*)
         FROM study_plan_analytics an
         JOIN users u ON an.student_email = u.email
-        WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND $assigned_plans_subquery
+        JOIN study_plan_activities act ON (
+            (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
+            OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
+        )
+        WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0 AND $assigned_plans_subquery
     ");
-    
+
     $kpis['attendance_pct'] = $total_available_tasks > 0 ? round(($total_completed_tasks / $total_available_tasks) * 100) : 0;
     $kpis['mock_tests'] = round($kpis['total_checklist_completions'] * 0.35);
     $kpis['mega_tests'] = round($kpis['total_checklist_completions'] * 0.08);
@@ -2219,7 +2242,7 @@ if ($source === 'courses') {
     // Fetch list of courses for filters
     try {
         $assigned_courses = $pdo->query("
-            SELECT DISTINCT sa.assigned_value as course_name 
+            SELECT DISTINCT sa.assigned_value as course_name
             FROM study_plan_assignments sa
             JOIN study_plans sp ON sa.study_plan_id = sp.id
             WHERE sa.assignment_type = 'course' AND sp.status = 'published'
@@ -2690,7 +2713,7 @@ include 'includes/admin_nav.php';
         border-color: #cbd5e1;
         background: #cbd5e1;
     }
-    
+
     /* Interactive Profile Image */
     .interactive-profile-photo {
         cursor: pointer;
@@ -2701,7 +2724,7 @@ include 'includes/admin_nav.php';
         border-color: var(--accent) !important;
         box-shadow: 0 8px 16px rgba(79, 70, 229, 0.15);
     }
-    
+
     /* Print styles to isolate dossier content */
     @media print {
         /* Hide all page layout outer wrapper elements without breaking nested modal backdrop */
@@ -2740,7 +2763,7 @@ include 'includes/admin_nav.php';
             margin: 0 !important;
             padding: 0 !important;
         }
-        
+
         /* Position modal backdrop as plain container, no dim overlay */
         #student-task-modal-backdrop {
             position: absolute !important;
@@ -2754,7 +2777,7 @@ include 'includes/admin_nav.php';
             opacity: 1 !important;
             overflow: visible !important;
         }
-        
+
         /* Remove shadows and scroll restrictions from timeline modal */
         .timeline-modal {
             width: 100% !important;
@@ -2768,7 +2791,7 @@ include 'includes/admin_nav.php';
             position: static !important;
             overflow: visible !important;
         }
-        
+
         /* Render dossier sidebar and main side-by-side */
         .timeline-modal-body {
             display: flex !important;
@@ -2794,15 +2817,15 @@ include 'includes/admin_nav.php';
             padding: 1.25rem !important;
             background: #fff !important;
         }
-        
+
         /* Hide header action buttons, filters bar and list headers during print */
-        .timeline-modal-header .btn, 
+        .timeline-modal-header .btn,
         .timeline-modal-header button,
         .dossier-main > div:first-child,
         .dossier-main h5 {
             display: none !important;
         }
-        
+
         /* Let timeline flow and prevent page-break cuts */
         .timeline-track-container,
         #st-timeline-list,
@@ -2831,7 +2854,7 @@ include 'includes/admin_nav.php';
                     <?php echo $page_title; ?>
                 </h3>
                 <p style="font-size:0.8rem; color:var(--text-muted); margin:0;">
-                    <?php 
+                    <?php
                         if ($source === 'courses') echo 'Dashboard / PEPP Course Analytics';
                         elseif ($source === 'forms') echo 'Dashboard / Custom Forms Campaigns';
                         else echo $page_sub;
@@ -2839,7 +2862,7 @@ include 'includes/admin_nav.php';
                 </p>
             </div>
         </div>
-        
+
         <div style="display:flex; align-items:center; gap:8px;">
             <?php if ($source !== ''): ?>
                 <a href="student-study-reports.php" class="btn btn-outline btn-sm"><i class="fas fa-chevron-left"></i> Change Source</a>
@@ -2855,7 +2878,7 @@ include 'includes/admin_nav.php';
             <div style="text-align:center; max-width:800px; width:100%;">
                 <h2 style="font-family:var(--header-font); font-weight:800; font-size:2rem; color:var(--text-main); margin-bottom:8px;">Welcome to Performance & Analytics Intelligence</h2>
                 <p style="font-size:0.95rem; color:var(--text-muted); margin-bottom:2.5rem;">Select an analytics data source to load your reporting dashboard workspace.</p>
-                
+
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:2rem;">
                     <!-- Courses Selection Card -->
                     <a href="?source=courses" style="text-decoration:none;">
@@ -2869,7 +2892,7 @@ include 'includes/admin_nav.php';
                             </div>
                         </div>
                     </a>
-                    
+
                     <!-- Forms Selection Card -->
                     <a href="?source=forms" style="text-decoration:none;">
                         <div class="landing-card">
@@ -3234,11 +3257,11 @@ include 'includes/admin_nav.php';
         <h4 style="margin:0; font-family:var(--header-font); font-weight:800; font-size:1.1rem; color:var(--text-main);"><i class="fas fa-cog" style="color:var(--accent); margin-right:6px;"></i> Configure Metrics</h4>
         <button type="button" class="btn btn-sm btn-outline" style="padding:4px 8px;" onclick="closeSlideOver('card-manager-slideover')"><i class="fas fa-xmark"></i></button>
     </div>
-    
+
     <div style="flex-grow:1; overflow-y:auto; display:flex; flex-direction:column; gap:14px;">
         <p style="font-size:0.75rem; color:var(--text-muted); margin:0;">Toggle checkboxes to show or hide KPI cards across the performance dashboard.</p>
         <hr style="border:none; border-top:1px solid var(--border); margin:5px 0;">
-        
+
         <div style="display:flex; flex-direction:column; gap:12px;">
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="font-size:0.85rem; font-weight:600; color:var(--text-main);">Total Enrolled Students</span>
@@ -3282,7 +3305,7 @@ include 'includes/admin_nav.php';
             </div>
         </div>
     </div>
-    
+
     <div style="margin-top:15px; border-top:1.5px solid var(--border); padding-top:10px; display:flex; justify-content:flex-end;">
         <button type="button" class="btn btn-primary" onclick="saveDashboardCardsConfig()"><i class="fas fa-check"></i> Save Layout</button>
     </div>
@@ -3315,7 +3338,7 @@ include 'includes/admin_nav.php';
                 </h4>
                 <p id="st-modal-subtitle" style="margin:2px 0 0 0; font-size:0.75rem; color:var(--text-muted);"></p>
             </div>
-            
+
             <!-- Quick Actions -->
             <div style="display:flex; gap:8px; align-items:center;">
                 <button type="button" class="btn btn-sm btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" onclick="window.print()"><i class="fas fa-print"></i> Print Report</button>
@@ -3325,10 +3348,10 @@ include 'includes/admin_nav.php';
                 <button type="button" class="btn btn-sm btn-soft-red" style="padding: 6px 12px; margin-left: 10px;" onclick="closeTimelineModal()"><i class="fas fa-xmark"></i></button>
             </div>
         </div>
-        
+
         <!-- Modal Body (Dossier Split-pane Layout) -->
         <div class="timeline-modal-body">
-            
+
             <!-- Left Dossier Sidebar -->
             <div class="dossier-sidebar">
                 <!-- Circular Completion Metric Widget -->
@@ -3336,7 +3359,7 @@ include 'includes/admin_nav.php';
                     <div style="position:relative; width:140px; height:140px; display:flex; align-items:center; justify-content:center; margin-bottom:12px; margin-top:5px;">
                         <svg width="140" height="140" viewBox="0 0 140 140" style="transform: rotate(-90deg);">
                             <circle cx="70" cy="70" r="58" stroke="#f1f5f9" stroke-width="10" fill="transparent" />
-                            <circle id="st-svg-progress-ring" cx="70" cy="70" r="58" stroke="url(#kpi-ring-grad)" stroke-width="10" fill="transparent" 
+                            <circle id="st-svg-progress-ring" cx="70" cy="70" r="58" stroke="url(#kpi-ring-grad)" stroke-width="10" fill="transparent"
                                     stroke-dasharray="364.4" stroke-dashoffset="364.4" stroke-linecap="round" style="transition: stroke-dashoffset 0.6s ease;" />
                             <defs>
                                 <linearGradient id="kpi-ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -3355,7 +3378,7 @@ include 'includes/admin_nav.php';
                         <strong id="st-last-activity-date" style="color:var(--text-main);">Never</strong>
                     </div>
                 </div>
-                
+
                 <!-- Detailed Dossier KPI Cards List -->
                 <div style="display:flex; flex-direction:column; gap:8px; width:100%;">
                     <div class="dossier-stat-row">
@@ -3392,7 +3415,7 @@ include 'includes/admin_nav.php';
                     </div>
                 </div>
             </div>
-            
+
             <!-- Right Dossier Main Panel -->
             <div class="dossier-main">
                 <!-- Filters & Controls Bar -->
@@ -3427,7 +3450,7 @@ include 'includes/admin_nav.php';
                         <button class="btn btn-sm btn-outline" onclick="resetTimelineFilters()" style="height:36px; padding:0 12px; font-size:0.8rem; border-radius:10px;"><i class="fas fa-arrows-rotate"></i> Reset</button>
                     </div>
                 </div>
-                
+
                 <!-- Timeline List View -->
                 <div style="flex-grow:1; display:flex; flex-direction:column; gap:8px; overflow:hidden;">
                     <h5 style="margin:4px 0; font-size:0.8rem; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Chronological Dossier Trail</h5>
@@ -3439,7 +3462,7 @@ include 'includes/admin_nav.php';
                     </div>
                 </div>
             </div>
-            
+
         </div>
     </div>
 </div>
@@ -3449,7 +3472,7 @@ include 'includes/admin_nav.php';
     const sourceVal = '<?php echo addslashes($source); ?>';
     const isSuperAdmin = <?php echo is_super_admin() ? 'true' : 'false'; ?>;
     const csrfToken = '<?php echo csrf_token(); ?>';
-    
+
     document.addEventListener('DOMContentLoaded', function() {
         if (sourceVal === 'courses') {
             // Autocomplete Search Trigger
@@ -3462,14 +3485,14 @@ include 'includes/admin_nav.php';
             if (emailParam) {
                 loadStudentIntelligenceDashboard(emailParam);
             }
-            
+
             input.addEventListener('input', function() {
                 const val = input.value.trim();
                 if (val.length < 2) {
                     box.style.display = 'none';
                     return;
                 }
-                
+
                 fetch('?action=global_student_search&q=' + encodeURIComponent(val))
                     .then(res => res.json())
                     .then(data => {
@@ -3479,7 +3502,7 @@ include 'includes/admin_nav.php';
                             box.style.display = 'block';
                             return;
                         }
-                        
+
                         data.forEach(item => {
                             const row = document.createElement('div');
                             row.className = 'search-autocomplete-item';
@@ -3509,7 +3532,7 @@ include 'includes/admin_nav.php';
 
             restoreDashboardCardsConfig();
             initKPIDrilldown();
-            
+
         } else if (sourceVal === 'forms') {
             loadFormsDashboardSidebar();
         }
@@ -3604,7 +3627,7 @@ include 'includes/admin_nav.php';
     function hideAllViewportViews() {
         const placeholder = document.getElementById('viewport-placeholder');
         if (placeholder) placeholder.style.display = 'none';
-        
+
         const views = ['kpi-drilldown-container', 'student-workspace', 'course-dashboard-workspace'];
         views.forEach(v => {
             const el = document.getElementById(v);
@@ -3618,7 +3641,7 @@ include 'includes/admin_nav.php';
         const titleEl = document.getElementById('kpi-drilldown-title');
         const headersEl = document.getElementById('kpi-drilldown-headers');
         const bodyEl = document.getElementById('kpi-drilldown-body');
-        
+
         // Clear search input on new load
         const searchInput = document.getElementById('kpi-drilldown-search-input');
         if (searchInput) searchInput.value = '';
@@ -3632,7 +3655,7 @@ include 'includes/admin_nav.php';
             .then(res => res.json())
             .then(res => {
                 titleEl.innerHTML = `<i class="fas fa-chart-line" style="color:#4f46e5; margin-right:8px;"></i> ${res.title}`;
-                
+
                 let hHtml = '<th style="padding:10px 14px; font-weight:700; color:#475569; width:70px;">Sl. No.</th>';
                 res.headers.forEach(h => {
                     hHtml += `<th style="padding:10px 14px; font-weight:700; color:#475569;">${h}</th>`;
@@ -3662,7 +3685,7 @@ include 'includes/admin_nav.php';
     function closeKPIDrilldown() {
         const container = document.getElementById('kpi-drilldown-container');
         if (container) container.style.display = 'none';
-        
+
         document.querySelectorAll('.kpi-card').forEach(el => {
             el.classList.remove('selected-kpi');
         });
@@ -3689,7 +3712,7 @@ include 'includes/admin_nav.php';
 
     // ── LIGHTBOX HELPERS ──
     let lightboxZoomScale = 1.0;
-    
+
     function openLightbox(src) {
         const lb = document.getElementById('photo-lightbox');
         const img = document.getElementById('lightbox-img');
@@ -3697,24 +3720,24 @@ include 'includes/admin_nav.php';
         lb.classList.add('show');
         resetLightboxZoom();
     }
-    
+
     function closeLightbox() {
         const lb = document.getElementById('photo-lightbox');
         lb.classList.remove('show');
     }
-    
+
     function zoomLightbox(amount) {
         const img = document.getElementById('lightbox-img');
         lightboxZoomScale = Math.max(0.5, Math.min(3.0, lightboxZoomScale + amount));
         img.style.transform = `scale(${lightboxZoomScale})`;
     }
-    
+
     function resetLightboxZoom() {
         const img = document.getElementById('lightbox-img');
         lightboxZoomScale = 1.0;
         img.style.transform = `scale(1)`;
     }
-    
+
     function downloadLightboxImage() {
         const img = document.getElementById('lightbox-img');
         if (!img.src) return;
@@ -3731,7 +3754,7 @@ include 'includes/admin_nav.php';
         const body = document.getElementById(`course-accordion-body-${idx}`);
         const icon = document.getElementById(`course-accordion-icon-${idx}`);
         if (!body) return;
-        
+
         if (body.classList.contains('expanded')) {
             body.classList.remove('expanded');
             icon.style.transform = 'rotate(0deg)';
@@ -3803,7 +3826,7 @@ include 'includes/admin_nav.php';
                                     <strong style="font-size:1.1rem;">📊 ${s.attendance}%</strong>
                                 </div>
                             </div>
-                            
+
                             <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:20px; text-align:center;">
                                 <div style="background:#e0f2fe; border-radius:10px; padding:10px 5px; color:#0369a1; cursor:help;" title="Performance Score:&#10;- Date-wise plans: Calculated as % completion of tasks scheduled on or before today.&#10;- Day-wise plans: Calculated as overall plan completion %.">
                                     <div style="font-size:0.6rem; font-weight:800; text-transform:uppercase;">Performance</div>
@@ -3877,7 +3900,7 @@ include 'includes/admin_nav.php';
                         </div>
                     </div>
                 `;
-                
+
                 container.innerHTML = html;
 
                 // Load Assessment Results for this student
@@ -3900,7 +3923,7 @@ include 'includes/admin_nav.php';
                 data.courses.forEach((c, cIdx) => {
                     const cDiv = document.createElement('div');
                     cDiv.className = 'course-card';
-                    
+
                     cDiv.innerHTML = `
                         <div class="course-card-header" onclick="toggleCourseAccordion(${cIdx})">
                             <div style="display:flex; flex-direction:column; gap:4px; flex-grow:1; margin-right:15px;">
@@ -3917,7 +3940,7 @@ include 'includes/admin_nav.php';
                                     <span>Last Active: <strong>${c.last_updated}</strong></span>
                                 </div>
                             </div>
-                            
+
                             <!-- Right Side: progress bar + collapse icon -->
                             <div style="display:flex; align-items:center; gap:15px;">
                                 <div style="display:flex; flex-direction:column; align-items:flex-end;">
@@ -3930,7 +3953,7 @@ include 'includes/admin_nav.php';
                                 <i id="course-accordion-icon-${cIdx}" class="fas fa-chevron-right" style="color:var(--text-muted); font-size:0.9rem; transition: transform 0.25s ease;"></i>
                             </div>
                         </div>
-                        
+
                         <!-- Collapsible study plans list -->
                         <div class="course-card-body" id="course-accordion-body-${cIdx}">
                             <div style="display:flex; flex-direction:column; gap:12px;" id="course-plans-container-${cIdx}">
@@ -3938,9 +3961,9 @@ include 'includes/admin_nav.php';
                             </div>
                         </div>
                     `;
-                    
+
                     coursesContainer.appendChild(cDiv);
-                    
+
                     // Render Study Plans inside the course card accordion body
                     const plansContainer = document.getElementById(`course-plans-container-${cIdx}`);
                     if (!c.plans || c.plans.length === 0) {
@@ -3949,7 +3972,7 @@ include 'includes/admin_nav.php';
                         c.plans.forEach(p => {
                             const isPlanActive = p.pct > 0 && p.pct < 100;
                             const pulseIndicator = isPlanActive ? `<span class="pulse-dot" style="margin:0; width:8px; height:8px; background:#10b981;" title="Active Study Plan"></span>` : '';
-                            
+
                             const pCard = document.createElement('div');
                             pCard.className = 'widget-card';
                             pCard.style.padding = '15px 20px';
@@ -3960,7 +3983,7 @@ include 'includes/admin_nav.php';
                             pCard.style.display = 'flex';
                             pCard.style.flexDirection = 'column';
                             pCard.style.gap = '8px';
-                            
+
                             pCard.innerHTML = `
                                 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
                                     <div style="display:flex; align-items:center; gap:8px;">
@@ -3969,7 +3992,7 @@ include 'includes/admin_nav.php';
                                     </div>
                                     <button class="btn btn-sm btn-soft-violet" style="padding: 4px 10px; font-size:0.75rem;" onclick="openStudentTimeline('${s.email}', ${p.id}, '${p.title.replace(/'/g, "\\'")}', '${s.streak}', '${s.performance_label}')"><i class="fas fa-list-check"></i> View Timeline Checklist</button>
                                 </div>
-                                
+
                                 <div style="display:flex; gap:16px; flex-wrap:wrap; font-size:0.75rem; color:var(--text-muted); border-top:1px dashed #e2e8f0; padding-top:8px; margin-top:4px;">
                                     <div>Duration: <strong style="color:var(--text-main);">${p.start_date} to ${p.end_date}</strong></div>
                                     <div>Total Tasks: <strong style="color:var(--text-main);">${p.total_tasks}</strong></div>
@@ -4142,7 +4165,7 @@ include 'includes/admin_nav.php';
         const backdrop = document.getElementById('student-task-modal-backdrop');
         backdrop.classList.add('show');
     }
-    
+
     function closeTimelineModal() {
         const backdrop = document.getElementById('student-task-modal-backdrop');
         backdrop.classList.remove('show');
@@ -4163,7 +4186,7 @@ include 'includes/admin_nav.php';
 
         titleEl.innerHTML = `<i class="fas fa-folder-open" style="color:var(--accent);"></i> Checklist Audit: ${planTitle}`;
         subtitleEl.innerHTML = `Student: <strong>${currentSelectedStudentName}</strong> (${email}) &nbsp;|&nbsp; Course: <strong>${currentSelectedStudentCourse}</strong>`;
-        
+
         timelineListContainer.innerHTML = `<div style="text-align:center; padding:3rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent);"></i><p>Loading chronological checklist timeline...</p></div>`;
 
         openTimelineModal();
@@ -4181,15 +4204,15 @@ include 'includes/admin_nav.php';
                 }
 
                 timelineActivities = data.timeline;
-                
+
                 // Calculate dynamic metrics
                 const total = data.timeline.length;
                 const completed = data.timeline.filter(t => t.status === 'Completed').length;
                 const pending = data.timeline.filter(t => t.status === 'Pending').length;
                 const overdue = data.timeline.filter(t => t.status === 'Overdue').length;
-                
+
                 const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
-                
+
                 // Attendance mapped to completeness
                 const attendance = pct > 0 ? Math.min(100, Math.round(pct * 1.1)) : 0;
 
@@ -4208,7 +4231,7 @@ include 'includes/admin_nav.php';
                 const strokeDashoffset = 364.4 - (pct / 100) * 364.4;
                 circle.style.strokeDashoffset = strokeDashoffset;
                 document.getElementById('st-ring-percent-text').innerText = `${pct}%`;
-                
+
                 // Last activity log date safely computed
                 const completedLogs = data.timeline.filter(t => t.completed_at && t.completed_at !== '');
                 const lastLog = completedLogs.length > 0 ? completedLogs.sort((a,b) => new Date(b.completed_at) - new Date(a.completed_at))[0] : null;
@@ -4277,11 +4300,11 @@ include 'includes/admin_nav.php';
         const subject = document.getElementById('st-filter-subject').value;
         const startD = document.getElementById('st-filter-start-date').value;
         const endD = document.getElementById('st-filter-end-date').value;
-        
+
         let filtered = timelineActivities;
-        
+
         if (q) {
-            filtered = filtered.filter(item => 
+            filtered = filtered.filter(item =>
                 (item.title && item.title.toLowerCase().includes(q)) ||
                 (item.topic && item.topic.toLowerCase().includes(q)) ||
                 (item.chapter && item.chapter.toLowerCase().includes(q)) ||
@@ -4289,23 +4312,23 @@ include 'includes/admin_nav.php';
                 (item.faculty && item.faculty.toLowerCase().includes(q))
             );
         }
-        
+
         if (status !== 'ALL') {
             filtered = filtered.filter(item => item.status === status);
         }
-        
+
         if (subject !== 'ALL') {
             filtered = filtered.filter(item => item.subject === subject);
         }
-        
+
         if (startD) {
             filtered = filtered.filter(item => item.date !== 'TBD' && new Date(item.date) >= new Date(startD));
         }
-        
+
         if (endD) {
             filtered = filtered.filter(item => item.date !== 'TBD' && new Date(item.date) <= new Date(endD));
         }
-        
+
         renderTimelineList(filtered);
     }
 
@@ -4326,16 +4349,16 @@ include 'includes/admin_nav.php';
     function renderTimelineList(list) {
         const container = document.getElementById('st-timeline-list');
         container.innerHTML = '';
-        
+
         if (list.length === 0) {
             container.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding:2rem;">No matching checklist activities found for selected filters.</div>';
             return;
         }
-        
+
         // Group items by Day/Date
         const groups = {};
         const groupOrder = [];
-        
+
         list.forEach((item) => {
             const key = item.date !== 'TBD' ? item.date : `Day ${item.day}`;
             if (!groups[key]) {
@@ -4353,15 +4376,15 @@ include 'includes/admin_nav.php';
                 groups[key].completed++;
             }
         });
-        
+
         // Reset index counter for unique element targeting
         groupIndex = 0;
-        
+
         groupOrder.forEach((key) => {
             const group = groups[key];
             const div = document.createElement('div');
             div.className = 'timeline-track-item';
-            
+
             // Generate HTML for each task in this group
             let tasksHtml = '';
             group.items.forEach((item, taskIdx) => {
@@ -4369,7 +4392,7 @@ include 'includes/admin_nav.php';
                 const badgeClass = item.status === 'Completed' ? 'green' : item.status === 'Overdue' ? 'red' : 'gray';
                 const mapLink = item.location ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(item.location)}" target="_blank" class="btn btn-sm btn-outline" style="padding: 2px 6px; font-size: 0.7rem; border-color:#3b82f6; color:#3b82f6;"><i class="fas fa-location-dot"></i> Maps Location</a>` : '';
                 const resourceBtn = item.resource ? `<a href="${item.resource}" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:underline;">View Resource</a>` : 'Standard Materials';
-                
+
                 // Determine icon configuration based on activity type
                 let activityIcon = 'fa-book-open';
                 let activityColor = '#3b82f6';
@@ -4384,7 +4407,7 @@ include 'includes/admin_nav.php';
                     activityIcon = 'fa-list-check';
                     activityColor = '#f59e0b';
                 }
-                
+
                 tasksHtml += `
                     <div class="task-row-container" style="border-bottom: 1px solid #f1f5f9; padding: 12px 4px;">
                         <div class="task-row-header" style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="toggleSubTaskExpand('${uniqueTaskIdx}', event)">
@@ -4402,7 +4425,7 @@ include 'includes/admin_nav.php';
                                 <i id="subtask-expand-icon-${uniqueTaskIdx}" class="fas fa-chevron-down" style="font-size:0.7rem; color:var(--text-muted); transition: transform 0.2s ease;"></i>
                             </div>
                         </div>
-                        
+
                         <!-- Collapsible Task Details -->
                         <div id="subtask-expand-body-${uniqueTaskIdx}" style="display:none; margin-top:10px; padding:10px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; font-size:0.75rem; color:var(--text-muted);">
                             <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; margin-bottom:8px;">
@@ -4413,7 +4436,7 @@ include 'includes/admin_nav.php';
                                 <div><strong>Faculty:</strong> ${item.faculty || 'N/A'}</div>
                                 <div><strong>Resource Link:</strong> ${resourceBtn}</div>
                             </div>
-                            
+
                             ${item.status === 'Completed' ? `
                                 <div style="border-top:1px dashed #e2e8f0; margin-top:8px; padding-top:8px; display:flex; flex-direction:column; gap:4px; font-size:0.7rem;">
                                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
@@ -4431,7 +4454,7 @@ include 'includes/admin_nav.php';
                                     ` : ''}
                                 </div>
                             ` : ''}
-                            
+
                             ${item.is_cleared ? `
                                 <div style="background:#fff5f5; border:1px solid #fee2e2; border-radius:8px; padding:8px 10px; margin-top:8px; font-size:0.7rem; color:#b91c1c; display:flex; flex-direction:column; gap:4px;">
                                     <div><i class="fas fa-ban"></i> Completion was <strong>Cleared</strong></div>
@@ -4443,12 +4466,12 @@ include 'includes/admin_nav.php';
                     </div>
                 `;
             });
-            
+
             // Calculate day group status and colors based on task availability and completion
             let groupStatus = 'Pending';
             let groupColor = '#f59e0b'; // Gold/orange dot (Pending/Today)
             let groupTextColor = '#d97706'; // Gold/orange text
-            
+
             if (group.completed === group.total && group.total > 0) {
                 groupStatus = 'Completed';
                 groupColor = '#10b981'; // Green
@@ -4462,11 +4485,11 @@ include 'includes/admin_nav.php';
                 groupColor = '#3b82f6'; // Blue
                 groupTextColor = '#2563eb'; // Dark blue
             }
-            
+
             div.innerHTML = `
                 <!-- Dot Indicator (Dynamic Status Color) -->
                 <span class="timeline-track-node" style="border-color:${groupColor}; background:${groupColor}; width:10px; height:10px; left:-21px; top:21px;"></span>
-                
+
                 <div class="day-group-box" style="border: 1px solid #cbd5e1; border-radius:16px; background:#fff; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.02); transition: box-shadow 0.2s ease;">
                     <!-- Day/Date Header Button -->
                     <div class="day-group-header" onclick="toggleDayExpand(${groupIndex})" style="padding:15px 20px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; background:#fff; user-select:none;">
@@ -4476,24 +4499,24 @@ include 'includes/admin_nav.php';
                         </div>
                         <span style="font-size:0.82rem; font-weight:700; color:${groupTextColor};">(${group.completed}/${group.total})</span>
                     </div>
-                    
+
                     <!-- Collapsible Day Checklist Container -->
                     <div id="day-expand-body-${groupIndex}" style="display:none; border-top:1px solid #f1f5f9; padding:0 16px 8px 16px; background:#fff;">
                         ${tasksHtml}
                     </div>
                 </div>
             `;
-            
+
             container.appendChild(div);
             groupIndex++;
         });
     }
-    
+
     function toggleDayExpand(gIdx) {
         const body = document.getElementById(`day-expand-body-${gIdx}`);
         const icon = document.getElementById(`day-expand-icon-${gIdx}`);
         if (!body) return;
-        
+
         if (body.style.display === 'none') {
             body.style.display = 'block';
             icon.style.transform = 'rotate(180deg)';
@@ -4502,7 +4525,7 @@ include 'includes/admin_nav.php';
             icon.style.transform = 'rotate(0deg)';
         }
     }
-    
+
     function toggleSubTaskExpand(uniqueIdx, event) {
         if (event) {
             event.preventDefault();
@@ -4511,7 +4534,7 @@ include 'includes/admin_nav.php';
         const body = document.getElementById(`subtask-expand-body-${uniqueIdx}`);
         const icon = document.getElementById(`subtask-expand-icon-${uniqueIdx}`);
         if (!body) return;
-        
+
         if (body.style.display === 'none') {
             body.style.display = 'block';
             icon.style.transform = 'rotate(180deg)';
@@ -4527,29 +4550,29 @@ include 'includes/admin_nav.php';
             alert('No timeline logs found to export.');
             return;
         }
-        
+
         let csv = 'Day,Date,Chapter,Subject,Topic,Activity Title,Type,Faculty,Status,Completed At,IP Address,Browser,Device\n';
         timelineActivities.forEach(item => {
             csv += `"${item.day}","${item.date}","${item.chapter}","${item.subject}","${item.topic}","${item.title}","${item.type}","${item.faculty}","${item.status}","${item.completed_at}","${item.ip}","${item.browser}","${item.device}"\n`;
         });
-        
+
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = `${currentSelectedStudentEmail}_timeline_checklist.csv`;
         a.click();
     }
-    
+
     function exportTimelineExcel() {
         if (timelineActivities.length === 0) {
             alert('No timeline logs found to export.');
             return;
         }
-        
+
         let html = '<table border="1"><tr>';
         html += '<th>Day</th><th>Date</th><th>Chapter</th><th>Subject</th><th>Topic</th><th>Activity Title</th><th>Type</th><th>Faculty</th><th>Status</th><th>Completed At</th><th>IP</th><th>Browser</th><th>Device</th>';
         html += '</tr>';
-        
+
         timelineActivities.forEach(item => {
             html += `<tr>
                 <td>${item.day}</td>
@@ -4568,14 +4591,14 @@ include 'includes/admin_nav.php';
             </tr>`;
         });
         html += '</table>';
-        
+
         const blob = new Blob([html], { type: 'application/vnd.ms-excel' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = `${currentSelectedStudentEmail}_timeline_checklist.xls`;
         a.click();
     }
-    
+
     function shareTimelineReport() {
         if (navigator.clipboard) {
             navigator.clipboard.writeText(window.location.href);
@@ -4588,12 +4611,12 @@ include 'includes/admin_nav.php';
     // ════════════════ COURSE ANALYTICS ACCORDIONS / TABS ════════════════
     let currentCourseNameSelected = '';
     let courseTasksData = [];
-    
+
     let currentCampaignIdSelected = 0;
     let currentCampaignTitleSelected = '';
     let campaignRespondentsData = [];
     let campaignTasksData = [];
-    
+
     function loadCourseDashboard(cname) {
         currentCourseNameSelected = cname;
         const workspace = document.getElementById('course-dashboard-workspace');
@@ -4689,7 +4712,7 @@ include 'includes/admin_nav.php';
             .then(res => res.json())
             .then(data => {
                 courseTasksData = data;
-                
+
                 // Populate Chapter filter select list dynamically
                 const chapterSelect = document.getElementById('course-task-chapter-filter');
                 if (chapterSelect) {
@@ -4702,7 +4725,7 @@ include 'includes/admin_nav.php';
                         chapterSelect.appendChild(opt);
                     });
                 }
-                
+
                 // Clear input filters first
                 const searchInput = document.getElementById('course-task-search');
                 if (searchInput) searchInput.value = '';
@@ -4740,22 +4763,22 @@ include 'includes/admin_nav.php';
     function filterCourseTasksTable() {
         const searchVal = document.getElementById('course-task-search').value.toLowerCase().trim();
         const chapterVal = document.getElementById('course-task-chapter-filter').value;
-        
+
         const filtered = courseTasksData.filter(t => {
             // Search filter
-            const matchesSearch = !searchVal || 
+            const matchesSearch = !searchVal ||
                 (t.title && t.title.toLowerCase().includes(searchVal)) ||
                 (t.topic && t.topic.toLowerCase().includes(searchVal)) ||
                 (t.subject && t.subject.toLowerCase().includes(searchVal)) ||
                 (t.chapter && t.chapter.toLowerCase().includes(searchVal)) ||
                 (t.plan && t.plan.toLowerCase().includes(searchVal));
-                
+
             // Chapter filter
             const matchesChapter = (chapterVal === 'ALL' || t.chapter === chapterVal);
-            
+
             return matchesSearch && matchesChapter;
         });
-        
+
         renderCourseTasksTable(filtered);
     }
 
@@ -4931,7 +4954,7 @@ include 'includes/admin_nav.php';
     function exportDrilldownExcel(type) {
         const tableId = type === 'completed' ? 'course-completed-students-body' : 'course-pending-students-body';
         const rows = document.querySelectorAll(`#${tableId} tr`);
-        
+
         const dataArr = [];
         if (type === 'completed') {
             dataArr.push(['Student Name', 'Completion Timestamp', 'Logged Details', 'Map Coordinates']);
@@ -4953,7 +4976,7 @@ include 'includes/admin_nav.php';
         const ws = XLSX.utils.aoa_to_sheet(dataArr);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Drilldown Analysis");
-        
+
         const title = currentDrilldownActivityTitle.replace(/\\s+/g, '_');
         XLSX.writeFile(wb, `${type}_tasks_${title}.xlsx`);
     }
@@ -4984,7 +5007,7 @@ include 'includes/admin_nav.php';
                         <div style="font-weight:800; color:var(--text-main); font-size:0.85rem; margin-bottom:4px;">${f.title}</div>
                         <small style="color:var(--text-muted); font-size:0.72rem; display:block;">Submissions: ${f.submissions} · Converted: ${f.conversions} (${f.rate})</small>
                     `;
-                    
+
                     item.addEventListener('click', function() {
                         document.querySelectorAll('#forms-sidebar-list > div').forEach(c => {
                             c.style.borderColor = 'var(--border)';
@@ -5238,7 +5261,7 @@ include 'includes/admin_nav.php';
             .then(res => res.json())
             .then(data => {
                 campaignRespondentsData = data;
-                
+
                 // Clear search
                 const searchInp = document.getElementById('campaign-respondent-search');
                 if (searchInp) searchInp.value = '';
@@ -5274,8 +5297,8 @@ include 'includes/admin_nav.php';
 
     function filterCampaignRespondentsTable() {
         const query = document.getElementById('campaign-respondent-search').value.toLowerCase().trim();
-        const filtered = campaignRespondentsData.filter(s => 
-            s.name.toLowerCase().includes(query) || 
+        const filtered = campaignRespondentsData.filter(s =>
+            s.name.toLowerCase().includes(query) ||
             s.email.toLowerCase().includes(query) ||
             s.phone.includes(query)
         );
@@ -5285,7 +5308,7 @@ include 'includes/admin_nav.php';
     function loadCampaignTasksTab(formId) {
         const tbody = document.getElementById('campaign-tasks-table-body');
         tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin"></i> Mapping task matrix...</td></tr>';
-        
+
         // Hide drilldown card initially
         const drilldownCard = document.getElementById('campaign-drilldown-card');
         if (drilldownCard) {
@@ -5297,7 +5320,7 @@ include 'includes/admin_nav.php';
             .then(res => res.json())
             .then(data => {
                 campaignTasksData = data;
-                
+
                 // Populate Chapter select
                 const chapterSelect = document.getElementById('campaign-task-chapter-filter');
                 if (chapterSelect) {
@@ -5310,7 +5333,7 @@ include 'includes/admin_nav.php';
                         chapterSelect.appendChild(opt);
                     });
                 }
-                
+
                 // Clear filters
                 const searchInp = document.getElementById('campaign-task-search');
                 if (searchInp) searchInp.value = '';
@@ -5349,7 +5372,7 @@ include 'includes/admin_nav.php';
         const searchVal = document.getElementById('campaign-task-search').value.toLowerCase().trim();
         const chapterVal = document.getElementById('campaign-task-chapter-filter').value;
         const filtered = campaignTasksData.filter(t => {
-            const matchesSearch = !searchVal || 
+            const matchesSearch = !searchVal ||
                 (t.title && t.title.toLowerCase().includes(searchVal)) ||
                 (t.topic && t.topic.toLowerCase().includes(searchVal)) ||
                 (t.subject && t.subject.toLowerCase().includes(searchVal)) ||
@@ -5496,7 +5519,7 @@ include 'includes/admin_nav.php';
         const tableId = type === 'completed' ? 'campaign-drilldown-completed-body' : 'campaign-drilldown-pending-body';
         const rows = document.querySelectorAll(`#${tableId} tr`);
         const dataArr = [];
-        
+
         if (type === 'completed') {
             dataArr.push(['Respondent Name', 'Completion Timestamp', 'Map Coordinates']);
             rows.forEach(row => {
@@ -5558,7 +5581,7 @@ include 'includes/admin_nav.php';
             event.preventDefault();
             event.stopPropagation();
         }
-        
+
         const confirmMsg = `Clear this completed activity?\n\n"${activityTitle}" for ${studentEmail}\n\nClearing this completion will remove it from the student's progress calculation while preserving the historical activity record.`;
         const reason = prompt(confirmMsg + "\n\nPlease enter the reason for clearing:");
         if (reason === null) return; // User cancelled
@@ -5566,12 +5589,12 @@ include 'includes/admin_nav.php';
             alert('You must provide a reason to clear this completion.');
             return;
         }
-        
+
         const fd = new FormData();
         fd.append('analytics_id', analyticsId);
         fd.append('clear_reason', reason.trim());
         fd.append('csrf_token', csrfToken);
-        
+
         fetch('?action=clear_student_activity_completion', {
             method: 'POST',
             body: fd
@@ -5580,7 +5603,7 @@ include 'includes/admin_nav.php';
         .then(data => {
             if (data.success) {
                 alert(data.message);
-                
+
                 // Refresh timeline checklist modal
                 const backdrop = document.getElementById('student-task-modal-backdrop');
                 const email = backdrop.dataset.email;
@@ -5588,7 +5611,7 @@ include 'includes/admin_nav.php';
                 const planTitle = backdrop.dataset.planTitle;
                 const streakDays = backdrop.dataset.streakDays;
                 const overallPerformance = backdrop.dataset.overallPerformance;
-                
+
                 if (email && planId) {
                     openStudentTimeline(email, planId, planTitle, streakDays, overallPerformance);
                     if (typeof loadStudentIntelligenceDashboard === 'function') {

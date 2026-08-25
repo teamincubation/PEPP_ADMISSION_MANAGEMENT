@@ -13,7 +13,8 @@ $_SESSION['admin_username'] = 'TestAdmin';
 $_SERVER['HTTP_X_TESTING_MODE'] = 'true';
 require_once dirname(__DIR__) . '/config/database.php';
 try {
-    $pdo->exec("INSERT OR IGNORE INTO admins (id, username, password_hash, full_name, role, permissions, status)
+    $pdo->exec("DELETE FROM admins WHERE id = 1");
+    $pdo->exec("INSERT INTO admins (id, username, password_hash, full_name, role, permissions, status)
                 VALUES (1, 'TestAdmin', 'hash', 'Test Administrator', 'super_admin', 'ALL', 'active')");
 } catch (Exception $e) {}
 require_once dirname(__DIR__) . '/includes/auth.php';
