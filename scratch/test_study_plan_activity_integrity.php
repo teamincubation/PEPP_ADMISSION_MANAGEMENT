@@ -1881,12 +1881,86 @@ run_test(78, "Historical completion report still includes orphan completion reco
     assert_equal($historical_count, 1, "Historical count includes legacy orphan completion");
 });
 
+run_test(79, "Orphan completions do not increase active/current plan tasks and completed counts", function() {
+    global $pdo, $plan_id;
+    reset_db();
+
+    // 1. Create 107 active activities
+    $activities_payload = [];
+    for ($i = 1; $i <= 107; $i++) {
+        $activities_payload[] = [
+            'activity_title' => "Active Task $i",
+            'day_number' => 1
+        ];
+    }
+    $res = helper_save_activities($plan_id, $activities_payload, 1);
+    $active_acts = $res['activities'];
+
+    // 2. Add 10 completions for active tasks
+    $stmt = $pdo->prepare("INSERT INTO study_plan_analytics (study_plan_id, student_email, action_type, activity_id, activity_uid, completion_status) VALUES (?, 'student@pepp.com', 'complete_activity', ?, ?, 'completed')");
+    for ($i = 0; $i < 10; $i++) {
+        $stmt->execute([$plan_id, $active_acts[$i]['id'], $active_acts[$i]['activity_uid']]);
+    }
+
+    // 3. Add 68 completions for legacy orphan tasks (no matching activity_id, NULL activity_uid)
+    $stmt_orphan = $pdo->prepare("INSERT INTO study_plan_analytics (study_plan_id, student_email, action_type, activity_id, activity_uid, completion_status) VALUES (?, 'student@pepp.com', 'complete_activity', ?, NULL, 'completed')");
+    for ($i = 1; $i <= 68; $i++) {
+        $stmt_orphan->execute([$plan_id, 20000 + $i]);
+    }
+
+    // 4. Fetch the timeline via test helper
+    $timeline = test_helper_get_student_plan_timeline('student@pepp.com', $plan_id);
+
+    // Total entries in the timeline should be 107 (active) + 68 (orphans) = 175
+    assert_equal(count($timeline), 175, "Total timeline entries count matches 175");
+
+    // Filter by classification === 'CURRENT_ACTIVITY'
+    $active_tasks = array_filter($timeline, function($t) {
+        return $t['classification'] === 'CURRENT_ACTIVITY';
+    });
+
+    $total_active = count($active_tasks);
+    $completed_active = count(array_filter($active_tasks, function($t) {
+        return $t['status'] === 'Completed';
+    }));
+
+    assert_equal($total_active, 107, "Current total tasks count remains exactly 107 (uninflated by orphans)");
+    assert_equal($completed_active, 10, "Current completed tasks count remains exactly 10 (uninflated by orphans)");
+
+    $completion_pct = $total_active > 0 ? round(($completed_active / $total_active) * 100) : 0;
+    assert_equal((int)$completion_pct, 9, "Current completion percentage remains exactly 9%");
+});
+
+run_test(80, "Orphan completions are classified as LEGACY_HISTORICAL_ORPHAN and display warning text without duplicate description", function() {
+    global $pdo, $plan_id;
+    reset_db();
+
+    // Log an orphan record (activity_id does not exist, activity_uid is NULL/empty)
+    $stmt = $pdo->prepare("INSERT INTO study_plan_analytics (study_plan_id, student_email, action_type, activity_id, activity_uid, completion_status, activity_title_snapshot, chapter_snapshot) VALUES (?, 'student@pepp.com', 'complete_activity', 99999, NULL, 'completed', NULL, NULL)");
+    $stmt->execute([$plan_id]);
+
+    $timeline = test_helper_get_student_plan_timeline('student@pepp.com', $plan_id);
+
+    // Find the orphan entry
+    $orphan_entry = null;
+    foreach ($timeline as $t) {
+        if ($t['classification'] === 'LEGACY_HISTORICAL_ORPHAN') {
+            $orphan_entry = $t;
+            break;
+        }
+    }
+
+    assert_true($orphan_entry !== null, "Orphan entry exists and is classified as LEGACY_HISTORICAL_ORPHAN");
+    assert_equal($orphan_entry['title'], 'Previously Completed — Activity No Longer Available', "Title is correct");
+    assert_equal($orphan_entry['chapter'], 'This activity was part of an earlier version of your study plan. The original activity is no longer available, but your completion history has been preserved.', "Chapter is correct");
+});
+
 // ── REPORT TEST SUMMARY ──
 
 echo "\n========================================\n";
 echo "🏆 INTEGRITY TEST RUN COMPLETED!\n";
 echo "========================================\n";
-echo "Passed: " . $passed_tests . " / 78\n";
+echo "Passed: " . $passed_tests . " / 80\n";
 
 if (count($failed_tests) > 0) {
     echo "❌ Failed " . count($failed_tests) . " tests:\n";
@@ -1895,7 +1969,7 @@ if (count($failed_tests) > 0) {
     }
     exit(1);
 } else {
-    echo "🎉 All 78 test cases passed successfully!\n";
+    echo "🎉 All 80 test cases passed successfully!\n";
     exit(0);
 }
 

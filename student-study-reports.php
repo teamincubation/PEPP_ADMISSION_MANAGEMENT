@@ -3512,28 +3512,32 @@ include 'includes/admin_nav.php';
                 <!-- Detailed Dossier KPI Cards List -->
                 <div style="display:flex; flex-direction:column; gap:8px; width:100%;">
                     <div class="dossier-stat-row">
-                        <span class="dossier-stat-label">Total Assigned Tasks</span>
+                        <span class="dossier-stat-label">Current Total Tasks</span>
                         <span id="st-total-tasks-val" class="dossier-stat-val">0</span>
                     </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #10b981;">
-                        <span class="dossier-stat-label" style="color:#047857;">Completed Tasks</span>
+                        <span class="dossier-stat-label" style="color:#047857;">Current Completed Tasks</span>
                         <span id="st-completed-tasks-val" class="dossier-stat-val" style="color:#047857;">0</span>
                     </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #f59e0b;">
-                        <span class="dossier-stat-label" style="color:#d97706;">Pending Tasks</span>
+                        <span class="dossier-stat-label" style="color:#d97706;">Current Pending Tasks</span>
                         <span id="st-pending-tasks-val" class="dossier-stat-val" style="color:#d97706;">0</span>
                     </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #ef4444;">
-                        <span class="dossier-stat-label" style="color:#b91c1c;">Overdue Tasks</span>
+                        <span class="dossier-stat-label" style="color:#b91c1c;">Current Overdue Tasks</span>
                         <span id="st-overdue-tasks-val" class="dossier-stat-val" style="color:#b91c1c;">0</span>
                     </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #3b82f6;">
-                        <span class="dossier-stat-label" style="color:#1d4ed8;">Attendance Rate</span>
+                        <span class="dossier-stat-label" style="color:#1d4ed8;">Current Attendance Rate</span>
                         <span id="st-attendance-rate-val" class="dossier-stat-val" style="color:#1d4ed8;">0%</span>
                     </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #8b5cf6;">
-                        <span class="dossier-stat-label" style="color:#6d28d9;">Completion Rate</span>
+                        <span class="dossier-stat-label" style="color:#6d28d9;">Current Completion Rate</span>
                         <span id="st-completion-pct-val" class="dossier-stat-val" style="color:#6d28d9;">0%</span>
+                    </div>
+                    <div class="dossier-stat-row" style="border-left: 3px solid #64748b;">
+                        <span class="dossier-stat-label" style="color:#475569;">Historical Completions</span>
+                        <span id="st-historical-completions-val" class="dossier-stat-val" style="color:#475569;">0</span>
                     </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #eab308;">
                         <span class="dossier-stat-label" style="color:#a16207;">Learning Streak</span>
@@ -4335,16 +4339,20 @@ include 'includes/admin_nav.php';
 
                 timelineActivities = data.timeline;
 
-                // Calculate dynamic metrics
-                const total = data.timeline.length;
-                const completed = data.timeline.filter(t => t.status === 'Completed').length;
-                const pending = data.timeline.filter(t => t.status === 'Pending').length;
-                const overdue = data.timeline.filter(t => t.status === 'Overdue').length;
+                // Calculate dynamic metrics using ONLY CURRENT_ACTIVITY items
+                const activeTasks = data.timeline.filter(t => t.classification === 'CURRENT_ACTIVITY');
+                const total = activeTasks.length;
+                const completed = activeTasks.filter(t => t.status === 'Completed').length;
+                const pending = activeTasks.filter(t => t.status === 'Pending').length;
+                const overdue = activeTasks.filter(t => t.status === 'Overdue').length;
 
                 const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
 
                 // Attendance mapped to completeness
                 const attendance = pct > 0 ? Math.min(100, Math.round(pct * 1.1)) : 0;
+
+                // Count historical completions (including soft-deleted and orphans)
+                const historicalCompletions = data.timeline.filter(t => t.classification !== 'CURRENT_ACTIVITY' && t.status === 'Completed').length;
 
                 // Update summary KPI counters
                 document.getElementById('st-total-tasks-val').innerText = total;
@@ -4353,6 +4361,7 @@ include 'includes/admin_nav.php';
                 document.getElementById('st-overdue-tasks-val').innerText = overdue;
                 document.getElementById('st-attendance-rate-val').innerText = `${attendance}%`;
                 document.getElementById('st-completion-pct-val').innerText = `${pct}%`;
+                document.getElementById('st-historical-completions-val').innerText = historicalCompletions;
                 document.getElementById('st-streak-val').innerText = `🔥 ${streakDays} Days`;
                 document.getElementById('st-perf-score-val').innerText = overallPerformance;
 
@@ -4547,7 +4556,7 @@ include 'includes/admin_nav.php';
                                 </div>
                                 <div style="flex:1;">
                                     <h6 style="font-size:0.85rem; font-weight:700; color:var(--text-main); margin:0;">${item.title}</h6>
-                                    <span style="font-size:0.68rem; color:var(--text-muted);">${item.subject || 'General'} · ${item.topic || 'N/A'} ${item.start_time ? `(${item.start_time} - ${item.end_time})` : ''}</span>
+                                    <span style="font-size:0.68rem; color:var(--text-muted);">${(item.subject && item.topic && item.subject === item.topic) ? item.subject : `${item.subject || 'General'} · ${item.topic || 'N/A'}`} ${item.start_time ? `(${item.start_time} - ${item.end_time})` : ''}</span>
                                 </div>
                             </div>
                             <div style="display:flex; align-items:center; gap:8px;">
