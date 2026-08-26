@@ -91,6 +91,13 @@ if (isset($_GET['email']) && $f['email'] && filter_var($f['email'], FILTER_VALID
         ]
     ];
 
+    $html = '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#374151;">'
+          . '<p>Dear ' . htmlspecialchars($f['name']) . ',</p>'
+          . '<p>Please find attached your payment statement.</p>'
+          . '<p>Completed sessions: <b>' . $completed . '</b><br>Total earned: <b>Rs. ' . number_format($earned, 2) . '</b>'
+          . '<br>Total paid: <b>Rs. ' . number_format($paid, 2) . '</b><br>Balance due: <b>Rs. ' . number_format($due, 2) . '</b></p>'
+          . '<p style="color:#9ca3af;font-size:12px;">PEPP Learning - Labinc Education Pvt. Ltd. This mailbox is not monitored.</p></div>';
+
     require_once __DIR__ . '/includes/mailer.php';
     $ok = pepp_mail($f['email'], 'Your Payment Statement | PEPP Learning', $html, '', $attachments, 'noreply@pepplearning.in', 'PEPP Learning');
     log_admin_activity($pdo, $admin_username, 'faculty_statement_emailed', "Statement emailed to {$f['name']} ({$f['email']})" . ($ok ? '' : ' [FAILED]'));
