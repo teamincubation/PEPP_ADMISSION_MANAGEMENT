@@ -2052,205 +2052,13 @@ include 'includes/admin_nav.php';
         </div>
     </div>
 
-    <!-- Edit Task Modal -->
-    <div class="modal-backdrop" id="edit-task-modal">
-        <div class="modal" style="max-width:550px; width: 95%;">
-            <div class="modal-head">
-                <h3><i class="fas fa-pen-to-square" style="color:var(--accent);"></i> Edit L&D Task</h3>
-                <button class="modal-close" onclick="closeModal('edit-task-modal')"><i class="fas fa-xmark"></i></button>
-            </div>
-            <form id="edit-task-form" method="POST">
-                <?php echo csrf_field(); ?>
-                <input type="hidden" name="action" value="update_task">
-                <input type="hidden" name="task_id" id="edit-task-id">
-                <input type="hidden" id="edit-quantity-label" value="">
-                <div class="modal-body">
-                    <div style="background:var(--bg-muted); padding:12px; border-radius:8px; margin-bottom:15px; border:1px solid var(--border); font-size:0.9rem;">
-                        <div style="margin-bottom:6px;"><strong>Date:</strong> <span id="edit-task-date-display" style="color:var(--text-muted); font-weight:500;"></span></div>
-                        <div style="margin-bottom:6px;"><strong>Staff:</strong> <span id="edit-task-staff-display" style="color:var(--text-muted); font-weight:500;"></span></div>
-                        <div style="margin-bottom:6px;"><strong>Course:</strong> <span id="edit-task-course-display" style="color:var(--text-muted); font-weight:500;"></span></div>
-                        <div><strong>Work Mode:</strong> <span id="edit-task-mode-display" style="color:var(--text-muted); font-weight:500;"></span></div>
-                    </div>
-                    <div class="field">
-                        <label>Topics Completed <span class="req">*</span></label>
-                        <div id="edit-topics-container">
-                            <!-- Dynamic rows -->
-                        </div>
-                        <button type="button" class="btn btn-sm btn-outline" style="margin-top:8px;" onclick="addEditTopicRow('', '')"><i class="fas fa-plus"></i> Add Topic</button>
-                    </div>
-                </div>
-                <div class="modal-foot">
-                    <button type="button" class="btn btn-outline" onclick="closeModal('edit-task-modal')">Cancel</button>
-                    <button type="submit" class="btn btn-primary"><i class="fas fa-check"></i> Save Changes</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- Delete Task Modal -->
-    <div class="modal-backdrop" id="delete-task-modal">
-        <div class="modal" style="max-width:450px; width: 95%;">
-            <div class="modal-head">
-                <h3><i class="fas fa-trash-can" style="color:var(--destructive);"></i> Delete Activity Log</h3>
-                <button class="modal-close" onclick="closeModal('delete-task-modal')"><i class="fas fa-xmark"></i></button>
-            </div>
-            <form id="delete-task-form" method="POST">
-                <?php echo csrf_field(); ?>
-                <input type="hidden" name="action" value="delete_task">
-                <input type="hidden" name="task_id" id="delete-task-id">
-                <div class="modal-body">
-                    <p style="font-size:0.92rem; margin-bottom:14px; color:#b91c1c; font-weight: 600;">
-                        WARNING: This will permanently delete this activity log and all associated work details. This action cannot be undone.
-                    </p>
-                    <div class="field" style="margin-bottom:12px;">
-                        <label>Reason for Deletion <span class="req">*</span></label>
-                        <input type="text" name="delete_reason" required placeholder="e.g. Logged incorrect quantity" style="width: 100%;">
-                    </div>
-                    <div class="field" style="margin-bottom:12px;">
-                        <label>Type DELETE to confirm <span class="req">*</span></label>
-                        <input type="text" name="confirm_text" id="delete-confirm-input" autocomplete="off" oninput="onDeleteConfirmInput(this)" placeholder="Type DELETE" style="width: 100%;">
-                    </div>
-                </div>
-                <div class="modal-foot">
-                    <button type="button" class="btn btn-outline" onclick="closeModal('delete-task-modal')">Cancel</button>
-                    <button type="submit" class="btn btn-primary btn-danger" id="btn-submit-delete" disabled><i class="fas fa-trash"></i> Delete</button>
-                </div>
-            </form>
-        </div>
-    </div>
 
     <!-- JS for Payout Dashboard -->
     <script>
     var selectedIntern = null;
     var currentExpected = 0.00;
 
-    function onDeleteConfirmInput(el) {
-        var btn = document.getElementById('btn-submit-delete');
-        if (el.value === 'DELETE') {
-            btn.disabled = false;
-        } else {
-            btn.disabled = true;
-        }
-    }
 
-    function openDeleteTaskModal(taskId) {
-        document.getElementById('delete-task-id').value = taskId;
-        var confirmInput = document.getElementById('delete-confirm-input');
-        if (confirmInput) {
-            confirmInput.value = '';
-        }
-        var btn = document.getElementById('btn-submit-delete');
-        if (btn) {
-            btn.disabled = true;
-        }
-        document.getElementById('delete-task-modal').style.display = 'flex';
-    }
-
-    function openEditTaskModal(data) {
-        document.getElementById('edit-task-id').value = data.id;
-        document.getElementById('edit-task-date-display').textContent = data.date;
-        document.getElementById('edit-task-staff-display').textContent = data.staff;
-        document.getElementById('edit-task-course-display').textContent = data.course;
-        document.getElementById('edit-task-mode-display').textContent = data.mode;
-        document.getElementById('edit-quantity-label').value = data.qty_label || '';
-
-        var container = document.getElementById('edit-topics-container');
-        container.innerHTML = '';
-
-        data.topics.forEach(function(tp) {
-            addEditTopicRow(tp.name, tp.qty);
-        });
-
-        if (data.topics.length === 0) {
-            addEditTopicRow('', '');
-        }
-
-        refreshEditQuantities();
-        document.getElementById('edit-task-modal').style.display = 'flex';
-    }
-
-    function addEditTopicRow(name, qty) {
-        var container = document.getElementById('edit-topics-container');
-        var row = document.createElement('div');
-        row.className = 'topic-input-row';
-        row.style.display = 'flex';
-        row.style.gap = '10px';
-        row.style.marginBottom = '8px';
-        row.style.alignItems = 'center';
-
-        var input = document.createElement('input');
-        input.type = 'text';
-        input.name = 'topics[]';
-        input.className = 'topic-input';
-        input.value = name;
-        input.required = true;
-        input.style.flex = '2';
-
-        var qtyContainer = document.createElement('div');
-        qtyContainer.className = 'qty-container';
-        qtyContainer.style.display = 'flex';
-        qtyContainer.style.alignItems = 'center';
-        qtyContainer.style.gap = '6px';
-        qtyContainer.style.flex = '1';
-
-        var qtyInput = document.createElement('input');
-        qtyInput.type = 'number';
-        qtyInput.step = 'any';
-        qtyInput.name = 'quantities[]';
-        qtyInput.className = 'qty-input';
-        qtyInput.value = qty;
-        qtyInput.placeholder = 'Qty';
-        qtyInput.style.width = '100px';
-
-        var qtyLabel = document.createElement('span');
-        qtyLabel.className = 'qty-label';
-        qtyLabel.style.fontSize = '0.85rem';
-        qtyLabel.style.fontWeight = '600';
-        qtyLabel.style.color = 'var(--text-muted)';
-        qtyLabel.textContent = 'Qty';
-
-        qtyContainer.appendChild(qtyInput);
-        qtyContainer.appendChild(qtyLabel);
-
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn-sm btn-soft-red';
-        btn.style.padding = '10px 12px';
-        btn.innerHTML = '<i class="fas fa-trash"></i>';
-        btn.onclick = function() {
-            if (container.querySelectorAll('.topic-input-row').length > 1) {
-                row.remove();
-            } else {
-                alert('At least one topic is required.');
-            }
-        };
-
-        row.appendChild(input);
-        row.appendChild(qtyContainer);
-        row.appendChild(btn);
-        container.appendChild(row);
-    }
-
-    function refreshEditQuantities() {
-        var label = document.getElementById('edit-quantity-label').value || '';
-        var container = document.getElementById('edit-topics-container');
-        var rows = container.querySelectorAll('.topic-input-row');
-        rows.forEach(function(row) {
-            var qtyInput = row.querySelector('.qty-input');
-            var qtyLabel = row.querySelector('.qty-label');
-            if (label && label.trim() !== '') {
-                qtyInput.style.display = 'inline-block';
-                qtyInput.required = true;
-                qtyLabel.textContent = label;
-                qtyLabel.style.display = 'inline-block';
-            } else {
-                qtyInput.style.display = 'none';
-                qtyInput.required = false;
-                qtyInput.value = '';
-                qtyLabel.style.display = 'none';
-            }
-        });
-    }
 
     var selectedIntern = null;
 
@@ -2552,5 +2360,203 @@ function updateDistributionChart(type) {
 }
 </script>
 <?php endif; // End of if ($tab === 'report') ?>
+
+    <!-- Edit Task Modal -->
+    <div class="modal-backdrop" id="edit-task-modal">
+        <div class="modal" style="max-width:550px; width: 95%;">
+            <div class="modal-head">
+                <h3><i class="fas fa-pen-to-square" style="color:var(--accent);"></i> Edit L&D Task</h3>
+                <button class="modal-close" onclick="closeModal('edit-task-modal')"><i class="fas fa-xmark"></i></button>
+            </div>
+            <form id="edit-task-form" method="POST">
+                <?php echo csrf_field(); ?>
+                <input type="hidden" name="action" value="update_task">
+                <input type="hidden" name="task_id" id="edit-task-id">
+                <input type="hidden" id="edit-quantity-label" value="">
+                <div class="modal-body">
+                    <div style="background:var(--bg-muted); padding:12px; border-radius:8px; margin-bottom:15px; border:1px solid var(--border); font-size:0.9rem;">
+                        <div style="margin-bottom:6px;"><strong>Date:</strong> <span id="edit-task-date-display" style="color:var(--text-muted); font-weight:500;"></span></div>
+                        <div style="margin-bottom:6px;"><strong>Staff:</strong> <span id="edit-task-staff-display" style="color:var(--text-muted); font-weight:500;"></span></div>
+                        <div style="margin-bottom:6px;"><strong>Course:</strong> <span id="edit-task-course-display" style="color:var(--text-muted); font-weight:500;"></span></div>
+                        <div><strong>Work Mode:</strong> <span id="edit-task-mode-display" style="color:var(--text-muted); font-weight:500;"></span></div>
+                    </div>
+                    <div class="field">
+                        <label>Topics Completed <span class="req">*</span></label>
+                        <div id="edit-topics-container">
+                            <!-- Dynamic rows -->
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline" style="margin-top:8px;" onclick="addEditTopicRow('', '')"><i class="fas fa-plus"></i> Add Topic</button>
+                    </div>
+                </div>
+                <div class="modal-foot">
+                    <button type="button" class="btn btn-outline" onclick="closeModal('edit-task-modal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fas fa-check"></i> Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Task Modal -->
+    <div class="modal-backdrop" id="delete-task-modal">
+        <div class="modal" style="max-width:450px; width: 95%;">
+            <div class="modal-head">
+                <h3><i class="fas fa-trash-can" style="color:var(--destructive);"></i> Delete Activity Log</h3>
+                <button class="modal-close" onclick="closeModal('delete-task-modal')"><i class="fas fa-xmark"></i></button>
+            </div>
+            <form id="delete-task-form" method="POST">
+                <?php echo csrf_field(); ?>
+                <input type="hidden" name="action" value="delete_task">
+                <input type="hidden" name="task_id" id="delete-task-id">
+                <div class="modal-body">
+                    <p style="font-size:0.92rem; margin-bottom:14px; color:#b91c1c; font-weight: 600;">
+                        WARNING: This will permanently delete this activity log and all associated work details. This action cannot be undone.
+                    </p>
+                    <div class="field" style="margin-bottom:12px;">
+                        <label>Reason for Deletion <span class="req">*</span></label>
+                        <input type="text" name="delete_reason" required placeholder="e.g. Logged incorrect quantity" style="width: 100%;">
+                    </div>
+                    <div class="field" style="margin-bottom:12px;">
+                        <label>Type DELETE to confirm <span class="req">*</span></label>
+                        <input type="text" name="confirm_text" id="delete-confirm-input" autocomplete="off" oninput="onDeleteConfirmInput(this)" placeholder="Type DELETE" style="width: 100%;">
+                    </div>
+                </div>
+                <div class="modal-foot">
+                    <button type="button" class="btn btn-outline" onclick="closeModal('delete-task-modal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary btn-danger" id="btn-submit-delete" disabled><i class="fas fa-trash"></i> Delete</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- JS for Edit/Delete Controls -->
+    <script>
+    function onDeleteConfirmInput(el) {
+        var btn = document.getElementById('btn-submit-delete');
+        if (el.value === 'DELETE') {
+            btn.disabled = false;
+        } else {
+            btn.disabled = true;
+        }
+    }
+
+    function openDeleteTaskModal(taskId) {
+        document.getElementById('delete-task-id').value = taskId;
+        var confirmInput = document.getElementById('delete-confirm-input');
+        if (confirmInput) {
+            confirmInput.value = '';
+        }
+        var btn = document.getElementById('btn-submit-delete');
+        if (btn) {
+            btn.disabled = true;
+        }
+        document.getElementById('delete-task-modal').style.display = 'flex';
+    }
+
+    function openEditTaskModal(data) {
+        document.getElementById('edit-task-id').value = data.id;
+        document.getElementById('edit-task-date-display').textContent = data.date;
+        document.getElementById('edit-task-staff-display').textContent = data.staff;
+        document.getElementById('edit-task-course-display').textContent = data.course;
+        document.getElementById('edit-task-mode-display').textContent = data.mode;
+        document.getElementById('edit-quantity-label').value = data.qty_label || '';
+
+        var container = document.getElementById('edit-topics-container');
+        container.innerHTML = '';
+
+        data.topics.forEach(function(tp) {
+            addEditTopicRow(tp.name, tp.qty);
+        });
+
+        if (data.topics.length === 0) {
+            addEditTopicRow('', '');
+        }
+
+        refreshEditQuantities();
+        document.getElementById('edit-task-modal').style.display = 'flex';
+    }
+
+    function addEditTopicRow(name, qty) {
+        var container = document.getElementById('edit-topics-container');
+        var row = document.createElement('div');
+        row.className = 'topic-input-row';
+        row.style.display = 'flex';
+        row.style.gap = '10px';
+        row.style.marginBottom = '8px';
+        row.style.alignItems = 'center';
+
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.name = 'topics[]';
+        input.className = 'topic-input';
+        input.value = name;
+        input.required = true;
+        input.style.flex = '2';
+
+        var qtyContainer = document.createElement('div');
+        qtyContainer.className = 'qty-container';
+        qtyContainer.style.display = 'flex';
+        qtyContainer.style.alignItems = 'center';
+        qtyContainer.style.gap = '6px';
+        qtyContainer.style.flex = '1';
+
+        var qtyInput = document.createElement('input');
+        qtyInput.type = 'number';
+        qtyInput.step = 'any';
+        qtyInput.name = 'quantities[]';
+        qtyInput.className = 'qty-input';
+        qtyInput.value = qty;
+        qtyInput.placeholder = 'Qty';
+        qtyInput.style.width = '100px';
+
+        var qtyLabel = document.createElement('span');
+        qtyLabel.className = 'qty-label';
+        qtyLabel.style.fontSize = '0.85rem';
+        qtyLabel.style.fontWeight = '600';
+        qtyLabel.style.color = 'var(--text-muted)';
+        qtyLabel.textContent = 'Qty';
+
+        qtyContainer.appendChild(qtyInput);
+        qtyContainer.appendChild(qtyLabel);
+
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-sm btn-soft-red';
+        btn.style.padding = '10px 12px';
+        btn.innerHTML = '<i class="fas fa-trash"></i>';
+        btn.onclick = function() {
+            if (container.querySelectorAll('.topic-input-row').length > 1) {
+                row.remove();
+            } else {
+                alert('At least one topic is required.');
+            }
+        };
+
+        row.appendChild(input);
+        row.appendChild(qtyContainer);
+        row.appendChild(btn);
+        container.appendChild(row);
+    }
+
+    function refreshEditQuantities() {
+        var label = document.getElementById('edit-quantity-label').value || '';
+        var container = document.getElementById('edit-topics-container');
+        var rows = container.querySelectorAll('.topic-input-row');
+        rows.forEach(function(row) {
+            var qtyInput = row.querySelector('.qty-input');
+            var qtyLabel = row.querySelector('.qty-label');
+            if (label && label.trim() !== '') {
+                qtyInput.style.display = 'inline-block';
+                qtyInput.required = true;
+                qtyLabel.textContent = label;
+                qtyLabel.style.display = 'inline-block';
+            } else {
+                qtyInput.style.display = 'none';
+                qtyInput.required = false;
+                qtyInput.value = '';
+                qtyLabel.style.display = 'none';
+            }
+        });
+    }
+    </script>
 
 <?php include 'includes/admin_footer.php'; ?>
