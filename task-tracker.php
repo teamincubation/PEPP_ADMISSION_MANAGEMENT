@@ -96,9 +96,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$course_name || !$mode_name) {
                     $error_message = "Invalid Course or Work Mode selection.";
                 } else {
-                    // Check if quantity is required for this Work Mode configuration
-                    $qty_required = ($qty_label_snapshot !== null && trim($qty_label_snapshot) !== '' && $mode_row['charge_per_quantity'] !== null);
-
                     try {
                         $validated_topics = [];
                         $has_at_least_one_valid_topic = false;
@@ -106,21 +103,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $topic_clean = trim($topic);
                             if ($topic_clean !== '') {
                                 $has_at_least_one_valid_topic = true;
-                                $raw_qty = isset($quantities[$idx]) ? trim($quantities[$idx]) : '';
-
-                                $qty = null;
-                                if ($raw_qty !== '') {
-                                    $qty = filter_var($raw_qty, FILTER_VALIDATE_FLOAT);
+                                if (!isset($quantities[$idx]) || trim($quantities[$idx]) === '') {
+                                    throw new Exception("Quantity is required for every topic.");
                                 }
-
-                                if ($qty_required) {
-                                    if ($qty === null || $qty === false || $qty <= 0) {
-                                        throw new Exception("Please enter the quantity for every completed topic.");
-                                    }
-                                } else {
-                                    if ($qty !== null && ($qty === false || $qty < 0)) {
-                                        throw new Exception("Quantity for each topic must be a valid non-negative number.");
-                                    }
+                                $raw_qty = trim($quantities[$idx]);
+                                if (!is_numeric($raw_qty)) {
+                                    throw new Exception("Quantity must be a positive whole number.");
+                                }
+                                $qty = filter_var($raw_qty, FILTER_VALIDATE_INT);
+                                if ($qty === false || $qty <= 0) {
+                                    throw new Exception("Quantity must be a positive whole number.");
                                 }
 
                                 $validated_topics[] = [
@@ -293,11 +285,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             foreach ($topics as $idx => $topic) {
                                 $topic_clean = trim($topic);
                                 if ($topic_clean !== '') {
-                                    $qty = isset($quantities[$idx]) && $quantities[$idx] !== '' ? filter_var($quantities[$idx], FILTER_VALIDATE_FLOAT) : null;
-                                    if ($qty !== null && ($qty === false || $qty < 0)) {
-                                        throw new Exception("Quantity for each topic must be a valid non-negative number.");
+                                    if (!isset($quantities[$idx]) || trim($quantities[$idx]) === '') {
+                                        throw new Exception("Quantity is required for every topic.");
                                     }
-                                    $calculated_charge = $qty !== null ? ($qty * $rate) : 0.00;
+                                    $raw_qty = trim($quantities[$idx]);
+                                    if (!is_numeric($raw_qty)) {
+                                        throw new Exception("Quantity must be a positive whole number.");
+                                    }
+                                    $qty = filter_var($raw_qty, FILTER_VALIDATE_INT);
+                                    if ($qty === false || $qty <= 0) {
+                                        throw new Exception("Quantity must be a positive whole number.");
+                                    }
+
+                                    $calculated_charge = $qty * $rate;
                                     $stmt_topic->execute([$id, $topic_clean, $qty, $calculated_charge]);
                                     $clean_topics[] = [
                                         'topic_name' => $topic_clean,
@@ -719,8 +719,8 @@ document.addEventListener('DOMContentLoaded', function() {
                             <div class="topic-input-row" style="display:flex; gap:10px; margin-bottom:8px; align-items:center;">
                                 <input type="text" name="topics[]" class="topic-input" placeholder="e.g. Personality theories" required style="flex:2;">
                                 <div class="qty-container" style="display:flex; align-items:center; gap:6px; flex:1;">
-                                    <input type="number" step="any" name="quantities[]" class="qty-input" placeholder="Qty" style="width:100px;">
-                                    <span class="qty-label" style="font-size:0.85rem; font-weight:600; color:var(--text-muted);">Qty</span>
+                                    <input type="number" min="1" step="1" required name="quantities[]" class="qty-input" placeholder="Qty *" style="width:100px;">
+                                    <span class="qty-label" style="font-size:0.85rem; font-weight:600; color:var(--text-muted);">Qty *</span>
                                 </div>
                                 <button type="button" class="btn btn-sm btn-soft-red" style="opacity:0; pointer-events:none; padding:10px 12px;"><i class="fas fa-trash"></i></button>
                             </div>
@@ -998,23 +998,20 @@ function isQtyRequired() {
 
 function updateAllQtyLabels() {
     var labelText = getSelectedModeQtyLabel();
-    var required = isQtyRequired();
+    var displayLabel = labelText ? (labelText + ' *') : 'Qty *';
 
     var labels = document.querySelectorAll('.qty-label');
     labels.forEach(function(lbl) {
-        lbl.textContent = labelText;
+        lbl.textContent = displayLabel;
     });
 
     var inputs = document.querySelectorAll('.qty-input');
     inputs.forEach(function(inp) {
-        inp.placeholder = labelText;
-        if (required) {
-            inp.required = true;
-            inp.classList.add('qty-required');
-        } else {
-            inp.required = false;
-            inp.classList.remove('qty-required');
-        }
+        inp.placeholder = displayLabel;
+        inp.required = true;
+        inp.min = "1";
+        inp.step = "1";
+        inp.classList.add('qty-required');
     });
 }
 
@@ -1045,21 +1042,18 @@ function addTopicRow(val = '', qty = '') {
     qtyContainer.style.flex = '1';
 
     var qtyLabelText = getSelectedModeQtyLabel();
+    var displayLabel = qtyLabelText ? (qtyLabelText + ' *') : 'Qty *';
 
     var qtyInput = document.createElement('input');
     qtyInput.type = 'number';
-    qtyInput.step = 'any';
+    qtyInput.min = '1';
+    qtyInput.step = '1';
     qtyInput.name = 'quantities[]';
     qtyInput.className = 'qty-input';
-    qtyInput.placeholder = qtyLabelText;
-    qtyInput.value = qty;
-
-    if (isQtyRequired()) {
-        qtyInput.required = true;
-        qtyInput.classList.add('qty-required');
-    } else {
-        qtyInput.required = false;
-    }
+    qtyInput.placeholder = displayLabel;
+    qtyInput.value = (qty !== '' && qty !== null && qty !== undefined) ? qty : '1';
+    qtyInput.required = true;
+    qtyInput.classList.add('qty-required');
     qtyInput.style.width = '100px';
 
     var qtyLabel = document.createElement('span');
@@ -1067,7 +1061,7 @@ function addTopicRow(val = '', qty = '') {
     qtyLabel.style.fontSize = '0.85rem';
     qtyLabel.style.fontWeight = '600';
     qtyLabel.style.color = 'var(--text-muted)';
-    qtyLabel.textContent = qtyLabelText;
+    qtyLabel.textContent = displayLabel;
 
     qtyContainer.appendChild(qtyInput);
     qtyContainer.appendChild(qtyLabel);
@@ -1123,20 +1117,18 @@ function enterEditMode(data) {
             qtyContainer.style.flex = '1';
 
             var qtyLabelText = getSelectedModeQtyLabel();
+            var displayLabel = qtyLabelText ? (qtyLabelText + ' *') : 'Qty *';
 
             var qtyInput = document.createElement('input');
             qtyInput.type = 'number';
-            qtyInput.step = 'any';
+            qtyInput.min = '1';
+            qtyInput.step = '1';
             qtyInput.name = 'quantities[]';
             qtyInput.className = 'qty-input';
-            qtyInput.placeholder = qtyLabelText;
+            qtyInput.placeholder = displayLabel;
             qtyInput.value = tp.qty;
-            qtyInput.required = isQtyRequired();
-            if (isQtyRequired()) {
-                qtyInput.classList.add('qty-required');
-            } else {
-                qtyInput.classList.remove('qty-required');
-            }
+            qtyInput.required = true;
+            qtyInput.classList.add('qty-required');
             qtyInput.style.width = '100px';
 
             var qtyLabel = document.createElement('span');
@@ -1144,7 +1136,7 @@ function enterEditMode(data) {
             qtyLabel.style.fontSize = '0.85rem';
             qtyLabel.style.fontWeight = '600';
             qtyLabel.style.color = 'var(--text-muted)';
-            qtyLabel.textContent = qtyLabelText;
+            qtyLabel.textContent = displayLabel;
 
             qtyContainer.appendChild(qtyInput);
             qtyContainer.appendChild(qtyLabel);
@@ -1211,16 +1203,13 @@ function cancelEditMode() {
 
     var qtyInput = document.createElement('input');
     qtyInput.type = 'number';
-    qtyInput.step = 'any';
+    qtyInput.min = '1';
+    qtyInput.step = '1';
     qtyInput.name = 'quantities[]';
     qtyInput.className = 'qty-input';
-    qtyInput.placeholder = 'Qty';
-    qtyInput.required = isQtyRequired();
-    if (isQtyRequired()) {
-        qtyInput.classList.add('qty-required');
-    } else {
-        qtyInput.classList.remove('qty-required');
-    }
+    qtyInput.placeholder = 'Qty *';
+    qtyInput.required = true;
+    qtyInput.classList.add('qty-required');
     qtyInput.style.width = '100px';
 
     var qtyLabel = document.createElement('span');
@@ -1228,7 +1217,7 @@ function cancelEditMode() {
     qtyLabel.style.fontSize = '0.85rem';
     qtyLabel.style.fontWeight = '600';
     qtyLabel.style.color = 'var(--text-muted)';
-    qtyLabel.textContent = 'Qty';
+    qtyLabel.textContent = 'Qty *';
 
     qtyContainer.appendChild(qtyInput);
     qtyContainer.appendChild(qtyLabel);
@@ -1261,27 +1250,37 @@ function validateAndSubmit(e) {
         inp.style.border = '';
     });
 
-    if (isQtyRequired()) {
-        var hasEmptyQty = false;
-        inputs.forEach(function(inp) {
-            var row = inp.closest('.topic-input-row');
-            if (row) {
-                var topicInput = row.querySelector('.topic-input');
-                if (topicInput && topicInput.value.trim() !== '') {
-                    var val = inp.value.trim();
-                    var numVal = parseFloat(val);
-                    if (val === '' || isNaN(numVal) || numVal <= 0) {
-                        inp.style.border = '2px solid #ef4444'; // Clear red highlight
-                        hasEmptyQty = true;
+    var hasInvalidQty = false;
+    var firstInvalidInp = null;
+
+    inputs.forEach(function(inp) {
+        var row = inp.closest('.topic-input-row');
+        if (row) {
+            var topicInput = row.querySelector('.topic-input');
+            if (topicInput && topicInput.value.trim() !== '') {
+                var val = inp.value.trim();
+                if (val === '') {
+                    inp.style.border = '2px solid #ef4444';
+                    hasInvalidQty = true;
+                    if (!firstInvalidInp) firstInvalidInp = inp;
+                } else {
+                    var isInt = /^[1-9]\d*$/.test(val);
+                    if (!isInt) {
+                        inp.style.border = '2px solid #ef4444';
+                        hasInvalidQty = true;
+                        if (!firstInvalidInp) firstInvalidInp = inp;
                     }
                 }
             }
-        });
-
-        if (hasEmptyQty) {
-            alert("Please enter the quantity for every completed topic.");
-            return false;
         }
+    });
+
+    if (hasInvalidQty) {
+        alert("Quantity is required for every topic.");
+        if (firstInvalidInp) {
+            firstInvalidInp.focus();
+        }
+        return false;
     }
 
     requestLocation(function(success) {
