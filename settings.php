@@ -448,41 +448,52 @@ $extra_head = '
 /* Settings Tab Styles */
 .settings-tabs-container {
     display: flex;
-    gap: 6px;
-    border-bottom: 2px solid var(--border, #e2e8f0);
+    flex-wrap: wrap;
+    gap: 10px;
+    border-bottom: 1px solid var(--border, #e2e8f0);
     margin-bottom: 24px;
-    overflow-x: auto;
-    white-space: nowrap;
-    padding-bottom: 2px;
-    scrollbar-width: thin;
+    padding-bottom: 14px;
 }
 .settings-tab {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    padding: 12px 20px;
+    padding: 10px 18px;
     font-family: "Space Grotesk", sans-serif;
     font-weight: 600;
     font-size: 0.88rem;
-    color: var(--text-muted, #64748b);
-    background: transparent;
-    border: none;
+    color: var(--text, #334155);
+    background: var(--card, #ffffff);
+    border: 1px solid var(--border, #cbd5e1);
+    border-radius: 8px;
     cursor: pointer;
-    transition: all 0.2s ease;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -2px;
+    transition: all 0.15s ease-in-out;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
 .settings-tab:hover {
     color: var(--foreground, #0f172a);
-    background: rgba(148, 163, 184, 0.06);
+    background: var(--bg-hover, #f8fafc);
+    border-color: #94a3b8;
+}
+html.theme-dark .settings-tab {
+    background: #1e293b;
+    border-color: #334155;
+    color: #94a3b8;
 }
 html.theme-dark .settings-tab:hover {
     color: #fff;
-    background: rgba(255, 255, 255, 0.04);
+    background: #334155;
+    border-color: #475569;
 }
 .settings-tab.active {
-    color: var(--primary, #7c3aed);
-    border-bottom: 2px solid var(--primary, #7c3aed);
+    color: #ffffff !important;
+    background: var(--primary, #7c3aed) !important;
+    border-color: var(--primary, #7c3aed) !important;
+    box-shadow: 0 2px 4px rgba(124, 58, 237, 0.15);
+}
+.settings-tab.active:hover {
+    background: var(--primary-hover, #6d28d9) !important;
+    border-color: var(--primary-hover, #6d28d9) !important;
 }
 .settings-tab i {
     font-size: 0.95rem;
