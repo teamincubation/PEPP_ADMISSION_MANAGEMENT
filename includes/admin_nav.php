@@ -873,6 +873,28 @@ $nav_data = [
         html.theme-sepia .nav-section-label.cat-system {
             color: #881337 !important;
         }
+
+        .nav-section-label.cat-public-links {
+            background: rgba(56, 189, 248, 0.12) !important;
+            color: #0284c7 !important;
+            border-radius: 6px;
+            margin-bottom: 4px;
+        }
+        .nav-section-label.cat-public-links:hover {
+            background: rgba(56, 189, 248, 0.22) !important;
+            color: #0369a1 !important;
+        }
+        html.theme-dark .nav-section-label.cat-public-links {
+            background: rgba(56, 189, 248, 0.22) !important;
+            color: #38bdf8 !important;
+        }
+        html.theme-dark .nav-section-label.cat-public-links:hover {
+            background: rgba(56, 189, 248, 0.32) !important;
+            color: #0ea5e9 !important;
+        }
+        html.theme-sepia .nav-section-label.cat-public-links {
+            color: #0369a1 !important;
+        }
     </style>
     <script>
         (function() {
@@ -1049,7 +1071,13 @@ $nav_data = [
             </div>
         <?php endforeach; ?>
         
-        <div class="nav-section" style="padding-top:0;">
+        <div class="nav-section collapsed">
+            <div class="nav-section-label cat-public-links">
+                <span>
+                    <i class="fas fa-link" style="margin-right:6px; font-size:0.8rem; opacity:0.8;"></i>
+                    Public Links
+                </span>
+            </div>
             <div class="nav-section-content">
                 <a class="nav-item" href="register.php" target="_blank" style="display: flex; align-items: center; width: 100%;">
                     <i class="fas fa-arrow-up-right-from-square"></i>
