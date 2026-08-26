@@ -40,6 +40,210 @@ if ($tab === 'payments') {
 $success_message = '';
 $error_message = '';
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!csrf_verify()) {
+        $error_message = 'Security token mismatch. Please retry.';
+    } else {
+        $action = $_POST['action'] ?? '';
+
+        if ($action === 'update_task') {
+            if (!is_super_admin()) {
+                http_response_code(403);
+                die("Access denied. Only Super Admin can edit activity logs.");
+            }
+
+            $id = (int)($_POST['task_id'] ?? 0);
+            $course_id = (int)($_POST['course_id'] ?? 0);
+            $mode_id = (int)($_POST['mode_id'] ?? 0);
+            $topics = $_POST['topics'] ?? [];
+            $quantities = $_POST['quantities'] ?? [];
+
+            $stmt = $pdo->prepare("SELECT * FROM ld_tasks WHERE id = ? AND status = 'active'");
+            $stmt->execute([$id]);
+            $task = $stmt->fetch();
+
+            if (!$task) {
+                $error_message = "Task not found.";
+            } elseif (($lock_info = is_ld_task_locked($pdo, $task['admin_id'], date('Y-m-d', strtotime($task['created_at']))))) {
+                http_response_code(403);
+                die("Access denied. This activity belongs to a completed payment period.");
+            } elseif ($course_id <= 0 || $mode_id <= 0 || empty($topics)) {
+                $error_message = "Please select a Course, Work Mode, and provide at least one topic.";
+            } else {
+                $stmt = $pdo->prepare("SELECT course_name FROM ld_work_courses WHERE id = ? AND status = 'active'");
+                $stmt->execute([$course_id]);
+                $course_name = $stmt->fetchColumn();
+
+                $stmt = $pdo->prepare("SELECT mode_name, quantity_label, charge_per_quantity FROM ld_work_modes WHERE id = ? AND status = 'active'");
+                $stmt->execute([$mode_id]);
+                $mode_row = $stmt->fetch();
+                $mode_name = $mode_row ? $mode_row['mode_name'] : '';
+
+                if (!$course_name || !$mode_name) {
+                    $error_message = "Invalid Course or Work Mode selection.";
+                } else {
+                    $rate = 0.00;
+                    $qty_label = '';
+
+                    if ($mode_id === (int)$task['mode_id']) {
+                        if ($task['charge_per_quantity_snapshot'] !== null && $task['quantity_label_snapshot'] !== null) {
+                            $rate = (float)$task['charge_per_quantity_snapshot'];
+                            $qty_label = $task['quantity_label_snapshot'];
+                        } else {
+                            $rate = $mode_row ? (float)$mode_row['charge_per_quantity'] : 0.00;
+                            $qty_label = $mode_row ? $mode_row['quantity_label'] : null;
+                        }
+                    } else {
+                        $rate = $mode_row ? (float)$mode_row['charge_per_quantity'] : 0.00;
+                        $qty_label = $mode_row ? $mode_row['quantity_label'] : null;
+                    }
+
+                    $stmt = $pdo->prepare("SELECT * FROM ld_task_topics WHERE task_id = ?");
+                    $stmt->execute([$id]);
+                    $old_topics = $stmt->fetchAll();
+
+                    $prev_data = [
+                        'id' => $task['id'],
+                        'course_name' => $task['course_name'],
+                        'mode_name' => $task['mode_name'],
+                        'topics' => array_map(function($tp) {
+                            return ['topic_name' => $tp['topic_name'], 'quantity' => $tp['quantity'], 'calculated_charge' => $tp['calculated_charge']];
+                        }, $old_topics)
+                    ];
+
+                    $pdo->beginTransaction();
+                    try {
+                        $stmt = $pdo->prepare("
+                            UPDATE ld_tasks
+                            SET course_id = ?, course_name = ?, mode_id = ?, mode_name = ?, updated_at = NOW(),
+                                quantity_label_snapshot = ?, charge_per_quantity_snapshot = ?, mode_name_snapshot = ?
+                            WHERE id = ?
+                        ");
+                        $stmt->execute([$course_id, $course_name, $mode_id, $mode_name, $qty_label, $rate, $mode_name, $id]);
+
+                        $stmt = $pdo->prepare("DELETE FROM ld_task_topics WHERE task_id = ?");
+                        $stmt->execute([$id]);
+
+                        $stmt_topic = $pdo->prepare("INSERT INTO ld_task_topics (task_id, topic_name, quantity, calculated_charge) VALUES (?, ?, ?, ?)");
+                        $clean_topics = [];
+                        foreach ($topics as $idx => $topic) {
+                            $topic_clean = trim($topic);
+                            if ($topic_clean !== '') {
+                                $qty = isset($quantities[$idx]) && $quantities[$idx] !== '' ? filter_var($quantities[$idx], FILTER_VALIDATE_FLOAT) : null;
+                                if ($qty !== null && ($qty === false || $qty < 0)) {
+                                    throw new Exception("Quantity for each topic must be a valid non-negative number.");
+                                }
+                                $calculated_charge = $qty !== null ? ($qty * $rate) : 0.00;
+                                $stmt_topic->execute([$id, $topic_clean, $qty, $calculated_charge]);
+                                $clean_topics[] = [
+                                    'topic_name' => $topic_clean,
+                                    'quantity' => $qty,
+                                    'calculated_charge' => $calculated_charge
+                                ];
+                            }
+                        }
+
+                        $new_data = [
+                            'id' => $id,
+                            'course_name' => $course_name,
+                            'mode_name' => $mode_name,
+                            'topics' => $clean_topics
+                        ];
+
+                        $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+                        $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+                        $stmt = $pdo->prepare("
+                            INSERT INTO ld_task_audit (task_id, admin_id, admin_username, action, previous_values, new_values, latitude, longitude, maps_url, ip_address, user_agent, created_at)
+                            VALUES (?, ?, ?, 'UPDATE', ?, ?, NULL, NULL, NULL, ?, ?, NOW())
+                        ");
+                        $stmt->execute([
+                            $id,
+                            (int)$task['admin_id'],
+                            $admin_username,
+                            json_encode($prev_data, JSON_UNESCAPED_UNICODE),
+                            json_encode($new_data, JSON_UNESCAPED_UNICODE),
+                            $ip,
+                            $ua
+                        ]);
+
+                        $pdo->commit();
+                        $success_message = "Task updated successfully.";
+                    } catch (Exception $e) {
+                        $pdo->rollBack();
+                        $error_message = $e->getMessage() ?: "Database error while updating task.";
+                    }
+                }
+            }
+        } elseif ($action === 'delete_task') {
+            if (!is_super_admin()) {
+                http_response_code(403);
+                die("Access denied. Only Super Admin can delete activity logs.");
+            }
+
+            $id = (int)($_POST['task_id'] ?? 0);
+            $reason = trim($_POST['delete_reason'] ?? '');
+
+            $stmt = $pdo->prepare("SELECT * FROM ld_tasks WHERE id = ? AND status = 'active'");
+            $stmt->execute([$id]);
+            $task = $stmt->fetch();
+
+            if (!$task) {
+                $error_message = "Task not found.";
+            } elseif (($lock_info = is_ld_task_locked($pdo, $task['admin_id'], date('Y-m-d', strtotime($task['created_at']))))) {
+                http_response_code(403);
+                die("Access denied. This activity belongs to a completed payment period.");
+            } else {
+                $stmt = $pdo->prepare("SELECT * FROM ld_task_topics WHERE task_id = ?");
+                $stmt->execute([$id]);
+                $old_topics = $stmt->fetchAll();
+
+                $prev_data = [
+                    'id' => $task['id'],
+                    'course_name' => $task['course_name'],
+                    'mode_name' => $task['mode_name'],
+                    'topics' => array_map(function($tp) {
+                        return ['topic_name' => $tp['topic_name'], 'quantity' => $tp['quantity'], 'calculated_charge' => $tp['calculated_charge']];
+                    }, $old_topics)
+                ];
+
+                $pdo->beginTransaction();
+                try {
+                    $stmt = $pdo->prepare("
+                        UPDATE ld_tasks
+                        SET status = 'deleted',
+                            deleted_at = NOW(),
+                            deleted_by = ?,
+                            deleted_reason = ?
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$admin_username, $reason, $id]);
+
+                    $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+                    $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+                    $stmt = $pdo->prepare("
+                        INSERT INTO ld_task_audit (task_id, admin_id, admin_username, action, previous_values, new_values, latitude, longitude, maps_url, ip_address, user_agent, created_at)
+                        VALUES (?, ?, ?, 'DELETE', ?, NULL, NULL, NULL, NULL, ?, ?, NOW())
+                    ");
+                    $stmt->execute([
+                        $id,
+                        (int)$task['admin_id'],
+                        $admin_username,
+                        json_encode($prev_data, JSON_UNESCAPED_UNICODE),
+                        $ip,
+                        $ua
+                    ]);
+
+                    $pdo->commit();
+                    $success_message = "Task deleted successfully.";
+                } catch (Exception $e) {
+                    $pdo->rollBack();
+                    $error_message = "Database error while deleting task.";
+                }
+            }
+        }
+    }
+}
+
 if ($tab === 'payments') {
     // 1. AJAX requests handling
     if (isset($_GET['action'])) {
@@ -1433,6 +1637,9 @@ include 'includes/admin_nav.php';
                             <th>Amount</th>
                             <th>Location</th>
                             <th>Status</th>
+                            <?php if (is_super_admin()): ?>
+                                <th style="text-align:right;">Actions</th>
+                            <?php endif; ?>
                         </tr>
                     </thead>
                     <tbody>
@@ -1495,10 +1702,41 @@ include 'includes/admin_nav.php';
                                         <div class="cell-sub" style="font-size:0.72rem; margin-top:2px;">By: <?php echo e($row['deleted_by']); ?></div>
                                     <?php endif; ?>
                                 </td>
+                                <?php if (is_super_admin()): ?>
+                                    <td style="text-align:right; white-space:nowrap;">
+                                        <?php
+                                        $lock_info = is_ld_task_locked($pdo, $row['admin_id'], date('Y-m-d', strtotime($row['created_at'])));
+                                        if ($lock_info):
+                                        ?>
+                                            <span style="font-weight:700; color:var(--text-muted); font-size:0.85rem; display:inline-flex; align-items:center; gap:4px;">
+                                                <i class="fas fa-lock" style="color:var(--success-ink);"></i> Locked (Paid)
+                                            </span>
+                                        <?php elseif ($row['status'] === 'deleted'): ?>
+                                            <span style="color:var(--text-muted); font-size:0.8rem;">No Actions</span>
+                                        <?php else: ?>
+                                            <button class="btn btn-sm btn-soft-amber" onclick='openEditTaskModal(<?php echo json_encode([
+                                                "id" => (int)$row["id"],
+                                                "course_id" => (int)$row["course_id"],
+                                                "mode_id" => (int)$row["mode_id"],
+                                                "topics" => array_map(function($tp) {
+                                                    return [
+                                                        "name" => $tp["topic_name"],
+                                                        "qty" => $tp["quantity"] !== null ? (float)$tp["quantity"] : ""
+                                                    ];
+                                                }, $row["topics"])
+                                            ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'>
+                                                <i class="fas fa-pen"></i> Edit
+                                            </button>
+                                            <button class="btn btn-sm btn-soft-red" onclick="openDeleteTaskModal(<?php echo (int)$row['id']; ?>)">
+                                                <i class="fas fa-trash"></i> Delete
+                                            </button>
+                                        <?php endif; ?>
+                                    </td>
+                                <?php endif; ?>
                             </tr>
                         <?php endforeach; ?>
                         <?php if (empty($detail_rows)): ?>
-                            <tr><td colspan="8"><div class="empty-state" style="padding:24px;"><p>No task entries match the selected filters.</p></div></td></tr>
+                            <tr><td colspan="<?php echo is_super_admin() ? 9 : 8; ?>"><div class="empty-state" style="padding:24px;"><p>No task entries match the selected filters.</p></div></td></tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
@@ -1559,9 +1797,32 @@ include 'includes/admin_nav.php';
                                 </li>
                             <?php endforeach; ?>
                         </ul>
-                        <div style="margin-top:10px; font-size:0.75rem; border-top:1px solid rgba(22, 78, 99, 0.05); padding-top:8px; display:flex; justify-content:space-between; align-items:center;">
+                        <div style="margin-top:10px; font-size:0.75rem; border-top:1px solid rgba(22, 78, 99, 0.05); padding-top:8px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
                             <div><i class="fas fa-clock"></i> <?php echo date('d M Y, h:i A', strtotime($row['created_at'])); ?></div>
-                            <a href="<?php echo e($row['maps_url']); ?>" target="_blank" class="btn btn-sm btn-soft-violet" style="padding:2px 8px; font-size:0.72rem;"><i class="fas fa-map-location-dot"></i> View Map</a>
+                            <div style="display:flex; gap:6px; align-items:center;">
+                                <a href="<?php echo e($row['maps_url']); ?>" target="_blank" class="btn btn-sm btn-soft-violet" style="padding:2px 8px; font-size:0.72rem;"><i class="fas fa-map-location-dot"></i> Map</a>
+                                <?php if (is_super_admin()): ?>
+                                    <?php
+                                    $lock_info = is_ld_task_locked($pdo, $row['admin_id'], date('Y-m-d', strtotime($row['created_at'])));
+                                    if ($lock_info):
+                                    ?>
+                                        <span style="font-weight:700; color:var(--text-muted); font-size:0.72rem; display:inline-flex; align-items:center; gap:2px;"><i class="fas fa-lock" style="color:var(--success-ink);"></i> Locked (Paid)</span>
+                                    <?php elseif ($row['status'] !== 'deleted'): ?>
+                                        <button type="button" class="btn btn-sm btn-soft-amber" style="padding:2px 8px; font-size:0.72rem;" onclick='openEditTaskModal(<?php echo json_encode([
+                                            "id" => (int)$row["id"],
+                                            "course_id" => (int)$row["course_id"],
+                                            "mode_id" => (int)$row["mode_id"],
+                                            "topics" => array_map(function($tp) {
+                                                return [
+                                                    "name" => $tp["topic_name"],
+                                                    "qty" => $tp["quantity"] !== null ? (float)$tp["quantity"] : ""
+                                                ];
+                                            }, $row["topics"])
+                                        ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i> Edit</button>
+                                        <button type="button" class="btn btn-sm btn-soft-red" style="padding:2px 8px; font-size:0.72rem;" onclick="openDeleteTaskModal(<?php echo (int)$row['id']; ?>)"><i class="fas fa-trash"></i> Delete</button>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+                            </div>
                         </div>
                     </div>
                 <?php endforeach; ?>
@@ -1806,9 +2067,193 @@ include 'includes/admin_nav.php';
         </div>
     </div>
 
+    <!-- Edit Task Modal -->
+    <div class="modal-backdrop" id="edit-task-modal">
+        <div class="modal" style="max-width:550px; width: 95%;">
+            <div class="modal-head">
+                <h3><i class="fas fa-pen-to-square" style="color:var(--accent);"></i> Edit L&D Task</h3>
+                <button class="modal-close" onclick="closeModal('edit-task-modal')"><i class="fas fa-xmark"></i></button>
+            </div>
+            <form id="edit-task-form" method="POST">
+                <?php echo csrf_field(); ?>
+                <input type="hidden" name="action" value="update_task">
+                <input type="hidden" name="task_id" id="edit-task-id">
+                <div class="modal-body">
+                    <div class="field" style="margin-bottom:12px;">
+                        <label>Course <span class="req">*</span></label>
+                        <select name="course_id" id="edit-course" required>
+                            <option value="">- Select Course -</option>
+                            <?php foreach ($courses_filter as $c): ?>
+                                <option value="<?php echo (int)$c['id']; ?>"><?php echo e($c['course_name']); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="field" style="margin-bottom:12px;">
+                        <label>Work Mode <span class="req">*</span></label>
+                        <select name="mode_id" id="edit-mode" required onchange="onEditModeChange()">
+                            <option value="">- Select Work Mode -</option>
+                            <?php foreach ($modes_filter as $m): ?>
+                                <option value="<?php echo (int)$m['id']; ?>" data-label="<?php echo e($m['quantity_label']); ?>"><?php echo e($m['mode_name']); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label>Topics Completed <span class="req">*</span></label>
+                        <div id="edit-topics-container">
+                            <!-- Dynamic rows -->
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline" style="margin-top:8px;" onclick="addEditTopicRow('', '')"><i class="fas fa-plus"></i> Add Topic</button>
+                    </div>
+                </div>
+                <div class="modal-foot">
+                    <button type="button" class="btn btn-outline" onclick="closeModal('edit-task-modal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fas fa-check"></i> Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Task Modal -->
+    <div class="modal-backdrop" id="delete-task-modal">
+        <div class="modal" style="max-width:450px; width: 95%;">
+            <div class="modal-head">
+                <h3><i class="fas fa-trash-can" style="color:var(--destructive);"></i> Delete Activity Log</h3>
+                <button class="modal-close" onclick="closeModal('delete-task-modal')"><i class="fas fa-xmark"></i></button>
+            </div>
+            <form id="delete-task-form" method="POST">
+                <?php echo csrf_field(); ?>
+                <input type="hidden" name="action" value="delete_task">
+                <input type="hidden" name="task_id" id="delete-task-id">
+                <div class="modal-body">
+                    <p style="font-size:0.9rem; margin-bottom:12px;">Are you sure you want to delete this activity log? This action will mark it as deleted.</p>
+                    <div class="field">
+                        <label>Reason for Deletion <span class="req">*</span></label>
+                        <input type="text" name="delete_reason" required placeholder="e.g. Logged incorrect quantity" style="width: 100%;">
+                    </div>
+                </div>
+                <div class="modal-foot">
+                    <button type="button" class="btn btn-outline" onclick="closeModal('delete-task-modal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary btn-danger"><i class="fas fa-trash"></i> Delete</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- JS for Payout Dashboard -->
     <script>
     var selectedIntern = null;
+    var currentExpected = 0.00;
+
+    function openDeleteTaskModal(taskId) {
+        document.getElementById('delete-task-id').value = taskId;
+        document.getElementById('delete-task-modal').style.display = 'flex';
+    }
+
+    function openEditTaskModal(data) {
+        document.getElementById('edit-task-id').value = data.id;
+        document.getElementById('edit-course').value = data.course_id;
+        document.getElementById('edit-mode').value = data.mode_id;
+
+        var container = document.getElementById('edit-topics-container');
+        container.innerHTML = '';
+
+        data.topics.forEach(function(tp) {
+            addEditTopicRow(tp.name, tp.qty);
+        });
+
+        if (data.topics.length === 0) {
+            addEditTopicRow('', '');
+        }
+
+        onEditModeChange();
+        document.getElementById('edit-task-modal').style.display = 'flex';
+    }
+
+    function addEditTopicRow(name, qty) {
+        var container = document.getElementById('edit-topics-container');
+        var row = document.createElement('div');
+        row.className = 'topic-input-row';
+        row.style.display = 'flex';
+        row.style.gap = '10px';
+        row.style.marginBottom = '8px';
+        row.style.alignItems = 'center';
+
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.name = 'topics[]';
+        input.className = 'topic-input';
+        input.value = name;
+        input.required = true;
+        input.style.flex = '2';
+
+        var qtyContainer = document.createElement('div');
+        qtyContainer.className = 'qty-container';
+        qtyContainer.style.display = 'flex';
+        qtyContainer.style.alignItems = 'center';
+        qtyContainer.style.gap = '6px';
+        qtyContainer.style.flex = '1';
+
+        var qtyInput = document.createElement('input');
+        qtyInput.type = 'number';
+        qtyInput.step = 'any';
+        qtyInput.name = 'quantities[]';
+        qtyInput.className = 'qty-input';
+        qtyInput.value = qty;
+        qtyInput.placeholder = 'Qty';
+        qtyInput.style.width = '100px';
+
+        var qtyLabel = document.createElement('span');
+        qtyLabel.className = 'qty-label';
+        qtyLabel.style.fontSize = '0.85rem';
+        qtyLabel.style.fontWeight = '600';
+        qtyLabel.style.color = 'var(--text-muted)';
+        qtyLabel.textContent = 'Qty';
+
+        qtyContainer.appendChild(qtyInput);
+        qtyContainer.appendChild(qtyLabel);
+
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-sm btn-soft-red';
+        btn.style.padding = '10px 12px';
+        btn.innerHTML = '<i class="fas fa-trash"></i>';
+        btn.onclick = function() {
+            if (container.querySelectorAll('.topic-input-row').length > 1) {
+                row.remove();
+            } else {
+                alert('At least one topic is required.');
+            }
+        };
+
+        row.appendChild(input);
+        row.appendChild(qtyContainer);
+        row.appendChild(btn);
+        container.appendChild(row);
+    }
+
+    function onEditModeChange() {
+        var modeSelect = document.getElementById('edit-mode');
+        var selectedOpt = modeSelect.options[modeSelect.selectedIndex];
+        var label = selectedOpt ? selectedOpt.getAttribute('data-label') : '';
+
+        var container = document.getElementById('edit-topics-container');
+        var rows = container.querySelectorAll('.topic-input-row');
+        rows.forEach(function(row) {
+            var qtyInput = row.querySelector('.qty-input');
+            var qtyLabel = row.querySelector('.qty-label');
+            if (label && label.trim() !== '') {
+                qtyInput.style.display = 'inline-block';
+                qtyInput.required = true;
+                qtyLabel.textContent = label;
+                qtyLabel.style.display = 'inline-block';
+            } else {
+                qtyInput.style.display = 'none';
+                qtyInput.required = false;
+                qtyInput.value = '';
+                qtyLabel.style.display = 'none';
+            }
+        });
+    }
     var currentExpected = 0.00;
 
     function openPayModal(intern) {
