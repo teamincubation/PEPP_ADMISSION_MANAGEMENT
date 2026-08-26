@@ -42,14 +42,22 @@ $error_message = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!csrf_verify()) {
+        $action = $_POST['action'] ?? '';
+        if ($action === 'update_task' || $action === 'delete_task') {
+            header('Content-Type: application/json');
+            echo json_encode(['success' => false, 'message' => 'Security token mismatch. Please retry.']);
+            exit();
+        }
         $error_message = 'Security token mismatch. Please retry.';
     } else {
         $action = $_POST['action'] ?? '';
 
         if ($action === 'update_task') {
+            header('Content-Type: application/json');
             if (!is_super_admin()) {
                 http_response_code(403);
-                die("Access denied. Only Super Admin can edit activity logs.");
+                echo json_encode(['success' => false, 'message' => 'Access denied. Only Super Admin can edit activity logs.']);
+                exit();
             }
 
             $id = (int)($_POST['task_id'] ?? 0);
@@ -61,12 +69,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $task = $stmt->fetch();
 
             if (!$task) {
-                $error_message = "Task not found.";
+                echo json_encode(['success' => false, 'message' => 'Task not found.']);
+                exit();
             } elseif (($lock_info = is_ld_task_locked($pdo, $task['admin_id'], date('Y-m-d', strtotime($task['created_at']))))) {
                 http_response_code(403);
-                die("Access denied. This activity belongs to a completed payment period.");
+                echo json_encode(['success' => false, 'message' => 'Access denied. This activity belongs to a completed payment period.']);
+                exit();
             } elseif (empty($topics)) {
-                $error_message = "Please provide at least one topic.";
+                echo json_encode(['success' => false, 'message' => 'Please provide at least one topic.']);
+                exit();
             } else {
                 $rate = $task['charge_per_quantity_snapshot'] !== null ? (float)$task['charge_per_quantity_snapshot'] : 0.00;
                 $qty_label = $task['quantity_label_snapshot'];
@@ -101,12 +112,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     foreach ($topics as $idx => $topic) {
                         $topic_clean = trim($topic);
                         if ($topic_clean !== '') {
-                            $qty = null;
-                            if ($qty_label && trim($qty_label) !== '') {
-                                $qty = isset($quantities[$idx]) && $quantities[$idx] !== '' ? filter_var($quantities[$idx], FILTER_VALIDATE_FLOAT) : null;
-                                if ($qty !== null && ($qty === false || $qty < 0)) {
-                                    throw new Exception("Quantity for each topic must be a valid non-negative number.");
-                                }
+                            $qty = isset($quantities[$idx]) && $quantities[$idx] !== '' ? filter_var($quantities[$idx], FILTER_VALIDATE_FLOAT) : null;
+                            if ($qty !== null && ($qty === false || $qty < 0)) {
+                                throw new Exception("Quantity for each topic must be a valid non-negative number.");
                             }
                             $calculated_charge = $qty !== null ? ($qty * $rate) : 0.00;
                             $stmt_topic->execute([$id, $topic_clean, $qty, $calculated_charge]);
@@ -127,9 +135,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     $ip = $_SERVER['REMOTE_ADDR'] ?? '';
                     $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+
+                    $lat = $task['latitude'] !== null ? $task['latitude'] : '0.00000000';
+                    $lng = $task['longitude'] !== null ? $task['longitude'] : '0.00000000';
+                    $maps_url = $task['maps_url'] !== null ? $task['maps_url'] : '';
+
                     $stmt = $pdo->prepare("
                         INSERT INTO ld_task_audit (task_id, admin_id, admin_username, action, previous_values, new_values, latitude, longitude, maps_url, ip_address, user_agent, created_at)
-                        VALUES (?, ?, ?, 'UPDATE', ?, ?, NULL, NULL, NULL, ?, ?, NOW())
+                        VALUES (?, ?, ?, 'UPDATE', ?, ?, ?, ?, ?, ?, ?, NOW())
                     ");
                     $stmt->execute([
                         $id,
@@ -137,21 +150,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $admin_username,
                         json_encode($prev_data, JSON_UNESCAPED_UNICODE),
                         json_encode($new_data, JSON_UNESCAPED_UNICODE),
+                        $lat,
+                        $lng,
+                        $maps_url,
                         $ip,
                         $ua
                     ]);
 
                     $pdo->commit();
-                    $success_message = "Task updated successfully.";
+                    echo json_encode(['success' => true, 'message' => 'Task updated successfully.']);
+                    exit();
                 } catch (Exception $e) {
                     $pdo->rollBack();
-                    $error_message = $e->getMessage() ?: "Database error while updating task.";
+                    echo json_encode(['success' => false, 'message' => $e->getMessage() ?: 'Database error while updating task.']);
+                    exit();
                 }
             }
         } elseif ($action === 'delete_task') {
+            header('Content-Type: application/json');
             if (!is_super_admin()) {
                 http_response_code(403);
-                die("Access denied. Only Super Admin can delete activity logs.");
+                echo json_encode(['success' => false, 'message' => 'Access denied. Only Super Admin can delete activity logs.']);
+                exit();
             }
 
             $id = (int)($_POST['task_id'] ?? 0);
@@ -159,17 +179,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $confirm_text = trim($_POST['confirm_text'] ?? '');
 
             if ($confirm_text !== 'DELETE') {
-                $error_message = "Deletion failed. You must type DELETE to confirm.";
+                echo json_encode(['success' => false, 'message' => 'Deletion failed. You must type DELETE to confirm.']);
+                exit();
             } else {
                 $stmt = $pdo->prepare("SELECT * FROM ld_tasks WHERE id = ? AND status = 'active'");
                 $stmt->execute([$id]);
                 $task = $stmt->fetch();
 
                 if (!$task) {
-                    $error_message = "Task not found.";
+                    echo json_encode(['success' => false, 'message' => 'Task not found.']);
+                    exit();
                 } elseif (($lock_info = is_ld_task_locked($pdo, $task['admin_id'], date('Y-m-d', strtotime($task['created_at']))))) {
                     http_response_code(403);
-                    die("Access denied. This activity belongs to a completed payment period.");
+                    echo json_encode(['success' => false, 'message' => 'Access denied. This activity belongs to a completed payment period.']);
+                    exit();
                 } else {
                     $stmt = $pdo->prepare("SELECT * FROM ld_task_topics WHERE task_id = ?");
                     $stmt->execute([$id]);
@@ -198,24 +221,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         $ip = $_SERVER['REMOTE_ADDR'] ?? '';
                         $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+
+                        $lat = $task['latitude'] !== null ? $task['latitude'] : '0.00000000';
+                        $lng = $task['longitude'] !== null ? $task['longitude'] : '0.00000000';
+                        $maps_url = $task['maps_url'] !== null ? $task['maps_url'] : '';
+
                         $stmt = $pdo->prepare("
                             INSERT INTO ld_task_audit (task_id, admin_id, admin_username, action, previous_values, new_values, latitude, longitude, maps_url, ip_address, user_agent, created_at)
-                            VALUES (?, ?, ?, 'DELETE', ?, NULL, NULL, NULL, NULL, ?, ?, NOW())
+                            VALUES (?, ?, ?, 'DELETE', ?, NULL, ?, ?, ?, ?, ?, NOW())
                         ");
                         $stmt->execute([
                             $id,
                             (int)$task['admin_id'],
                             $admin_username,
                             json_encode($prev_data, JSON_UNESCAPED_UNICODE),
+                            $lat,
+                            $lng,
+                            $maps_url,
                             $ip,
                             $ua
                         ]);
 
                         $pdo->commit();
-                        $success_message = "Task deleted successfully.";
+                        echo json_encode(['success' => true, 'message' => 'Task deleted successfully.']);
+                        exit();
                     } catch (Exception $e) {
                         $pdo->rollBack();
-                        $error_message = "Database error while deleting task.";
+                        echo json_encode(['success' => false, 'message' => 'Database error while deleting task.']);
+                        exit();
                     }
                 }
             }
@@ -2374,6 +2407,7 @@ function updateDistributionChart(type) {
                 <input type="hidden" name="task_id" id="edit-task-id">
                 <input type="hidden" id="edit-quantity-label" value="">
                 <div class="modal-body">
+                    <div id="edit-modal-alert-container" style="display:none; margin-bottom:12px;"></div>
                     <div style="background:var(--bg-muted); padding:12px; border-radius:8px; margin-bottom:15px; border:1px solid var(--border); font-size:0.9rem;">
                         <div style="margin-bottom:6px;"><strong>Date:</strong> <span id="edit-task-date-display" style="color:var(--text-muted); font-weight:500;"></span></div>
                         <div style="margin-bottom:6px;"><strong>Staff:</strong> <span id="edit-task-staff-display" style="color:var(--text-muted); font-weight:500;"></span></div>
@@ -2408,6 +2442,7 @@ function updateDistributionChart(type) {
                 <input type="hidden" name="action" value="delete_task">
                 <input type="hidden" name="task_id" id="delete-task-id">
                 <div class="modal-body">
+                    <div id="delete-modal-alert-container" style="display:none; margin-bottom:12px;"></div>
                     <p style="font-size:0.92rem; margin-bottom:14px; color:#b91c1c; font-weight: 600;">
                         WARNING: This will permanently delete this activity log and all associated work details. This action cannot be undone.
                     </p>
@@ -2449,7 +2484,14 @@ function updateDistributionChart(type) {
         if (btn) {
             btn.disabled = true;
         }
-        document.getElementById('delete-task-modal').style.display = 'flex';
+
+        var alertContainer = document.getElementById('delete-modal-alert-container');
+        if (alertContainer) {
+            alertContainer.style.display = 'none';
+            alertContainer.innerHTML = '';
+        }
+
+        openModal('delete-task-modal');
     }
 
     function openEditTaskModal(data) {
@@ -2472,7 +2514,14 @@ function updateDistributionChart(type) {
         }
 
         refreshEditQuantities();
-        document.getElementById('edit-task-modal').style.display = 'flex';
+
+        var alertContainer = document.getElementById('edit-modal-alert-container');
+        if (alertContainer) {
+            alertContainer.style.display = 'none';
+            alertContainer.innerHTML = '';
+        }
+
+        openModal('edit-task-modal');
     }
 
     function addEditTopicRow(name, qty) {
@@ -2504,7 +2553,7 @@ function updateDistributionChart(type) {
         qtyInput.step = 'any';
         qtyInput.name = 'quantities[]';
         qtyInput.className = 'qty-input';
-        qtyInput.value = qty;
+        qtyInput.value = (qty !== '' && qty !== null && qty !== undefined) ? qty : '1';
         qtyInput.placeholder = 'Qty';
         qtyInput.style.width = '100px';
 
@@ -2513,7 +2562,7 @@ function updateDistributionChart(type) {
         qtyLabel.style.fontSize = '0.85rem';
         qtyLabel.style.fontWeight = '600';
         qtyLabel.style.color = 'var(--text-muted)';
-        qtyLabel.textContent = 'Qty';
+        qtyLabel.textContent = 'units';
 
         qtyContainer.appendChild(qtyInput);
         qtyContainer.appendChild(qtyLabel);
@@ -2539,24 +2588,105 @@ function updateDistributionChart(type) {
 
     function refreshEditQuantities() {
         var label = document.getElementById('edit-quantity-label').value || '';
+        var displayLabel = (label && label.trim() !== '') ? label : 'units';
         var container = document.getElementById('edit-topics-container');
         var rows = container.querySelectorAll('.topic-input-row');
         rows.forEach(function(row) {
             var qtyInput = row.querySelector('.qty-input');
             var qtyLabel = row.querySelector('.qty-label');
-            if (label && label.trim() !== '') {
-                qtyInput.style.display = 'inline-block';
-                qtyInput.required = true;
-                qtyLabel.textContent = label;
-                qtyLabel.style.display = 'inline-block';
-            } else {
-                qtyInput.style.display = 'none';
-                qtyInput.required = false;
-                qtyInput.value = '';
-                qtyLabel.style.display = 'none';
-            }
+            qtyInput.style.display = 'inline-block';
+            qtyInput.required = true;
+            qtyLabel.textContent = displayLabel;
+            qtyLabel.style.display = 'inline-block';
         });
     }
+
+    // AJAX Form submissions handlers
+    document.getElementById('edit-task-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        var form = this;
+        var alertContainer = document.getElementById('edit-modal-alert-container');
+        alertContainer.style.display = 'none';
+        alertContainer.innerHTML = '';
+
+        var submitBtn = form.querySelector('button[type="submit"]');
+        var oldBtnHtml = submitBtn.innerHTML;
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+
+        var formData = new FormData(form);
+
+        fetch('ld-work-report.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = oldBtnHtml;
+            if (data.success) {
+                window.location.reload();
+            } else {
+                alertContainer.className = 'alert alert-error';
+                alertContainer.style.padding = '8px 12px';
+                alertContainer.style.fontSize = '0.8rem';
+                alertContainer.innerHTML = '<i class="fas fa-triangle-exclamation"></i> ' + (data.message || 'Unable to save changes. Please correct the error and try again.');
+                alertContainer.style.display = 'block';
+            }
+        })
+        .catch(function(err) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = oldBtnHtml;
+            alertContainer.className = 'alert alert-error';
+            alertContainer.style.padding = '8px 12px';
+            alertContainer.style.fontSize = '0.8rem';
+            alertContainer.innerHTML = '<i class="fas fa-triangle-exclamation"></i> Connection/Server error occurred. Please try again.';
+            alertContainer.style.display = 'block';
+        });
+    });
+
+    document.getElementById('delete-task-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        var form = this;
+        var alertContainer = document.getElementById('delete-modal-alert-container');
+        alertContainer.style.display = 'none';
+        alertContainer.innerHTML = '';
+
+        var submitBtn = document.getElementById('btn-submit-delete');
+        var oldBtnHtml = submitBtn.innerHTML;
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
+
+        var formData = new FormData(form);
+
+        fetch('ld-work-report.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = oldBtnHtml;
+            if (data.success) {
+                window.location.reload();
+            } else {
+                alertContainer.className = 'alert alert-error';
+                alertContainer.style.padding = '8px 12px';
+                alertContainer.style.fontSize = '0.8rem';
+                alertContainer.innerHTML = '<i class="fas fa-triangle-exclamation"></i> ' + (data.message || 'Failed to delete task.');
+                alertContainer.style.display = 'block';
+            }
+        })
+        .catch(function(err) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = oldBtnHtml;
+            alertContainer.className = 'alert alert-error';
+            alertContainer.style.padding = '8px 12px';
+            alertContainer.style.fontSize = '0.8rem';
+            alertContainer.innerHTML = '<i class="fas fa-triangle-exclamation"></i> Connection/Server error occurred. Please try again.';
+            alertContainer.style.display = 'block';
+        });
+    });
     </script>
 
 <?php include 'includes/admin_footer.php'; ?>
