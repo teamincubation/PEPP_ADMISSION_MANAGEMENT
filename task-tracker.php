@@ -559,8 +559,11 @@ var workModesConfig = <?php echo json_encode($modes_json); ?>;
 <?php if ($incomplete_qty_count > 0): ?>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-player/2.0.4/lottie-player.js"></script>
 <div class="alert alert-info" id="motivation-box" style="background: linear-gradient(135deg, #f5f3ff, #ede9fe); border: 1px solid #ddd6fe; border-radius: 16px; padding: 20px; margin-bottom: 24px; position: relative; box-shadow: 0 4px 20px rgba(124, 58, 237, 0.05); display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
-    <div style="background: #ffffff; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(124, 58, 237, 0.1); width: 56px; height: 56px; flex-shrink: 0; overflow: hidden;">
-        <lottie-player src="https://lottie.host/80dc1d05-4c07-4c74-bf4b-84a1a5b8a05c/KjS0uI538q.json" background="transparent" speed="1" style="width: 48px; height: 48px;" loop autoplay></lottie-player>
+    <div style="background: #ffffff; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(124, 58, 237, 0.1); width: 56px; height: 56px; flex-shrink: 0; overflow: hidden; position: relative;">
+        <!-- Lottie player loading local asset -->
+        <lottie-player id="motivation-lottie" src="assets/img/tick.json" background="transparent" speed="1" style="width: 48px; height: 48px; position: relative; z-index: 2;" loop autoplay></lottie-player>
+        <!-- Clean static icon fallback in case Lottie fails to load or render -->
+        <i class="fas fa-award" id="motivation-fallback-icon" style="color:#7c3aed; font-size: 1.5rem; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1;"></i>
     </div>
     <div style="flex: 1; min-width: 250px;">
         <h3 style="margin: 0 0 4px 0; font-size: 1.05rem; font-weight: 700; color: #5b21b6;">Make Your Work Count! ✨</h3>
@@ -577,6 +580,22 @@ var workModesConfig = <?php echo json_encode($modes_json); ?>;
         </button>
     </div>
 </div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    var player = document.getElementById("motivation-lottie");
+    var fallback = document.getElementById("motivation-fallback-icon");
+    if (player) {
+        player.addEventListener("ready", function() {
+            if (fallback) fallback.style.display = "none";
+        });
+        player.addEventListener("error", function() {
+            if (fallback) fallback.style.display = "block";
+            player.style.display = "none";
+        });
+    }
+});
+</script>
 
 <script>
 function scrollToIncompleteTasks() {
