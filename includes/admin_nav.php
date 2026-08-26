@@ -680,9 +680,9 @@ $nav_data = [
             background: rgba(255, 255, 255, 0.1);
         }
 
-        /* Selected/active sub-category menu styles: dark background with white icon & font */
+        /* Selected/active sub-category menu styles: violet background with white icon & font */
         .nav-item.active {
-            background: #0f172a !important;
+            background: #7c3aed !important;
             color: #ffffff !important;
             font-weight: 600;
         }
@@ -690,7 +690,7 @@ $nav_data = [
             color: #ffffff !important;
         }
         html.theme-dark .nav-item.active {
-            background: #4f46e5 !important;
+            background: #7c3aed !important;
             color: #ffffff !important;
         }
         html.theme-dark .nav-item.active i {
