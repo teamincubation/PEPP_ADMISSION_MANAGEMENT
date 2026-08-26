@@ -237,10 +237,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $error_message = 'L&D database tables are not installed yet. Please run database-update-21.sql first.';
                 } else {
                     $name  = trim($_POST['mode_name'] ?? '');
+                    $qty_label = trim($_POST['quantity_label'] ?? '');
+                    $charge = $_POST['charge_per_quantity'] ?? '0';
                     $order = (int)($_POST['sort_order'] ?? 0);
-                    if ($name !== '') {
+
+                    if ($name === '') {
+                        $error_message = 'Work Mode name is required.';
+                    } elseif ($qty_label === '') {
+                        $error_message = 'Quantity label is required.';
+                    } elseif (!is_numeric($charge) || (float)$charge < 0) {
+                        $error_message = 'Charge must be a non-negative number.';
+                    } else {
                         try {
-                            $pdo->prepare("INSERT INTO ld_work_modes (mode_name, status, sort_order) VALUES (?, 'active', ?)")->execute([$name, $order]);
+                            $pdo->prepare("INSERT INTO ld_work_modes (mode_name, status, sort_order, quantity_label, charge_per_quantity) VALUES (?, 'active', ?, ?, ?)")->execute([$name, $order, $qty_label, (float)$charge]);
                             $success_message = "L&D Work Mode \"{$name}\" added.";
                         } catch (Exception $e) { $error_message = 'L&D Work Mode name already exists.'; }
                     }
@@ -251,11 +260,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } else {
                     $id    = (int)($_POST['mode_id'] ?? 0);
                     $name  = trim($_POST['mode_name'] ?? '');
+                    $qty_label = trim($_POST['quantity_label'] ?? '');
+                    $charge = $_POST['charge_per_quantity'] ?? '0';
                     $order = (int)($_POST['sort_order'] ?? 0);
                     $status = in_array($_POST['status'] ?? '', ['active','inactive'], true) ? $_POST['status'] : 'active';
-                    if ($id > 0 && $name !== '') {
+
+                    if ($id <= 0) {
+                        $error_message = 'Invalid L&D Work Mode ID.';
+                    } elseif ($name === '') {
+                        $error_message = 'Work Mode name is required.';
+                    } elseif ($qty_label === '') {
+                        $error_message = 'Quantity label is required.';
+                    } elseif (!is_numeric($charge) || (float)$charge < 0) {
+                        $error_message = 'Charge must be a non-negative number.';
+                    } else {
                         try {
-                            $pdo->prepare("UPDATE ld_work_modes SET mode_name = ?, status = ?, sort_order = ? WHERE id = ?")->execute([$name, $status, $order, $id]);
+                            $pdo->prepare("UPDATE ld_work_modes SET mode_name = ?, status = ?, sort_order = ?, quantity_label = ?, charge_per_quantity = ? WHERE id = ?")->execute([$name, $status, $order, $qty_label, (float)$charge, $id]);
                             $success_message = "L&D Work Mode updated.";
                         } catch (Exception $e) { $error_message = 'L&D Work Mode name already exists.'; }
                     }
@@ -274,8 +294,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } else {
                     if (is_super_admin()) {
                         $id = (int)($_POST['mode_id'] ?? 0);
-                        $pdo->prepare("DELETE FROM ld_work_modes WHERE id = ?")->execute([$id]);
-                        $success_message = 'L&D Work Mode deleted.';
+
+                        // Check if there are active tasks using this mode
+                        $stmt = $pdo->prepare("SELECT COUNT(*) FROM ld_tasks WHERE mode_id = ?");
+                        $stmt->execute([$id]);
+                        $task_count = (int)$stmt->fetchColumn();
+
+                        if ($task_count > 0) {
+                            $pdo->prepare("UPDATE ld_work_modes SET status = 'inactive' WHERE id = ?")->execute([$id]);
+                            $success_message = "This Work Mode has {$task_count} task(s) completed by L&D Interns. It cannot be permanently deleted because historical work records depend on it. It will be archived instead.";
+                        } else {
+                            $pdo->prepare("DELETE FROM ld_work_modes WHERE id = ?")->execute([$id]);
+                            $success_message = 'L&D Work Mode deleted.';
+                        }
                     }
                 }
             } elseif ($action === 'save_smtp_settings') {
@@ -323,7 +354,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $stmt_ac->execute([$auto_collapse_val]);
 
                         log_admin_activity($pdo, $admin_username, 'sidebar_layout_changed', 'Reordered and regrouped sidebar menu layout');
-                        
+
                         header("Location: settings.php?success=1");
                         exit();
                     }
@@ -746,7 +777,7 @@ include 'includes/admin_nav.php';
             <div class="field" style="margin:0; width:120px;"><label>Sort Order</label><input type="number" name="sort_order" value="0" required></div>
             <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Add Course</button>
         </form>
-        
+
         <?php if (!empty($ld_courses)): ?>
         <div class="table-wrap"><table class="data-table">
             <thead><tr><th>Course Name</th><th>Sort Order</th><th>Status</th><th style="text-align:right;">Actions</th></tr></thead>
@@ -778,27 +809,42 @@ include 'includes/admin_nav.php';
 <div class="panel">
     <div class="panel-head"><span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-tags"></i></span><h2>L&D Work Modes</h2></div>
     <div class="panel-body">
-        <form method="POST" class="filter-bar" style="margin-bottom:16px; display:flex; gap:12px; align-items:end;">
+        <form method="POST" class="filter-bar" style="margin-bottom:16px; display:flex; gap:12px; align-items:end; flex-wrap:wrap;">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="add_ld_mode">
-            <div class="field grow-2" style="margin:0;"><label>Mode Name</label><input type="text" name="mode_name" placeholder="e.g. Tests" required></div>
-            <div class="field" style="margin:0; width:120px;"><label>Sort Order</label><input type="number" name="sort_order" value="0" required></div>
+            <div class="field grow-2" style="margin:0; min-width:180px;"><label>Mode Name <span class="req">*</span></label><input type="text" name="mode_name" placeholder="e.g. Tests" required></div>
+            <div class="field" style="margin:0; width:180px;"><label>Quantity Label <span class="req">*</span></label><input type="text" name="quantity_label" placeholder="e.g. Page, MCQ, Video" required></div>
+            <div class="field" style="margin:0; width:140px;"><label>Charge Per Quantity (₹) <span class="req">*</span></label><input type="number" step="0.01" min="0" name="charge_per_quantity" value="0.00" required></div>
+            <div class="field" style="margin:0; width:100px;"><label>Sort Order <span class="req">*</span></label><input type="number" name="sort_order" value="0" required></div>
             <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Add Mode</button>
         </form>
-        
+
         <?php if (!empty($ld_modes)): ?>
         <div class="table-wrap"><table class="data-table">
-            <thead><tr><th>Mode Name</th><th>Sort Order</th><th>Status</th><th style="text-align:right;">Actions</th></tr></thead>
+            <thead>
+                <tr>
+                    <th>Mode Name</th>
+                    <th>Quantity Label</th>
+                    <th>Rate / Quantity</th>
+                    <th>Sort Order</th>
+                    <th>Status</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
             <tbody>
             <?php foreach ($ld_modes as $m): ?>
                 <tr>
                     <td class="cell-main"><?php echo e($m['mode_name']); ?></td>
+                    <td><?php echo e($m['quantity_label'] ?: 'N/A'); ?></td>
+                    <td style="font-weight:600;">₹<?php echo number_format((float)($m['charge_per_quantity'] ?? 0), 2); ?></td>
                     <td><?php echo (int)$m['sort_order']; ?></td>
                     <td><span class="badge <?php echo $m['status'] === 'active' ? 'green' : 'gray'; ?>"><?php echo ucfirst($m['status']); ?></span></td>
                     <td style="text-align:right; white-space:nowrap;">
                         <button type="button" class="btn btn-sm btn-outline" onclick='openEditLdMode(<?php echo json_encode([
                             "id" => (int)$m["id"],
                             "mode_name" => $m["mode_name"],
+                            "quantity_label" => $m["quantity_label"] ?? "",
+                            "charge_per_quantity" => (float)($m["charge_per_quantity"] ?? 0),
                             "sort_order" => (int)$m["sort_order"],
                             "status" => $m["status"]
                         ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
@@ -881,7 +927,7 @@ $nongst_preview = ($current_settings['inv_nongst_prefix'] ?? 'INV') . '/' . date
         <form method="POST">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="save_smtp_settings">
-            
+
             <div style="margin-bottom: 15px;">
                 <label style="display:flex; align-items:center; gap:8px; font-weight:700; cursor:pointer;">
                     <input type="checkbox" name="smtp_enabled" value="1" <?php echo $ivs('smtp_enabled', '0') === '1' ? 'checked' : ''; ?>>
@@ -893,7 +939,7 @@ $nongst_preview = ($current_settings['inv_nongst_prefix'] ?? 'INV') . '/' . date
             <div class="form-grid">
                 <div class="field"><label>SMTP Host</label>
                     <input type="text" name="smtp_host" value="<?php echo e($ivs('smtp_host', 'smtp.hostinger.com')); ?>" placeholder="e.g. smtp.hostinger.com"></div>
-                
+
                 <div class="field"><label>SMTP Port</label>
                     <input type="number" name="smtp_port" value="<?php echo e($ivs('smtp_port', '465')); ?>" placeholder="465 or 587"></div>
 
@@ -979,7 +1025,7 @@ try {
             <i class="fas fa-circle-info"></i>
             <span>Super administrators can rearrange categories, reorder sub-categories inside a category, or move sub-categories from one category to another. Click <strong>Save Sidebar Layout</strong> to apply.</span>
         </div>
-        
+
         <form method="POST">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="save_sidebar_config">
@@ -1006,11 +1052,11 @@ try {
                 .switch-toggle input:checked + .toggle-slider:before { transform: translateX(22px); }
                 .toggle-slider:before { position:absolute; content:""; height:20px; width:20px; left:3px; bottom:3px; background-color:white; transition:.3s; border-radius:50%; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
             </style>
-            
+
             <div id="sidebar-layout-editor" style="display:flex; flex-direction:column; gap:16px; margin-bottom:20px;">
                 <!-- Reordering UI generated by JS -->
             </div>
-            
+
             <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border); padding-top:14px;">
                 <button type="button" class="btn btn-outline" onclick="resetSidebarToDefault()"><i class="fas fa-undo"></i> Reset to Default</button>
                 <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save Sidebar Layout</button>
@@ -1124,10 +1170,10 @@ var subItemLabels = <?php echo json_encode($sub_item_labels); ?>;
 function renderEditor() {
     var container = document.getElementById('sidebar-layout-editor');
     if (!container) return;
-    
+
     container.innerHTML = '';
     document.getElementById('sidebar-config-input').value = JSON.stringify(sidebarConfig);
-    
+
     sidebarConfig.forEach(function(section, secIdx) {
         var card = document.createElement('div');
         card.style.border = '1px solid var(--border)';
@@ -1135,7 +1181,7 @@ function renderEditor() {
         card.style.background = 'var(--card)';
         card.style.overflow = 'hidden';
         card.style.boxShadow = '0 2px 8px rgba(0,0,0,0.02)';
-        
+
         // Header block
         var header = document.createElement('div');
         header.style.padding = '12px 16px';
@@ -1144,7 +1190,7 @@ function renderEditor() {
         header.style.display = 'flex';
         header.style.justifyContent = 'space-between';
         header.style.alignItems = 'center';
-        
+
         var headerTitle = document.createElement('div');
         headerTitle.style.fontWeight = '700';
         headerTitle.style.display = 'flex';
@@ -1153,22 +1199,22 @@ function renderEditor() {
         headerTitle.style.fontSize = '0.85rem';
         headerTitle.style.textTransform = 'uppercase';
         headerTitle.style.color = 'var(--foreground)';
-        
+
         var iconEl = document.createElement('i');
         iconEl.className = section.icon || 'fas fa-folder';
         iconEl.style.color = 'var(--accent)';
         iconEl.style.fontSize = '0.9rem';
         headerTitle.appendChild(iconEl);
-        
+
         var titleText = document.createElement('span');
         titleText.textContent = section.title;
         headerTitle.appendChild(titleText);
         header.appendChild(headerTitle);
-        
+
         var headerActions = document.createElement('div');
         headerActions.style.display = 'flex';
         headerActions.style.gap = '6px';
-        
+
         var btnUp = document.createElement('button');
         btnUp.type = 'button';
         btnUp.className = 'btn btn-sm btn-outline';
@@ -1179,7 +1225,7 @@ function renderEditor() {
             moveCategory(secIdx, -1);
         };
         headerActions.appendChild(btnUp);
-        
+
         var btnDown = document.createElement('button');
         btnDown.type = 'button';
         btnDown.className = 'btn btn-sm btn-outline';
@@ -1190,17 +1236,17 @@ function renderEditor() {
             moveCategory(secIdx, 1);
         };
         headerActions.appendChild(btnDown);
-        
+
         header.appendChild(headerActions);
         card.appendChild(header);
-        
+
         // Children items block
         var content = document.createElement('div');
         content.style.padding = '12px';
         content.style.display = 'flex';
         content.style.flexDirection = 'column';
         content.style.gap = '8px';
-        
+
         if (!section.items || section.items.length === 0) {
             var empty = document.createElement('div');
             empty.style.padding = '16px';
@@ -1222,19 +1268,19 @@ function renderEditor() {
                 row.style.background = 'var(--surface)';
                 row.style.border = '1px solid var(--border)';
                 row.style.borderRadius = '8px';
-                
+
                 var label = document.createElement('div');
                 label.style.fontSize = '0.85rem';
                 label.style.fontWeight = '500';
                 label.style.color = 'var(--text-main)';
                 label.textContent = subItemLabels[itemKey] || itemKey;
                 row.appendChild(label);
-                
+
                 var actions = document.createElement('div');
                 actions.style.display = 'flex';
                 actions.style.alignItems = 'center';
                 actions.style.gap = '8px';
-                
+
                 // Destination category selection dropdown
                 var moveSelect = document.createElement('select');
                 moveSelect.style.fontSize = '0.75rem';
@@ -1243,12 +1289,12 @@ function renderEditor() {
                 moveSelect.style.border = '1px solid var(--border)';
                 moveSelect.style.background = 'var(--card)';
                 moveSelect.style.color = 'var(--foreground)';
-                
+
                 var optDefault = document.createElement('option');
                 optDefault.value = '';
                 optDefault.textContent = 'Move Category to...';
                 moveSelect.appendChild(optDefault);
-                
+
                 sidebarConfig.forEach(function(destSec) {
                     if (destSec.id !== section.id) {
                         var opt = document.createElement('option');
@@ -1257,7 +1303,7 @@ function renderEditor() {
                         moveSelect.appendChild(opt);
                     }
                 });
-                
+
                 moveSelect.onchange = function() {
                     var destId = moveSelect.value;
                     if (destId) {
@@ -1265,7 +1311,7 @@ function renderEditor() {
                     }
                 };
                 actions.appendChild(moveSelect);
-                
+
                 // Move item up/down inside group
                 var btnItemUp = document.createElement('button');
                 btnItemUp.type = 'button';
@@ -1277,7 +1323,7 @@ function renderEditor() {
                     moveSubcategoryInGroup(secIdx, itemIdx, -1);
                 };
                 actions.appendChild(btnItemUp);
-                
+
                 var btnItemDown = document.createElement('button');
                 btnItemDown.type = 'button';
                 btnItemDown.className = 'btn btn-sm btn-outline';
@@ -1288,12 +1334,12 @@ function renderEditor() {
                     moveSubcategoryInGroup(secIdx, itemIdx, 1);
                 };
                 actions.appendChild(btnItemDown);
-                
+
                 row.appendChild(actions);
                 content.appendChild(row);
             });
         }
-        
+
         card.appendChild(content);
         container.appendChild(card);
     });
@@ -1323,12 +1369,12 @@ function moveSubcategoryInGroup(secIdx, itemIdx, direction) {
 function moveSubcategoryToCategory(srcSecId, itemKey, destSecId) {
     var srcSec = null;
     var destSec = null;
-    
+
     sidebarConfig.forEach(function(sec) {
         if (sec.id === srcSecId) srcSec = sec;
         if (sec.id === destSecId) destSec = sec;
     });
-    
+
     if (srcSec && destSec) {
         srcSec.items = srcSec.items.filter(function(item) { return item !== itemKey; });
         if (!destSec.items) destSec.items = [];
@@ -1388,8 +1434,10 @@ document.addEventListener('DOMContentLoaded', function() {
             <input type="hidden" name="mode_id" id="edit-ld-mode-id">
             <div class="modal-body">
                 <div class="form-grid" style="grid-template-columns:1fr;">
-                    <div class="field"><label>Mode Name</label><input type="text" name="mode_name" id="edit-ld-mode-name" required></div>
-                    <div class="field"><label>Sort Order</label><input type="number" name="sort_order" id="edit-ld-mode-order" required></div>
+                    <div class="field"><label>Mode Name <span class="req">*</span></label><input type="text" name="mode_name" id="edit-ld-mode-name" required></div>
+                    <div class="field"><label>Quantity Label <span class="req">*</span></label><input type="text" name="quantity_label" id="edit-ld-mode-qty-label" placeholder="e.g. Page, MCQ, Video" required></div>
+                    <div class="field"><label>Charge Per Quantity (₹) <span class="req">*</span></label><input type="number" step="0.01" min="0" name="charge_per_quantity" id="edit-ld-mode-charge" required></div>
+                    <div class="field"><label>Sort Order <span class="req">*</span></label><input type="number" name="sort_order" id="edit-ld-mode-order" required></div>
                     <div class="field"><label>Status</label>
                         <select name="status" id="edit-ld-mode-status">
                             <option value="active">Active</option>
@@ -1417,6 +1465,8 @@ function openEditLdCourse(data) {
 function openEditLdMode(data) {
     document.getElementById('edit-ld-mode-id').value = data.id;
     document.getElementById('edit-ld-mode-name').value = data.mode_name;
+    document.getElementById('edit-ld-mode-qty-label').value = data.quantity_label || '';
+    document.getElementById('edit-ld-mode-charge').value = data.charge_per_quantity || 0;
     document.getElementById('edit-ld-mode-order').value = data.sort_order;
     document.getElementById('edit-ld-mode-status').value = data.status;
     openModal('edit-ld-mode-modal');

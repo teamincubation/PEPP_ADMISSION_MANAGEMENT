@@ -96,42 +96,77 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     if (!is_super_admin() && !can_access('ld-work-report')) {
         die('Access denied.');
     }
-    
+
     $rows = [];
     try {
         $stmt = $pdo->prepare("
-            SELECT t.*, GROUP_CONCAT(tp.topic_name SEPARATOR '|||') AS topics_list
+            SELECT t.*
             FROM ld_tasks t
-            LEFT JOIN ld_task_topics tp ON tp.task_id = t.id
             $where_sql
-            GROUP BY t.id
             ORDER BY t.created_at DESC
         ");
         $stmt->execute($params);
         $rows = $stmt->fetchAll();
+
+        if (!empty($rows)) {
+            $task_ids = array_map(function($x) { return (int)$x['id']; }, $rows);
+            $in_clause = implode(',', $task_ids);
+            $topics_rows = $pdo->query("SELECT * FROM ld_task_topics WHERE task_id IN ($in_clause) ORDER BY id ASC")->fetchAll();
+
+            $topics_by_task = [];
+            foreach ($topics_rows as $row) {
+                $topics_by_task[$row['task_id']][] = $row;
+            }
+            foreach ($rows as &$t) {
+                $t['topics'] = $topics_by_task[$t['id']] ?? [];
+            }
+            unset($t);
+        }
     } catch (Exception $e) {
         die("Export Error: " . $e->getMessage());
     }
 
     log_admin_activity($pdo, $admin_username, 'data_export', "Exported L&D Work report (" . count($rows) . ' rows)');
-    
+
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="ld-work-report-' . date('Y-m-d-Hi') . '.csv"');
-    
+
     $out = fopen('php://output', 'w');
     fputs($out, "\xEF\xBB\xBF"); // BOM
-    fputcsv($out, ['Date', 'Staff', 'Role', 'Course', 'Work Mode', 'Topics Count', 'Topics List', 'IP Address', 'Maps URL', 'Status', 'Deleted By', 'Deleted Reason']);
-    
+    fputcsv($out, ['Date', 'Staff', 'Role', 'Course', 'Work Mode', 'Topics Count', 'Total Quantity', 'Total Charge (₹)', 'Topics List', 'IP Address', 'Maps URL', 'Status', 'Deleted By', 'Deleted Reason']);
+
     foreach ($rows as $r) {
-        $topics = explode('|||', $r['topics_list'] ?? '');
-        $topics_clean = implode(', ', $topics);
+        $topics_clean_parts = [];
+        $total_task_qty = 0.00;
+        $total_task_charge = 0.00;
+        $has_qty_info = false;
+
+        foreach ($r['topics'] as $tp) {
+            if ($tp['quantity'] !== null) {
+                $has_qty_info = true;
+                $total_task_qty += (float)$tp['quantity'];
+                $total_task_charge += (float)$tp['calculated_charge'];
+
+                $qty_lbl = $r['quantity_label_snapshot'] ?? 'units';
+                $rate_val = $r['charge_per_quantity_snapshot'] !== null ? '₹' . number_format((float)$r['charge_per_quantity_snapshot'], 2) : 'N/A';
+                $charge_val = '₹' . number_format((float)$tp['calculated_charge'], 2);
+
+                $topics_clean_parts[] = $tp['topic_name'] . " (" . (float)$tp['quantity'] . " " . $qty_lbl . " @ " . $rate_val . " = " . $charge_val . ")";
+            } else {
+                $topics_clean_parts[] = $tp['topic_name'] . " (Quantity: Not Added / Historical Rate: Not Available / Charge: Not Calculated)";
+            }
+        }
+        $topics_clean = implode('; ', $topics_clean_parts);
+
         fputcsv($out, [
             $r['created_at'],
             $r['admin_name'],
             $r['admin_role'],
             $r['course_name'],
-            $r['mode_name'],
-            count($topics),
+            $r['mode_name_snapshot'] ?: $r['mode_name'],
+            count($r['topics']),
+            $has_qty_info ? $total_task_qty : 'Not Added',
+            $has_qty_info ? number_format($total_task_charge, 2) : 'Not Calculated',
             $topics_clean,
             $r['ip_address'],
             $r['maps_url'],
@@ -144,12 +179,11 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     exit();
 }
 
-// Handle PDF Export
 if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     if (!is_super_admin() && !can_access('ld-work-report')) {
         die('Access denied.');
     }
-    
+
     // Fetch metrics
     $total_tasks = 0;
     $total_topics = 0;
@@ -157,38 +191,56 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     $course_breakdown = [];
     $mode_breakdown = [];
     $tasks = [];
+    $total_charge_sum = 0.00;
 
     try {
         // Fetch raw tasks matching filters
         $stmt = $pdo->prepare("
-            SELECT t.*, GROUP_CONCAT(tp.topic_name SEPARATOR '|||') AS topics_list
+            SELECT t.*
             FROM ld_tasks t
-            LEFT JOIN ld_task_topics tp ON tp.task_id = t.id
             $where_sql
-            GROUP BY t.id
             ORDER BY t.created_at DESC
         ");
         $stmt->execute($params);
         $tasks = $stmt->fetchAll();
-        
+
+        if (!empty($tasks)) {
+            $task_ids = array_map(function($x) { return (int)$x['id']; }, $tasks);
+            $in_clause = implode(',', $task_ids);
+            $topics_rows = $pdo->query("SELECT * FROM ld_task_topics WHERE task_id IN ($in_clause) ORDER BY id ASC")->fetchAll();
+
+            $topics_by_task = [];
+            foreach ($topics_rows as $row) {
+                $topics_by_task[$row['task_id']][] = $row;
+            }
+            foreach ($tasks as &$t) {
+                $t['topics'] = $topics_by_task[$t['id']] ?? [];
+            }
+            unset($t);
+        }
+
         $dates = [];
         foreach ($tasks as $tk) {
             $total_tasks++;
-            $topics = array_filter(explode('|||', $tk['topics_list'] ?? ''));
-            $cnt = count($topics);
+            $cnt = count($tk['topics']);
             $total_topics += $cnt;
-            
+
             $dates[date('Y-m-d', strtotime($tk['created_at']))] = true;
-            
+
             if (!isset($course_breakdown[$tk['course_name']])) {
                 $course_breakdown[$tk['course_name']] = 0;
             }
             $course_breakdown[$tk['course_name']] += $cnt;
-            
-            if (!isset($mode_breakdown[$tk['mode_name']])) {
-                $mode_breakdown[$tk['mode_name']] = 0;
+
+            $mode_title = $tk['mode_name_snapshot'] ?: $tk['mode_name'];
+            if (!isset($mode_breakdown[$mode_title])) {
+                $mode_breakdown[$mode_title] = 0;
             }
-            $mode_breakdown[$tk['mode_name']] += $cnt;
+            $mode_breakdown[$mode_title] += $cnt;
+
+            foreach ($tk['topics'] as $tp) {
+                $total_charge_sum += (float)$tp['calculated_charge'];
+            }
         }
         $active_days = count($dates);
     } catch (Exception $e) {
@@ -197,7 +249,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
 
     $pdf = new MiniPDF();
     $L = 50; $R = MiniPDF::W - 50; $W = $R - $L;
-    
+
     // Check if logo exists
     $logo = __DIR__ . '/pepp-logo.jpg';
     if (file_exists($logo)) {
@@ -205,24 +257,25 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     } else {
         $pdf->text($L, 44, 18, 'PEPP Learning', true);
     }
-    
+
     $pdf->text($L, 48, 9, 'L&D Operations Work Report', false, 'R', $W);
     $pdf->text($L, 60, 9, 'Generated: ' . date('d-m-Y h:i A'), false, 'R', $W);
     $pdf->text($L, 95, 14, 'L&D OPERATIONS WORK REPORT', true, 'C', $W);
-    
+
     $y = 120;
     $pdf->line($L, $y, $R, $y); $y += 12;
-    
+
     // Summary table
     $pdf->text($L, $y, 10, 'Summary Metrics', true); $y += 16;
     $pdf->text($L, $y, 9, 'Total Task Logs: ' . $total_tasks);
-    $pdf->text($L + 150, $y, 9, 'Total Topics Completed: ' . $total_topics);
-    $pdf->text($L + 320, $y, 9, 'Active Work Days: ' . $active_days);
+    $pdf->text($L + 120, $y, 9, 'Total Topics: ' . $total_topics);
+    $pdf->text($L + 220, $y, 9, 'Active Days: ' . $active_days);
+    $pdf->text($L + 300, $y, 9, 'Total Charge: INR ' . number_format($total_charge_sum, 2));
     $y += 14;
     $pdf->text($L, $y, 9, 'Avg Topics/Active Day: ' . ($active_days > 0 ? number_format($total_topics / $active_days, 1) : '0'));
     $y += 16;
     $pdf->line($L, $y, $R, $y); $y += 16;
-    
+
     // Course breakdown table
     $pdf->text($L, $y, 10, 'Course Breakdown (Topics completed)', true); $y += 14;
     $pdf->line($L, $y, $R, $y); $y += 8;
@@ -234,7 +287,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     }
     $y += 10;
     $pdf->line($L, $y, $R, $y); $y += 16;
-    
+
     // Mode breakdown table
     $pdf->text($L, $y, 10, 'Work Mode Breakdown (Topics completed)', true); $y += 14;
     $pdf->line($L, $y, $R, $y); $y += 8;
@@ -246,44 +299,54 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     }
     $y += 10;
     $pdf->line($L, $y, $R, $y); $y += 20;
-    
+
     // Daily activity detail list (Up to 15 rows to fit pages)
     $pdf->text($L, $y, 10, 'Recent Activity Logs', true); $y += 14;
     $pdf->line($L, $y, $R, $y); $y += 8;
-    
+
     $pdf->text($L, $y, 8.5, 'Date/Time', true);
-    $pdf->text($L + 100, $y, 8.5, 'Staff', true);
-    $pdf->text($L + 200, $y, 8.5, 'Course', true);
-    $pdf->text($L + 320, $y, 8.5, 'Mode', true);
-    $pdf->text($R - 50, $y, 8.5, 'Topics', true, 'R');
+    $pdf->text($L + 80, $y, 8.5, 'Staff', true);
+    $pdf->text($L + 180, $y, 8.5, 'Course', true);
+    $pdf->text($L + 280, $y, 8.5, 'Mode', true);
+    $pdf->text($L + 380, $y, 8.5, 'Topics', true, 'R', 40);
+    $pdf->text($R, $y, 8.5, 'Charge (₹)', true, 'R');
     $y += 8; $pdf->line($L, $y, $R, $y); $y += 10;
-    
+
     $limit = 15;
     $count = 0;
     foreach ($tasks as $tk) {
         if ($count >= $limit) break;
         if ($y > 760) { $pdf->line($L, $y, $R, $y); $y = 50; }
-        
-        $topics = array_filter(explode('|||', $tk['topics_list'] ?? ''));
+
+        $task_charge = 0.00;
+        $has_incomplete = false;
+        foreach ($tk['topics'] as $tp) {
+            if ($tp['quantity'] === null) $has_incomplete = true;
+            $task_charge += (float)$tp['calculated_charge'];
+        }
+
         $pdf->text($L, $y, 8, date('d-m-y H:i', strtotime($tk['created_at'])));
-        $pdf->text($L + 100, $y, 8, substr($tk['admin_name'], 0, 18));
-        $pdf->text($L + 200, $y, 8, substr($tk['course_name'], 0, 22));
-        $pdf->text($L + 320, $y, 8, substr($tk['mode_name'], 0, 22));
-        $pdf->text($R - 50, $y, 8, count($topics), false, 'R');
-        
+        $pdf->text($L + 80, $y, 8, substr($tk['admin_name'], 0, 18));
+        $pdf->text($L + 180, $y, 8, substr($tk['course_name'], 0, 18));
+        $pdf->text($L + 280, $y, 8, substr($tk['mode_name_snapshot'] ?: $tk['mode_name'], 0, 18));
+        $pdf->text($L + 380, $y, 8, count($tk['topics']), false, 'R', 40);
+
+        $charge_display = $has_incomplete ? 'Incomplete' : '₹' . number_format($task_charge, 2);
+        $pdf->text($R, $y, 8, $charge_display, false, 'R');
+
         $y += 14;
         $count++;
     }
-    
+
     $y += 10;
     $pdf->line($L, $y, $R, $y); $y += 12;
     $pdf->text($L, $y, 8, 'PEPP Learning Operations · office@pepplearning.com · Confidential Report', false, 'C', $W);
-    
+
     $bytes = $pdf->output();
     $fname = 'ld-work-report-' . date('Y-m-d-Hi') . '.pdf';
-    
+
     log_admin_activity($pdo, $admin_username, 'data_export', "Exported L&D Work PDF report");
-    
+
     header('Content-Type: application/pdf');
     header('Content-Disposition: attachment; filename="' . $fname . '"');
     header('Content-Length: ' . strlen($bytes));
@@ -298,29 +361,32 @@ $total_topics = 0;
 $active_days = 0;
 $courses_worked = 0;
 $modes_used = 0;
+$total_charge_sum = 0.00;
 
 try {
     // 1. Aggregated Metrics
     $stmt = $pdo->prepare("
-        SELECT 
+        SELECT
             COUNT(DISTINCT t.id) AS total_tasks,
             COUNT(tp.id) AS total_topics,
             COUNT(DISTINCT DATE(t.created_at)) AS active_days,
             COUNT(DISTINCT t.course_id) AS courses_worked,
-            COUNT(DISTINCT t.mode_id) AS modes_used
+            COUNT(DISTINCT t.mode_id) AS modes_used,
+            SUM(tp.calculated_charge) AS total_charge
         FROM ld_tasks t
         LEFT JOIN ld_task_topics tp ON tp.task_id = t.id
         $where_sql
     ");
     $stmt->execute($params);
     $totals = $stmt->fetch();
-    
+
     $total_tasks = $totals['total_tasks'] ?? 0;
     $total_topics = $totals['total_topics'] ?? 0;
     $active_days = $totals['active_days'] ?? 0;
     $courses_worked = $totals['courses_worked'] ?? 0;
     $modes_used = $totals['modes_used'] ?? 0;
-    
+    $total_charge_sum = (float)($totals['total_charge'] ?? 0.00);
+
 } catch (Exception $e) {
     error_log("Report stats error: " . $e->getMessage());
     $stats_error = 'Error calculating summary metrics.';
@@ -338,20 +404,33 @@ try {
     $stmt = $pdo->prepare("SELECT COUNT(DISTINCT t.id) FROM ld_tasks t $where_sql");
     $stmt->execute($params);
     $total_rows = (int)$stmt->fetchColumn();
-    
+
     // Fetch records
     $stmt = $pdo->prepare("
-        SELECT t.*, GROUP_CONCAT(tp.topic_name SEPARATOR '|||') AS topics_list
+        SELECT t.*
         FROM ld_tasks t
-        LEFT JOIN ld_task_topics tp ON tp.task_id = t.id
         $where_sql
-        GROUP BY t.id
         ORDER BY t.created_at DESC
         LIMIT $limit OFFSET $offset
     ");
     $stmt->execute($params);
     $detail_rows = $stmt->fetchAll();
-    
+
+    if (!empty($detail_rows)) {
+        $task_ids = array_map(function($x) { return (int)$x['id']; }, $detail_rows);
+        $in_clause = implode(',', $task_ids);
+        $topics_rows = $pdo->query("SELECT * FROM ld_task_topics WHERE task_id IN ($in_clause) ORDER BY id ASC")->fetchAll();
+
+        $topics_by_task = [];
+        foreach ($topics_rows as $row) {
+            $topics_by_task[$row['task_id']][] = $row;
+        }
+
+        foreach ($detail_rows as &$t) {
+            $t['topics'] = $topics_by_task[$t['id']] ?? [];
+        }
+        unset($t);
+    }
 } catch (Exception $e) {
     error_log("Report details error: " . $e->getMessage());
 }
@@ -712,6 +791,10 @@ include 'includes/admin_nav.php';
             <h3>Avg Topics/Day</h3>
             <p><?php echo $active_days > 0 ? number_format($total_topics / $active_days, 1) : '0.0'; ?></p>
         </div>
+        <div class="stats-card" style="background: linear-gradient(135deg, #10b981, #059669); color: #ffffff;">
+            <h3 style="color: rgba(255,255,255,0.85); font-weight:600;">Total L&D Charge</h3>
+            <p style="margin-top: 4px;">₹<?php echo number_format($total_charge_sum, 2); ?></p>
+        </div>
     </div>
 
     <!-- Charts and Breakdown Visualizations -->
@@ -747,7 +830,7 @@ include 'includes/admin_nav.php';
             <h2>Activity Logs</h2>
             <div class="head-right" style="display:flex; gap:8px;">
                 <!-- Respect Active Filters inside URL -->
-                <?php 
+                <?php
                 $query_str = http_build_query($_GET);
                 $csv_url = "ld-work-report.php?export=csv" . ($query_str ? '&' . $query_str : '');
                 $pdf_url = "ld-work-report.php?export=pdf" . ($query_str ? '&' . $query_str : '');
@@ -766,14 +849,23 @@ include 'includes/admin_nav.php';
                             <th>Staff Name</th>
                             <th>Course</th>
                             <th>Work Mode</th>
-                            <th>Completed Topics</th>
+                            <th>Completed Topics (Details)</th>
+                            <th>Amount</th>
                             <th>Location</th>
                             <th>Status</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($detail_rows as $row): 
-                            $topics = explode('|||', $row['topics_list'] ?? '');
+                        <?php foreach ($detail_rows as $row):
+                            $task_amount = 0.00;
+                            $has_incomplete = false;
+                            foreach ($row['topics'] as $tp) {
+                                if ($tp['quantity'] === null) {
+                                    $has_incomplete = true;
+                                }
+                                $task_amount += (float)$tp['calculated_charge'];
+                            }
+                            $display_mode_name = $row['mode_name_snapshot'] ?: $row['mode_name'];
                         ?>
                             <tr>
                                 <td style="white-space:nowrap; font-size:0.8rem;">
@@ -785,13 +877,32 @@ include 'includes/admin_nav.php';
                                     <div class="cell-sub">Role: <?php echo ucfirst(e($row['admin_role'])); ?></div>
                                 </td>
                                 <td><?php echo e($row['course_name']); ?></td>
-                                <td><?php echo e($row['mode_name']); ?></td>
+                                <td><?php echo e($display_mode_name); ?></td>
                                 <td>
                                     <ul style="padding-left: 14px; list-style-type: disc; font-size: 0.8rem; margin: 0;">
-                                        <?php foreach ($topics as $tp): ?>
-                                            <li><?php echo e($tp); ?></li>
+                                        <?php foreach ($row['topics'] as $tp): ?>
+                                            <li>
+                                                <strong><?php echo e($tp['topic_name']); ?></strong>
+                                                <?php if ($tp['quantity'] !== null): ?>
+                                                    <span style="color:var(--text-muted); font-size:0.75rem;">
+                                                        (<?php echo (float)$tp['quantity']; ?> <?php echo e($row['quantity_label_snapshot'] ?? 'units'); ?>
+                                                        <?php if ($row['charge_per_quantity_snapshot'] !== null): ?>
+                                                            @ ₹<?php echo number_format((float)$row['charge_per_quantity_snapshot'], 2); ?>
+                                                        <?php endif; ?>)
+                                                    </span>
+                                                <?php else: ?>
+                                                    <span style="color:var(--destructive); font-size:0.75rem;">(Quantity not added)</span>
+                                                <?php endif; ?>
+                                            </li>
                                         <?php endforeach; ?>
                                     </ul>
+                                </td>
+                                <td style="font-weight:700; color:var(--success);">
+                                    <?php if ($has_incomplete): ?>
+                                        <span class="badge gray" style="font-size:0.7rem; padding:2px 6px;">Incomplete</span>
+                                    <?php else: ?>
+                                        ₹<?php echo number_format($task_amount, 2); ?>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <a href="<?php echo e($row['maps_url']); ?>" target="_blank" class="btn btn-sm btn-soft-violet" title="View location"><i class="fas fa-map-location-dot"></i> View Map</a>
@@ -807,7 +918,7 @@ include 'includes/admin_nav.php';
                             </tr>
                         <?php endforeach; ?>
                         <?php if (empty($detail_rows)): ?>
-                            <tr><td colspan="7"><div class="empty-state" style="padding:24px;"><p>No task entries match the selected filters.</p></div></td></tr>
+                            <tr><td colspan="8"><div class="empty-state" style="padding:24px;"><p>No task entries match the selected filters.</p></div></td></tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
@@ -815,8 +926,16 @@ include 'includes/admin_nav.php';
 
             <!-- Mobile Layout -->
             <div class="mobile-view">
-                <?php foreach ($detail_rows as $row): 
-                    $topics = explode('|||', $row['topics_list'] ?? '');
+                <?php foreach ($detail_rows as $row):
+                    $task_amount = 0.00;
+                    $has_incomplete = false;
+                    foreach ($row['topics'] as $tp) {
+                        if ($tp['quantity'] === null) {
+                            $has_incomplete = true;
+                        }
+                        $task_amount += (float)$tp['calculated_charge'];
+                    }
+                    $display_mode_name = $row['mode_name_snapshot'] ?: $row['mode_name'];
                 ?>
                     <div class="timeline-card-mobile">
                         <div style="display:flex; justify-content:space-between; align-items:start;">
@@ -824,19 +943,40 @@ include 'includes/admin_nav.php';
                                 <strong style="font-size:0.9rem; color:var(--primary);"><?php echo e($row['admin_name']); ?></strong>
                                 <div style="font-size:0.75rem; color:var(--foreground); opacity:0.85;">Role: <?php echo ucfirst(e($row['admin_role'])); ?></div>
                             </div>
-                            <?php if ($row['status'] === 'active'): ?>
-                                <span class="badge green">Active</span>
-                            <?php else: ?>
-                                <span class="badge red">Deleted</span>
-                            <?php endif; ?>
+                            <div style="text-align:right;">
+                                <?php if ($row['status'] === 'active'): ?>
+                                    <span class="badge green">Active</span>
+                                <?php else: ?>
+                                    <span class="badge red">Deleted</span>
+                                <?php endif; ?>
+                                <div style="font-weight:700; color:var(--success); font-size:0.85rem; margin-top:4px;">
+                                    <?php if ($has_incomplete): ?>
+                                        <span class="badge gray" style="font-size:0.65rem; padding:1px 4px;">Incomplete</span>
+                                    <?php else: ?>
+                                        ₹<?php echo number_format($task_amount, 2); ?>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
                         </div>
                         <div style="margin-top:8px; font-size:0.82rem;">
                             <div><strong>Course:</strong> <?php echo e($row['course_name']); ?></div>
-                            <div><strong>Mode:</strong> <?php echo e($row['mode_name']); ?></div>
+                            <div><strong>Mode:</strong> <?php echo e($display_mode_name); ?></div>
                         </div>
                         <ul style="margin-top:6px; padding-left:14px; list-style-type:disc; font-size:0.8rem;">
-                            <?php foreach ($topics as $tp): ?>
-                                <li><?php echo e($tp); ?></li>
+                            <?php foreach ($row['topics'] as $tp): ?>
+                                <li>
+                                    <?php echo e($tp['topic_name']); ?>
+                                    <?php if ($tp['quantity'] !== null): ?>
+                                        <span style="color:var(--text-muted); font-size:0.75rem;">
+                                            (<?php echo (float)$tp['quantity']; ?> <?php echo e($row['quantity_label_snapshot'] ?? 'units'); ?>
+                                            <?php if ($row['charge_per_quantity_snapshot'] !== null): ?>
+                                                @ ₹<?php echo number_format((float)$row['charge_per_quantity_snapshot'], 2); ?>
+                                            <?php endif; ?>)
+                                        </span>
+                                    <?php else: ?>
+                                        <span style="color:var(--destructive); font-size:0.75rem;">(Quantity not added)</span>
+                                    <?php endif; ?>
+                                </li>
                             <?php endforeach; ?>
                         </ul>
                         <div style="margin-top:10px; font-size:0.75rem; border-top:1px solid rgba(22, 78, 99, 0.05); padding-top:8px; display:flex; justify-content:space-between; align-items:center;">
@@ -851,7 +991,7 @@ include 'includes/admin_nav.php';
             </div>
 
             <!-- Pagination -->
-            <?php if ($total_rows > $limit): 
+            <?php if ($total_rows > $limit):
                 $total_pages = ceil($total_rows / $limit);
                 $q = $_GET;
             ?>

@@ -233,10 +233,10 @@ try {
         $ll = $stmt_ll->fetchColumn();
         $_SESSION['login_time'] = $ll ? strtotime($ll) : time();
     }
-    
+
     $cur_page = basename($_SERVER['SCRIPT_NAME']);
     $login_dt = date('Y-m-d H:i:s', $_SESSION['login_time']);
-    
+
     // Resolve section
     $cur_sec = 'Other';
     $low_page = strtolower(trim($cur_page));
@@ -251,11 +251,11 @@ try {
 
     $lat = isset($_COOKIE['pepp_lat']) && is_numeric($_COOKIE['pepp_lat']) ? (float)$_COOKIE['pepp_lat'] : null;
     $lng = isset($_COOKIE['pepp_lng']) && is_numeric($_COOKIE['pepp_lng']) ? (float)$_COOKIE['pepp_lng'] : null;
-    
+
     $stmt_pres = $pdo->prepare("
         INSERT INTO admin_presence (username, current_page, current_section, last_seen, login_time, latitude, longitude, ip_address)
         VALUES (?, ?, ?, NOW(), ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE 
+        ON DUPLICATE KEY UPDATE
             current_page = VALUES(current_page),
             current_section = VALUES(current_section),
             last_seen = NOW(),
@@ -264,12 +264,12 @@ try {
             ip_address = VALUES(ip_address)
     ");
     $stmt_pres->execute([
-        $admin_username, 
-        $cur_page, 
-        $cur_sec, 
-        $login_dt, 
-        $lat, 
-        $lng, 
+        $admin_username,
+        $cur_page,
+        $cur_sec,
+        $login_dt,
+        $lat,
+        $lng,
         $_SERVER['REMOTE_ADDR'] ?? null
     ]);
 } catch (Exception $e) {
@@ -291,42 +291,42 @@ $_SESSION['last_activity'] = time();
 // Server-side action check blocks to prevent unauthorized actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $post_action = strtolower($_POST['action'] ?? '');
-    
+
     // Allow self-account updates (like change_password)
     if ($post_action !== 'change_password') {
         // Check Delete
         if (!can_admin_delete()) {
-            if (strpos($post_action, 'delete') !== false || 
-                strpos($post_action, 'remove') !== false || 
-                strpos($post_action, 'reject') !== false || 
+            if (strpos($post_action, 'delete') !== false ||
+                strpos($post_action, 'remove') !== false ||
+                strpos($post_action, 'reject') !== false ||
                 strpos($post_action, 'cancel') !== false ||
                 strpos($post_action, 'purge') !== false) {
-                
+
                 die("<div style='color:#ef4444; font-family:sans-serif; text-align:center; margin-top:50px; padding:20px; border:1px solid #fca5a5; background:#fef2f2; border-radius:12px; max-width:500px; margin-left:auto; margin-right:auto;'><h3>Access Denied</h3><p>You do not have permission to delete records.</p></div>");
             }
         }
-        
+
         // Check Export
         if (!can_admin_export()) {
-            if (strpos($post_action, 'export') !== false || 
-                strpos($post_action, 'download') !== false || 
-                strpos($post_action, 'csv') !== false || 
-                strpos($post_action, 'excel') !== false || 
+            if (strpos($post_action, 'export') !== false ||
+                strpos($post_action, 'download') !== false ||
+                strpos($post_action, 'csv') !== false ||
+                strpos($post_action, 'excel') !== false ||
                 strpos($post_action, 'report') !== false) {
-                
+
                 die("<div style='color:#ef4444; font-family:sans-serif; text-align:center; margin-top:50px; padding:20px; border:1px solid #fca5a5; background:#fef2f2; border-radius:12px; max-width:500px; margin-left:auto; margin-right:auto;'><h3>Access Denied</h3><p>You do not have permission to export data.</p></div>");
             }
         }
-        
+
         // Check Edit / Create
         if (!can_admin_edit()) {
             // Block any modifications except search or details viewing
-            if ($post_action !== '' && 
-                $post_action !== 'search' && 
-                $post_action !== 'filter' && 
-                strpos($post_action, 'load') === false && 
+            if ($post_action !== '' &&
+                $post_action !== 'search' &&
+                $post_action !== 'filter' &&
+                strpos($post_action, 'load') === false &&
                 strpos($post_action, 'view') === false) {
-                
+
                 die("<div style='color:#ef4444; font-family:sans-serif; text-align:center; margin-top:50px; padding:20px; border:1px solid #fca5a5; background:#fef2f2; border-radius:12px; max-width:500px; margin-left:auto; margin-right:auto;'><h3>Access Denied</h3><p>You do not have permission to edit or create records.</p></div>");
             }
         }
@@ -337,22 +337,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 if (isset($_GET['action'])) {
     $get_action = strtolower($_GET['action']);
     if (!can_admin_export()) {
-        if (strpos($get_action, 'export') !== false || 
-            strpos($get_action, 'download') !== false || 
-            strpos($get_action, 'csv') !== false || 
-            strpos($get_action, 'excel') !== false || 
+        if (strpos($get_action, 'export') !== false ||
+            strpos($get_action, 'download') !== false ||
+            strpos($get_action, 'csv') !== false ||
+            strpos($get_action, 'excel') !== false ||
             strpos($get_action, 'report') !== false) {
-            
+
             die("<div style='color:#ef4444; font-family:sans-serif; text-align:center; margin-top:50px; padding:20px; border:1px solid #fca5a5; background:#fef2f2; border-radius:12px; max-width:500px; margin-left:auto; margin-right:auto;'><h3>Access Denied</h3><p>You do not have permission to export data.</p></div>");
         }
     }
     if (!can_admin_delete()) {
-        if (strpos($get_action, 'delete') !== false || 
-            strpos($get_action, 'remove') !== false || 
-            strpos($get_action, 'reject') !== false || 
+        if (strpos($get_action, 'delete') !== false ||
+            strpos($get_action, 'remove') !== false ||
+            strpos($get_action, 'reject') !== false ||
             strpos($get_action, 'cancel') !== false ||
             strpos($get_action, 'purge') !== false) {
-            
+
             die("<div style='color:#ef4444; font-family:sans-serif; text-align:center; margin-top:50px; padding:20px; border:1px solid #fca5a5; background:#fef2f2; border-radius:12px; max-width:500px; margin-left:auto; margin-right:auto;'><h3>Access Denied</h3><p>You do not have permission to delete records.</p></div>");
         }
     }
@@ -369,7 +369,7 @@ function can_access($page_key) {
     }
     if (is_super_admin()) return true;
     if (trim($admin_perms) === 'ALL') return true;
-    
+
     $perms = array_map('trim', explode(',', $admin_perms));
     if (($page_key === 'whatsapp-inbox' || $page_key === 'whatsapp-marketing-templates') && in_array('communication', $perms, true)) {
         return true;
@@ -559,13 +559,13 @@ function status_log($pdo, $user_id, $old, $new, $reason, $admin) {
 function is_credential_restricted($scope) {
     global $admin_credential_visibility, $admin_credential_visibility_scopes;
     if (is_super_admin()) return false;
-    
+
     $vis = $admin_credential_visibility ?? 'visible';
     if ($vis === 'visible') return false;
-    
+
     $scopes_str = $admin_credential_visibility_scopes ?? '';
     if (trim($scopes_str) === '') return false;
-    
+
     $scopes = array_map('trim', explode(',', strtolower($scopes_str)));
     return in_array(strtolower($scope), $scopes, true);
 }
@@ -574,13 +574,13 @@ function format_credential($value, $type, $scope = 'students') {
     global $admin_credential_visibility;
     $value = trim((string)$value);
     if ($value === '') return '';
-    
+
     if (!is_credential_restricted($scope)) {
         return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
     }
-    
+
     $vis = $admin_credential_visibility ?? 'visible';
-    
+
     if ($vis === 'hide') {
         $len = strlen($value);
         if ($type === 'email') {
@@ -592,7 +592,7 @@ function format_credential($value, $type, $scope = 'students') {
         }
         return '<span style="filter: blur(4.5px); -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none; pointer-events: none; display: inline-block;">' . $obfuscated . '</span>';
     }
-    
+
     if ($vis === 'mask') {
         if ($type === 'email') {
             $parts = explode('@', $value);
@@ -621,7 +621,7 @@ function format_credential($value, $type, $scope = 'students') {
             return htmlspecialchars(substr($value, 0, 5) . str_repeat('*', $len - 10) . substr($value, -5), ENT_QUOTES, 'UTF-8');
         }
     }
-    
+
     return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
 }
 
@@ -629,13 +629,13 @@ function format_credential_text($value, $type, $scope = 'students') {
     global $admin_credential_visibility;
     $value = trim((string)$value);
     if ($value === '') return '';
-    
+
     if (!is_credential_restricted($scope)) {
         return $value;
     }
-    
+
     $vis = $admin_credential_visibility ?? 'visible';
-    
+
     if ($vis === 'hide') {
         $len = strlen($value);
         if ($type === 'email') {
@@ -646,7 +646,7 @@ function format_credential_text($value, $type, $scope = 'students') {
             return str_repeat('x', min(15, $len));
         }
     }
-    
+
     if ($vis === 'mask') {
         if ($type === 'email') {
             $parts = explode('@', $value);
@@ -675,7 +675,7 @@ function format_credential_text($value, $type, $scope = 'students') {
             return substr($value, 0, 5) . str_repeat('*', $len - 10) . substr($value, -5);
         }
     }
-    
+
     return $value;
 }
 
@@ -702,12 +702,54 @@ function ld_tables_exist($pdo) {
         try {
             $tables = ['ld_work_courses', 'ld_work_modes', 'ld_tasks', 'ld_task_topics', 'ld_task_audit'];
             foreach ($tables as $tbl) {
-                $has = $pdo->query("SHOW TABLES LIKE '$tbl'")->fetchColumn();
+                $has = false;
+                try {
+                    $has = (bool)$pdo->query("SELECT 1 FROM `$tbl` LIMIT 1");
+                } catch (Exception $e) {}
                 if (!$has) {
                     $exists = false;
                     return false;
                 }
             }
+
+            // Helper to check if a column exists
+            $has_col = function($db, $table, $column) {
+                try {
+                    $db->query("SELECT `$column` FROM `$table` LIMIT 1");
+                    return true;
+                } catch (Exception $e) {
+                    return false;
+                }
+            };
+
+            // Self-healing columns addition
+            // 1. ld_work_modes
+            if (!$has_col($pdo, 'ld_work_modes', 'quantity_label')) {
+                $pdo->exec("ALTER TABLE `ld_work_modes` ADD COLUMN `quantity_label` VARCHAR(100) DEFAULT NULL");
+            }
+            if (!$has_col($pdo, 'ld_work_modes', 'charge_per_quantity')) {
+                $pdo->exec("ALTER TABLE `ld_work_modes` ADD COLUMN `charge_per_quantity` DECIMAL(10,2) NOT NULL DEFAULT 0.00");
+            }
+
+            // 2. ld_tasks
+            if (!$has_col($pdo, 'ld_tasks', 'quantity_label_snapshot')) {
+                $pdo->exec("ALTER TABLE `ld_tasks` ADD COLUMN `quantity_label_snapshot` VARCHAR(100) DEFAULT NULL");
+            }
+            if (!$has_col($pdo, 'ld_tasks', 'charge_per_quantity_snapshot')) {
+                $pdo->exec("ALTER TABLE `ld_tasks` ADD COLUMN `charge_per_quantity_snapshot` DECIMAL(10,2) NOT NULL DEFAULT 0.00");
+            }
+            if (!$has_col($pdo, 'ld_tasks', 'mode_name_snapshot')) {
+                $pdo->exec("ALTER TABLE `ld_tasks` ADD COLUMN `mode_name_snapshot` VARCHAR(255) DEFAULT NULL");
+            }
+
+            // 3. ld_task_topics
+            if (!$has_col($pdo, 'ld_task_topics', 'quantity')) {
+                $pdo->exec("ALTER TABLE `ld_task_topics` ADD COLUMN `quantity` DECIMAL(10,2) DEFAULT NULL");
+            }
+            if (!$has_col($pdo, 'ld_task_topics', 'calculated_charge')) {
+                $pdo->exec("ALTER TABLE `ld_task_topics` ADD COLUMN `calculated_charge` DECIMAL(10,2) NOT NULL DEFAULT 0.00");
+            }
+
             $exists = true;
         } catch (Exception $e) {
             $exists = false;
@@ -753,11 +795,11 @@ if (!function_exists('checkLeadDuplicate')) {
             $isSqlite = ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
         } catch (Exception $e) {}
         $lockSql = ($inTransaction && !$isSqlite) ? " FOR UPDATE" : "";
-        
+
         // Ignore leads whose status is 'rejected'
         $stmt = $pdo->prepare("
-            SELECT id, whatsapp_number, interested_course, status, name 
-            FROM leads 
+            SELECT id, whatsapp_number, interested_course, status, name
+            FROM leads
             WHERE (whatsapp_number LIKE ? OR whatsapp_number LIKE ?)
               AND status <> 'rejected'
             " . $lockSql
@@ -770,12 +812,12 @@ if (!function_exists('checkLeadDuplicate')) {
             if ($excludeLeadId !== null && (int)$l['id'] === (int)$excludeLeadId) {
                 continue;
             }
-            if (normalizeLeadPhone($l['whatsapp_number']) === $normPhone && 
+            if (normalizeLeadPhone($l['whatsapp_number']) === $normPhone &&
                 normalizeLeadCourse($l['interested_course']) === $normCourse) {
                 $matches[] = $l;
             }
         }
-        
+
         return [
             'count' => count($matches),
             'matches' => $matches
@@ -813,39 +855,39 @@ if (!function_exists('convertLeadFromApprovedAdmission')) {
             if ($status === 'converted') {
                 return true; // Idempotent
             }
-            
+
             $stmtUpdate = $pdo->prepare("
-                UPDATE leads 
-                SET status = 'converted', 
-                    converted_user_id = ?, 
-                    updated_at = NOW() 
+                UPDATE leads
+                SET status = 'converted',
+                    converted_user_id = ?,
+                    updated_at = NOW()
                 WHERE id = ?
             ");
             $stmtUpdate->execute([$studentUserId, $leadId]);
-            
+
             // Log lead activity timeline
             if (function_exists('lead_log')) {
                 lead_log($pdo, $leadId, 'status_change', "Lead marked converted via matched approved student #{$studentUserId}", $status, 'converted', null, $adminUsername);
             } else {
                 $stmtAct = $pdo->prepare("
-                    INSERT INTO lead_activity (lead_id, activity_type, remark, old_status, new_status, performed_by, performed_at) 
+                    INSERT INTO lead_activity (lead_id, activity_type, remark, old_status, new_status, performed_by, performed_at)
                     VALUES (?, 'status_change', ?, ?, 'converted', ?, NOW())
                 ");
                 $stmtAct->execute([$leadId, "Lead marked converted via matched approved student #{$studentUserId}", $status, $adminUsername]);
                 $pdo->prepare("UPDATE leads SET last_activity_at = NOW() WHERE id = ?")->execute([$leadId]);
             }
-            
+
             // Log admin activity
             if (function_exists('log_admin_activity')) {
                 log_admin_activity($pdo, $adminUsername, 'lead_converted', "Lead #{$leadId} marked converted for Student #{$studentUserId}");
             } else {
                 $stmtLog = $pdo->prepare("
-                    INSERT INTO admin_activity_log (username, action_type, description, ip_address, user_agent, timestamp) 
+                    INSERT INTO admin_activity_log (username, action_type, description, ip_address, user_agent, timestamp)
                     VALUES (?, 'lead_converted', ?, ?, ?, NOW())
                 ");
                 $stmtLog->execute([$adminUsername, "Lead #{$leadId} marked converted for Student #{$studentUserId}", $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1', $_SERVER['HTTP_USER_AGENT'] ?? 'CLI']);
             }
-            
+
             return true;
         } catch (Exception $e) {
             error_log("Failed to convert lead #{$leadId}: " . $e->getMessage());
