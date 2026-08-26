@@ -57,7 +57,19 @@ if ($tab === 'payments') {
             }
 
             // Fetch intern username to query tasks
-            $stmt = $pdo->prepare("SELECT username, DATE(created_at) AS joining_date FROM admins WHERE id = ? AND admin_type = 'intern'");
+            $stmt = $pdo->prepare("
+                SELECT username, DATE(created_at) AS joining_date
+                FROM admins
+                WHERE id = ?
+                  AND (
+                      admin_type = 'intern'
+                      OR (
+                          role != 'super_admin'
+                          AND permissions != 'ALL'
+                          AND (permissions = 'task-tracker' OR permissions LIKE '%,task-tracker' OR permissions LIKE 'task-tracker,%' OR permissions LIKE '%,task-tracker,%')
+                      )
+                  )
+            ");
             $stmt->execute([$intern_id]);
             $intern = $stmt->fetch();
             if (!$intern) {
@@ -237,7 +249,19 @@ if ($tab === 'payments') {
             $paid_date = trim($_POST['paid_date'] ?? '');
             $remarks = trim($_POST['remarks'] ?? '');
 
-            $stmt = $pdo->prepare("SELECT username, full_name, DATE(created_at) AS joining_date FROM admins WHERE id = ? AND admin_type = 'intern'");
+            $stmt = $pdo->prepare("
+                SELECT username, full_name, DATE(created_at) AS joining_date
+                FROM admins
+                WHERE id = ?
+                  AND (
+                      admin_type = 'intern'
+                      OR (
+                          role != 'super_admin'
+                          AND permissions != 'ALL'
+                          AND (permissions = 'task-tracker' OR permissions LIKE '%,task-tracker' OR permissions LIKE 'task-tracker,%' OR permissions LIKE '%,task-tracker,%')
+                      )
+                  )
+            ");
             $stmt->execute([$intern_id]);
             $intern = $stmt->fetch();
 
@@ -462,6 +486,11 @@ if ($tab === 'payments') {
             SELECT id, username, full_name, status, DATE(created_at) AS joining_date
             FROM admins
             WHERE admin_type = 'intern'
+               OR (
+                   role != 'super_admin'
+                   AND permissions != 'ALL'
+                   AND (permissions = 'task-tracker' OR permissions LIKE '%,task-tracker' OR permissions LIKE 'task-tracker,%' OR permissions LIKE '%,task-tracker,%')
+               )
             ORDER BY full_name ASC
         ")->fetchAll();
 

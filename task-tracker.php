@@ -28,7 +28,7 @@ if (!$me) {
         'role' => $_SESSION['admin_role'] ?? 'admin'
     ];
 }
-$is_intern = (($_SESSION['admin_role'] ?? '') === 'intern' || ($me['role'] ?? '') === 'intern');
+$is_intern = is_ld_intern_user();
 
 
 // Audit logger helper

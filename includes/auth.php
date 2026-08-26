@@ -459,6 +459,42 @@ function get_admin_type() {
     return $admin_row['admin_type'] ?? 'erp_admin';
 }
 
+/** Checks if the currently logged-in user is eligible/assigned as an L&D intern. */
+function is_ld_intern_user() {
+    global $admin_role, $admin_perms;
+    if (get_admin_type() === 'intern') {
+        return true;
+    }
+    if ($admin_role === 'super_admin' || get_admin_type() === 'superadmin') {
+        return false;
+    }
+    if (trim($admin_perms) === 'ALL') {
+        return false;
+    }
+    $perms = array_map('trim', explode(',', $admin_perms));
+    return in_array('task-tracker', $perms, true);
+}
+
+/** Checks if a given admin database row is eligible/assigned as an L&D intern. */
+function is_ld_intern($admin) {
+    if (!isset($admin['permissions']) || !isset($admin['role'])) {
+        return false;
+    }
+    $admin_type = $admin['admin_type'] ?? 'erp_admin';
+    if ($admin_type === 'intern') {
+        return true;
+    }
+    if ($admin['role'] === 'super_admin' || $admin_type === 'superadmin') {
+        return false;
+    }
+    $perms = $admin['permissions'];
+    if (trim($perms) === 'ALL') {
+        return false;
+    }
+    $perms_array = array_map('trim', explode(',', $perms));
+    return in_array('task-tracker', $perms_array, true);
+}
+
 /** Get courses assigned to a mentor admin. Returns array of course_name strings. */
 function get_mentor_courses($pdo, $admin_id) {
     try {
