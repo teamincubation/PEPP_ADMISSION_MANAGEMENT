@@ -28,6 +28,8 @@ if (!$me) {
         'role' => $_SESSION['admin_role'] ?? 'admin'
     ];
 }
+$is_intern = (($_SESSION['admin_role'] ?? '') === 'intern' || ($me['role'] ?? '') === 'intern');
+
 
 // Audit logger helper
 function log_ld_audit($pdo, $taskId, $adminId, $username, $action, $prev, $new, $lat, $lon, $mapsUrl) {
@@ -217,6 +219,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if (!$task) {
                     $error_message = "Task not found.";
+                } elseif (($lock_info = is_ld_task_locked($pdo, $task['admin_id'], date('Y-m-d', strtotime($task['created_at']))))) {
+                    $error_message = "This task belongs to a completed payment period (" . date('d M Y', strtotime($lock_info['period_start_date'])) . " – " . date('d M Y', strtotime($lock_info['period_end_date'])) . ") and can no longer be edited.";
                 } elseif (!is_super_admin() && $task['admin_username'] !== $admin_username) {
                     $error_message = "You are not authorized to update this task.";
                 } elseif ($course_id <= 0 || $mode_id <= 0 || empty($topics)) {
@@ -341,6 +345,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if (!$task) {
                     $error_message = "Task not found.";
+                } elseif (($lock_info = is_ld_task_locked($pdo, $task['admin_id'], date('Y-m-d', strtotime($task['created_at']))))) {
+                    $error_message = "This task belongs to a completed payment period (" . date('d M Y', strtotime($lock_info['period_start_date'])) . " – " . date('d M Y', strtotime($lock_info['period_end_date'])) . ") and can no longer be deleted.";
                 } elseif (!is_super_admin() && $task['admin_username'] !== $admin_username) {
                     $error_message = "You are not authorized to delete this task.";
                 } else {
@@ -395,8 +401,9 @@ $active_modes = $pdo->query("SELECT * FROM ld_work_modes WHERE status = 'active'
 // Fetch Logged-in User's Active Tasks with Topics
 $my_tasks = [];
 try {
+    $charge_field_sql = $is_intern ? "NULL AS charge_per_quantity_snapshot" : "t.charge_per_quantity_snapshot";
     $stmt = $pdo->prepare("
-        SELECT t.*
+        SELECT t.id, t.admin_id, t.admin_username, t.admin_name, t.admin_role, t.course_id, t.course_name, t.mode_id, t.mode_name, t.latitude, t.longitude, t.maps_url, t.ip_address, t.user_agent, t.status, t.created_at, t.updated_at, t.quantity_label_snapshot, t.mode_name_snapshot, $charge_field_sql
         FROM ld_tasks t
         WHERE t.admin_username = ? AND t.status = 'active'
         ORDER BY t.created_at DESC
@@ -407,7 +414,8 @@ try {
     if (!empty($my_tasks)) {
         $task_ids = array_map(function($x) { return (int)$x['id']; }, $my_tasks);
         $in_clause = implode(',', $task_ids);
-        $topics_rows = $pdo->query("SELECT * FROM ld_task_topics WHERE task_id IN ($in_clause) ORDER BY id ASC")->fetchAll();
+        $calc_charge_field_sql = $is_intern ? "NULL AS calculated_charge" : "calculated_charge";
+        $topics_rows = $pdo->query("SELECT id, task_id, topic_name, quantity, $calc_charge_field_sql FROM ld_task_topics WHERE task_id IN ($in_clause) ORDER BY id ASC")->fetchAll();
 
         $topics_by_task = [];
         foreach ($topics_rows as $row) {
@@ -450,7 +458,8 @@ foreach ($active_modes as $m) {
     $modes_json[$m['id']] = [
         'name' => $m['mode_name'],
         'qty_label' => $m['quantity_label'] ?? '',
-        'charge_per_quantity' => $m['charge_per_quantity'] !== null ? (float)$m['charge_per_quantity'] : null
+        'is_charging' => ($m['charge_per_quantity'] !== null),
+        'charge_per_quantity' => !$is_intern && $m['charge_per_quantity'] !== null ? (float)$m['charge_per_quantity'] : null
     ];
 }
 ?>
@@ -779,7 +788,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 </div>
                                 <div style="text-align:right;">
                                     <span class="badge blue"><?php echo count($t['topics']); ?> topics</span>
-                                    <?php if (!$has_incomplete && $t['charge_per_quantity_snapshot'] !== null): ?>
+                                    <?php if (!$is_intern && !$has_incomplete && $t['charge_per_quantity_snapshot'] !== null): ?>
                                         <div style="font-size:0.8rem; font-weight:700; color:var(--success); margin-top:4px;">₹<?php echo number_format($total_task_charge, 2); ?></div>
                                     <?php endif; ?>
                                 </div>
@@ -801,10 +810,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                             <?php echo e($tp['topic_name']); ?>
                                             <?php if ($tp['quantity'] !== null): ?>
                                                 <span style="font-weight:600; color:var(--text-muted);">
-                                                    (<?php echo (float)$tp['quantity']; ?> <?php echo e($t['quantity_label_snapshot'] ?? 'units'); ?>
-                                                    <?php if ($t['charge_per_quantity_snapshot'] !== null): ?>
-                                                        @ ₹<?php echo number_format((float)$t['charge_per_quantity_snapshot'], 2); ?>/unit = ₹<?php echo number_format((float)$tp['calculated_charge'], 2); ?>
-                                                    <?php endif; ?>)
+                                                    (<?php echo (float)$tp['quantity']; ?> <?php echo e($t['quantity_label_snapshot'] ?? 'units'); ?><?php if (!$is_intern && $t['charge_per_quantity_snapshot'] !== null): ?> @ ₹<?php echo number_format((float)$t['charge_per_quantity_snapshot'], 2); ?>/unit = ₹<?php echo number_format((float)$tp['calculated_charge'], 2); ?><?php endif; ?>)
                                                 </span>
                                             <?php else: ?>
                                                 <span style="font-weight:600; color:var(--destructive);">
@@ -817,18 +823,28 @@ document.addEventListener('DOMContentLoaded', function() {
                             </div>
 
                             <div class="timeline-actions">
-                                <button type="button" class="btn btn-sm btn-soft-amber" onclick='enterEditMode(<?php echo json_encode([
-                                    "id" => (int)$t["id"],
-                                    "course_id" => (int)$t["course_id"],
-                                    "mode_id" => (int)$t["mode_id"],
-                                    "topics" => array_map(function($tp) {
-                                        return [
-                                            "name" => $tp["topic_name"],
-                                            "qty" => $tp["quantity"] !== null ? (float)$tp["quantity"] : ""
-                                        ];
-                                    }, $t["topics"])
-                                ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i> Edit</button>
-                                <button type="button" class="btn btn-sm btn-soft-red" onclick="openDeleteModal(<?php echo (int)$t['id']; ?>)"><i class="fas fa-trash"></i> Delete</button>
+                                <?php
+                                $lock_info = is_ld_task_locked($pdo, $t['admin_id'], date('Y-m-d', strtotime($t['created_at'])));
+                                if ($lock_info):
+                                ?>
+                                    <span style="font-weight:700; color:var(--text-muted); font-size:0.85rem; display:inline-flex; align-items:center; gap:6px;">
+                                        <i class="fas fa-lock" style="color:var(--success-ink);"></i> Paid &amp; Locked
+                                        <small style="font-weight:500;">(<?php echo date('d M Y', strtotime($lock_info['period_start_date'])) . ' – ' . date('d M Y', strtotime($lock_info['period_end_date'])); ?>)</small>
+                                    </span>
+                                <?php else: ?>
+                                    <button type="button" class="btn btn-sm btn-soft-amber" onclick='enterEditMode(<?php echo json_encode([
+                                        "id" => (int)$t["id"],
+                                        "course_id" => (int)$t["course_id"],
+                                        "mode_id" => (int)$t["mode_id"],
+                                        "topics" => array_map(function($tp) {
+                                            return [
+                                                "name" => $tp["topic_name"],
+                                                "qty" => $tp["quantity"] !== null ? (float)$tp["quantity"] : ""
+                                            ];
+                                        }, $t["topics"])
+                                    ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i> Edit</button>
+                                    <button type="button" class="btn btn-sm btn-soft-red" onclick="openDeleteModal(<?php echo (int)$t['id']; ?>)"><i class="fas fa-trash"></i> Delete</button>
+                                <?php endif; ?>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -975,7 +991,7 @@ function isQtyRequired() {
     var modeId = modeSelect ? modeSelect.value : '';
     if (modeId && workModesConfig[modeId]) {
         var cfg = workModesConfig[modeId];
-        return (cfg.qty_label !== undefined && cfg.qty_label !== null && cfg.qty_label.trim() !== '' && cfg.charge_per_quantity !== null);
+        return (cfg.qty_label !== undefined && cfg.qty_label !== null && cfg.qty_label.trim() !== '' && cfg.is_charging);
     }
     return false;
 }

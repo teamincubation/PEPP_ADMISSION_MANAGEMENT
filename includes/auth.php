@@ -750,12 +750,189 @@ function ld_tables_exist($pdo) {
                 $pdo->exec("ALTER TABLE `ld_task_topics` ADD COLUMN `calculated_charge` DECIMAL(10,2) NOT NULL DEFAULT 0.00");
             }
 
+            // 4. ld_intern_payments & ld_intern_payment_items self-healing check
+            $has_pay_table = false;
+            try {
+                $has_pay_table = (bool)$pdo->query("SELECT 1 FROM `ld_intern_payments` LIMIT 1");
+            } catch (Exception $e) {}
+            if (!$has_pay_table) {
+                $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+                if ($driver === 'sqlite') {
+                    $pdo->exec("
+                        CREATE TABLE IF NOT EXISTS ld_intern_payments (
+                          id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          voucher_no TEXT NOT NULL UNIQUE,
+                          intern_id INTEGER NOT NULL,
+                          intern_username_snapshot TEXT NOT NULL,
+                          intern_name_snapshot TEXT NOT NULL,
+                          period_start_date TEXT NOT NULL,
+                          period_end_date TEXT NOT NULL,
+                          expected_amount REAL NOT NULL,
+                          adjustment_amount REAL NOT NULL DEFAULT 0.00,
+                          paid_amount REAL NOT NULL,
+                          payment_account_id INTEGER DEFAULT NULL,
+                          payment_account_name_snapshot TEXT DEFAULT NULL,
+                          paid_date TEXT NOT NULL,
+                          screenshot_path TEXT DEFAULT NULL,
+                          remarks TEXT DEFAULT NULL,
+                          status TEXT NOT NULL DEFAULT 'Completed',
+                          created_by TEXT NOT NULL,
+                          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                          updated_at TEXT DEFAULT NULL
+                        )
+                    ");
+                } else {
+                    $pdo->exec("
+                        CREATE TABLE IF NOT EXISTS `ld_intern_payments` (
+                          `id` INT AUTO_INCREMENT PRIMARY KEY,
+                          `voucher_no` VARCHAR(50) NOT NULL UNIQUE,
+                          `intern_id` INT NOT NULL,
+                          `intern_username_snapshot` VARCHAR(100) NOT NULL,
+                          `intern_name_snapshot` VARCHAR(255) NOT NULL,
+                          `period_start_date` DATE NOT NULL,
+                          `period_end_date` DATE NOT NULL,
+                          `expected_amount` DECIMAL(10,2) NOT NULL,
+                          `adjustment_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+                          `paid_amount` DECIMAL(10,2) NOT NULL,
+                          `payment_account_id` INT DEFAULT NULL,
+                          `payment_account_name_snapshot` VARCHAR(255) DEFAULT NULL,
+                          `paid_date` DATE NOT NULL,
+                          `screenshot_path` VARCHAR(255) DEFAULT NULL,
+                          `remarks` TEXT DEFAULT NULL,
+                          `status` VARCHAR(50) NOT NULL DEFAULT 'Completed',
+                          `created_by` VARCHAR(100) NOT NULL,
+                          `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                          `updated_at` DATETIME DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+                          FOREIGN KEY (`payment_account_id`) REFERENCES `payment_accounts` (`id`) ON DELETE SET NULL,
+                          INDEX `idx_intern_period` (`intern_id`, `period_start_date`, `period_end_date`)
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+                    ");
+                }
+            }
+
+            $has_item_table = false;
+            try {
+                $has_item_table = (bool)$pdo->query("SELECT 1 FROM `ld_intern_payment_items` LIMIT 1");
+            } catch (Exception $e) {}
+            if (!$has_item_table) {
+                $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+                if ($driver === 'sqlite') {
+                    $pdo->exec("
+                        CREATE TABLE IF NOT EXISTS ld_intern_payment_items (
+                          id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          payment_id INTEGER NOT NULL,
+                          work_mode_id INTEGER NOT NULL,
+                          work_mode_name_snapshot TEXT NOT NULL,
+                          quantity REAL NOT NULL,
+                          quantity_label_snapshot TEXT DEFAULT NULL,
+                          FOREIGN KEY (payment_id) REFERENCES ld_intern_payments (id) ON DELETE CASCADE
+                        )
+                    ");
+                } else {
+                    $pdo->exec("
+                        CREATE TABLE IF NOT EXISTS `ld_intern_payment_items` (
+                          `id` INT AUTO_INCREMENT PRIMARY KEY,
+                          `payment_id` INT NOT NULL,
+                          `work_mode_id` INT NOT NULL,
+                          `work_mode_name_snapshot` VARCHAR(255) NOT NULL,
+                          `quantity` DECIMAL(10,2) NOT NULL,
+                          `quantity_label_snapshot` VARCHAR(100) DEFAULT NULL,
+                          FOREIGN KEY (`payment_id`) REFERENCES `ld_intern_payments` (`id`) ON DELETE CASCADE
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+                    ");
+                }
+            }
+
+            // 5. self-healing ld_payment_id in expenses table & L&D Intern Payment in expense_types
+            $has_expenses = false;
+            try {
+                $has_expenses = (bool)$pdo->query("SELECT 1 FROM `expenses` LIMIT 1");
+            } catch (Exception $e) {}
+            if ($has_expenses) {
+                if (!$has_col($pdo, 'expenses', 'ld_payment_id')) {
+                    $pdo->exec("ALTER TABLE `expenses` ADD COLUMN `ld_payment_id` INT DEFAULT NULL");
+                }
+
+                $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+                if ($driver === 'mysql') {
+                    // Check if parent table exists
+                    $has_parent = false;
+                    try {
+                        $has_parent = (bool)$pdo->query("SELECT 1 FROM `ld_intern_payments` LIMIT 1");
+                    } catch (Exception $e) {}
+
+                    if ($has_parent) {
+                        // Check for orphaned ld_payment_id values
+                        $stmt_orphan = $pdo->query("
+                            SELECT COUNT(*)
+                            FROM `expenses`
+                            WHERE `ld_payment_id` IS NOT NULL
+                              AND `ld_payment_id` NOT IN (SELECT `id` FROM `ld_intern_payments`)
+                        ");
+                        $orphan_count = (int)$stmt_orphan->fetchColumn();
+
+                        if ($orphan_count > 0) {
+                            error_log("L&D Migration WARNING: Found {$orphan_count} orphaned records in expenses table. Foreign key constraint 'fk_expense_ld_payment' creation deferred until resolved.");
+                        } else {
+                            // Check if constraint fk_expense_ld_payment already exists
+                            $stmt_fk = $pdo->prepare("
+                                SELECT COUNT(*)
+                                FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+                                WHERE CONSTRAINT_NAME = 'fk_expense_ld_payment'
+                                  AND TABLE_SCHEMA = DATABASE()
+                            ");
+                            $stmt_fk->execute();
+                            $fk_exists = (int)$stmt_fk->fetchColumn();
+
+                            if ($fk_exists === 0) {
+                                $pdo->exec("
+                                    ALTER TABLE `expenses`
+                                    ADD CONSTRAINT `fk_expense_ld_payment`
+                                    FOREIGN KEY (`ld_payment_id`)
+                                    REFERENCES `ld_intern_payments` (`id`)
+                                    ON DELETE SET NULL
+                                ");
+                            }
+                        }
+                    }
+                }
+            }
+
+            $has_exp_types = false;
+            try {
+                $has_exp_types = (bool)$pdo->query("SELECT 1 FROM `expense_types` LIMIT 1");
+            } catch (Exception $e) {}
+            if ($has_exp_types) {
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM expense_types WHERE name = ?");
+                $stmt->execute(['L&D Intern Payment']);
+                if ((int)$stmt->fetchColumn() === 0) {
+                    $pdo->prepare("INSERT INTO expense_types (name, status) VALUES (?, 'active')")->execute(['L&D Intern Payment']);
+                }
+            }
+
             $exists = true;
         } catch (Exception $e) {
             $exists = false;
         }
     }
     return $exists;
+}
+
+function is_ld_task_locked($pdo, $intern_id, $task_date) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT id, voucher_no, period_start_date, period_end_date
+            FROM ld_intern_payments
+            WHERE intern_id = ?
+              AND status = 'Completed'
+              AND ? BETWEEN period_start_date AND period_end_date
+            LIMIT 1
+        ");
+        $stmt->execute([$intern_id, $task_date]);
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        return false;
+    }
 }
 
 /**

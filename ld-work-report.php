@@ -1,6 +1,12 @@
 <?php
 require_once 'includes/auth.php';
 require_permission('ld-work-report');
+
+if (get_admin_type() === 'intern') {
+    http_response_code(403);
+    die("Access denied. L&D Work Report is restricted to administrators.");
+}
+
 require_once 'config/database.php';
 
 if (!ld_tables_exist($pdo)) {
@@ -18,8 +24,529 @@ require_once 'includes/pdf_invoice.php'; // MiniPDF + helpers
 // Set time zone
 date_default_timezone_set('Asia/Kolkata');
 
-// Filter parameters
-$f_staff = trim($_GET['staff'] ?? '');
+$tab = $_GET['tab'] ?? 'report';
+if (!in_array($tab, ['report', 'payments'])) {
+    $tab = 'report';
+}
+
+if ($tab === 'payments') {
+    if (get_admin_type() === 'intern') {
+        http_response_code(403);
+        echo "<div class='alert alert-error' style='margin:20px;'><i class='fas fa-triangle-exclamation'></i> Access Denied. Financial reports are restricted to administrators.</div>";
+        exit();
+    }
+}
+
+$success_message = '';
+$error_message = '';
+
+if ($tab === 'payments') {
+    // 1. AJAX requests handling
+    if (isset($_GET['action'])) {
+        header('Content-Type: application/json');
+        $action = $_GET['action'];
+
+        if ($action === 'calc_expected') {
+            $intern_id = (int)($_GET['intern_id'] ?? 0);
+            $start = trim($_GET['start'] ?? '');
+            $end = trim($_GET['end'] ?? '');
+
+            if (!$intern_id || !$start || !$end) {
+                echo json_encode(['success' => false, 'error' => 'Missing required fields']);
+                exit();
+            }
+
+            // Fetch intern username to query tasks
+            $stmt = $pdo->prepare("SELECT username, DATE(created_at) AS joining_date FROM admins WHERE id = ? AND admin_type = 'intern'");
+            $stmt->execute([$intern_id]);
+            $intern = $stmt->fetch();
+            if (!$intern) {
+                echo json_encode(['success' => false, 'error' => 'Intern not found']);
+                exit();
+            }
+
+            // Date validations
+            if (!strtotime($start) || !strtotime($end)) {
+                echo json_encode(['success' => false, 'error' => 'Invalid date format.']);
+                exit();
+            }
+            if ($start < $intern['joining_date']) {
+                echo json_encode(['success' => false, 'error' => 'Start date cannot be earlier than intern joining date (' . $intern['joining_date'] . ')']);
+                exit();
+            }
+            if ($end < $start) {
+                echo json_encode(['success' => false, 'error' => 'End date cannot be earlier than start date']);
+                exit();
+            }
+            if ($end > date('Y-m-d')) {
+                echo json_encode(['success' => false, 'error' => 'End date cannot be in the future.']);
+                exit();
+            }
+
+            // Check overlap
+            $stmt = $pdo->prepare("
+                SELECT id, voucher_no, period_start_date, period_end_date
+                FROM ld_intern_payments
+                WHERE intern_id = ?
+                  AND status = 'Completed'
+                  AND NOT (period_end_date < ? OR period_start_date > ?)
+                LIMIT 1
+            ");
+            $stmt->execute([$intern_id, $start, $end]);
+            $overlap = $stmt->fetch();
+
+            if ($overlap) {
+                $ov_start = date('d M Y', strtotime($overlap['period_start_date']));
+                $ov_end = date('d M Y', strtotime($overlap['period_end_date']));
+                $msg = "This payment period overlaps with an existing completed payment period (Voucher: " . $overlap['voucher_no'] . ", " . $ov_start . " – " . $ov_end . "). Please select a non-overlapping period.";
+                echo json_encode(['success' => false, 'error' => $msg]);
+                exit();
+            }
+
+            // Scan for legacy tasks with missing quantities in the period, excluding already paid ones
+            $stmt = $pdo->prepare("
+                SELECT DISTINCT t.id, DATE(t.created_at) AS task_date, t.mode_name, tp.topic_name
+                FROM ld_tasks t
+                JOIN ld_task_topics tp ON tp.task_id = t.id
+                WHERE t.admin_username = ?
+                  AND t.status = 'active'
+                  AND DATE(t.created_at) BETWEEN ? AND ?
+                  AND (tp.quantity IS NULL OR tp.quantity <= 0)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM ld_intern_payments p
+                      WHERE p.intern_id = ?
+                        AND p.status = 'Completed'
+                        AND DATE(t.created_at) BETWEEN p.period_start_date AND p.period_end_date
+                  )
+            ");
+            $stmt->execute([$intern['username'], $start, $end, $intern_id]);
+            $incomplete_tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Query tasks and calculate expected amount based on topic snapshots, excluding already paid ones
+            $stmt = $pdo->prepare("
+                SELECT SUM(tp.calculated_charge) AS total_charge
+                FROM ld_tasks t
+                JOIN ld_task_topics tp ON tp.task_id = t.id
+                WHERE t.admin_username = ?
+                  AND t.status = 'active'
+                  AND DATE(t.created_at) BETWEEN ? AND ?
+                  AND tp.quantity IS NOT NULL
+                  AND tp.quantity > 0
+                  AND NOT EXISTS (
+                      SELECT 1 FROM ld_intern_payments p
+                      WHERE p.intern_id = ?
+                        AND p.status = 'Completed'
+                        AND DATE(t.created_at) BETWEEN p.period_start_date AND p.period_end_date
+                  )
+            ");
+            $stmt->execute([$intern['username'], $start, $end, $intern_id]);
+            $expected = (float)($stmt->fetchColumn() ?? 0.00);
+
+            // Aggregate by mode, excluding already paid ones
+            $stmt = $pdo->prepare("
+                SELECT t.mode_id, t.mode_name_snapshot, t.mode_name, t.quantity_label_snapshot, SUM(tp.quantity) AS total_qty
+                FROM ld_tasks t
+                JOIN ld_task_topics tp ON tp.task_id = t.id
+                WHERE t.admin_username = ?
+                  AND t.status = 'active'
+                  AND DATE(t.created_at) BETWEEN ? AND ?
+                  AND tp.quantity IS NOT NULL
+                  AND tp.quantity > 0
+                  AND NOT EXISTS (
+                      SELECT 1 FROM ld_intern_payments p
+                      WHERE p.intern_id = ?
+                        AND p.status = 'Completed'
+                        AND DATE(t.created_at) BETWEEN p.period_start_date AND p.period_end_date
+                  )
+                GROUP BY t.mode_id, t.quantity_label_snapshot
+            ");
+            $stmt->execute([$intern['username'], $start, $end, $intern_id]);
+            $modes = $stmt->fetchAll();
+
+            $work_summary = [];
+            foreach ($modes as $m) {
+                $mname = $m['mode_name_snapshot'] ?: $m['mode_name'];
+                $qlbl = $m['quantity_label_snapshot'] ?: 'units';
+                $work_summary[] = [
+                    'mode_name' => $mname,
+                    'total_qty' => (float)$m['total_qty'],
+                    'quantity_label' => $qlbl
+                ];
+            }
+
+            echo json_encode([
+                'success' => true,
+                'expected_amount' => $expected,
+                'work_summary' => $work_summary,
+                'incomplete_tasks' => $incomplete_tasks
+            ]);
+            exit();
+        }
+
+        if ($action === 'check_overlap') {
+            $intern_id = (int)($_GET['intern_id'] ?? 0);
+            $start = trim($_GET['start'] ?? '');
+            $end = trim($_GET['end'] ?? '');
+
+            if (!$intern_id || !$start || !$end) {
+                echo json_encode(['success' => false, 'error' => 'Missing fields']);
+                exit();
+            }
+
+            // Check overlap
+            $stmt = $pdo->prepare("
+                SELECT id, voucher_no, period_start_date, period_end_date
+                FROM ld_intern_payments
+                WHERE intern_id = ?
+                  AND status = 'Completed'
+                  AND NOT (period_end_date < ? OR period_start_date > ?)
+                LIMIT 1
+            ");
+            $stmt->execute([$intern_id, $start, $end]);
+            $overlap = $stmt->fetch();
+
+            if ($overlap) {
+                $ov_start = date('d M Y', strtotime($overlap['period_start_date']));
+                $ov_end = date('d M Y', strtotime($overlap['period_end_date']));
+                $msg = "This payment period overlaps with an existing completed payment period (Voucher: " . $overlap['voucher_no'] . ", " . $ov_start . " – " . $ov_end . "). Please select a non-overlapping period.";
+                echo json_encode([
+                    'success' => true,
+                    'overlap' => true,
+                    'message' => $msg
+                ]);
+            } else {
+                echo json_encode([
+                    'success' => true,
+                    'overlap' => false
+                ]);
+            }
+            exit();
+        }
+    }
+
+    // 2. Handle POST payout logging
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'record_payment') {
+        if (!verify_csrf()) {
+            $error_message = 'Invalid request (CSRF check failed).';
+        } else {
+            $intern_id = (int)($_POST['intern_id'] ?? 0);
+            $start = trim($_POST['period_start'] ?? '');
+            $end = trim($_POST['period_end'] ?? '');
+            $adj = (float)($_POST['adjustment_amount'] ?? 0.00);
+            $acct_id = (int)($_POST['payment_account_id'] ?? 0);
+            $paid_date = trim($_POST['paid_date'] ?? '');
+            $remarks = trim($_POST['remarks'] ?? '');
+
+            $stmt = $pdo->prepare("SELECT username, full_name, DATE(created_at) AS joining_date FROM admins WHERE id = ? AND admin_type = 'intern'");
+            $stmt->execute([$intern_id]);
+            $intern = $stmt->fetch();
+
+            if (!$intern) {
+                $error_message = 'Intern not found.';
+            } elseif (empty($start) || empty($end) || empty($paid_date)) {
+                $error_message = 'Start date, end date, and paid date are mandatory.';
+            } elseif (!strtotime($start) || !strtotime($end) || !strtotime($paid_date)) {
+                $error_message = 'Invalid date format provided.';
+            } elseif ($start < $intern['joining_date']) {
+                $error_message = 'Start date cannot be earlier than intern joining/registration date.';
+            } elseif ($end < $start) {
+                $error_message = 'End date cannot be earlier than start date.';
+            } elseif ($end > date('Y-m-d')) {
+                $error_message = 'End date cannot be in the future.';
+            } elseif ($acct_id <= 0) {
+                $error_message = 'Payment account is required.';
+            } else {
+                $stmt = $pdo->prepare("SELECT account_name FROM payment_accounts WHERE id = ? AND status = 'active'");
+                $stmt->execute([$acct_id]);
+                $acct_name = $stmt->fetchColumn();
+
+                if (!$acct_name) {
+                    $error_message = 'Invalid or inactive payment account selected.';
+                } else {
+                    $stmt = $pdo->prepare("
+                        SELECT id, voucher_no, period_start_date, period_end_date
+                        FROM ld_intern_payments
+                        WHERE intern_id = ?
+                          AND status = 'Completed'
+                          AND NOT (period_end_date < ? OR period_start_date > ?)
+                        LIMIT 1
+                    ");
+                    $stmt->execute([$intern_id, $start, $end]);
+                    $overlap = $stmt->fetch();
+
+                    if ($overlap) {
+                        $ov_start = date('d M Y', strtotime($overlap['period_start_date']));
+                        $ov_end = date('d M Y', strtotime($overlap['period_end_date']));
+                        $error_message = "This payment period overlaps with an existing completed payment period (Voucher: " . $overlap['voucher_no'] . ", " . $ov_start . " – " . $ov_end . "). Please select a non-overlapping period.";
+                    } else {
+                        // SERVER-SIDE RE-CALCULATION, excluding already paid tasks
+                        $stmt = $pdo->prepare("
+                            SELECT SUM(tp.calculated_charge) AS total_charge
+                            FROM ld_tasks t
+                            JOIN ld_task_topics tp ON tp.task_id = t.id
+                            WHERE t.admin_username = ?
+                              AND t.status = 'active'
+                              AND DATE(t.created_at) BETWEEN ? AND ?
+                              AND tp.quantity IS NOT NULL
+                              AND tp.quantity > 0
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM ld_intern_payments p
+                                  WHERE p.intern_id = ?
+                                    AND p.status = 'Completed'
+                                    AND DATE(t.created_at) BETWEEN p.period_start_date AND p.period_end_date
+                              )
+                        ");
+                        $stmt->execute([$intern['username'], $start, $end, $intern_id]);
+                        $server_expected = (float)($stmt->fetchColumn() ?? 0.00);
+
+                        $server_paid_amount = $server_expected + $adj;
+
+                        if ($server_paid_amount < 0) {
+                            $error_message = 'Final paid amount cannot be negative.';
+                        } else {
+                            $screenshot_path = null;
+                            if (isset($_FILES['screenshot']) && $_FILES['screenshot']['error'] === UPLOAD_ERR_OK) {
+                                $file = $_FILES['screenshot'];
+                                $file_ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+                                $allowed_exts = ['jpg', 'jpeg', 'png', 'pdf'];
+
+                                if (!in_array($file_ext, $allowed_exts)) {
+                                    $error_message = 'Only image (JPG, PNG) or PDF screenshots are allowed.';
+                                } elseif ($file['size'] > 5 * 1024 * 1024) {
+                                    $error_message = 'Payment screenshot size cannot exceed 5MB.';
+                                } else {
+                                    $upload_dir = __DIR__ . '/uploads/ld_payments/';
+                                    if (!file_exists($upload_dir)) {
+                                        mkdir($upload_dir, 0777, true);
+                                    }
+                                    $unique_name = 'ld_pay_' . bin2hex(random_bytes(8)) . '.' . $file_ext;
+                                    $target_path = $upload_dir . $unique_name;
+                                    if (move_uploaded_file($file['tmp_name'], $target_path)) {
+                                        $screenshot_path = 'uploads/ld_payments/' . $unique_name;
+                                    } else {
+                                        $error_message = 'Failed to move uploaded screenshot file.';
+                                    }
+                                }
+                            }
+
+                            if (empty($error_message)) {
+                                try {
+                                    $pdo->beginTransaction();
+
+                                    // Double-check overlap inside transaction for concurrency safety
+                                    $stmt = $pdo->prepare("
+                                        SELECT id, voucher_no, period_start_date, period_end_date
+                                        FROM ld_intern_payments
+                                        WHERE intern_id = ?
+                                          AND status = 'Completed'
+                                          AND NOT (period_end_date < ? OR period_start_date > ?)
+                                        LIMIT 1
+                                    ");
+                                    $stmt->execute([$intern_id, $start, $end]);
+                                    $tx_overlap = $stmt->fetch();
+
+                                    if ($tx_overlap) {
+                                        $ov_start = date('d M Y', strtotime($tx_overlap['period_start_date']));
+                                        $ov_end = date('d M Y', strtotime($tx_overlap['period_end_date']));
+                                        throw new Exception("This payment period overlaps with an existing completed payment period (Voucher: " . $tx_overlap['voucher_no'] . ", " . $ov_start . " – " . $ov_end . "). Please select a non-overlapping period.");
+                                    }
+
+                                    $temp_voucher = 'TEMP-LD-' . bin2hex(random_bytes(16));
+
+                                    $stmt = $pdo->prepare("
+                                        INSERT INTO ld_intern_payments (
+                                            voucher_no, intern_id, intern_username_snapshot, intern_name_snapshot,
+                                            period_start_date, period_end_date, expected_amount, adjustment_amount,
+                                            paid_amount, payment_account_id, payment_account_name_snapshot, paid_date,
+                                            screenshot_path, remarks, status, created_by
+                                        ) VALUES (
+                                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Completed', ?
+                                        )
+                                    ");
+                                    $stmt->execute([
+                                        $temp_voucher,
+                                        $intern_id, $intern['username'], $intern['full_name'],
+                                        $start, $end, $server_expected, $adj,
+                                        $server_paid_amount, $acct_id, $acct_name, $paid_date,
+                                        $screenshot_path, $remarks, $admin_username
+                                    ]);
+
+                                    $inserted_id = $pdo->lastInsertId();
+                                    $voucher_no = 'VOU-LD-' . str_pad($inserted_id, 5, '0', STR_PAD_LEFT);
+
+                                    $stmt = $pdo->prepare("UPDATE ld_intern_payments SET voucher_no = ? WHERE id = ?");
+                                    $stmt->execute([$voucher_no, $inserted_id]);
+
+                                    // Record linked transaction in Accounts & Expenses
+                                    $expense_purpose = "L&D Intern Payment – " . $intern['full_name'] . " – " . $voucher_no;
+                                    $expense_stmt = $pdo->prepare("
+                                        INSERT INTO expenses (
+                                            purpose, expense_type, amount, remarks,
+                                            payment_account_id, spent_date, ld_payment_id, created_by, created_at
+                                        ) VALUES (
+                                            ?, 'L&D Intern Payment', ?, ?,
+                                            ?, ?, ?, ?, NOW()
+                                        )
+                                    ");
+                                    $expense_stmt->execute([
+                                        $expense_purpose,
+                                        $server_paid_amount,
+                                        $remarks ?: null,
+                                        $acct_id,
+                                        $paid_date,
+                                        $inserted_id,
+                                        $admin_username
+                                    ]);
+
+                                    // Aggregate by work mode during the payment period and bulk insert snapshots into ld_intern_payment_items, excluding already paid ones
+                                    $stmt = $pdo->prepare("
+                                        SELECT t.mode_id, t.mode_name_snapshot, t.mode_name, t.quantity_label_snapshot, SUM(tp.quantity) AS total_qty
+                                        FROM ld_tasks t
+                                        JOIN ld_task_topics tp ON tp.task_id = t.id
+                                        WHERE t.admin_username = ?
+                                          AND t.status = 'active'
+                                          AND DATE(t.created_at) BETWEEN ? AND ?
+                                          AND tp.quantity IS NOT NULL
+                                          AND tp.quantity > 0
+                                          AND NOT EXISTS (
+                                              SELECT 1 FROM ld_intern_payments p
+                                              WHERE p.intern_id = ?
+                                                AND p.status = 'Completed'
+                                                AND DATE(t.created_at) BETWEEN p.period_start_date AND p.period_end_date
+                                          )
+                                        GROUP BY t.mode_id, t.quantity_label_snapshot
+                                    ");
+                                    $stmt->execute([$intern['username'], $start, $end, $intern_id]);
+                                    $aggregated_items = $stmt->fetchAll();
+
+                                    $item_stmt = $pdo->prepare("
+                                        INSERT INTO ld_intern_payment_items (
+                                            payment_id, work_mode_id, work_mode_name_snapshot, quantity, quantity_label_snapshot
+                                        ) VALUES (
+                                            ?, ?, ?, ?, ?
+                                        )
+                                    ");
+                                    foreach ($aggregated_items as $item) {
+                                        $mtitle = $item['mode_name_snapshot'] ?: $item['mode_name'];
+                                        $qlbl = $item['quantity_label_snapshot'] ?: 'units';
+                                        $item_stmt->execute([
+                                            $inserted_id,
+                                            (int)$item['mode_id'],
+                                            $mtitle,
+                                            (float)$item['total_qty'],
+                                            $qlbl
+                                        ]);
+                                    }
+
+                                    $audit_details = "Recorded payment {$voucher_no} for intern {$intern['full_name']} ({$start} to {$end}) - Expected: ₹" . number_format($server_expected, 2) . ", Adj: ₹" . number_format($adj, 2) . ", Paid: ₹" . number_format($server_paid_amount, 2);
+                                    log_admin_activity($pdo, $admin_username, 'ld_payment_recorded', $audit_details);
+
+                                    $pdo->commit();
+                                    $success_message = "Payment logged successfully. Voucher: " . $voucher_no;
+                                } catch (Exception $txEx) {
+                                    $pdo->rollBack();
+                                    $error_message = "Database error: " . $txEx->getMessage();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Load Intern Summary data
+    $intern_payouts = [];
+    try {
+        $all_interns = $pdo->query("
+            SELECT id, username, full_name, status, DATE(created_at) AS joining_date
+            FROM admins
+            WHERE admin_type = 'intern'
+            ORDER BY full_name ASC
+        ")->fetchAll();
+
+        foreach ($all_interns as $intern) {
+            $stmt = $pdo->prepare("
+                SELECT SUM(tp.calculated_charge)
+                FROM ld_tasks t
+                JOIN ld_task_topics tp ON tp.task_id = t.id
+                WHERE t.admin_username = ? AND t.status = 'active'
+            ");
+            $stmt->execute([$intern['username']]);
+            $expected = (float)($stmt->fetchColumn() ?? 0.00);
+
+            $stmt = $pdo->prepare("
+                SELECT SUM(paid_amount)
+                FROM ld_intern_payments
+                WHERE intern_id = ? AND status = 'Completed'
+            ");
+            $stmt->execute([$intern['id']]);
+            $paid = (float)($stmt->fetchColumn() ?? 0.00);
+
+            // Pending calculation based on unpaid tasks
+            $stmt = $pdo->prepare("
+                SELECT SUM(tp.calculated_charge)
+                FROM ld_tasks t
+                JOIN ld_task_topics tp ON tp.task_id = t.id
+                WHERE t.admin_username = ?
+                  AND t.status = 'active'
+                  AND tp.quantity IS NOT NULL
+                  AND tp.quantity > 0
+                  AND NOT EXISTS (
+                      SELECT 1 FROM ld_intern_payments p
+                      WHERE p.intern_id = ?
+                        AND p.status = 'Completed'
+                        AND DATE(t.created_at) BETWEEN p.period_start_date AND p.period_end_date
+                  )
+            ");
+            $stmt->execute([$intern['username'], $intern['id']]);
+            $pending = (float)($stmt->fetchColumn() ?? 0.00);
+
+            $intern_payouts[] = [
+                'id' => $intern['id'],
+                'username' => $intern['username'],
+                'full_name' => $intern['full_name'],
+                'status' => $intern['status'],
+                'joining_date' => $intern['joining_date'],
+                'expected' => $expected,
+                'paid' => $paid,
+                'pending' => $pending
+            ];
+        }
+    } catch (Exception $e) {
+        error_log("Load intern payouts summary error: " . $e->getMessage());
+    }
+
+    // Load Completed Payments data
+    $completed_payments = [];
+    try {
+        $completed_payments = $pdo->query("
+            SELECT p.*, a.account_name
+            FROM ld_intern_payments p
+            LEFT JOIN payment_accounts a ON a.id = p.payment_account_id
+            ORDER BY p.paid_date DESC, p.id DESC
+        ")->fetchAll();
+    } catch (Exception $e) {
+        error_log("Load completed payments error: " . $e->getMessage());
+    }
+
+    // Load payment accounts
+    $payment_accounts = [];
+    try {
+        $payment_accounts = $pdo->query("
+            SELECT id, account_name, account_type
+            FROM payment_accounts
+            WHERE status = 'active'
+            ORDER BY account_name ASC
+        ")->fetchAll();
+    } catch (Exception $e) {
+        error_log("Load payment accounts error: " . $e->getMessage());
+    }
+}
+
+if ($tab === 'report') {
+    // Filter parameters
+    $f_staff = trim($_GET['staff'] ?? '');
 $f_role = trim($_GET['role'] ?? '');
 $f_course = (int)($_GET['course'] ?? 0);
 $f_mode = (int)($_GET['mode'] ?? 0);
@@ -529,9 +1056,16 @@ try {
     error_log("Chart load error: " . $e->getMessage());
 }
 
+}
+
+if ($tab === 'payments') {
+    $page_title = 'L&D Intern Payments';
+    $page_sub   = 'Process and view payment vouchers for L&D Interns';
+} else {
+    $page_title = 'L&D Operations Work Report';
+    $page_sub   = 'Operational L&D stats, charts and logs';
+}
 $active_page = 'ld-work-report';
-$page_title  = 'L&D Operations Work Report';
-$page_sub    = 'Operational L&D stats, charts and logs';
 include 'includes/admin_nav.php';
 ?>
 
@@ -677,8 +1211,15 @@ include 'includes/admin_nav.php';
         grid-column: span 1 !important;
     }
 }
-</style>
+</style><div class="tabs" style="margin-bottom:18px;">
+    <a class="tab <?php echo $tab === 'report' ? 'active' : ''; ?>" href="?tab=report"><i class="fas fa-chart-line"></i> L&D Work Report</a>
+    <a class="tab <?php echo $tab === 'payments' ? 'active' : ''; ?>" href="?tab=payments"><i class="fas fa-indian-rupee-sign"></i> L&D Intern Payments</a>
+</div>
 
+<?php if ($success_message): ?><div class="alert alert-success"><i class="fas fa-circle-check"></i><span><?php echo e($success_message); ?></span></div><?php endif; ?>
+<?php if ($error_message):   ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($error_message); ?></span></div><?php endif; ?>
+
+<?php if ($tab === 'report'): ?>
 <div class="report-grid">
     <!-- Filters Panel -->
     <div class="panel">
@@ -1008,7 +1549,418 @@ include 'includes/admin_nav.php';
         </div>
     </div>
 </div>
+<?php endif; // End of if ($tab === 'report') ?>
 
+<?php if ($tab === 'payments'): ?>
+    <!-- Payments Dashboard -->
+    <div class="report-grid">
+        <!-- Interns Summary Table -->
+        <div class="panel">
+            <div class="panel-head">
+                <span class="head-icon" style="background:var(--success-soft);color:var(--success-ink);"><i class="fas fa-users-viewfinder"></i></span>
+                <h2>L&D Interns Payment Summary</h2>
+            </div>
+            <div class="panel-body">
+                <div class="desktop-view table-wrap">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Intern Name</th>
+                                <th>Joining Date</th>
+                                <th>Total Expected Charge</th>
+                                <th>Total Paid Amount</th>
+                                <th>Pending Balance</th>
+                                <th style="text-align:right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($intern_payouts as $ip): ?>
+                                <tr>
+                                    <td>
+                                        <strong><?php echo e($ip['full_name']); ?></strong><br>
+                                        <small style="color:var(--text-muted);">@<?php echo e($ip['username']); ?></small>
+                                        <?php if ($ip['status'] === 'inactive'): ?>
+                                            <span class="badge red" style="font-size:0.65rem; padding:1px 4px; margin-left:4px;">Inactive</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td><?php echo date('d-m-Y', strtotime($ip['joining_date'])); ?></td>
+                                    <td>₹<?php echo number_format($ip['expected'], 2); ?></td>
+                                    <td>₹<?php echo number_format($ip['paid'], 2); ?></td>
+                                    <td style="font-weight: 700; color: <?php echo $ip['pending'] > 0 ? 'var(--destructive)' : 'var(--success)'; ?>;">
+                                        ₹<?php echo number_format($ip['pending'], 2); ?>
+                                    </td>
+                                    <td style="text-align:right;">
+                                        <button class="btn btn-sm btn-primary" onclick="openPayModal(<?php echo htmlspecialchars(json_encode($ip)); ?>)">
+                                            <i class="fas fa-indian-rupee-sign"></i> Pay
+                                        </button>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                            <?php if (empty($intern_payouts)): ?>
+                                <tr>
+                                    <td colspan="6" class="empty-state" style="text-align:center;">No L&D Interns found.</td>
+                                </tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Completed Payments Section -->
+        <div class="panel">
+            <div class="panel-head">
+                <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-receipt"></i></span>
+                <h2>Completed Payments History</h2>
+            </div>
+            <div class="panel-body">
+                <div class="desktop-view table-wrap">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Voucher No</th>
+                                <th>Intern Name</th>
+                                <th>Payment Period</th>
+                                <th>Paid Date</th>
+                                <th>Paid Amount</th>
+                                <th>Payment Account</th>
+                                <th style="text-align:right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($completed_payments as $cp): ?>
+                                <tr>
+                                    <td><strong><?php echo e($cp['voucher_no']); ?></strong></td>
+                                    <td><?php echo e($cp['intern_name_snapshot']); ?></td>
+                                    <td><?php echo date('d/m/Y', strtotime($cp['period_start_date'])) . ' to ' . date('d/m/Y', strtotime($cp['period_end_date'])); ?></td>
+                                    <td><?php echo date('d/m/Y', strtotime($cp['paid_date'])); ?></td>
+                                    <td><strong>₹<?php echo number_format($cp['paid_amount'], 2); ?></strong></td>
+                                    <td><?php echo e($cp['payment_account_name_snapshot'] ?: 'N/A'); ?></td>
+                                    <td style="text-align:right; white-space:nowrap;">
+                                        <a href="ld-payment-voucher.php?id=<?php echo $cp['id']; ?>" target="_blank" class="btn btn-sm btn-soft-violet">
+                                            <i class="fas fa-file-invoice"></i> View Voucher
+                                        </a>
+                                        <?php if ($cp['screenshot_path']): ?>
+                                            <a href="download-ld-payment-proof.php?id=<?php echo (int)$cp['id']; ?>" target="_blank" class="btn btn-sm btn-soft-blue" title="View Screenshot">
+                                                <i class="fas fa-image"></i> Screenshot
+                                            </a>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                            <?php if (empty($completed_payments)): ?>
+                                <tr>
+                                    <td colspan="7" class="empty-state" style="text-align:center;">No completed payments recorded.</td>
+                                </tr>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pay Modal -->
+    <div class="modal-backdrop" id="pay-modal">
+        <div class="modal" style="max-width:600px; width: 95%;">
+            <div class="modal-head">
+                <h3><i class="fas fa-money-bill-transfer" style="color:var(--accent);"></i> Process Intern Payout</h3>
+                <button class="modal-close" onclick="closeModal('pay-modal')"><i class="fas fa-xmark"></i></button>
+            </div>
+            <form id="payout-form" method="POST" enctype="multipart/form-data">
+                <?php echo csrf_field(); ?>
+                <input type="hidden" name="action" value="record_payment">
+                <input type="hidden" name="intern_id" id="modal-intern-id">
+
+                <div class="modal-body">
+                    <div class="alert alert-info" style="display:flex; align-items:center; gap:8px;">
+                        <i class="fas fa-user-check"></i>
+                        <div>
+                            <strong id="modal-intern-name">Intern</strong>
+                            (<span id="modal-intern-username">@username</span>) -
+                            Joining: <span id="modal-intern-joining">Joining Date</span>
+                        </div>
+                    </div>
+
+                    <div id="modal-alert-box" style="margin-bottom:12px;"></div>
+
+                    <div class="form-grid">
+                        <div class="field">
+                            <label>Period Start Date <span class="req">*</span></label>
+                            <input type="date" name="period_start" id="modal-period-start" required onchange="onPeriodDateChange()">
+                        </div>
+                        <div class="field">
+                            <label>Period End Date <span class="req">*</span></label>
+                            <input type="date" name="period_end" id="modal-period-end" required onchange="onPeriodDateChange()">
+                        </div>
+                        <div class="field full" style="margin-top: 5px;">
+                            <button type="button" class="btn btn-sm btn-outline" id="btn-calculate" onclick="calculateExpectedAmount()" style="width: 100%; justify-content: center;">
+                                <i class="fas fa-calculator"></i> Calculate Expected Amount & Work Details
+                            </button>
+                        </div>
+
+                        <!-- Work Aggregation Preview -->
+                        <div class="field full" id="work-preview-container" style="display:none; background:var(--bg-muted); padding:12px; border-radius:8px; border:1px solid var(--border);">
+                            <label style="font-weight: 700; margin-bottom: 6px;"><i class="fas fa-cubes"></i> Aggregated Work Completed</label>
+                            <div id="work-preview-list" style="font-size:0.85rem; line-height:1.5;"></div>
+                        </div>
+
+                        <div class="field">
+                            <label>Expected Amount (₹)</label>
+                            <input type="text" id="modal-expected-display" readonly style="background:var(--bg-muted); font-weight:700;" value="₹0.00">
+                            <input type="hidden" name="expected_amount" id="modal-expected-val" value="0.00">
+                        </div>
+                        <div class="field">
+                            <label>Adjustment Amount (₹)</label>
+                            <input type="number" step="0.01" name="adjustment_amount" id="modal-adjustment" value="0.00" oninput="updateFinalPayout()">
+                        </div>
+                        <div class="field">
+                            <label>Final Paid Amount (₹)</label>
+                            <input type="text" id="modal-final-display" readonly style="background:var(--bg-muted); font-weight:700; color:var(--success-ink);" value="₹0.00">
+                        </div>
+                        <div class="field">
+                            <label>Payment Account <span class="req">*</span></label>
+                            <select name="payment_account_id" required>
+                                <option value="">- Select Account -</option>
+                                <?php foreach ($payment_accounts as $pa): ?>
+                                    <option value="<?php echo (int)$pa['id']; ?>"><?php echo e($pa['account_name']); ?> (<?php echo e($pa['account_type']); ?>)</option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label>Paid Date <span class="req">*</span></label>
+                            <input type="date" name="paid_date" value="<?php echo date('Y-m-d'); ?>" required>
+                        </div>
+                        <div class="field full">
+                            <label>Payment Screenshot (Screenshot/PDF)</label>
+                            <input type="file" name="screenshot" accept="image/*,.pdf">
+                        </div>
+
+                        <div class="field full">
+                            <label>Remarks</label>
+                            <textarea name="remarks" id="modal-remarks" rows="2" style="width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-family: inherit; font-size: 0.9rem;" placeholder="Optional transaction notes..."></textarea>
+                        </div>
+
+                        <!-- Legacy/Incomplete Tasks Warning -->
+                        <div class="field full" id="legacy-warning-container" style="display:none; background:#fee2e2; border:1px solid #fca5a5; padding:12px; border-radius:8px; color:#991b1b;">
+                            <label style="font-weight: 700; margin-bottom: 6px;"><i class="fas fa-triangle-exclamation"></i> Tasks with Missing/Invalid Quantities</label>
+                            <div id="legacy-warning-list" style="font-size:0.85rem; line-height:1.5;"></div>
+                        </div>
+
+                        <!-- Overlap Block Warning (hidden by default) -->
+                        <div class="field full" id="overlap-warning-field" style="display:none; background:#fee2e2; border:1px solid #fca5a5; padding:12px; border-radius:8px; color:#991b1b;">
+                            <div style="display:flex; align-items:flex-start; gap:8px;">
+                                <i class="fas fa-triangle-exclamation" style="margin-top:2px;"></i>
+                                <div>
+                                    <strong style="display:block; margin-bottom:4px; font-weight:700;">Overlapping Period Blocked</strong>
+                                    <span id="overlap-warning-text"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-foot">
+                    <button type="button" class="btn btn-outline" onclick="closeModal('pay-modal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="btn-submit-payout"><i class="fas fa-check"></i> Record Payout</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- JS for Payout Dashboard -->
+    <script>
+    var selectedIntern = null;
+    var currentExpected = 0.00;
+
+    function openPayModal(intern) {
+        selectedIntern = intern;
+        document.getElementById('modal-intern-id').value = intern.id;
+        document.getElementById('modal-intern-name').textContent = intern.full_name;
+        document.getElementById('modal-intern-username').textContent = '@' + intern.username;
+        document.getElementById('modal-intern-joining').textContent = intern.joining_date;
+
+        // Reset fields
+        document.getElementById('modal-period-start').value = '';
+        document.getElementById('modal-period-end').value = '';
+        document.getElementById('modal-expected-display').value = '₹0.00';
+        document.getElementById('modal-expected-val').value = '0.00';
+        document.getElementById('modal-adjustment').value = '0.00';
+        document.getElementById('modal-final-display').value = '₹0.00';
+        document.getElementById('modal-final-display').style.color = '';
+        document.getElementById('modal-remarks').value = '';
+        document.getElementById('work-preview-container').style.display = 'none';
+        document.getElementById('legacy-warning-container').style.display = 'none';
+        document.getElementById('legacy-warning-list').innerHTML = '';
+        document.getElementById('overlap-warning-field').style.display = 'none';
+        document.getElementById('modal-alert-box').innerHTML = '';
+        document.getElementById('btn-submit-payout').disabled = false;
+
+        currentExpected = 0.00;
+        openModal('pay-modal');
+    }
+
+    function onPeriodDateChange() {
+        // Clear previous calculations since dates changed
+        document.getElementById('modal-expected-display').value = '₹0.00';
+        document.getElementById('modal-expected-val').value = '0.00';
+        document.getElementById('modal-final-display').value = '₹0.00';
+        document.getElementById('work-preview-container').style.display = 'none';
+        document.getElementById('legacy-warning-container').style.display = 'none';
+        document.getElementById('legacy-warning-list').innerHTML = '';
+        document.getElementById('overlap-warning-field').style.display = 'none';
+        document.getElementById('btn-submit-payout').disabled = false;
+        currentExpected = 0.00;
+    }
+
+    function calculateExpectedAmount() {
+        var start = document.getElementById('modal-period-start').value;
+        var end = document.getElementById('modal-period-end').value;
+        var alertBox = document.getElementById('modal-alert-box');
+
+        alertBox.innerHTML = '';
+        document.getElementById('legacy-warning-container').style.display = 'none';
+        document.getElementById('legacy-warning-list').innerHTML = '';
+
+        if (!start || !end) {
+            alertBox.innerHTML = '<div class="alert alert-error" style="padding: 8px 12px; font-size: 0.8rem;"><i class="fas fa-triangle-exclamation"></i> Please select both Period Start and End dates.</div>';
+            return;
+        }
+
+        if (start < selectedIntern.joining_date) {
+            alertBox.innerHTML = '<div class="alert alert-error" style="padding: 8px 12px; font-size: 0.8rem;"><i class="fas fa-triangle-exclamation"></i> Period Start date cannot be before intern registration date (' + selectedIntern.joining_date + ').</div>';
+            return;
+        }
+
+        if (end < start) {
+            alertBox.innerHTML = '<div class="alert alert-error" style="padding: 8px 12px; font-size: 0.8rem;"><i class="fas fa-triangle-exclamation"></i> End date cannot be before start date.</div>';
+            return;
+        }
+
+        var today = new Date().toISOString().split('T')[0];
+        if (end > today) {
+            alertBox.innerHTML = '<div class="alert alert-error" style="padding: 8px 12px; font-size: 0.8rem;"><i class="fas fa-triangle-exclamation"></i> End date cannot be in the future.</div>';
+            return;
+        }
+
+        // Fetch calculations
+        var btn = document.getElementById('btn-calculate');
+        var oldText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Calculating...';
+        btn.disabled = true;
+
+        var url = 'ld-work-report.php?tab=payments&action=calc_expected&intern_id=' + selectedIntern.id + '&start=' + start + '&end=' + end;
+        fetch(url)
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                btn.innerHTML = oldText;
+                btn.disabled = false;
+
+                if (data.success) {
+                    currentExpected = parseFloat(data.expected_amount) || 0.00;
+                    document.getElementById('modal-expected-display').value = '₹' + currentExpected.toFixed(2);
+                    document.getElementById('modal-expected-val').value = currentExpected.toFixed(2);
+
+                    updateFinalPayout();
+
+                    // Render work preview aggregation
+                    var previewList = document.getElementById('work-preview-list');
+                    previewList.innerHTML = '';
+                    if (data.work_summary && data.work_summary.length > 0) {
+                        var html = '<ul style="margin: 0; padding-left: 16px; list-style-type: square;">';
+                        data.work_summary.forEach(function(item) {
+                            html += '<li>' + item.mode_name + ' — <strong>' + item.total_qty + ' ' + item.quantity_label + '</strong></li>';
+                        });
+                        html += '</ul>';
+                        previewList.innerHTML = html;
+                        document.getElementById('work-preview-container').style.display = 'block';
+                    } else {
+                        previewList.innerHTML = '<div style="color:var(--text-muted);"><i class="fas fa-info-circle"></i> No active work logs found for this period. (Expected Charge: ₹0.00)</div>';
+                        document.getElementById('work-preview-container').style.display = 'block';
+                        alertBox.innerHTML = '<div class="alert alert-warn" style="padding: 8px 12px; font-size: 0.8rem;"><i class="fas fa-triangle-exclamation"></i> Warning: No active tasks logged for this intern in the selected period.</div>';
+                    }
+
+                    // Render legacy warnings
+                    if (data.incomplete_tasks && data.incomplete_tasks.length > 0) {
+                        var legacyList = document.getElementById('legacy-warning-list');
+                        var legacyHtml = '<ul style="margin: 0; padding-left: 16px; color:#991b1b;">';
+                        data.incomplete_tasks.forEach(function(task) {
+                            legacyHtml += '<li>Task #' + task.id + ' (' + task.task_date + ') — <strong>' + task.mode_name + '</strong> (Missing quantity for topic: "<em>' + task.topic_name + '</em>")</li>';
+                        });
+                        legacyHtml += '</ul><div style="margin-top:8px; font-weight:600;"><i class="fas fa-circle-info"></i> These tasks are excluded from calculation. Please ask the intern to complete them.</div>';
+                        legacyList.innerHTML = legacyHtml;
+                        document.getElementById('legacy-warning-container').style.display = 'block';
+                    }
+
+                    // Check for overlap after successful calculation
+                    checkOverlap(start, end);
+                } else {
+                    alertBox.innerHTML = '<div class="alert alert-error" style="padding: 8px 12px; font-size: 0.8rem;"><i class="fas fa-triangle-exclamation"></i> ' + (data.error || 'Failed to calculate.') + '</div>';
+                }
+            })
+            .catch(function(err) {
+                btn.innerHTML = oldText;
+                btn.disabled = false;
+                alertBox.innerHTML = '<div class="alert alert-error" style="padding: 8px 12px; font-size: 0.8rem;"><i class="fas fa-triangle-exclamation"></i> Server connection failed.</div>';
+            });
+    }
+
+    function checkOverlap(start, end) {
+        var url = 'ld-work-report.php?tab=payments&action=check_overlap&intern_id=' + selectedIntern.id + '&start=' + start + '&end=' + end;
+        fetch(url)
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                if (data.success && data.overlap) {
+                    document.getElementById('overlap-warning-text').textContent = data.message;
+                    document.getElementById('overlap-warning-field').style.display = 'block';
+                    document.getElementById('btn-submit-payout').disabled = true;
+                } else {
+                    document.getElementById('overlap-warning-field').style.display = 'none';
+                    document.getElementById('btn-submit-payout').disabled = false;
+                }
+            })
+            .catch(function(err) {
+                console.error("Failed to check overlap:", err);
+            });
+    }
+
+    function updateFinalPayout() {
+        var adj = parseFloat(document.getElementById('modal-adjustment').value) || 0.00;
+        var finalPay = currentExpected + adj;
+
+        var displayEl = document.getElementById('modal-final-display');
+        displayEl.value = '₹' + finalPay.toFixed(2);
+
+        if (finalPay < 0) {
+            displayEl.style.color = 'var(--destructive)';
+        } else {
+            displayEl.style.color = 'var(--success-ink)';
+        }
+    }
+
+    document.getElementById('payout-form').addEventListener('submit', function(e) {
+        var adj = parseFloat(document.getElementById('modal-adjustment').value) || 0.00;
+        var finalPay = currentExpected + adj;
+        var alertBox = document.getElementById('modal-alert-box');
+
+        alertBox.innerHTML = '';
+
+        if (finalPay < 0) {
+            e.preventDefault();
+            alertBox.innerHTML = '<div class="alert alert-error" style="padding: 8px 12px; font-size: 0.8rem;"><i class="fas fa-triangle-exclamation"></i> Final Payout amount cannot be negative. Please adjust.</div>';
+            return;
+        }
+
+        var isOverlapFieldVisible = document.getElementById('overlap-warning-field').style.display !== 'none';
+        if (isOverlapFieldVisible) {
+            e.preventDefault();
+            alertBox.innerHTML = '<div class="alert alert-error" style="padding: 8px 12px; font-size: 0.8rem;"><i class="fas fa-triangle-exclamation"></i> Cannot record payout: Selected period overlaps with an existing completed payment.</div>';
+            return;
+        }
+    });
+    </script>
+<?php endif; // End of if ($tab === 'payments') ?>
+
+<?php if ($tab === 'report'): ?>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 function togglePeriodFields(val) {
@@ -1117,5 +2069,6 @@ function updateDistributionChart(type) {
     distributionChart.update();
 }
 </script>
+<?php endif; // End of if ($tab === 'report') ?>
 
 <?php include 'includes/admin_footer.php'; ?>

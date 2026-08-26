@@ -1,6 +1,9 @@
 <?php
 require_once 'includes/auth.php';
 require_permission('accounts');
+if (function_exists('ld_tables_exist')) {
+    ld_tables_exist($pdo);
+}
 
 /* Accounts & Expenses (CRM).
    Record administrative expenses against a payment account, see faculty
@@ -47,9 +50,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!can_delete()) { $error_message = 'Only the Super Admin can delete an expense.'; }
                 else {
                     $id = (int)($_POST['expense_id'] ?? 0);
-                    $pdo->prepare("DELETE FROM expenses WHERE id = ?")->execute([$id]);
-                    log_admin_activity($pdo, $admin_username, 'expense_deleted', "Deleted expense #{$id}");
-                    $success_message = 'Expense deleted.';
+                    $stmt = $pdo->prepare("SELECT ld_payment_id FROM expenses WHERE id = ?");
+                    $stmt->execute([$id]);
+                    $ld_payment_id = $stmt->fetchColumn();
+                    if ($ld_payment_id) {
+                        $error_message = 'Cannot delete expense: This record is linked to a completed L&D Intern Payment.';
+                    } else {
+                        $pdo->prepare("DELETE FROM expenses WHERE id = ?")->execute([$id]);
+                        log_admin_activity($pdo, $admin_username, 'expense_deleted', "Deleted expense #{$id}");
+                        $success_message = 'Expense deleted.';
+                    }
                 }
             }
         } catch (Exception $e) {
@@ -124,7 +134,7 @@ function build_ledger($pdo, $f_type, $f_acc, $f_from, $f_to, $f_q) {
     foreach ($stmt->fetchAll() as $e) {
         $rows[] = ['kind' => 'Expense', 'date' => $e['spent_date'], 'purpose' => $e['purpose'],
                    'type' => $e['expense_type'] ?: '-', 'amount' => (float)$e['amount'], 'account' => $e['account_name'] ?: '-',
-                   'remarks' => $e['remarks'] ?: '', 'by' => $e['created_by'], 'id' => (int)$e['id'], 'deletable' => true];
+                   'remarks' => $e['remarks'] ?: '', 'by' => $e['created_by'], 'id' => (int)$e['id'], 'deletable' => empty($e['ld_payment_id'])];
     }
     // Faculty payments (only when not filtering by an expense type)
     if ($f_type === '') {
