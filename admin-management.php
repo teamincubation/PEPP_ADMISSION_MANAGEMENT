@@ -197,8 +197,9 @@ include 'includes/admin_nav.php';
     <div class="panel-head">
         <span class="head-icon" style="background:var(--red-soft);color:var(--red-ink);"><i class="fas fa-user-shield"></i></span>
         <h2>Admin Accounts (<?php echo count($admins); ?>)</h2>
-        <div class="head-right">
+        <div class="head-right" style="display:flex; gap:8px;">
             <a class="btn btn-sm btn-outline" href="admin-activity.php"><i class="fas fa-clock-rotate-left"></i> Activity Log</a>
+            <button type="button" class="btn btn-sm btn-primary" onclick="openModal('create-admin-modal')"><i class="fas fa-user-plus"></i> Create New Admin</button>
         </div>
     </div>
     <div class="panel-body flush table-wrap">
@@ -293,108 +294,114 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
-<!-- ── ADD ADMIN ── -->
-<div class="panel">
-    <div class="panel-head"><span class="head-icon"><i class="fas fa-user-plus"></i></span><h2>Create Admin Account</h2></div>
-    <div class="panel-body">
+<!-- ── CREATE ADMIN MODAL ── -->
+<div class="modal-backdrop" id="create-admin-modal">
+    <div class="modal" style="max-width:600px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-user-plus" style="color:var(--accent);"></i> Create Admin Account</h3>
+            <button class="modal-close" onclick="closeModal('create-admin-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
         <form method="POST">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="add_admin">
-            <div class="form-grid">
-                <div class="field"><label>Username <span class="req">*</span></label>
-                    <input type="text" name="username" required pattern="[A-Za-z0-9_.@-]{3,50}" placeholder="e.g. office.staff"></div>
-                <div class="field"><label>Full name</label>
-                    <input type="text" name="full_name" placeholder="Display name"></div>
-                <div class="field"><label>Email</label>
-                    <input type="email" name="email" placeholder="admin@example.com">
-                    <div class="help">Used for reminders &amp; Google sign-in</div></div>
-                <div class="field"><label>Google sign-in email</label>
-                    <input type="email" name="google_email" placeholder="(defaults to email above)">
-                    <div class="help">The Google account allowed to sign in as this admin</div></div>
-                <div class="field"><label>Phone</label>
-                    <input type="text" name="phone" placeholder="Mobile number"></div>
-                <div class="field"><label>Admin Type</label>
-                    <select name="admin_type" required>
-                        <option value="erp_admin">ERP Admin</option>
-                        <option value="employee">Employee</option>
-                        <option value="faculty">Faculty</option>
-                        <option value="intern">Intern</option>
-                        <option value="superadmin">Superadmin</option>
-                    </select>
-                    <div class="help">Classification for this admin account</div></div>
-                <div class="field"><label>Credential Visibility</label>
-                    <select name="credential_visibility" required>
-                        <option value="visible">Visible</option>
-                        <option value="hide">Hide</option>
-                        <option value="mask">Mask</option>
-                    </select>
+            <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+                <div class="form-grid">
+                    <div class="field"><label>Username <span class="req">*</span></label>
+                        <input type="text" name="username" required pattern="[A-Za-z0-9_.@-]{3,50}" placeholder="e.g. office.staff"></div>
+                    <div class="field"><label>Full name</label>
+                        <input type="text" name="full_name" placeholder="Display name"></div>
+                    <div class="field"><label>Email</label>
+                        <input type="email" name="email" placeholder="admin@example.com">
+                        <div class="help">Used for reminders &amp; Google sign-in</div></div>
+                    <div class="field"><label>Google sign-in email</label>
+                        <input type="email" name="google_email" placeholder="(defaults to email above)">
+                        <div class="help">The Google account allowed to sign in as this admin</div></div>
+                    <div class="field"><label>Phone</label>
+                        <input type="text" name="phone" placeholder="Mobile number"></div>
+                    <div class="field"><label>Admin Type</label>
+                        <select name="admin_type" required>
+                            <option value="erp_admin">ERP Admin</option>
+                            <option value="employee">Employee</option>
+                            <option value="faculty">Faculty</option>
+                            <option value="intern">Intern</option>
+                            <option value="superadmin">Superadmin</option>
+                        </select>
+                        <div class="help">Classification for this admin account</div></div>
+                    <div class="field"><label>Credential Visibility</label>
+                        <select name="credential_visibility" required>
+                            <option value="visible">Visible</option>
+                            <option value="hide">Hide</option>
+                            <option value="mask">Mask</option>
+                        </select>
+                    </div>
+                    <div class="field" style="grid-column: span 2; margin-top:-8px; margin-bottom:12px;">
+                        <label style="margin-bottom:6px; display:block;">Credential Visibility Scopes</label>
+                        <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="students" style="width:16px; height:16px; accent-color:var(--accent);" checked> Students
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="alumni" style="width:16px; height:16px; accent-color:var(--accent);"> Alumni Data
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="faculties" style="width:16px; height:16px; accent-color:var(--accent);"> Faculties
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="leads" style="width:16px; height:16px; accent-color:var(--accent);"> Leads
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="campaigns" style="width:16px; height:16px; accent-color:var(--accent);"> Custom Forms
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="student-study-reports" style="width:16px; height:16px; accent-color:var(--accent);"> Student Reports
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="credential_visibility_scopes[]" value="financials" style="width:16px; height:16px; accent-color:var(--accent);"> Financials
+                            </label>
+                        </div>
+                    </div>
+                    <div class="field" style="grid-column: span 2; margin-top:-4px; margin-bottom:12px;">
+                        <label style="margin-bottom:6px; display:block;">Action Permissions (Global)</label>
+                        <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="can_edit" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Edit / Modify
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="can_delete" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Delete
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="can_export" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Export
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="allow_copy_email" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Copy Original Email
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="allow_whatsapp_chat" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow WhatsApp Chat
+                            </label>
+                        </div>
+                    </div>
+                    <div class="field"><label>Password <span class="req">*</span></label>
+                        <input type="password" name="password" required minlength="8" autocomplete="new-password">
+                        <div class="help">Minimum 8 characters - share it securely</div></div>
                 </div>
-                <div class="field" style="grid-column: span 2; margin-top:-8px; margin-bottom:12px;">
-                    <label style="margin-bottom:6px; display:block;">Credential Visibility Scopes</label>
-                    <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
-                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                            <input type="checkbox" name="credential_visibility_scopes[]" value="students" style="width:16px; height:16px; accent-color:var(--accent);" checked> Students
-                        </label>
-                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                            <input type="checkbox" name="credential_visibility_scopes[]" value="alumni" style="width:16px; height:16px; accent-color:var(--accent);"> Alumni Data
-                        </label>
-                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                            <input type="checkbox" name="credential_visibility_scopes[]" value="faculties" style="width:16px; height:16px; accent-color:var(--accent);"> Faculties
-                        </label>
-                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                            <input type="checkbox" name="credential_visibility_scopes[]" value="leads" style="width:16px; height:16px; accent-color:var(--accent);"> Leads
-                        </label>
-                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                            <input type="checkbox" name="credential_visibility_scopes[]" value="campaigns" style="width:16px; height:16px; accent-color:var(--accent);"> Custom Forms
-                        </label>
-                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                            <input type="checkbox" name="credential_visibility_scopes[]" value="student-study-reports" style="width:16px; height:16px; accent-color:var(--accent);"> Student Reports
-                        </label>
-                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                            <input type="checkbox" name="credential_visibility_scopes[]" value="financials" style="width:16px; height:16px; accent-color:var(--accent);"> Financials
-                        </label>
+                <div class="field" style="margin-top:16px;">
+                    <label>Page access <span class="req">*</span></label>
+                    <label style="display:inline-flex;align-items:center;gap:8px;font-size:.84rem;font-weight:700;background:var(--green-soft);color:var(--green-ink);border-radius:50px;padding:7px 16px;cursor:pointer;text-transform:none;letter-spacing:0;margin-bottom:10px;">
+                        <input type="checkbox" name="perm_all" value="1" onchange="toggleAll(this, 'new-perms')" style="width:16px;height:16px;accent-color:var(--green-ink);">
+                        Full access (every current &amp; future page)
+                    </label>
+                    <div id="new-perms" style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <?php foreach ($GLOBALS['ADMIN_PAGES'] as $key => [$label, $icon]): ?>
+                            <label style="display:inline-flex;align-items:center;gap:7px;font-size:.8rem;font-weight:600;background:var(--card);border-radius:50px;padding:7px 14px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--foreground);">
+                                <input type="checkbox" name="perms[]" value="<?php echo e($key); ?>" style="width:15px;height:15px;accent-color:var(--accent);">
+                                <i class="fas <?php echo e($icon); ?>" style="color:var(--secondary);font-size:.75rem;"></i> <?php echo e($label); ?>
+                            </label>
+                        <?php endforeach; ?>
                     </div>
                 </div>
-                <div class="field" style="grid-column: span 2; margin-top:-4px; margin-bottom:12px;">
-                    <label style="margin-bottom:6px; display:block;">Action Permissions (Global)</label>
-                    <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
-                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                            <input type="checkbox" name="can_edit" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Edit / Modify
-                        </label>
-                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                            <input type="checkbox" name="can_delete" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Delete
-                        </label>
-                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                            <input type="checkbox" name="can_export" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Export
-                        </label>
-                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                            <input type="checkbox" name="allow_copy_email" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Copy Original Email
-                        </label>
-                        <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                            <input type="checkbox" name="allow_whatsapp_chat" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow WhatsApp Chat
-                        </label>
-                    </div>
-                </div>
-                <div class="field"><label>Password <span class="req">*</span></label>
-                    <input type="password" name="password" required minlength="8" autocomplete="new-password">
-                    <div class="help">Minimum 8 characters - share it securely</div></div>
             </div>
-            <div class="field" style="margin-top:16px;">
-                <label>Page access <span class="req">*</span></label>
-                <label style="display:inline-flex;align-items:center;gap:8px;font-size:.84rem;font-weight:700;background:var(--green-soft);color:var(--green-ink);border-radius:50px;padding:7px 16px;cursor:pointer;text-transform:none;letter-spacing:0;margin-bottom:10px;">
-                    <input type="checkbox" name="perm_all" value="1" onchange="toggleAll(this, 'new-perms')" style="width:16px;height:16px;accent-color:var(--green-ink);">
-                    Full access (every current &amp; future page)
-                </label>
-                <div id="new-perms" style="display:flex; gap:8px; flex-wrap:wrap;">
-                    <?php foreach ($GLOBALS['ADMIN_PAGES'] as $key => [$label, $icon]): ?>
-                        <label style="display:inline-flex;align-items:center;gap:7px;font-size:.8rem;font-weight:600;background:var(--card);border-radius:50px;padding:7px 14px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--foreground);">
-                            <input type="checkbox" name="perms[]" value="<?php echo e($key); ?>" style="width:15px;height:15px;accent-color:var(--accent);">
-                            <i class="fas <?php echo e($icon); ?>" style="color:var(--secondary);font-size:.75rem;"></i> <?php echo e($label); ?>
-                        </label>
-                    <?php endforeach; ?>
-                </div>
-            </div>
-            <div style="display:flex; justify-content:flex-end; margin-top:16px;">
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('create-admin-modal')">Cancel</button>
                 <button type="submit" class="btn btn-primary"><i class="fas fa-user-plus"></i> Create Admin</button>
             </div>
         </form>
