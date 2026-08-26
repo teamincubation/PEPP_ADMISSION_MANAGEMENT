@@ -94,8 +94,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$course_name || !$mode_name) {
                     $error_message = "Invalid Course or Work Mode selection.";
                 } else {
-                    $pdo->beginTransaction();
+                    // Check if quantity is required for this Work Mode configuration
+                    $qty_required = ($qty_label_snapshot !== null && trim($qty_label_snapshot) !== '' && $mode_row['charge_per_quantity'] !== null);
+
                     try {
+                        $validated_topics = [];
+                        $has_at_least_one_valid_topic = false;
+                        foreach ($topics as $idx => $topic) {
+                            $topic_clean = trim($topic);
+                            if ($topic_clean !== '') {
+                                $has_at_least_one_valid_topic = true;
+                                $raw_qty = isset($quantities[$idx]) ? trim($quantities[$idx]) : '';
+
+                                $qty = null;
+                                if ($raw_qty !== '') {
+                                    $qty = filter_var($raw_qty, FILTER_VALIDATE_FLOAT);
+                                }
+
+                                if ($qty_required) {
+                                    if ($qty === null || $qty === false || $qty <= 0) {
+                                        throw new Exception("Please enter the quantity for every completed topic.");
+                                    }
+                                } else {
+                                    if ($qty !== null && ($qty === false || $qty < 0)) {
+                                        throw new Exception("Quantity for each topic must be a valid non-negative number.");
+                                    }
+                                }
+
+                                $validated_topics[] = [
+                                    'topic_name' => $topic_clean,
+                                    'quantity' => $qty
+                                ];
+                            }
+                        }
+
+                        if (!$has_at_least_one_valid_topic) {
+                            throw new Exception("Please select a Course, Work Mode, and provide at least one topic.");
+                        }
+
+                        $pdo->beginTransaction();
+
                         $ip = $_SERVER['REMOTE_ADDR'] ?? '';
                         $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
 
@@ -126,21 +164,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         // Insert topics
                         $stmt_topic = $pdo->prepare("INSERT INTO ld_task_topics (task_id, topic_name, quantity, calculated_charge) VALUES (?, ?, ?, ?)");
                         $clean_topics = [];
-                        foreach ($topics as $idx => $topic) {
-                            $topic_clean = trim($topic);
-                            if ($topic_clean !== '') {
-                                $qty = isset($quantities[$idx]) && $quantities[$idx] !== '' ? filter_var($quantities[$idx], FILTER_VALIDATE_FLOAT) : null;
-                                if ($qty !== null && ($qty === false || $qty < 0)) {
-                                    throw new Exception("Quantity for each topic must be a valid non-negative number.");
-                                }
-                                $calculated_charge = $qty !== null ? ($qty * $charge_snapshot) : 0.00;
-                                $stmt_topic->execute([$task_id, $topic_clean, $qty, $calculated_charge]);
-                                $clean_topics[] = [
-                                    'topic_name' => $topic_clean,
-                                    'quantity' => $qty,
-                                    'calculated_charge' => $calculated_charge
-                                ];
-                            }
+                        foreach ($validated_topics as $v_topic) {
+                            $qty = $v_topic['quantity'];
+                            $calculated_charge = $qty !== null ? ($qty * $charge_snapshot) : 0.00;
+                            $stmt_topic->execute([$task_id, $v_topic['topic_name'], $qty, $calculated_charge]);
+                            $clean_topics[] = [
+                                'topic_name' => $v_topic['topic_name'],
+                                'quantity' => $qty,
+                                'calculated_charge' => $calculated_charge
+                            ];
                         }
 
                         // Log Audit CREATE
@@ -155,7 +187,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $pdo->commit();
                         $success_message = "Task created successfully.";
                     } catch (Exception $e) {
-                        $pdo->rollBack();
+                        if ($pdo->inTransaction()) {
+                            $pdo->rollBack();
+                        }
                         error_log("Create L&D Task: " . $e->getMessage());
                         $error_message = $e->getMessage() ?: "Database error while creating task.";
                     }
@@ -415,7 +449,8 @@ $modes_json = [];
 foreach ($active_modes as $m) {
     $modes_json[$m['id']] = [
         'name' => $m['mode_name'],
-        'qty_label' => $m['quantity_label'] ?? 'Qty'
+        'qty_label' => $m['quantity_label'] ?? '',
+        'charge_per_quantity' => $m['charge_per_quantity'] !== null ? (float)$m['charge_per_quantity'] : null
     ];
 }
 ?>
@@ -675,7 +710,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             <div class="topic-input-row" style="display:flex; gap:10px; margin-bottom:8px; align-items:center;">
                                 <input type="text" name="topics[]" class="topic-input" placeholder="e.g. Personality theories" required style="flex:2;">
                                 <div class="qty-container" style="display:flex; align-items:center; gap:6px; flex:1;">
-                                    <input type="number" step="any" name="quantities[]" class="qty-input" placeholder="Qty" style="width:100px;" required>
+                                    <input type="number" step="any" name="quantities[]" class="qty-input" placeholder="Qty" style="width:100px;">
                                     <span class="qty-label" style="font-size:0.85rem; font-weight:600; color:var(--text-muted);">Qty</span>
                                 </div>
                                 <button type="button" class="btn btn-sm btn-soft-red" style="opacity:0; pointer-events:none; padding:10px 12px;"><i class="fas fa-trash"></i></button>
@@ -917,6 +952,8 @@ document.addEventListener('DOMContentLoaded', function() {
         modeSelect.addEventListener('change', function() {
             updateAllQtyLabels();
         });
+        // Run immediately to set initial required attributes based on selected mode
+        updateAllQtyLabels();
     }
 });
 
@@ -924,20 +961,44 @@ function getSelectedModeQtyLabel() {
     var modeSelect = document.getElementById('form-mode');
     var modeId = modeSelect ? modeSelect.value : '';
     if (modeId && workModesConfig[modeId]) {
-        return workModesConfig[modeId].qty_label;
+        return workModesConfig[modeId].qty_label || 'Qty';
     }
     return 'Qty';
 }
 
+function isQtyRequired() {
+    var action = document.getElementById('form-action').value;
+    if (action !== 'create_task') {
+        return false;
+    }
+    var modeSelect = document.getElementById('form-mode');
+    var modeId = modeSelect ? modeSelect.value : '';
+    if (modeId && workModesConfig[modeId]) {
+        var cfg = workModesConfig[modeId];
+        return (cfg.qty_label !== undefined && cfg.qty_label !== null && cfg.qty_label.trim() !== '' && cfg.charge_per_quantity !== null);
+    }
+    return false;
+}
+
 function updateAllQtyLabels() {
     var labelText = getSelectedModeQtyLabel();
+    var required = isQtyRequired();
+
     var labels = document.querySelectorAll('.qty-label');
     labels.forEach(function(lbl) {
         lbl.textContent = labelText;
     });
+
     var inputs = document.querySelectorAll('.qty-input');
     inputs.forEach(function(inp) {
         inp.placeholder = labelText;
+        if (required) {
+            inp.required = true;
+            inp.classList.add('qty-required');
+        } else {
+            inp.required = false;
+            inp.classList.remove('qty-required');
+        }
     });
 }
 
@@ -976,7 +1037,13 @@ function addTopicRow(val = '', qty = '') {
     qtyInput.className = 'qty-input';
     qtyInput.placeholder = qtyLabelText;
     qtyInput.value = qty;
-    qtyInput.required = true;
+
+    if (isQtyRequired()) {
+        qtyInput.required = true;
+        qtyInput.classList.add('qty-required');
+    } else {
+        qtyInput.required = false;
+    }
     qtyInput.style.width = '100px';
 
     var qtyLabel = document.createElement('span');
@@ -1048,7 +1115,12 @@ function enterEditMode(data) {
             qtyInput.className = 'qty-input';
             qtyInput.placeholder = qtyLabelText;
             qtyInput.value = tp.qty;
-            qtyInput.required = true;
+            qtyInput.required = isQtyRequired();
+            if (isQtyRequired()) {
+                qtyInput.classList.add('qty-required');
+            } else {
+                qtyInput.classList.remove('qty-required');
+            }
             qtyInput.style.width = '100px';
 
             var qtyLabel = document.createElement('span');
@@ -1127,7 +1199,12 @@ function cancelEditMode() {
     qtyInput.name = 'quantities[]';
     qtyInput.className = 'qty-input';
     qtyInput.placeholder = 'Qty';
-    qtyInput.required = true;
+    qtyInput.required = isQtyRequired();
+    if (isQtyRequired()) {
+        qtyInput.classList.add('qty-required');
+    } else {
+        qtyInput.classList.remove('qty-required');
+    }
     qtyInput.style.width = '100px';
 
     var qtyLabel = document.createElement('span');
@@ -1155,10 +1232,41 @@ function cancelEditMode() {
 
     document.getElementById('btn-cancel-edit').style.display = 'none';
     document.getElementById('btn-submit').innerHTML = '<i class="fas fa-floppy-disk"></i> Log Task';
+
+    updateAllQtyLabels();
 }
 
 function validateAndSubmit(e) {
     e.preventDefault();
+
+    // Reset previous validation highlights
+    var inputs = document.querySelectorAll('.qty-input');
+    inputs.forEach(function(inp) {
+        inp.style.border = '';
+    });
+
+    if (isQtyRequired()) {
+        var hasEmptyQty = false;
+        inputs.forEach(function(inp) {
+            var row = inp.closest('.topic-input-row');
+            if (row) {
+                var topicInput = row.querySelector('.topic-input');
+                if (topicInput && topicInput.value.trim() !== '') {
+                    var val = inp.value.trim();
+                    var numVal = parseFloat(val);
+                    if (val === '' || isNaN(numVal) || numVal <= 0) {
+                        inp.style.border = '2px solid #ef4444'; // Clear red highlight
+                        hasEmptyQty = true;
+                    }
+                }
+            }
+        });
+
+        if (hasEmptyQty) {
+            alert("Please enter the quantity for every completed topic.");
+            return false;
+        }
+    }
 
     requestLocation(function(success) {
         if (!success) {
