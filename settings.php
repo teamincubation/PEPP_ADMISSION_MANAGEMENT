@@ -442,6 +442,60 @@ $message_fields = [
 $active_page = 'settings';
 $page_title  = 'Settings';
 $page_sub    = 'Academic years, templates, payment accounts & admin account';
+
+$extra_head = '
+<style>
+/* Settings Tab Styles */
+.settings-tabs-container {
+    display: flex;
+    gap: 6px;
+    border-bottom: 2px solid var(--border, #e2e8f0);
+    margin-bottom: 24px;
+    overflow-x: auto;
+    white-space: nowrap;
+    padding-bottom: 2px;
+    scrollbar-width: thin;
+}
+.settings-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    font-family: "Space Grotesk", sans-serif;
+    font-weight: 600;
+    font-size: 0.88rem;
+    color: var(--text-muted, #64748b);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+}
+.settings-tab:hover {
+    color: var(--foreground, #0f172a);
+    background: rgba(148, 163, 184, 0.06);
+}
+html.theme-dark .settings-tab:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.04);
+}
+.settings-tab.active {
+    color: var(--primary, #7c3aed);
+    border-bottom: 2px solid var(--primary, #7c3aed);
+}
+.settings-tab i {
+    font-size: 0.95rem;
+}
+.settings-tab-pane {
+    display: none;
+}
+.settings-tab-pane.active {
+    display: block;
+}
+</style>
+';
+
 include 'includes/admin_nav.php';
 ?>
 
@@ -449,6 +503,37 @@ include 'includes/admin_nav.php';
 <?php if ($error_message):   ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($error_message); ?></span></div><?php endif; ?>
 
 <?php if (is_super_admin()): ?>
+<div class="settings-tabs-container">
+    <button type="button" class="settings-tab active" onclick="switchSettingsTab('academic-years')">
+        <i class="fas fa-calendar-days"></i> Academic Years
+    </button>
+    <button type="button" class="settings-tab" onclick="switchSettingsTab('whatsapp-templates')">
+        <i class="fab fa-whatsapp"></i> WhatsApp Templates
+    </button>
+    <button type="button" class="settings-tab" onclick="switchSettingsTab('payment-accounts')">
+        <i class="fas fa-building-columns"></i> Payment Accounts
+    </button>
+    <button type="button" class="settings-tab" onclick="switchSettingsTab('expense-types')">
+        <i class="fas fa-tags"></i> Expense Types
+    </button>
+    <button type="button" class="settings-tab" onclick="switchSettingsTab('ld-settings')">
+        <i class="fas fa-graduation-cap"></i> L&D Settings
+    </button>
+    <button type="button" class="settings-tab" onclick="switchSettingsTab('invoice-settings')">
+        <i class="fas fa-file-invoice"></i> Invoice Settings
+    </button>
+    <button type="button" class="settings-tab" onclick="switchSettingsTab('smtp-settings')">
+        <i class="fas fa-envelope-open-text"></i> SMTP Mail
+    </button>
+    <button type="button" class="settings-tab" onclick="switchSettingsTab('sidebar-layout')">
+        <i class="fas fa-bars"></i> Sidebar Layout
+    </button>
+    <button type="button" class="settings-tab" onclick="switchSettingsTab('admin-account')">
+        <i class="fas fa-user-shield"></i> Security &amp; Account
+    </button>
+</div>
+
+<div id="pane-academic-years" class="settings-tab-pane active">
 <!-- ── ACADEMIC YEARS ── -->
 <div class="panel">
     <div class="panel-head"><span class="head-icon"><i class="fas fa-calendar-days"></i></span><h2>Academic Years</h2></div>
@@ -494,7 +579,9 @@ include 'includes/admin_nav.php';
         </div>
     </div>
 </div>
+</div>
 
+<div id="pane-whatsapp-templates" class="settings-tab-pane">
 <!-- ── WHATSAPP TEMPLATES ── -->
 <div class="panel">
     <div class="panel-head"><span class="head-icon" style="background:var(--green-soft);color:var(--green-ink);"><i class="fab fa-whatsapp"></i></span><h2>WhatsApp Message Templates</h2></div>
@@ -527,7 +614,9 @@ include 'includes/admin_nav.php';
         </form>
     </div>
 </div>
+</div>
 
+<div id="pane-payment-accounts" class="settings-tab-pane">
 <!-- ── PAYMENT ACCOUNTS ── -->
 <div class="panel">
     <div class="panel-head"><span class="head-icon" style="background:var(--amber-soft);color:var(--amber-ink);"><i class="fas fa-building-columns"></i></span><h2>Payment Accounts</h2></div>
@@ -598,9 +687,11 @@ include 'includes/admin_nav.php';
         </div>
     </div>
 </div>
+</div>
 
 
 
+<div id="pane-expense-types" class="settings-tab-pane">
 <!-- ── EXPENSE TYPES ── -->
 <div class="panel">
     <div class="panel-head"><span class="head-icon" style="background:var(--amber-soft);color:var(--amber-ink);"><i class="fas fa-tags"></i></span><h2>Expense Types</h2></div>
@@ -630,7 +721,9 @@ include 'includes/admin_nav.php';
         <?php else: ?><div class="cell-sub">No expense types yet - the standard list is seeded by database-update-7.sql.</div><?php endif; ?>
     </div>
 </div>
+</div>
 
+<div id="pane-ld-settings" class="settings-tab-pane">
 <!-- ── L&D WORK COURSES ── -->
 <div class="panel">
     <div class="panel-head"><span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-book-open"></i></span><h2>L&D Work Courses</h2></div>
@@ -708,7 +801,9 @@ include 'includes/admin_nav.php';
         <?php else: ?><div class="cell-sub">No L&D work modes defined yet.</div><?php endif; ?>
     </div>
 </div>
+</div>
 
+<div id="pane-invoice-settings" class="settings-tab-pane">
 <!-- ── INVOICE SETTINGS ── -->
 <?php
 $ivs = function ($k, $d = '') use ($current_settings) { return e($current_settings[$k] ?? $d); };
@@ -765,7 +860,9 @@ $nongst_preview = ($current_settings['inv_nongst_prefix'] ?? 'INV') . '/' . date
         </form>
     </div>
 </div>
+</div>
 
+<div id="pane-smtp-settings" class="settings-tab-pane">
 <!-- ── SMTP MAIL CONFIGURATION ── -->
 <div class="panel">
     <div class="panel-head"><span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-envelope-open-text"></i></span><h2>SMTP Mail Settings</h2></div>
@@ -816,7 +913,9 @@ $nongst_preview = ($current_settings['inv_nongst_prefix'] ?? 'INV') . '/' . date
         </form>
     </div>
 </div>
+</div>
 
+<div id="pane-sidebar-layout" class="settings-tab-pane">
 <!-- ── SIDEBAR MENU LAYOUT ── -->
 <?php
 $sub_item_labels = [
@@ -908,6 +1007,7 @@ try {
         </form>
     </div>
 </div>
+</div>
 
 <?php endif; /* super-only settings */ ?>
 
@@ -915,6 +1015,7 @@ try {
 <div class="alert alert-info"><i class="fas fa-circle-info"></i><span>You can update your own password here. Other settings are managed by the Super Admin.</span></div>
 <?php endif; ?>
 
+<div id="pane-admin-account" class="<?php echo is_super_admin() ? 'settings-tab-pane' : ''; ?>">
 <!-- ── ADMIN ACCOUNT ── -->
 <div class="panel">
     <div class="panel-head"><span class="head-icon" style="background:var(--red-soft);color:var(--red-ink);"><i class="fas fa-user-shield"></i></span><h2>Admin Account</h2></div>
@@ -948,6 +1049,7 @@ try {
             </div>
         </form>
     </div>
+</div>
 </div>
 
 <!-- Edit payment account modal -->
@@ -1308,6 +1410,65 @@ function openEditLdMode(data) {
     document.getElementById('edit-ld-mode-status').value = data.status;
     openModal('edit-ld-mode-modal');
 }
+
+function switchSettingsTab(tabId) {
+    // Only execute if tabs container exists
+    if (!document.querySelector('.settings-tabs-container')) return;
+
+    // Remove active class from all tabs
+    document.querySelectorAll('.settings-tab').forEach(function(tab) {
+        tab.classList.remove('active');
+    });
+
+    // Remove active class from all panes
+    document.querySelectorAll('.settings-tab-pane').forEach(function(pane) {
+        pane.classList.remove('active');
+    });
+
+    // Find clicked tab button
+    var activeTabBtn = document.querySelector('.settings-tab[onclick*="' + tabId + '"]');
+    if (activeTabBtn) {
+        activeTabBtn.classList.add('active');
+    }
+
+    // Find matching pane
+    var activePane = document.getElementById('pane-' + tabId);
+    if (activePane) {
+        activePane.classList.add('active');
+    }
+
+    // Save to localStorage
+    localStorage.setItem('active_settings_tab', tabId);
+
+    // Update URL hash without causing page jump
+    if (history.replaceState) {
+        history.replaceState(null, null, '#' + tabId);
+    } else {
+        window.location.hash = tabId;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Check if the user is a super admin (by checking if tabs exist)
+    if (!document.querySelector('.settings-tabs-container')) return;
+
+    // 1. Check URL hash
+    var tabId = window.location.hash.substring(1);
+
+    // 2. Fallback to localStorage
+    if (!tabId) {
+        tabId = localStorage.getItem('active_settings_tab');
+    }
+
+    // Validate tab ID or default to 'academic-years'
+    var validTabs = ['academic-years', 'whatsapp-templates', 'payment-accounts', 'expense-types', 'ld-settings', 'invoice-settings', 'smtp-settings', 'sidebar-layout', 'admin-account'];
+    if (!tabId || !validTabs.includes(tabId)) {
+        tabId = 'academic-years';
+    }
+
+    // Switch to active tab
+    switchSettingsTab(tabId);
+});
 </script>
 
 <?php include 'includes/admin_footer.php'; ?>
