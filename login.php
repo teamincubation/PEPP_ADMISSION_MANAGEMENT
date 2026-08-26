@@ -1,5 +1,6 @@
 <?php
 session_start();
+require_once 'includes/activity_logger.php';
 
 // Already logged in → redirect to first accessible page
 if (isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true) {
@@ -123,6 +124,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$locked) {
         $_SESSION['admin_logged_in'] = true;
         $_SESSION['admin_username']  = $username;
         $_SESSION['admin_role']      = $role;
+        $_SESSION['admin_id']        = isset($row['id']) ? $row['id'] : null;
+        $_SESSION['session_ref']     = bin2hex(random_bytes(16));
         $_SESSION['login_time']      = time();
         $_SESSION['last_activity']   = time();
         $_SESSION['login_attempts']  = 0;
@@ -140,19 +143,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$locked) {
             $location = 'Local / private network';
         }
         $_SESSION['admin_location'] = $location;
-        try {
-            if (!empty($has_admins)) {
-                $stmt = $pdo->prepare("
-                    INSERT INTO admin_activity_log (admin_username, action_type, details, ip_address, location, user_agent, created_at)
-                    VALUES (?, 'login', ?, ?, ?, ?, NOW())
-                ");
-                $stmt->execute([
-                    $username,
-                    'Signed in (' . ($role === 'super_admin' ? 'Super Admin' : 'Admin') . ')',
-                    $ip, $location, substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 255)
-                ]);
-            }
-        } catch (Exception $e) { error_log('login activity: ' . $e->getMessage()); }
+        log_login($pdo, $username, $_SESSION['admin_id'], $_SESSION['session_ref']);
 
         $redirect = 'dashboard.php';
         if ($role !== 'super_admin' && isset($row) && !empty($row['permissions'])) {
@@ -196,6 +187,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$locked) {
     $error_message = $remaining > 0
         ? "Invalid username or password. {$remaining} attempt(s) remaining."
         : 'Too many failed attempts. Please wait 10 minutes and try again.';
+
+    // Log failed login attempt
+    $fail_reason = $remaining > 0 ? 'Invalid credentials' : 'Locked out due to excessive failed attempts';
+    log_failed_login($pdo, $username, $fail_reason);
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && $locked) {
     $wait = ceil(($lock_seconds - (time() - $lock_time)) / 60);
     $error_message = "Account temporarily locked. Try again in about {$wait} minute(s).";

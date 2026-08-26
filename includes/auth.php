@@ -17,6 +17,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/activity_logger.php';
 
 $GLOBALS['ADMIN_PAGES'] = [
     'dashboard'     => ['Dashboard',               'fa-gauge-high'],
@@ -157,29 +158,47 @@ function whatsapp_outbound_mode($pdo) {
 
 /* ── Activity logging (logins, logouts, exports, admin events) ──────────── */
 function log_admin_activity($pdo, $admin, $type, $details = '', $ip = null, $location = null) {
-    try {
-        if (!admins_table_exists($pdo)) return; // table ships with the same migration
-        $lat = isset($_COOKIE['pepp_lat']) && is_numeric($_COOKIE['pepp_lat']) ? (float)$_COOKIE['pepp_lat'] : null;
-        $lng = isset($_COOKIE['pepp_lng']) && is_numeric($_COOKIE['pepp_lng']) ? (float)$_COOKIE['pepp_lng'] : null;
-        $meta = $_COOKIE['pepp_meta'] ?? null;
-        $stmt = $pdo->prepare("
-            INSERT INTO admin_activity_log (admin_username, action_type, details, ip_address, location, user_agent, latitude, longitude, metadata, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-        ");
-        $stmt->execute([
-            $admin, $type, $details,
-            $ip ?? ($_SERVER['REMOTE_ADDR'] ?? null),
-            $location ?? ($_SESSION['admin_location'] ?? null),
-            substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 255),
-            $lat, $lng, $meta
-        ]);
-    } catch (Exception $e) { error_log('admin activity log: ' . $e->getMessage()); }
+    // Determine target entity from details or type
+    $target_type = null;
+    $target_id = null;
+
+    // Auto-detect target student if student ID exists in details (e.g. PL-2026-99)
+    if (preg_match('/(PL-[A-Za-z0-9\-]+)/i', $details, $matches)) {
+        $target_type = 'student';
+        $target_id = strtoupper($matches[1]);
+    }
+
+    // Resolve module/page based on current page
+    $cur_page = basename($_SERVER['SCRIPT_NAME'] ?? '');
+    $low_page = strtolower(trim($cur_page));
+    $module = 'Other';
+    if (in_array($low_page, ['dashboard.php'], true)) $module = 'Overview';
+    elseif (in_array($low_page, ['student-approval.php', 'add-student.php'], true)) $module = 'Registrations';
+    elseif (in_array($low_page, ['studentpage.php', 'studentonboarding.php', 'student-details.php'], true)) $module = 'Students';
+    elseif (in_array($low_page, ['sessions.php', 'lead-management.php', 'student-mentoring.php'], true)) $module = 'Leads & Mentoring';
+    elseif (in_array($low_page, ['whatsapp-notification.php', 'whatsapp-inbox.php', 'communication-dashboard.php', 'communication-campaigns.php', 'whatsapp-marketing-templates.php'], true)) $module = 'Communication';
+    elseif (in_array($low_page, ['course-management.php', 'faculties.php', 'studyplans.php', 'student-study-reports.php', 'assessment-results.php', 'studyplan-designer.php', 'studyplan-chapters.php'], true)) $module = 'Academics';
+    elseif (in_array($low_page, ['settings.php'], true)) $module = 'Settings';
+    elseif (in_array($low_page, ['admin-management.php', 'employee-management.php', 'admin-activity.php', 'reports.php', 'email-reports.php'], true)) $module = 'Admin Panel';
+
+    log_activity_event($pdo, [
+        'admin_username' => $admin,
+        'action_type' => $type,
+        'details' => $details,
+        'ip_address' => $ip,
+        'location' => $location,
+        'module' => $module,
+        'page' => $cur_page,
+        'section' => $module,
+        'target_type' => $target_type,
+        'target_id' => $target_id
+    ]);
 }
 
 /* ── Logout ─────────────────────────────────────────────────────────────── */
 if (isset($_GET['logout'])) {
     if (!empty($_SESSION['admin_username'])) {
-        log_admin_activity($pdo, $_SESSION['admin_username'], 'logout', 'Manual logout');
+        log_logout($pdo, $_SESSION['admin_username'], $_SESSION['session_ref'] ?? null, 'Manual logout');
     }
     $_SESSION = [];
     if (ini_get('session.use_cookies')) {
@@ -210,9 +229,12 @@ if (admins_table_exists($pdo)) {
         $stmt = $pdo->prepare("SELECT * FROM admins WHERE username = ? LIMIT 1");
         $stmt->execute([$admin_username]);
         $admin_row = $stmt->fetch();
+        if ($admin_row) {
+            $_SESSION['admin_id'] = $admin_row['id'];
+        }
         if (!$admin_row || $admin_row['status'] !== 'active') {
             // Deactivated or removed while logged in → end the session
-            log_admin_activity($pdo, $admin_username, 'forced_logout', 'Account inactive or removed');
+            log_auto_logout($pdo, $admin_username, $_SESSION['session_ref'] ?? null, 'Account inactive or removed');
             session_unset(); session_destroy();
             header('Location: login.php?expired=1');
             exit();
@@ -234,8 +256,12 @@ try {
         $_SESSION['login_time'] = $ll ? strtotime($ll) : time();
     }
 
+    // Auto-generate session_ref if not set yet (backwards compatibility)
+    if (empty($_SESSION['session_ref'])) {
+        $_SESSION['session_ref'] = bin2hex(random_bytes(16));
+    }
+
     $cur_page = basename($_SERVER['SCRIPT_NAME']);
-    $login_dt = date('Y-m-d H:i:s', $_SESSION['login_time']);
 
     // Resolve section
     $cur_sec = 'Other';
@@ -249,29 +275,19 @@ try {
     elseif (in_array($low_page, ['settings.php'], true)) $cur_sec = 'Settings';
     elseif (in_array($low_page, ['admin-management.php', 'employee-management.php', 'admin-activity.php', 'reports.php', 'email-reports.php'], true)) $cur_sec = 'Admin Panel';
 
-    $lat = isset($_COOKIE['pepp_lat']) && is_numeric($_COOKIE['pepp_lat']) ? (float)$_COOKIE['pepp_lat'] : null;
-    $lng = isset($_COOKIE['pepp_lng']) && is_numeric($_COOKIE['pepp_lng']) ? (float)$_COOKIE['pepp_lng'] : null;
+    // Update presence
+    update_presence_state($pdo, $cur_page, $cur_sec, $cur_sec, 0); // 0 = active
 
-    $stmt_pres = $pdo->prepare("
-        INSERT INTO admin_presence (username, current_page, current_section, last_seen, login_time, latitude, longitude, ip_address)
-        VALUES (?, ?, ?, NOW(), ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-            current_page = VALUES(current_page),
-            current_section = VALUES(current_section),
-            last_seen = NOW(),
-            latitude = VALUES(latitude),
-            longitude = VALUES(longitude),
-            ip_address = VALUES(ip_address)
-    ");
-    $stmt_pres->execute([
-        $admin_username,
-        $cur_page,
-        $cur_sec,
-        $login_dt,
-        $lat,
-        $lng,
-        $_SERVER['REMOTE_ADDR'] ?? null
-    ]);
+    // Log page view if it's a normal page load (not AJAX/API)
+    $is_ajax = (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest')
+               || (isset($_SERVER['HTTP_ACCEPT']) && strpos(strtolower($_SERVER['HTTP_ACCEPT']), 'application/json') !== false);
+
+    $req_uri = $_SERVER['REQUEST_URI'] ?? '';
+    $is_api = (strpos($req_uri, '/api/') !== false || strpos($req_uri, 'api/v1/') !== false || strpos($req_uri, 'api-') !== false || strpos($req_uri, 'heartbeat') !== false);
+
+    if (!$is_ajax && !$is_api) {
+        log_page_view($pdo, $cur_page, $cur_sec, $cur_sec);
+    }
 } catch (Exception $e) {
     error_log('admin presence log failed: ' . $e->getMessage());
 }
@@ -279,7 +295,7 @@ try {
 /* ── Inactivity timeout: 20 min for admins, 2 h for the Super Admin ─────── */
 $timeout = ($admin_role === 'super_admin') ? 2 * 60 * 60 : 20 * 60;
 if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity']) > $timeout) {
-    log_admin_activity($pdo, $admin_username, 'auto_logout',
+    log_auto_logout($pdo, $admin_username, $_SESSION['session_ref'] ?? null,
         'Automatically logged out after ' . round($timeout / 60) . ' minutes of inactivity');
     session_unset();
     session_destroy();
@@ -289,7 +305,7 @@ if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity']) >
 $_SESSION['last_activity'] = time();
 
 // Server-side action check blocks to prevent unauthorized actions
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $post_action = strtolower($_POST['action'] ?? '');
 
     // Allow self-account updates (like change_password)

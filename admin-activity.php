@@ -2,20 +2,22 @@
 require_once 'includes/auth.php';
 require_super_admin();
 
-/* Activity Log - Super Admin only.
+/* Centralized Admin Activity Log - Super Admin only.
    Merges three sources into one filterable timeline:
-   • admin_activity_log     : logins / logouts / auto-logouts / admin events
+   • admin_activity_log     : logins / page views / heartbeats / admin events
    • track_records          : every action performed on a student
    • whatsapp_notifications : messages sent to students
-   Each source is queried INDEPENDENTLY and merged in PHP, so a missing or
-   differently-shaped table never blanks the whole page. Supports per-row
-   delete and "clear filtered" delete, plus Excel export. */
+   Each source is queried independently and merged, providing failure safety. */
 
-$f_admin = trim($_GET['admin'] ?? '');
-$f_type  = trim($_GET['type'] ?? '');
-$f_from  = trim($_GET['from'] ?? '');
-$f_to    = trim($_GET['to'] ?? '');
-$f_q     = trim($_GET['q'] ?? '');
+$f_admin   = trim($_GET['admin'] ?? '');
+$f_type    = trim($_GET['type'] ?? '');
+$f_from    = trim($_GET['from'] ?? '');
+$f_to      = trim($_GET['to'] ?? '');
+$f_q       = trim($_GET['q'] ?? '');
+$f_session = trim($_GET['session'] ?? '');
+$f_module  = trim($_GET['module'] ?? '');
+$f_page    = trim($_GET['page'] ?? '');
+$f_idle    = isset($_GET['idle']) && $_GET['idle'] !== '' ? (int)$_GET['idle'] : '';
 
 if ($f_from && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $f_from)) $f_from = '';
 if ($f_to   && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $f_to))   $f_to   = '';
@@ -24,74 +26,181 @@ $success_message = '';
 $error_message   = '';
 
 function table_exists($pdo, $t) {
-    try { return (bool)$pdo->query("SHOW TABLES LIKE " . $pdo->quote($t))->fetchColumn(); }
-    catch (Exception $e) { return false; }
+    try {
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($driver === 'sqlite') {
+            return (bool)$pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name=" . $pdo->quote($t))->fetchColumn();
+        }
+        return (bool)$pdo->query("SHOW TABLES LIKE " . $pdo->quote($t))->fetchColumn();
+    } catch (Exception $e) { return false; }
 }
 
 /**
  * Collect activity rows from all three sources, merged & sorted in PHP.
- * Each row: source, source_id, at_time, admin_name, act, details, ip, loc, student.
  */
-function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $limit = 500) {
+function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_session, $f_module, $f_page, $f_idle, $limit = 5000) {
     $all = [];
     $like = $f_q !== '' ? '%' . $f_q . '%' : null;
+    $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
 
-    if (($f_type === '' || in_array($f_type, ['session', 'admin_event'], true)) && table_exists($pdo, 'admin_activity_log')) {
+    // 1. Query admin_activity_log
+    if (table_exists($pdo, 'admin_activity_log')) {
         try {
             $w = ['1=1']; $p = [];
-            if ($f_type === 'session')     $w[] = "action_type IN ('login','logout','auto_logout','forced_logout')";
-            if ($f_type === 'admin_event') $w[] = "action_type NOT IN ('login','logout','auto_logout','forced_logout')";
+
+            if ($f_type === 'session') {
+                $w[] = "action_type IN ('login','logout','auto_logout','forced_logout')";
+            } elseif ($f_type === 'page_view') {
+                $w[] = "action_type = 'page_view'";
+            } elseif ($f_type === 'heartbeat') {
+                $w[] = "action_type = 'heartbeat'";
+            } elseif ($f_type === 'admin_event') {
+                $w[] = "action_type NOT IN ('login','logout','auto_logout','forced_logout','page_view','heartbeat')";
+            }
+
             if ($f_admin !== '') { $w[] = "admin_username = ?"; $p[] = $f_admin; }
-            if ($f_from  !== '') { $w[] = "created_at >= ?";    $p[] = $f_from . ' 00:00:00'; }
-            if ($f_to    !== '') { $w[] = "created_at <= ?";    $p[] = $f_to . ' 23:59:59'; }
-            if ($like)           { $w[] = "(details LIKE ? OR action_type LIKE ?)"; $p[] = $like; $p[] = $like; }
-            $stmt = $pdo->prepare("SELECT id, created_at, admin_username, action_type, details, ip_address, location, latitude, longitude, metadata
+            if ($f_session !== '') { $w[] = "session_id = ?"; $p[] = $f_session; }
+            if ($f_module !== '') { $w[] = "module = ?"; $p[] = $f_module; }
+            if ($f_page !== '') { $w[] = "page LIKE ?"; $p[] = '%' . $f_page . '%'; }
+            if ($f_idle !== '') { $w[] = "is_idle = ?"; $p[] = $f_idle; }
+
+            if ($f_from !== '') { $w[] = "created_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
+            if ($f_to !== '') { $w[] = "created_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+
+            if ($like) {
+                $w[] = "(details LIKE ? OR action_type LIKE ?)";
+                $p[] = $like; $p[] = $like;
+            }
+
+            $stmt = $pdo->prepare("SELECT id, created_at, admin_id, admin_username, session_id, action_type, module, page, section, target_type, target_id, details, request_method, request_uri, referrer, ip_address, location, user_agent, latitude, longitude, is_heartbeat, is_idle, metadata
                                    FROM admin_activity_log WHERE " . implode(' AND ', $w) . " ORDER BY created_at DESC LIMIT $limit");
             $stmt->execute($p);
-            foreach ($stmt->fetchAll() as $r) {
-                $all[] = ['source' => 'admin_activity_log', 'source_id' => (int)$r['id'], 'at_time' => $r['created_at'],
-                          'admin_name' => $r['admin_username'], 'act' => $r['action_type'], 'details' => $r['details'],
-                          'ip' => $r['ip_address'], 'loc' => $r['location'], 'student' => null,
-                          'lat' => $r['latitude'] ?? null, 'lng' => $r['longitude'] ?? null, 'meta' => $r['metadata'] ?? null];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $all[] = [
+                    'source' => 'admin_activity_log',
+                    'source_id' => (int)$r['id'],
+                    'at_time' => $r['created_at'],
+                    'admin_name' => $r['admin_username'],
+                    'admin_id' => $r['admin_id'],
+                    'session_id' => $r['session_id'],
+                    'act' => $r['action_type'],
+                    'module' => $r['module'] ?: 'Administration',
+                    'page' => $r['page'],
+                    'section' => $r['section'],
+                    'target_type' => $r['target_type'],
+                    'target_id' => $r['target_id'],
+                    'details' => $r['details'],
+                    'request_method' => $r['request_method'],
+                    'request_uri' => $r['request_uri'],
+                    'referrer' => $r['referrer'],
+                    'ip' => $r['ip_address'],
+                    'loc' => $r['location'],
+                    'user_agent' => $r['user_agent'],
+                    'student' => $r['target_type'] === 'student' ? $r['target_id'] : null,
+                    'lat' => $r['latitude'] ?? null,
+                    'lng' => $r['longitude'] ?? null,
+                    'meta' => $r['metadata'] ?? null,
+                    'is_heartbeat' => (int)$r['is_heartbeat'],
+                    'is_idle' => (int)$r['is_idle']
+                ];
             }
         } catch (Exception $e) { error_log('activity admin_log: ' . $e->getMessage()); }
     }
 
-    if (($f_type === '' || $f_type === 'student_action') && table_exists($pdo, 'track_records')) {
+    // 2. Query track_records (student actions)
+    $include_track = ($f_session === '' && $f_idle !== 1 && ($f_type === '' || $f_type === 'student_action') && ($f_module === '' || $f_module === 'Students'));
+    if ($include_track && table_exists($pdo, 'track_records')) {
         try {
             $w = ['1=1']; $p = [];
             if ($f_admin !== '') { $w[] = "performed_by = ?"; $p[] = $f_admin; }
-            if ($f_from  !== '') { $w[] = "performed_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
-            if ($f_to    !== '') { $w[] = "performed_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
-            if ($like)           { $w[] = "(action_details LIKE ? OR action_type LIKE ? OR user_id LIKE ?)"; $p[] = $like; $p[] = $like; $p[] = $like; }
+            if ($f_page !== '') { $w[] = "(user_id LIKE ? OR action_type LIKE ?)"; $p[] = '%' . $f_page . '%'; $p[] = '%' . $f_page . '%'; }
+            if ($f_from !== '') { $w[] = "performed_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
+            if ($f_to !== '') { $w[] = "performed_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+            if ($like) {
+                $w[] = "(action_details LIKE ? OR action_type LIKE ? OR user_id LIKE ?)";
+                $p[] = $like; $p[] = $like; $p[] = $like;
+            }
+
             $stmt = $pdo->prepare("SELECT id, performed_at, performed_by, action_type, action_details, user_id, latitude, longitude, metadata
                                    FROM track_records WHERE " . implode(' AND ', $w) . " ORDER BY performed_at DESC LIMIT $limit");
             $stmt->execute($p);
-            foreach ($stmt->fetchAll() as $r) {
-                $all[] = ['source' => 'track_records', 'source_id' => (int)$r['id'], 'at_time' => $r['performed_at'],
-                          'admin_name' => $r['performed_by'], 'act' => $r['action_type'], 'details' => $r['action_details'],
-                          'ip' => null, 'loc' => null, 'student' => $r['user_id'],
-                          'lat' => $r['latitude'] ?? null, 'lng' => $r['longitude'] ?? null, 'meta' => $r['metadata'] ?? null];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $all[] = [
+                    'source' => 'track_records',
+                    'source_id' => (int)$r['id'],
+                    'at_time' => $r['performed_at'],
+                    'admin_name' => $r['performed_by'],
+                    'admin_id' => null,
+                    'session_id' => null,
+                    'act' => $r['action_type'],
+                    'module' => 'Students',
+                    'page' => 'student-details.php',
+                    'section' => 'Students',
+                    'target_type' => 'student',
+                    'target_id' => $r['user_id'],
+                    'details' => $r['action_details'],
+                    'request_method' => 'POST',
+                    'request_uri' => null,
+                    'referrer' => null,
+                    'ip' => null,
+                    'loc' => null,
+                    'user_agent' => null,
+                    'student' => $r['user_id'],
+                    'lat' => $r['latitude'] ?? null,
+                    'lng' => $r['longitude'] ?? null,
+                    'meta' => $r['metadata'] ?? null,
+                    'is_heartbeat' => 0,
+                    'is_idle' => 0
+                ];
             }
         } catch (Exception $e) { error_log('activity track: ' . $e->getMessage()); }
     }
 
-    if (($f_type === '' || $f_type === 'whatsapp') && table_exists($pdo, 'whatsapp_notifications')) {
+    // 3. Query whatsapp_notifications
+    $include_wa = ($f_session === '' && $f_idle !== 1 && ($f_type === '' || $f_type === 'whatsapp') && ($f_module === '' || $f_module === 'Communication'));
+    if ($include_wa && table_exists($pdo, 'whatsapp_notifications')) {
         try {
             $w = ['1=1']; $p = [];
             if ($f_admin !== '') { $w[] = "sent_by = ?"; $p[] = $f_admin; }
-            if ($f_from  !== '') { $w[] = "created_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
-            if ($f_to    !== '') { $w[] = "created_at <= ?";    $p[] = $f_to . ' 23:59:59'; }
-            if ($like)           { $w[] = "(message LIKE ? OR student_name LIKE ? OR phone LIKE ?)"; $p[] = $like; $p[] = $like; $p[] = $like; }
+            if ($f_from !== '') { $w[] = "created_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
+            if ($f_to !== '') { $w[] = "created_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+            if ($like) {
+                $w[] = "(message LIKE ? OR student_name LIKE ? OR phone LIKE ?)";
+                $p[] = $like; $p[] = $like; $p[] = $like;
+            }
+
             $stmt = $pdo->prepare("SELECT id, created_at, sent_by, student_name, phone, message, latitude, longitude, metadata
                                    FROM whatsapp_notifications WHERE " . implode(' AND ', $w) . " ORDER BY created_at DESC LIMIT $limit");
             $stmt->execute($p);
-            foreach ($stmt->fetchAll() as $r) {
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 $detail = 'To ' . ($r['student_name'] ?: $r['phone']) . ': ' . mb_substr((string)$r['message'], 0, 160);
-                $all[] = ['source' => 'whatsapp_notifications', 'source_id' => (int)$r['id'], 'at_time' => $r['created_at'],
-                          'admin_name' => $r['sent_by'], 'act' => 'whatsapp_message', 'details' => $detail,
-                          'ip' => null, 'loc' => null, 'student' => null,
-                          'lat' => $r['latitude'] ?? null, 'lng' => $r['longitude'] ?? null, 'meta' => $r['metadata'] ?? null];
+                $all[] = [
+                    'source' => 'whatsapp_notifications',
+                    'source_id' => (int)$r['id'],
+                    'at_time' => $r['created_at'],
+                    'admin_name' => $r['sent_by'],
+                    'admin_id' => null,
+                    'session_id' => null,
+                    'act' => 'whatsapp_message',
+                    'module' => 'Communication',
+                    'page' => 'whatsapp-notification.php',
+                    'section' => 'Communication',
+                    'target_type' => 'student',
+                    'target_id' => null,
+                    'details' => $detail,
+                    'request_method' => 'POST',
+                    'request_uri' => null,
+                    'referrer' => null,
+                    'ip' => null,
+                    'loc' => null,
+                    'user_agent' => null,
+                    'student' => null,
+                    'lat' => $r['latitude'] ?? null,
+                    'lng' => $r['longitude'] ?? null,
+                    'meta' => $r['metadata'] ?? null,
+                    'is_heartbeat' => 0,
+                    'is_idle' => 0
+                ];
             }
         } catch (Exception $e) { error_log('activity whatsapp: ' . $e->getMessage()); }
     }
@@ -119,7 +228,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $error_message = 'Invalid record.';
                 }
             } elseif ($action === 'clear_filtered') {
-                $rows = collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, 100000);
+                $rows = collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_session, $f_module, $f_page, $f_idle, 100000);
                 $byTable = ['admin_activity_log' => [], 'track_records' => [], 'whatsapp_notifications' => []];
                 foreach ($rows as $r) { $byTable[$r['source']][] = (int)$r['source_id']; }
                 $deleted = 0;
@@ -135,7 +244,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 log_admin_activity($pdo, $admin_username, 'activity_cleared',
                     "Cleared {$deleted} activity record(s) matching filter" .
-                    ($f_admin || $f_type || $f_from || $f_to || $f_q ? '' : ' (ALL records)'));
+                    ($f_admin || $f_type || $f_from || $f_to || $f_q || $f_session || $f_module || $f_page || $f_idle !== '' ? '' : ' (ALL records)'));
                 $success_message = "Deleted {$deleted} activity record(s).";
             }
         } catch (Exception $e) {
@@ -147,7 +256,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 /* ── EXPORT (before any output) ─────────────────────────────────── */
 if (isset($_GET['export'])) {
-    $rows = collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, 20000);
+    $rows = collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_session, $f_module, $f_page, $f_idle, 20000);
     log_admin_activity($pdo, $admin_username, 'data_export',
         'Exported admin activity (' . count($rows) . ' rows' . ($f_admin ? ", admin={$f_admin}" : '') . ')');
 
@@ -163,55 +272,58 @@ if (isset($_GET['export'])) {
     exit();
 }
 
-/* ── PAGE DATA ──────────────────────────────────────────────────── */
-$page     = max(1, (int)($_GET['page'] ?? 1));
-$per_page = 40;
+/* ── ONLINE METRICS & COMPATIBILITY CHECKS ──────────────────────── */
+$driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
 
-$all_rows = collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, 5000);
-$total    = count($all_rows);
-$total_pages = max(1, (int)ceil($total / $per_page));
-$page     = min($page, $total_pages);
-$rows     = array_slice($all_rows, ($page - 1) * $per_page, $per_page);
+$active_now = 0;
+$online_admins = 0;
+$today_activities = 0;
+$active_time_mins = 0;
 
-$admin_list = [];
 try {
-    $set = [];
+    $time_cond = $driver === 'sqlite' ? "last_seen >= datetime('now', '-5 minutes', 'localtime')" : "last_seen >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)";
+    $cur_date_cond = $driver === 'sqlite' ? "strftime('%Y-%m-%d', created_at) = date('now', 'localtime')" : "created_at >= CURDATE()";
+    $cur_date_track = $driver === 'sqlite' ? "strftime('%Y-%m-%d', performed_at) = date('now', 'localtime')" : "performed_at >= CURDATE()";
+
+    if (table_exists($pdo, 'admin_presence')) {
+        $stmt = $pdo->query("SELECT COUNT(*) FROM admin_presence WHERE $time_cond AND is_idle = 0");
+        $active_now = (int)$stmt->fetchColumn();
+
+        $stmt = $pdo->query("SELECT COUNT(*) FROM admin_presence WHERE $time_cond");
+        $online_admins = (int)$stmt->fetchColumn();
+    }
+
     if (table_exists($pdo, 'admin_activity_log')) {
-        foreach ($pdo->query("SELECT DISTINCT admin_username FROM admin_activity_log WHERE admin_username IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $a) $set[$a] = true;
+        $stmt = $pdo->query("SELECT COUNT(*) FROM admin_activity_log WHERE $cur_date_cond");
+        $today_activities = (int)$stmt->fetchColumn();
+
+        $stmt = $pdo->query("SELECT COUNT(*) FROM admin_activity_log WHERE is_heartbeat = 1 AND is_idle = 0 AND $cur_date_cond");
+        $active_time_mins = (int)$stmt->fetchColumn();
     }
+
     if (table_exists($pdo, 'track_records')) {
-        foreach ($pdo->query("SELECT DISTINCT performed_by FROM track_records WHERE performed_by IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $a) $set[$a] = true;
+        $stmt = $pdo->query("SELECT COUNT(*) FROM track_records WHERE $cur_date_track");
+        $today_activities += (int)$stmt->fetchColumn();
     }
+
     if (table_exists($pdo, 'whatsapp_notifications')) {
-        foreach ($pdo->query("SELECT DISTINCT sent_by FROM whatsapp_notifications WHERE sent_by IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $a) $set[$a] = true;
+        $stmt = $pdo->query("SELECT COUNT(*) FROM whatsapp_notifications WHERE $cur_date_cond");
+        $today_activities += (int)$stmt->fetchColumn();
     }
-    $admin_list = array_keys($set);
-    sort($admin_list);
-} catch (Exception $e) { error_log('activity admin list: ' . $e->getMessage()); }
+} catch (Exception $e) { error_log("Failed to calculate metrics: " . $e->getMessage()); }
 
-$has_filter = ($f_admin || $f_type || $f_from || $f_to || $f_q);
-
-function aqs($overrides = []) {
-    $q = array_merge($_GET, $overrides);
-    unset($q['logout'], $q['export']);
-    return '?' . http_build_query($q);
-}
-function act_badge($act) {
-    if ($act === 'login') return ['green', 'fa-right-to-bracket', 'Login'];
-    if ($act === 'logout') return ['gray', 'fa-right-from-bracket', 'Logout'];
-    if (in_array($act, ['auto_logout', 'forced_logout'], true)) return ['amber', 'fa-clock', $act === 'auto_logout' ? 'Auto-logout' : 'Forced logout'];
-    if ($act === 'whatsapp_message') return ['teal', 'fa-comment', 'WhatsApp'];
-    if (strpos($act, 'admin_') === 0 || strpos($act, 'lead_') === 0 || strpos($act, 'invoice') === 0 ||
-        in_array($act, ['permissions_changed', 'password_reset', 'password_changed', 'data_export', 'activity_deleted', 'activity_cleared', 'student_reverted'], true))
-        return ['violet', 'fa-user-shield', ucwords(str_replace('_', ' ', $act))];
-    return ['blue', 'fa-pen', ucwords(str_replace('_', ' ', $act))];
+if ($active_time_mins < 60) {
+    $active_time_display = $active_time_mins . ' mins';
+} else {
+    $hrs = floor($active_time_mins / 60);
+    $mins = $active_time_mins % 60;
+    $active_time_display = $hrs . 'h ' . $mins . 'm';
 }
 
 $online_list = [];
 try {
     if (table_exists($pdo, 'admin_presence')) {
-        // Online if active in the last 5 minutes (300 seconds)
-        $stmt_on = $pdo->query("SELECT * FROM admin_presence WHERE last_seen >= DATE_SUB(NOW(), INTERVAL 5 MINUTE) ORDER BY last_seen DESC");
+        $stmt_on = $pdo->query("SELECT * FROM admin_presence WHERE $time_cond ORDER BY last_seen DESC");
         while ($r = $stmt_on->fetch(PDO::FETCH_ASSOC)) {
             $duration_secs = time() - strtotime($r['login_time']);
             if ($duration_secs < 60) {
@@ -229,19 +341,149 @@ try {
     }
 } catch (Exception $e) { error_log('Online query error: ' . $e->getMessage()); }
 
+/* ── TIMELINE DATA GENERATION ──────────────────────────────────── */
+$all_rows = collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_session, $f_module, $f_page, $f_idle, 5000);
+$total    = count($all_rows);
+
+// Paginate rows
+$page     = max(1, (int)($_GET['page'] ?? 1));
+$per_page = 40;
+$total_pages = max(1, (int)ceil($total / $per_page));
+$page     = min($page, $total_pages);
+$rows     = array_slice($all_rows, ($page - 1) * $per_page, $per_page);
+
+// Group timeline rows by session reference visually
+$session_groups = [];
+foreach ($rows as $r) {
+    $s_id = $r['session_id'] ?: 'legacy_or_direct';
+    if (!isset($session_groups[$s_id])) {
+        $session_groups[$s_id] = [
+            'session_id' => $s_id,
+            'admin_name' => $r['admin_name'] ?: 'Legacy',
+            'ip' => $r['ip'],
+            'loc' => $r['loc'],
+            'activities' => []
+        ];
+    }
+    $session_groups[$s_id]['activities'][] = $r;
+}
+
+$admin_list = [];
+try {
+    $set = [];
+    if (table_exists($pdo, 'admin_activity_log')) {
+        foreach ($pdo->query("SELECT DISTINCT admin_username FROM admin_activity_log WHERE admin_username IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $a) $set[$a] = true;
+    }
+    if (table_exists($pdo, 'track_records')) {
+        foreach ($pdo->query("SELECT DISTINCT performed_by FROM track_records WHERE performed_by IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $a) $set[$a] = true;
+    }
+    if (table_exists($pdo, 'whatsapp_notifications')) {
+        foreach ($pdo->query("SELECT DISTINCT sent_by FROM whatsapp_notifications WHERE sent_by IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $a) $set[$a] = true;
+    }
+    $admin_list = array_keys($set);
+    sort($admin_list);
+} catch (Exception $e) { error_log('activity admin list: ' . $e->getMessage()); }
+
+$has_filter = ($f_admin || $f_type || $f_from || $f_to || $f_q || $f_session || $f_module || $f_page || $f_idle !== '');
+
+function aqs($overrides = []) {
+    $q = array_merge($_GET, $overrides);
+    unset($q['logout'], $q['export']);
+    return '?' . http_build_query($q);
+}
+
+function act_badge($act) {
+    if ($act === 'login') return ['green', 'fa-right-to-bracket', 'Login'];
+    if ($act === 'logout') return ['gray', 'fa-right-from-bracket', 'Logout'];
+    if (in_array($act, ['auto_logout', 'forced_logout'], true)) return ['amber', 'fa-clock', $act === 'auto_logout' ? 'Auto-logout' : 'Forced logout'];
+    if ($act === 'whatsapp_message') return ['teal', 'fa-comment', 'WhatsApp'];
+    if ($act === 'page_view') return ['blue', 'fa-eye', 'Page View'];
+    if ($act === 'heartbeat') return ['sky', 'fa-pulse fa-heartbeat', 'Heartbeat'];
+    if (strpos($act, 'admin_') === 0 || strpos($act, 'lead_') === 0 || strpos($act, 'invoice') === 0 ||
+        in_array($act, ['permissions_changed', 'password_reset', 'password_changed', 'data_export', 'activity_deleted', 'activity_cleared', 'student_reverted'], true))
+        return ['violet', 'fa-user-shield', ucwords(str_replace('_', ' ', $act))];
+    return ['blue', 'fa-pen', ucwords(str_replace('_', ' ', $act))];
+}
+
 $active_page = 'admin-activity';
 $page_title  = 'Activity Log';
-$page_sub    = 'Every admin action, login & message - Super Admin only';
+$page_sub    = 'Reconstruct admin timeline history, session activity metrics and heartbeats';
 include 'includes/admin_nav.php';
 ?>
 
 <?php if ($success_message): ?><div class="alert alert-success"><i class="fas fa-circle-check"></i><span><?php echo e($success_message); ?></span></div><?php endif; ?>
 <?php if ($error_message):   ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($error_message); ?></span></div><?php endif; ?>
 
+<!-- Real-time metrics overview -->
+<div class="row" style="display:flex; gap:16px; margin-bottom:24px; flex-wrap:wrap;">
+    <div class="card" style="flex:1; min-width:200px; padding:18px; border-left:4px solid #10b981; background:var(--surface);">
+        <div style="font-size:0.8rem; color:var(--muted-foreground); font-weight:600; text-transform:uppercase;">Active Admins Now</div>
+        <div style="font-size:1.8rem; font-weight:700; margin-top:8px; display:flex; align-items:center; gap:8px;">
+            <span style="width:12px; height:12px; border-radius:50%; background:#10b981; display:inline-block; animation: pulse 1.5s infinite;"></span>
+            <?php echo $active_now; ?>
+        </div>
+    </div>
+    <div class="card" style="flex:1; min-width:200px; padding:18px; border-left:4px solid #8b5cf6; background:var(--surface);">
+        <div style="font-size:0.8rem; color:var(--muted-foreground); font-weight:600; text-transform:uppercase;">Total Online (5m)</div>
+        <div style="font-size:1.8rem; font-weight:700; margin-top:8px;"><?php echo $online_admins; ?></div>
+    </div>
+    <div class="card" style="flex:1; min-width:200px; padding:18px; border-left:4px solid #3b82f6; background:var(--surface);">
+        <div style="font-size:0.8rem; color:var(--muted-foreground); font-weight:600; text-transform:uppercase;">Today's Logged Actions</div>
+        <div style="font-size:1.8rem; font-weight:700; margin-top:8px;"><?php echo number_format($today_activities); ?></div>
+    </div>
+    <div class="card" style="flex:1; min-width:200px; padding:18px; border-left:4px solid #ec4899; background:var(--surface);">
+        <div style="font-size:0.8rem; color:var(--muted-foreground); font-weight:600; text-transform:uppercase;">Active Duration Today</div>
+        <div style="font-size:1.8rem; font-weight:700; margin-top:8px;"><?php echo $active_time_display; ?></div>
+    </div>
+</div>
+
+<style>
+@keyframes pulse {
+    0% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+    70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+    100% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+.session-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 20px;
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+}
+.session-header {
+    background: var(--card);
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.timeline-list {
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.timeline-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    transition: background 0.15s ease;
+}
+.timeline-item:hover {
+    background: var(--card);
+}
+</style>
+
 <div class="panel">
     <div class="panel-body">
-        <form method="GET" class="filter-bar">
-            <div class="field">
+        <form method="GET" class="filter-bar" style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end;">
+            <div class="field" style="flex:1; min-width:150px;">
                 <label>Admin</label>
                 <select name="admin">
                     <option value="">All admins</option>
@@ -250,22 +492,50 @@ include 'includes/admin_nav.php';
                     <?php endforeach; ?>
                 </select>
             </div>
-            <div class="field">
-                <label>Type</label>
+            <div class="field" style="flex:1; min-width:150px;">
+                <label>Type / Action</label>
                 <select name="type">
-                    <option value="">All activity</option>
+                    <option value="">All actions</option>
                     <option value="session"        <?php echo $f_type === 'session' ? 'selected' : ''; ?>>Logins / Logouts</option>
+                    <option value="page_view"      <?php echo $f_type === 'page_view' ? 'selected' : ''; ?>>Page Views</option>
+                    <option value="heartbeat"      <?php echo $f_type === 'heartbeat' ? 'selected' : ''; ?>>Heartbeats</option>
                     <option value="student_action" <?php echo $f_type === 'student_action' ? 'selected' : ''; ?>>Student actions</option>
                     <option value="whatsapp"       <?php echo $f_type === 'whatsapp' ? 'selected' : ''; ?>>WhatsApp messages</option>
-                    <option value="admin_event"    <?php echo $f_type === 'admin_event' ? 'selected' : ''; ?>>Admin / system events</option>
+                    <option value="admin_event"    <?php echo $f_type === 'admin_event' ? 'selected' : ''; ?>>System events</option>
                 </select>
             </div>
-            <div class="field"><label>From</label><input type="date" name="from" value="<?php echo e($f_from); ?>"></div>
-            <div class="field"><label>To</label><input type="date" name="to" value="<?php echo e($f_to); ?>"></div>
-            <div class="field grow-2"><label>Search</label><input type="text" name="q" value="<?php echo e($f_q); ?>" placeholder="Details, action or student ID"></div>
-            <button type="submit" class="btn btn-primary"><i class="fas fa-filter"></i> Filter</button>
-            <a href="admin-activity.php" class="btn btn-outline">Reset</a>
-            <a href="<?php echo e(aqs(['export' => 1])); ?>" class="btn btn-soft-green"><i class="fas fa-file-excel"></i> Export Excel</a>
+            <div class="field" style="flex:1; min-width:150px;">
+                <label>Module</label>
+                <select name="module">
+                    <option value="">All modules</option>
+                    <option value="Overview" <?php echo $f_module === 'Overview' ? 'selected' : ''; ?>>Overview</option>
+                    <option value="Registrations" <?php echo $f_module === 'Registrations' ? 'selected' : ''; ?>>Registrations</option>
+                    <option value="Students" <?php echo $f_module === 'Students' ? 'selected' : ''; ?>>Students</option>
+                    <option value="Leads & Mentoring" <?php echo $f_module === 'Leads & Mentoring' ? 'selected' : ''; ?>>Leads & Mentoring</option>
+                    <option value="Communication" <?php echo $f_module === 'Communication' ? 'selected' : ''; ?>>Communication</option>
+                    <option value="Academics" <?php echo $f_module === 'Academics' ? 'selected' : ''; ?>>Academics</option>
+                    <option value="Settings" <?php echo $f_module === 'Settings' ? 'selected' : ''; ?>>Settings</option>
+                    <option value="Admin Panel" <?php echo $f_module === 'Admin Panel' ? 'selected' : ''; ?>>Admin Panel</option>
+                </select>
+            </div>
+            <div class="field" style="flex:1; min-width:120px;">
+                <label>Activity State</label>
+                <select name="idle">
+                    <option value="">All states</option>
+                    <option value="0" <?php echo $f_idle === 0 ? 'selected' : ''; ?>>Active</option>
+                    <option value="1" <?php echo $f_idle === 1 ? 'selected' : ''; ?>>Idle</option>
+                </select>
+            </div>
+            <div class="field" style="flex:1; min-width:120px;"><label>From</label><input type="date" name="from" value="<?php echo e($f_from); ?>"></div>
+            <div class="field" style="flex:1; min-width:120px;"><label>To</label><input type="date" name="to" value="<?php echo e($f_to); ?>"></div>
+            <div class="field" style="flex:1; min-width:150px;"><label>Page</label><input type="text" name="page" value="<?php echo e($f_page); ?>" placeholder="e.g. task-tracker.php"></div>
+            <div class="field" style="flex:1; min-width:150px;"><label>Session Reference</label><input type="text" name="session" value="<?php echo e($f_session); ?>" placeholder="Enter hex string"></div>
+            <div class="field grow-2" style="flex:2; min-width:200px;"><label>Search Keywords</label><input type="text" name="q" value="<?php echo e($f_q); ?>" placeholder="Details, target ID or coordinates"></div>
+            <div style="display:flex; gap:8px;">
+                <button type="submit" class="btn btn-primary"><i class="fas fa-filter"></i> Filter</button>
+                <a href="admin-activity.php" class="btn btn-outline">Reset</a>
+                <a href="<?php echo e(aqs(['export' => 1])); ?>" class="btn btn-soft-green"><i class="fas fa-file-excel"></i> Export</a>
+            </div>
         </form>
     </div>
 </div>
@@ -287,6 +557,7 @@ include 'includes/admin_nav.php';
                     <th>Admin</th>
                     <th>Current Section</th>
                     <th>Current Page</th>
+                    <th>Activity State</th>
                     <th>IP / Location</th>
                     <th>Active Duration</th>
                     <th>Last Seen</th>
@@ -296,11 +567,18 @@ include 'includes/admin_nav.php';
             <?php foreach ($online_list as $oa): ?>
                 <tr>
                     <td class="cell-main" style="font-weight: 600;">
-                        <span style="width: 8px; height: 8px; border-radius: 50%; background: #10b981; display: inline-block; margin-right: 8px; vertical-align: middle; box-shadow: 0 0 8px #10b981;"></span>
+                        <span style="width: 8px; height: 8px; border-radius: 50%; background: <?php echo $oa['is_idle'] ? '#f59e0b' : '#10b981'; ?>; display: inline-block; margin-right: 8px; vertical-align: middle; box-shadow: 0 0 8px <?php echo $oa['is_idle'] ? '#f59e0b' : '#10b981'; ?>;"></span>
                         <?php echo e($oa['username']); ?>
                     </td>
                     <td><span class="badge blue" style="font-size:0.75rem; padding: 4px 8px; font-weight: 600;"><i class="fas fa-folder-open" style="margin-right: 4px;"></i><?php echo e($oa['current_section']); ?></span></td>
                     <td class="cell-sub"><code><?php echo e($oa['current_page']); ?></code></td>
+                    <td>
+                        <?php if ($oa['is_idle']): ?>
+                            <span class="badge amber" style="font-size: 0.75rem; padding: 4px 8px;"><i class="fas fa-moon" style="margin-right: 4px;"></i>Idle</span>
+                        <?php else: ?>
+                            <span class="badge green" style="font-size: 0.75rem; padding: 4px 8px;"><i class="fas fa-check" style="margin-right: 4px;"></i>Active</span>
+                        <?php endif; ?>
+                    </td>
                     <td class="cell-sub" style="vertical-align: middle;">
                         <div style="display: flex; align-items: center; gap: 8px;">
                             <?php if (!empty($oa['latitude']) && !empty($oa['longitude'])): ?>
@@ -314,7 +592,7 @@ include 'includes/admin_nav.php';
                         </div>
                     </td>
                     <td class="cell-main" style="font-weight: 500;"><?php echo e($oa['active_duration']); ?></td>
-                    <td class="cell-sub" style="color: var(--muted-foreground);"><?php echo date('h:i:s A', strtotime($oa['last_seen'])); ?></td>
+                    <td class="cell-sub" style="color: var(--muted-foreground);"><?php echo date('h:i:s A', strtotime($r['last_seen'] ?? $oa['last_seen'])); ?></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
@@ -324,9 +602,11 @@ include 'includes/admin_nav.php';
 </div>
 
 <div class="panel">
-    <div class="panel-head">
-        <span class="head-icon" style="background:var(--card);color:var(--secondary);"><i class="fas fa-clock-rotate-left"></i></span>
-        <h2>Activity (<?php echo number_format($total); ?><?php echo $total >= 5000 ? '+' : ''; ?> records)</h2>
+    <div class="panel-head" style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="display:flex; align-items:center; gap:8px;">
+            <span class="head-icon" style="background:var(--card);color:var(--secondary);"><i class="fas fa-clock-rotate-left"></i></span>
+            <h2>Session Timeline (<?php echo number_format($total); ?><?php echo $total >= 5000 ? '+' : ''; ?> records)</h2>
+        </div>
         <div class="head-right">
             <?php if ($total > 0): ?>
             <form method="POST" style="display:inline;" onsubmit="return confirmClear();">
@@ -339,80 +619,114 @@ include 'includes/admin_nav.php';
             <?php endif; ?>
         </div>
     </div>
-    <div class="panel-body flush table-wrap">
-        <?php if (empty($rows)): ?>
+    <div class="panel-body" style="padding: 20px;">
+        <?php if (empty($session_groups)): ?>
             <div class="empty-state"><i class="fas fa-clock-rotate-left"></i>
-                <p><?php echo $has_filter ? 'No activity matches these filters.' : 'No activity recorded yet. Logins, student actions and messages will appear here.'; ?></p>
+                <p><?php echo $has_filter ? 'No activity matches these filters.' : 'No activity recorded yet.'; ?></p>
             </div>
         <?php else: ?>
-        <table class="data-table">
-            <thead><tr><th>Date &amp; Time</th><th>Admin</th><th>Action</th><th>Details</th><th>IP / Location</th><th style="text-align:right;">Delete</th></tr></thead>
-            <tbody>
-            <?php foreach ($rows as $r): [$b, $icon, $label] = act_badge($r['act']); ?>
-                <tr>
-                    <td class="cell-sub" style="white-space:nowrap;"><?php echo date('d M Y, h:i:s A', strtotime($r['at_time'])); ?></td>
-                    <td class="cell-main"><?php echo e($r['admin_name'] ?: '-'); ?></td>
-                    <td><span class="badge <?php echo $b; ?>"><i class="fas <?php echo $icon; ?>"></i> <?php echo e($label); ?></span></td>
-                    <td class="cell-sub" style="max-width:420px;">
-                        <?php echo e($r['details'] ?: '-'); ?>
-                        <?php if ($r['student']): ?>
-                            · <a href="student-details.php?user_id=<?php echo urlencode($r['student']); ?>"><?php echo e($r['student']); ?></a>
-                        <?php endif; ?>
-                    </td>
-                    <td class="cell-sub" style="vertical-align: middle;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <?php if (!empty($r['lat']) && !empty($r['lng'])): ?>
-                                <a href="https://www.google.com/maps?q=<?php echo urlencode($r['lat'] . ',' . $r['lng']); ?>" target="_blank" class="btn btn-sm btn-soft-red" style="padding: 4px 8px; font-size: 0.8rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; text-decoration: none;" title="View Exact Google Map Location">
-                                    <i class="fas fa-location-dot"></i> Map
-                                </a>
-                            <?php endif; ?>
-                            <?php if (!empty($r['meta'])): ?>
-                                <button type="button" class="btn btn-sm btn-soft-blue" style="padding: 4px 8px; font-size: 0.8rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; border: none; cursor: pointer;" onclick='showMetadata(<?php echo json_encode($r['meta']); ?>)' title="View Audit Metadata">
-                                    <i class="fas fa-circle-info"></i> Meta
-                                </button>
-                            <?php endif; ?>
-                        </div>
-                        <div style="margin-top: 4px;">
-                            <?php if ($r['ip']): ?>
-                                <?php echo e($r['ip']); ?><?php if ($r['loc']): ?> · <span style="font-size:.72rem; color:var(--muted-foreground);"><?php echo e($r['loc']); ?></span><?php endif; ?>
-                            <?php else: ?>-<?php endif; ?>
-                        </div>
-                    </td>
-                    <td style="text-align:right;">
-                        <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this activity record?');">
-                            <?php echo csrf_field(); ?>
-                            <input type="hidden" name="action" value="delete_one">
-                            <input type="hidden" name="source" value="<?php echo e($r['source']); ?>">
-                            <input type="hidden" name="source_id" value="<?php echo (int)$r['source_id']; ?>">
-                            <button type="submit" class="btn btn-sm btn-soft-red" title="Delete this record"><i class="fas fa-trash"></i></button>
-                        </form>
-                    </td>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
 
-        <?php if ($total_pages > 1): ?>
-        <div class="pagination">
-            <?php if ($page > 1): ?><a class="page-link" href="<?php echo e(aqs(['page' => $page - 1])); ?>"><i class="fas fa-chevron-left"></i></a><?php endif; ?>
-            <?php for ($p = max(1, $page - 3); $p <= min($total_pages, $page + 3); $p++): ?>
-                <a class="page-link <?php echo $p === $page ? 'active' : ''; ?>" href="<?php echo e(aqs(['page' => $p])); ?>"><?php echo $p; ?></a>
-            <?php endfor; ?>
-            <?php if ($page < $total_pages): ?><a class="page-link" href="<?php echo e(aqs(['page' => $page + 1])); ?>"><i class="fas fa-chevron-right"></i></a><?php endif; ?>
-        </div>
-        <?php endif; ?>
+            <?php foreach ($session_groups as $sid => $group): ?>
+                <div class="session-card">
+                    <div class="session-header">
+                        <div>
+                            <i class="fas fa-user-tie" style="color:var(--accent); margin-right:6px;"></i>
+                            <strong><?php echo e($group['admin_name']); ?></strong>
+                            <?php if ($sid !== 'legacy_or_direct'): ?>
+                                <span style="font-size:0.8rem; color:var(--secondary); margin-left:12px;">Session: <code><?php echo e($sid); ?></code></span>
+                            <?php else: ?>
+                                <span class="badge gray" style="font-size:0.7rem; margin-left:12px;">Direct DB Audit / Legacy</span>
+                            <?php endif; ?>
+                        </div>
+                        <div style="font-size:0.8rem; color:var(--muted-foreground);">
+                            <?php if ($group['ip']): ?><i class="fas fa-network-wired"></i> <?php echo e($group['ip']); ?><?php endif; ?>
+                            <?php if ($group['loc']): ?> · <i class="fas fa-map-pin"></i> <?php echo e($group['loc']); ?><?php endif; ?>
+                        </div>
+                    </div>
+                    <div class="timeline-list">
+                        <?php foreach ($group['activities'] as $act):
+                            [$badge_color, $badge_icon, $badge_label] = act_badge($act['act']);
+                        ?>
+                            <div class="timeline-item" style="cursor:pointer;" onclick='showDetail(<?php echo json_encode($act); ?>)'>
+                                <span style="font-size:0.8rem; color:var(--secondary); width:80px; flex-shrink:0;">
+                                    <?php echo date('h:i:s A', strtotime($act['at_time'])); ?>
+                                </span>
+                                <span class="badge <?php echo $badge_color; ?>" style="flex-shrink:0; display:inline-flex; align-items:center; gap:4px; font-size:0.75rem; padding:4px 8px;">
+                                    <i class="fas <?php echo $badge_icon; ?>"></i> <?php echo e($badge_label); ?>
+                                </span>
+                                <span style="font-size:0.85rem; color:var(--muted-foreground); flex-shrink:0; font-weight:600; width:120px;">
+                                    <?php echo e($act['module']); ?>
+                                </span>
+                                <span style="font-size:0.85rem; color:var(--foreground); flex-grow:1; word-break:break-word;">
+                                    <?php echo e($act['details']); ?>
+                                </span>
+                                <div style="display:flex; gap:6px; flex-shrink:0; align-items:center;">
+                                    <?php if ($act['is_idle']): ?>
+                                        <span class="badge amber" style="font-size:0.7rem; padding: 2px 6px;">Idle</span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($act['lat']) && !empty($act['lng'])): ?>
+                                        <span class="badge red" style="font-size:0.7rem; padding: 2px 6px;"><i class="fas fa-location-dot"></i> Geo</span>
+                                    <?php endif; ?>
+                                    <?php if ($act['student']): ?>
+                                        <span class="badge blue" style="font-size:0.7rem; padding: 2px 6px;">Student: <?php echo e($act['student']); ?></span>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+
+            <?php if ($total_pages > 1): ?>
+                <div class="pagination" style="margin-top:20px; display:flex; justify-content:center; gap:6px;">
+                    <?php if ($page > 1): ?><a class="page-link" href="<?php echo e(aqs(['page' => $page - 1])); ?>"><i class="fas fa-chevron-left"></i></a><?php endif; ?>
+                    <?php for ($p = max(1, $page - 3); $p <= min($total_pages, $page + 3); $p++): ?>
+                        <a class="page-link <?php echo $p === $page ? 'active' : ''; ?>" href="<?php echo e(aqs(['page' => $p])); ?>"><?php echo $p; ?></a>
+                    <?php endfor; ?>
+                    <?php if ($page < $total_pages): ?><a class="page-link" href="<?php echo e(aqs(['page' => $page + 1])); ?>"><i class="fas fa-chevron-right"></i></a><?php endif; ?>
+                </div>
+            <?php endif; ?>
+
         <?php endif; ?>
     </div>
 </div>
 
-<div class="modal-backdrop" id="meta-modal">
-    <div class="modal-content" style="max-width:550px;">
-        <div class="modal-head">
-            <h3 style="font-family:'Space Grotesk',sans-serif;font-weight:700;margin:0;"><i class="fas fa-circle-info"></i> Browser &amp; Device Audit Metadata</h3>
-            <button class="modal-close" onclick="closeModal('meta-modal')">&times;</button>
+<!-- Modal: Event Details -->
+<div class="modal-backdrop" id="detail-modal">
+    <div class="modal" style="max-width:600px; background:var(--surface);">
+        <div class="modal-head" style="border-bottom:1px solid var(--border); padding:14px 20px;">
+            <h3><i class="fas fa-circle-info" style="color:var(--accent);"></i> Activity Details</h3>
+            <button class="modal-close" onclick="closeModal('detail-modal')">&times;</button>
         </div>
-        <div class="modal-body" id="meta-modal-body" style="padding:20px; font-size:0.85rem; line-height:1.6;">
-            <!-- Metadata table gets rendered here -->
+        <div class="modal-body" style="padding:20px; font-size:0.88rem; line-height:1.6;">
+            <table class="data-table" style="width:100%; border-collapse:collapse;">
+                <tbody>
+                    <tr><td style="font-weight:600; color:var(--secondary); width:140px; padding:8px 0;">Timestamp</td><td id="det-time" style="padding:8px 0;"></td></tr>
+                    <tr><td style="font-weight:600; color:var(--secondary); padding:8px 0;">Admin Name</td><td id="det-admin" style="padding:8px 0;"></td></tr>
+                    <tr><td style="font-weight:600; color:var(--secondary); padding:8px 0;">Session Reference</td><td id="det-session" style="padding:8px 0;"></td></tr>
+                    <tr><td style="font-weight:600; color:var(--secondary); padding:8px 0;">Module</td><td id="det-module" style="padding:8px 0;"></td></tr>
+                    <tr><td style="font-weight:600; color:var(--secondary); padding:8px 0;">Page script</td><td id="det-page" style="padding:8px 0;"></td></tr>
+                    <tr><td style="font-weight:600; color:var(--secondary); padding:8px 0;">Action Type</td><td id="det-action" style="padding:8px 0;"></td></tr>
+                    <tr><td style="font-weight:600; color:var(--secondary); padding:8px 0;">IP / Location</td><td id="det-ip-loc" style="padding:8px 0;"></td></tr>
+                    <tr><td style="font-weight:600; color:var(--secondary); padding:8px 0;">HTTP Request</td><td id="det-request" style="padding:8px 0;"></td></tr>
+                    <tr><td style="font-weight:600; color:var(--secondary); padding:8px 0;">Referrer URI</td><td id="det-referrer" style="padding:8px 0; word-break:break-all;"></td></tr>
+                    <tr><td style="font-weight:600; color:var(--secondary); padding:8px 0;">User Agent</td><td id="det-ua" style="padding:8px 0; word-break:break-all;"></td></tr>
+                    <tr><td style="font-weight:600; color:var(--secondary); padding:8px 0;">Description</td><td id="det-details" style="padding:8px 0; font-weight:600;"></td></tr>
+                </tbody>
+            </table>
+
+            <div id="det-geo-section" style="margin-top:14px; display:none; padding-top:10px; border-top:1px dashed var(--border);">
+                <strong>Geographical Coordinates:</strong>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
+                    <span id="det-coords" style="font-family:monospace;"></span>
+                    <a id="det-map-link" href="#" target="_blank" class="btn btn-sm btn-soft-red"><i class="fas fa-location-dot"></i> View on Google Maps</a>
+                </div>
+            </div>
+
+            <div id="det-meta-section" style="margin-top:14px; display:none; padding-top:10px; border-top:1px dashed var(--border);">
+                <strong>Browser Metadata Snapshot:</strong>
+                <div id="det-meta-table" style="margin-top:8px;"></div>
+            </div>
         </div>
     </div>
 </div>
@@ -425,48 +739,93 @@ function confirmClear() {
         : "return confirm('Delete the ENTIRE activity log (" . (int)$total . " records)? This cannot be undone.');") . "
 }
 
-function showMetadata(metaStr) {
-    try {
-        const meta = typeof metaStr === 'string' ? JSON.parse(metaStr) : metaStr;
-        let h = '<table class=\"data-table\" style=\"width:100%; border-collapse:collapse; margin-top:10px;\">';
-        h += '<thead><tr><th style=\"padding:8px; text-align:left; border-bottom:2px solid var(--border);\">Property</th><th style=\"padding:8px; text-align:left; border-bottom:2px solid var(--border);\">Value</th></tr></thead>';
-        h += '<tbody>';
-        
-        const labels = {
-            user_agent: 'User Agent',
-            platform: 'Platform / OS',
-            screen_width: 'Screen Width',
-            screen_height: 'Screen Height',
-            viewport_width: 'Viewport Width',
-            viewport_height: 'Viewport Height',
-            device_pixel_ratio: 'Device Pixel Ratio',
-            timezone: 'Timezone',
-            language: 'Language',
-            accuracy: 'GPS Accuracy',
-            connection: 'Network Connection'
-        };
+function showDetail(act) {
+    document.getElementById('det-time').textContent = formatDateTime(act.at_time);
+    document.getElementById('det-admin').textContent = act.admin_name || '-';
+    document.getElementById('det-session').textContent = act.session_id || 'Legacy / Direct DB Operation';
+    document.getElementById('det-module').textContent = act.module || '-';
+    document.getElementById('det-page').textContent = act.page || '-';
+    document.getElementById('det-action').textContent = act.act || '-';
 
-        for (const k in meta) {
-            let val = meta[k];
-            if (k === 'accuracy' && typeof val === 'number') {
-                val = val.toFixed(2) + ' meters';
-            }
-            h += `<tr>
-                <td style=\"padding:8px; border-bottom:1px solid var(--border); font-weight:600; color:var(--muted-foreground);\">\${labels[k] || k}</td>
-                <td style=\"padding:8px; border-bottom:1px solid var(--border); word-break:break-all;\">\${escH(String(val))}</td>
-            </tr>`;
-        }
-        h += '</tbody></table>';
-        document.getElementById('meta-modal-body').innerHTML = h;
-        openModal('meta-modal');
-    } catch (e) {
-        alert('Failed to parse metadata: ' + e.message);
+    let ipLoc = act.ip || 'Local / Private';
+    if (act.loc) {
+        ipLoc += ' (' + act.loc + ')';
     }
+    document.getElementById('det-ip-loc').textContent = ipLoc;
+
+    let method = act.request_method || 'GET';
+    let uri = act.request_uri || '-';
+    document.getElementById('det-request').textContent = method + ' ' + uri;
+    document.getElementById('det-referrer').textContent = act.referrer || '-';
+    document.getElementById('det-ua').textContent = act.user_agent || '-';
+    document.getElementById('det-details').textContent = act.details || '-';
+
+    // Geographical coordinates display
+    let geo = document.getElementById('det-geo-section');
+    if (act.lat && act.lng) {
+        geo.style.display = 'block';
+        document.getElementById('det-coords').textContent = 'Lat: ' + act.lat + ', Lng: ' + act.lng;
+        document.getElementById('det-map-link').href = 'https://www.google.com/maps?q=' + act.lat + ',' + act.lng;
+    } else {
+        geo.style.display = 'none';
+    }
+
+    // Parse metadata JSON
+    let metaSection = document.getElementById('det-meta-section');
+    if (act.meta) {
+        try {
+            const meta = typeof act.meta === 'string' ? JSON.parse(act.meta) : act.meta;
+            let h = '<table class=\"data-table\" style=\"width:100%; border-collapse:collapse; font-size:0.78rem;\">';
+            h += '<tbody>';
+            const labels = {
+                user_agent: 'User Agent',
+                platform: 'Platform / OS',
+                screen_width: 'Screen Width',
+                screen_height: 'Screen Height',
+                viewport_width: 'Viewport Width',
+                viewport_height: 'Viewport Height',
+                device_pixel_ratio: 'Pixel Ratio',
+                timezone: 'Timezone',
+                language: 'Language',
+                accuracy: 'GPS Accuracy',
+                connection: 'Connection'
+            };
+            for (const k in meta) {
+                h += `<tr><td style=\"padding:4px 8px; border-bottom:1px solid var(--border); font-weight:600; width:140px;\">\${labels[k] || k}</td><td style=\"padding:4px 8px; border-bottom:1px solid var(--border); word-break:break-all;\">\${escH(String(meta[k]))}</td></tr>`;
+            }
+            h += '</tbody></table>';
+            document.getElementById('det-meta-table').innerHTML = h;
+            metaSection.style.display = 'block';
+        } catch (e) {
+            metaSection.style.display = 'none';
+        }
+    } else {
+        metaSection.style.display = 'none';
+    }
+
+    openModal('detail-modal');
 }
+
+function formatDateTime(dtStr) {
+    if (!dtStr) return '-';
+    const d = new Date(dtStr.replace(/-/g, '/'));
+    if (isNaN(d)) return dtStr;
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    let hours = d.getHours();
+    let minutes = d.getMinutes();
+    let seconds = d.getSeconds();
+    let ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    minutes = minutes < 10 ? '0'+minutes : minutes;
+    seconds = seconds < 10 ? '0'+seconds : seconds;
+    return d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear() + ', ' + hours + ':' + minutes + ':' + seconds + ' ' + ampm;
+}
+
 function escH(s) {
+    if (!s) return '';
     return s.replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\").replace(/>/g, \"&gt;\").replace(/\"/g, \"&quot;\").replace(/'/g, \"&#039;\");
 }
 </script>";
 include 'includes/admin_footer.php';
 ?>
-

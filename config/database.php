@@ -76,16 +76,40 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
             );
             CREATE TABLE IF NOT EXISTS admin_activity_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER,
                 admin_username TEXT,
+                session_id TEXT,
                 action_type TEXT,
+                module TEXT,
+                page TEXT,
+                section TEXT,
+                target_type TEXT,
+                target_id TEXT,
                 details TEXT,
+                request_method TEXT,
+                request_uri TEXT,
+                referrer TEXT,
                 ip_address TEXT,
                 location TEXT,
                 user_agent TEXT,
                 latitude REAL,
                 longitude REAL,
+                is_heartbeat INTEGER DEFAULT 0,
+                is_idle INTEGER DEFAULT 0,
                 metadata TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS admin_presence (
+                username TEXT PRIMARY KEY,
+                current_page TEXT,
+                current_section TEXT,
+                last_seen TEXT,
+                login_time TEXT,
+                latitude REAL,
+                longitude REAL,
+                ip_address TEXT,
+                session_id TEXT,
+                is_idle INTEGER DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS card_templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1419,6 +1443,44 @@ try {
                         ADD COLUMN longitude DECIMAL(11, 8) DEFAULT NULL,
                         ADD COLUMN metadata TEXT DEFAULT NULL");
                 }
+
+                // Add new tracking columns if they do not exist
+                $extra_cols = [
+                    'admin_id' => 'INT DEFAULT NULL',
+                    'session_id' => 'VARCHAR(100) DEFAULT NULL',
+                    'module' => 'VARCHAR(100) DEFAULT NULL',
+                    'page' => 'VARCHAR(255) DEFAULT NULL',
+                    'section' => 'VARCHAR(100) DEFAULT NULL',
+                    'target_type' => 'VARCHAR(100) DEFAULT NULL',
+                    'target_id' => 'VARCHAR(100) DEFAULT NULL',
+                    'request_method' => 'VARCHAR(10) DEFAULT NULL',
+                    'request_uri' => 'TEXT DEFAULT NULL',
+                    'referrer' => 'TEXT DEFAULT NULL',
+                    'is_heartbeat' => 'TINYINT(1) DEFAULT 0',
+                    'is_idle' => 'TINYINT(1) DEFAULT 0'
+                ];
+                foreach ($extra_cols as $col_name => $col_def) {
+                    $has_col = $pdo->query("SHOW COLUMNS FROM admin_activity_log LIKE '$col_name'")->fetch();
+                    if (!$has_col) {
+                        $pdo->exec("ALTER TABLE admin_activity_log ADD COLUMN `$col_name` $col_def");
+                    }
+                }
+
+                // Add indexes on new tracking columns
+                try {
+                    $indexes = [
+                        'idx_aal_session' => 'session_id',
+                        'idx_aal_admin_id' => 'admin_id',
+                        'idx_aal_module' => 'module',
+                        'idx_aal_page' => 'page'
+                    ];
+                    foreach ($indexes as $idx_name => $idx_col) {
+                        $has_idx = $pdo->query("SHOW INDEX FROM admin_activity_log WHERE Key_name = '$idx_name'")->fetch();
+                        if (!$has_idx) {
+                            $pdo->exec("CREATE INDEX `$idx_name` ON admin_activity_log (`$idx_col`)");
+                        }
+                    }
+                } catch (Exception $idxEx) {}
             }
             // 2. track_records
             if ($pdo->query("SHOW TABLES LIKE 'track_records'")->fetchColumn()) {
@@ -1454,6 +1516,18 @@ try {
                     KEY `idx_ap_seen` (`last_seen`)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             ");
+
+            // Add columns to admin_presence
+            $pres_cols = [
+                'session_id' => 'VARCHAR(100) DEFAULT NULL',
+                'is_idle' => 'TINYINT(1) DEFAULT 0'
+            ];
+            foreach ($pres_cols as $col_name => $col_def) {
+                $has_col = $pdo->query("SHOW COLUMNS FROM admin_presence LIKE '$col_name'")->fetch();
+                if (!$has_col) {
+                    $pdo->exec("ALTER TABLE admin_presence ADD COLUMN `$col_name` $col_def");
+                }
+            }
 
             // Upgrade study_plan_activities for MySQL
             try {

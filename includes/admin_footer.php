@@ -260,7 +260,7 @@ function postponeReminder(id) {
     var btn = document.getElementById('theme-toggle-btn');
     var icon = document.getElementById('theme-toggle-icon');
     if (!btn || !icon) return;
-    
+
     function updateThemeUI(theme) {
         document.documentElement.classList.remove('theme-dark', 'theme-sepia');
         if (theme === 'dark') {
@@ -276,10 +276,10 @@ function postponeReminder(id) {
             btn.title = 'Current: Light Mode. Click to switch to Sepia Mode.';
         }
     }
-    
+
     var currentTheme = localStorage.getItem('admin-theme') || 'light';
     updateThemeUI(currentTheme);
-    
+
     btn.addEventListener('click', function() {
         var theme = localStorage.getItem('admin-theme') || 'light';
         var nextTheme = 'light';
@@ -295,6 +295,113 @@ function postponeReminder(id) {
     });
 })();
 </script>
+
+<!-- Centralized Heartbeat & Active/Idle Tracker -->
+<script>
+(function() {
+    var page = <?php echo json_encode(basename($_SERVER['SCRIPT_NAME'])); ?>;
+    var section = <?php echo json_encode($cur_sec ?? 'Other'); ?>;
+    var module = section;
+    var isIdle = 0;
+    var lastInteraction = Date.now();
+    var heartbeatInterval = 60000;
+    var timer = null;
+    var latitude = null;
+    var longitude = null;
+
+    function getCookie(name) {
+        var match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+        if (match) return match[2];
+        return null;
+    }
+
+    latitude = getCookie('pepp_lat');
+    longitude = getCookie('pepp_lng');
+
+    if (!latitude && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(function(pos) {
+            latitude = pos.coords.latitude;
+            longitude = pos.coords.longitude;
+            document.cookie = "pepp_lat=" + latitude + "; path=/; max-age=" + (86400 * 30);
+            document.cookie = "pepp_lng=" + longitude + "; path=/; max-age=" + (86400 * 30);
+        }, null, { timeout: 10000 });
+    }
+
+    function sendHeartbeat(beacon) {
+        var payload = {
+            page: page,
+            module: module,
+            section: section,
+            is_idle: isIdle,
+            latitude: latitude,
+            longitude: longitude
+        };
+
+        if (beacon && navigator.sendBeacon) {
+            navigator.sendBeacon('api/activity-heartbeat.php', JSON.stringify(payload));
+        } else {
+            fetch('api/activity-heartbeat.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: JSON.stringify(payload)
+            }).catch(function(e) {
+                // Fail silently
+            });
+        }
+    }
+
+    function resetIdleTimer() {
+        if (isIdle === 1) {
+            isIdle = 0;
+            sendHeartbeat(false);
+        }
+        lastInteraction = Date.now();
+    }
+
+    var events = ['click', 'keydown', 'mousemove', 'scroll', 'touchstart', 'pointerdown'];
+    events.forEach(function(evt) {
+        document.addEventListener(evt, resetIdleTimer, { passive: true });
+    });
+
+    document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState === 'hidden') {
+            if (timer) {
+                clearInterval(timer);
+                timer = null;
+            }
+            isIdle = 1;
+            sendHeartbeat(true);
+        } else {
+            resetIdleTimer();
+            startHeartbeat();
+        }
+    });
+
+    function startHeartbeat() {
+        if (timer) clearInterval(timer);
+        timer = setInterval(function() {
+            var timeSinceInteraction = Date.now() - lastInteraction;
+            if (timeSinceInteraction >= 60000) {
+                isIdle = 1;
+            } else {
+                isIdle = 0;
+            }
+            sendHeartbeat(false);
+        }, heartbeatInterval);
+    }
+
+    sendHeartbeat(false);
+    startHeartbeat();
+
+    window.addEventListener('pagehide', function() {
+        sendHeartbeat(true);
+    });
+})();
+</script>
+
 <?php if (!empty($extra_scripts)) echo $extra_scripts; ?>
 </body>
 </html>
