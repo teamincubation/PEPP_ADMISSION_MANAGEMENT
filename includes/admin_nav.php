@@ -412,7 +412,7 @@ function render_nav_item($key, $active_page, $nav_data) {
             echo '<a class="nav-item ' . nav_active('assessment-results', $active_page) . '" href="assessment-results.php"><i class="fas fa-chart-column"></i> Assessment Results</a>';
             break;
         case 'task-tracker':
-            echo '<a class="nav-item ' . nav_active('task-tracker', $active_page) . '" href="task-tracker.php"><i class="fas fa-list-check"></i> Task Tracker</a>';
+            echo '<a class="nav-item ' . nav_active('task-tracker', $active_page) . '" href="task-tracker.php"><i class="fas fa-list-check"></i> Intern Task Tracker</a>';
             break;
         case 'ld-work-report':
             echo '<a class="nav-item ' . nav_active('ld-work-report', $active_page) . '" href="ld-work-report.php"><i class="fas fa-chart-simple"></i> L&D Work Report</a>';
