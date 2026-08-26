@@ -638,7 +638,17 @@ if (!empty($where)) {
 // Fetch all staff members for filters
 $staff_list = [];
 try {
-    $staff_list = $pdo->query("SELECT DISTINCT admin_username, admin_name FROM ld_tasks ORDER BY admin_name ASC")->fetchAll();
+    $staff_list = $pdo->query("
+        SELECT username AS admin_username, full_name AS admin_name
+        FROM admins
+        WHERE admin_type = 'intern'
+           OR (
+               role != 'super_admin'
+               AND permissions != 'ALL'
+               AND (permissions = 'task-tracker' OR permissions LIKE '%,task-tracker' OR permissions LIKE 'task-tracker,%' OR permissions LIKE '%,task-tracker,%')
+           )
+        ORDER BY full_name ASC
+    ")->fetchAll();
 } catch (Exception $e) {}
 
 // Fetch courses and modes for filter dropdowns
