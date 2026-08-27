@@ -460,6 +460,42 @@ include 'includes/admin_nav.php';
     align-items: center;
     flex-wrap: wrap;
     gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s ease;
+}
+.session-header:hover {
+    background: rgba(124, 58, 237, 0.02);
+}
+.session-toggle-btn {
+    background: none;
+    border: none;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    padding: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.95rem;
+    border-radius: 6px;
+    transition: background 0.15s, color 0.15s;
+}
+.session-toggle-btn:hover, .session-toggle-btn:focus {
+    background: rgba(124, 58, 237, 0.08);
+    color: var(--accent, #7c3aed);
+    outline: none;
+}
+.session-toggle-btn i {
+    transition: transform 0.2s ease;
+}
+.session-card.expanded .session-toggle-btn i {
+    transform: rotate(180deg);
+}
+.session-card .timeline-list {
+    display: none;
+}
+.session-card.expanded .timeline-list {
+    display: flex;
 }
 .timeline-list {
     padding: 14px 18px;
@@ -607,7 +643,15 @@ include 'includes/admin_nav.php';
             <span class="head-icon" style="background:var(--card);color:var(--secondary);"><i class="fas fa-clock-rotate-left"></i></span>
             <h2>Session Timeline (<?php echo number_format($total); ?><?php echo $total >= 5000 ? '+' : ''; ?> records)</h2>
         </div>
-        <div class="head-right">
+        <div class="head-right" style="display:flex; align-items:center; gap:10px;">
+            <?php if (!empty($session_groups)): ?>
+                <button type="button" class="btn btn-sm btn-outline" onclick="expandAllSessions()" style="padding:6px 12px; font-size:0.8rem; border-radius:8px; display:inline-flex; align-items:center; gap:6px;">
+                    <i class="fas fa-arrows-up-down"></i> Expand All
+                </button>
+                <button type="button" class="btn btn-sm btn-outline" onclick="collapseAllSessions()" style="padding:6px 12px; font-size:0.8rem; border-radius:8px; display:inline-flex; align-items:center; gap:6px;">
+                    <i class="fas fa-compress"></i> Collapse All
+                </button>
+            <?php endif; ?>
             <?php if ($total > 0): ?>
             <form method="POST" style="display:inline;" onsubmit="return confirmClear();">
                 <?php echo csrf_field(); ?>
@@ -626,24 +670,43 @@ include 'includes/admin_nav.php';
             </div>
         <?php else: ?>
 
-            <?php foreach ($session_groups as $sid => $group): ?>
-                <div class="session-card">
-                    <div class="session-header">
-                        <div>
-                            <i class="fas fa-user-tie" style="color:var(--accent); margin-right:6px;"></i>
+            <?php
+            $is_first_session = true;
+            foreach ($session_groups as $sid => $group):
+                $should_expand = $is_first_session || $has_filter;
+
+                // Calculate date & time span for the session
+                $first_act = end($group['activities']);
+                $last_act = $group['activities'][0];
+                $time_span = date('h:i A', strtotime($first_act['at_time'])) . ' - ' . date('h:i A', strtotime($last_act['at_time']));
+                $date_span = date('d M Y', strtotime($last_act['at_time']));
+            ?>
+                <div class="session-card <?php echo $should_expand ? 'expanded' : ''; ?>" id="session-card-<?php echo htmlspecialchars($sid); ?>">
+                    <div class="session-header" onclick="toggleSession('<?php echo htmlspecialchars($sid); ?>')">
+                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                            <i class="fas fa-user-tie" style="color:var(--accent); margin-right:2px;"></i>
                             <strong><?php echo e($group['admin_name']); ?></strong>
                             <?php if ($sid !== 'legacy_or_direct'): ?>
-                                <span style="font-size:0.8rem; color:var(--secondary); margin-left:12px;">Session: <code><?php echo e($sid); ?></code></span>
+                                <span style="font-size:0.8rem; color:var(--secondary);" title="<?php echo htmlspecialchars($sid); ?>">Session: <code><?php echo htmlspecialchars(substr($sid, 0, 12)); ?>...</code></span>
                             <?php else: ?>
-                                <span class="badge gray" style="font-size:0.7rem; margin-left:12px;">Direct DB Audit / Legacy</span>
+                                <span class="badge gray" style="font-size:0.7rem;">Direct DB Audit / Legacy</span>
                             <?php endif; ?>
+                            <span class="badge blue" style="font-size:0.75rem; padding: 2px 6px; font-weight:600;"><?php echo count($group['activities']); ?> activities</span>
+                            <span style="font-size:0.78rem; color:var(--muted-foreground); display:inline-flex; align-items:center; gap:4px; margin-left:6px;">
+                                <i class="far fa-calendar"></i> <?php echo $date_span; ?> · <i class="far fa-clock"></i> <?php echo $time_span; ?>
+                            </span>
                         </div>
-                        <div style="font-size:0.8rem; color:var(--muted-foreground);">
-                            <?php if ($group['ip']): ?><i class="fas fa-network-wired"></i> <?php echo e($group['ip']); ?><?php endif; ?>
-                            <?php if ($group['loc']): ?> · <i class="fas fa-map-pin"></i> <?php echo e($group['loc']); ?><?php endif; ?>
+                        <div style="display:flex; align-items:center; gap:12px;">
+                            <div style="font-size:0.8rem; color:var(--muted-foreground);">
+                                <?php if ($group['ip']): ?><i class="fas fa-network-wired"></i> <?php echo e($group['ip']); ?><?php endif; ?>
+                                <?php if ($group['loc']): ?> · <i class="fas fa-map-pin"></i> <?php echo e($group['loc']); ?><?php endif; ?>
+                            </div>
+                            <button class="session-toggle-btn" aria-expanded="<?php echo $should_expand ? 'true' : 'false'; ?>" aria-controls="timeline-list-<?php echo htmlspecialchars($sid); ?>" onclick="event.stopPropagation(); toggleSession('<?php echo htmlspecialchars($sid); ?>')" title="Toggle session activities">
+                                <i class="fas fa-chevron-down"></i>
+                            </button>
                         </div>
                     </div>
-                    <div class="timeline-list">
+                    <div class="timeline-list" id="timeline-list-<?php echo htmlspecialchars($sid); ?>">
                         <?php foreach ($group['activities'] as $act):
                             [$badge_color, $badge_icon, $badge_label] = act_badge($act['act']);
                         ?>
@@ -675,6 +738,7 @@ include 'includes/admin_nav.php';
                         <?php endforeach; ?>
                     </div>
                 </div>
+                <?php $is_first_session = false; ?>
             <?php endforeach; ?>
 
             <?php if ($total_pages > 1): ?>
@@ -804,6 +868,38 @@ function showDetail(act) {
     }
 
     openModal('detail-modal');
+}
+
+function toggleSession(sid) {
+    var card = document.getElementById('session-card-' + sid);
+    if (!card) return;
+    var isExpanded = card.classList.toggle('expanded');
+    var btn = card.querySelector('.session-toggle-btn');
+    if (btn) {
+        btn.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+    }
+}
+
+function expandAllSessions() {
+    var cards = document.querySelectorAll('.session-card');
+    cards.forEach(function(card) {
+        card.classList.add('expanded');
+        var btn = card.querySelector('.session-toggle-btn');
+        if (btn) {
+            btn.setAttribute('aria-expanded', 'true');
+        }
+    });
+}
+
+function collapseAllSessions() {
+    var cards = document.querySelectorAll('.session-card');
+    cards.forEach(function(card) {
+        card.classList.remove('expanded');
+        var btn = card.querySelector('.session-toggle-btn');
+        if (btn) {
+            btn.setAttribute('aria-expanded', 'false');
+        }
+    });
 }
 
 function formatDateTime(dtStr) {
