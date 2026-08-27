@@ -58,22 +58,22 @@ class QueueProcessor {
             error_log("QueueProcessor stale-recovery error: " . $staleEx->getMessage());
         }
 
-        // Query pending or failed items that are ready for attempt
+        // Query pending, failed, or retrying items that are ready for attempt
         $stmt = $this->pdo->prepare("
-            SELECT id FROM communication_queue 
-            WHERE status IN ('pending', 'failed') 
-              AND next_attempt_at <= NOW() 
+            SELECT id FROM communication_queue
+            WHERE status IN ('pending', 'failed', 'retrying')
+              AND next_attempt_at <= NOW()
               AND (
                 (channel = 'whatsapp' AND retry_count < 3) OR
                 (channel = 'email' AND retry_count < 5) OR
                 (channel NOT IN ('whatsapp', 'email') AND retry_count < 3)
               )
-            ORDER BY priority DESC, created_at ASC 
+            ORDER BY priority DESC, created_at ASC
             LIMIT ?
         ");
         $stmt->bindValue(1, $this->batchSize, PDO::PARAM_INT);
         $stmt->execute();
-        
+
         $itemIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
         if (empty($itemIds)) {
             return [

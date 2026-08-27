@@ -15,7 +15,7 @@ class EmailMailerProvider implements CommunicationProviderInterface {
                 ];
             }
         }
-        
+
         $sent = pepp_mail_dispatch($to, $subject, $bodyHtml, $bodyText, $mappedAttachments);
         if ($sent) {
             return [
@@ -23,6 +23,10 @@ class EmailMailerProvider implements CommunicationProviderInterface {
                 'message_id' => 'mail_' . md5(uniqid('', true))
             ];
         }
-        return false;
+        $err = function_exists('pepp_mailer_get_last_error') ? pepp_mailer_get_last_error() : 'Provider failed to dispatch message';
+        return [
+            'success' => false,
+            'error' => $err
+        ];
     }
 }

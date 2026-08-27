@@ -237,7 +237,7 @@ class CommunicationEngine {
                 UPDATE communication_queue
                 SET status = 'processing', worker_started_at = NOW(), updated_at = NOW()
                 WHERE id = ?
-                  AND status IN ('pending', 'scheduled', 'failed')
+                  AND status IN ('pending', 'scheduled', 'failed', 'retrying')
                   AND next_attempt_at <= NOW()
                   AND (
                     (channel = 'whatsapp' AND retry_count < 3) OR
@@ -774,7 +774,12 @@ class CommunicationEngine {
                 }
                 return true;
             } else {
-                $errMsg = ($provider instanceof WhatsAppCloudProvider) ? $provider->getLastError() : 'Provider failed to dispatch message.';
+                $errMsg = 'Provider failed to dispatch message.';
+                if ($res && is_array($res) && isset($res['error'])) {
+                    $errMsg = $res['error'];
+                } elseif ($provider instanceof WhatsAppCloudProvider) {
+                    $errMsg = $provider->getLastError();
+                }
                 throw new Exception($errMsg);
             }
 
@@ -828,7 +833,7 @@ class CommunicationEngine {
                 $status = 'failed';
                 $nextAttempt = date('Y-m-d H:i:s', time() + 3600 * 24 * 365); // Far future
             } else {
-                $status = 'failed'; // kept in failed but scheduling retries
+                $status = 'retrying';
                 $backoffMinutes = pow(2, $retryCount); // Exponential backoff: 2m, 4m, 8m...
                 $nextAttempt = date('Y-m-d H:i:s', time() + (60 * $backoffMinutes));
             }

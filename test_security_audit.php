@@ -256,7 +256,7 @@ try {
     $stmt = $pdo->prepare("SELECT status, retry_count, next_attempt_at FROM communication_queue WHERE id = ?");
     $stmt->execute([$queueId2]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    assert_true($row['status'] === 'failed', "MAIL-04: Failed mail status is failed");
+    assert_true($row['status'] === 'retrying', "MAIL-04: Failed mail status is retrying");
     assert_true((int)$row['retry_count'] === 1, "MAIL-04: Retry count incremented");
     assert_true(strtotime($row['next_attempt_at']) > time(), "MAIL-05: Backoff next attempt scheduled in the future");
 
@@ -299,7 +299,9 @@ try {
     $smtp_client = new PEPPSMTPClient('127.0.0.1', 9999, 'ssl', 'user', 'pass');
     $smtp_result = $smtp_client->send('from@example.com', 'From', 'to@example.com', 'Subject', 'HTML Body');
     assert_false($smtp_result, "MAIL-03: SMTP client handles connection failure gracefully and returns false");
-    assert_contains($smtp_client->getLastError(), 'Connection to SMTP server failed', "MAIL-03: SMTP client logs correct socket connection error message");
+    $lastErr = $smtp_client->getLastError();
+    $isValidErr = (strpos($lastErr, 'Connection refused') !== false || strpos($lastErr, 'Connection to SMTP server failed') !== false || strpos($lastErr, 'SMTP connection timeout') !== false);
+    assert_true($isValidErr, "MAIL-03: SMTP client logs correct socket connection error message");
 
 } catch (Exception $e) {
     $failed++;

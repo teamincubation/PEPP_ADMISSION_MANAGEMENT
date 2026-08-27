@@ -24,7 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'retry
     } else {
         $log_id = (int)($_POST['log_id'] ?? 0);
         $source_module = trim($_POST['source_module'] ?? '');
-        
+
         if ($source_module === 'email_campaigns' && $log_id > 0) {
             $stmt = $pdo->prepare("SELECT * FROM email_queue WHERE id = ?");
             $stmt->execute([$log_id]);
@@ -47,14 +47,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'retry
             $item = $stmt->fetch();
             if ($item) {
                 require_once 'includes/mailer.php';
-                $sent = pepp_mail($item['recipient'], $item['subject'] ?: 'PEPP Learning Notification', $item['body_html'] ?: nl2br(htmlspecialchars($item['body_text'])), $item['body_text'] ?: strip_tags($item['body_html']));
+
+                $attachments = [];
+                if (!empty($item['attachments'])) {
+                    $attachments = json_decode($item['attachments'], true) ?: [];
+                }
+
+                $sent = pepp_mail_dispatch($item['recipient'], $item['subject'] ?: 'PEPP Learning Notification', $item['body_html'] ?: nl2br(htmlspecialchars($item['body_text'])), $item['body_text'] ?: strip_tags($item['body_html']), $attachments);
                 if ($sent) {
                     $pdo->prepare("UPDATE communication_queue SET status = 'sent', updated_at = NOW(), error_message = NULL WHERE id = ?")->execute([$log_id]);
                     log_admin_activity($pdo, $admin_username, 'email_resent', "Resent communication email #{$log_id} to {$item['recipient']}");
                     $success_message = "Communication email re-sent successfully to {$item['recipient']}.";
                 } else {
-                    $pdo->prepare("UPDATE communication_queue SET status = 'failed', error_message = 'Manual resend failed' WHERE id = ?")->execute([$log_id]);
-                    $error_message = "Failed to resend email to {$item['recipient']}.";
+                    $err = function_exists('pepp_mailer_get_last_error') ? pepp_mailer_get_last_error() : 'Manual resend failed';
+                    $pdo->prepare("UPDATE communication_queue SET status = 'failed', error_message = ?, updated_at = NOW() WHERE id = ?")->execute([$err, $log_id]);
+                    $error_message = "Failed to resend email to {$item['recipient']}: " . htmlspecialchars($err);
                 }
             }
         }
@@ -96,7 +103,7 @@ try {
 
 if ($has_eq_table) {
     $sub_queries[] = "
-        SELECT 
+        SELECT
             eq.id as unique_id,
             'email_campaigns' COLLATE utf8mb4_unicode_ci as module_type,
             'Bulk Email Campaign' COLLATE utf8mb4_unicode_ci as module_label,
@@ -123,11 +130,15 @@ try {
 
 if ($has_comm_table) {
     $sub_queries[] = "
-        SELECT 
+        SELECT
             cq.id as unique_id,
             'communication_engine' COLLATE utf8mb4_unicode_ci as module_type,
-            'Communication Engine' COLLATE utf8mb4_unicode_ci as module_label,
-            CAST(COALESCE(cq.template_name, 'Direct Dispatch') AS CHAR) COLLATE utf8mb4_unicode_ci as campaign_title,
+            CASE
+                WHEN cq.event_name = 'activity_log_export' THEN 'Activity Log Export' COLLATE utf8mb4_unicode_ci
+                WHEN cq.event_name = 'email_reports_export' THEN 'Email Reports Export' COLLATE utf8mb4_unicode_ci
+                ELSE 'Communication Engine' COLLATE utf8mb4_unicode_ci
+            END as module_label,
+            CAST(COALESCE(cq.template_name, cq.event_name, 'Direct Dispatch') AS CHAR) COLLATE utf8mb4_unicode_ci as campaign_title,
             CAST(cq.recipient AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_email,
             CAST(COALESCE(cq.recipient_name, '') AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_name,
             CAST(COALESCE(cq.subject, 'Notification') AS CHAR) COLLATE utf8mb4_unicode_ci as subject,
@@ -153,7 +164,7 @@ try {
 
 if ($has_inv_col) {
     $sub_queries[] = "
-        SELECT 
+        SELECT
             inv.id as unique_id,
             'invoices' COLLATE utf8mb4_unicode_ci as module_type,
             'Invoices & Billing' COLLATE utf8mb4_unicode_ci as module_label,
@@ -187,6 +198,10 @@ if ($filter_module !== '') {
 if ($filter_status !== '') {
     if ($filter_status === 'sent') {
         $unified_sql .= " AND status IN ('sent', 'delivered', 'read')";
+    } elseif ($filter_status === 'pending') {
+        $unified_sql .= " AND status IN ('pending', 'queued', 'scheduled', 'processing', 'retrying')";
+    } elseif ($filter_status === 'failed') {
+        $unified_sql .= " AND status IN ('failed', 'cancelled')";
     } else {
         $unified_sql .= " AND status = ?";
         $params[] = $filter_status;
@@ -216,33 +231,79 @@ if ($filter_search !== '') {
 
 // Handle CSV Export Request
 if (isset($_GET['export']) && $_GET['export'] === 'csv') {
-    $export_sql = $unified_sql . " ORDER BY dispatched_at DESC";
-    $stmt_exp = $pdo->prepare($export_sql);
-    $stmt_exp->execute($params);
-    $rows_exp = $stmt_exp->fetchAll(PDO::FETCH_ASSOC);
-
-    header('Content-Type: text/csv; charset=utf-8');
-    header('Content-Disposition: attachment; filename="email_dispatches_report_' . date('Y-m-d_H-i') . '.csv"');
-    header('Pragma: no-cache');
-    header('Expires: 0');
-
-    $out = fopen('php://output', 'w');
-    fputcsv($out, ['ID', 'Module', 'Campaign / Purpose', 'Recipient Name', 'Recipient Email', 'Subject', 'Status', 'Dispatched At', 'Admin', 'Error Message']);
-    foreach ($rows_exp as $r) {
-        fputcsv($out, [
-            $r['unique_id'],
-            $r['module_label'],
-            $r['campaign_title'],
-            $r['recipient_name'] ?: 'N/A',
-            $r['recipient_email'],
-            $r['subject'],
-            strtoupper($r['status']),
-            $r['dispatched_at'],
-            $r['admin_username'],
-            $r['error_message'] ?: ''
-        ]);
+    $token = bin2hex(random_bytes(32));
+    $exportDir = __DIR__ . '/config/activity_exports';
+    if (!is_dir($exportDir)) {
+        mkdir($exportDir, 0755, true);
     }
-    fclose($out);
+
+    $filename = 'PEPP_Email_Reports_Export_' . date('Y-m-d_His') . '_' . bin2hex(random_bytes(4)) . '.csv';
+    $filePath = $exportDir . '/' . $filename;
+
+    $out = fopen($filePath, 'w');
+    if ($out) {
+        fputs($out, "\xEF\xBB\xBF");
+        fputcsv($out, ['ID', 'Module', 'Campaign / Purpose', 'Recipient Name', 'Recipient Email', 'Subject', 'Status', 'Dispatched At', 'Admin', 'Error Message']);
+
+        $export_sql = $unified_sql . " ORDER BY dispatched_at DESC";
+        $stmt_exp = $pdo->prepare($export_sql);
+        $stmt_exp->execute($params);
+        $totalRecords = 0;
+
+        while ($r = $stmt_exp->fetch(PDO::FETCH_ASSOC)) {
+            fputcsv($out, [
+                $r['unique_id'],
+                $r['module_label'],
+                $r['campaign_title'],
+                $r['recipient_name'] ?: 'N/A',
+                $r['recipient_email'],
+                $r['subject'],
+                strtoupper($r['status']),
+                $r['dispatched_at'],
+                $r['admin_username'],
+                $r['error_message'] ?: ''
+            ]);
+            $totalRecords++;
+        }
+        fclose($out);
+
+        log_admin_activity($pdo, $admin_username, 'data_export', "Initiated secure export of email dispatch reports ({$totalRecords} rows)");
+
+        require_once __DIR__ . '/includes/SecureDownloadManager.php';
+        $expiresAt = time() + 86400; // 24 hours
+        SecureDownloadManager::registerToken($token, $filePath, $expiresAt);
+
+        $host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'localhost';
+        $scriptName = isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '/admissions/email-reports.php';
+        $baseUrl = 'http://' . $host . dirname($scriptName);
+        $downloadUrl = rtrim($baseUrl, '/') . '/activity-export-download.php?token=' . $token;
+
+        $subject = 'PEPP ERP – Secure Email Reports Export – ' . date('d M Y');
+        $html = '<h3>PEPP ERP Secure Email Reports Export</h3>';
+        $html .= '<p>A secure export of the PEPP ERP Email Dispatch Reports has been generated based on your requested filters.</p>';
+        $html .= '<p><strong>Details:</strong></p>';
+        $html .= '<ul>';
+        $html .= '<li><strong>Requested By:</strong> ' . htmlspecialchars($admin_username) . '</li>';
+        $html .= '<li><strong>Total Records:</strong> ' . $totalRecords . '</li>';
+        $html .= '<li><strong>Generated At:</strong> ' . date('d M Y h:i A') . '</li>';
+        $html .= '<li><strong>Expires In:</strong> 24 Hours</li>';
+        $html .= '</ul>';
+        $html .= '<p><a href="' . htmlspecialchars($downloadUrl) . '" style="display:inline-block; padding:10px 20px; background:#7c3aed; color:#fff; text-decoration:none; border-radius:6px; font-weight:bold;">Download CSV Export File</a></p>';
+        $html .= '<p><small>If the button above does not work, copy and paste the following link into your browser:<br>' . htmlspecialchars($downloadUrl) . '</small></p>';
+
+        require_once __DIR__ . '/includes/mail_queue.php';
+        pepp_enqueue_mail('incubation.ngo@gmail.com', $subject, $html, '', [], 'noreply@pepplearning.in', 'PEPP Learning', 10, 'email_reports_export', $admin_username);
+        pepp_enqueue_mail('office@pepplearning.com', $subject, $html, '', [], 'noreply@pepplearning.in', 'PEPP Learning', 10, 'email_reports_export', $admin_username);
+
+        $_SESSION['success_message'] = 'Export generated and queued for delivery to the configured administrators.';
+    } else {
+        $_SESSION['error_message'] = 'Failed to generate export file server-side.';
+    }
+
+    $clean_params = $_GET;
+    unset($clean_params['export']);
+    $qs = !empty($clean_params) ? '?' . http_build_query($clean_params) : '';
+    header("Location: email-reports.php" . $qs);
     exit();
 }
 
@@ -286,7 +347,7 @@ include 'includes/admin_nav.php';
 ?>
 
 <div class="container-fluid" style="padding:24px; max-width:1400px; margin:0 auto;">
-    
+
     <!-- Top Header Banner -->
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; flex-wrap:wrap; gap:16px;">
         <div>
@@ -312,7 +373,7 @@ include 'includes/admin_nav.php';
             <i class="fas fa-circle-check" style="font-size:1.1rem;"></i> <?php echo htmlspecialchars($success_message); ?>
         </div>
     <?php endif; ?>
-    
+
     <?php if ($error_message): ?>
         <div class="alert alert-danger" style="background:#fef2f2; border:1px solid #fca5a5; color:#991b1b; padding:14px 18px; border-radius:12px; margin-bottom:20px; display:flex; align-items:center; gap:10px;">
             <i class="fas fa-triangle-exclamation" style="font-size:1.1rem;"></i> <?php echo htmlspecialchars($error_message); ?>
@@ -363,7 +424,7 @@ include 'includes/admin_nav.php';
     <!-- Filter Toolbar Form -->
     <div style="background:var(--card, #fff); border:1px solid var(--border, #e2e8f0); border-radius:16px; padding:20px; margin-bottom:24px; box-shadow:0 2px 8px rgba(0,0,0,0.02);">
         <form method="GET" style="display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end;">
-            
+
             <div style="flex:1; min-width:220px;">
                 <label style="font-size:0.82rem; font-weight:600; color:var(--text-muted, #64748b); margin-bottom:6px; display:block;">Search Keywords</label>
                 <div style="position:relative;">
@@ -450,12 +511,12 @@ include 'includes/admin_nav.php';
                         </tr>
                     <?php else: ?>
                         <?php foreach ($reports as $index => $r): ?>
-                            <?php 
+                            <?php
                             $status_st = strtolower($r['status']);
                             $badge_class = 'background:#f1f5f9; color:#475569;';
                             $status_icon = 'fa-clock';
                             $status_text = ucfirst($status_st);
-                            
+
                             if (in_array($status_st, ['sent', 'delivered', 'read'])) {
                                 $badge_class = 'background:#dcfce7; color:#15803d; border:1px solid #bbf7d0;';
                                 $status_icon = 'fa-circle-check';
@@ -464,6 +525,14 @@ include 'includes/admin_nav.php';
                                 $badge_class = 'background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5;';
                                 $status_icon = 'fa-circle-xmark';
                                 $status_text = 'Failed';
+                            } elseif ($status_st === 'processing') {
+                                $badge_class = 'background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd;';
+                                $status_icon = 'fa-spinner fa-spin';
+                                $status_text = 'Processing';
+                            } elseif ($status_st === 'retrying') {
+                                $badge_class = 'background:#ffedd5; color:#c2410c; border:1px solid #fed7aa;';
+                                $status_icon = 'fa-arrow-rotate-right fa-spin';
+                                $status_text = 'Retrying';
                             } else {
                                 $badge_class = 'background:#fef3c7; color:#b45309; border:1px solid #fde68a;';
                                 $status_icon = 'fa-hourglass-half';
@@ -660,7 +729,7 @@ function showEmailDetails(index) {
 
     // Set raw data securely via innerText
     document.getElementById('md-raw-source').innerText = record.body_preview || '';
-    
+
     var errBox = document.getElementById('md-error-box');
     if (record.error_message) {
         errBox.style.display = 'block';
@@ -668,10 +737,10 @@ function showEmailDetails(index) {
     } else {
         errBox.style.display = 'none';
     }
-    
+
     document.getElementById('md-resend-id').value = record.unique_id;
     document.getElementById('md-resend-module').value = record.module_type;
-    
+
     openModal('email-details-modal');
 }
 

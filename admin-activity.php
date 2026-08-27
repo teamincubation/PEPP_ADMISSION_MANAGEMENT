@@ -641,10 +641,10 @@ if (isset($_GET['export'])) {
         $html .= '<p><small>If the button above does not work, copy and paste the following link into your browser:<br>' . htmlspecialchars($downloadUrl) . '</small></p>';
 
         require_once __DIR__ . '/includes/mail_queue.php';
-        pepp_enqueue_mail('incubation.ngo@gmail.com', $subject, $html, '', [], 'noreply@pepplearning.in', 'PEPP Learning', 10, 'activity_export_' . $token, $admin_username);
-        pepp_enqueue_mail('office@pepplearning.com', $subject, $html, '', [], 'noreply@pepplearning.in', 'PEPP Learning', 10, 'activity_export_' . $token, $admin_username);
+        pepp_enqueue_mail('incubation.ngo@gmail.com', $subject, $html, '', [], 'noreply@pepplearning.in', 'PEPP Learning', 10, 'activity_log_export', $admin_username);
+        pepp_enqueue_mail('office@pepplearning.com', $subject, $html, '', [], 'noreply@pepplearning.in', 'PEPP Learning', 10, 'activity_log_export', $admin_username);
 
-        $_SESSION['success_message'] = 'Export generated successfully. A secure download link has been sent to the configured admin email addresses.';
+        $_SESSION['success_message'] = 'Export generated and queued for delivery to the configured administrators.';
     } else {
         $_SESSION['error_message'] = 'Failed to generate export file server-side.';
     }

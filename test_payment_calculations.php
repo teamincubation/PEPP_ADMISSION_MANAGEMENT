@@ -4,7 +4,13 @@
  * Tests all payment calculations and logic across the PEPP Learning system
  */
 
-require_once '../config/database.php';
+$_SERVER['HTTP_X_TESTING_MODE'] = 'true';
+
+if (file_exists('config/database.php')) {
+    require_once 'config/database.php';
+} else {
+    require_once '../config/database.php';
+}
 
 echo "<h1>PEPP Learning Payment System Test</h1>\n";
 echo "<style>
