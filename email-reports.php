@@ -449,7 +449,7 @@ include 'includes/admin_nav.php';
                             </td>
                         </tr>
                     <?php else: ?>
-                        <?php foreach ($reports as $r): ?>
+                        <?php foreach ($reports as $index => $r): ?>
                             <?php 
                             $status_st = strtolower($r['status']);
                             $badge_class = 'background:#f1f5f9; color:#475569;';
@@ -520,7 +520,7 @@ include 'includes/admin_nav.php';
                                 </td>
 
                                 <td style="padding:16px 20px; text-align:right;">
-                                    <button type="button" class="btn btn-sm btn-outline" style="border-radius:8px; font-size:0.8rem; padding:6px 12px; background:#fff; border:1px solid #cbd5e1;" onclick='showEmailDetails(<?php echo json_encode($r); ?>)'>
+                                    <button type="button" class="btn btn-sm btn-outline" style="border-radius:8px; font-size:0.8rem; padding:6px 12px; background:#fff; border:1px solid #cbd5e1;" onclick="showEmailDetails(<?php echo $index; ?>)">
                                         <i class="fas fa-eye"></i> Details
                                     </button>
                                 </td>
@@ -577,6 +577,22 @@ include 'includes/admin_nav.php';
                     <span style="font-size:0.75rem; color:#64748b; font-weight:600; text-transform:uppercase;">Dispatched By</span>
                     <div id="md-admin" style="font-weight:600; color:#0f172a; font-size:0.9rem; margin-top:2px;"></div>
                 </div>
+                <div>
+                    <span style="font-size:0.75rem; color:#64748b; font-weight:600; text-transform:uppercase;">Status</span>
+                    <div id="md-status" style="font-weight:600; color:#0f172a; font-size:0.9rem; margin-top:2px;"></div>
+                </div>
+                <div>
+                    <span style="font-size:0.75rem; color:#64748b; font-weight:600; text-transform:uppercase;">Provider</span>
+                    <div id="md-provider" style="font-weight:600; color:#0f172a; font-size:0.9rem; margin-top:2px;">SMTP / Mail Transport</div>
+                </div>
+                <div>
+                    <span style="font-size:0.75rem; color:#64748b; font-weight:600; text-transform:uppercase;">Created At</span>
+                    <div id="md-created" style="font-weight:500; color:#334155; font-size:0.85rem; margin-top:2px;"></div>
+                </div>
+                <div>
+                    <span style="font-size:0.75rem; color:#64748b; font-weight:600; text-transform:uppercase;">Dispatched At</span>
+                    <div id="md-dispatched" style="font-weight:500; color:#334155; font-size:0.85rem; margin-top:2px;"></div>
+                </div>
             </div>
 
             <div style="margin-bottom:16px;">
@@ -589,9 +605,16 @@ include 'includes/admin_nav.php';
                 <div id="md-error" style="color:#b91c1c; font-size:0.84rem; padding:10px 14px; background:#fef2f2; border:1px solid #fca5a5; border-radius:8px; font-family:monospace;"></div>
             </div>
 
+            <div style="margin-bottom:16px;">
+                <label style="font-size:0.75rem; color:#64748b; font-weight:600; text-transform:uppercase; display:block; margin-bottom:4px;">Email Preview</label>
+                <iframe id="md-body-iframe" sandbox="allow-same-origin" style="width:100%; height:300px; border:1px solid #cbd5e1; border-radius:10px; background:#fff;"></iframe>
+            </div>
+
             <div>
-                <label style="font-size:0.75rem; color:#64748b; font-weight:600; text-transform:uppercase; display:block; margin-bottom:4px;">Email Body Content Preview</label>
-                <div id="md-body" style="padding:14px; background:#fff; border:1px solid #cbd5e1; border-radius:10px; max-height:220px; overflow-y:auto; font-size:0.85rem; color:#334155; line-height:1.5;"></div>
+                <details style="border:1px solid #cbd5e1; border-radius:10px; padding:10px;">
+                    <summary style="font-size:0.8rem; font-weight:600; color:#7c3aed; cursor:pointer; user-select:none;">View Raw Email Data</summary>
+                    <pre id="md-raw-source" style="margin-top:10px; padding:10px; background:#f1f5f9; border-radius:6px; overflow-x:auto; font-size:0.75rem; color:#334155; max-height:200px; font-family:monospace; white-space:pre-wrap; word-break:break-all;"></pre>
+                </details>
             </div>
         </div>
 
@@ -611,13 +634,32 @@ include 'includes/admin_nav.php';
 </div>
 
 <script>
-function showEmailDetails(record) {
-    document.getElementById('md-module').innerText = record.module_label;
-    document.getElementById('md-campaign').innerText = record.campaign_title;
+const emailDispatchRecords = <?php echo json_encode($reports, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+
+function showEmailDetails(index) {
+    var record = emailDispatchRecords[index];
+    if (!record) return;
+
+    document.getElementById('md-module').innerText = record.module_label || '';
+    document.getElementById('md-campaign').innerText = record.campaign_title || '';
     document.getElementById('md-recipient').innerText = (record.recipient_name ? record.recipient_name + ' (' + record.recipient_email + ')' : record.recipient_email);
-    document.getElementById('md-admin').innerText = record.admin_username;
-    document.getElementById('md-subject').innerText = record.subject;
-    document.getElementById('md-body').innerHTML = record.body_preview || '<em>No preview content available</em>';
+    document.getElementById('md-admin').innerText = record.admin_username || '';
+    document.getElementById('md-status').innerText = record.status ? record.status.toUpperCase() : '';
+    document.getElementById('md-created').innerText = record.created_at || '';
+    document.getElementById('md-dispatched').innerText = record.dispatched_at || '';
+    document.getElementById('md-subject').innerText = record.subject || '';
+
+    // Render HTML safely inside sandboxed iframe to prevent Stored XSS
+    var iframe = document.getElementById('md-body-iframe');
+    if (iframe) {
+        var doc = iframe.contentDocument || iframe.contentWindow.document;
+        doc.open();
+        doc.write('<style>body{font-family:"DM Sans",sans-serif;font-size:14px;color:#334155;margin:10px;line-height:1.5;word-wrap:break-word;}</style>' + (record.body_preview || '<em>No preview content available</em>'));
+        doc.close();
+    }
+
+    // Set raw data securely via innerText
+    document.getElementById('md-raw-source').innerText = record.body_preview || '';
     
     var errBox = document.getElementById('md-error-box');
     if (record.error_message) {

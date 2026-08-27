@@ -1142,7 +1142,7 @@ $nav_data = [
             });
         }
 
-        // ── MANDATORY GEOLOCATION & METADATA AUDITING ──
+        // ── NON-BLOCKING GEOLOCATION INITIALIZATION FLOW ──
         function setPeppCookie(name, value, days) {
             var expires = "";
             if (days) {
@@ -1163,35 +1163,40 @@ $nav_data = [
             return null;
         }
 
-        function showPeppLocationOverlay() {
-            var overlay = document.getElementById('pepp-location-overlay');
-            if (!overlay) {
-                overlay = document.createElement('div');
-                overlay.id = 'pepp-location-overlay';
-                overlay.style = "position:fixed; top:0; left:0; width:100%; height:100%; background:#0f172a; color:#fff; z-index:999999; display:flex; flex-direction:column; align-items:center; justify-content:center; font-family:'Space Grotesk',sans-serif; padding:20px; text-align:center;";
-                overlay.innerHTML = `
-                    <div style="max-width:500px; background:#1e293b; padding:40px; border-radius:16px; box-shadow:0 10px 25px rgba(0,0,0,0.5); border:1px solid #334155;">
-                        <div style="width:80px; height:80px; background:rgba(239,68,68,0.1); border:2px solid #ef4444; border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto 24px auto; color:#ef4444; font-size:32px;">
-                            <i class="fas fa-location-dot"></i>
-                        </div>
-                        <h2 style="font-size:24px; font-weight:700; margin-bottom:16px; color:#fff; font-family:'Space Grotesk',sans-serif;">Location Access Mandatory</h2>
-                        <p id="pepp-location-message" style="color:#94a3b8; font-size:15px; line-height:1.6; margin-bottom:24px; font-family:'DM Sans',sans-serif;">
-                            PEPP ERP requires active, exact GPS tracking for security compliance, audit trails, and administrative action logging. You must share your location to use this platform.
-                        </p>
-                        <button onclick="requestPeppLocation()" style="background:#4f46e5; color:#fff; border:none; padding:12px 32px; font-size:15px; font-weight:600; border-radius:8px; cursor:pointer; transition:all 0.15s; width:100%; display:flex; align-items:center; justify-content:center; gap:8px; font-family:'Space Grotesk',sans-serif;">
-                            <i class="fas fa-location-crosshairs"></i> Share My Location
-                        </button>
+        function showPeppLocationBanner(message, isError) {
+            var banner = document.getElementById('pepp-location-banner');
+            if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'pepp-location-banner';
+                document.body.appendChild(banner);
+            }
+            banner.style = "position:fixed; bottom:20px; right:20px; width:350px; background:#1e293b; color:#fff; z-index:999999; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,0.3); border:1px solid " + (isError ? "#ef4444" : "#7c3aed") + "; padding:16px; font-family:'Space Grotesk',sans-serif; transition:all 0.3s ease;";
+            banner.innerHTML = `
+                <div style="display:flex; flex-direction:column; gap:12px; text-align:left;">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span style="color:${isError ? '#ef4444' : '#7c3aed'}; font-size:16px;"><i class="fas fa-location-dot"></i></span>
+                        <span style="font-weight:600; font-size:14px; color:#f8fafc;">Location Verification</span>
                     </div>
-                `;
-                document.body.appendChild(overlay);
-            } else {
-                overlay.style.display = 'flex';
+                    <p style="margin:0; font-size:13px; color:#94a3b8; line-height:1.4; font-family:'DM Sans',sans-serif;">
+                        ${message}
+                    </p>
+                    <button onclick="requestPeppLocation()" style="background:${isError ? '#ef4444' : '#7c3aed'}; color:#fff; border:none; padding:8px 16px; font-size:13px; font-weight:600; border-radius:6px; cursor:pointer; transition:all 0.15s; width:100%; display:flex; align-items:center; justify-content:center; gap:6px; font-family:'Space Grotesk',sans-serif;">
+                        <i class="fas fa-location-crosshairs"></i> ${isError ? 'Try Again' : 'Enable Location'}
+                    </button>
+                </div>
+            `;
+        }
+
+        function removePeppLocationBanner() {
+            var banner = document.getElementById('pepp-location-banner');
+            if (banner) {
+                banner.remove();
             }
         }
 
         function requestPeppLocation() {
             if (!navigator.geolocation) {
-                alert('Geolocation is not supported by your browser. You cannot use PEPP ERP without a browser supporting geolocation.');
+                showPeppLocationBanner("Geolocation is not supported by your browser. Activity location tracking is unavailable.", true);
                 return;
             }
             navigator.geolocation.getCurrentPosition(
@@ -1222,22 +1227,35 @@ $nav_data = [
                     setPeppCookie('pepp_lng', lng, 1);
                     setPeppCookie('pepp_meta', JSON.stringify(meta), 1);
 
-                    var overlay = document.getElementById('pepp-location-overlay');
-                    if (overlay) {
-                        overlay.remove();
-                    }
+                    removePeppLocationBanner();
+
+                    // Send heartbeat immediately to register geolocation in activity logger
+                    fetch('api/activity-heartbeat.php', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest'
+                        },
+                        body: JSON.stringify({
+                            page: <?php echo json_encode(basename($_SERVER['SCRIPT_NAME'])); ?>,
+                            module: <?php echo json_encode($cur_sec ?? 'Other'); ?>,
+                            section: <?php echo json_encode($cur_sec ?? 'Other'); ?>,
+                            is_idle: 0,
+                            latitude: lat,
+                            longitude: lng
+                        })
+                    }).catch(function(e) {});
                 },
                 function(error) {
-                    var msg = "Location access is required to use PEPP ERP. Please enable location services and try again.";
+                    var msg = "Location access is required for activity tracking.";
                     if (error.code === error.PERMISSION_DENIED) {
-                        msg = "Location permission denied. Access to PEPP ERP is blocked until location sharing is enabled in browser settings.";
+                        msg = "Location access is disabled. Activity location tracking is unavailable.";
                     } else if (error.code === error.POSITION_UNAVAILABLE) {
-                        msg = "GPS/Location position is unavailable. Please check your system/device location settings.";
+                        msg = "GPS/Location position is unavailable. Activity location tracking is unavailable.";
                     } else if (error.code === error.TIMEOUT) {
-                        msg = "Location request timed out. Please try sharing location again.";
+                        msg = "Location request timed out. Activity location tracking is unavailable.";
                     }
-                    showPeppLocationOverlay();
-                    document.getElementById('pepp-location-message').textContent = msg;
+                    showPeppLocationBanner(msg, true);
                 },
                 {
                     enableHighAccuracy: true,
@@ -1252,11 +1270,8 @@ $nav_data = [
             var lat = getPeppCookie('pepp_lat');
             var lng = getPeppCookie('pepp_lng');
             if (!lat || !lng) {
-                showPeppLocationOverlay();
+                showPeppLocationBanner("Location access is required for activity tracking.", false);
                 requestPeppLocation();
-            } else {
-                // Periodically verify / refresh in background
-                setTimeout(requestPeppLocation, 1000);
             }
         })();
         </script>
