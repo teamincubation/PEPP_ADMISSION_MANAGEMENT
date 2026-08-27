@@ -3,14 +3,21 @@
  * PEPP Learning — Google OAuth configuration (shared by admin login and the
  * alumni portal). The redirect URI must be registered in the Google Cloud
  * console for this client. We use the standard OAuth 2.0 web flow (no SDK).
+ *
+ * Client secrets are loaded from config/secrets.php (gitignored).
  */
+$_secrets_path = __DIR__ . '/secrets.php';
+if (file_exists($_secrets_path)) {
+    require_once $_secrets_path;
+}
+
 // Admin login OAuth client
-define('GOOGLE_CLIENT_ID', '584799929473-017vjabprb7eb1ptbbanmlteen17avce.apps.googleusercontent.com');
-define('GOOGLE_CLIENT_SECRET', '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');
+define('GOOGLE_CLIENT_ID',     defined('PEPP_GOOGLE_CLIENT_ID')     ? PEPP_GOOGLE_CLIENT_ID     : '');
+define('GOOGLE_CLIENT_SECRET', defined('PEPP_GOOGLE_CLIENT_SECRET') ? PEPP_GOOGLE_CLIENT_SECRET : '');
 
 // Alumni portal OAuth client (separate Google project/client)
-define('GOOGLE_ALUMNI_CLIENT_ID', '373139526353-skuafbth6s0jp3h71l8s65tqfgk1aupe.apps.googleusercontent.com');
-define('GOOGLE_ALUMNI_CLIENT_SECRET', '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');
+define('GOOGLE_ALUMNI_CLIENT_ID',     defined('PEPP_GOOGLE_ALUMNI_CLIENT_ID')     ? PEPP_GOOGLE_ALUMNI_CLIENT_ID     : '');
+define('GOOGLE_ALUMNI_CLIENT_SECRET', defined('PEPP_GOOGLE_ALUMNI_CLIENT_SECRET') ? PEPP_GOOGLE_ALUMNI_CLIENT_SECRET : '');
 
 /** Pick the right client credentials for a purpose ('admin' | 'alumni'). */
 function google_client($purpose) {

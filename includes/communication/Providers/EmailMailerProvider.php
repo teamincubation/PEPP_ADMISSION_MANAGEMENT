@@ -16,7 +16,7 @@ class EmailMailerProvider implements CommunicationProviderInterface {
             }
         }
         
-        $sent = pepp_mail($to, $subject, $bodyHtml, $bodyText, $mappedAttachments);
+        $sent = pepp_mail_dispatch($to, $subject, $bodyHtml, $bodyText, $mappedAttachments);
         if ($sent) {
             return [
                 'success' => true,

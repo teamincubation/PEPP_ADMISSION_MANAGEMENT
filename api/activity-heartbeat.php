@@ -37,11 +37,17 @@ $is_idle = isset($input['is_idle']) ? (int)$input['is_idle'] : 0;
 
 // Geolocation coordinate parsing and cookie caching
 if (isset($input['latitude']) && is_numeric($input['latitude'])) {
-    setcookie('pepp_lat', $input['latitude'], time() + 86400 * 30, '/');
+    setcookie('pepp_lat', $input['latitude'], [
+        'expires' => time() + 86400 * 30, 'path' => '/',
+        'httponly' => true, 'samesite' => 'Lax'
+    ]);
     $_COOKIE['pepp_lat'] = $input['latitude'];
 }
 if (isset($input['longitude']) && is_numeric($input['longitude'])) {
-    setcookie('pepp_lng', $input['longitude'], time() + 86400 * 30, '/');
+    setcookie('pepp_lng', $input['longitude'], [
+        'expires' => time() + 86400 * 30, 'path' => '/',
+        'httponly' => true, 'samesite' => 'Lax'
+    ]);
     $_COOKIE['pepp_lng'] = $input['longitude'];
 }
 

@@ -22,7 +22,7 @@ try {
             $correctToken = $stmtSec->fetchColumn();
             
             $providedKey = $_GET['key'] ?? '';
-            if ($correctToken && $providedKey === $correctToken) {
+            if ($correctToken && is_string($correctToken) && is_string($providedKey) && hash_equals($correctToken, $providedKey)) {
                 $is_authenticated = true;
             }
         } catch (Exception $secEx) {
@@ -263,10 +263,12 @@ try {
                     $pdo->commit();
                     
                     // Check if campaign is finished (all recipients have queue IDs)
-                    $pendingCount = (int)$pdo->query("
+                    $pendingStmt = $pdo->prepare("
                         SELECT COUNT(*) FROM communication_campaign_recipients 
-                        WHERE campaign_id = {$campId} AND queue_id IS NULL
-                    ")->fetchColumn();
+                        WHERE campaign_id = ? AND queue_id IS NULL
+                    ");
+                    $pendingStmt->execute([$campId]);
+                    $pendingCount = (int)$pendingStmt->fetchColumn();
                     
                     if ($pendingCount === 0 && $dueCampaign['status'] === 'active') {
                         $pdo->prepare("UPDATE communication_campaigns SET status = 'completed', updated_at = NOW() WHERE id = ?")->execute([$campId]);
@@ -377,7 +379,7 @@ try {
     } else {
         echo json_encode([
             'success' => false,
-            'message' => 'Processor Error: ' . $e->getMessage()
+            'message' => 'Internal server error. Check server logs for details.'
         ]);
         exit;
     }

@@ -1,10 +1,11 @@
 <?php
-session_start();
+require_once __DIR__ . '/../includes/auth.php';
 header('Content-Type: application/json');
 
-// Check if user is logged in
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-    echo json_encode(['success' => false, 'message' => 'Unauthorized access']);
+// Permission check: only admins with 'approvals' access
+if (!can_access('approvals')) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'message' => 'Access denied. You do not have permission to reject students.']);
     exit();
 }
 
@@ -12,6 +13,14 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     echo json_encode(['success' => false, 'message' => 'Invalid request method']);
     exit();
 }
+
+// CSRF protection
+if (!csrf_verify()) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'message' => 'Invalid or expired security token. Please refresh and try again.']);
+    exit();
+}
+
 
 try {
     require_once '../config/database.php';

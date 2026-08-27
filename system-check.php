@@ -4,6 +4,9 @@
  * then DELETE this file. It checks the usual causes of a blank/500 page:
  * PHP version, required include files, extensions and DB connectivity.
  */
+require_once __DIR__ . '/includes/auth.php';
+require_super_admin();
+
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 header('Content-Type: text/plain; charset=UTF-8');

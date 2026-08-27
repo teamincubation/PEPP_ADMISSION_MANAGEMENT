@@ -41,13 +41,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'appointment_pdf' && isset($_G
     $table = ($_GET['source'] ?? '') === 'employee' ? 'employees' : 'staff_registration_requests';
     try {
         $stmt = $pdo->prepare("SELECT appointment_snapshot, appointment_reference FROM {$table} WHERE id = ? LIMIT 1");
-        $stmt->execute([(int)$_GET['id']]);
+        $safe_id = (int)$_GET['id'];
+        $stmt->execute([$safe_id]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$row) {
-            throw new RuntimeException("Employee/application record not found for ID: " . $_GET['id']);
+            throw new RuntimeException("Employee/application record not found for ID: " . $safe_id);
         }
         if (empty($row['appointment_snapshot'])) {
-            throw new RuntimeException("Appointment snapshot is missing for ID: " . $_GET['id']);
+            throw new RuntimeException("Appointment snapshot is missing for ID: " . $safe_id);
         }
 
         require_once 'includes/appointment_pdf.php';

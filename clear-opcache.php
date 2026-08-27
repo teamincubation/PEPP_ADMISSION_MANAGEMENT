@@ -3,6 +3,9 @@
  * PEPP ERP Cache Diagnostic Tool.
  * Resets the OPcache to resolve file caching on Hostinger.
  */
+require_once __DIR__ . '/includes/auth.php';
+require_super_admin();
+
 header('Content-Type: text/plain');
 
 if (function_exists('opcache_reset')) {

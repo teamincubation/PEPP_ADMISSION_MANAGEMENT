@@ -137,7 +137,41 @@ class PEPPSMTPClient {
     }
 }
 
+/**
+ * Enqueue an email for delivery via the unified mail queue.
+ * This is the primary function all business callers should use.
+ * It routes through pepp_enqueue_mail() → communication_queue → cron dispatch.
+ *
+ * Falls back to synchronous dispatch only when the queue is unavailable.
+ */
 function pepp_mail($to, $subject, $bodyHtml, $bodyText = '', array $attachments = [], $fromEmail = '', $fromName = '') {
+    $finalFromEmail = $fromEmail ?: 'noreply@pepplearning.in';
+    $finalFromName  = $fromName  ?: 'PEPP Learning';
+
+    // Try to route through the unified mail queue
+    $queueFile = __DIR__ . '/mail_queue.php';
+    if (file_exists($queueFile)) {
+        require_once $queueFile;
+        $queueId = pepp_enqueue_mail($to, $subject, $bodyHtml, $bodyText, $attachments, $finalFromEmail, $finalFromName);
+        if ($queueId !== false) {
+            return true; // Successfully queued
+        }
+        // Queue failed — fall through to synchronous dispatch
+        error_log("pepp_mail: Queue unavailable for {$to}, falling back to synchronous dispatch");
+    }
+
+    // Synchronous fallback
+    return pepp_mail_dispatch($to, $subject, $bodyHtml, $bodyText, $attachments, $finalFromEmail, $finalFromName);
+}
+
+/**
+ * Direct synchronous email dispatch (SMTP with mail() fallback).
+ * Called by the QueueProcessor when processing email queue items,
+ * and as a last-resort fallback when the queue is unavailable.
+ *
+ * DO NOT call this from business logic — use pepp_mail() instead.
+ */
+function pepp_mail_dispatch($to, $subject, $bodyHtml, $bodyText = '', array $attachments = [], $fromEmail = '', $fromName = '') {
     global $pdo;
     if (!isset($pdo)) {
         try {

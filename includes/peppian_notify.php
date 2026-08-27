@@ -59,11 +59,13 @@ function marketing_mark_seen($pdo, $kind) {
 
 /** Low-level branded email (HTML + plain text), CC the handling admin. */
 function peppian_send_email($to_email, $subject_text, $heading, $body_html, $cc_admin = true) {
+    require_once __DIR__ . '/mailer.php';
+
     if (!$to_email || !filter_var($to_email, FILTER_VALIDATE_EMAIL)) {
         // Still notify the admin even if the PEPPian email is invalid
         $to_email = null;
     }
-    $subject = '=?UTF-8?B?' . base64_encode($subject_text . ' | PEPP Learning') . '?=';
+    $subject = $subject_text . ' | PEPP Learning';
     $html = '<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f6f1e8;font-family:Segoe UI,Arial,sans-serif;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f1e8;padding:28px 12px;"><tr><td align="center">
 <table role="presentation" width="540" cellpadding="0" cellspacing="0" style="max-width:540px;width:100%;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #ece6dc;">
@@ -84,29 +86,26 @@ function peppian_send_email($to_email, $subject_text, $heading, $body_html, $cc_
 </table></td></tr></table></body></html>';
 
     $text = strip_tags(str_replace(['<br>', '</p>', '</div>'], "\n", $heading . "\n\n" . $body_html));
-    $bAlt = 'a' . md5(uniqid('', true));
-    $headers = "From: PEPP Learning <noreply@pepplearning.in>\r\nReply-To: noreply@pepplearning.in\r\n";
-    if ($cc_admin) $headers .= "Cc: " . PEPP_ADMIN_NOTIFY_EMAIL . "\r\n";
-    $headers .= "MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"$bAlt\"";
-    $body  = "--$bAlt\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n$text\r\n\r\n";
-    $body .= "--$bAlt\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n$html\r\n\r\n--$bAlt--";
 
     try {
         if ($to_email) {
-            @mail($to_email, $subject, $body, $headers);
-        } else {
-            $headers_admin = "From: PEPP Learning <noreply@pepplearning.in>\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8";
-            @mail(PEPP_ADMIN_NOTIFY_EMAIL, $subject, $body, $headers_admin);
+            pepp_mail($to_email, $subject, $html, $text);
+        }
+        // Send admin copy as a separate queued email
+        if ($cc_admin || !$to_email) {
+            pepp_mail(PEPP_ADMIN_NOTIFY_EMAIL, $subject, $html, $text);
         }
     } catch (Exception $e) { error_log('peppian_send_email: ' . $e->getMessage()); }
 }
 
 /** General branded HTML email notification sender */
 function peppian_send_email_general($to_email, $subject_text, $heading, $body_html, $cc_admin = false) {
+    require_once __DIR__ . '/mailer.php';
+
     if (!$to_email || !filter_var($to_email, FILTER_VALIDATE_EMAIL)) {
         return false;
     }
-    $subject = '=?UTF-8?B?' . base64_encode($subject_text . ' | PEPP Learning') . '?=';
+    $subject = $subject_text . ' | PEPP Learning';
     $html = '<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f8fafc;font-family:Segoe UI,Arial,sans-serif;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;padding:28px 12px;"><tr><td align="center">
 <table role="presentation" width="540" cellpadding="0" cellspacing="0" style="max-width:540px;width:100%;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;box-shadow:0 4px 12px rgba(0,0,0,0.03);">
@@ -127,15 +126,13 @@ function peppian_send_email_general($to_email, $subject_text, $heading, $body_ht
 </table></td></tr></table></body></html>';
 
     $text = strip_tags(str_replace(['<br>', '</p>', '</div>'], "\n", $heading . "\n\n" . $body_html));
-    $bAlt = 'a' . md5(uniqid('', true));
-    $headers = "From: PEPP Learning <noreply@pepplearning.in>\r\nReply-To: noreply@pepplearning.in\r\n";
-    if ($cc_admin) $headers .= "Cc: " . PEPP_ADMIN_NOTIFY_EMAIL . "\r\n";
-    $headers .= "MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"$bAlt\"";
-    $body  = "--$bAlt\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n$text\r\n\r\n";
-    $body .= "--$bAlt\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n$html\r\n\r\n--$bAlt--";
 
     try {
-        return @mail($to_email, $subject, $body, $headers);
+        $result = pepp_mail($to_email, $subject, $html, $text);
+        if ($cc_admin) {
+            pepp_mail(PEPP_ADMIN_NOTIFY_EMAIL, $subject, $html, $text);
+        }
+        return $result;
     } catch (Exception $e) {
         error_log('peppian_send_email_general: ' . $e->getMessage());
         return false;

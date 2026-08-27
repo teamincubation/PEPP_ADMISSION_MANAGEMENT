@@ -20,6 +20,44 @@ class QueueProcessor {
      * @return int Number of successfully processed items
      */
     public function execute() {
+
+
+        // ── Stale-job recovery ──────────────────────────────────────────
+        // If PHP crashed during processQueueItem(), jobs stay stuck in
+        // 'processing' forever. Reset items older than 10 minutes back to
+        // 'pending' so the next cron run can retry them.
+        try {
+            $isSqlite = ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+            if ($isSqlite) {
+                $staleStmt = $this->pdo->prepare("
+                    UPDATE communication_queue
+                    SET status = 'pending',
+                        retry_count = retry_count + 1,
+                        error_message = COALESCE(error_message,'') || ' [stale-recovery]',
+                        updated_at = datetime(NOW())
+                    WHERE status = 'processing'
+                      AND worker_started_at < datetime(NOW(), '-10 minute')
+                ");
+            } else {
+                $staleStmt = $this->pdo->prepare("
+                    UPDATE communication_queue
+                    SET status = 'pending',
+                        retry_count = retry_count + 1,
+                        error_message = CONCAT(COALESCE(error_message,''), ' [stale-recovery]'),
+                        updated_at = NOW()
+                    WHERE status = 'processing'
+                      AND worker_started_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE)
+                ");
+            }
+            $staleStmt->execute();
+            $recovered = $staleStmt->rowCount();
+            if ($recovered > 0) {
+                error_log("QueueProcessor: Recovered {$recovered} stale job(s) stuck in 'processing'.");
+            }
+        } catch (Exception $staleEx) {
+            error_log("QueueProcessor stale-recovery error: " . $staleEx->getMessage());
+        }
+
         // Query pending or failed items that are ready for attempt
         $stmt = $this->pdo->prepare("
             SELECT id FROM communication_queue 

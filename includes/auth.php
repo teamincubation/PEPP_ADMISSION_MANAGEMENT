@@ -13,7 +13,30 @@
  * Admin Management for the Super Admin to grant.
  */
 if (session_status() === PHP_SESSION_NONE) {
+    // ── Session cookie hardening ─────────────────────────────────────
+    // HttpOnly prevents JS access (XSS mitigation).
+    // SameSite=Lax prevents CSRF on cross-origin navigations.
+    // Secure is set automatically when running over HTTPS.
+    $isSecure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+             || (!empty($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443);
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path'     => '/',
+        'domain'   => '',
+        'secure'   => $isSecure,
+        'httponly'  => true,
+        'samesite'  => 'Lax',
+    ]);
     session_start();
+}
+
+// ── Baseline security headers ────────────────────────────────────────
+// Safe defaults that don't break existing integrations.
+// Guard with headers_sent() for CLI/test compatibility.
+if (!headers_sent()) {
+    header('X-Content-Type-Options: nosniff');
+    header('X-Frame-Options: SAMEORIGIN');
+    header('Referrer-Policy: strict-origin-when-cross-origin');
 }
 
 require_once __DIR__ . '/../config/database.php';

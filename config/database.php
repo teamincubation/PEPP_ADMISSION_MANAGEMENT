@@ -4,14 +4,24 @@
  * Cleaned: the old file ran a large CREATE TABLE block on EVERY request,
  * slowing down every page. The schema already exists in the database
  * (see the SQL dump); run migrations manually when needed.
+ *
+ * Credentials are loaded from config/secrets.php (gitignored).
  */
 date_default_timezone_set('Asia/Kolkata');
 
-define('DB_HOST', 'localhost');
-define('DB_NAME', 'u361910773_peppadmin');
-define('DB_USER', 'u361910773_admindash');
-define('DB_PASS', 'PL@AdmInc2025#');
-define('INVOICE_HMAC_SECRET', 'PEPP_InvoiceSecret_2026_Key_Secure_Rand');
+// Load credentials from the gitignored secrets file
+$_secrets_path = __DIR__ . '/secrets.php';
+if (file_exists($_secrets_path)) {
+    require_once $_secrets_path;
+}
+
+define('DB_HOST', defined('PEPP_DB_HOST') ? PEPP_DB_HOST : (getenv('PEPP_DB_HOST') ?: 'localhost'));
+define('DB_NAME', defined('PEPP_DB_NAME') ? PEPP_DB_NAME : (getenv('PEPP_DB_NAME') ?: 'u361910773_peppadmin'));
+define('DB_USER', defined('PEPP_DB_USER') ? PEPP_DB_USER : (getenv('PEPP_DB_USER') ?: 'root'));
+define('DB_PASS', defined('PEPP_DB_PASS') ? PEPP_DB_PASS : (getenv('PEPP_DB_PASS') ?: ''));
+if (!defined('INVOICE_HMAC_SECRET')) {
+    define('INVOICE_HMAC_SECRET', getenv('INVOICE_HMAC_SECRET') ?: 'CHANGE_ME');
+}
 
 if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true') || ($_SERVER['SERVER_NAME'] ?? '') === 'localhost' || ($_SERVER['HTTP_HOST'] ?? '') === 'localhost:8088') {
     try {
@@ -22,6 +32,7 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 return date('Y-m-d H:i:s');
             });
         }
+
         $conn = $pdo;
         $pdo->exec("
             CREATE TABLE IF NOT EXISTS admin_settings (
@@ -31,13 +42,70 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
             );
             CREATE TABLE IF NOT EXISTS communication_queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                channel TEXT,
-                recipient TEXT,
-                status TEXT,
-                retry_count INTEGER DEFAULT 0,
-                message_id TEXT,
-                error_message TEXT,
-                updated_at TEXT
+                channel TEXT NOT NULL DEFAULT 'whatsapp',
+                recipient TEXT NOT NULL,
+                recipient_name TEXT DEFAULT NULL,
+                subject TEXT DEFAULT NULL,
+                body_html TEXT DEFAULT NULL,
+                body_text TEXT DEFAULT NULL,
+                template_name TEXT DEFAULT NULL,
+                template_data TEXT DEFAULT NULL,
+                attachments TEXT DEFAULT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                priority INTEGER NOT NULL DEFAULT 0,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                last_retry_at TEXT DEFAULT NULL,
+                next_attempt_at TEXT NOT NULL,
+                message_id TEXT DEFAULT NULL,
+                error_message TEXT DEFAULT NULL,
+                sent_by TEXT DEFAULT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                worker_started_at TEXT DEFAULT NULL,
+                api_requested_at TEXT DEFAULT NULL,
+                api_responded_at TEXT DEFAULT NULL,
+                delivered_at TEXT DEFAULT NULL,
+                student_uid TEXT DEFAULT NULL,
+                event_name TEXT DEFAULT NULL,
+                invoice_id INTEGER DEFAULT NULL
+            );
+            CREATE TABLE IF NOT EXISTS communication_campaigns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                channel TEXT NOT NULL DEFAULT 'whatsapp',
+                target_audience TEXT DEFAULT 'students',
+                template_name TEXT DEFAULT NULL,
+                segment_criteria TEXT DEFAULT NULL,
+                status TEXT NOT NULL DEFAULT 'draft',
+                scheduled_at TEXT DEFAULT NULL,
+                created_by TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS communication_campaign_recipients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id INTEGER NOT NULL,
+                recipient TEXT NOT NULL,
+                recipient_name TEXT DEFAULT NULL,
+                queue_id INTEGER DEFAULT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                sent_at TEXT DEFAULT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                lead_id INTEGER DEFAULT NULL,
+                user_id TEXT DEFAULT NULL
+            );
+            CREATE TABLE IF NOT EXISTS communication_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel TEXT NOT NULL DEFAULT 'whatsapp',
+                template_name TEXT NOT NULL,
+                language TEXT NOT NULL DEFAULT 'en',
+                status TEXT NOT NULL DEFAULT 'approved',
+                category TEXT DEFAULT NULL,
+                quality_status TEXT DEFAULT NULL,
+                rejection_reason TEXT DEFAULT NULL,
+                meta_data TEXT DEFAULT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS communication_webhook_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
