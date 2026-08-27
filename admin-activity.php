@@ -345,19 +345,12 @@ try {
 $all_rows = collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_session, $f_module, $f_page, $f_idle, 5000);
 $total    = count($all_rows);
 
-// Paginate rows
-$page     = max(1, (int)($_GET['page'] ?? 1));
-$per_page = 40;
-$total_pages = max(1, (int)ceil($total / $per_page));
-$page     = min($page, $total_pages);
-$rows     = array_slice($all_rows, ($page - 1) * $per_page, $per_page);
-
-// Group timeline rows by session reference visually
-$session_groups = [];
-foreach ($rows as $r) {
+// Group all timeline rows by session reference visually first
+$all_session_groups = [];
+foreach ($all_rows as $r) {
     $s_id = $r['session_id'] ?: 'legacy_or_direct';
-    if (!isset($session_groups[$s_id])) {
-        $session_groups[$s_id] = [
+    if (!isset($all_session_groups[$s_id])) {
+        $all_session_groups[$s_id] = [
             'session_id' => $s_id,
             'admin_name' => $r['admin_name'] ?: 'Legacy',
             'ip' => $r['ip'],
@@ -365,8 +358,17 @@ foreach ($rows as $r) {
             'activities' => []
         ];
     }
-    $session_groups[$s_id]['activities'][] = $r;
+    $all_session_groups[$s_id]['activities'][] = $r;
 }
+
+$total_sessions = count($all_session_groups);
+
+// Paginate sessions (10 sessions per page)
+$page     = max(1, (int)($_GET['page'] ?? 1));
+$per_page = 10;
+$total_pages = max(1, (int)ceil($total_sessions / $per_page));
+$page     = min($page, $total_pages);
+$session_groups = array_slice($all_session_groups, ($page - 1) * $per_page, $per_page, true);
 
 $admin_list = [];
 try {
@@ -671,17 +673,14 @@ include 'includes/admin_nav.php';
         <?php else: ?>
 
             <?php
-            $is_first_session = true;
             foreach ($session_groups as $sid => $group):
-                $should_expand = $is_first_session || $has_filter;
-
                 // Calculate date & time span for the session
                 $first_act = end($group['activities']);
                 $last_act = $group['activities'][0];
                 $time_span = date('h:i A', strtotime($first_act['at_time'])) . ' - ' . date('h:i A', strtotime($last_act['at_time']));
                 $date_span = date('d M Y', strtotime($last_act['at_time']));
             ?>
-                <div class="session-card <?php echo $should_expand ? 'expanded' : ''; ?>" id="session-card-<?php echo htmlspecialchars($sid); ?>">
+                <div class="session-card" id="session-card-<?php echo htmlspecialchars($sid); ?>">
                     <div class="session-header" onclick="toggleSession('<?php echo htmlspecialchars($sid); ?>')">
                         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                             <i class="fas fa-user-tie" style="color:var(--accent); margin-right:2px;"></i>
@@ -701,7 +700,7 @@ include 'includes/admin_nav.php';
                                 <?php if ($group['ip']): ?><i class="fas fa-network-wired"></i> <?php echo e($group['ip']); ?><?php endif; ?>
                                 <?php if ($group['loc']): ?> · <i class="fas fa-map-pin"></i> <?php echo e($group['loc']); ?><?php endif; ?>
                             </div>
-                            <button class="session-toggle-btn" aria-expanded="<?php echo $should_expand ? 'true' : 'false'; ?>" aria-controls="timeline-list-<?php echo htmlspecialchars($sid); ?>" onclick="event.stopPropagation(); toggleSession('<?php echo htmlspecialchars($sid); ?>')" title="Toggle session activities">
+                            <button class="session-toggle-btn" aria-expanded="false" aria-controls="timeline-list-<?php echo htmlspecialchars($sid); ?>" onclick="event.stopPropagation(); toggleSession('<?php echo htmlspecialchars($sid); ?>')" title="Toggle session activities">
                                 <i class="fas fa-chevron-down"></i>
                             </button>
                         </div>
@@ -738,7 +737,6 @@ include 'includes/admin_nav.php';
                         <?php endforeach; ?>
                     </div>
                 </div>
-                <?php $is_first_session = false; ?>
             <?php endforeach; ?>
 
             <?php if ($total_pages > 1): ?>
