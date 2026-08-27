@@ -22,8 +22,9 @@ $f_idle    = isset($_GET['idle']) && $_GET['idle'] !== '' ? (int)$_GET['idle'] :
 if ($f_from && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $f_from)) $f_from = '';
 if ($f_to   && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $f_to))   $f_to   = '';
 
-$success_message = '';
-$error_message   = '';
+$success_message = $_SESSION['success_message'] ?? '';
+$error_message   = $_SESSION['error_message'] ?? '';
+unset($_SESSION['success_message'], $_SESSION['error_message']);
 
 function table_exists($pdo, $t) {
     try {
@@ -209,9 +210,335 @@ function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_sess
     return array_slice($all, 0, $limit);
 }
 
+/**
+ * Identify matching sessions from all sources, returning their headers.
+ */
+function get_session_headers($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_session, $f_module, $f_page, $f_idle) {
+    $sessions = [];
+    $like = $f_q !== '' ? '%' . $f_q . '%' : null;
+
+    // 1. Query admin_activity_log
+    if (table_exists($pdo, 'admin_activity_log')) {
+        $w = ['1=1']; $p = [];
+        if ($f_type === 'session') {
+            $w[] = "action_type IN ('login','logout','auto_logout','forced_logout')";
+        } elseif ($f_type === 'page_view') {
+            $w[] = "action_type = 'page_view'";
+        } elseif ($f_type === 'heartbeat') {
+            $w[] = "action_type = 'heartbeat'";
+        } elseif ($f_type === 'admin_event') {
+            $w[] = "action_type NOT IN ('login','logout','auto_logout','forced_logout','page_view','heartbeat')";
+        }
+        if ($f_admin !== '') { $w[] = "admin_username = ?"; $p[] = $f_admin; }
+        if ($f_session !== '') { $w[] = "session_id = ?"; $p[] = $f_session; }
+        if ($f_module !== '') { $w[] = "module = ?"; $p[] = $f_module; }
+        if ($f_page !== '') { $w[] = "page LIKE ?"; $p[] = '%' . $f_page . '%'; }
+        if ($f_idle !== '') { $w[] = "is_idle = ?"; $p[] = $f_idle; }
+        if ($f_from !== '') { $w[] = "created_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
+        if ($f_to !== '') { $w[] = "created_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+        if ($like) {
+            $w[] = "(details LIKE ? OR action_type LIKE ?)";
+            $p[] = $like; $p[] = $like;
+        }
+
+        $sql = "SELECT session_id, MAX(created_at) as max_time, admin_username, ip_address, location, COUNT(*) as act_count
+                FROM admin_activity_log
+                WHERE " . implode(' AND ', $w) . "
+                GROUP BY session_id";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($p);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $sid = $row['session_id'] ?: 'legacy_or_direct';
+            if (!isset($sessions[$sid])) {
+                $sessions[$sid] = [
+                    'session_id' => $sid,
+                    'admin_name' => $row['admin_username'] ?: 'Legacy',
+                    'ip' => $row['ip_address'],
+                    'loc' => $row['location'],
+                    'max_time' => $row['max_time'],
+                    'act_count' => (int)$row['act_count']
+                ];
+            } else {
+                $sessions[$sid]['act_count'] += (int)$row['act_count'];
+                if (strtotime($row['max_time']) > strtotime($sessions[$sid]['max_time'])) {
+                    $sessions[$sid]['max_time'] = $row['max_time'];
+                }
+            }
+        }
+    }
+
+    // 2. Query track_records
+    $include_track = ($f_session === '' && $f_idle !== 1 && ($f_type === '' || $f_type === 'student_action') && ($f_module === '' || $f_module === 'Students'));
+    if ($include_track && table_exists($pdo, 'track_records')) {
+        $w = ['1=1']; $p = [];
+        if ($f_admin !== '') { $w[] = "performed_by = ?"; $p[] = $f_admin; }
+        if ($f_page !== '') { $w[] = "(user_id LIKE ? OR action_type LIKE ?)"; $p[] = '%' . $f_page . '%'; $p[] = '%' . $f_page . '%'; }
+        if ($f_from !== '') { $w[] = "performed_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
+        if ($f_to !== '') { $w[] = "performed_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+        if ($like) {
+            $w[] = "(action_details LIKE ? OR action_type LIKE ? OR user_id LIKE ?)";
+            $p[] = $like; $p[] = $like; $p[] = $like;
+        }
+
+        $sql = "SELECT MAX(performed_at) as max_time, performed_by, COUNT(*) as act_count
+                FROM track_records
+                WHERE " . implode(' AND ', $w);
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($p);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row && $row['act_count'] > 0) {
+            $sid = 'legacy_or_direct';
+            if (!isset($sessions[$sid])) {
+                $sessions[$sid] = [
+                    'session_id' => $sid,
+                    'admin_name' => $row['performed_by'] ?: 'Legacy',
+                    'ip' => null,
+                    'loc' => null,
+                    'max_time' => $row['max_time'],
+                    'act_count' => (int)$row['act_count']
+                ];
+            } else {
+                $sessions[$sid]['act_count'] += (int)$row['act_count'];
+                if (strtotime($row['max_time']) > strtotime($sessions[$sid]['max_time'])) {
+                    $sessions[$sid]['max_time'] = $row['max_time'];
+                }
+            }
+        }
+    }
+
+    // 3. Query whatsapp_notifications
+    $include_wa = ($f_session === '' && $f_idle !== 1 && ($f_type === '' || $f_type === 'whatsapp') && ($f_module === '' || $f_module === 'Communication'));
+    if ($include_wa && table_exists($pdo, 'whatsapp_notifications')) {
+        $w = ['1=1']; $p = [];
+        if ($f_admin !== '') { $w[] = "sent_by = ?"; $p[] = $f_admin; }
+        if ($f_from !== '') { $w[] = "created_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
+        if ($f_to !== '') { $w[] = "created_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+        if ($like) {
+            $w[] = "(message LIKE ? OR student_name LIKE ? OR phone LIKE ?)";
+            $p[] = $like; $p[] = $like; $p[] = $like;
+        }
+
+        $sql = "SELECT MAX(created_at) as max_time, sent_by, COUNT(*) as act_count
+                FROM whatsapp_notifications
+                WHERE " . implode(' AND ', $w);
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($p);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row && $row['act_count'] > 0) {
+            $sid = 'legacy_or_direct';
+            if (!isset($sessions[$sid])) {
+                $sessions[$sid] = [
+                    'session_id' => $sid,
+                    'admin_name' => $row['sent_by'] ?: 'Legacy',
+                    'ip' => null,
+                    'loc' => null,
+                    'max_time' => $row['max_time'],
+                    'act_count' => (int)$row['act_count']
+                ];
+            } else {
+                $sessions[$sid]['act_count'] += (int)$row['act_count'];
+                if (strtotime($row['max_time']) > strtotime($sessions[$sid]['max_time'])) {
+                    $sessions[$sid]['max_time'] = $row['max_time'];
+                }
+            }
+        }
+    }
+
+    uasort($sessions, function($a, $b) {
+        return strtotime($b['max_time']) <=> strtotime($a['max_time']);
+    });
+
+    return $sessions;
+}
+
+/**
+ * Fetch detailed activity rows only for the specified session IDs.
+ */
+function fetch_session_activities($pdo, $sids, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_module, $f_page, $f_idle) {
+    $activities = [];
+    $like = $f_q !== '' ? '%' . $f_q . '%' : null;
+    $has_legacy = in_array('legacy_or_direct', $sids, true);
+    $active_sids = array_filter($sids, function($id) { return $id !== 'legacy_or_direct'; });
+
+    // 1. From admin_activity_log
+    if (table_exists($pdo, 'admin_activity_log')) {
+        $w = ['1=1']; $p = [];
+        if ($f_type === 'session') {
+            $w[] = "action_type IN ('login','logout','auto_logout','forced_logout')";
+        } elseif ($f_type === 'page_view') {
+            $w[] = "action_type = 'page_view'";
+        } elseif ($f_type === 'heartbeat') {
+            $w[] = "action_type = 'heartbeat'";
+        } elseif ($f_type === 'admin_event') {
+            $w[] = "action_type NOT IN ('login','logout','auto_logout','forced_logout','page_view','heartbeat')";
+        }
+        if ($f_admin !== '') { $w[] = "admin_username = ?"; $p[] = $f_admin; }
+        if ($f_module !== '') { $w[] = "module = ?"; $p[] = $f_module; }
+        if ($f_page !== '') { $w[] = "page LIKE ?"; $p[] = '%' . $f_page . '%'; }
+        if ($f_idle !== '') { $w[] = "is_idle = ?"; $p[] = $f_idle; }
+        if ($f_from !== '') { $w[] = "created_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
+        if ($f_to !== '') { $w[] = "created_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+        if ($like) {
+            $w[] = "(details LIKE ? OR action_type LIKE ?)";
+            $p[] = $like; $p[] = $like;
+        }
+
+        $sid_w = [];
+        if (!empty($active_sids)) {
+            $ph = implode(',', array_fill(0, count($active_sids), '?'));
+            $sid_w[] = "session_id IN ($ph)";
+            foreach ($active_sids as $id) { $p[] = $id; }
+        }
+        if ($has_legacy) {
+            $sid_w[] = "session_id IS NULL OR session_id = ''";
+        }
+
+        if (!empty($sid_w)) {
+            $w[] = "(" . implode(' OR ', $sid_w) . ")";
+            $stmt = $pdo->prepare("SELECT id, created_at, admin_id, admin_username, session_id, action_type, module, page, section, target_type, target_id, details, request_method, request_uri, referrer, ip_address, location, user_agent, latitude, longitude, is_heartbeat, is_idle, metadata
+                                   FROM admin_activity_log WHERE " . implode(' AND ', $w) . " ORDER BY created_at DESC LIMIT 5000");
+            $stmt->execute($p);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $sid = $r['session_id'] ?: 'legacy_or_direct';
+                $activities[$sid][] = [
+                    'source' => 'admin_activity_log',
+                    'source_id' => (int)$r['id'],
+                    'at_time' => $r['created_at'],
+                    'admin_name' => $r['admin_username'],
+                    'admin_id' => $r['admin_id'],
+                    'session_id' => $r['session_id'],
+                    'act' => $r['action_type'],
+                    'module' => $r['module'] ?: 'Administration',
+                    'page' => $r['page'],
+                    'section' => $r['section'],
+                    'target_type' => $r['target_type'],
+                    'target_id' => $r['target_id'],
+                    'details' => $r['details'],
+                    'request_method' => $r['request_method'],
+                    'request_uri' => $r['request_uri'],
+                    'referrer' => $r['referrer'],
+                    'ip' => $r['ip_address'],
+                    'loc' => $r['location'],
+                    'user_agent' => $r['user_agent'],
+                    'student' => $r['target_type'] === 'student' ? $r['target_id'] : null,
+                    'lat' => $r['latitude'] ?? null,
+                    'lng' => $r['longitude'] ?? null,
+                    'meta' => $r['metadata'] ?? null,
+                    'is_heartbeat' => (int)$r['is_heartbeat'],
+                    'is_idle' => (int)$r['is_idle']
+                ];
+            }
+        }
+    }
+
+    // 2. From track_records
+    if ($has_legacy) {
+        $include_track = ($f_idle !== 1 && ($f_type === '' || $f_type === 'student_action') && ($f_module === '' || $f_module === 'Students'));
+        if ($include_track && table_exists($pdo, 'track_records')) {
+            $w = ['1=1']; $p = [];
+            if ($f_admin !== '') { $w[] = "performed_by = ?"; $p[] = $f_admin; }
+            if ($f_page !== '') { $w[] = "(user_id LIKE ? OR action_type LIKE ?)"; $p[] = '%' . $f_page . '%'; $p[] = '%' . $f_page . '%'; }
+            if ($f_from !== '') { $w[] = "performed_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
+            if ($f_to !== '') { $w[] = "performed_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+            if ($like) {
+                $w[] = "(action_details LIKE ? OR action_type LIKE ? OR user_id LIKE ?)";
+                $p[] = $like; $p[] = $like; $p[] = $like;
+            }
+
+            $stmt = $pdo->prepare("SELECT id, performed_at, performed_by, action_type, action_details, user_id, latitude, longitude, metadata
+                                   FROM track_records WHERE " . implode(' AND ', $w) . " ORDER BY performed_at DESC LIMIT 5000");
+            $stmt->execute($p);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $activities['legacy_or_direct'][] = [
+                    'source' => 'track_records',
+                    'source_id' => (int)$r['id'],
+                    'at_time' => $r['performed_at'],
+                    'admin_name' => $r['performed_by'],
+                    'admin_id' => null,
+                    'session_id' => null,
+                    'act' => $r['action_type'],
+                    'module' => 'Students',
+                    'page' => 'student-details.php',
+                    'section' => 'Students',
+                    'target_type' => 'student',
+                    'target_id' => $r['user_id'],
+                    'details' => $r['action_details'],
+                    'request_method' => 'POST',
+                    'request_uri' => null,
+                    'referrer' => null,
+                    'ip' => null,
+                    'loc' => null,
+                    'user_agent' => null,
+                    'student' => $r['user_id'],
+                    'lat' => $r['latitude'] ?? null,
+                    'lng' => $r['longitude'] ?? null,
+                    'meta' => $r['metadata'] ?? null,
+                    'is_heartbeat' => 0,
+                    'is_idle' => 0
+                ];
+            }
+        }
+
+        // 3. From whatsapp_notifications
+        $include_wa = ($f_idle !== 1 && ($f_type === '' || $f_type === 'whatsapp') && ($f_module === '' || $f_module === 'Communication'));
+        if ($include_wa && table_exists($pdo, 'whatsapp_notifications')) {
+            $w = ['1=1']; $p = [];
+            if ($f_admin !== '') { $w[] = "sent_by = ?"; $p[] = $f_admin; }
+            if ($f_from !== '') { $w[] = "created_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
+            if ($f_to !== '') { $w[] = "created_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+            if ($like) {
+                $w[] = "(message LIKE ? OR student_name LIKE ? OR phone LIKE ?)";
+                $p[] = $like; $p[] = $like; $p[] = $like;
+            }
+
+            $stmt = $pdo->prepare("SELECT id, created_at, sent_by, student_name, phone, message, latitude, longitude, metadata
+                                   FROM whatsapp_notifications WHERE " . implode(' AND ', $w) . " ORDER BY created_at DESC LIMIT 5000");
+            $stmt->execute($p);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $detail = 'To ' . ($r['student_name'] ?: $r['phone']) . ': ' . mb_substr((string)$r['message'], 0, 160);
+                $activities['legacy_or_direct'][] = [
+                    'source' => 'whatsapp_notifications',
+                    'source_id' => (int)$r['id'],
+                    'at_time' => $r['created_at'],
+                    'admin_name' => $r['sent_by'],
+                    'admin_id' => null,
+                    'session_id' => null,
+                    'act' => 'whatsapp_message',
+                    'module' => 'Communication',
+                    'page' => 'whatsapp-notification.php',
+                    'section' => 'Communication',
+                    'target_type' => 'student',
+                    'target_id' => null,
+                    'details' => $detail,
+                    'request_method' => 'POST',
+                    'request_uri' => null,
+                    'referrer' => null,
+                    'ip' => null,
+                    'loc' => null,
+                    'user_agent' => null,
+                    'student' => null,
+                    'lat' => $r['latitude'] ?? null,
+                    'lng' => $r['longitude'] ?? null,
+                    'meta' => $r['metadata'] ?? null,
+                    'is_heartbeat' => 0,
+                    'is_idle' => 0
+                ];
+            }
+        }
+    }
+
+    foreach ($activities as $sid => &$list) {
+        usort($list, function($a, $b) {
+            return strtotime($b['at_time']) <=> strtotime($a['at_time']);
+        });
+    }
+
+    return $activities;
+}
+
 /* ── POST: delete actions ───────────────────────────────────────── */
 $valid_sources = ['admin_activity_log', 'track_records', 'whatsapp_notifications'];
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     if (!csrf_verify()) {
         $error_message = 'Security token mismatch. Please retry.';
     } else {
@@ -256,19 +583,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 /* ── EXPORT (before any output) ─────────────────────────────────── */
 if (isset($_GET['export'])) {
-    $rows = collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_session, $f_module, $f_page, $f_idle, 20000);
-    log_admin_activity($pdo, $admin_username, 'data_export',
-        'Exported admin activity (' . count($rows) . ' rows' . ($f_admin ? ", admin={$f_admin}" : '') . ')');
-
-    header('Content-Type: text/csv; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="admin-activity-' . date('Y-m-d-Hi') . '.csv"');
-    $out = fopen('php://output', 'w');
-    fputs($out, "\xEF\xBB\xBF");
-    fputcsv($out, ['Date & Time', 'Admin', 'Action', 'Details', 'Student ID', 'IP Address', 'Location', 'Latitude', 'Longitude', 'Metadata']);
-    foreach ($rows as $r) {
-        fputcsv($out, [$r['at_time'], $r['admin_name'], $r['act'], $r['details'], $r['student'], $r['ip'], $r['loc'], $r['lat'] ?? '', $r['lng'] ?? '', $r['meta'] ?? '']);
+    $token = bin2hex(random_bytes(32));
+    $exportDir = __DIR__ . '/config/activity_exports';
+    if (!is_dir($exportDir)) {
+        mkdir($exportDir, 0755, true);
     }
-    fclose($out);
+
+    $filename = 'PEPP_Admin_Activity_Export_' . date('Y-m-d_His') . '_' . bin2hex(random_bytes(4)) . '.csv';
+    $filePath = $exportDir . '/' . $filename;
+
+    $out = fopen($filePath, 'w');
+    if ($out) {
+        fputs($out, "\xEF\xBB\xBF");
+        fputcsv($out, ['Date & Time', 'Admin', 'Action', 'Details', 'Student ID', 'IP Address', 'Location', 'Latitude', 'Longitude', 'Metadata'], ',', '"', "\\");
+
+        $rows = collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_session, $f_module, $f_page, $f_idle, 20000);
+        $totalRecords = 0;
+        foreach ($rows as $r) {
+            fputcsv($out, [
+                $r['at_time'],
+                $r['admin_name'],
+                $r['act'],
+                $r['details'],
+                $r['student'],
+                $r['ip'],
+                $r['loc'],
+                $r['lat'] ?? '',
+                $r['lng'] ?? '',
+                $r['meta'] ?? ''
+            ], ',', '"', "\\");
+            $totalRecords++;
+        }
+        fclose($out);
+
+        log_admin_activity($pdo, $admin_username, 'data_export', "Initiated secure export of admin activity ({$totalRecords} rows)");
+
+        require_once __DIR__ . '/includes/SecureDownloadManager.php';
+        $expiresAt = time() + 86400; // 24 hours
+        SecureDownloadManager::registerToken($token, $filePath, $expiresAt);
+
+        $host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'localhost';
+        $scriptName = isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '/admissions/admin-activity.php';
+        $baseUrl = 'http://' . $host . dirname($scriptName);
+        $downloadUrl = rtrim($baseUrl, '/') . '/activity-export-download.php?token=' . $token;
+
+        $subject = 'PEPP ERP – Secure Activity Log Export – ' . date('d M Y');
+        $html = '<h3>PEPP ERP Secure Activity Log Export</h3>';
+        $html .= '<p>A secure export of the PEPP ERP Activity Log has been generated based on your requested filters.</p>';
+        $html .= '<p><strong>Details:</strong></p>';
+        $html .= '<ul>';
+        $html .= '<li><strong>Requested By:</strong> ' . htmlspecialchars($admin_username) . '</li>';
+        $html .= '<li><strong>Total Records:</strong> ' . $totalRecords . '</li>';
+        $html .= '<li><strong>Generated At:</strong> ' . date('d M Y h:i A') . '</li>';
+        $html .= '<li><strong>Expires In:</strong> 24 Hours</li>';
+        $html .= '</ul>';
+        $html .= '<p><a href="' . htmlspecialchars($downloadUrl) . '" style="display:inline-block; padding:10px 20px; background:#7c3aed; color:#fff; text-decoration:none; border-radius:6px; font-weight:bold;">Download CSV Export File</a></p>';
+        $html .= '<p><small>If the button above does not work, copy and paste the following link into your browser:<br>' . htmlspecialchars($downloadUrl) . '</small></p>';
+
+        require_once __DIR__ . '/includes/mail_queue.php';
+        pepp_enqueue_mail('incubation.ngo@gmail.com', $subject, $html, '', [], 'noreply@pepplearning.in', 'PEPP Learning', 10, 'activity_export_' . $token, $admin_username);
+        pepp_enqueue_mail('office@pepplearning.com', $subject, $html, '', [], 'noreply@pepplearning.in', 'PEPP Learning', 10, 'activity_export_' . $token, $admin_username);
+
+        $_SESSION['success_message'] = 'Export generated successfully. A secure download link has been sent to the configured admin email addresses.';
+    } else {
+        $_SESSION['error_message'] = 'Failed to generate export file server-side.';
+    }
+
+    $redirectUrl = aqs(['export' => null]);
+    header("Location: admin-activity.php" . $redirectUrl);
     exit();
 }
 
@@ -341,34 +723,39 @@ try {
     }
 } catch (Exception $e) { error_log('Online query error: ' . $e->getMessage()); }
 
-/* ── TIMELINE DATA GENERATION ──────────────────────────────────── */
-$all_rows = collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_session, $f_module, $f_page, $f_idle, 5000);
-$total    = count($all_rows);
+/* ── TIMELINE DATA GENERATION (OPTIMIZED PERFORMANCE) ───────────────── */
+$all_session_headers = get_session_headers($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_session, $f_module, $f_page, $f_idle);
+$total_sessions = count($all_session_headers);
 
-// Group all timeline rows by session reference visually first
-$all_session_groups = [];
-foreach ($all_rows as $r) {
-    $s_id = $r['session_id'] ?: 'legacy_or_direct';
-    if (!isset($all_session_groups[$s_id])) {
-        $all_session_groups[$s_id] = [
-            'session_id' => $s_id,
-            'admin_name' => $r['admin_name'] ?: 'Legacy',
-            'ip' => $r['ip'],
-            'loc' => $r['loc'],
-            'activities' => []
-        ];
-    }
-    $all_session_groups[$s_id]['activities'][] = $r;
+// Calculate total matched activities
+$total = 0;
+foreach ($all_session_headers as $h) {
+    $total += $h['act_count'];
 }
-
-$total_sessions = count($all_session_groups);
 
 // Paginate sessions (10 sessions per page)
 $page     = max(1, (int)($_GET['page'] ?? 1));
 $per_page = 10;
 $total_pages = max(1, (int)ceil($total_sessions / $per_page));
 $page     = min($page, $total_pages);
-$session_groups = array_slice($all_session_groups, ($page - 1) * $per_page, $per_page, true);
+$paged_headers = array_slice($all_session_headers, ($page - 1) * $per_page, $per_page, true);
+
+// Fetch activities only for the paged sessions
+$paged_sids = array_keys($paged_headers);
+$session_activities = !empty($paged_sids)
+    ? fetch_session_activities($pdo, $paged_sids, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_module, $f_page, $f_idle)
+    : [];
+
+$session_groups = [];
+foreach ($paged_headers as $sid => $header) {
+    $session_groups[$sid] = [
+        'session_id' => $sid,
+        'admin_name' => $header['admin_name'],
+        'ip' => $header['ip'],
+        'loc' => $header['loc'],
+        'activities' => $session_activities[$sid] ?? []
+    ];
+}
 
 $admin_list = [];
 try {
@@ -674,6 +1061,7 @@ include 'includes/admin_nav.php';
 
             <?php
             foreach ($session_groups as $sid => $group):
+                if (empty($group['activities'])) continue;
                 // Calculate date & time span for the session
                 $first_act = end($group['activities']);
                 $last_act = $group['activities'][0];

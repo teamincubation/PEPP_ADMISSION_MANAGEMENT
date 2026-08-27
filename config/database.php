@@ -783,6 +783,27 @@ try {
             // Ignore column issues if already exists or other error
         }
 
+        // Self-heal index optimizations for activity logs
+        try {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'mysql') {
+                $idxCheck = $pdo->query("SHOW INDEX FROM `admin_activity_log` WHERE Key_name = 'idx_aal_session_id'")->fetch();
+                if (!$idxCheck) {
+                    $pdo->exec("ALTER TABLE `admin_activity_log` ADD INDEX `idx_aal_session_id` (`session_id`)");
+                }
+
+                $idxCheckWa = $pdo->query("SHOW INDEX FROM `whatsapp_notifications` WHERE Key_name = 'idx_wan_sent_by'")->fetch();
+                if (!$idxCheckWa) {
+                    $pdo->exec("ALTER TABLE `whatsapp_notifications` ADD INDEX `idx_wan_sent_by` (`sent_by`)");
+                }
+            } else if ($driver === 'sqlite') {
+                $pdo->exec("CREATE INDEX IF NOT EXISTS `idx_aal_session_id` ON `admin_activity_log` (`session_id`)");
+                $pdo->exec("CREATE INDEX IF NOT EXISTS `idx_wan_sent_by` ON `whatsapp_notifications` (`sent_by`)");
+            }
+        } catch (Exception $idxEx) {
+            // Ignore index creation issues
+        }
+
         // Self-heal Mega Test Result template preset inside card_templates
         $stmt_check = $pdo->prepare("SELECT COUNT(*) FROM card_templates WHERE title = 'Mega Test Result Template'");
         $stmt_check->execute();

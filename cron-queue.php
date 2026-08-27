@@ -293,6 +293,15 @@ try {
             }
         }
 
+        // Run monthly activity log backup and token cleanup
+        try {
+            require_once __DIR__ . '/includes/SecureDownloadManager.php';
+            SecureDownloadManager::runMonthlyBackupJob($pdo);
+            SecureDownloadManager::cleanExpired();
+        } catch (Exception $backupEx) {
+            error_log("Cron: Monthly activity backup error: " . $backupEx->getMessage());
+        }
+
         $telemetry = [
             'timestamp' => time(),
             'datetime' => date('Y-m-d H:i:s'),
