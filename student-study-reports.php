@@ -4950,6 +4950,25 @@ include 'includes/admin_nav.php';
         </div>
     </div>
 
+    <!-- 3 Horizontal Streak / Study-Day Cards -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 12px; page-break-inside: avoid;">
+        <div style="background: #fff7ed; border: 1px solid #ffedd5; border-radius: 8px; padding: 10px 14px; text-align: center;">
+            <div style="font-size: 7pt; font-weight: 800; color: #c2410c; text-transform: uppercase; letter-spacing: 0.04em;">ACTIVE STREAK</div>
+            <div style="font-size: 14pt; font-weight: 900; color: #ea580c; margin: 3px 0 2px 0;">🔥 ${activeStreak} Days</div>
+            <div style="font-size: 7pt; color: #9a3412;">Consecutive learning days</div>
+        </div>
+        <div style="background: #fefce8; border: 1px solid #fef08a; border-radius: 8px; padding: 10px 14px; text-align: center;">
+            <div style="font-size: 7pt; font-weight: 800; color: #854d0e; text-transform: uppercase; letter-spacing: 0.04em;">LONGEST STREAK</div>
+            <div style="font-size: 14pt; font-weight: 900; color: #ca8a04; margin: 3px 0 2px 0;">⭐ ${longestStreak} Days</div>
+            <div style="font-size: 7pt; color: #713f12;">Best recorded continuity</div>
+        </div>
+        <div style="background: #eff6ff; border: 1px solid #dbeafe; border-radius: 8px; padding: 10px 14px; text-align: center;">
+            <div style="font-size: 7pt; font-weight: 800; color: #1e40af; text-transform: uppercase; letter-spacing: 0.04em;">ACTIVE STUDY DAYS</div>
+            <div style="font-size: 14pt; font-weight: 900; color: #2563eb; margin: 3px 0 2px 0;">🗓️ ${activeDays} / ${totalPlanDays}d</div>
+            <div style="font-size: 7pt; color: #1d4ed8;">${consistencyPct}% Plan Calendar Consistency</div>
+        </div>
+    </div>
+
     <!-- Section 2: Study Plan Performance & Cohort Ranking -->
     <div class="section-card">
         <div class="section-title">
@@ -5050,38 +5069,37 @@ include 'includes/admin_nav.php';
         </table>
     </div>
 
-    <!-- Section 4: Chapter-wise Student Progress -->
+    <!-- Section 4: Chapter-wise Progress Breakdown -->
     ${(a.chapters && a.chapters.length > 0) ? `
         <div class="section-card">
             <div class="section-title">
-                <span>📚 Chapter-wise Student Progress</span>
-                <span style="font-size:7pt; font-weight:normal; color:#64748b;">${a.chapters.length} Canonical Chapters</span>
+                <span>📚 Chapter-wise Progress Breakdown</span>
+                <span style="font-size:7pt; font-weight:normal; color:#64748b;">Includes All Assigned Chapters</span>
             </div>
             <table class="report-table">
                 <thead>
                     <tr>
-                        <th style="width:30%;">Chapter Name</th>
-                        <th style="width:10%;">Total</th>
-                        <th style="width:10%;">Completed</th>
-                        <th style="width:10%;">Pending</th>
-                        <th style="width:10%;">Overdue</th>
-                        <th style="width:10%;">Rate</th>
-                        <th style="width:20%;">Progress Bar</th>
+                        <th>Chapter Name</th>
+                        <th>Total Tasks</th>
+                        <th>Completed</th>
+                        <th>Pending</th>
+                        <th>Overdue</th>
+                        <th>Progress %</th>
                     </tr>
                 </thead>
                 <tbody>
-                    ${a.chapters.map(c => `
+                    ${a.chapters.map(ch => `
                         <tr>
-                            <td><strong>${r_esc_js(c.chapter_name)}</strong></td>
-                            <td>${c.total_activities}</td>
-                            <td style="color:#047857; font-weight:700;">${c.completed_activities}</td>
-                            <td>${c.pending_activities}</td>
-                            <td>${c.overdue_activities > 0 ? `<span style="color:#b91c1c; font-weight:700;">${c.overdue_activities}</span>` : '0'}</td>
-                            <td><strong>${c.completion_percentage}%</strong></td>
+                            <td><strong>${r_esc_js(ch.chapter_name)}</strong></td>
+                            <td>${ch.total_activities}</td>
+                            <td><span style="color:#047857; font-weight:700;">${ch.completed_activities}</span></td>
+                            <td>${ch.pending_activities}</td>
+                            <td><span style="color:${ch.overdue_activities > 0 ? '#b91c1c' : '#64748b'};">${ch.overdue_activities}</span></td>
                             <td>
-                                <div class="progress-bar-bg">
-                                    <div class="progress-bar-fill" style="width:${c.completion_percentage}%; background:${c.completion_percentage >= 80 ? '#10b981' : '#4f46e5'};"></div>
+                                <div class="prog-bar-wrap">
+                                    <div class="prog-bar" style="width:${ch.completion_percentage}%;"></div>
                                 </div>
+                                <span style="font-size:7pt; font-weight:700;">${ch.completion_percentage}%</span>
                             </td>
                         </tr>
                     `).join('')}
@@ -5095,16 +5113,17 @@ include 'includes/admin_nav.php';
         <div class="section-card">
             <div class="section-title">
                 <span>📝 Chapter-wise Assessment Performance</span>
-                <span style="font-size:7pt; font-weight:normal; color:#64748b;">Published Tests Audit</span>
+                <span style="font-size:7pt; font-weight:normal; color:#64748b;">Published Tests &amp; Assessment Ranks</span>
             </div>
             <table class="report-table">
                 <thead>
                     <tr>
-                        <th>Chapter Name</th>
-                        <th>Published Tests</th>
-                        <th>Attended Tests</th>
-                        <th>Attendance %</th>
-                        <th>Average Score %</th>
+                        <th style="width:30%;">Chapter Name</th>
+                        <th style="width:14%;">Published Tests</th>
+                        <th style="width:14%;">Attended Tests</th>
+                        <th style="width:14%;">Attendance %</th>
+                        <th style="width:14%;">Average Score %</th>
+                        <th style="width:14%;">Assessment Rank</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -5115,6 +5134,9 @@ include 'includes/admin_nav.php';
                             <td>${ca.attended_assessments}</td>
                             <td>${ca.attendance_percentage !== null ? ca.attendance_percentage + '%' : '—'}</td>
                             <td><strong>${ca.average_score !== null ? ca.average_score + '%' : '—'}</strong></td>
+                            <td>
+                                ${ca.rank !== null ? `<span class="badge badge-purple" style="font-weight:800;">🏆 #${ca.rank}${ca.total_participants ? ` / ${ca.total_participants}` : ''}</span>` : `<span class="badge" style="background:#f1f5f9; color:#64748b;">Not available</span>`}
+                            </td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -5156,41 +5178,65 @@ include 'includes/admin_nav.php';
         </div>
     ` : ''}
 
-    <!-- Section 7: Topic Mastery Analysis -->
-    ${(a.strongest_topics && a.strongest_topics.length > 0) || (a.needs_attention_topics && a.needs_attention_topics.length > 0) ? `
+    <!-- Section 7: Learning Performance Highlights -->
+    ${(a.learning_highlights && (a.learning_highlights.strongest_activities?.length > 0 || a.learning_highlights.needs_attention_activities?.length > 0)) || (a.strongest_activities && a.strongest_activities.length > 0) || (a.strongest_topics && a.strongest_topics.length > 0) ? `
         <div class="section-card">
             <div class="section-title">
-                <span>🎯 Topic Mastery Analysis</span>
-                <span style="font-size:7pt; font-weight:normal; color:#64748b;">Strongest Topics vs Topics Needing Attention</span>
+                <span>⚡ Learning Performance Highlights</span>
+                <span style="font-size:7pt; font-weight:normal; color:#64748b;">Live Sessions &amp; Mega Tests / Assessments</span>
             </div>
             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
                 <div>
-                    <div style="font-size:7.5pt; font-weight:700; color:#047857; text-transform:uppercase; margin-bottom:4px;">Strongest Topics (100% Mastery)</div>
+                    <div style="font-size:7.5pt; font-weight:700; color:#047857; text-transform:uppercase; margin-bottom:4px;">🟢 Strongest Activities</div>
                     <table class="report-table">
-                        <thead><tr><th>Topic</th><th>Completed</th><th>%</th></tr></thead>
+                        <thead>
+                            <tr>
+                                <th style="width:55%;">Activity</th>
+                                <th style="width:23%;">Type</th>
+                                <th style="width:22%;">Performance</th>
+                            </tr>
+                        </thead>
                         <tbody>
-                            ${(a.strongest_topics || []).slice(0, 5).map(t => `
+                            ${(((a.learning_highlights && a.learning_highlights.strongest_activities) || a.strongest_activities || []).length > 0) ? ((a.learning_highlights && a.learning_highlights.strongest_activities) || a.strongest_activities).slice(0, 5).map(act => `
+                                <tr>
+                                    <td><strong>${r_esc_js(act.activity_title)}</strong></td>
+                                    <td><span class="badge ${act.type_category === 'live_session' ? 'badge-green' : act.type_category === 'mega_test' ? 'badge-purple' : 'badge-blue'}">${r_esc_js(act.type_label || 'ACTIVITY')}</span></td>
+                                    <td><strong style="color:#047857;">${r_esc_js(act.performance_display || '100%')}</strong></td>
+                                </tr>
+                            `).join('') : ((a.strongest_topics || []).slice(0, 5).map(t => `
                                 <tr>
                                     <td><strong>${r_esc_js(t.topic_name || t.topic)}</strong></td>
-                                    <td>${t.completed}/${t.total}</td>
-                                    <td><span class="badge badge-green">${t.completion_percentage}%</span></td>
+                                    <td><span class="badge badge-green">TOPIC</span></td>
+                                    <td><strong style="color:#047857;">${t.completion_percentage}%</strong></td>
                                 </tr>
-                            `).join('') || '<tr><td colspan="3" style="color:#64748b;">No topic records</td></tr>'}
+                            `).join('') || '<tr><td colspan="3" style="color:#64748b; text-align:center;">No qualifying activities</td></tr>')}
                         </tbody>
                     </table>
                 </div>
                 <div>
-                    <div style="font-size:7.5pt; font-weight:700; color:#b91c1c; text-transform:uppercase; margin-bottom:4px;">Topics Needing Attention</div>
+                    <div style="font-size:7.5pt; font-weight:700; color:#b91c1c; text-transform:uppercase; margin-bottom:4px;">🔴 Activities Needing Attention</div>
                     <table class="report-table">
-                        <thead><tr><th>Topic</th><th>Pending</th><th>%</th></tr></thead>
+                        <thead>
+                            <tr>
+                                <th style="width:55%;">Activity</th>
+                                <th style="width:23%;">Type</th>
+                                <th style="width:22%;">Status / Score</th>
+                            </tr>
+                        </thead>
                         <tbody>
-                            ${(a.needs_attention_topics || []).slice(0, 5).map(t => `
+                            ${(((a.learning_highlights && a.learning_highlights.needs_attention_activities) || a.needs_attention_activities || []).length > 0) ? ((a.learning_highlights && a.learning_highlights.needs_attention_activities) || a.needs_attention_activities).slice(0, 5).map(act => `
+                                <tr>
+                                    <td><strong>${r_esc_js(act.activity_title)}</strong></td>
+                                    <td><span class="badge ${act.type_category === 'live_session' ? 'badge-green' : act.type_category === 'mega_test' ? 'badge-purple' : 'badge-blue'}">${r_esc_js(act.type_label || 'ACTIVITY')}</span></td>
+                                    <td><strong style="color:#b91c1c;">${r_esc_js(act.performance_display || act.status_label || 'Pending')}</strong></td>
+                                </tr>
+                            `).join('') : ((a.needs_attention_topics || []).slice(0, 5).map(t => `
                                 <tr>
                                     <td><strong>${r_esc_js(t.topic_name || t.topic)}</strong></td>
-                                    <td>${t.pending}</td>
-                                    <td><span class="badge ${t.completion_percentage === 0 ? 'badge-red' : 'badge-amber'}">${t.completion_percentage}%</span></td>
+                                    <td><span class="badge badge-amber">TOPIC</span></td>
+                                    <td><strong style="color:#b91c1c;">${t.completion_percentage}%</strong></td>
                                 </tr>
-                            `).join('') || '<tr><td colspan="3" style="color:#64748b;">All topics up to date</td></tr>'}
+                            `).join('') || '<tr><td colspan="3" style="color:#64748b; text-align:center;">All activities up to date</td></tr>')}
                         </tbody>
                     </table>
                 </div>
@@ -5729,7 +5775,7 @@ include 'includes/admin_nav.php';
                 <div class="analytics-section-card">
                     <div class="analytics-section-header">
                         <h5 class="analytics-section-title"><i class="fas fa-vial-circle-check" style="color:#8b5cf6;"></i> Chapter-wise Assessment Performance</h5>
-                        <span style="font-size:0.72rem; color:var(--text-muted);">Published tests separate from study activities</span>
+                        <span style="font-size:0.72rem; color:var(--text-muted);">Published tests &amp; competitive assessment rankings</span>
                     </div>
                     <table class="analytics-accessible-table">
                         <thead>
@@ -5739,16 +5785,20 @@ include 'includes/admin_nav.php';
                                 <th>Attended Tests</th>
                                 <th>Attendance %</th>
                                 <th>Average Score %</th>
+                                <th>Assessment Rank</th>
                             </tr>
                         </thead>
                         <tbody>
                             ${chapAssessments.map(ca => `
                                 <tr>
-                                    <td><strong>${ca.chapter_name}</strong></td>
+                                    <td><strong>${r_esc_js(ca.chapter_name)}</strong></td>
                                     <td>${ca.published_assessments}</td>
                                     <td>${ca.attended_assessments}</td>
                                     <td>${ca.attendance_percentage !== null ? ca.attendance_percentage + '%' : '—'}</td>
                                     <td><strong>${ca.average_score !== null ? ca.average_score + '%' : '—'}</strong></td>
+                                    <td>
+                                        ${ca.rank !== null ? `<span class="badge badge-elite" style="font-weight:800; font-size:0.75rem; padding:4px 8px;">🏆 Rank #${ca.rank}${ca.total_participants ? ` / ${ca.total_participants}` : ''}</span>` : `<span class="badge gray" style="font-size:0.7rem;">Rank: Not available</span>`}
+                                    </td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -5816,47 +5866,75 @@ include 'includes/admin_nav.php';
                     </div>
                     <div style="background:#eff6ff; border:1px solid #dbeafe; border-radius:12px; padding:14px; text-align:center;">
                         <div style="font-size:0.7rem; font-weight:800; color:#1e40af; text-transform:uppercase;">Active Study Days</div>
-                        <div style="font-size:1.6rem; font-weight:900; color:#2563eb; margin-top:4px;">📅 ${activeDays} / ${totalPlanDays}d</div>
+                        <div style="font-size:1.6rem; font-weight:900; color:#2563eb; margin-top:4px;">🗓️ ${activeDays} / ${totalPlanDays}d</div>
                         <div style="font-size:0.7rem; color:#1d4ed8; margin-top:2px;">${consistencyPct}% Plan Calendar Consistency</div>
                     </div>
                 </div>
             </div>
         `;
 
-        // ── 9. TOPIC ANALYSIS ──
-        const strongestTopics = a.strongest_topics || [];
-        const needsAttentionTopics = a.needs_attention_topics || [];
+        // ── 9. LEARNING PERFORMANCE HIGHLIGHTS ──
+        const strongestActs = (a.learning_highlights && a.learning_highlights.strongest_activities) || a.strongest_activities || [];
+        const needsAttentionActs = (a.learning_highlights && a.learning_highlights.needs_attention_activities) || a.needs_attention_activities || [];
         html += `
             <div class="analytics-section-card">
                 <div class="analytics-section-header">
-                    <h5 class="analytics-section-title"><i class="fas fa-crosshairs" style="color:var(--accent);"></i> Topic Mastery Analysis</h5>
-                    <span style="font-size:0.72rem; color:var(--text-muted);">Strongest Topics vs Topics Needing Attention</span>
+                    <div>
+                        <h5 class="analytics-section-title"><i class="fas fa-bolt" style="color:#eab308;"></i> Learning Performance Highlights</h5>
+                        <div style="font-size:0.72rem; color:var(--text-muted); margin-top:2px;">
+                            Performance highlights across Live Sessions &amp; Mega Tests / Assessments in this Study Plan
+                        </div>
+                    </div>
                 </div>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.25rem;">
                     <div>
-                        <div style="font-size:0.75rem; font-weight:800; color:#047857; text-transform:uppercase; margin-bottom:8px;">
-                            <i class="fas fa-circle-check"></i> Strongest Topics
+                        <div style="font-size:0.75rem; font-weight:800; color:#047857; text-transform:uppercase; margin-bottom:8px; display:flex; align-items:center; gap:6px;">
+                            <i class="fas fa-circle-check"></i> Strongest Activities
                         </div>
                         <div style="display:flex; flex-direction:column; gap:8px;">
-                            ${strongestTopics.map(t => `
+                            ${strongestActs.length > 0 ? strongestActs.map(act => `
+                                <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:10px 12px; display:flex; justify-content:space-between; align-items:center;">
+                                    <div>
+                                        <div style="font-size:0.82rem; font-weight:700; color:#166534;">${r_esc_js(act.activity_title)}</div>
+                                        <div style="margin-top:3px;">
+                                            <span class="badge ${act.type_category === 'live_session' ? 'green' : act.type_category === 'mega_test' ? 'badge-elite' : 'blue'}" style="font-size:0.6rem; text-transform:uppercase; font-weight:800;">${r_esc_js(act.type_label || 'ACTIVITY')}</span>
+                                        </div>
+                                    </div>
+                                    <div style="text-align:right;">
+                                        <span class="badge green" style="font-size:0.75rem; font-weight:800;">${r_esc_js(act.performance_display || '100%')}</span>
+                                    </div>
+                                </div>
+                            `).join('') : ((a.strongest_topics || []).slice(0, 5).map(t => `
                                 <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
-                                    <span style="font-size:0.8rem; font-weight:700; color:#166534;">${t.topic_name || t.topic}</span>
+                                    <span style="font-size:0.8rem; font-weight:700; color:#166534;">${r_esc_js(t.topic_name || t.topic)}</span>
                                     <span class="badge green" style="font-size:0.65rem;">${t.completed}/${t.total} (${t.completion_percentage}%)</span>
                                 </div>
-                            `).join('') || '<div style="font-size:0.75rem; color:var(--text-muted);">No topic data available.</div>'}
+                            `).join('') || '<div style="font-size:0.75rem; color:var(--text-muted);">No qualifying activities recorded.</div>')}
                         </div>
                     </div>
                     <div>
-                        <div style="font-size:0.75rem; font-weight:800; color:#b91c1c; text-transform:uppercase; margin-bottom:8px;">
-                            <i class="fas fa-triangle-exclamation"></i> Topics Needing Attention
+                        <div style="font-size:0.75rem; font-weight:800; color:#b91c1c; text-transform:uppercase; margin-bottom:8px; display:flex; align-items:center; gap:6px;">
+                            <i class="fas fa-triangle-exclamation"></i> Activities Needing Attention
                         </div>
                         <div style="display:flex; flex-direction:column; gap:8px;">
-                            ${needsAttentionTopics.map(t => `
+                            ${needsAttentionActs.length > 0 ? needsAttentionActs.map(act => `
+                                <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:10px 12px; display:flex; justify-content:space-between; align-items:center;">
+                                    <div>
+                                        <div style="font-size:0.82rem; font-weight:700; color:#991b1b;">${r_esc_js(act.activity_title)}</div>
+                                        <div style="margin-top:3px;">
+                                            <span class="badge ${act.type_category === 'live_session' ? 'green' : act.type_category === 'mega_test' ? 'badge-elite' : 'blue'}" style="font-size:0.6rem; text-transform:uppercase; font-weight:800;">${r_esc_js(act.type_label || 'ACTIVITY')}</span>
+                                        </div>
+                                    </div>
+                                    <div style="text-align:right;">
+                                        <span class="badge ${act.score_pct !== null ? (act.score_pct === 0 ? 'red' : 'amber') : (act.is_overdue ? 'red' : 'amber')}" style="font-size:0.75rem; font-weight:800;">${r_esc_js(act.performance_display || act.status_label || 'Pending')}</span>
+                                    </div>
+                                </div>
+                            `).join('') : ((a.needs_attention_topics || []).slice(0, 5).map(t => `
                                 <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
-                                    <span style="font-size:0.8rem; font-weight:700; color:#991b1b;">${t.topic_name || t.topic}</span>
+                                    <span style="font-size:0.8rem; font-weight:700; color:#991b1b;">${r_esc_js(t.topic_name || t.topic)}</span>
                                     <span class="badge ${t.completion_percentage === 0 ? 'red' : 'amber'}" style="font-size:0.65rem;">${t.pending} pending (${t.completion_percentage}%)</span>
                                 </div>
-                            `).join('') || '<div style="font-size:0.75rem; color:var(--text-muted);">No topics requiring attention.</div>'}
+                            `).join('') || '<div style="font-size:0.75rem; color:var(--text-muted);">All activities up to date.</div>')}
                         </div>
                     </div>
                 </div>

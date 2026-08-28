@@ -253,7 +253,9 @@ class StudentStudyPlanAnalytics {
 
         // Fetch real attendance and performance from assessment results linked to this plan
         $stmt_att = $pdo->prepare("
-            SELECT ar.batch_id, ar.attendance_status, ar.score, ar.total_score, arb.chapter_snapshot, act.chapter as act_chapter
+            SELECT ar.batch_id, ar.attendance_status, ar.score, ar.total_score,
+                   arb.id as batch_table_id, arb.activity_id, arb.chapter_snapshot, act.chapter as act_chapter,
+                   act.activity_title, act.activity_type
             FROM assessment_results ar
             JOIN assessment_result_batches arb ON ar.batch_id = arb.id
             LEFT JOIN study_plan_activities act ON arb.activity_id = act.id
@@ -265,13 +267,59 @@ class StudentStudyPlanAnalytics {
         $stmt_att->execute([$user_id, $email, $study_plan_id, $academic_year, $today]);
         $att_records = $stmt_att->fetchAll(PDO::FETCH_ASSOC);
 
+        // Compute genuine competition ranks for all batches linked to this student and plan
+        $batch_ranks = [];
+        $batch_ids = array_unique(array_filter(array_column($att_records, 'batch_id')));
+        if (!empty($batch_ids)) {
+            $in_placeholders = implode(',', array_fill(0, count($batch_ids), '?'));
+            $stmt_batch_all = $pdo->prepare("
+                SELECT batch_id, user_id, student_email, score, total_score, attendance_status
+                FROM assessment_results
+                WHERE batch_id IN ($in_placeholders) AND attendance_status = 'attended' AND score IS NOT NULL
+                ORDER BY score DESC
+            ");
+            $stmt_batch_all->execute(array_values($batch_ids));
+            $all_batch_results = $stmt_batch_all->fetchAll(PDO::FETCH_ASSOC);
+
+            $grouped_batches = [];
+            foreach ($all_batch_results as $abr) {
+                $grouped_batches[$abr['batch_id']][] = $abr;
+            }
+
+            foreach ($grouped_batches as $bid => $bresults) {
+                $total_cohort = count($bresults);
+                $prev_score = null;
+                $cur_rank = 0;
+                $counter = 0;
+                foreach ($bresults as $res_item) {
+                    $counter++;
+                    if ($res_item['score'] !== $prev_score) {
+                        $cur_rank = $counter;
+                        $prev_score = $res_item['score'];
+                    }
+                    $match_user = (!empty($res_item['user_id']) && $res_item['user_id'] == $user_id);
+                    $match_email = (!empty($res_item['student_email']) && strcasecmp($res_item['student_email'], $email) === 0);
+                    if ($match_user || $match_email) {
+                        $batch_ranks[$bid] = [
+                            'rank' => $cur_rank,
+                            'total_participants' => $total_cohort,
+                            'rank_display' => "#{$cur_rank} / {$total_cohort}",
+                            'rank_badge' => "🏆 Rank #{$cur_rank}"
+                        ];
+                        break;
+                    }
+                }
+            }
+        }
+
         // De-duplicate results by batch_id
         $unique_att = [];
         $unique_perf = [];
         $chap_assess_map = [];
 
         foreach ($att_records as $rec) {
-            $unique_att[$rec['batch_id']] = $rec['attendance_status'];
+            $bid = $rec['batch_id'];
+            $unique_att[$bid] = $rec['attendance_status'];
 
             $cname = trim((string)($rec['chapter_snapshot'] ?? ''));
             if ($cname === '') {
@@ -286,9 +334,11 @@ class StudentStudyPlanAnalytics {
                     'chapter_name' => $cname,
                     'published_assessments' => 0,
                     'attended_assessments' => 0,
-                    'scores' => []
+                    'scores' => [],
+                    'batch_ids' => []
                 ];
             }
+            $chap_assess_map[$cname]['batch_ids'][] = $bid;
 
             if ($rec['attendance_status'] === 'attended' || $rec['attendance_status'] === 'not_attended') {
                 $chap_assess_map[$cname]['published_assessments']++;
@@ -299,7 +349,7 @@ class StudentStudyPlanAnalytics {
                         $total = (float)$rec['total_score'];
                         if ($score >= 0 && $score <= $total) {
                             $pct_score = ($score / $total) * 100;
-                            $unique_perf[$rec['batch_id']] = $pct_score;
+                            $unique_perf[$bid] = $pct_score;
                             $chap_assess_map[$cname]['scores'][] = $pct_score;
                         }
                     }
@@ -391,21 +441,196 @@ class StudentStudyPlanAnalytics {
         });
         $chapters = array_values($chap_map);
 
-        // 4. CHAPTER-WISE ASSESSMENT BREAKDOWN
+        // 4. CHAPTER-WISE ASSESSMENT BREAKDOWN (With Assessment Ranks)
         $chapter_assessments = [];
         foreach ($chap_assess_map as $cname => $cdata) {
             $att_pct = $cdata['published_assessments'] > 0 ? round(($cdata['attended_assessments'] / $cdata['published_assessments']) * 100) : null;
             $avg_sc = count($cdata['scores']) > 0 ? round(array_sum($cdata['scores']) / count($cdata['scores']), 1) : null;
+
+            $best_rank = null;
+            $total_cohort_for_rank = null;
+            $rank_display = 'Not available';
+            $rank_badge = 'Rank: Not available';
+
+            if (!empty($cdata['batch_ids'])) {
+                $chapter_ranks = [];
+                foreach ($cdata['batch_ids'] as $bid) {
+                    if (isset($batch_ranks[$bid])) {
+                        $chapter_ranks[] = $batch_ranks[$bid];
+                    }
+                }
+                if (!empty($chapter_ranks)) {
+                    usort($chapter_ranks, function($a, $b) {
+                        return $a['rank'] <=> $b['rank'];
+                    });
+                    $top_r = $chapter_ranks[0];
+                    $best_rank = $top_r['rank'];
+                    $total_cohort_for_rank = $top_r['total_participants'];
+                    $rank_display = "#{$best_rank} / {$total_cohort_for_rank}";
+                    $rank_badge = "🏆 Rank #{$best_rank}";
+                }
+            }
+
             $chapter_assessments[] = [
                 'chapter_name' => $cname,
                 'published_assessments' => $cdata['published_assessments'],
                 'attended_assessments' => $cdata['attended_assessments'],
                 'attendance_percentage' => $att_pct,
-                'average_score' => $avg_sc
+                'average_score' => $avg_sc,
+                'rank' => $best_rank,
+                'total_participants' => $total_cohort_for_rank,
+                'rank_display' => $rank_display,
+                'rank_badge' => $rank_badge
             ];
         }
 
-        // 5. TOPIC ANALYSIS (Topic -> Subject fallback -> General)
+        // 5. ACTIVITY-FOCUSED LEARNING PERFORMANCE HIGHLIGHTS (Live Sessions & Mega Tests)
+        $activity_assessment_map = [];
+        foreach ($att_records as $rec) {
+            $act_id = (int)($rec['activity_id'] ?? 0);
+            if ($act_id > 0) {
+                $bid = $rec['batch_id'];
+                $rnk_info = $batch_ranks[$bid] ?? null;
+                $pct = null;
+                if ($rec['attendance_status'] === 'attended' && $rec['score'] !== null && (float)$rec['total_score'] > 0) {
+                    $pct = round(((float)$rec['score'] / (float)$rec['total_score']) * 100);
+                }
+                $activity_assessment_map[$act_id] = [
+                    'attendance_status' => $rec['attendance_status'],
+                    'score' => $rec['score'],
+                    'total_score' => $rec['total_score'],
+                    'percentage' => $pct,
+                    'rank' => $rnk_info ? $rnk_info['rank'] : null,
+                    'rank_display' => $rnk_info ? $rnk_info['rank_display'] : null,
+                    'rank_badge' => $rnk_info ? $rnk_info['rank_badge'] : null
+                ];
+            }
+        }
+
+        $all_highlights = [];
+        foreach ($activities as $act) {
+            $act_id = (int)$act['id'];
+            $title = trim($act['activity_title'] ?? ('Activity #' . $act_id));
+            $raw_type = trim($act['activity_type'] ?? '');
+            $type_lower = strtolower($raw_type . ' ' . $title);
+
+            // Determine Activity Type label and category
+            if (strpos($type_lower, 'mega') !== false) {
+                $type_label = 'MEGA TEST';
+                $type_category = 'mega_test';
+                $type_badge_class = 'purple';
+            } elseif (strpos($type_lower, 'test') !== false || strpos($type_lower, 'assessment') !== false || strpos($type_lower, 'exam') !== false || strpos($type_lower, 'quiz') !== false || strpos($type_lower, 'mock') !== false) {
+                $type_label = 'ASSESSMENT';
+                $type_category = 'assessment';
+                $type_badge_class = 'blue';
+            } elseif (strpos($type_lower, 'live') !== false || strpos($type_lower, 'session') !== false || strpos($type_lower, 'class') !== false || strpos($type_lower, 'lecture') !== false || strpos($type_lower, 'webinar') !== false) {
+                $type_label = 'LIVE SESSION';
+                $type_category = 'live_session';
+                $type_badge_class = 'green';
+            } else {
+                $type_label = !empty($raw_type) ? strtoupper($raw_type) : 'ACTIVITY';
+                $type_category = 'other';
+                $type_badge_class = 'gray';
+            }
+
+            $is_completed = isset($completed_map[$act_id]);
+            $is_overdue = ($plan_type === 'date_wise' && !empty($act['activity_date']) && $act['activity_date'] < $today && !$is_completed);
+            $assess_info = $activity_assessment_map[$act_id] ?? null;
+
+            $score_pct = null;
+            $performance_display = '';
+            $status_label = '';
+            $rank_display = null;
+
+            if ($assess_info && $assess_info['percentage'] !== null) {
+                $score_pct = $assess_info['percentage'];
+                $rank_display = $assess_info['rank_display'];
+                $performance_display = $score_pct . '%';
+                if ($rank_display) {
+                    $performance_display .= ' (Rank ' . $rank_display . ')';
+                }
+                $status_label = 'Completed';
+            } elseif ($assess_info && $assess_info['attendance_status'] === 'not_attended') {
+                $performance_display = 'Not Attempted';
+                $status_label = 'Not Attempted';
+            } elseif ($type_category === 'mega_test' || $type_category === 'assessment') {
+                $performance_display = 'No assessment data';
+                $status_label = $is_completed ? 'Completed' : ($is_overdue ? 'Overdue' : 'Pending');
+            } else {
+                // Live Session or regular activity
+                $score_pct = $is_completed ? 100 : 0;
+                $performance_display = $is_completed ? '100%' : ($is_overdue ? 'Overdue' : 'Pending');
+                $status_label = $is_completed ? 'Completed' : ($is_overdue ? 'Overdue' : 'Pending');
+            }
+
+            $all_highlights[] = [
+                'activity_id' => $act_id,
+                'activity_title' => $title,
+                'activity_type' => $raw_type,
+                'type_label' => $type_label,
+                'type_category' => $type_category,
+                'type_badge_class' => $type_badge_class,
+                'chapter' => trim($act['chapter'] ?? 'General'),
+                'is_completed' => $is_completed,
+                'is_overdue' => $is_overdue,
+                'score_pct' => $score_pct,
+                'performance_display' => $performance_display,
+                'status_label' => $status_label,
+                'rank_display' => $rank_display
+            ];
+        }
+
+        // Strongest Activities: High scores or Completed live sessions
+        $strongest_candidates = [];
+        foreach ($all_highlights as $item) {
+            if ($item['score_pct'] !== null && $item['score_pct'] >= 70) {
+                $strongest_candidates[] = $item;
+            } elseif ($item['is_completed'] && ($item['type_category'] === 'live_session' || $item['type_category'] === 'other')) {
+                $strongest_candidates[] = $item;
+            }
+        }
+        usort($strongest_candidates, function($a, $b) {
+            $a_score = $a['score_pct'] ?? ($a['is_completed'] ? 100 : 0);
+            $b_score = $b['score_pct'] ?? ($b['is_completed'] ? 100 : 0);
+            if ($b_score !== $a_score) {
+                return $b_score <=> $a_score;
+            }
+            return strcmp($a['activity_title'], $b['activity_title']);
+        });
+        $strongest_activities = array_slice($strongest_candidates, 0, 5);
+
+        // Activities Needing Attention: Low scores (<60%) or Overdue or Incomplete Live Sessions
+        // Critical: Do NOT add assessments merely because of missing data.
+        $attention_candidates = [];
+        foreach ($all_highlights as $item) {
+            if ($item['score_pct'] !== null && $item['score_pct'] < 60) {
+                $attention_candidates[] = $item;
+            } elseif ($item['is_overdue']) {
+                $attention_candidates[] = $item;
+            } elseif (!$item['is_completed'] && $item['type_category'] === 'live_session') {
+                $attention_candidates[] = $item;
+            }
+        }
+        usort($attention_candidates, function($a, $b) {
+            $a_priority = ($a['score_pct'] !== null) ? 1 : ($a['is_overdue'] ? 2 : 3);
+            $b_priority = ($b['score_pct'] !== null) ? 1 : ($b['is_overdue'] ? 2 : 3);
+            if ($a_priority !== $b_priority) {
+                return $a_priority <=> $b_priority;
+            }
+            if ($a['score_pct'] !== null && $b['score_pct'] !== null) {
+                return $a['score_pct'] <=> $b['score_pct'];
+            }
+            return strcmp($a['activity_title'], $b['activity_title']);
+        });
+        $needs_attention_activities = array_slice($attention_candidates, 0, 5);
+
+        $learning_highlights = [
+            'strongest_activities' => $strongest_activities,
+            'needs_attention_activities' => $needs_attention_activities,
+            'all_activities' => $all_highlights
+        ];
+
+        // 6. TOPIC ANALYSIS (Retained for backwards compatibility)
         $topic_map = [];
         foreach ($activities as $act) {
             $raw_top = trim((string)($act['topic'] ?? ''));
@@ -588,6 +813,9 @@ class StudentStudyPlanAnalytics {
 
             'chapters' => $chapters,
             'chapter_assessments' => $chapter_assessments,
+            'learning_highlights' => $learning_highlights,
+            'strongest_activities' => $strongest_activities,
+            'needs_attention_activities' => $needs_attention_activities,
             'topics' => $topics,
             'strongest_topics' => $strongest_topics,
             'needs_attention_topics' => $needs_attention_topics,
@@ -1502,6 +1730,13 @@ class StudentStudyPlanAnalytics {
 
             'chapters' => [],
             'chapter_assessments' => [],
+            'learning_highlights' => [
+                'strongest_activities' => [],
+                'needs_attention_activities' => [],
+                'all_activities' => []
+            ],
+            'strongest_activities' => [],
+            'needs_attention_activities' => [],
             'topics' => [],
             'strongest_topics' => [],
             'needs_attention_topics' => [],

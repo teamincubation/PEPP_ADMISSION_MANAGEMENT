@@ -1463,6 +1463,100 @@ assertTest("Test AX: Raw email is not included in student_profile", false, isset
 assertTest("Test AX: PDF report isolates Learning Analytics Hub without raw checklist dossier rows", true, strpos($reports_file_content, 'printStudentLearningAnalyticsReport') !== false);
 
 
+// --- TEST AY: Learning Performance Highlights Data Architecture ---
+// Set activity types for test plan 1
+$pdo->exec("UPDATE study_plan_activities SET activity_type = 'Live Session', activity_title = 'Live Psychology Workshop' WHERE study_plan_id = 1 AND id = 1");
+$pdo->exec("UPDATE study_plan_activities SET activity_type = 'Mega Test', activity_title = 'Cognitive Mega Test 2026' WHERE study_plan_id = 1 AND id = 2");
+
+$analytics_plan1 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test AY: learning_highlights exists in analytics payload", true, isset($analytics_plan1['learning_highlights']));
+assertTest("Test AY: strongest_activities array exists", true, isset($analytics_plan1['strongest_activities']) && is_array($analytics_plan1['strongest_activities']));
+assertTest("Test AY: needs_attention_activities array exists", true, isset($analytics_plan1['needs_attention_activities']) && is_array($analytics_plan1['needs_attention_activities']));
+assertTest("Test AY: all_activities array exists in learning_highlights", true, isset($analytics_plan1['learning_highlights']['all_activities']));
+
+// Check activity categorization
+$all_acts = $analytics_plan1['learning_highlights']['all_activities'];
+$has_live_session = false;
+$has_assessment = false;
+foreach ($all_acts as $act_item) {
+    if ($act_item['type_label'] === 'LIVE SESSION' || $act_item['type_category'] === 'live_session') {
+        $has_live_session = true;
+    }
+    if ($act_item['type_label'] === 'MEGA TEST' || $act_item['type_label'] === 'ASSESSMENT' || $act_item['type_category'] === 'assessment' || $act_item['type_category'] === 'mega_test') {
+        $has_assessment = true;
+    }
+}
+assertTest("Test AY: Live session activity type categorized correctly", true, $has_live_session);
+assertTest("Test AY: Assessment / Mega test activity type categorized correctly", true, $has_assessment);
+
+// Check that no-data assessments are NOT falsely put in needs_attention_activities
+$needs_att = $analytics_plan1['needs_attention_activities'];
+$has_false_needs_attention = false;
+foreach ($needs_att as $na_item) {
+    if ($na_item['performance_display'] === 'No assessment data' && !$na_item['is_overdue']) {
+        $has_false_needs_attention = true;
+    }
+}
+assertTest("Test AY: No-data assessments not falsely flagged as Needs Attention", false, $has_false_needs_attention);
+
+
+// --- TEST AZ: Assessment Ranks in Chapter-wise Assessment Performance ---
+// Insert a test assessment batch with 3 students to verify genuine competition ranking
+$pdo->prepare("DELETE FROM assessment_result_batches WHERE id = 9999")->execute();
+$pdo->prepare("
+    INSERT INTO assessment_result_batches (id, academic_year, course_name, study_plan_id, activity_id, activity_title_snapshot, chapter_snapshot, status)
+    VALUES (9999, '2026-27', 'MA/MSc Psychology (Premium)', 1, 2, 'Cognitive Mega Test 2026', 'Cognitive Psychology', 'published')
+")->execute();
+$pdo->prepare("DELETE FROM assessment_results WHERE batch_id = 9999")->execute();
+$pdo->prepare("
+    INSERT INTO assessment_results (batch_id, user_id, student_email, attendance_status, score, total_score)
+    VALUES (9999, 'PEPP20268771', 'fathima@pepp.com', 'attended', 85, 100),
+           (9999, 'PEPP20261111', 'top@pepp.com', 'attended', 95, 100),
+           (9999, 'PEPP20262222', 'low@pepp.com', 'attended', 60, 100)
+")->execute();
+
+$analytics_with_rank = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+$cog_chap = null;
+foreach ($analytics_with_rank['chapter_assessments'] as $ca) {
+    if ($ca['chapter_name'] === 'Cognitive Psychology') {
+        $cog_chap = $ca;
+        break;
+    }
+}
+assertTest("Test AZ: Cognitive Psychology chapter found in assessment breakdown", true, $cog_chap !== null);
+assertTest("Test AZ: chapter_assessments contains rank keys", true, isset($cog_chap['rank_display']));
+assertTest("Test AZ: chapter_assessments contains rank_badge", true, isset($cog_chap['rank_badge']));
+assertTest("Test AZ: Genuine competition rank computed correctly (#2 of 3)", 2, $cog_chap['rank']);
+assertTest("Test AZ: Total participants in assessment cohort", 3, $cog_chap['total_participants']);
+assertTest("Test AZ: Rank display format (#2 / 3)", "#2 / 3", $cog_chap['rank_display']);
+assertTest("Test AZ: Rank badge format (🏆 Rank #2)", "🏆 Rank #2", $cog_chap['rank_badge']);
+
+// Cleanup test batch
+$pdo->prepare("DELETE FROM assessment_results WHERE batch_id = 9999")->execute();
+$pdo->prepare("DELETE FROM assessment_result_batches WHERE id = 9999")->execute();
+
+
+// --- TEST BA: PDF 3 Streak / Study-Day Cards ---
+assertTest("Test BA: PDF report contains ACTIVE STREAK card", true, strpos($reports_file_content, 'ACTIVE STREAK') !== false);
+assertTest("Test BA: PDF report contains LONGEST STREAK card", true, strpos($reports_file_content, 'LONGEST STREAK') !== false);
+assertTest("Test BA: PDF report contains ACTIVE STUDY DAYS card", true, strpos($reports_file_content, 'ACTIVE STUDY DAYS') !== false);
+assertTest("Test BA: PDF report streak cards use canonical emoji 🔥, ⭐, 🗓️", true,
+    strpos($reports_file_content, '🔥 ${activeStreak}') !== false &&
+    strpos($reports_file_content, '⭐ ${longestStreak}') !== false &&
+    strpos($reports_file_content, '🗓️ ${activeDays}') !== false
+);
+assertTest("Test BA: PDF report uses 3-column horizontal grid layout", true, strpos($reports_file_content, 'grid-template-columns: 1fr 1fr 1fr') !== false);
+
+
+// --- TEST BB: Learning Performance Highlights Web Hub & PDF Parity ---
+assertTest("Test BB: Web Hub renders Learning Performance Highlights section", true, strpos($reports_file_content, 'Learning Performance Highlights') !== false);
+assertTest("Test BB: Web Hub contains Strongest Activities block", true, strpos($reports_file_content, 'Strongest Activities') !== false);
+assertTest("Test BB: Web Hub contains Activities Needing Attention block", true, strpos($reports_file_content, 'Activities Needing Attention') !== false);
+assertTest("Test BB: Web Hub Chapter-wise Assessment contains Assessment Rank column", true, strpos($reports_file_content, '<th>Assessment Rank</th>') !== false);
+assertTest("Test BB: PDF report Chapter-wise Assessment contains Assessment Rank column", true, strpos($reports_file_content, '<th style="width:14%;">Assessment Rank</th>') !== false);
+assertTest("Test BB: PDF report renders Learning Performance Highlights section", true, strpos($reports_file_content, '⚡ Learning Performance Highlights') !== false);
+
+
 echo "<h2>Test Execution Summary</h2>\n";
 $percent = $total_tests > 0 ? round(($passed_tests / $total_tests) * 100) : 0;
 echo "<div style='font-size: 1.2rem; font-weight: bold; margin-top: 20px;'>";
