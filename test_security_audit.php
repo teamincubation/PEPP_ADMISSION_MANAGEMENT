@@ -303,6 +303,38 @@ try {
     $isValidErr = (strpos($lastErr, 'Connection refused') !== false || strpos($lastErr, 'Connection to SMTP server failed') !== false || strpos($lastErr, 'SMTP connection timeout') !== false);
     assert_true($isValidErr, "MAIL-03: SMTP client logs correct socket connection error message");
 
+    // ── SEC-21: Custom Form Access Control system ────
+    $_SERVER['HTTP_X_TESTING_MODE'] = 'true';
+    @session_start();
+    $_SESSION['admin_logged_in'] = true;
+    $_SESSION['admin_username'] = 'admin';
+    $_SESSION['admin_role'] = 'super_admin';
+    require_once __DIR__ . '/includes/auth.php';
+    
+    // Set up mock DB variables for testing
+    global $admin_role, $admin_perms;
+    $admin_role = 'super_admin';
+    $admin_perms = 'ALL';
+    
+    // 1. Superadmin has access to everything
+    assert_true(has_form_access($pdo, 'admin', 101), "SEC-21: Superadmin has access to arbitrary form ID");
+    
+    // 2. Admin with 'campaigns' permission but not assigned should not have access
+    $_SESSION['admin_username'] = 'restricted_admin';
+    $_SESSION['admin_role'] = 'admin';
+    $admin_role = 'admin';
+    $admin_perms = 'campaigns';
+    assert_false(has_form_access($pdo, 'restricted_admin', 101), "SEC-21: Regular admin without assignment has no access");
+    
+    // 3. Grant access by inserting a record
+    $pdo->exec("INSERT INTO campaign_form_admin_access (form_id, admin_user_id) VALUES (101, 99)");
+    
+    // Mock restricted_admin id as 99
+    $pdo->exec("INSERT INTO admins (id, username, password_hash, full_name, role, permissions, status) VALUES (99, 'restricted_admin', 'hash', 'Restricted Admin', 'admin', 'campaigns', 'active')");
+    
+    assert_true(has_form_access($pdo, 'restricted_admin', 101), "SEC-21: Regular admin has access to form when assigned");
+    assert_false(has_form_access($pdo, 'restricted_admin', 202), "SEC-21: Regular admin still restricted from unassigned form");
+
 } catch (Exception $e) {
     $failed++;
     echo "❌ FAIL: Integration test exception: " . $e->getMessage() . "\n";

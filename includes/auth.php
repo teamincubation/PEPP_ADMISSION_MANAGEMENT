@@ -131,6 +131,35 @@ function ensure_credential_visibility_column($pdo) {
         if (!$cols_phone_call) {
             $pdo->exec("ALTER TABLE admins ADD COLUMN `allow_phone_call` TINYINT(1) NOT NULL DEFAULT 1");
         }
+
+        // Self-heal campaign_form_admin_access table
+        try {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $pdo->exec("
+                    CREATE TABLE IF NOT EXISTS campaign_form_admin_access (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        form_id INTEGER NOT NULL,
+                        admin_user_id INTEGER NOT NULL,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT,
+                        UNIQUE(form_id, admin_user_id)
+                    );
+                ");
+            } else {
+                $pdo->exec("
+                    CREATE TABLE IF NOT EXISTS `campaign_form_admin_access` (
+                        `id` INT AUTO_INCREMENT PRIMARY KEY,
+                        `form_id` INT NOT NULL,
+                        `admin_user_id` INT NOT NULL,
+                        `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+                        UNIQUE KEY `idx_form_admin` (`form_id`, `admin_user_id`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+                ");
+            }
+        } catch (Exception $tbl_e) {}
+
         $ensured = true;
     } catch (Exception $e) {
         error_log("Failed to ensure admins schema updates: " . $e->getMessage());
@@ -1182,6 +1211,36 @@ function has_template_access($pdo, $admin_username, $template_id) {
         }
         $stmt = $pdo->prepare("SELECT COUNT(*) FROM card_template_admin_access WHERE template_id = ? AND admin_user_id = ?");
         $stmt->execute([$template_id, $admin_id]);
+        return (int)$stmt->fetchColumn() > 0;
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+function has_form_access($pdo, $admin_username, $form_id) {
+    if (is_super_admin()) {
+        return true;
+    }
+    if (!can_access('campaigns')) {
+        return false;
+    }
+    if (!$pdo) {
+        return false;
+    }
+    try {
+        $stmt = $pdo->prepare("SELECT id FROM admins WHERE username = ? AND status = 'active' LIMIT 1");
+        $stmt->execute([$admin_username]);
+        $admin_id = $stmt->fetchColumn();
+        if (!$admin_id) {
+            return false;
+        }
+        
+        // If a form is not in the access restriction list at all, is it restricted by default?
+        // Like card templates: if a template is created, until assigned, regular admins have no access.
+        // Let's check if there is at least one restriction entry. If not, it could be restricted to super admin only.
+        // Let's implement consistent logic: check if mapped in campaign_form_admin_access.
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM campaign_form_admin_access WHERE form_id = ? AND admin_user_id = ?");
+        $stmt->execute([$form_id, $admin_id]);
         return (int)$stmt->fetchColumn() > 0;
     } catch (Exception $e) {
         return false;

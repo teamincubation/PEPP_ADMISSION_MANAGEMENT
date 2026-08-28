@@ -18,6 +18,9 @@ if ($form_id > 0) {
         $form_data = $stmt->fetch();
 
         if ($form_data) {
+            if (!has_form_access($pdo, $admin_username, $form_id)) {
+                die("<div style='padding:2rem; font-family:sans-serif; text-align:center; color:#ef4444;'><h2>Access Denied</h2><p>You do not have permission to access/modify this form.</p></div>");
+            }
             $stmt = $pdo->prepare("SELECT * FROM campaign_form_fields WHERE form_id = ? AND is_deleted = 0 ORDER BY sort_order ASC");
             $stmt->execute([$form_id]);
             $fields_data = $stmt->fetchAll();

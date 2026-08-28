@@ -51,6 +51,52 @@ try {
         exit();
     }
 
+    if ($action === 'save_form_access') {
+        if (!is_super_admin()) {
+            echo json_encode(['success' => false, 'message' => 'Only superadmin can modify access.']);
+            exit();
+        }
+
+        $form_id = (int)($_POST['form_id'] ?? 0);
+        $admin_ids = (array)($_POST['admin_ids'] ?? []);
+
+        if (!$form_id) {
+            echo json_encode(['success' => false, 'message' => 'Invalid form ID.']);
+            exit();
+        }
+
+        $pdo->beginTransaction();
+
+        // Clear existing access records
+        $stmt_del = $pdo->prepare("DELETE FROM campaign_form_admin_access WHERE form_id = ?");
+        $stmt_del->execute([$form_id]);
+
+        // Insert new access records
+        $stmt_ins = $pdo->prepare("INSERT INTO campaign_form_admin_access (form_id, admin_user_id) VALUES (?, ?)");
+
+        $added_names = [];
+        foreach ($admin_ids as $adm_id) {
+            $adm_id = (int)$adm_id;
+            $stmt_ins->execute([$form_id, $adm_id]);
+
+            $stmt_u = $pdo->prepare("SELECT username FROM admins WHERE id = ?");
+            $stmt_u->execute([$adm_id]);
+            $u = $stmt_u->fetchColumn();
+            if ($u) {
+                $added_names[] = $u;
+            }
+        }
+
+        $pdo->commit();
+
+        // Log to Admin Activity Log
+        $added_str = empty($added_names) ? 'None' : implode(', ', $added_names);
+        log_admin_activity($pdo, $admin_username, 'form_access_changed', "Superadmin updated access list for Form ID #{$form_id} to: {$added_str}");
+
+        echo json_encode(['success' => true, 'message' => 'Form access saved successfully.']);
+        exit();
+    }
+
     if ($action === 'save_form') {
         $data = json_decode(file_get_contents('php://input'), true);
         if (!$data) {
@@ -59,6 +105,10 @@ try {
         }
 
         $form_id = (int)($data['id'] ?? 0);
+        if ($form_id > 0 && !has_form_access($pdo, $admin_username, $form_id)) {
+            echo json_encode(['success' => false, 'message' => 'Access denied. You do not have permission to modify this form.']);
+            exit();
+        }
         $title = trim($data['title'] ?? 'Untitled Form');
         $description = trim($data['description'] ?? '');
         $slug = trim($data['slug'] ?? '');
@@ -260,6 +310,11 @@ try {
             exit();
         }
 
+        if (!has_form_access($pdo, $admin_username, $id)) {
+            echo json_encode(['success' => false, 'message' => 'Access denied. You do not have permission to duplicate this form.']);
+            exit();
+        }
+
         // Duplicate metadata
         $title = $form['title'] . ' (Copy)';
         $slug = $form['slug'] . '-copy-' . rand(100, 999);
@@ -333,6 +388,11 @@ try {
             exit();
         }
 
+        if (!has_form_access($pdo, $admin_username, $id)) {
+            echo json_encode(['success' => false, 'message' => 'Access denied. You do not have permission to delete this form.']);
+            exit();
+        }
+
         $stmt_f = $pdo->prepare("SELECT title FROM campaign_forms WHERE id = ?");
         $stmt_f->execute([$id]);
         $f_title = $stmt_f->fetchColumn() ?: "Form #{$id}";
@@ -356,6 +416,11 @@ try {
 
         if ($id <= 0) {
             echo json_encode(['success' => false, 'message' => 'Invalid Form ID']);
+            exit();
+        }
+
+        if (!has_form_access($pdo, $admin_username, $id)) {
+            echo json_encode(['success' => false, 'message' => 'Access denied. You do not have permission to archive this form.']);
             exit();
         }
 
@@ -405,6 +470,12 @@ try {
             if (!$sub) {
                 $skipped_count++;
                 $errors[] = "Submission #{$sub_id} not found.";
+                continue;
+            }
+
+            if (!has_form_access($pdo, $admin_username, $sub['form_id'])) {
+                $skipped_count++;
+                $errors[] = "Submission #{$sub_id}: Access Denied to Form.";
                 continue;
             }
 

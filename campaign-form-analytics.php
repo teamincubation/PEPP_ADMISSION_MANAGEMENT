@@ -15,6 +15,9 @@ $form = $stmt->fetch();
 if (!$form) {
     die("<h3>Form not found</h3>");
 }
+if (!has_form_access($pdo, $admin_username, $form_id)) {
+    die("<div style='padding:2rem; font-family:sans-serif; text-align:center; color:#ef4444;'><h2>Access Denied</h2><p>You do not have permission to view analytics for this form.</p></div>");
+}
 
 $page_title  = htmlspecialchars($form['title']) . ' — Advanced Analytics';
 $page_sub    = 'Visual performance reports, traffic metrics, conversion trends, and choice analysis';

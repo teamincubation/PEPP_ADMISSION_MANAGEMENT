@@ -518,6 +518,14 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 updated_at TEXT,
                 UNIQUE(template_id, admin_user_id)
             );
+            CREATE TABLE IF NOT EXISTS campaign_form_admin_access (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                form_id INTEGER NOT NULL,
+                admin_user_id INTEGER NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT,
+                UNIQUE(form_id, admin_user_id)
+            );
             CREATE TABLE IF NOT EXISTS student_course_migrations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL,
@@ -749,6 +757,17 @@ try {
                 `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
                 UNIQUE KEY `idx_template_admin` (`template_id`, `admin_user_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `campaign_form_admin_access` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `form_id` INT NOT NULL,
+                `admin_user_id` INT NOT NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY `idx_form_admin` (`form_id`, `admin_user_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 

@@ -60,6 +60,21 @@ try {
     $error_msg = "Failed to load forms: " . $e->getMessage();
 }
 
+$admins_with_campaigns = [];
+if (is_super_admin()) {
+    try {
+        $stmt_adms = $pdo->query("SELECT id, username, full_name, role, permissions FROM admins WHERE status = 'active' ORDER BY username ASC");
+        $all_adms = $stmt_adms->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($all_adms as $adm) {
+            if ($adm['role'] === 'super_admin') continue;
+            $perms = array_map('trim', explode(',', $adm['permissions']));
+            if ($adm['permissions'] === 'ALL' || in_array('campaigns', $perms, true)) {
+                $admins_with_campaigns[] = $adm;
+            }
+        }
+    } catch (Exception $e) {}
+}
+
 include 'includes/admin_nav.php';
 ?>
 
@@ -157,22 +172,89 @@ include 'includes/admin_nav.php';
                 $conv = $f['views'] > 0 ? round(($f['submissions'] / $f['views']) * 100, 1) : 0;
                 $status_class = $f['status'] === 'published' ? 'badge green' : ($f['status'] === 'archived' ? 'badge red' : 'badge amber');
                 $public_url = "f.php?s=" . $f['slug'];
+
+                $has_access = has_form_access($pdo, $admin_username, $f['id']);
+                $current_access_ids = [];
+                if (is_super_admin()) {
+                    try {
+                        $stmt_access = $pdo->prepare("SELECT admin_user_id FROM campaign_form_admin_access WHERE form_id = ?");
+                        $stmt_access->execute([$f['id']]);
+                        $current_access_ids = $stmt_access->fetchAll(PDO::FETCH_COLUMN);
+                    } catch (Exception $e) {}
+                }
             ?>
                 <tr style="border-bottom:1px solid var(--border); transition:background 0.2s;" class="table-row">
                     <td style="padding:15px; max-width:240px;">
-                        <div style="font-weight:700; font-size:0.95rem; margin-bottom:2px;"><?php echo htmlspecialchars($f['title']); ?></div>
-                        <div style="font-size:0.75rem; color:var(--text-muted);">
+                        <div style="font-weight:700; font-size:0.95rem; margin-bottom:2px;">
+                            <?php echo htmlspecialchars($f['title']); ?>
+                            <?php if (!$has_access): ?> <i class="fas fa-lock" style="color:#ef4444; font-size:0.8rem; margin-left:4px;" title="Access Restricted"></i><?php endif; ?>
+                        </div>
+                        <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:6px;">
                             Created: <?php echo date('d M Y', strtotime($f['created_at'])); ?> by <?php echo htmlspecialchars($f['created_by']); ?>
                         </div>
+                        <?php if (is_super_admin()): ?>
+                            <!-- Form Access Dropdown -->
+                            <div class="form-access-container" style="position: relative; margin-top: 8px;">
+                                <div class="dropdown" style="position: relative; display: inline-block; width: 100%; max-width: 220px;">
+                                    <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" onclick="toggleAccessDropdown(<?php echo (int)$f['id']; ?>)" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; font-size: 0.75rem; text-align: left; background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; cursor: pointer; color: #1e293b; font-weight: 500;">
+                                        <span><?php echo count($current_access_ids); ?> Admins Selected</span>
+                                        <i class="fas fa-chevron-down" style="font-size: 0.65rem; color: #64748b; margin-left: 6px;"></i>
+                                    </button>
+                                    <div id="access-dropdown-<?php echo (int)$f['id']; ?>" class="dropdown-menu" style="display: none; position: absolute; top: 100%; left: 0; z-index: 1000; min-width: 250px; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); margin-top: 4px; padding: 10px; box-sizing: border-box; text-align: left;">
+                                        <!-- Search Box -->
+                                        <div style="margin-bottom: 8px;">
+                                            <input type="text" placeholder="Search admins..." oninput="filterAdmins(this)" style="width: 100%; padding: 6px 10px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 0.75rem; box-sizing: border-box; outline: none;">
+                                        </div>
+                                        <!-- Select All -->
+                                        <label style="display: flex; align-items: center; gap: 8px; padding: 4px; font-size: 0.75rem; font-weight: 600; color: #1e293b; cursor: pointer; border-bottom: 1px solid #f1f5f9; margin-bottom: 4px;">
+                                            <input type="checkbox" class="select-all-cb" onchange="toggleSelectAll(this)" style="width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer;">
+                                            <span>Select All</span>
+                                        </label>
+                                        <!-- Admins List -->
+                                        <div class="admins-list" style="max-height: 120px; overflow-y: auto; margin-bottom: 8px; display: flex; flex-direction: column; gap: 2px;">
+                                            <?php foreach ($admins_with_campaigns as $adm):
+                                                $checked = in_array($adm['id'], $current_access_ids) ? 'checked' : '';
+                                                $displayName = ($adm['full_name'] ?: $adm['username']) . ' (' . $adm['username'] . ')';
+                                            ?>
+                                                <label class="admin-item" style="display: flex; align-items: center; gap: 8px; padding: 4px; font-size: 0.75rem; color: #334155; cursor: pointer; user-select: none; border-radius: 4px;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
+                                                    <input type="checkbox" name="admin_ids[]" value="<?php echo (int)$adm['id']; ?>" <?php echo $checked; ?> onchange="updateSelectedCount(this)" style="width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer;">
+                                                    <span><?php echo htmlspecialchars($displayName); ?></span>
+                                                </label>
+                                            <?php endforeach; ?>
+                                            <?php if (empty($admins_with_campaigns)): ?>
+                                                <div style="padding: 4px; font-size: 0.75rem; color: #94a3b8; font-style: italic;">No campaign-enabled admins</div>
+                                            <?php endif; ?>
+                                        </div>
+                                        <!-- Footer -->
+                                        <div style="border-top: 1px solid #f1f5f9; padding-top: 8px; display: flex; justify-content: space-between; align-items: center;">
+                                            <span class="selected-count" style="font-size: 0.7rem; color: #64748b; font-weight: 500;">0 selected</span>
+                                            <div style="display: flex; gap: 6px;">
+                                                <button type="button" onclick="closeAccessDropdown(<?php echo (int)$f['id']; ?>)" style="padding: 4px 8px; font-size: 0.7rem; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; cursor: pointer; color: #475569;">Cancel</button>
+                                                <button type="button" onclick="saveFormAccessAjax(<?php echo (int)$f['id']; ?>)" style="padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; background: var(--accent); color: #fff; border: none; cursor: pointer; font-weight: 600;">Save</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php elseif (!$has_access): ?>
+                            <div style="color:#ef4444; font-size:0.72rem; font-weight:700; margin-top:4px; display:flex; align-items:center; gap:4px;">
+                                <i class="fas fa-lock"></i>
+                                <span>Access Restricted</span>
+                            </div>
+                        <?php endif; ?>
                     </td>
                     <td style="padding:15px;">
                         <div style="display:flex; align-items:center; gap:8px;">
-                            <a href="<?php echo $public_url; ?>" target="_blank" style="font-family:monospace; font-size:0.85rem; color:var(--accent); text-decoration:none;">
-                                /<?php echo htmlspecialchars($f['slug']); ?>
-                            </a>
-                            <button class="btn btn-sm btn-soft-blue" title="Copy clean link" onclick="copyLink('<?php echo $_SERVER['HTTP_HOST'] . '/admissions/' . $public_url; ?>', this)">
-                                <i class="fas fa-copy"></i>
-                            </button>
+                            <?php if ($has_access): ?>
+                                <a href="<?php echo $public_url; ?>" target="_blank" style="font-family:monospace; font-size:0.85rem; color:var(--accent); text-decoration:none;">
+                                    /<?php echo htmlspecialchars($f['slug']); ?>
+                                </a>
+                                <button class="btn btn-sm btn-soft-blue" title="Copy clean link" onclick="copyLink('<?php echo $_SERVER['HTTP_HOST'] . '/admissions/' . $public_url; ?>', this)">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            <?php else: ?>
+                                <span style="font-family:monospace; font-size:0.85rem; color:var(--text-muted);">/<?php echo htmlspecialchars($f['slug']); ?></span>
+                            <?php endif; ?>
                         </div>
                     </td>
                     <td style="padding:15px; text-align:center; font-weight:600;"><?php echo number_format($f['views']); ?></td>
@@ -183,27 +265,31 @@ include 'includes/admin_nav.php';
                     </td>
                     <td style="padding:15px; text-align:right;">
                         <div style="display:flex; justify-content:flex-end; gap:6px;">
-                            <a href="campaign-form-builder.php?id=<?php echo $f['id']; ?>" class="btn btn-sm btn-soft-violet" title="Edit Form"><i class="fas fa-edit"></i></a>
-                            <a href="campaign-form-responses.php?id=<?php echo $f['id']; ?>" class="btn btn-sm btn-soft-green" title="View Responses"><i class="fas fa-list"></i></a>
-                            <a href="campaign-form-analytics.php?id=<?php echo $f['id']; ?>" class="btn btn-sm btn-soft-blue" title="View Analytics"><i class="fas fa-chart-pie"></i></a>
-                            
-                            <button class="btn btn-sm btn-soft-amber" title="Duplicate Form" onclick="duplicateForm(<?php echo $f['id']; ?>)">
-                                <i class="fas fa-clone"></i>
-                            </button>
-                            
-                            <?php if ($f['status'] !== 'archived'): ?>
-                                <button class="btn btn-sm btn-soft-red" title="Archive Form" onclick="archiveForm(<?php echo $f['id']; ?>, 1)">
-                                    <i class="fas fa-archive"></i>
+                            <?php if ($has_access): ?>
+                                <a href="campaign-form-builder.php?id=<?php echo $f['id']; ?>" class="btn btn-sm btn-soft-violet" title="Edit Form"><i class="fas fa-edit"></i></a>
+                                <a href="campaign-form-responses.php?id=<?php echo $f['id']; ?>" class="btn btn-sm btn-soft-green" title="View Responses"><i class="fas fa-list"></i></a>
+                                <a href="campaign-form-analytics.php?id=<?php echo $f['id']; ?>" class="btn btn-sm btn-soft-blue" title="View Analytics"><i class="fas fa-chart-pie"></i></a>
+                                
+                                <button class="btn btn-sm btn-soft-amber" title="Duplicate Form" onclick="duplicateForm(<?php echo $f['id']; ?>)">
+                                    <i class="fas fa-clone"></i>
+                                </button>
+                                
+                                <?php if ($f['status'] !== 'archived'): ?>
+                                    <button class="btn btn-sm btn-soft-red" title="Archive Form" onclick="archiveForm(<?php echo $f['id']; ?>, 1)">
+                                        <i class="fas fa-archive"></i>
+                                    </button>
+                                <?php else: ?>
+                                    <button class="btn btn-sm btn-soft-green" title="Restore Draft" onclick="archiveForm(<?php echo $f['id']; ?>, 0)">
+                                        <i class="fas fa-box-open"></i>
+                                    </button>
+                                <?php endif; ?>
+
+                                <button class="btn btn-sm btn-soft-red" title="Delete Form" onclick="deleteForm(<?php echo $f['id']; ?>)">
+                                    <i class="fas fa-trash-can"></i>
                                 </button>
                             <?php else: ?>
-                                <button class="btn btn-sm btn-soft-green" title="Restore Draft" onclick="archiveForm(<?php echo $f['id']; ?>, 0)">
-                                    <i class="fas fa-box-open"></i>
-                                </button>
+                                <button type="button" class="btn btn-sm btn-secondary" onclick="alert('Access denied. You do not currently have permission to use this form. Please ask the Superadmin to grant you access.')" style="opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-lock"></i> Locked</button>
                             <?php endif; ?>
-
-                            <button class="btn btn-sm btn-soft-red" title="Delete Form" onclick="deleteForm(<?php echo $f['id']; ?>)">
-                                <i class="fas fa-trash-can"></i>
-                            </button>
                         </div>
                     </td>
                 </tr>
@@ -301,6 +387,123 @@ include 'includes/admin_nav.php';
             }
         })
         .catch(err => alert('Error: ' + err));
+    }
+
+    // Access Dropdown Functions
+    function filterAdmins(input) {
+        const query = input.value.toLowerCase().trim();
+        const dropdown = input.closest('.dropdown-menu');
+        const items = dropdown.querySelectorAll('.admin-item');
+        items.forEach(item => {
+            const text = item.textContent.toLowerCase();
+            if (text.includes(query)) {
+                item.style.display = 'flex';
+            } else {
+                item.style.display = 'none';
+            }
+        });
+    }
+
+    function toggleSelectAll(selectAllCb) {
+        const dropdown = selectAllCb.closest('.dropdown-menu');
+        const checkboxes = dropdown.querySelectorAll('.admins-list input[type="checkbox"]');
+        checkboxes.forEach(cb => {
+            if (cb.closest('.admin-item').style.display !== 'none') {
+                cb.checked = selectAllCb.checked;
+            }
+        });
+        updateDropdownSelectedCount(dropdown);
+    }
+
+    function updateSelectedCount(cb) {
+        const dropdown = cb.closest('.dropdown-menu');
+        updateDropdownSelectedCount(dropdown);
+    }
+
+    function updateDropdownSelectedCount(dropdown) {
+        const checkedCount = dropdown.querySelectorAll('.admins-list input[type="checkbox"]:checked').length;
+        const totalCount = dropdown.querySelectorAll('.admins-list input[type="checkbox"]').length;
+        const countSpan = dropdown.querySelector('.selected-count');
+        if (countSpan) {
+            countSpan.textContent = checkedCount + ' selected';
+        }
+        const selectAllCb = dropdown.querySelector('.select-all-cb');
+        if (selectAllCb) {
+            selectAllCb.checked = (checkedCount === totalCount && totalCount > 0);
+        }
+    }
+
+    function toggleAccessDropdown(formId) {
+        const el = document.getElementById('access-dropdown-' + formId);
+        if (el) {
+            if (el.style.display === 'none') {
+                document.querySelectorAll('.dropdown-menu').forEach(menu => {
+                    if (menu.id !== 'access-dropdown-' + formId) {
+                        menu.style.display = 'none';
+                    }
+                });
+                el.style.display = 'block';
+                updateDropdownSelectedCount(el);
+            } else {
+                el.style.display = 'none';
+            }
+        }
+    }
+
+    function closeAccessDropdown(formId) {
+        const el = document.getElementById('access-dropdown-' + formId);
+        if (el) {
+            el.style.display = 'none';
+        }
+    }
+
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.dropdown')) {
+            document.querySelectorAll('[id^="access-dropdown-"]').forEach(menu => {
+                menu.style.display = 'none';
+            });
+        }
+    });
+
+    function saveFormAccessAjax(formId) {
+        const dropdown = document.getElementById('access-dropdown-' + formId);
+        if (!dropdown) return;
+
+        const checkboxes = dropdown.querySelectorAll('.admins-list input[type="checkbox"]:checked');
+        const adminIds = Array.from(checkboxes).map(cb => cb.value);
+
+        const formData = new FormData();
+        formData.append('action', 'save_form_access');
+        formData.append('form_id', formId);
+        formData.append('csrf_token', '<?php echo csrf_token(); ?>');
+        adminIds.forEach(id => {
+            formData.append('admin_ids[]', id);
+        });
+
+        fetch('api/campaign-forms.php', {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                const btnSpan = dropdown.closest('.dropdown').querySelector('.dropdown-toggle span');
+                if (btnSpan) {
+                    btnSpan.textContent = adminIds.length + ' Admins Selected';
+                }
+                closeAccessDropdown(formId);
+                alert('Access updated successfully!');
+            } else {
+                alert(data.message || 'Failed to update access.');
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Network error while saving form access.');
+        });
     }
 </script>
 
