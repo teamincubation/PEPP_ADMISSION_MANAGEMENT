@@ -149,7 +149,7 @@ include 'includes/admin_nav.php';
 </div>
 
 <!-- ── FORMS LISTING ── -->
-<div class="card" style="padding:0; overflow:hidden;">
+<div class="card" style="padding:0; overflow:visible;">
     <table class="data-table" style="width:100%; border-collapse:collapse;">
         <thead>
             <tr style="border-bottom:1px solid var(--border); text-align:left;">
