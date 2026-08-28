@@ -1250,7 +1250,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                                                             <?php endif; ?>
                                                         </div>
                                                         <div style="font-size:0.75rem; color:var(--text-muted);">
-                                                            <?php echo p_esc($it['subject']); ?> · <?php echo p_esc($it['chapter']); ?>
+                                                            <?php echo p_esc(!empty($it['topic']) ? $it['topic'] : ($it['subject'] ?? '')); ?> · <?php echo p_esc($it['chapter']); ?>
                                                             <?php if ($it['faculty']): ?> · Fac: <?php echo p_esc($it['faculty']); ?><?php endif; ?>
                                                         </div>
                                                         <small class="comp-time-lbl" style="display: <?php echo $is_completed ? 'block' : 'none'; ?>; font-size:0.65rem; color:#22c55e; margin-top:2px;">

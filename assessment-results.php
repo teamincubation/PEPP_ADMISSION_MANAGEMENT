@@ -190,7 +190,7 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             $all_test_types = array_unique(array_merge($test_types, $custom_types));
             $placeholders = implode(',', array_fill(0, count($all_test_types), '?'));
             $stmt = $pdo->prepare("
-                SELECT id, activity_title, activity_type, activity_date, chapter, subject, topic, day_number
+                SELECT id, activity_title, activity_type, activity_date, chapter, topic, day_number
                 FROM study_plan_activities WHERE study_plan_id = ? AND activity_type IN ($placeholders) AND is_deleted = 0
                 ORDER BY activity_date ASC, sort_order ASC, day_number ASC
             ");
@@ -1404,6 +1404,7 @@ function arSelectPlan(planId) {
                 d.onclick = () => arSelectTest(t);
                 let meta = '<span><i class="fas fa-tag"></i> '+escH(t.activity_type)+'</span>';
                 if (t.chapter) meta += '<span><i class="fas fa-book"></i> Chapter: '+escH(t.chapter)+'</span>';
+                if (t.topic) meta += '<span><i class="fas fa-bookmark"></i> Topic: '+escH(t.topic)+'</span>';
                 if (t.activity_date) meta += '<span><i class="fas fa-calendar"></i> Activity Date: '+formatDate(t.activity_date)+'</span>';
                 let badge = t.has_published_result
                     ? '<span class="ar-test-badge published"><i class="fas fa-check-circle"></i> Result Published (v'+t.published_version+')</span>'

@@ -576,7 +576,7 @@ if ($is_logged_in && $selected_plan_id > 0) {
                                                 <div style="flex:1;">
                                                     <div style="font-size:0.85rem; font-weight:700; color:var(--text-main);"><?php echo p_esc($it['activity_title']); ?></div>
                                                     <div style="font-size:0.75rem; color:var(--text-muted);">
-                                                        <?php echo p_esc($it['subject']); ?> · <?php echo p_esc($it['chapter']); ?>
+                                                        <?php echo p_esc(!empty($it['topic']) ? $it['topic'] : ($it['subject'] ?? '')); ?> · <?php echo p_esc($it['chapter']); ?>
                                                         <?php if ($it['faculty']): ?> · Fac: <?php echo p_esc($it['faculty']); ?><?php endif; ?>
                                                     </div>
                                                 </div>

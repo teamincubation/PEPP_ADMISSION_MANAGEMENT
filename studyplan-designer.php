@@ -884,31 +884,14 @@ include 'includes/admin_nav.php';
                     </datalist>
                 </div>
                 <div class="field">
-                    <label>Subject</label>
-                    <input type="text" id="act-subject" placeholder="e.g. Psychology">
-                </div>
-            </div>
-
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                <div class="field">
                     <label>Topic</label>
-                    <input type="text" id="act-topic" placeholder="e.g. Memory Models">
-                </div>
-                <div class="field">
-                    <label>Subtopic</label>
-                    <input type="text" id="act-subtopic" placeholder="e.g. Atkinson-Shiffrin">
+                    <input type="text" id="act-topic" placeholder="e.g. Memory Models / Psychology">
                 </div>
             </div>
 
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                <div class="field">
-                    <label>Faculty</label>
-                    <input type="text" id="act-faculty" placeholder="e.g. Dr. Anand">
-                </div>
-                <div class="field">
-                    <label>Mentor</label>
-                    <input type="text" id="act-mentor" placeholder="e.g. Prof. Priya">
-                </div>
+            <div class="field">
+                <label>Faculty</label>
+                <input type="text" id="act-faculty" placeholder="e.g. Dr. Anand">
             </div>
 
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
@@ -1347,7 +1330,7 @@ include 'includes/admin_nav.php';
                                     '<i class="fas ' + typeConf.icon + '" style="color:' + typeConf.color + '; font-size:1.1rem; width:20px;"></i>' +
                                     '<div>' +
                                         '<div style="font-size:0.85rem; font-weight:700; color:var(--text-main);">' + (act.activity_title || 'Self Study') + '</div>' +
-                                        '<div style="font-size:0.75rem; color:var(--text-muted);">' + (act.subject || 'Academics') + ' · ' + (act.chapter || 'Intro') + '</div>' +
+                                        '<div style="font-size:0.75rem; color:var(--text-muted);">' + (act.topic || act.subject || 'Academics') + ' · ' + (act.chapter || 'Intro') + '</div>' +
                                     '</div>' +
                                  '</div>' +
                                  '<div style="display:flex; gap:6px;">' +
@@ -1390,11 +1373,8 @@ include 'includes/admin_nav.php';
 
         document.getElementById('act-title').value = 'Read Study Material';
         document.getElementById('act-chapter').value = '';
-        document.getElementById('act-subject').value = '';
         document.getElementById('act-topic').value = '';
-        document.getElementById('act-subtopic').value = '';
         document.getElementById('act-faculty').value = '';
-        document.getElementById('act-mentor').value = '';
         document.getElementById('act-duration').value = '60';
         document.getElementById('act-difficulty').value = 'medium';
         document.getElementById('act-resources').value = '';
@@ -1407,14 +1387,11 @@ include 'includes/admin_nav.php';
         document.getElementById('act-edit-index').value = index;
         document.getElementById('act-edit-date').value = act.activity_date;
 
-        document.getElementById('act-title').value = act.activity_title;
-        document.getElementById('act-type').value = act.activity_type;
+        document.getElementById('act-title').value = act.activity_title || '';
+        document.getElementById('act-type').value = act.activity_type || 'Read Material';
         document.getElementById('act-chapter').value = act.chapter || '';
-        document.getElementById('act-subject').value = act.subject || '';
-        document.getElementById('act-topic').value = act.topic || '';
-        document.getElementById('act-subtopic').value = act.subtopic || '';
+        document.getElementById('act-topic').value = act.topic || act.subject || '';
         document.getElementById('act-faculty').value = act.faculty || '';
-        document.getElementById('act-mentor').value = act.mentor || '';
         document.getElementById('act-duration').value = act.estimated_duration || '60';
         document.getElementById('act-difficulty').value = act.difficulty_level || 'medium';
         document.getElementById('act-resources').value = act.resource_links || '';
@@ -1433,11 +1410,8 @@ include 'includes/admin_nav.php';
             activity_title: document.getElementById('act-title').value,
             activity_type: document.getElementById('act-type').value,
             chapter: document.getElementById('act-chapter').value,
-            subject: document.getElementById('act-subject').value,
             topic: document.getElementById('act-topic').value,
-            subtopic: document.getElementById('act-subtopic').value,
             faculty: document.getElementById('act-faculty').value,
-            mentor: document.getElementById('act-mentor').value,
             estimated_duration: parseInt(document.getElementById('act-duration').value) || 60,
             difficulty_level: document.getElementById('act-difficulty').value,
             resource_links: document.getElementById('act-resources').value,
@@ -1718,7 +1692,7 @@ include 'includes/admin_nav.php';
                                     '</div>' +
                                     '<div>' +
                                         '<div style="font-size:0.8rem; font-weight:700; color:var(--text-main);">' + it.activity_title + '</div>' +
-                                        '<div style="font-size:0.7rem; color:var(--text-muted);">' + (it.subject || 'General') + ' · ' + (it.chapter || 'Academics') + '</div>' +
+                                        '<div style="font-size:0.7rem; color:var(--text-muted);">' + (it.topic || it.subject || 'General') + ' · ' + (it.chapter || 'Academics') + '</div>' +
                                     '</div>' +
                                 '</div>' +
                                 '<span style="margin-left:auto; background:var(--accent-soft); border-radius:4px; font-size:0.65rem; font-weight:700; padding:2px 6px; color:var(--accent); flex-shrink:0;">' + (it.estimated_duration || 60) + 'm</span>' +

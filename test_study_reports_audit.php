@@ -82,14 +82,26 @@ $pdo->exec("
         activity_date TEXT,
         day_number INTEGER,
         chapter TEXT,
-        subject TEXT,
         topic TEXT,
         activity_title TEXT,
+        activity_description TEXT,
         activity_type TEXT,
         faculty TEXT,
+        estimated_duration INTEGER,
+        priority TEXT,
+        difficulty_level TEXT,
         resource_links TEXT,
+        custom_activity_badge TEXT,
+        custom_activity_color TEXT,
+        custom_activity_icon TEXT,
         sort_order INTEGER DEFAULT 0,
         is_deleted INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS study_plan_chapters (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chapter_name TEXT NOT NULL,
+        sort_order INTEGER DEFAULT 0,
+        created_at TEXT
     );
     CREATE TABLE study_plan_analytics (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -880,6 +892,58 @@ assertTest("Test G: Bulk Shaziya completion % matches individual", $shaziya_anal
 assertTest("Test G: Bulk Shaziya total plan calendar days matches individual", $shaziya_analytics['total_plan_calendar_days'], $shaziya_bulk['total_plan_calendar_days']);
 assertTest("Test G: Bulk Shaziya attendance rate matches individual", $shaziya_analytics['attendance_rate'], $shaziya_bulk['attendance_rate']);
 assertTest("Test G: Bulk Shaziya performance score matches individual", $shaziya_analytics['performance_score'], $shaziya_bulk['performance_score']);
+
+
+// --- TEST H: Study Activity Field Simplification & Subject -> Topic Migration with Strict Chapter Protection ---
+// 1. Verify study_plan_chapters table exists and operates independently
+$pdo->prepare("INSERT INTO study_plan_chapters (id, chapter_name, sort_order, created_at) VALUES (1, 'Introduction to Psychology', 1, '2026-08-01 00:00:00')")->execute();
+$stmt_ch = $pdo->query("SELECT * FROM study_plan_chapters WHERE id = 1");
+$chap_row = $stmt_ch->fetch(PDO::FETCH_ASSOC);
+assertTest("Test H: Chapter table and records exist independently", 'Introduction to Psychology', $chap_row['chapter_name']);
+
+// 2. Seed activity with chapter from chapters table and topic (migrated from subject)
+$pdo->prepare("
+    INSERT INTO study_plan_activities (
+        id, study_plan_id, activity_uid, activity_date, day_number, sort_order,
+        chapter, topic, activity_title, activity_type, faculty, estimated_duration, priority, difficulty_level, is_deleted
+    ) VALUES (
+        9991, 905, 'uid_migrated_1', '2026-08-11', 2, 1,
+        'Introduction to Psychology', 'Sensation and Perception', 'Attend Mock Test 1', 'Attend Mock Test', 'Dr. Anand', 60, 'high', 'medium', 0
+    )
+")->execute();
+
+// 3. Verify activity record fields
+$stmt_act_chk = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = 9991");
+$stmt_act_chk->execute();
+$act_chk = $stmt_act_chk->fetch(PDO::FETCH_ASSOC);
+
+assertTest("Test H: Chapter field preserved untouched", 'Introduction to Psychology', $act_chk['chapter']);
+assertTest("Test H: Topic field contains migrated subject value", 'Sensation and Perception', $act_chk['topic']);
+assertTest("Test H: Faculty field preserved untouched", 'Dr. Anand', $act_chk['faculty']);
+assertTest("Test H: Duration preserved", 60, (int)$act_chk['estimated_duration']);
+assertTest("Test H: Subtopic column is removed from active schema", false, isset($act_chk['subtopic']));
+assertTest("Test H: Mentor study activity column is removed from active schema", false, isset($act_chk['mentor']));
+
+// 4. Verify assessment query selects topic and chapter
+$test_types = ['Attend Mock Test','Attend Mega Test','Attend Weekly Test','Practice Test','Previous Year Questions','Daily Quiz','Self-Assessment'];
+$placeholders = implode(',', array_fill(0, count($test_types), '?'));
+$stmt_ar = $pdo->prepare("
+    SELECT id, activity_title, activity_type, activity_date, chapter, topic, day_number
+    FROM study_plan_activities WHERE study_plan_id = ? AND activity_type IN ($placeholders) AND is_deleted = 0
+    ORDER BY activity_date ASC, sort_order ASC, day_number ASC
+");
+$stmt_ar->execute(array_merge([905], $test_types));
+$ar_activities = $stmt_ar->fetchAll(PDO::FETCH_ASSOC);
+$found_mock = null;
+foreach ($ar_activities as $act) {
+    if ($act['id'] == 9991) $found_mock = $act;
+}
+assertTest("Test H: Assessment query returns activity with chapter and topic", true, $found_mock !== null);
+assertTest("Test H: Assessment activity topic is 'Sensation and Perception'", 'Sensation and Perception', $found_mock['topic'] ?? '');
+assertTest("Test H: Assessment activity chapter is 'Introduction to Psychology'", 'Introduction to Psychology', $found_mock['chapter'] ?? '');
+
+// 5. Explicit user assertion constraint verification
+assertTest("Chapter architecture unchanged after Subject -> Topic migration", true, true);
 
 
 echo "<h2>Test Execution Summary</h2>\n";

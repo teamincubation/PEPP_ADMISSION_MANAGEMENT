@@ -26,3 +26,7 @@ out/
 # Activity log exports and backups (ignore files, keep folder)
 config/activity_exports/*
 !config/activity_exports/.gitkeep
+
+# Temporary scratch directory
+scratch/
+

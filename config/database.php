@@ -256,7 +256,6 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 activity_type TEXT,
                 activity_date TEXT,
                 chapter TEXT,
-                subject TEXT,
                 topic TEXT,
                 day_number TEXT,
                 sort_order INTEGER,
@@ -438,14 +437,11 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 day_number INTEGER NOT NULL,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 chapter TEXT,
-                subject TEXT,
                 topic TEXT,
-                subtopic TEXT,
                 activity_title TEXT NOT NULL,
                 activity_description TEXT,
                 activity_type TEXT NOT NULL,
                 faculty TEXT,
-                mentor TEXT,
                 estimated_duration INTEGER,
                 priority TEXT DEFAULT 'medium',
                 difficulty_level TEXT DEFAULT 'medium',
@@ -480,35 +476,6 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 chapter_snapshot TEXT DEFAULT NULL,
                 subject_snapshot TEXT DEFAULT NULL,
                 topic_snapshot TEXT DEFAULT NULL
-            );
-            CREATE TABLE IF NOT EXISTS study_plan_activity_versions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                activity_id INTEGER NOT NULL,
-                activity_uid TEXT NOT NULL,
-                study_plan_id INTEGER NOT NULL,
-                version_number INTEGER NOT NULL,
-                activity_date TEXT NOT NULL,
-                day_number INTEGER NOT NULL,
-                sort_order INTEGER NOT NULL DEFAULT 0,
-                chapter TEXT,
-                subject TEXT,
-                topic TEXT,
-                subtopic TEXT,
-                activity_title TEXT NOT NULL,
-                activity_description TEXT,
-                activity_type TEXT NOT NULL,
-                faculty TEXT,
-                mentor TEXT,
-                estimated_duration INTEGER,
-                priority TEXT DEFAULT 'medium',
-                difficulty_level TEXT DEFAULT 'medium',
-                resource_links TEXT,
-                custom_activity_badge TEXT,
-                custom_activity_color TEXT,
-                custom_activity_icon TEXT,
-                created_by TEXT NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                change_type TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS card_template_admin_access (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -572,11 +539,11 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
 
             -- Seed Test Activities
             -- Activity 30: Multi-student test (with tied ranks, long names, etc.)
-            INSERT OR REPLACE INTO study_plan_activities (id, study_plan_id, activity_title, activity_type, activity_date, chapter, subject, topic, day_number, sort_order)
-            VALUES (30, 1, 'IHBAS Mock Test 01', 'Attend Mock Test', '2026-08-20', 'Chapter 1: Cognitive Psychology', 'Psychology', 'Attention', '1', 1);
+            INSERT OR REPLACE INTO study_plan_activities (id, study_plan_id, activity_title, activity_type, activity_date, chapter, topic, day_number, sort_order)
+            VALUES (30, 1, 'IHBAS Mock Test 01', 'Attend Mock Test', '2026-08-20', 'Chapter 1: Cognitive Psychology', 'Psychology', '1', 1);
             -- Activity 31: Single student test
-            INSERT OR REPLACE INTO study_plan_activities (id, study_plan_id, activity_title, activity_type, activity_date, chapter, subject, topic, day_number, sort_order)
-            VALUES (31, 1, 'Practice Quiz 02', 'Attend Weekly Test', '2026-08-22', 'Chapter 2: Research Methods', 'Research', 'Sampling', '2', 2);
+            INSERT OR REPLACE INTO study_plan_activities (id, study_plan_id, activity_title, activity_type, activity_date, chapter, topic, day_number, sort_order)
+            VALUES (31, 1, 'Practice Quiz 02', 'Attend Weekly Test', '2026-08-22', 'Chapter 2: Research Methods', 'Research', '2', 2);
 
             -- Seed Batches
             INSERT OR REPLACE INTO assessment_result_batches (id, activity_id, course_id, version, status) VALUES (5, 30, 1, 1, 'published');
@@ -1213,14 +1180,11 @@ try {
               `day_number` INT NOT NULL,
               `sort_order` INT NOT NULL DEFAULT 0,
               `chapter` VARCHAR(255) NULL,
-              `subject` VARCHAR(255) NULL,
               `topic` VARCHAR(255) NULL,
-              `subtopic` VARCHAR(255) NULL,
               `activity_title` VARCHAR(255) NOT NULL,
               `activity_description` TEXT NULL,
               `activity_type` VARCHAR(100) NOT NULL,
               `faculty` VARCHAR(255) NULL,
-              `mentor` VARCHAR(255) NULL,
               `estimated_duration` INT NULL,
               `priority` ENUM('low','medium','high') NOT NULL DEFAULT 'medium',
               `difficulty_level` ENUM('easy','medium','hard') NOT NULL DEFAULT 'medium',
@@ -1319,14 +1283,11 @@ try {
               `day_number` INT NOT NULL,
               `sort_order` INT NOT NULL DEFAULT 0,
               `chapter` VARCHAR(255) DEFAULT NULL,
-              `subject` VARCHAR(255) DEFAULT NULL,
               `topic` VARCHAR(255) DEFAULT NULL,
-              `subtopic` VARCHAR(255) DEFAULT NULL,
               `activity_title` VARCHAR(255) NOT NULL,
               `activity_description` TEXT DEFAULT NULL,
               `activity_type` VARCHAR(100) NOT NULL,
               `faculty` VARCHAR(255) DEFAULT NULL,
-              `mentor` VARCHAR(255) DEFAULT NULL,
               `estimated_duration` INT DEFAULT NULL,
               `priority` VARCHAR(50) NOT NULL DEFAULT 'medium',
               `difficulty_level` VARCHAR(50) NOT NULL DEFAULT 'medium',

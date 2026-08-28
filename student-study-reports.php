@@ -528,7 +528,7 @@ if (isset($_GET['action'])) {
                 SELECT an.*,
                        act.id as act_table_id, act.activity_title as act_title, act.activity_type as act_type,
                        act.activity_date as act_date, act.day_number as act_day, act.chapter as act_chap,
-                       act.subject as act_subj, act.topic as act_topic, act.faculty as act_fac,
+                       act.topic as act_topic, act.faculty as act_fac,
                        act.resource_links as act_resource, act.is_deleted as act_deleted
                 FROM study_plan_analytics an
                 LEFT JOIN study_plan_activities act ON (
@@ -572,7 +572,7 @@ if (isset($_GET['action'])) {
             }
 
             $timeline = [];
-            $subject_stats = [];
+            $topic_stats = [];
             $chapter_stats = [];
             $faculty_stats = [];
 
@@ -620,14 +620,16 @@ if (isset($_GET['action'])) {
                     $day_num = $date_to_day_map[$a['activity_date']] ?? 1;
                 }
 
+                $act_topic_val = $a['topic'] ?? ($a['subject'] ?? '');
+
                 $timeline[] = [
                     'day' => $day_num,
                     'date' => $a['activity_date'] ? strtoupper(date('d M Y (D)', strtotime($a['activity_date']))) : 'TBD',
                     'start_time' => $a['start_time'] ? date('h:i A', strtotime($a['start_time'])) : '',
                     'end_time' => $a['end_time'] ? date('h:i A', strtotime($a['end_time'])) : '',
                     'chapter' => r_esc($a['chapter']),
-                    'subject' => r_esc($a['subject']),
-                    'topic' => r_esc($a['topic']),
+                    'topic' => r_esc($act_topic_val),
+                    'subject' => r_esc($act_topic_val),
                     'title' => r_esc($a['activity_title']),
                     'type' => r_esc($a['activity_type'] ?: 'Reading'),
                     'faculty' => r_esc($a['faculty'] ?: 'N/A'),
@@ -651,11 +653,11 @@ if (isset($_GET['action'])) {
                     'classification' => 'CURRENT_ACTIVITY'
                 ];
 
-                // Accumulate stats for subject/chapter/faculty completion graphs
-                $subj = $a['subject'] ?: 'Unspecified';
-                if (!isset($subject_stats[$subj])) $subject_stats[$subj] = ['total' => 0, 'comp' => 0];
-                $subject_stats[$subj]['total']++;
-                if ($is_completed_now) $subject_stats[$subj]['comp']++;
+                // Accumulate stats for topic/chapter/faculty completion graphs
+                $top = $act_topic_val ?: 'Unspecified';
+                if (!isset($topic_stats[$top])) $topic_stats[$top] = ['total' => 0, 'comp' => 0];
+                $topic_stats[$top]['total']++;
+                if ($is_completed_now) $topic_stats[$top]['comp']++;
 
                 $chap = $a['chapter'] ?: 'General';
                 if (!isset($chapter_stats[$chap])) $chapter_stats[$chap] = ['total' => 0, 'comp' => 0];
@@ -699,7 +701,6 @@ if (isset($_GET['action'])) {
 
                 $title = '';
                 $chapter = '';
-                $subject = '';
                 $topic = '';
                 $type = 'Reading';
                 $faculty = 'N/A';
@@ -711,8 +712,7 @@ if (isset($_GET['action'])) {
                     $classification = 'ARCHIVED_ACTIVITY';
                     $title = '[Archived] ' . ($log['act_title'] ?: 'Archived Activity');
                     $chapter = $log['act_chap'] ?: 'Archived';
-                    $subject = $log['act_subj'] ?: 'Archived';
-                    $topic = $log['act_topic'] ?: 'Archived';
+                    $topic = $log['act_topic'] ?: ($log['act_subj'] ?? 'Archived');
                     $type = $log['act_type'] ?: 'Reading';
                     $faculty = $log['act_fac'] ?: 'N/A';
                     $resource = $log['act_resource'] ?: 'Standard Materials';
@@ -722,8 +722,7 @@ if (isset($_GET['action'])) {
                     if (!empty($log['activity_title_snapshot'])) {
                         $title = '[Archived] ' . $log['activity_title_snapshot'];
                         $chapter = $log['chapter_snapshot'] ?: 'Archived';
-                        $subject = $log['subject_snapshot'] ?: 'Archived';
-                        $topic = $log['topic_snapshot'] ?: 'Archived';
+                        $topic = $log['topic_snapshot'] ?: ($log['subject_snapshot'] ?? 'Archived');
                         $type = $log['activity_type_snapshot'] ?: 'Reading';
                         $faculty = 'N/A';
                         $resource = 'Standard Materials';
@@ -731,7 +730,6 @@ if (isset($_GET['action'])) {
                         // Details completely missing (legacy records)
                         $title = 'Previously Completed — Activity No Longer Available';
                         $chapter = 'This activity was part of an earlier version of your study plan. The original activity is no longer available, but your completion history has been preserved.';
-                        $subject = 'Original activity details unavailable — historical completion preserved.';
                         $topic = 'Original activity details unavailable — historical completion preserved.';
                         $type = 'Archived';
                         $faculty = 'Original activity details unavailable — historical completion preserved.';
@@ -747,8 +745,8 @@ if (isset($_GET['action'])) {
                     'start_time' => '',
                     'end_time' => '',
                     'chapter' => r_esc($chapter),
-                    'subject' => r_esc($subject),
                     'topic' => r_esc($topic),
+                    'subject' => r_esc($topic),
                     'title' => r_esc($title),
                     'type' => r_esc($type),
                     'faculty' => r_esc($faculty),
@@ -776,7 +774,8 @@ if (isset($_GET['action'])) {
 
             echo json_encode([
                 'timeline' => $timeline,
-                'subjects' => $subject_stats,
+                'topics' => $topic_stats,
+                'subjects' => $topic_stats,
                 'chapters' => $chapter_stats,
                 'faculties' => $faculty_stats,
                 'analytics' => $plan_analytics
@@ -931,7 +930,7 @@ if (isset($_GET['action'])) {
             if (!empty($pids)) {
                 $in_clause = implode(',', array_fill(0, count($pids), '?'));
                 $stmt = $pdo->prepare("
-                    SELECT a.id, a.day_number, a.activity_date, a.chapter, a.subject, a.topic, a.activity_title as title, a.faculty, sp.title as plan_title, sp.is_deleted as plan_deleted
+                    SELECT a.id, a.day_number, a.activity_date, a.chapter, a.topic, a.activity_title as title, a.faculty, sp.title as plan_title, sp.is_deleted as plan_deleted
                     FROM study_plan_activities a
                     JOIN study_plans sp ON a.study_plan_id = sp.id
                     WHERE a.study_plan_id IN ($in_clause)
@@ -957,8 +956,8 @@ if (isset($_GET['action'])) {
                         'day' => $t['day_number'],
                         'date' => $t['activity_date'] ? date('d M Y', strtotime($t['activity_date'])) : 'TBD',
                         'chapter' => r_esc($t['chapter']),
-                        'subject' => r_esc($t['subject']),
-                        'topic' => r_esc($t['topic']),
+                        'topic' => r_esc($t['topic'] ?? ''),
+                        'subject' => r_esc($t['topic'] ?? ''),
                         'title' => r_esc($t['title']),
                         'faculty' => r_esc($t['faculty'] ?: 'TBD'),
                         'assigned' => $total_students,
@@ -1996,9 +1995,9 @@ if (isset($_GET['action'])) {
 
                 case 'task_completions':
                     $title = 'Checklist Completions Logs';
-                    $headers = ['Student Name', 'Email', 'Plan Title', 'Subject', 'Chapter', 'Task Title', 'Completed Time'];
+                    $headers = ['Student Name', 'Email', 'Plan Title', 'Topic', 'Chapter', 'Task Title', 'Completed Time'];
                     $stmt = $pdo->query("
-                         SELECT u.name, u.email, sp.title as plan_title, sp.is_deleted as plan_deleted, act.subject, act.chapter, act.activity_title as task_title, an.created_at
+                         SELECT u.name, u.email, sp.title as plan_title, sp.is_deleted as plan_deleted, act.topic, act.chapter, act.activity_title as task_title, an.created_at
                          FROM study_plan_analytics an
                          JOIN users u ON an.student_email = u.email
                          JOIN study_plans sp ON an.study_plan_id = sp.id
@@ -2015,7 +2014,7 @@ if (isset($_GET['action'])) {
                             r_esc($r['name']),
                             format_credential_text($r['email'], 'email', 'students'),
                             ((int)$r['plan_deleted'] === 1 ? '[Archived / Deleted] ' : '') . r_esc($r['plan_title']),
-                            r_esc($r['subject'] ?: '-'),
+                            r_esc($r['topic'] ?: '-'),
                             r_esc($r['chapter'] ?: '-'),
                             r_esc($r['task_title']),
                             date('d M Y h:i A', strtotime($r['created_at']))
@@ -3536,7 +3535,7 @@ include 'includes/admin_nav.php';
                     <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; width:100%;">
                         <!-- Search input -->
                         <div style="flex-grow:2; min-width:220px;">
-                            <input type="text" id="st-filter-search" oninput="applyTimelineFilters()" placeholder="Search topic, chapter, subject, faculty..." style="width:100%; height:36px; padding:0 12px; border:1px solid #cbd5e1; border-radius:10px; font-size:0.82rem;">
+                            <input type="text" id="st-filter-search" oninput="applyTimelineFilters()" placeholder="Search topic, chapter, faculty..." style="width:100%; height:36px; padding:0 12px; border:1px solid #cbd5e1; border-radius:10px; font-size:0.82rem;">
                         </div>
                         <!-- Status Filter -->
                         <div style="width:130px;">
@@ -3547,10 +3546,10 @@ include 'includes/admin_nav.php';
                                 <option value="Overdue">Overdue</option>
                             </select>
                         </div>
-                        <!-- Subject Filter -->
+                        <!-- Topic Filter -->
                         <div style="width:150px;">
                             <select id="st-filter-subject" onchange="applyTimelineFilters()" style="width:100%; height:36px; padding:0 10px; border:1px solid #cbd5e1; border-radius:10px; font-size:0.82rem;">
-                                <option value="ALL">All Subjects</option>
+                                <option value="ALL">All Topics</option>
                             </select>
                         </div>
                         <!-- Date Range -->
@@ -4396,49 +4395,51 @@ include 'includes/admin_nav.php';
                 const lastActiveText = lastLog ? lastLog.completed_at : 'Never';
                 document.getElementById('st-last-activity-date').innerText = lastActiveText;
 
-                // Calculate Subject syllabus progress breakdown
-                const subjectsMap = {};
+                // Calculate Topic syllabus progress breakdown
+                const topicsMap = {};
                 data.timeline.forEach(item => {
-                    const sub = item.subject || 'General Syllabus';
-                    if (!subjectsMap[sub]) {
-                        subjectsMap[sub] = { total: 0, completed: 0 };
+                    const top = item.topic || item.subject || 'General Topic';
+                    if (!topicsMap[top]) {
+                        topicsMap[top] = { total: 0, completed: 0 };
                     }
-                    subjectsMap[sub].total++;
+                    topicsMap[top].total++;
                     if (item.status === 'Completed') {
-                        subjectsMap[sub].completed++;
+                        topicsMap[top].completed++;
                     }
                 });
 
-                let subHtml = '';
-                for (const [subName, stats] of Object.entries(subjectsMap)) {
-                    const subPct = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
-                    subHtml += `
+                let topHtml = '';
+                for (const [topName, stats] of Object.entries(topicsMap)) {
+                    const topPct = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
+                    topHtml += `
                         <div>
                             <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:4px;">
-                                <span style="font-weight:600; color:var(--text-main);">${subName}</span>
-                                <span style="color:var(--text-muted);">${stats.completed}/${stats.total} (${subPct}%)</span>
+                                <span style="font-weight:600; color:var(--text-main);">${topName}</span>
+                                <span style="color:var(--text-muted);">${stats.completed}/${stats.total} (${topPct}%)</span>
                             </div>
                             <div style="background:#e2e8f0; height:6px; border-radius:3px; overflow:hidden;">
-                                <div style="background:var(--primary-gradient); width:${subPct}%; height:100%;"></div>
+                                <div style="background:var(--primary-gradient); width:${topPct}%; height:100%;"></div>
                             </div>
                         </div>
                     `;
                 }
                 const subBarsEl = document.getElementById('st-subject-progress-bars');
                 if (subBarsEl) {
-                    subBarsEl.innerHTML = subHtml || '<div style="font-size:0.8rem; color:var(--text-muted);">No subjects found in syllabus outline.</div>';
+                    subBarsEl.innerHTML = topHtml || '<div style="font-size:0.8rem; color:var(--text-muted);">No topics found in syllabus outline.</div>';
                 }
 
-                // Initialize Subject Filter Select list
+                // Initialize Topic Filter Select list
                 const subjectFilterSelect = document.getElementById('st-filter-subject');
-                subjectFilterSelect.innerHTML = '<option value="ALL">All Subjects</option>';
-                const uniqueSubjects = [...new Set(data.timeline.map(item => item.subject).filter(Boolean))];
-                uniqueSubjects.forEach(sub => {
-                    const opt = document.createElement('option');
-                    opt.value = sub;
-                    opt.innerText = sub;
-                    subjectFilterSelect.appendChild(opt);
-                });
+                if (subjectFilterSelect) {
+                    subjectFilterSelect.innerHTML = '<option value="ALL">All Topics</option>';
+                    const uniqueTopics = [...new Set(data.timeline.map(item => item.topic || item.subject).filter(Boolean))];
+                    uniqueTopics.forEach(top => {
+                        const opt = document.createElement('option');
+                        opt.value = top;
+                        opt.innerText = top;
+                        subjectFilterSelect.appendChild(opt);
+                    });
+                }
 
                 // Clear input filters first
                 document.getElementById('st-filter-search').value = '';
@@ -4455,7 +4456,8 @@ include 'includes/admin_nav.php';
     function applyTimelineFilters() {
         const q = document.getElementById('st-filter-search').value.toLowerCase().trim();
         const status = document.getElementById('st-filter-status').value;
-        const subject = document.getElementById('st-filter-subject').value;
+        const topicFilterEl = document.getElementById('st-filter-subject');
+        const selectedTopic = topicFilterEl ? topicFilterEl.value : 'ALL';
         const startD = document.getElementById('st-filter-start-date').value;
         const endD = document.getElementById('st-filter-end-date').value;
 
@@ -4466,7 +4468,6 @@ include 'includes/admin_nav.php';
                 (item.title && item.title.toLowerCase().includes(q)) ||
                 (item.topic && item.topic.toLowerCase().includes(q)) ||
                 (item.chapter && item.chapter.toLowerCase().includes(q)) ||
-                (item.subject && item.subject.toLowerCase().includes(q)) ||
                 (item.faculty && item.faculty.toLowerCase().includes(q))
             );
         }
@@ -4475,8 +4476,8 @@ include 'includes/admin_nav.php';
             filtered = filtered.filter(item => item.status === status);
         }
 
-        if (subject !== 'ALL') {
-            filtered = filtered.filter(item => item.subject === subject);
+        if (selectedTopic !== 'ALL') {
+            filtered = filtered.filter(item => (item.topic === selectedTopic || item.subject === selectedTopic));
         }
 
         if (startD) {
@@ -4575,7 +4576,7 @@ include 'includes/admin_nav.php';
                                 </div>
                                 <div style="flex:1;">
                                     <h6 style="font-size:0.85rem; font-weight:700; color:var(--text-main); margin:0;">${item.title}</h6>
-                                    <span style="font-size:0.68rem; color:var(--text-muted);">${(item.subject && item.topic && item.subject === item.topic) ? item.subject : `${item.subject || 'General'} · ${item.topic || 'N/A'}`} ${item.start_time ? `(${item.start_time} - ${item.end_time})` : ''}</span>
+                                    <span style="font-size:0.68rem; color:var(--text-muted);">${item.topic || 'General'}${item.chapter ? ` · ${item.chapter}` : ''} ${item.start_time ? `(${item.start_time} - ${item.end_time})` : ''}</span>
                                 </div>
                             </div>
                             <div style="display:flex; align-items:center; gap:8px;">
@@ -4587,7 +4588,6 @@ include 'includes/admin_nav.php';
                         <!-- Collapsible Task Details -->
                         <div id="subtask-expand-body-${uniqueTaskIdx}" style="display:none; margin-top:10px; padding:10px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; font-size:0.75rem; color:var(--text-muted);">
                             <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; margin-bottom:8px;">
-                                <div><strong>Subject:</strong> ${item.subject || 'N/A'}</div>
                                 <div><strong>Chapter:</strong> ${item.chapter || 'N/A'}</div>
                                 <div><strong>Topic:</strong> ${item.topic || 'N/A'}</div>
                                 <div><strong>Activity Type:</strong> ${item.type || 'Reading'}</div>
@@ -4907,7 +4907,7 @@ include 'includes/admin_nav.php';
                     <td style="padding:10px 8px; font-weight:600; color:var(--text-muted); font-size:0.78rem;">${t.plan}</td>
                     <td style="padding:10px 8px; text-align:center; font-weight:700; font-size:0.78rem;">${t.date}</td>
                     <td style="padding:10px 8px;"><strong style="color:var(--text-main); font-size:0.85rem;">${t.title}</strong><br><small style="color:var(--text-muted);">${t.topic}</small></td>
-                    <td style="padding:10px 8px; font-size:0.78rem;">Subject: ${t.subject}<br>Chapter: ${t.chapter}</td>
+                    <td style="padding:10px 8px; font-size:0.78rem;">Chapter: ${t.chapter}</td>
                     <td style="padding:10px 8px; text-align:center; font-weight:700; color:#10b981;">${t.completed}</td>
                     <td style="padding:10px 8px; text-align:center; font-weight:700; color:#ef4444;">${t.pending}</td>
                     <td style="padding:10px 8px; text-align:right;">
@@ -4927,7 +4927,6 @@ include 'includes/admin_nav.php';
             const matchesSearch = !searchVal ||
                 (t.title && t.title.toLowerCase().includes(searchVal)) ||
                 (t.topic && t.topic.toLowerCase().includes(searchVal)) ||
-                (t.subject && t.subject.toLowerCase().includes(searchVal)) ||
                 (t.chapter && t.chapter.toLowerCase().includes(searchVal)) ||
                 (t.plan && t.plan.toLowerCase().includes(searchVal));
 
@@ -4941,7 +4940,7 @@ include 'includes/admin_nav.php';
     }
 
     function exportCourseTasksCSV() {
-        let csv = 'Plan Title,Task Date,Task Title,Subject & Chapter,Completed Students,Pending Students,Completion %\r\n';
+        let csv = 'Plan Title,Task Date,Task Title,Topic & Chapter,Completed Students,Pending Students,Completion %\r\n';
         document.querySelectorAll('#course-tasks-table-body tr').forEach(row => {
             const cols = row.querySelectorAll('td');
             if (cols.length >= 7) {
@@ -5679,9 +5678,9 @@ include 'includes/admin_nav.php';
     }
 
     function exportCampaignTasksCSV() {
-        let csv = 'Plan Title,Task Date,Task Title,Subject & Chapter,Completed Count,Pending Count,Completion %\r\n';
+        let csv = 'Plan Title,Task Date,Task Title,Topic & Chapter,Completed Count,Pending Count,Completion %\r\n';
         campaignTasksData.forEach(t => {
-            csv += `"${t.plan}","${t.date}","${t.title}","Subject: ${t.subject} | Chapter: ${t.chapter}","${t.completed}","${t.pending}","${t.pct}%"\r\n`;
+            csv += `"${t.plan}","${t.date}","${t.title}","Topic: ${t.topic || t.subject || ''} | Chapter: ${t.chapter}","${t.completed}","${t.pending}","${t.pct}%"\r\n`;
         });
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement("a");

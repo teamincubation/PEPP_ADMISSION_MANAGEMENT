@@ -31,10 +31,10 @@ function log_activity_version($pdo, $activity_id, $change_type, $admin_username)
     $stmt_ins = $pdo->prepare("
         INSERT INTO study_plan_activity_versions (
             activity_id, activity_uid, study_plan_id, version_number, activity_date, day_number, sort_order,
-            chapter, subject, topic, subtopic, activity_title, activity_description, activity_type,
-            faculty, mentor, estimated_duration, priority, difficulty_level, resource_links,
+            chapter, topic, activity_title, activity_description, activity_type,
+            faculty, estimated_duration, priority, difficulty_level, resource_links,
             custom_activity_badge, custom_activity_color, custom_activity_icon, created_by, change_type, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
     ");
     $stmt_ins->execute([
         $activity_id,
@@ -45,14 +45,11 @@ function log_activity_version($pdo, $activity_id, $change_type, $admin_username)
         (int)$act['day_number'],
         (int)$act['sort_order'],
         $act['chapter'] ?? null,
-        $act['subject'] ?? null,
-        $act['topic'] ?? null,
-        $act['subtopic'] ?? null,
+        !empty($act['topic']) ? $act['topic'] : ($act['subject'] ?? null),
         $act['activity_title'],
         $act['activity_description'] ?? null,
         $act['activity_type'],
         $act['faculty'] ?? null,
-        $act['mentor'] ?? null,
         !empty($act['estimated_duration']) ? (int)$act['estimated_duration'] : null,
         $act['priority'] ?? 'medium',
         $act['difficulty_level'] ?? 'medium',
@@ -258,19 +255,19 @@ try {
 
         $stmt_act_ins = $pdo->prepare("
             INSERT INTO study_plan_activities (
-                study_plan_id, activity_date, day_number, sort_order, chapter, subject,
-                topic, subtopic, activity_title, activity_description, activity_type,
-                faculty, mentor, estimated_duration, priority, difficulty_level, resource_links,
+                study_plan_id, activity_date, day_number, sort_order, chapter,
+                topic, activity_title, activity_description, activity_type,
+                faculty, estimated_duration, priority, difficulty_level, resource_links,
                 custom_activity_badge, custom_activity_color, custom_activity_icon, activity_uid
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
 
         foreach ($activities as $act) {
             $new_uid = 'SPA-' . bin2hex(random_bytes(10));
             $stmt_act_ins->execute([
-                $new_id, $act['activity_date'], $act['day_number'], $act['sort_order'], $act['chapter'], $act['subject'],
-                $act['topic'], $act['subtopic'], $act['activity_title'], $act['activity_description'], $act['activity_type'],
-                $act['faculty'], $act['mentor'], $act['estimated_duration'], $act['priority'], $act['difficulty_level'], $act['resource_links'],
+                $new_id, $act['activity_date'], $act['day_number'], $act['sort_order'], $act['chapter'],
+                !empty($act['topic']) ? $act['topic'] : ($act['subject'] ?? null), $act['activity_title'], $act['activity_description'], $act['activity_type'],
+                $act['faculty'], $act['estimated_duration'], $act['priority'], $act['difficulty_level'], $act['resource_links'],
                 $act['custom_activity_badge'], $act['custom_activity_color'], $act['custom_activity_icon'], $new_uid
             ]);
             $new_act_id = $pdo->lastInsertId();
@@ -608,18 +605,18 @@ try {
 
         $stmt_ins = $pdo->prepare("
             INSERT INTO study_plan_activities (
-                study_plan_id, activity_date, day_number, sort_order, chapter, subject,
-                topic, subtopic, activity_title, activity_description, activity_type,
-                faculty, mentor, estimated_duration, priority, difficulty_level, resource_links,
+                study_plan_id, activity_date, day_number, sort_order, chapter,
+                topic, activity_title, activity_description, activity_type,
+                faculty, estimated_duration, priority, difficulty_level, resource_links,
                 custom_activity_badge, custom_activity_color, custom_activity_icon, activity_uid, is_deleted
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         ");
 
         $stmt_upd = $pdo->prepare("
             UPDATE study_plan_activities SET
-                activity_date = ?, day_number = ?, sort_order = ?, chapter = ?, subject = ?,
-                topic = ?, subtopic = ?, activity_title = ?, activity_description = ?, activity_type = ?,
-                faculty = ?, mentor = ?, estimated_duration = ?, priority = ?, difficulty_level = ?, resource_links = ?,
+                activity_date = ?, day_number = ?, sort_order = ?, chapter = ?,
+                topic = ?, activity_title = ?, activity_description = ?, activity_type = ?,
+                faculty = ?, estimated_duration = ?, priority = ?, difficulty_level = ?, resource_links = ?,
                 custom_activity_badge = ?, custom_activity_color = ?, custom_activity_icon = ?, is_deleted = 0
             WHERE id = ?
         ");
@@ -636,6 +633,8 @@ try {
                 $act_id = (int)$stmt_get_id->fetchColumn();
             }
 
+            $topic_val = trim(!empty($act['topic']) ? $act['topic'] : ($act['subject'] ?? ''));
+
             if ($act_id > 0) {
                 // Read current record to check for changes
                 $stmt_cur = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ?");
@@ -648,14 +647,11 @@ try {
                         (int)$cur['day_number'] !== (int)$act['day_number'] ||
                         (int)$cur['sort_order'] !== (int)$act['sort_order'] ||
                         ($cur['chapter'] ?? '') !== ($act['chapter'] ?? '') ||
-                        ($cur['subject'] ?? '') !== ($act['subject'] ?? '') ||
-                        ($cur['topic'] ?? '') !== ($act['topic'] ?? '') ||
-                        ($cur['subtopic'] ?? '') !== ($act['subtopic'] ?? '') ||
+                        ($cur['topic'] ?? '') !== $topic_val ||
                         ($cur['activity_title'] ?? '') !== ($act['activity_title'] ?? '') ||
                         ($cur['activity_description'] ?? '') !== ($act['activity_description'] ?? '') ||
                         ($cur['activity_type'] ?? '') !== ($act['activity_type'] ?? '') ||
                         ($cur['faculty'] ?? '') !== ($act['faculty'] ?? '') ||
-                        ($cur['mentor'] ?? '') !== ($act['mentor'] ?? '') ||
                         ($cur['estimated_duration'] !== null ? (int)$cur['estimated_duration'] : null) !== (!empty($act['estimated_duration']) ? (int)$act['estimated_duration'] : null) ||
                         ($cur['priority'] ?? 'medium') !== ($act['priority'] ?? 'medium') ||
                         ($cur['difficulty_level'] ?? 'medium') !== ($act['difficulty_level'] ?? 'medium') ||
@@ -680,14 +676,11 @@ try {
                     (int)$act['day_number'],
                     (int)$act['sort_order'],
                     trim($act['chapter'] ?? ''),
-                    trim($act['subject'] ?? ''),
-                    trim($act['topic'] ?? ''),
-                    trim($act['subtopic'] ?? ''),
+                    $topic_val,
                     trim($act['activity_title'] ?? 'Self Study'),
                     trim($act['activity_description'] ?? ''),
                     trim($act['activity_type'] ?? 'Revision'),
                     trim($act['faculty'] ?? ''),
-                    trim($act['mentor'] ?? ''),
                     !empty($act['estimated_duration']) ? (int)$act['estimated_duration'] : null,
                     trim($act['priority'] ?? 'medium'),
                     trim($act['difficulty_level'] ?? 'medium'),
@@ -707,14 +700,11 @@ try {
                     (int)$act['day_number'],
                     (int)$act['sort_order'],
                     trim($act['chapter'] ?? ''),
-                    trim($act['subject'] ?? ''),
-                    trim($act['topic'] ?? ''),
-                    trim($act['subtopic'] ?? ''),
+                    $topic_val,
                     trim($act['activity_title'] ?? 'Self Study'),
                     trim($act['activity_description'] ?? ''),
                     trim($act['activity_type'] ?? 'Revision'),
                     trim($act['faculty'] ?? ''),
-                    trim($act['mentor'] ?? ''),
                     !empty($act['estimated_duration']) ? (int)$act['estimated_duration'] : null,
                     trim($act['priority'] ?? 'medium'),
                     trim($act['difficulty_level'] ?? 'medium'),
@@ -972,14 +962,11 @@ try {
             'date' => -1,
             'day' => -1,
             'chapter' => -1,
-            'subject' => -1,
             'topic' => -1,
-            'subtopic' => -1,
             'title' => -1,
             'description' => -1,
             'type' => -1,
             'faculty' => -1,
-            'mentor' => -1,
             'duration' => -1,
             'priority' => -1,
             'difficulty' => -1,
@@ -990,14 +977,11 @@ try {
             if (strpos($h, 'date') !== false) $mapping['date'] = $index;
             elseif (strpos($h, 'day') !== false) $mapping['day'] = $index;
             elseif (strpos($h, 'chap') !== false) $mapping['chapter'] = $index;
-            elseif (strpos($h, 'subj') !== false) $mapping['subject'] = $index;
-            elseif (strpos($h, 'top') !== false) $mapping['topic'] = $index;
-            elseif (strpos($h, 'subt') !== false) $mapping['subtopic'] = $index;
+            elseif (strpos($h, 'subj') !== false || strpos($h, 'top') !== false) $mapping['topic'] = $index;
             elseif (strpos($h, 'titl') !== false || strpos($h, 'name') !== false) $mapping['title'] = $index;
             elseif (strpos($h, 'desc') !== false) $mapping['description'] = $index;
             elseif (strpos($h, 'type') !== false || strpos($h, 'act') !== false) $mapping['type'] = $index;
             elseif (strpos($h, 'fac') !== false) $mapping['faculty'] = $index;
-            elseif (strpos($h, 'ment') !== false) $mapping['mentor'] = $index;
             elseif (strpos($h, 'dur') !== false || strpos($h, 'time') !== false) $mapping['duration'] = $index;
             elseif (strpos($h, 'prio') !== false) $mapping['priority'] = $index;
             elseif (strpos($h, 'diff') !== false) $mapping['difficulty'] = $index;
@@ -1029,14 +1013,11 @@ try {
                 'activity_date' => $date_clean,
                 'day_number' => $mapping['day'] >= 0 ? (int)$r[$mapping['day']] : 1,
                 'chapter' => $mapping['chapter'] >= 0 ? trim($r[$mapping['chapter']]) : '',
-                'subject' => $mapping['subject'] >= 0 ? trim($r[$mapping['subject']]) : '',
                 'topic' => $mapping['topic'] >= 0 ? trim($r[$mapping['topic']]) : '',
-                'subtopic' => $mapping['subtopic'] >= 0 ? trim($r[$mapping['subtopic']]) : '',
                 'activity_title' => $title_val,
                 'activity_description' => $mapping['description'] >= 0 ? trim($r[$mapping['description']]) : '',
                 'activity_type' => $type_val,
                 'faculty' => $mapping['faculty'] >= 0 ? trim($r[$mapping['faculty']]) : '',
-                'mentor' => $mapping['mentor'] >= 0 ? trim($r[$mapping['mentor']]) : '',
                 'estimated_duration' => $mapping['duration'] >= 0 ? (int)$r[$mapping['duration']] : 60,
                 'priority' => $mapping['priority'] >= 0 ? strtolower(trim($r[$mapping['priority']])) : 'medium',
                 'difficulty_level' => $mapping['difficulty'] >= 0 ? strtolower(trim($r[$mapping['difficulty']])) : 'medium',
