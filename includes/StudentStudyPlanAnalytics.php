@@ -57,6 +57,60 @@ class StudentStudyPlanAnalytics {
     }
 
     /**
+     * Resolve student profile photo to a canonical browser-accessible URL.
+     * Safely normalizes relative/absolute paths, handles legacy paths,
+     * validates image format (filters out non-image files like PDFs),
+     * blocks path traversal, and constructs the canonical public URL path.
+     */
+    public static function resolveStudentPhotoUrl($raw_photo) {
+        if ($raw_photo === null) {
+            return '';
+        }
+        $photo = trim((string)$raw_photo);
+        if ($photo === '' || strcasecmp($photo, 'null') === 0 || strcasecmp($photo, 'undefined') === 0) {
+            return '';
+        }
+
+        // 1. External URL or Data URI
+        if (preg_match('#^(https?:)?//#i', $photo) || strpos($photo, 'data:image/') === 0) {
+            $url_path = parse_url($photo, PHP_URL_PATH) ?: $photo;
+            if (preg_match('/\.(pdf|docx?|xlsx?|zip|rar|txt|csv)$/i', $url_path)) {
+                return '';
+            }
+            if (strpos($photo, 'data:image/') === 0 || preg_match('/\.(jpe?g|png|gif|webp|bmp|svg)(\?.*)?$/i', $photo)) {
+                return $photo;
+            }
+            return '';
+        }
+
+        // 2. Reject non-image files (e.g. PDF/DOC uploads stored in user_photo column)
+        if (!preg_match('/\.(jpe?g|png|gif|webp|bmp|svg)$/i', $photo)) {
+            return '';
+        }
+
+        // 3. Security: Block malicious path traversal attempts
+        if (strpos($photo, '../..') !== false || strpos($photo, '..\\..') !== false) {
+            return '';
+        }
+
+        // 4. Normalize relative/absolute storage paths
+        $clean = preg_replace('#^[./\\\\]+#', '', $photo);
+        $clean = ltrim($clean, '/\\');
+
+        // Standardize legacy photos/ to uploads/photos/ if stored without uploads prefix
+        if (strpos($clean, 'photos/') === 0) {
+            $clean = 'uploads/' . $clean;
+        }
+
+        // Ensure canonical uploads/ prefix
+        if (strpos($clean, 'uploads/') === 0) {
+            return '../' . $clean;
+        }
+
+        return '../uploads/photos/' . basename($clean);
+    }
+
+    /**
      * Get analytics scoped strictly to a single Study Plan with detailed chapter, topic,
      * assessment, consistency, timeline, and cohort ranking data.
      */
@@ -80,7 +134,8 @@ class StudentStudyPlanAnalytics {
         $user_id = $user['user_id'];
         $academic_year = $user['pepp_academic_year'];
         $course_name = $user['pepp_course'];
-        $user_photo = !empty($user['user_photo']) ? trim((string)$user['user_photo']) : '';
+        $user_photo_raw = !empty($user['user_photo']) ? trim((string)$user['user_photo']) : '';
+        $user_photo = self::resolveStudentPhotoUrl($user_photo_raw);
         $student_status = !empty($user['student_status']) ? trim((string)$user['student_status']) : 'Active';
         $student_name = !empty($user['name']) ? trim((string)$user['name']) : '';
         $masked_email = self::maskEmail($email);
@@ -480,6 +535,7 @@ class StudentStudyPlanAnalytics {
             'masked_email' => $masked_email,
             'photo' => $user_photo,
             'photo_url' => $user_photo,
+            'raw_photo' => $user_photo_raw,
             'course' => $course_name,
             'academic_year' => $academic_year,
             'status' => $student_status,
@@ -786,7 +842,8 @@ class StudentStudyPlanAnalytics {
                 'name' => $st['name'],
                 'course' => $st['pepp_course'],
                 'academic_year' => $st['pepp_academic_year'],
-                'user_photo' => $st['user_photo'],
+                'user_photo' => self::resolveStudentPhotoUrl($st['user_photo'] ?? ''),
+                'raw_photo' => $st['user_photo'] ?? '',
                 'completion_pct' => $completion_pct,
                 'completed_tasks' => $completed_tasks,
                 'total_tasks' => $total_plan_tasks,

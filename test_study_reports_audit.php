@@ -1347,7 +1347,7 @@ $analytics_prof = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'PEPP2026877
 assertTest("Test AO: Student profile is returned in plan analytics", true, isset($analytics_prof['student_profile']));
 assertTest("Test AO: Student Name resolved from database", 'Fathima Rinfa', $analytics_prof['student_profile']['name']);
 assertTest("Test AO: Student ID resolved from database", 'PEPP20268771', $analytics_prof['student_profile']['student_id']);
-assertTest("Test AO: Student Photo resolved from database", 'uploads/photos/fathima.jpg', $analytics_prof['student_profile']['photo']);
+assertTest("Test AO: Student Photo resolved from database", '../uploads/photos/fathima.jpg', $analytics_prof['student_profile']['photo']);
 assertTest("Test AO: Student Status resolved from database", 'Active', $analytics_prof['student_profile']['status']);
 assertTest("Test AO: Student Course resolved from database", 'MA/MSc Psychology (Premium)', $analytics_prof['student_profile']['course']);
 assertTest("Test AO: Student Academic Year resolved from database", '2026-27', $analytics_prof['student_profile']['academic_year']);
@@ -1391,10 +1391,11 @@ assertTest("Test AQ: Empty analytics provides default student profile structure"
 
 
 // --- TEST AR: Web & PDF Profile Parity (Single Source of Truth) ---
-assertTest("Test AR: student-study-reports.php does not contain broken '../' image prefix in analytics hub", true, strpos($reports_file_content, 'src="../${st.photo}"') === false && strpos($reports_file_content, 'src="../${profPhoto}"') === false);
+assertTest("Test AR: student-study-reports.php contains getAbsolutePhotoUrl helper", true, strpos($reports_file_content, 'function getAbsolutePhotoUrl') !== false);
 assertTest("Test AR: renderLearningAnalyticsHub uses single source studentProfile", true, strpos($reports_file_content, 'a.student_profile') !== false);
-assertTest("Test AR: PDF generator includes student photo rendering with fallback", true, strpos($reports_file_content, 'onerror="this.src=\'assets/img/default-avatar.svg\';"') !== false);
-assertTest("Test AR: PDF generator binds masked_email from canonical student profile", true, strpos($reports_file_content, 'profEmail') !== false);
+assertTest("Test AR: PDF generator includes student photo rendering with fallback", true, strpos($reports_file_content, 'pdfPhotoUrl') !== false);
+assertTest("Test AR: PDF generator includes base href for iframe/popup compatibility", true, strpos($reports_file_content, '<base href=') !== false);
+assertTest("Test AR: Dossier sidebar includes student photo profile card", true, strpos($reports_file_content, 'id="st-dossier-student-photo"') !== false);
 
 
 // --- TEST AS: Student Isolation & Data Safety ---
@@ -1404,6 +1405,62 @@ assertTest("Test AS: Student A ID matches isolated user_id", 'PEPP20268771', $an
 assertTest("Test AS: Student B ID matches isolated user_id", 'PEPP20269999', $analytics_student_b['student_profile']['student_id']);
 assertTest("Test AS: Student A photo does not leak into Student B", true, $analytics_student_a['student_profile']['photo'] !== $analytics_student_b['student_profile']['photo']);
 assertTest("Test AS: Student A email does not leak into Student B", true, $analytics_student_a['student_profile']['masked_email'] !== $analytics_student_b['student_profile']['masked_email']);
+
+
+// --- TEST AT: Canonical Photo Resolver Unit Tests ---
+assertTest("Test AT: Standard uploads/photos path", '../uploads/photos/test.jpg', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('uploads/photos/test.jpg'));
+assertTest("Test AT: Leading slash /uploads/photos path", '../uploads/photos/test.png', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('/uploads/photos/test.png'));
+assertTest("Test AT: Relative ../uploads/photos path", '../uploads/photos/test.webp', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('../uploads/photos/test.webp'));
+assertTest("Test AT: Legacy photos/ path without uploads prefix", '../uploads/photos/legacy.jpeg', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('photos/legacy.jpeg'));
+assertTest("Test AT: External HTTP URL", 'https://pepplearning.in/photo.jpg', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('https://pepplearning.in/photo.jpg'));
+assertTest("Test AT: Data URI support", 'data:image/png;base64,iVBORw0KGgo=', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('data:image/png;base64,iVBORw0KGgo='));
+assertTest("Test AT: Empty string returns empty", '', StudentStudyPlanAnalytics::resolveStudentPhotoUrl(''));
+assertTest("Test AT: Null value returns empty", '', StudentStudyPlanAnalytics::resolveStudentPhotoUrl(null));
+assertTest("Test AT: String 'null' returns empty", '', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('null'));
+assertTest("Test AT: String 'undefined' returns empty", '', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('undefined'));
+
+
+// --- TEST AU: Non-Image File (PDF/Doc) Rejection ---
+assertTest("Test AU: PDF upload rejected from image resolver", '', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('uploads/photos/6a2e609a84de7_Beauna photo new.pdf'));
+assertTest("Test AU: Doc upload rejected from image resolver", '', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('uploads/photos/document.docx'));
+assertTest("Test AU: External PDF link rejected from image resolver", '', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('https://example.com/file.pdf'));
+
+
+// --- TEST AV: Cross-Student Photo Isolation (Student A, Student B, Student C) ---
+$pdo->prepare("DELETE FROM users WHERE user_id = 'PEPP20267777'")->execute();
+$pdo->prepare("
+    INSERT INTO users (user_id, name, email, phone, pepp_course, pepp_academic_year, user_photo, student_status, status, created_at)
+    VALUES ('PEPP20267777', 'Legacy Photo Student', 'legacy@pepp.com', '+919999999997', 'MA/MSc Psychology (Premium)', '2026-27', 'photos/student_c_legacy.jpg', 'Active', 'approved', '2026-08-01 10:00:00')
+")->execute();
+$pdo->prepare("
+    INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value)
+    VALUES (2, 'student', 'PEPP20267777')
+")->execute();
+
+$analytics_student_c = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'PEPP20267777', 2);
+assertTest("Test AV: Student C Legacy photo resolved", '../uploads/photos/student_c_legacy.jpg', $analytics_student_c['student_profile']['photo']);
+assertTest("Test AV: Student A photo is isolated from Student C", true, $analytics_student_a['student_profile']['photo'] !== $analytics_student_c['student_profile']['photo']);
+assertTest("Test AV: Student B (no photo) is isolated from Student C", true, $analytics_student_b['student_profile']['photo'] !== $analytics_student_c['student_profile']['photo']);
+assertTest("Test AV: Student C raw photo preserved in raw_photo key", 'photos/student_c_legacy.jpg', $analytics_student_c['student_profile']['raw_photo']);
+
+
+// --- TEST AW: Additional Image Formats & Path Traversal Security ---
+assertTest("Test AW: GIF extension support", '../uploads/photos/avatar.gif', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('uploads/photos/avatar.gif'));
+assertTest("Test AW: BMP extension support", '../uploads/photos/avatar.bmp', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('uploads/photos/avatar.bmp'));
+assertTest("Test AW: SVG extension support", '../uploads/photos/avatar.svg', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('uploads/photos/avatar.svg'));
+assertTest("Test AW: Path traversal attack rejected (../../)", '', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('../../etc/passwd.jpg'));
+assertTest("Test AW: Path traversal attack rejected (..\\..\\)", '', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('..\\..\\windows\\system32\\image.jpg'));
+assertTest("Test AW: Text file extension rejected", '', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('uploads/photos/notes.txt'));
+assertTest("Test AW: Zip file extension rejected", '', StudentStudyPlanAnalytics::resolveStudentPhotoUrl('uploads/photos/archive.zip'));
+
+
+// --- TEST AX: Architectural & Structural Static Checks ---
+$analytics_class_code = file_get_contents(__DIR__ . '/includes/StudentStudyPlanAnalytics.php');
+assertTest("Test AX: No hardcoded student photo mapping in resolver", false, strpos($analytics_class_code, 'PEPP20264589') !== false || strpos($analytics_class_code, 'PEPP20264479') !== false);
+assertTest("Test AX: users.user_photo is queried in getPlanAnalytics", true, strpos($analytics_class_code, 'user_photo') !== false);
+assertTest("Test AX: maskEmail is applied to student_profile", true, strpos($analytics_class_code, 'maskEmail') !== false);
+assertTest("Test AX: Raw email is not included in student_profile", false, isset($analytics_student_a['student_profile']['raw_email']) || isset($analytics_student_a['student_profile']['email']));
+assertTest("Test AX: PDF report isolates Learning Analytics Hub without raw checklist dossier rows", true, strpos($reports_file_content, 'printStudentLearningAnalyticsReport') !== false);
 
 
 echo "<h2>Test Execution Summary</h2>\n";

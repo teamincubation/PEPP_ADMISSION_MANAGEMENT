@@ -471,7 +471,8 @@ if (isset($_GET['action'])) {
                     'academic_year' => r_esc($student['academic_year']),
                     'joined_date' => $student['created_at'] ? date('d M Y', strtotime($student['created_at'])) : 'N/A',
                     'status' => $student['student_status'] ?: 'inactive',
-                    'photo' => $student['user_photo'] ?: '',
+                    'photo' => StudentStudyPlanAnalytics::resolveStudentPhotoUrl($student['user_photo'] ?? ''),
+                    'raw_photo' => $student['user_photo'] ?? '',
                     'online' => $online,
                     'presence' => $presence,
                     'last_login' => $pres ? date('d M Y h:i A', strtotime($pres['created_at'])) : 'Never',
@@ -510,7 +511,7 @@ if (isset($_GET['action'])) {
                 }
             } catch (Exception $e) {}
         }
-        $plan_id = (int)($_GET['plan_id'] ?? 0);
+        $plan_id = (int)($_GET['plan_id'] ?? $_GET['study_plan_id'] ?? 0);
         try {
             // Get plan type first
             $stmt_plan = $pdo->prepare("SELECT plan_type FROM study_plans WHERE id = ?");
@@ -3709,6 +3710,17 @@ include 'includes/admin_nav.php';
 
             <!-- Left Dossier Sidebar -->
             <div class="dossier-sidebar">
+                <!-- Dossier Student Profile Overview Card -->
+                <div style="display:flex; align-items:center; gap:12px; padding:10px 12px; background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; margin-bottom:12px; width:100%;">
+                    <div style="width:46px; height:46px; border-radius:50%; background:#e0e7ff; color:var(--accent); display:flex; align-items:center; justify-content:center; font-size:1.2rem; font-weight:800; border:2px solid var(--accent); overflow:hidden; flex-shrink:0;">
+                        <img id="st-dossier-student-photo" src="assets/img/default-avatar.svg" onerror="this.src='assets/img/default-avatar.svg'; this.onerror=null;" style="width:100%; height:100%; object-fit:cover;" alt="Avatar">
+                    </div>
+                    <div style="overflow:hidden; flex-grow:1;">
+                        <strong id="st-dossier-student-name" style="display:block; font-size:0.9rem; color:var(--text-main); white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">Student</strong>
+                        <span id="st-dossier-student-meta" style="display:block; font-size:0.72rem; color:var(--text-muted); white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">-</span>
+                    </div>
+                </div>
+
                 <!-- Circular Completion Metric Widget -->
                 <div style="display:flex; flex-direction:column; align-items:center; text-align:center; padding-bottom:12px; border-bottom:1px dashed #e2e8f0; margin-bottom:5px; width:100%;">
                     <div style="position:relative; width:140px; height:140px; display:flex; align-items:center; justify-content:center; margin-bottom:12px; margin-top:5px;">
@@ -4076,6 +4088,21 @@ include 'includes/admin_nav.php';
     let currentSelectedStudentStatus = 'Active';
     let timelineActivities = [];
 
+    // ── CANONICAL PHOTO URL HELPER ──
+    function getAbsolutePhotoUrl(photoSrc) {
+        if (!photoSrc || typeof photoSrc !== 'string') return '';
+        const clean = photoSrc.trim();
+        if (clean === '' || clean.toLowerCase() === 'null' || clean.toLowerCase() === 'undefined') return '';
+        if (clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('data:')) {
+            return clean;
+        }
+        try {
+            return new URL(clean, window.location.href).href;
+        } catch(e) {
+            return clean;
+        }
+    }
+
     // ── LIGHTBOX HELPERS ──
     let lightboxZoomScale = 1.0;
 
@@ -4167,7 +4194,7 @@ include 'includes/admin_nav.php';
                     searchInput.value = s.name;
                 }
                 const statusBadgeClass = s.status === 'active' ? 'green' : 'gray';
-                const profilePhotoSrc = s.photo ? s.photo : 'assets/img/default-avatar.svg';
+                const profilePhotoSrc = s.photo ? getAbsolutePhotoUrl(s.photo) : 'assets/img/default-avatar.svg';
 
                 // Build modern visual dashboard HTML structure
                 let html = `
@@ -4213,19 +4240,19 @@ include 'includes/admin_nav.php';
                             <!-- Communication Actions -->
                             <div style="display:flex; flex-direction:column; gap:8px;">
                                 ${canWhatsappChat ? `
-                                    <a href="https://wa.me/${s.raw_phone.replace(/\D/g, '')}" target="_blank" class="btn btn-whatsapp" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fab fa-whatsapp"></i> Chat on WhatsApp</a>
+                                    <a href="https://wa.me/${(s.raw_phone || '').replace(/\D/g, '')}" target="_blank" class="btn btn-whatsapp" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fab fa-whatsapp"></i> Chat on WhatsApp</a>
                                 ` : `
                                     <button class="btn btn-whatsapp" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i> Chat on WhatsApp (Restricted)</button>
                                 `}
 
                                 ${(!isCredentialRestricted || canCopyEmail) ? `
-                                    <a href="mailto:${s.raw_email || s.email}" class="btn btn-primary" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-envelope"></i> Send Email</a>
+                                    <a href="mailto:${s.raw_email || s.email || ''}" class="btn btn-primary" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-envelope"></i> Send Email</a>
                                 ` : `
                                     <button class="btn btn-primary" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-envelope"></i> Send Email (Restricted)</button>
                                 `}
 
                                 ${canPhoneCall ? `
-                                    <a href="tel:${s.raw_phone}" class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-phone"></i> Call Student</a>
+                                    <a href="tel:${s.raw_phone || ''}" class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-phone"></i> Call Student</a>
                                 ` : `
                                     <button class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-phone"></i> Call Student (Restricted)</button>
                                 `}
@@ -4630,11 +4657,13 @@ include 'includes/admin_nav.php';
 
         const nowStr = new Date().toLocaleString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:true });
         const reportId = 'PEPP-LAR-' + (profId || 'STD') + '-' + Date.now().toString().slice(-6);
+        const pdfPhotoUrl = profPhoto ? getAbsolutePhotoUrl(profPhoto) : '';
 
         let docHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <base href="${window.location.href}">
     <title>Student Learning Analytics Report - ${r_esc_js(profName)}</title>
     <style>
         @page {
@@ -4859,7 +4888,7 @@ include 'includes/admin_nav.php';
     <div class="student-profile-card">
         <div style="display: flex; align-items: center; gap: 14px;">
             <div style="width: 52px; height: 52px; border-radius: 50%; background: #e0e7ff; color: #4f46e5; display: flex; align-items: center; justify-content: center; font-size: 13pt; font-weight: 800; border: 2px solid #4f46e5; overflow: hidden; flex-shrink: 0;">
-                ${profPhoto ? `<img src="${r_esc_js(profPhoto)}" style="width:100%; height:100%; object-fit:cover;" onerror="this.src='assets/img/default-avatar.svg';">` : `<img src="assets/img/default-avatar.svg" style="width:100%; height:100%; object-fit:cover;" onerror="this.outerHTML='<span style=\\\'font-size:10pt;\\\'>PEPP</span>';">`}
+                ${pdfPhotoUrl ? `<img src="${r_esc_js(pdfPhotoUrl)}" style="width:100%; height:100%; object-fit:cover;" onerror="this.src='assets/img/default-avatar.svg';">` : `<img src="assets/img/default-avatar.svg" style="width:100%; height:100%; object-fit:cover;">`}
             </div>
             <div>
                 <h2 class="student-name" style="margin:0 0 3px 0;">${r_esc_js(profName)}</h2>
@@ -5343,6 +5372,7 @@ include 'includes/admin_nav.php';
         const profYear = prof.academic_year || a.academic_year || '2026-27';
         const profStatus = prof.status || currentSelectedStudentStatus || 'Active';
         const profPhoto = prof.photo || prof.photo_url || currentSelectedStudentPhoto || '';
+        const hubPhotoUrl = profPhoto ? getAbsolutePhotoUrl(profPhoto) : '';
 
         window.currentPlanAnalyticsPayload = {
             analytics: a,
@@ -5381,7 +5411,7 @@ include 'includes/admin_nav.php';
                 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
                     <div style="display:flex; align-items:center; gap:16px;">
                         <div style="width:64px; height:64px; border-radius:50%; background:#e0e7ff; color:var(--accent); display:flex; align-items:center; justify-content:center; font-size:1.5rem; font-weight:800; border:2.5px solid var(--accent); overflow:hidden; flex-shrink:0;">
-                            ${profPhoto ? `<img src="${r_esc_js(profPhoto)}" style="width:100%; height:100%; object-fit:cover;" onerror="this.src='assets/img/default-avatar.svg'; this.onerror=null;">` : `<img src="assets/img/default-avatar.svg" style="width:100%; height:100%; object-fit:cover;" onerror="this.outerHTML='<i class=\\\'fas fa-user-graduate\\\'></i>';">`}
+                            ${hubPhotoUrl ? `<img src="${r_esc_js(hubPhotoUrl)}" style="width:100%; height:100%; object-fit:cover;" onerror="this.src='assets/img/default-avatar.svg'; this.onerror=null;" alt="Avatar">` : `<img src="assets/img/default-avatar.svg" style="width:100%; height:100%; object-fit:cover;" alt="Avatar">`}
                         </div>
                         <div>
                             <h4 style="font-size:1.2rem; font-weight:800; color:var(--text-main); margin:0 0 4px 0;">${r_esc_js(profName)}</h4>
@@ -6048,6 +6078,21 @@ include 'includes/admin_nav.php';
 
                 // Render Analytics Hub with single source of truth
                 renderLearningAnalyticsHub(data.analytics, sp, {}, planTitle);
+
+                // Update Dossier sidebar student profile card
+                const dossierPhotoEl = document.getElementById('st-dossier-student-photo');
+                const dossierNameEl = document.getElementById('st-dossier-student-name');
+                const dossierMetaEl = document.getElementById('st-dossier-student-meta');
+                const activePhoto = sp.photo || sp.photo_url || currentSelectedStudentPhoto || '';
+                if (dossierPhotoEl) {
+                    dossierPhotoEl.src = activePhoto ? getAbsolutePhotoUrl(activePhoto) : 'assets/img/default-avatar.svg';
+                }
+                if (dossierNameEl) {
+                    dossierNameEl.innerText = sp.name || currentSelectedStudentName || 'Student';
+                }
+                if (dossierMetaEl) {
+                    dossierMetaEl.innerText = `${sp.masked_email || currentSelectedStudentEmail || ''} • ${sp.student_id || currentSelectedStudentId || ''}`;
+                }
 
                 // Update summary KPI counters in Dossier sidebar
                 document.getElementById('st-total-tasks-val').innerText = total;
