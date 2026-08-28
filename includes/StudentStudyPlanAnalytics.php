@@ -113,7 +113,8 @@ class StudentStudyPlanAnalytics {
             $key = !empty($log['activity_uid']) ? $log['activity_uid'] : 'id_' . $log['activity_id'];
             if (isset($effective_completions[$key]) && $effective_completions[$key] === 'completed') {
                 if ($log['completion_status'] === 'completed' && !empty($log['created_at'])) {
-                    $completed_dates[] = date('Y-m-d', strtotime($log['created_at']));
+                    $log_dt = new DateTimeImmutable($log['created_at'], new DateTimeZone('Asia/Kolkata'));
+                    $completed_dates[] = $log_dt->format('Y-m-d');
                 }
             }
         }
@@ -289,7 +290,8 @@ class StudentStudyPlanAnalytics {
             $key = !empty($log['activity_uid']) ? $log['activity_uid'] : 'id_' . $log['activity_id'];
             if (isset($effective_completions[$key]) && $effective_completions[$key] === 'completed') {
                 if ($log['completion_status'] === 'completed' && !empty($log['created_at'])) {
-                    $completed_dates[] = date('Y-m-d', strtotime($log['created_at']));
+                    $log_dt = new DateTimeImmutable($log['created_at'], new DateTimeZone('Asia/Kolkata'));
+                    $completed_dates[] = $log_dt->format('Y-m-d');
                 }
             }
         }
