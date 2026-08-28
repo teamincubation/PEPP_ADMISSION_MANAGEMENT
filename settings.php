@@ -310,6 +310,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
             } elseif ($action === 'save_smtp_settings') {
+                $smtp_pass = trim($_POST['smtp_pass'] ?? '');
+                if ($smtp_pass === '••••••••' || $smtp_pass === '') {
+                    $old_pass_stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'smtp_pass' LIMIT 1");
+                    $old_pass_stmt->execute();
+                    $smtp_pass = $old_pass_stmt->fetchColumn() ?: '';
+                }
+
                 $stmt = $pdo->prepare("
                     INSERT INTO admin_settings (setting_name, setting_value, created_at, updated_at)
                     VALUES (?, ?, NOW(), NOW())
@@ -321,7 +328,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'smtp_port'       => (string)(int)($_POST['smtp_port'] ?? 465),
                     'smtp_secure'     => in_array($_POST['smtp_secure'] ?? '', ['ssl', 'tls', 'none'], true) ? $_POST['smtp_secure'] : 'ssl',
                     'smtp_user'       => trim($_POST['smtp_user'] ?? ''),
-                    'smtp_pass'       => trim($_POST['smtp_pass'] ?? ''),
+                    'smtp_pass'       => $smtp_pass,
                     'smtp_from_email' => trim($_POST['smtp_from_email'] ?? ''),
                     'smtp_from_name'  => trim($_POST['smtp_from_name'] ?? 'PEPP Learning'),
                 ];
@@ -955,7 +962,7 @@ $nongst_preview = ($current_settings['inv_nongst_prefix'] ?? 'INV') . '/' . date
                     <input type="email" name="smtp_user" value="<?php echo e($ivs('smtp_user', 'noreply@pepplearning.in')); ?>" placeholder="noreply@pepplearning.in"></div>
 
                 <div class="field"><label>SMTP Password</label>
-                    <input type="password" name="smtp_pass" value="<?php echo e($ivs('smtp_pass', '')); ?>" placeholder="Enter SMTP password"></div>
+                    <input type="password" name="smtp_pass" value="<?php echo $ivs('smtp_pass', '') !== '' ? '••••••••' : ''; ?>" placeholder="<?php echo $ivs('smtp_pass', '') !== '' ? 'Leave blank to keep current password' : 'Enter SMTP password'; ?>"></div>
 
                 <div class="field"><label>Sender From Email</label>
                     <input type="email" name="smtp_from_email" value="<?php echo e($ivs('smtp_from_email', 'noreply@pepplearning.in')); ?>" placeholder="noreply@pepplearning.in"></div>

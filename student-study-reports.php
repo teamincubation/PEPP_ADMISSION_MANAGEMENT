@@ -274,9 +274,9 @@ if (isset($_GET['action'])) {
                     $results[] = [
                         'id' => $u['user_id'],
                         'name' => $u['name'],
-                        'email' => format_credential_text($u['email'], 'email', 'student-study-reports'),
-                        'phone' => format_credential_text($u['phone'], 'phone', 'student-study-reports'),
-                        'raw_email' => $u['email'],
+                        'email' => format_credential_text($u['email'], 'email', 'students'),
+                        'phone' => format_credential_text($u['phone'], 'phone', 'students'),
+                        'raw_email' => is_credential_restricted('students') ? format_credential_text($u['email'], 'email', 'students') : $u['email'],
                         'course' => $u['pepp_course'],
                         'academic_year' => $u['academic_year'],
                         'has_plans' => $has_plans,
@@ -292,18 +292,29 @@ if (isset($_GET['action'])) {
     // 2. Student Intelligence Dashboard Details
     if ($_GET['action'] === 'get_student_intelligence') {
         $email = trim($_GET['email'] ?? '');
+        $student_id = trim($_GET['student_id'] ?? $_GET['user_id'] ?? '');
         try {
-            $stmt = $pdo->prepare("
-                SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year, created_at, student_status, user_photo
-                FROM users
-                WHERE email = ? AND status = 'approved' LIMIT 1
-            ");
-            $stmt->execute([$email]);
+            if ($student_id !== '') {
+                $stmt = $pdo->prepare("
+                    SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year, created_at, student_status, user_photo
+                    FROM users
+                    WHERE user_id = ? AND status = 'approved' LIMIT 1
+                ");
+                $stmt->execute([$student_id]);
+            } else {
+                $stmt = $pdo->prepare("
+                    SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year, created_at, student_status, user_photo
+                    FROM users
+                    WHERE email = ? AND status = 'approved' LIMIT 1
+                ");
+                $stmt->execute([$email]);
+            }
             $student = $stmt->fetch(PDO::FETCH_ASSOC);
             if (!$student) {
                 echo json_encode(['error' => 'Student details not found.']);
                 exit;
             }
+            $email = $student['email'];
 
             // Quick calculations for learning statistics
             $stmt_as = $pdo->prepare("
@@ -534,9 +545,9 @@ if (isset($_GET['action'])) {
                 'student' => [
                     'name' => r_esc($student['name']),
                     'user_id' => $student['user_id'],
-                    'email' => $student['email'],
-                    'masked_email' => format_credential_text($student['email'], 'email', 'student-study-reports'),
-                    'masked_phone' => format_credential_text($student['phone'], 'phone', 'student-study-reports'),
+                    'email' => is_credential_restricted('students') ? format_credential_text($student['email'], 'email', 'students') : $student['email'],
+                    'masked_email' => format_credential_text($student['email'], 'email', 'students'),
+                    'masked_phone' => format_credential_text($student['phone'], 'phone', 'students'),
                     'course' => r_esc($student['pepp_course']),
                     'academic_year' => r_esc($student['academic_year']),
                     'joined_date' => $student['created_at'] ? date('d M Y', strtotime($student['created_at'])) : 'N/A',
@@ -563,6 +574,17 @@ if (isset($_GET['action'])) {
     // 3. Student Timeline and Analytics details
     if ($_GET['action'] === 'get_student_plan_timeline') {
         $email = trim($_GET['email'] ?? '');
+        $student_id = trim($_GET['student_id'] ?? $_GET['user_id'] ?? '');
+        if ($student_id !== '') {
+            try {
+                $stmt_resolve = $pdo->prepare("SELECT email FROM users WHERE user_id = ? LIMIT 1");
+                $stmt_resolve->execute([$student_id]);
+                $resolved_email = $stmt_resolve->fetchColumn();
+                if ($resolved_email) {
+                    $email = $resolved_email;
+                }
+            } catch (Exception $e) {}
+        }
         $plan_id = (int)($_GET['plan_id'] ?? 0);
         try {
             // Get plan type first
@@ -1064,7 +1086,7 @@ if (isset($_GET['action'])) {
 
                 $data[] = [
                     'name' => r_esc($r['name']),
-                    'masked_email' => format_credential_text($r['email'], 'email', 'student-study-reports'),
+                    'masked_email' => format_credential_text($r['email'], 'email', 'students'),
                     'completed_at' => date('d M Y h:i A', strtotime($r['created_at'])),
                     'ip' => $r['ip_address'] ?: 'N/A',
                     'browser' => $r['browser'] ?? 'N/A',
@@ -1126,8 +1148,8 @@ if (isset($_GET['action'])) {
                         'name' => r_esc($s['name']),
                         'email' => $s['email'],
                         'phone' => $s['phone'],
-                        'masked_email' => format_credential_text($s['email'], 'email', 'student-study-reports'),
-                        'masked_phone' => format_credential_text($s['phone'], 'phone', 'student-study-reports'),
+                        'masked_email' => format_credential_text($s['email'], 'email', 'students'),
+                        'masked_phone' => format_credential_text($s['phone'], 'phone', 'students'),
                         'overdue_days' => $overdue_days,
                         'task_title' => $act['activity_title']
                     ];
@@ -1184,7 +1206,7 @@ if (isset($_GET['action'])) {
                 $data[] = [
                     'id' => $s['id'],
                     'identifier' => r_esc($s['respondent_identifier']),
-                    'masked_identifier' => format_credential_text($s['respondent_identifier'], 'email', 'student-study-reports'),
+                    'masked_identifier' => format_credential_text($s['respondent_identifier'], 'email', 'students'),
                     'date' => date('d M Y h:i A', strtotime($s['created_at'])),
                     'converted' => $s['is_converted_lead'] ? 'Yes' : 'No'
                 ];
@@ -1518,9 +1540,10 @@ if (isset($_GET['action'])) {
                 $data[] = [
                     'user_id' => $s['user_id'],
                     'name' => r_esc($s['name']),
-                    'email' => $s['email'],
-                    'masked_email' => format_credential_text($s['email'], 'email', 'student-study-reports'),
-                    'masked_phone' => format_credential_text($s['phone'], 'phone', 'student-study-reports'),
+                    'email' => is_credential_restricted('students') ? format_credential_text($s['email'], 'email', 'students') : $s['email'],
+                    'phone' => is_credential_restricted('students') ? format_credential_text($s['phone'], 'phone', 'students') : $s['phone'],
+                    'masked_email' => format_credential_text($s['email'], 'email', 'students'),
+                    'masked_phone' => format_credential_text($s['phone'], 'phone', 'students'),
                     'joined' => date('d M Y', strtotime($s['created_at'])),
                     'converted' => $s['is_converted_lead'] ? 'Yes' : 'No',
                     'completed' => $comp,
@@ -1699,7 +1722,7 @@ if (isset($_GET['action'])) {
 
                 $data[] = [
                     'name' => r_esc($r['name']),
-                    'masked_email' => format_credential_text($r['email'], 'email', 'student-study-reports'),
+                    'masked_email' => format_credential_text($r['email'], 'email', 'students'),
                     'completed_at' => date('d M Y h:i A', strtotime($r['created_at'])),
                     'ip' => $r['ip_address'] ?: 'N/A',
                     'browser' => $r['browser'] ?? 'N/A',
@@ -1763,10 +1786,10 @@ if (isset($_GET['action'])) {
                 if ($comp === 0) {
                     $data[] = [
                         'name' => r_esc($s['name']),
-                        'email' => $s['email'],
-                        'phone' => $s['phone'],
-                        'masked_email' => format_credential_text($s['email'], 'email', 'student-study-reports'),
-                        'masked_phone' => format_credential_text($s['phone'], 'phone', 'student-study-reports'),
+                        'email' => is_credential_restricted('students') ? format_credential_text($s['email'], 'email', 'students') : $s['email'],
+                        'phone' => is_credential_restricted('students') ? format_credential_text($s['phone'], 'phone', 'students') : $s['phone'],
+                        'masked_email' => format_credential_text($s['email'], 'email', 'students'),
+                        'masked_phone' => format_credential_text($s['phone'], 'phone', 'students'),
                         'overdue_days' => $overdue_days
                     ];
                 }
@@ -1833,7 +1856,7 @@ if (isset($_GET['action'])) {
 
                         $data[] = [
                             r_esc($r['name']),
-                            format_credential_text($r['email'], 'email', 'student-study-reports'),
+                            format_credential_text($r['email'], 'email', 'students'),
                             r_esc($r['pepp_course']),
                             r_esc($r['academic_year']),
                             $plans
@@ -1927,7 +1950,7 @@ if (isset($_GET['action'])) {
 
                         $student_rows[] = [
                             'name' => r_esc($r['name']),
-                            'email' => format_credential_text($r['email'], 'email', 'student-study-reports'),
+                            'email' => format_credential_text($r['email'], 'email', 'students'),
                             'course' => r_esc($r['pepp_course']),
                             'year' => r_esc($r['academic_year']),
                             'registered_place' => r_esc($reg_place),
@@ -2065,7 +2088,7 @@ if (isset($_GET['action'])) {
                     foreach ($rows as $r) {
                         $data[] = [
                             r_esc($r['name']),
-                            format_credential_text($r['email'], 'email', 'student-study-reports'),
+                            format_credential_text($r['email'], 'email', 'students'),
                             ((int)$r['plan_deleted'] === 1 ? '[Archived / Deleted] ' : '') . r_esc($r['plan_title']),
                             r_esc($r['subject'] ?: '-'),
                             r_esc($r['chapter'] ?: '-'),
@@ -2114,7 +2137,7 @@ if (isset($_GET['action'])) {
 
                         $data[] = [
                             r_esc($std['name']),
-                            format_credential_text($std['email'], 'email', 'student-study-reports'),
+                            format_credential_text($std['email'], 'email', 'students'),
                             r_esc($std['pepp_course']),
                             $comp . ' / ' . $total,
                             '<strong>' . $pct . '%</strong>'
@@ -2247,7 +2270,7 @@ if (isset($_GET['action'])) {
 
                 $export_list[] = [
                     'name' => $std['name'],
-                    'email' => format_credential_text($std['email'], 'email', 'student-study-reports'),
+                    'email' => format_credential_text($std['email'], 'email', 'students'),
                     'plans' => $plans_count,
                     'tasks' => $completed . ' / ' . $total_tasks,
                     'pct' => $pct . '%',
@@ -2383,7 +2406,7 @@ if ($source === 'courses') {
 
 $page_title = 'Performance & Analytics Intelligence';
 $page_sub = 'Enterprise analytics, performance dashboards, and activities tracking portal';
-$active_page = 'student-study-reports';
+$active_page = 'students';
 $extra_head = '
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -3606,6 +3629,7 @@ include 'includes/admin_nav.php';
     const sourceVal = '<?php echo addslashes($source); ?>';
     const isSuperAdmin = <?php echo is_super_admin() ? 'true' : 'false'; ?>;
     const csrfToken = '<?php echo csrf_token(); ?>';
+    const isCredentialRestricted = <?php echo is_credential_restricted('students') ? 'true' : 'false'; ?>;
 
     document.addEventListener('DOMContentLoaded', function() {
         if (sourceVal === 'courses') {
@@ -3613,10 +3637,13 @@ include 'includes/admin_nav.php';
             const input = document.getElementById('global-student-search-input');
             const box = document.getElementById('search-autocomplete-box');
 
-            // Auto-load student report if email is in query params
+            // Auto-load student report if email/student_id/user_id is in query params
             const urlParams = new URLSearchParams(window.location.search);
             const emailParam = urlParams.get('email');
-            if (emailParam) {
+            const studentIdParam = urlParams.get('student_id') || urlParams.get('user_id');
+            if (studentIdParam) {
+                loadStudentIntelligenceDashboard(null, studentIdParam);
+            } else if (emailParam) {
                 loadStudentIntelligenceDashboard(emailParam);
             }
 
@@ -3648,7 +3675,7 @@ include 'includes/admin_nav.php';
                                 </div>
                             `;
                             row.addEventListener('click', function() {
-                                loadStudentIntelligenceDashboard(item.raw_email);
+                                loadStudentIntelligenceDashboard(null, item.id);
                                 box.style.display = 'none';
                                 input.value = item.name;
                             });
@@ -3842,6 +3869,7 @@ include 'includes/admin_nav.php';
     let currentSelectedStudentEmail = '';
     let currentSelectedStudentName = '';
     let currentSelectedStudentCourse = '';
+    let currentSelectedStudentId = '';
     let timelineActivities = [];
 
     // ── LIGHTBOX HELPERS ──
@@ -3899,14 +3927,22 @@ include 'includes/admin_nav.php';
     }
 
     // ── LOAD INTEL DASHBOARD ──
-    function loadStudentIntelligenceDashboard(email) {
+    function loadStudentIntelligenceDashboard(email, studentId = '') {
         currentSelectedStudentEmail = email;
+        currentSelectedStudentId = studentId;
         hideAllViewportViews();
         const container = document.getElementById('student-workspace');
         container.innerHTML = `<div class="chart-card" style="text-align:center; padding:4rem;"><i class="fas fa-spinner fa-spin" style="font-size:2rem; color:var(--accent);"></i><p>Gathering learning analytics indicators...</p></div>`;
         container.style.display = 'block';
 
-        fetch('?action=get_student_intelligence&email=' + encodeURIComponent(email))
+        let url = '?action=get_student_intelligence';
+        if (studentId) {
+            url += '&student_id=' + encodeURIComponent(studentId);
+        } else {
+            url += '&email=' + encodeURIComponent(email);
+        }
+
+        fetch(url)
             .then(res => res.json())
             .then(data => {
                 if (data.error) {
@@ -3974,9 +4010,15 @@ include 'includes/admin_nav.php';
 
                             <!-- Communication Actions -->
                             <div style="display:flex; flex-direction:column; gap:8px;">
-                                <a href="https://wa.me/${s.masked_phone.replace(/\D/g, '')}" target="_blank" class="btn btn-whatsapp" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fab fa-whatsapp"></i> Chat on WhatsApp</a>
-                                <a href="mailto:${s.email}" class="btn btn-primary" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-envelope"></i> Send Email</a>
-                                <a href="tel:${s.masked_phone}" class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-phone"></i> Call Student</a>
+                                ${isCredentialRestricted ? `
+                                    <button class="btn btn-whatsapp" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i> Chat on WhatsApp (Restricted)</button>
+                                    <button class="btn btn-primary" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-envelope"></i> Send Email (Restricted)</button>
+                                    <button class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-phone"></i> Call Student (Restricted)</button>
+                                ` : `
+                                    <a href="https://wa.me/${s.masked_phone.replace(/\D/g, '')}" target="_blank" class="btn btn-whatsapp" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fab fa-whatsapp"></i> Chat on WhatsApp</a>
+                                    <a href="mailto:${s.email}" class="btn btn-primary" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-envelope"></i> Send Email</a>
+                                    <a href="tel:${s.masked_phone}" class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-phone"></i> Call Student</a>
+                                `}
                                 <a href="student-details.php?user_id=${s.user_id}" class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-user-graduate"></i> View Profile Page</a>
                             </div>
                         </div>
@@ -4038,7 +4080,7 @@ include 'includes/admin_nav.php';
                 container.innerHTML = html;
 
                 // Load Assessment Results for this student
-                loadStudentAssessmentResults(email);
+                loadStudentAssessmentResults(email, s.user_id);
                 loadStudentCallLogs(s.user_id);
                 loadStudentRemarks(s.user_id);
 
@@ -4124,7 +4166,7 @@ include 'includes/admin_nav.php';
                                         ${pulseIndicator}
                                         <strong style="font-size:0.95rem; color:var(--text-main);">${p.title}</strong>
                                     </div>
-                                    <button class="btn btn-sm btn-soft-violet" style="padding: 4px 10px; font-size:0.75rem;" onclick="openStudentTimeline('${s.email}', ${p.id}, '${p.title.replace(/'/g, "\\'")}', '${s.streak}', '${s.performance_label}')"><i class="fas fa-list-check"></i> View Timeline Checklist</button>
+                                    <button class="btn btn-sm btn-soft-violet" style="padding: 4px 10px; font-size:0.75rem;" onclick="openStudentTimeline('${s.email}', ${p.id}, '${p.title.replace(/'/g, "\\'")}', '${s.streak}', '${s.performance_label}', '${s.user_id}')"><i class="fas fa-list-check"></i> View Timeline Checklist</button>
                                 </div>
 
                                 <div style="display:flex; gap:16px; flex-wrap:wrap; font-size:0.75rem; color:var(--text-muted); border-top:1px dashed #e2e8f0; padding-top:8px; margin-top:4px;">
@@ -4153,10 +4195,16 @@ include 'includes/admin_nav.php';
     }
 
     // ── LOAD STUDENT ASSESSMENT RESULTS ──
-    function loadStudentAssessmentResults(email) {
+    function loadStudentAssessmentResults(email, studentId = '') {
         const container = document.getElementById('std-assessment-results-container');
         if (!container) return;
-        fetch('assessment-results.php?action=get_student_results&email=' + encodeURIComponent(email))
+        let url = 'assessment-results.php?action=get_student_results';
+        if (studentId) {
+            url += '&student_id=' + encodeURIComponent(studentId);
+        } else {
+            url += '&email=' + encodeURIComponent(email);
+        }
+        fetch(url)
             .then(r => r.json())
             .then(results => {
                 if (!results || results.length === 0) {
@@ -4306,26 +4354,34 @@ include 'includes/admin_nav.php';
     }
 
     // ── TIMELINE DETAILS LOADING ──
-    function openStudentTimeline(email, planId, planTitle, streakDays, overallPerformance) {
+    function openStudentTimeline(email, planId, planTitle, streakDays, overallPerformance, studentId = '') {
         const titleEl = document.getElementById('st-modal-title');
         const subtitleEl = document.getElementById('st-modal-subtitle');
         const timelineListContainer = document.getElementById('st-timeline-list');
         const backdrop = document.getElementById('student-task-modal-backdrop');
 
         backdrop.dataset.email = email;
+        backdrop.dataset.studentId = studentId;
         backdrop.dataset.planId = planId;
         backdrop.dataset.planTitle = planTitle;
         backdrop.dataset.streakDays = streakDays;
         backdrop.dataset.overallPerformance = overallPerformance;
 
         titleEl.innerHTML = `<i class="fas fa-folder-open" style="color:var(--accent);"></i> Checklist Audit: ${planTitle}`;
-        subtitleEl.innerHTML = `Student: <strong>${currentSelectedStudentName}</strong> (${email}) &nbsp;|&nbsp; Course: <strong>${currentSelectedStudentCourse}</strong>`;
+        subtitleEl.innerHTML = `Student: <strong>${currentSelectedStudentName}</strong> (${email ? email : studentId}) &nbsp;|&nbsp; Course: <strong>${currentSelectedStudentCourse}</strong>`;
 
         timelineListContainer.innerHTML = `<div style="text-align:center; padding:3rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent);"></i><p>Loading chronological checklist timeline...</p></div>`;
 
         openTimelineModal();
 
-        fetch(`?action=get_student_plan_timeline&email=${encodeURIComponent(email)}&plan_id=${planId}`)
+        let url = `?action=get_student_plan_timeline&plan_id=${planId}`;
+        if (studentId) {
+            url += `&student_id=${encodeURIComponent(studentId)}`;
+        } else {
+            url += `&email=${encodeURIComponent(email)}`;
+        }
+
+        fetch(url)
             .then(res => res.json())
             .then(data => {
                 if (data.error) {
@@ -5066,9 +5122,15 @@ include 'includes/admin_nav.php';
                             <td style="padding:8px; text-align:center; color:#ef4444; font-weight:800;">${s.overdue_days} Days</td>
                             <td style="padding:8px; text-align:right;">
                                 <div style="display:inline-flex; gap:4px;">
-                                    <a href="${waLink}" target="_blank" class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.65rem;" title="Send WhatsApp alert"><i class="fab fa-whatsapp"></i></a>
-                                    <a href="mailto:${s.email}?subject=Pending Task Alert" class="btn btn-xs btn-primary" style="padding:3px 6px; font-size:0.65rem;" title="Send Email alert"><i class="fas fa-envelope"></i></a>
-                                    <a href="tel:${s.phone}" class="btn btn-xs btn-info" style="padding:3px 6px; font-size:0.65rem;" title="Call student"><i class="fas fa-phone"></i></a>
+                                    ${isCredentialRestricted ? `
+                                        <button class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.65rem; opacity:0.6; cursor:not-allowed;" title="Send WhatsApp alert (Restricted)" disabled><i class="fab fa-whatsapp"></i></button>
+                                        <button class="btn btn-xs btn-primary" style="padding:3px 6px; font-size:0.65rem; opacity:0.6; cursor:not-allowed;" title="Send Email alert (Restricted)" disabled><i class="fas fa-envelope"></i></button>
+                                        <button class="btn btn-xs btn-info" style="padding:3px 6px; font-size:0.65rem; opacity:0.6; cursor:not-allowed;" title="Call student (Restricted)" disabled><i class="fas fa-phone"></i></button>
+                                    ` : `
+                                        <a href="${waLink}" target="_blank" class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.65rem;" title="Send WhatsApp alert"><i class="fab fa-whatsapp"></i></a>
+                                        <a href="mailto:${s.email}?subject=Pending Task Alert" class="btn btn-xs btn-primary" style="padding:3px 6px; font-size:0.65rem;" title="Send Email alert"><i class="fas fa-envelope"></i></a>
+                                        <a href="tel:${s.phone}" class="btn btn-xs btn-info" style="padding:3px 6px; font-size:0.65rem;" title="Call student"><i class="fas fa-phone"></i></a>
+                                    `}
                                 </div>
                             </td>
                         </tr>
@@ -5427,7 +5489,7 @@ include 'includes/admin_nav.php';
                     <td style="padding:10px 8px; text-align:center; font-weight:700;">${s.score}</td>
                     <td style="padding:10px 8px; text-align:center; font-weight:700; color:var(--accent);">${s.pct}%</td>
                     <td style="padding:10px 8px; text-align:right;">
-                        <button class="btn btn-xs btn-outline" style="padding:4px 8px;" onclick="loadStudentTimelineChecklist('${s.email}')"><i class="fas fa-eye"></i> View Dossier</button>
+                        <button class="btn btn-xs btn-outline" style="padding:4px 8px;" onclick="loadStudentIntelligenceDashboard(null, '${s.user_id}')"><i class="fas fa-eye"></i> View Dossier</button>
                     </td>
                 </tr>
             `;
@@ -5616,8 +5678,13 @@ include 'includes/admin_nav.php';
                             <td style="padding:6px;">${s.masked_phone}</td>
                             <td style="padding:6px; text-align:right;">
                                 <div style="display:inline-flex; gap:3px;">
-                                    <a href="${waLink}" target="_blank" class="btn btn-xs btn-success" style="padding:2px 4px; font-size:0.6rem;"><i class="fab fa-whatsapp"></i></a>
-                                    <a href="mailto:${s.email}?subject=Pending Task Checklist Alert" class="btn btn-xs btn-primary" style="padding:2px 4px; font-size:0.6rem;"><i class="fas fa-envelope"></i></a>
+                                    ${isCredentialRestricted ? `
+                                        <button class="btn btn-xs btn-success" style="padding:2px 4px; font-size:0.6rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i></button>
+                                        <button class="btn btn-xs btn-primary" style="padding:2px 4px; font-size:0.6rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-envelope"></i></button>
+                                    ` : `
+                                        <a href="${waLink}" target="_blank" class="btn btn-xs btn-success" style="padding:2px 4px; font-size:0.6rem;"><i class="fab fa-whatsapp"></i></a>
+                                        <a href="mailto:${s.email}?subject=Pending Task Checklist Alert" class="btn btn-xs btn-primary" style="padding:2px 4px; font-size:0.6rem;"><i class="fas fa-envelope"></i></a>
+                                    `}
                                 </div>
                             </td>
                         </tr>
@@ -5746,15 +5813,16 @@ include 'includes/admin_nav.php';
                 // Refresh timeline checklist modal
                 const backdrop = document.getElementById('student-task-modal-backdrop');
                 const email = backdrop.dataset.email;
+                const studentId = backdrop.dataset.studentId;
                 const planId = backdrop.dataset.planId;
                 const planTitle = backdrop.dataset.planTitle;
                 const streakDays = backdrop.dataset.streakDays;
                 const overallPerformance = backdrop.dataset.overallPerformance;
 
-                if (email && planId) {
-                    openStudentTimeline(email, planId, planTitle, streakDays, overallPerformance);
+                if ((email || studentId) && planId) {
+                    openStudentTimeline(email, planId, planTitle, streakDays, overallPerformance, studentId);
                     if (typeof loadStudentIntelligenceDashboard === 'function') {
-                        loadStudentIntelligenceDashboard(email);
+                        loadStudentIntelligenceDashboard(email, studentId);
                     }
                 } else {
                     location.reload();

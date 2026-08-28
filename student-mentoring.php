@@ -668,8 +668,8 @@ include 'includes/admin_nav.php';
                 ?>
                 <tr class="student-row"
                     data-name="<?= e(strtolower($s['full_name'])) ?>"
-                    data-email="<?= e(strtolower($s['email'])) ?>"
-                    data-mobile="<?= e($s['whatsapp_number']) ?>"
+                    data-email="<?= e(is_credential_restricted('students') ? format_credential_text($s['email'], 'email', 'students') : strtolower($s['email'])) ?>"
+                    data-mobile="<?= e(is_credential_restricted('students') ? format_credential_text($s['whatsapp_number'], 'phone', 'students') : $s['whatsapp_number']) ?>"
                     data-user-id="<?= e(strtolower($s['user_id'])) ?>"
                     data-progress="<?= (int)$m['progress'] ?>"
                     data-streak="<?= (int)$m['streak'] ?>"
@@ -679,7 +679,7 @@ include 'includes/admin_nav.php';
                     data-attendance="<?= (int)$m['attendance'] ?>">
                     <td data-label="Student">
                         <div class="cell-main"><?= e($s['full_name']) ?></div>
-                        <div class="cell-sub"><?= e($s['email']) ?> · <?= e($s['whatsapp_country_code'] . ' ' . $s['whatsapp_number']) ?></div>
+                        <div class="cell-sub"><?= htmlspecialchars(format_credential_text($s['email'], 'email', 'students'), ENT_QUOTES, 'UTF-8') ?> · <?= htmlspecialchars(($s['whatsapp_country_code'] ?: '+91') . ' ' . format_credential_text($s['whatsapp_number'], 'phone', 'students'), ENT_QUOTES, 'UTF-8') ?></div>
                     </td>
                     <td data-label="Course">
                         <div class="cell-main"><?= e($s['course']) ?></div>
@@ -704,9 +704,13 @@ include 'includes/admin_nav.php';
                         </div>
                     </td>
                     <td class="actions-cell" style="text-align:right; white-space:nowrap;">
-                        <a href="student-study-reports.php?source=courses&email=<?= urlencode($s['email']) ?>" target="_blank" class="btn btn-sm btn-soft-violet" title="View Student Report"><i class="fas fa-chart-line"></i> Report</a>
+                        <a href="student-study-reports.php?source=courses&student_id=<?= urlencode($s['user_id']) ?>" target="_blank" class="btn btn-sm btn-soft-violet" title="View Student Report"><i class="fas fa-chart-line"></i> Report</a>
                         <button type="button" class="btn btn-sm btn-soft-blue" onclick="openCall('<?= e($s['user_id']) ?>', '<?= e($s['full_name']) ?>')" title="Log Call"><i class="fas fa-phone"></i> Log Call</button>
-                        <a href="https://wa.me/<?= $wa_phone ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
+                        <?php if (is_credential_restricted('students')): ?>
+                            <button type="button" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat (Restricted)" style="opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i> Chat</button>
+                        <?php else: ?>
+                            <a href="https://wa.me/<?= $wa_phone ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
+                        <?php endif; ?>
                         <button type="button" class="btn btn-sm btn-outline" onclick="openRemark('<?= e($s['user_id']) ?>', '<?= e($s['full_name']) ?>')" title="Add/View Remarks"><i class="fas fa-comment-dots"></i> Remarks (<?= $m['remarks_count'] ?>)</button>
                     </td>
                 </tr>
@@ -750,15 +754,15 @@ include 'includes/admin_nav.php';
             <tr>
                 <td class="cell-main">
                     <div class="cell-main">
-                        <?php if (!empty($cl['email'])): ?>
-                            <a href="student-study-reports.php?source=courses&email=<?php echo urlencode($cl['email']); ?>" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none;">
+                        <?php if (!empty($cl['student_user_id'])): ?>
+                            <a href="student-study-reports.php?source=courses&student_id=<?php echo urlencode($cl['student_user_id']); ?>" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none;">
                                 <?php echo e($cl['student_name'] ?: 'Unknown (' . $cl['student_user_id'] . ')'); ?>
                             </a>
                         <?php else: ?>
                             <?php echo e($cl['student_name'] ?: 'Unknown (' . $cl['student_user_id'] . ')'); ?>
                         <?php endif; ?>
                     </div>
-                    <div class="cell-sub"><?php echo e(($cl['whatsapp_country_code'] ?: '+91') . ' ' . $cl['whatsapp_number']); ?></div>
+                    <div class="cell-sub"><?php echo e(($cl['whatsapp_country_code'] ?: '+91') . ' ' . format_credential_text($cl['whatsapp_number'], 'phone', 'students')); ?></div>
                 </td>
                 <td class="cell-sub"><?php echo e($cl['admin_username']); ?></td>
                 <td class="cell-sub"><?php echo date('d M Y, h:i A', strtotime($cl['call_timestamp'])); ?></td>
@@ -768,7 +772,11 @@ include 'includes/admin_nav.php';
                     $cl_wa = preg_replace('/\D/', '', ($cl['whatsapp_country_code'] ?: '+91') . $cl['whatsapp_number']);
                     if ($cl_wa):
                     ?>
-                    <a href="https://wa.me/<?php echo $cl_wa; ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
+                        <?php if (is_credential_restricted('students')): ?>
+                            <button type="button" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat (Restricted)" style="opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i> Chat</button>
+                        <?php else: ?>
+                            <a href="https://wa.me/<?php echo $cl_wa; ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
+                        <?php endif; ?>
                     <?php endif; ?>
 
                     <?php if (is_super_admin()): ?>
@@ -823,15 +831,15 @@ include 'includes/admin_nav.php';
             <tr>
                 <td class="cell-main">
                     <div class="cell-main">
-                        <?php if (!empty($rm['email'])): ?>
-                            <a href="student-study-reports.php?source=courses&email=<?php echo urlencode($rm['email']); ?>" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none;">
+                        <?php if (!empty($rm['student_user_id'])): ?>
+                            <a href="student-study-reports.php?source=courses&student_id=<?php echo urlencode($rm['student_user_id']); ?>" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none;">
                                 <?php echo e($rm['student_name'] ?: 'Unknown (' . $rm['student_user_id'] . ')'); ?>
                             </a>
                         <?php else: ?>
                             <?php echo e($rm['student_name'] ?: 'Unknown (' . $rm['student_user_id'] . ')'); ?>
                         <?php endif; ?>
                     </div>
-                    <div class="cell-sub"><?php echo e(($rm['whatsapp_country_code'] ?: '+91') . ' ' . $rm['whatsapp_number']); ?></div>
+                    <div class="cell-sub"><?php echo e(($rm['whatsapp_country_code'] ?: '+91') . ' ' . format_credential_text($rm['whatsapp_number'], 'phone', 'students')); ?></div>
                 </td>
                 <td class="cell-sub"><?php echo e($rm['admin_username']); ?></td>
                 <td style="max-width:350px;"><?php echo e($rm['remark']); ?></td>
@@ -841,7 +849,11 @@ include 'includes/admin_nav.php';
                     $rm_wa = preg_replace('/\D/', '', ($rm['whatsapp_country_code'] ?: '+91') . $rm['whatsapp_number']);
                     if ($rm_wa):
                     ?>
-                    <a href="https://wa.me/<?php echo $rm_wa; ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
+                        <?php if (is_credential_restricted('students')): ?>
+                            <button type="button" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat (Restricted)" style="opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i> Chat</button>
+                        <?php else: ?>
+                            <a href="https://wa.me/<?php echo $rm_wa; ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
+                        <?php endif; ?>
                     <?php endif; ?>
 
                     <?php if (is_super_admin()): ?>

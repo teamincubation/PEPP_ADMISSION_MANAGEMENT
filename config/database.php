@@ -69,6 +69,7 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 event_name TEXT DEFAULT NULL,
                 invoice_id INTEGER DEFAULT NULL
             );
+            CREATE INDEX IF NOT EXISTS idx_status_channel_next_attempt ON communication_queue (status, channel, next_attempt_at, created_at);
             CREATE TABLE IF NOT EXISTS communication_campaigns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,

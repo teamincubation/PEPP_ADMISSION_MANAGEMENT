@@ -940,7 +940,20 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
     // Get student assessment results
     if ($ajax_action === 'get_student_results') {
         $email = strtolower(trim($_GET['email'] ?? ''));
-        if (empty($email)) { echo json_encode([]); exit; }
+        $student_id = trim($_GET['student_id'] ?? $_GET['user_id'] ?? '');
+        if (empty($email) && empty($student_id)) { echo json_encode([]); exit; }
+
+        if (!empty($student_id)) {
+            try {
+                $stmt_resolve = $pdo->prepare("SELECT email FROM users WHERE user_id = ? LIMIT 1");
+                $stmt_resolve->execute([$student_id]);
+                $resolved_email = $stmt_resolve->fetchColumn();
+                if ($resolved_email) {
+                    $email = strtolower(trim($resolved_email));
+                }
+            } catch (Exception $e) {}
+        }
+
         try {
             $stmt = $pdo->prepare("
                 SELECT ar.*, arb.activity_title_snapshot, arb.activity_type_snapshot, arb.activity_date_snapshot, arb.chapter_snapshot, arb.course_name, arb.academic_year, arb.version, arb.status as batch_status
@@ -969,6 +982,10 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
                 $r['rank'] = $ranks[$r['student_email']] ?? null;
                 $r['total_ranked'] = count($ranks);
                 if ($r['score']!==null && $r['total_score']!==null && $r['total_score']>0) { $r['percentage'] = round(($r['score']/$r['total_score'])*100,2); }
+
+                if (is_credential_restricted('students')) {
+                    $r['student_email'] = format_credential_text($r['student_email'], 'email', 'students');
+                }
             }
             unset($r);
             echo json_encode($results);

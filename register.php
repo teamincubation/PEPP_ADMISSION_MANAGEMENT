@@ -66,6 +66,16 @@ $success_message = '';
 $email_exists = false;
 $whatsapp_exists = false;
 
+function normalize_whatsapp_number($num) {
+    $num = preg_replace('/\D/', '', $num);
+    if (strlen($num) === 11 && strpos($num, '0') === 0) {
+        $num = substr($num, 1);
+    } elseif (strlen($num) === 12 && strpos($num, '91') === 0) {
+        $num = substr($num, 2);
+    }
+    return $num;
+}
+
 if (isset($_GET['ajax'])) {
     header('Content-Type: application/json');
     
@@ -74,13 +84,22 @@ if (isset($_GET['ajax'])) {
     if ($_GET['ajax'] === 'check_email' && isset($_GET['email']) && isset($_GET['academic_year'])) {
         try {
             if (empty($_GET['course'])) {
-                echo json_encode(['exists' => false, 'need_course' => true]);
+                echo json_encode(['exists' => false, 'eligible' => false, 'need_course' => true]);
                 exit;
             }
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE email = ? AND pepp_course = ? AND pepp_academic_year = ?");
-            $stmt->execute([$_GET['email'], $_GET['course'], $_GET['academic_year']]);
+            $email = strtolower(trim($_GET['email']));
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                echo json_encode(['exists' => false, 'eligible' => false, 'reason' => 'invalid_format']);
+                exit;
+            }
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE LOWER(email) = ? AND pepp_course = ? AND pepp_academic_year = ?");
+            $stmt->execute([$email, $_GET['course'], $_GET['academic_year']]);
             $exists = $stmt->fetchColumn() > 0;
-            echo json_encode(['exists' => $exists]);
+            echo json_encode([
+                'exists' => $exists,
+                'eligible' => !$exists,
+                'reason' => $exists ? 'already_registered' : null
+            ]);
         } catch (Exception $e) {
             echo json_encode(['error' => 'Database error']);
         }
@@ -90,13 +109,22 @@ if (isset($_GET['ajax'])) {
     if ($_GET['ajax'] === 'check_whatsapp' && isset($_GET['whatsapp']) && isset($_GET['academic_year'])) {
         try {
             if (empty($_GET['course'])) {
-                echo json_encode(['exists' => false, 'need_course' => true]);
+                echo json_encode(['exists' => false, 'eligible' => false, 'need_course' => true]);
+                exit;
+            }
+            $whatsapp = normalize_whatsapp_number($_GET['whatsapp']);
+            if (strlen($whatsapp) !== 10) {
+                echo json_encode(['exists' => false, 'eligible' => false, 'reason' => 'invalid_format']);
                 exit;
             }
             $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE whatsapp_number = ? AND pepp_course = ? AND pepp_academic_year = ?");
-            $stmt->execute([$_GET['whatsapp'], $_GET['course'], $_GET['academic_year']]);
+            $stmt->execute([$whatsapp, $_GET['course'], $_GET['academic_year']]);
             $exists = $stmt->fetchColumn() > 0;
-            echo json_encode(['exists' => $exists]);
+            echo json_encode([
+                'exists' => $exists,
+                'eligible' => !$exists,
+                'reason' => $exists ? 'already_registered' : null
+            ]);
         } catch (Exception $e) {
             echo json_encode(['error' => 'Database error']);
         }
@@ -139,13 +167,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'gender' => $_POST['gender'] ?? '',
         'date_of_birth' => $_POST['date_of_birth'] ?? '',
         'whatsapp_country_code' => $_POST['whatsapp_country_code'] ?? '+91',
-        'whatsapp_number' => trim($_POST['whatsapp_number'] ?? ''),
+        'whatsapp_number' => normalize_whatsapp_number($_POST['whatsapp_number'] ?? ''),
         'mobile_same_whatsapp' => $_POST['mobile_same_whatsapp'] ?? '',
         'mobile_country_code' => $_POST['mobile_country_code'] ?? '+91',
         'mobile_number' => trim($_POST['mobile_number'] ?? ''),
         'emergency_country_code' => $_POST['emergency_country_code'] ?? '+91',
         'emergency_contact' => trim($_POST['emergency_contact'] ?? ''),
-        'email' => trim($_POST['email'] ?? ''),
+        'email' => strtolower(trim($_POST['email'] ?? '')),
         'postal_address' => trim($_POST['postal_address'] ?? ''),
         'postal_pincode' => trim($_POST['postal_pincode'] ?? ''),
         'state' => trim($_POST['state'] ?? ''),
@@ -204,11 +232,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     if (!empty($form_data['email']) && !empty($form_data['pepp_course']) && !empty($form_data['pepp_academic_year'])) {
         try {
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE email = ? AND pepp_course = ? AND pepp_academic_year = ?");
-            $stmt->execute([$form_data['email'], $form_data['pepp_course'], $form_data['pepp_academic_year']]);
-            if ($stmt->fetchColumn() > 0) {
-                $validation_errors['email'] = 'This email is already registered for this course in the selected academic year';
-                $email_exists = true;
+            if (!filter_var($form_data['email'], FILTER_VALIDATE_EMAIL)) {
+                $validation_errors['email'] = 'Invalid email format';
+            } else {
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE LOWER(email) = ? AND pepp_course = ? AND pepp_academic_year = ?");
+                $stmt->execute([$form_data['email'], $form_data['pepp_course'], $form_data['pepp_academic_year']]);
+                if ($stmt->fetchColumn() > 0) {
+                    $validation_errors['email'] = 'This email is already registered for this course in the selected academic year';
+                    $email_exists = true;
+                }
             }
         } catch (Exception $e) {
             error_log("Email check error: " . $e->getMessage());
@@ -217,11 +249,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     if (!empty($form_data['whatsapp_number']) && !empty($form_data['pepp_course']) && !empty($form_data['pepp_academic_year'])) {
         try {
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE whatsapp_number = ? AND pepp_course = ? AND pepp_academic_year = ?");
-            $stmt->execute([$form_data['whatsapp_number'], $form_data['pepp_course'], $form_data['pepp_academic_year']]);
-            if ($stmt->fetchColumn() > 0) {
-                $validation_errors['whatsapp_number'] = 'This WhatsApp number is already registered for this course in the selected academic year';
-                $whatsapp_exists = true;
+            if (strlen($form_data['whatsapp_number']) !== 10) {
+                $validation_errors['whatsapp_number'] = 'Invalid WhatsApp number. Please enter a 10-digit number.';
+            } else {
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE whatsapp_number = ? AND pepp_course = ? AND pepp_academic_year = ?");
+                $stmt->execute([$form_data['whatsapp_number'], $form_data['pepp_course'], $form_data['pepp_academic_year']]);
+                if ($stmt->fetchColumn() > 0) {
+                    $validation_errors['whatsapp_number'] = 'This WhatsApp number is already registered for this course in the selected academic year';
+                    $whatsapp_exists = true;
+                }
             }
         } catch (Exception $e) {
             error_log("WhatsApp check error: " . $e->getMessage());
@@ -2045,11 +2081,41 @@ $country_codes = [
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         let emailTimeout, whatsappTimeout;
+        let emailState = 'empty';
+        let whatsappState = 'empty';
+        let emailController = null;
+        let whatsappController = null;
+
+        function normalizeWhatsAppNumber(num) {
+            num = num.replace(/\D/g, '');
+            if (num.length === 11 && num.startsWith('0')) {
+                num = num.substring(1);
+            } else if (num.length === 12 && num.startsWith('91')) {
+                num = num.substring(2);
+            }
+            return num;
+        }
 
         // ── Submit button loading state + Client Validation ──────────
         const submitBtn = document.getElementById('submit-btn');
         const form = document.getElementById('registration-form');
         form.addEventListener('submit', function(e) {
+            if (emailState === 'checking' || whatsappState === 'checking') {
+                e.preventDefault();
+                alert('Please wait while we verify your email and WhatsApp number availability...');
+                return;
+            }
+            if (emailState === 'registered' || emailState === 'invalid' || emailState === 'error') {
+                e.preventDefault();
+                alert('Please correct the email address error before submitting.');
+                return;
+            }
+            if (whatsappState === 'registered' || whatsappState === 'invalid' || whatsappState === 'error') {
+                e.preventDefault();
+                alert('Please correct the WhatsApp number error before submitting.');
+                return;
+            }
+
             // Clear any existing client-side summary
             const existingSummary = document.getElementById('client-validation-summary');
             if (existingSummary) {
@@ -2196,13 +2262,14 @@ $country_codes = [
         const courseSelect = document.querySelector('select[name="pepp_course"]');
 
         function checkEmail() {
-            const email = emailInput.value.trim();
+            const email = emailInput.value.trim().toLowerCase();
             const academicYear = academicYearSelect.value;
             const course = courseSelect ? courseSelect.value : '';
             const indicator = document.getElementById('email-indicator');
             const message   = document.getElementById('email-message');
             
             if (!email) {
+                emailState = 'empty';
                 emailInput.classList.remove('error-field', 'success-field');
                 indicator.innerHTML = '';
                 message.innerHTML   = '';
@@ -2212,6 +2279,7 @@ $country_codes = [
             // Format check
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             if (!emailRegex.test(email)) {
+                emailState = 'invalid';
                 emailInput.classList.add('error-field');
                 emailInput.classList.remove('success-field');
                 indicator.innerHTML = '<i class="fas fa-times text-danger"></i>';
@@ -2220,27 +2288,52 @@ $country_codes = [
             }
             
             if (academicYear && course) {
+                emailState = 'checking';
+                indicator.innerHTML = '<i class="fas fa-spinner fa-spin text-muted"></i>';
+                message.innerHTML   = '<div style="color:var(--text-muted); font-size:0.8rem;"><i class="fas fa-spinner fa-spin"></i> Checking availability...</div>';
+                
                 clearTimeout(emailTimeout);
                 emailTimeout = setTimeout(() => {
-                    fetch('?ajax=check_email&email=' + encodeURIComponent(email) + '&academic_year=' + encodeURIComponent(academicYear) + '&course=' + encodeURIComponent(course))
+                    if (emailController) {
+                        emailController.abort();
+                    }
+                    emailController = new AbortController();
+                    const signal = emailController.signal;
+
+                    fetch('?ajax=check_email&email=' + encodeURIComponent(email) + '&academic_year=' + encodeURIComponent(academicYear) + '&course=' + encodeURIComponent(course), { signal })
                         .then(r => r.json())
                         .then(data => {
                             if (data.exists) {
+                                emailState = 'registered';
                                 emailInput.classList.add('error-field');
                                 emailInput.classList.remove('success-field');
                                 indicator.innerHTML = '<i class="fas fa-times text-danger"></i>';
                                 message.innerHTML   = '<div class="error-message"><i class="fas fa-exclamation-circle"></i>Already registered for this course in the selected academic year</div>';
+                            } else if (data.reason === 'invalid_format') {
+                                emailState = 'invalid';
+                                emailInput.classList.add('error-field');
+                                emailInput.classList.remove('success-field');
+                                indicator.innerHTML = '<i class="fas fa-times text-danger"></i>';
+                                message.innerHTML   = '<div class="error-message"><i class="fas fa-exclamation-circle"></i>Invalid email format</div>';
                             } else {
+                                emailState = 'available';
                                 emailInput.classList.remove('error-field');
                                 emailInput.classList.add('success-field');
                                 indicator.innerHTML = '<i class="fas fa-check text-success"></i>';
                                 message.innerHTML   = '<div class="success-message"><i class="fas fa-check-circle"></i>Email available</div>';
                             }
+                        })
+                        .catch(err => {
+                            if (err.name === 'AbortError') return;
+                            emailState = 'error';
+                            emailInput.classList.remove('error-field', 'success-field');
+                            indicator.innerHTML = '<i class="fas fa-triangle-exclamation text-warning"></i>';
+                            message.innerHTML   = '<div class="error-message" style="color:var(--amber-ink);"><i class="fas fa-exclamation-triangle"></i>Unable to verify email availability</div>';
                         });
                 }, 500);
             } else {
-                emailInput.classList.remove('error-field');
-                emailInput.classList.remove('success-field');
+                emailState = 'empty';
+                emailInput.classList.remove('error-field', 'success-field');
                 indicator.innerHTML = '';
                 message.innerHTML = '';
             }
@@ -2253,13 +2346,15 @@ $country_codes = [
         const whatsappInput = document.getElementById('whatsapp');
 
         function checkWhatsApp() {
-            const whatsapp = whatsappInput.value.trim();
+            const rawWhatsapp = whatsappInput.value.trim();
+            const whatsapp = normalizeWhatsAppNumber(rawWhatsapp);
             const academicYear = academicYearSelect.value;
             const course = courseSelect ? courseSelect.value : '';
             const indicator = document.getElementById('whatsapp-indicator');
             const message   = document.getElementById('whatsapp-message');
             
-            if (!whatsapp) {
+            if (!rawWhatsapp) {
+                whatsappState = 'empty';
                 whatsappInput.classList.remove('error-field', 'success-field');
                 indicator.innerHTML = '';
                 message.innerHTML   = '';
@@ -2267,8 +2362,8 @@ $country_codes = [
             }
             
             // Format check
-            const phoneRegex = /^\d{10}$/;
-            if (!phoneRegex.test(whatsapp)) {
+            if (whatsapp.length !== 10) {
+                whatsappState = 'invalid';
                 whatsappInput.classList.add('error-field');
                 whatsappInput.classList.remove('success-field');
                 indicator.innerHTML = '<i class="fas fa-times text-danger"></i>';
@@ -2277,27 +2372,52 @@ $country_codes = [
             }
             
             if (academicYear && course) {
+                whatsappState = 'checking';
+                indicator.innerHTML = '<i class="fas fa-spinner fa-spin text-muted"></i>';
+                message.innerHTML   = '<div style="color:var(--text-muted); font-size:0.8rem;"><i class="fas fa-spinner fa-spin"></i> Checking availability...</div>';
+                
                 clearTimeout(whatsappTimeout);
                 whatsappTimeout = setTimeout(() => {
-                    fetch('?ajax=check_whatsapp&whatsapp=' + encodeURIComponent(whatsapp) + '&academic_year=' + encodeURIComponent(academicYear) + '&course=' + encodeURIComponent(course))
+                    if (whatsappController) {
+                        whatsappController.abort();
+                    }
+                    whatsappController = new AbortController();
+                    const signal = whatsappController.signal;
+
+                    fetch('?ajax=check_whatsapp&whatsapp=' + encodeURIComponent(whatsapp) + '&academic_year=' + encodeURIComponent(academicYear) + '&course=' + encodeURIComponent(course), { signal })
                         .then(r => r.json())
                         .then(data => {
                             if (data.exists) {
+                                whatsappState = 'registered';
                                 whatsappInput.classList.add('error-field');
                                 whatsappInput.classList.remove('success-field');
                                 indicator.innerHTML = '<i class="fas fa-times text-danger"></i>';
                                 message.innerHTML   = '<div class="error-message"><i class="fas fa-exclamation-circle"></i>Already registered for this course in the selected academic year</div>';
+                            } else if (data.reason === 'invalid_format') {
+                                whatsappState = 'invalid';
+                                whatsappInput.classList.add('error-field');
+                                whatsappInput.classList.remove('success-field');
+                                indicator.innerHTML = '<i class="fas fa-times text-danger"></i>';
+                                message.innerHTML   = '<div class="error-message"><i class="fas fa-exclamation-circle"></i>WhatsApp number must be exactly 10 digits</div>';
                             } else {
+                                whatsappState = 'available';
                                 whatsappInput.classList.remove('error-field');
                                 whatsappInput.classList.add('success-field');
                                 indicator.innerHTML = '<i class="fas fa-check text-success"></i>';
                                 message.innerHTML   = '<div class="success-message"><i class="fas fa-check-circle"></i>WhatsApp number available</div>';
                             }
+                        })
+                        .catch(err => {
+                            if (err.name === 'AbortError') return;
+                            whatsappState = 'error';
+                            whatsappInput.classList.remove('error-field', 'success-field');
+                            indicator.innerHTML = '<i class="fas fa-triangle-exclamation text-warning"></i>';
+                            message.innerHTML   = '<div class="error-message" style="color:var(--amber-ink);"><i class="fas fa-exclamation-triangle"></i>Unable to verify WhatsApp availability</div>';
                         });
                 }, 500);
             } else {
-                whatsappInput.classList.remove('error-field');
-                whatsappInput.classList.remove('success-field');
+                whatsappState = 'empty';
+                whatsappInput.classList.remove('error-field', 'success-field');
                 indicator.innerHTML = '';
                 message.innerHTML = '';
             }
@@ -2305,6 +2425,14 @@ $country_codes = [
         whatsappInput.addEventListener('input', checkWhatsApp);
         academicYearSelect.addEventListener('change', checkWhatsApp);
         if (courseSelect) courseSelect.addEventListener('change', checkWhatsApp);
+
+        // Run checks on load if fields are pre-filled
+        if (emailInput && emailInput.value.trim()) {
+            checkEmail();
+        }
+        if (whatsappInput && whatsappInput.value.trim()) {
+            checkWhatsApp();
+        }
 
         // ── PIN Code auto-fill ───────────────────────────────────────
         const pincodeInput  = document.getElementById('pincode');

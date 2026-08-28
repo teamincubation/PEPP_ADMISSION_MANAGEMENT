@@ -119,6 +119,10 @@ if ($has_eq_table) {
             CAST(COALESCE(ec.created_by, 'System') AS CHAR) COLLATE utf8mb4_unicode_ci as admin_username
         FROM email_queue eq
         LEFT JOIN email_campaigns ec ON eq.campaign_id = ec.id
+        WHERE NOT EXISTS (
+            SELECT 1 FROM communication_queue cq
+            WHERE cq.recipient = eq.recipient_email AND cq.subject = eq.subject AND cq.channel = 'email'
+        )
     ";
 }
 
@@ -136,9 +140,13 @@ if ($has_comm_table) {
             CASE
                 WHEN cq.event_name = 'activity_log_export' THEN 'Activity Log Export' COLLATE utf8mb4_unicode_ci
                 WHEN cq.event_name = 'email_reports_export' THEN 'Email Reports Export' COLLATE utf8mb4_unicode_ci
+                WHEN ec.id IS NOT NULL THEN 'Bulk Email Campaign' COLLATE utf8mb4_unicode_ci
                 ELSE 'Communication Engine' COLLATE utf8mb4_unicode_ci
             END as module_label,
-            CAST(COALESCE(cq.template_name, cq.event_name, 'Direct Dispatch') AS CHAR) COLLATE utf8mb4_unicode_ci as campaign_title,
+            CASE
+                WHEN ec.id IS NOT NULL THEN CAST(COALESCE(ec.subject, 'Marketing Campaign') AS CHAR) COLLATE utf8mb4_unicode_ci
+                ELSE CAST(COALESCE(cq.template_name, cq.event_name, 'Direct Dispatch') AS CHAR) COLLATE utf8mb4_unicode_ci
+            END as campaign_title,
             CAST(cq.recipient AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_email,
             CAST(COALESCE(cq.recipient_name, '') AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_name,
             CAST(COALESCE(cq.subject, 'Notification') AS CHAR) COLLATE utf8mb4_unicode_ci as subject,
@@ -147,8 +155,17 @@ if ($has_comm_table) {
             CAST(COALESCE(cq.error_message, '') AS CHAR) COLLATE utf8mb4_unicode_ci as error_message,
             COALESCE(cq.updated_at, cq.created_at) as dispatched_at,
             cq.created_at,
-            CAST(COALESCE(cq.sent_by, 'System') AS CHAR) COLLATE utf8mb4_unicode_ci as admin_username
+            CASE
+                WHEN ec.id IS NOT NULL THEN CAST(COALESCE(ec.created_by, 'System') AS CHAR) COLLATE utf8mb4_unicode_ci
+                ELSE CAST(COALESCE(cq.sent_by, 'System') AS CHAR) COLLATE utf8mb4_unicode_ci
+            END as admin_username
         FROM communication_queue cq
+        LEFT JOIN (
+            SELECT recipient_email, subject, MAX(campaign_id) as campaign_id
+            FROM email_queue
+            GROUP BY recipient_email, subject
+        ) eq ON (cq.recipient = eq.recipient_email AND cq.subject = eq.subject)
+        LEFT JOIN email_campaigns ec ON eq.campaign_id = ec.id
         WHERE cq.channel = 'email'
     ";
 }
