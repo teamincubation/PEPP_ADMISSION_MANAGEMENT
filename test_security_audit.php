@@ -335,6 +335,25 @@ try {
     assert_true(has_form_access($pdo, 'restricted_admin', 101), "SEC-21: Regular admin has access to form when assigned");
     assert_false(has_form_access($pdo, 'restricted_admin', 202), "SEC-21: Regular admin still restricted from unassigned form");
 
+    // ── SEC-22: Isolated campaign-form-edit privilege checks ────
+    // Superadmin has both access keys
+    $admin_role = 'super_admin';
+    $admin_perms = 'ALL';
+    assert_true(can_access('campaigns'), "SEC-22: Superadmin has access to campaigns");
+    assert_true(can_access('campaign-form-edit'), "SEC-22: Superadmin has access to campaign-form-edit");
+    
+    // Admin with campaigns and campaign-form-edit
+    $admin_role = 'admin';
+    $admin_perms = 'campaigns,campaign-form-edit';
+    assert_true(can_access('campaigns'), "SEC-22: Admin with both permissions can access campaigns");
+    assert_true(can_access('campaign-form-edit'), "SEC-22: Admin with both permissions can access campaign-form-edit");
+
+    // Admin with campaigns only (read-only)
+    $admin_role = 'admin';
+    $admin_perms = 'campaigns';
+    assert_true(can_access('campaigns'), "SEC-22: Read-only admin can access campaigns");
+    assert_false(can_access('campaign-form-edit'), "SEC-22: Read-only admin cannot access campaign-form-edit");
+
 } catch (Exception $e) {
     $failed++;
     echo "❌ FAIL: Integration test exception: " . $e->getMessage() . "\n";

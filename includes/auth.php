@@ -67,6 +67,7 @@ $GLOBALS['ADMIN_PAGES'] = [
     'cards'         => ['Generate Cards',          'fa-id-card'],
     'card-templates'=> ['Create Card Templates',   'fa-id-card'],
     'campaigns'     => ['Campaign Forms',          'fa-wpforms'],
+    'campaign-form-edit' => ['Campaign Form Edit',     'fa-pen-to-square'],
     'studyplans'    => ['Study Plans',             'fa-calendar-days'],
     'task-tracker'  => ['Intern Task Tracker',     'fa-list-check'],
     'ld-work-report'=> ['L&D Work Report',         'fa-chart-simple'],

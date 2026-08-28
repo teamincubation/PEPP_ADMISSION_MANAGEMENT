@@ -98,6 +98,10 @@ try {
     }
 
     if ($action === 'save_form') {
+        if (!can_access('campaign-form-edit')) {
+            echo json_encode(['success' => false, 'message' => 'Access denied. You do not have permission to modify forms.']);
+            exit();
+        }
         $data = json_decode(file_get_contents('php://input'), true);
         if (!$data) {
             // fallback to $_POST if json_decode fails
@@ -294,6 +298,10 @@ try {
     }
 
     if ($action === 'duplicate') {
+        if (!can_access('campaign-form-edit')) {
+            echo json_encode(['success' => false, 'message' => 'Access denied. You do not have permission to duplicate forms.']);
+            exit();
+        }
         $id = (int)($_POST['id'] ?? 0);
         if ($id <= 0) {
             echo json_encode(['success' => false, 'message' => 'Invalid Form ID']);
@@ -382,6 +390,10 @@ try {
     }
 
     if ($action === 'delete') {
+        if (!can_access('campaign-form-edit')) {
+            echo json_encode(['success' => false, 'message' => 'Access denied. You do not have permission to delete forms.']);
+            exit();
+        }
         $id = (int)($_POST['id'] ?? 0);
         if ($id <= 0) {
             echo json_encode(['success' => false, 'message' => 'Invalid Form ID']);
@@ -411,6 +423,10 @@ try {
     }
 
     if ($action === 'archive') {
+        if (!can_access('campaign-form-edit')) {
+            echo json_encode(['success' => false, 'message' => 'Access denied. You do not have permission to archive/restore forms.']);
+            exit();
+        }
         $id = (int)($_POST['id'] ?? 0);
         $archive = isset($_POST['archive']) ? (int)$_POST['archive'] : 1;
 
@@ -592,6 +608,10 @@ try {
     }
 
     if ($action === 'upload_banner') {
+        if (!can_access('campaign-form-edit')) {
+            echo json_encode(['success' => false, 'message' => 'Access denied. You do not have permission to upload banner images.']);
+            exit();
+        }
         if (!isset($_FILES['banner_file']) || $_FILES['banner_file']['error'] !== UPLOAD_ERR_OK) {
             echo json_encode(['success' => false, 'message' => 'No image file uploaded or upload error occurred.']);
             exit();

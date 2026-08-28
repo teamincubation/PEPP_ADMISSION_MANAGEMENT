@@ -143,7 +143,9 @@ include 'includes/admin_nav.php';
         <?php endif; ?>
     </form>
     
-    <a href="campaign-form-builder.php" class="btn btn-primary" style="padding:0.75rem 1.5rem; border-radius:12px; font-weight:700;"><i class="fas fa-plus"></i> Create Custom Form</a>
+    <?php if (can_access('campaign-form-edit')): ?>
+        <a href="campaign-form-builder.php" class="btn btn-primary" style="padding:0.75rem 1.5rem; border-radius:12px; font-weight:700;"><i class="fas fa-plus"></i> Create Custom Form</a>
+    <?php endif; ?>
 </div>
 
 <!-- ── FORMS LISTING ── -->
@@ -266,27 +268,31 @@ include 'includes/admin_nav.php';
                     <td style="padding:15px; text-align:right;">
                         <div style="display:flex; justify-content:flex-end; gap:6px;">
                             <?php if ($has_access): ?>
-                                <a href="campaign-form-builder.php?id=<?php echo $f['id']; ?>" class="btn btn-sm btn-soft-violet" title="Edit Form"><i class="fas fa-edit"></i></a>
+                                <?php if (can_access('campaign-form-edit')): ?>
+                                    <a href="campaign-form-builder.php?id=<?php echo $f['id']; ?>" class="btn btn-sm btn-soft-violet" title="Edit Form"><i class="fas fa-edit"></i></a>
+                                <?php endif; ?>
                                 <a href="campaign-form-responses.php?id=<?php echo $f['id']; ?>" class="btn btn-sm btn-soft-green" title="View Responses"><i class="fas fa-list"></i></a>
                                 <a href="campaign-form-analytics.php?id=<?php echo $f['id']; ?>" class="btn btn-sm btn-soft-blue" title="View Analytics"><i class="fas fa-chart-pie"></i></a>
                                 
-                                <button class="btn btn-sm btn-soft-amber" title="Duplicate Form" onclick="duplicateForm(<?php echo $f['id']; ?>)">
-                                    <i class="fas fa-clone"></i>
-                                </button>
-                                
-                                <?php if ($f['status'] !== 'archived'): ?>
-                                    <button class="btn btn-sm btn-soft-red" title="Archive Form" onclick="archiveForm(<?php echo $f['id']; ?>, 1)">
-                                        <i class="fas fa-archive"></i>
+                                <?php if (can_access('campaign-form-edit')): ?>
+                                    <button class="btn btn-sm btn-soft-amber" title="Duplicate Form" onclick="duplicateForm(<?php echo $f['id']; ?>)">
+                                        <i class="fas fa-clone"></i>
                                     </button>
-                                <?php else: ?>
-                                    <button class="btn btn-sm btn-soft-green" title="Restore Draft" onclick="archiveForm(<?php echo $f['id']; ?>, 0)">
-                                        <i class="fas fa-box-open"></i>
+                                    
+                                    <?php if ($f['status'] !== 'archived'): ?>
+                                        <button class="btn btn-sm btn-soft-red" title="Archive Form" onclick="archiveForm(<?php echo $f['id']; ?>, 1)">
+                                            <i class="fas fa-archive"></i>
+                                        </button>
+                                    <?php else: ?>
+                                        <button class="btn btn-sm btn-soft-green" title="Restore Draft" onclick="archiveForm(<?php echo $f['id']; ?>, 0)">
+                                            <i class="fas fa-box-open"></i>
+                                        </button>
+                                    <?php endif; ?>
+
+                                    <button class="btn btn-sm btn-soft-red" title="Delete Form" onclick="deleteForm(<?php echo $f['id']; ?>)">
+                                        <i class="fas fa-trash-can"></i>
                                     </button>
                                 <?php endif; ?>
-
-                                <button class="btn btn-sm btn-soft-red" title="Delete Form" onclick="deleteForm(<?php echo $f['id']; ?>)">
-                                    <i class="fas fa-trash-can"></i>
-                                </button>
                             <?php else: ?>
                                 <button type="button" class="btn btn-sm btn-secondary" onclick="alert('Access denied. You do not currently have permission to use this form. Please ask the Superadmin to grant you access.')" style="opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-lock"></i> Locked</button>
                             <?php endif; ?>

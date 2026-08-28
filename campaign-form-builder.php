@@ -1,6 +1,6 @@
 <?php
 require_once 'includes/auth.php';
-require_permission('campaigns');
+require_permission('campaign-form-edit');
 require_once 'config/database.php';
 
 $active_page = 'campaigns';
