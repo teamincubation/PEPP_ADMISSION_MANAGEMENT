@@ -523,12 +523,15 @@ if (isset($_GET['action'])) {
             $stmt_act->execute([$plan_id]);
             $activities = $stmt_act->fetchAll(PDO::FETCH_ASSOC);
 
+            $act_cols = get_table_columns_safe($pdo, 'study_plan_activities');
+            $subj_col_sql = in_array('subject', $act_cols) ? 'act.subject as act_subj,' : '';
+
             // Fetch all completions for this student in this plan, including soft-deleted and orphans
             $stmt_logs = $pdo->prepare("
                 SELECT an.*,
                        act.id as act_table_id, act.activity_title as act_title, act.activity_type as act_type,
                        act.activity_date as act_date, act.day_number as act_day, act.chapter as act_chap,
-                       act.topic as act_topic, act.faculty as act_fac,
+                       act.topic as act_topic, {$subj_col_sql} act.faculty as act_fac,
                        act.resource_links as act_resource, act.is_deleted as act_deleted
                 FROM study_plan_analytics an
                 LEFT JOIN study_plan_activities act ON (
@@ -620,7 +623,9 @@ if (isset($_GET['action'])) {
                     $day_num = $date_to_day_map[$a['activity_date']] ?? 1;
                 }
 
-                $act_topic_val = $a['topic'] ?? ($a['subject'] ?? '');
+                $raw_act_topic = trim((string)($a['topic'] ?? ''));
+                $raw_act_subject = trim((string)($a['subject'] ?? ''));
+                $act_topic_val = ($raw_act_topic !== '') ? $raw_act_topic : (($raw_act_subject !== '') ? $raw_act_subject : '');
 
                 $timeline[] = [
                     'day' => $day_num,
@@ -712,7 +717,11 @@ if (isset($_GET['action'])) {
                     $classification = 'ARCHIVED_ACTIVITY';
                     $title = '[Archived] ' . ($log['act_title'] ?: 'Archived Activity');
                     $chapter = $log['act_chap'] ?: 'Archived';
-                    $topic = $log['act_topic'] ?: ($log['act_subj'] ?? 'Archived');
+                    $raw_log_topic = trim((string)($log['act_topic'] ?? ''));
+                    $raw_log_subj = trim((string)($log['act_subj'] ?? ''));
+                    $raw_snap_topic = trim((string)($log['topic_snapshot'] ?? ''));
+                    $raw_snap_subj = trim((string)($log['subject_snapshot'] ?? ''));
+                    $topic = ($raw_log_topic !== '') ? $raw_log_topic : (($raw_log_subj !== '') ? $raw_log_subj : (($raw_snap_topic !== '') ? $raw_snap_topic : (($raw_snap_subj !== '') ? $raw_snap_subj : 'Archived')));
                     $type = $log['act_type'] ?: 'Reading';
                     $faculty = $log['act_fac'] ?: 'N/A';
                     $resource = $log['act_resource'] ?: 'Standard Materials';
@@ -722,7 +731,9 @@ if (isset($_GET['action'])) {
                     if (!empty($log['activity_title_snapshot'])) {
                         $title = '[Archived] ' . $log['activity_title_snapshot'];
                         $chapter = $log['chapter_snapshot'] ?: 'Archived';
-                        $topic = $log['topic_snapshot'] ?: ($log['subject_snapshot'] ?? 'Archived');
+                        $raw_snap_topic = trim((string)($log['topic_snapshot'] ?? ''));
+                        $raw_snap_subj = trim((string)($log['subject_snapshot'] ?? ''));
+                        $topic = ($raw_snap_topic !== '') ? $raw_snap_topic : (($raw_snap_subj !== '') ? $raw_snap_subj : 'Archived');
                         $type = $log['activity_type_snapshot'] ?: 'Reading';
                         $faculty = 'N/A';
                         $resource = 'Standard Materials';
@@ -930,7 +941,7 @@ if (isset($_GET['action'])) {
             if (!empty($pids)) {
                 $in_clause = implode(',', array_fill(0, count($pids), '?'));
                 $stmt = $pdo->prepare("
-                    SELECT a.id, a.day_number, a.activity_date, a.chapter, a.topic, a.activity_title as title, a.faculty, sp.title as plan_title, sp.is_deleted as plan_deleted
+                    SELECT a.*, sp.title as plan_title, sp.is_deleted as plan_deleted
                     FROM study_plan_activities a
                     JOIN study_plans sp ON a.study_plan_id = sp.id
                     WHERE a.study_plan_id IN ($in_clause)
@@ -950,15 +961,19 @@ if (isset($_GET['action'])) {
                     ", [$t['id'], $course_name]);
                     $pending = $total_students - $comp;
 
+                    $raw_t_topic = trim((string)($t['topic'] ?? ''));
+                    $raw_t_subj = trim((string)($t['subject'] ?? ''));
+                    $t_topic_val = ($raw_t_topic !== '') ? $raw_t_topic : (($raw_t_subj !== '') ? $raw_t_subj : '');
+
                     $data[] = [
                         'id' => $t['id'],
                         'plan' => ((int)$t['plan_deleted'] === 1 ? '[Archived / Deleted] ' : '') . r_esc($t['plan_title']),
                         'day' => $t['day_number'],
                         'date' => $t['activity_date'] ? date('d M Y', strtotime($t['activity_date'])) : 'TBD',
                         'chapter' => r_esc($t['chapter']),
-                        'topic' => r_esc($t['topic'] ?? ''),
-                        'subject' => r_esc($t['topic'] ?? ''),
-                        'title' => r_esc($t['title']),
+                        'topic' => r_esc($t_topic_val),
+                        'subject' => r_esc($t_topic_val),
+                        'title' => r_esc($t['activity_title'] ?? ($t['title'] ?? '')),
                         'faculty' => r_esc($t['faculty'] ?: 'TBD'),
                         'assigned' => $total_students,
                         'completed' => $comp,
@@ -1532,7 +1547,7 @@ if (isset($_GET['action'])) {
             if (!empty($pids)) {
                 $in_clause = implode(',', array_fill(0, count($pids), '?'));
                 $stmt_tasks = $pdo->prepare("
-                    SELECT a.id, a.activity_uid, a.study_plan_id, a.day_number, a.activity_date, a.chapter, a.subject, a.topic, a.activity_title as title, a.faculty, sp.title as plan_title, sp.is_deleted as plan_deleted
+                    SELECT a.*, sp.title as plan_title, sp.is_deleted as plan_deleted
                     FROM study_plan_activities a
                     JOIN study_plans sp ON a.study_plan_id = sp.id
                     WHERE a.study_plan_id IN ($in_clause) AND a.is_deleted = 0
@@ -1577,15 +1592,19 @@ if (isset($_GET['action'])) {
 
                     $pending = $total_assigned - $comp;
 
+                    $raw_camp_topic = trim((string)($t['topic'] ?? ''));
+                    $raw_camp_subj = trim((string)($t['subject'] ?? ''));
+                    $camp_topic_val = ($raw_camp_topic !== '') ? $raw_camp_topic : (($raw_camp_subj !== '') ? $raw_camp_subj : '');
+
                     $data[] = [
                        'id' => $t['id'],
                        'day' => $t['day_number'],
                        'date' => $t['activity_date'] ? date('d M Y', strtotime($t['activity_date'])) : 'TBD',
-                       'title' => r_esc($t['title']),
-                       'subject' => r_esc($t['subject']),
+                       'title' => r_esc($t['activity_title'] ?? ($t['title'] ?? '')),
+                       'subject' => r_esc($camp_topic_val),
                        'chapter' => r_esc($t['chapter']),
-                       'topic' => r_esc($t['topic']),
-                       'faculty' => r_esc($t['faculty']),
+                       'topic' => r_esc($camp_topic_val),
+                       'faculty' => r_esc($t['faculty'] ?? ''),
                        'plan' => ((int)$t['plan_deleted'] === 1 ? '[Archived / Deleted] ' : '') . r_esc($t['plan_title']),
                        'completed' => $comp,
                        'pending' => $pending,
@@ -1997,7 +2016,7 @@ if (isset($_GET['action'])) {
                     $title = 'Checklist Completions Logs';
                     $headers = ['Student Name', 'Email', 'Plan Title', 'Topic', 'Chapter', 'Task Title', 'Completed Time'];
                     $stmt = $pdo->query("
-                         SELECT u.name, u.email, sp.title as plan_title, sp.is_deleted as plan_deleted, act.topic, act.chapter, act.activity_title as task_title, an.created_at
+                         SELECT u.name, u.email, sp.title as plan_title, sp.is_deleted as plan_deleted, act.*, an.created_at
                          FROM study_plan_analytics an
                          JOIN users u ON an.student_email = u.email
                          JOIN study_plans sp ON an.study_plan_id = sp.id
@@ -2010,13 +2029,16 @@ if (isset($_GET['action'])) {
                     ");
                     $rows = $stmt->fetchAll();
                     foreach ($rows as $r) {
+                        $raw_kpi_topic = trim((string)($r['topic'] ?? ''));
+                        $raw_kpi_subj = trim((string)($r['subject'] ?? ''));
+                        $kpi_topic_val = ($raw_kpi_topic !== '') ? $raw_kpi_topic : (($raw_kpi_subj !== '') ? $raw_kpi_subj : '-');
                         $data[] = [
                             r_esc($r['name']),
                             format_credential_text($r['email'], 'email', 'students'),
                             ((int)$r['plan_deleted'] === 1 ? '[Archived / Deleted] ' : '') . r_esc($r['plan_title']),
-                            r_esc($r['topic'] ?: '-'),
+                            r_esc($kpi_topic_val),
                             r_esc($r['chapter'] ?: '-'),
-                            r_esc($r['task_title']),
+                            r_esc($r['activity_title'] ?? ($r['task_title'] ?? '')),
                             date('d M Y h:i A', strtotime($r['created_at']))
                         ];
                     }
@@ -3244,7 +3266,7 @@ include 'includes/admin_nav.php';
                                         <th style="padding:12px 10px; font-weight:700;">Plan</th>
                                         <th style="padding:12px 10px; font-weight:700; text-align:center; width:110px;">Date</th>
                                         <th style="padding:12px 10px; font-weight:700;">Task Title</th>
-                                        <th style="padding:12px 10px; font-weight:700;">Subject &amp; Chapter</th>
+                                        <th style="padding:12px 10px; font-weight:700;">Topic &amp; Chapter</th>
                                         <th style="padding:12px 10px; font-weight:700; text-align:center;">Completed</th>
                                         <th style="padding:12px 10px; font-weight:700; text-align:center;">Pending</th>
                                         <th style="padding:12px 10px; font-weight:700; text-align:right;">Completion Rate</th>
@@ -4576,7 +4598,7 @@ include 'includes/admin_nav.php';
                                 </div>
                                 <div style="flex:1;">
                                     <h6 style="font-size:0.85rem; font-weight:700; color:var(--text-main); margin:0;">${item.title}</h6>
-                                    <span style="font-size:0.68rem; color:var(--text-muted);">${item.topic || 'General'}${item.chapter ? ` · ${item.chapter}` : ''} ${item.start_time ? `(${item.start_time} - ${item.end_time})` : ''}</span>
+                                    <span style="font-size:0.68rem; color:var(--text-muted);">${item.topic || item.subject || 'General'}${item.chapter ? ` · ${item.chapter}` : ''} ${item.start_time ? `(${item.start_time} - ${item.end_time})` : ''}</span>
                                 </div>
                             </div>
                             <div style="display:flex; align-items:center; gap:8px;">
@@ -4589,7 +4611,7 @@ include 'includes/admin_nav.php';
                         <div id="subtask-expand-body-${uniqueTaskIdx}" style="display:none; margin-top:10px; padding:10px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; font-size:0.75rem; color:var(--text-muted);">
                             <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:8px; margin-bottom:8px;">
                                 <div><strong>Chapter:</strong> ${item.chapter || 'N/A'}</div>
-                                <div><strong>Topic:</strong> ${item.topic || 'N/A'}</div>
+                                <div><strong>Topic:</strong> ${item.topic || item.subject || 'N/A'}</div>
                                 <div><strong>Activity Type:</strong> ${item.type || 'Reading'}</div>
                                 <div><strong>Faculty:</strong> ${item.faculty || 'N/A'}</div>
                                 <div><strong>Resource Link:</strong> ${resourceBtn}</div>
@@ -5359,7 +5381,7 @@ include 'includes/admin_nav.php';
                                                 <th style="padding:12px 10px; font-weight:700;">Plan</th>
                                                 <th style="padding:12px 10px; font-weight:700; text-align:center; width:100px;">Date</th>
                                                 <th style="padding:12px 10px; font-weight:700;">Task Activity</th>
-                                                <th style="padding:12px 10px; font-weight:700;">Subject &amp; Chapter</th>
+                                                <th style="padding:12px 10px; font-weight:700;">Topic &amp; Chapter</th>
                                                 <th style="padding:12px 10px; font-weight:700; text-align:center; width:65px;">Done</th>
                                                 <th style="padding:12px 10px; font-weight:700; text-align:center; width:65px;">Pend</th>
                                             </tr>
@@ -5527,7 +5549,7 @@ include 'includes/admin_nav.php';
                     <td style="padding:10px 8px; font-weight:600; color:var(--text-muted); font-size:0.72rem;">${t.plan}</td>
                     <td style="padding:10px 8px; text-align:center; font-weight:700; font-size:0.72rem;">${t.date}</td>
                     <td style="padding:10px 8px;"><strong style="color:var(--text-main); font-size:0.82rem;">${t.title}</strong><br><small style="color:var(--text-muted); font-size:0.72rem;">${t.topic}</small></td>
-                    <td style="padding:10px 8px; font-size:0.72rem;">Sub: ${t.subject}<br>Ch: ${t.chapter}</td>
+                    <td style="padding:10px 8px; font-size:0.72rem;">Topic: ${t.topic || t.subject || '-'}<br>Ch: ${t.chapter}</td>
                     <td style="padding:10px 8px; text-align:center;">
                         <button class="btn btn-xs btn-link" onclick="drilldownCampaignCompleted(${t.id}, '${t.title.replace(/'/g, "\\\\'")}')" style="color:#10b981; font-weight:800; font-size:0.78rem; text-decoration:none;">${t.completed} <i class="fas fa-eye" style="font-size:0.65rem;"></i></button>
                     </td>

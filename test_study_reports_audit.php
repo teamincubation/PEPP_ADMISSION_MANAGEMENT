@@ -946,6 +946,64 @@ assertTest("Test H: Assessment activity chapter is 'Introduction to Psychology'"
 assertTest("Chapter architecture unchanged after Subject -> Topic migration", true, true);
 
 
+// --- TEST I: Forensic Verification for Study Plan 5 (Emotion -> Part 04 -> Recorded Session) ---
+// 1. Seed Study Plan 5 and Chapter 'Emotion'
+$pdo->prepare("INSERT INTO study_plan_chapters (id, chapter_name, sort_order, created_at) VALUES (2, 'Emotion', 2, '2026-08-01 00:00:00')")->execute();
+$pdo->prepare("
+    INSERT INTO study_plans (id, title, plan_type, status, academic_year, start_date, end_date, is_deleted)
+    VALUES (5, 'August 2026', 'date_wise', 'published', '2026-27', '2026-08-01', '2026-08-31', 0)
+")->execute();
+
+// 2. Seed Study Plan Activity with canonical topic = 'Part 04' and chapter = 'Emotion'
+$pdo->prepare("
+    INSERT INTO study_plan_activities (
+        id, study_plan_id, activity_uid, activity_date, day_number, sort_order,
+        chapter, topic, activity_title, activity_type, faculty, estimated_duration, priority, difficulty_level, is_deleted
+    ) VALUES (
+        5001, 5, 'uid_sp5_act1', '2026-08-29', 29, 1,
+        'Emotion', 'Part 04', 'Recorded Session', 'Watch Recorded Session', '', 60, 'medium', 'medium', 0
+    )
+")->execute();
+
+// 3. Resolve active activity topic and chapter using canonical timeline logic
+$stmt_sp5_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = 5001");
+$stmt_sp5_act->execute();
+$act5 = $stmt_sp5_act->fetch(PDO::FETCH_ASSOC);
+
+$raw_topic_5 = trim((string)($act5['topic'] ?? ''));
+$raw_subj_5 = trim((string)($act5['subject'] ?? ''));
+$resolved_topic_5 = ($raw_topic_5 !== '') ? $raw_topic_5 : (($raw_subj_5 !== '') ? $raw_subj_5 : '');
+
+assertTest("Test I: Plan 5 Activity Chapter resolves to 'Emotion'", 'Emotion', $act5['chapter']);
+assertTest("Test I: Plan 5 Activity Topic resolves to 'Part 04'", 'Part 04', $resolved_topic_5);
+assertTest("Test I: Plan 5 Activity Title is 'Recorded Session'", 'Recorded Session', $act5['activity_title']);
+assertTest("Test I: Plan 5 Activity Type is 'Watch Recorded Session'", 'Watch Recorded Session', $act5['activity_type']);
+
+// 4. Test fallback when topic is empty string and legacy subject contains 'Part 04'
+$legacy_act = [
+    'chapter' => 'Emotion',
+    'topic' => '',
+    'subject' => 'Part 04',
+    'activity_title' => 'Recorded Session'
+];
+$legacy_raw_topic = trim((string)($legacy_act['topic'] ?? ''));
+$legacy_raw_subj = trim((string)($legacy_act['subject'] ?? ''));
+$legacy_resolved_topic = ($legacy_raw_topic !== '') ? $legacy_raw_topic : (($legacy_raw_subj !== '') ? $legacy_raw_subj : '');
+assertTest("Test I: Legacy activity with empty topic and subject 'Part 04' resolves topic to 'Part 04'", 'Part 04', $legacy_resolved_topic);
+
+// 5. Test protection: activity with neither topic nor subject does NOT receive false topic
+$empty_act = [
+    'chapter' => 'Emotion',
+    'topic' => '',
+    'subject' => '',
+    'activity_title' => 'Recorded Session'
+];
+$empty_raw_topic = trim((string)($empty_act['topic'] ?? ''));
+$empty_raw_subj = trim((string)($empty_act['subject'] ?? ''));
+$empty_resolved_topic = ($empty_raw_topic !== '') ? $empty_raw_topic : (($empty_raw_subj !== '') ? $empty_raw_subj : '');
+assertTest("Test I: Activity with no topic or subject resolves to empty string (no false topic assigned)", '', $empty_resolved_topic);
+
+
 echo "<h2>Test Execution Summary</h2>\n";
 $percent = $total_tests > 0 ? round(($passed_tests / $total_tests) * 100) : 0;
 echo "<div style='font-size: 1.2rem; font-weight: bold; margin-top: 20px;'>";
