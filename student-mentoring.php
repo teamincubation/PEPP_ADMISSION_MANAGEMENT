@@ -7,6 +7,7 @@
  */
 require_once 'includes/auth.php';
 require_permission('student-mentoring');
+require_once 'includes/StudentStudyPlanAnalytics.php';
 
 // AJAX call to fetch remarks for a specific student
 if (isset($_GET['get_remarks_student_user_id'])) {
@@ -47,102 +48,9 @@ function get_student_mentoring_details($pdo, $student) {
     $email = $student['email'];
     $user_id = $student['user_id'];
     $course = $student['course'];
-    $year = $student['pepp_academic_year'];
 
-    // Fetch published plans assigned to the student
-    $stmt = $pdo->prepare("
-        SELECT sp.id, sp.title, sp.plan_type
-        FROM study_plans sp
-        JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-        WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND (
-            sa.assignment_type = 'all' OR
-            (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
-            (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
-            (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
-            (sa.assignment_type = 'form' AND EXISTS (
-                SELECT 1 FROM campaign_form_submissions s
-                WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
-            ))
-        )
-    ");
-    $stmt->execute([$course, $year, $user_id, $email]);
-    $plans = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    $total_tasks = 0;
-    $completed_tasks = 0;
-    $max_streak = 0;
-    $total_streak_target = 0;
-    $overdue_tasks = 0;
-
-    foreach ($plans as $p) {
-        // Fetch activities (non-deleted only)
-        $stmt_act = $pdo->prepare("SELECT id, day_number, activity_date FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0");
-        $stmt_act->execute([$p['id']]);
-        $activities = $stmt_act->fetchAll(PDO::FETCH_ASSOC);
-
-        // Fetch completed analytics (non-deleted tasks only, using UID-matching with ID fallback)
-        $stmt_comp = $pdo->prepare("
-            SELECT DISTINCT act.id
-            FROM study_plan_analytics an
-            JOIN study_plan_activities act ON (
-                (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
-                OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
-            )
-            WHERE an.student_email = ? AND an.study_plan_id = ?
-              AND an.action_type = 'complete_activity' AND an.completion_status = 'completed'
-              AND act.is_deleted = 0
-        ");
-        $stmt_comp->execute([$email, $p['id']]);
-        $completed_ids = $stmt_comp->fetchAll(PDO::FETCH_COLUMN);
-        $completed_map = array_fill_keys($completed_ids, true);
-
-        $tot = count($activities);
-        $comp = count($completed_ids);
-        $total_tasks += $tot;
-        $completed_tasks += $comp;
-
-        // Group activities by day/date for streak
-        $day_tasks = [];
-        foreach ($activities as $act) {
-            $day_key = ($p['plan_type'] === 'day_wise') ? (int)$act['day_number'] : $act['activity_date'];
-            if (!isset($day_tasks[$day_key])) {
-                $day_tasks[$day_key] = ['total' => 0, 'completed' => 0];
-            }
-            $day_tasks[$day_key]['total']++;
-            if (isset($completed_map[$act['id']])) {
-                $day_tasks[$day_key]['completed']++;
-            }
-        }
-
-        // Calculate overdue tasks for this plan
-        $today_str = date('Y-m-d');
-        foreach ($activities as $act) {
-            if ($p['plan_type'] === 'date_wise') {
-                if ($act['activity_date'] && $act['activity_date'] < $today_str) {
-                    if (!isset($completed_map[$act['id']])) {
-                        $overdue_tasks++;
-                    }
-                }
-            }
-        }
-
-        $plan_streak = 0;
-        if (!empty($day_tasks)) {
-            foreach ($day_tasks as $dk => $stats) {
-                if ($stats['total'] > 0 && $stats['completed'] === $stats['total']) {
-                    $plan_streak++;
-                }
-            }
-        }
-        if ($plan_streak > $max_streak) {
-            $max_streak = $plan_streak;
-        }
-
-        $total_streak_target += count($day_tasks);
-    }
-
-    $progress = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
-    $attendance = min(100, round($progress * 1.1));
+    // Get Course level analytics using the canonical helper
+    $course_analytics = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, $email, $course);
 
     // Get last call date & time
     $last_call_time = null;
@@ -169,17 +77,17 @@ function get_student_mentoring_details($pdo, $student) {
     $remarks_count = (int)$remark_stmt->fetchColumn();
 
     return [
-        'progress' => $progress,
-        'attendance' => $attendance,
-        'streak' => $max_streak,
-        'streak_target' => $total_streak_target,
+        'progress' => $course_analytics['completion_percentage'],
+        'attendance' => $course_analytics['attendance_rate'],
+        'streak' => $course_analytics['active_streak'],
+        'streak_target' => $course_analytics['longest_streak'],
         'last_call_time' => $last_call_time,
         'last_called_status' => $last_called_status,
         'remarks_count' => $remarks_count,
-        'total_tasks' => $total_tasks,
-        'completed_tasks' => $completed_tasks,
-        'pending_tasks' => $total_tasks - $completed_tasks,
-        'overdue_tasks' => $overdue_tasks
+        'total_tasks' => $course_analytics['total_tasks'],
+        'completed_tasks' => $course_analytics['completed_tasks'],
+        'pending_tasks' => $course_analytics['pending_tasks'],
+        'overdue_tasks' => $course_analytics['overdue_tasks']
     ];
 }
 
@@ -692,10 +600,10 @@ include 'includes/admin_nav.php';
                             </div>
                             <span style="font-size:0.75rem; font-weight:700;"><?= $m['progress'] ?>%</span>
                         </div>
-                        <span class="badge green" style="font-size:0.65rem;"><i class="fas fa-chart-line"></i> Attendance: <?= $m['attendance'] ?>%</span>
+                        <span class="badge green" style="font-size:0.65rem;"><i class="fas fa-chart-line"></i> Assessment Attendance: <?= $m['attendance'] !== null ? $m['attendance'] . '%' : 'No assessment data' ?></span>
                     </td>
                     <td data-label="Streak">
-                        <span style="font-weight:700; color:#b45309; font-size:0.85rem;">🔥 <?= $m['streak'] ?> / <?= $m['streak_target'] ?> Days</span>
+                        <span style="font-weight:700; color:#b45309; font-size:0.85rem;" title="Streak details: Current Streak / Longest Streak">🔥 <?= $m['streak'] ?> / <?= $m['streak_target'] ?> Days</span>
                     </td>
                     <td data-label="Last Call">
                         <div class="cell-sub" style="font-size:0.8rem;">

@@ -2,6 +2,7 @@
 require_once 'includes/auth.php';
 require_permission('student-study-reports');
 require_once 'config/database.php';
+require_once 'includes/StudentStudyPlanAnalytics.php';
 
 // Helper to escape output
 if (!function_exists('r_esc')) {
@@ -316,7 +317,10 @@ if (isset($_GET['action'])) {
             }
             $email = $student['email'];
 
-            // Quick calculations for learning statistics
+            // Get Course level analytics using the canonical helper
+            $course_analytics = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, $email, $student['pepp_course']);
+
+            // Fetch assigned published plans for the student
             $stmt_as = $pdo->prepare("
                 SELECT sp.*, sa.assignment_type, sa.assigned_value
                 FROM study_plans sp
@@ -336,126 +340,31 @@ if (isset($_GET['action'])) {
             $assigned_plans = $stmt_as->fetchAll(PDO::FETCH_ASSOC);
 
             $plans_data = [];
-            $total_tasks = 0;
-            $completed_tasks = 0;
             $processed_plan_ids = [];
-
-            // Performance calculations:
-            $perf_total_tasks = 0;
-            $perf_completed_tasks = 0;
-
-            // Streak calculations:
-            $plan_streaks = [];
 
             foreach ($assigned_plans as $p) {
                 if (in_array($p['id'], $processed_plan_ids)) continue;
                 $processed_plan_ids[] = $p['id'];
 
-                $plan_type = $p['plan_type'] ?? 'date_wise';
-
-                // Get all activities of this plan (non-deleted only)
-                $stmt_act = $pdo->prepare("SELECT id, day_number, activity_date FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0");
-                $stmt_act->execute([$p['id']]);
-                $activities = $stmt_act->fetchAll(PDO::FETCH_ASSOC);
-
-                // Get all completed activity IDs for this student in this plan (non-deleted tasks, matched by UID/ID)
-                $stmt_comp = $pdo->prepare("
-                    SELECT DISTINCT act.id
-                    FROM study_plan_analytics an
-                    JOIN study_plan_activities act ON (
-                        (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
-                        OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
-                    )
-                    WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0
-                ");
-                $stmt_comp->execute([$email, $p['id']]);
-                $completed_ids = $stmt_comp->fetchAll(PDO::FETCH_COLUMN);
-                $completed_map = array_fill_keys($completed_ids, true);
-
-                $tot = count($activities);
-                $comp = count($completed_ids);
-                $total_tasks += $tot;
-                $completed_tasks += $comp;
-
-                // Group activities by day/date for streak
-                $day_tasks = [];
-                foreach ($activities as $act) {
-                    $day_key = ($plan_type === 'day_wise') ? (int)$act['day_number'] : $act['activity_date'];
-                    if (!isset($day_tasks[$day_key])) {
-                        $day_tasks[$day_key] = [
-                            'total' => 0,
-                            'completed' => 0
-                        ];
-                    }
-                    $day_tasks[$day_key]['total']++;
-                    if (isset($completed_map[$act['id']])) {
-                        $day_tasks[$day_key]['completed']++;
-                    }
-                }
-
-                // Performance calculation for this plan
-                if ($plan_type === 'date_wise') {
-                    $today_str = date('Y-m-d');
-                    foreach ($activities as $act) {
-                        if ($act['activity_date'] && $act['activity_date'] <= $today_str) {
-                            $perf_total_tasks++;
-                            if (isset($completed_map[$act['id']])) {
-                                $perf_completed_tasks++;
-                            }
-                        }
-                    }
-                } else {
-                    foreach ($activities as $act) {
-                        $perf_total_tasks++;
-                        if (isset($completed_map[$act['id']])) {
-                            $perf_completed_tasks++;
-                        }
-                    }
-                }
-
-                // Streak calculation for this plan
-                $plan_streak = 0;
-                if (!empty($day_tasks)) {
-                    foreach ($day_tasks as $dk => $stats) {
-                        if ($stats['total'] > 0 && $stats['completed'] === $stats['total']) {
-                            $plan_streak++;
-                        }
-                    }
-                }
-                $plan_streaks[] = $plan_streak;
-
-                $pct = $tot > 0 ? round(($comp / $tot) * 100) : 0;
-                $perf = get_performance_status($pct);
-
-                $last_up = $pdo->prepare("SELECT MAX(created_at) FROM study_plan_analytics WHERE student_email = ? AND study_plan_id = ? AND action_type = 'complete_activity' AND completion_status = 'completed'");
-                $last_up->execute([$email, $p['id']]);
-                $lut = $last_up->fetchColumn();
+                // Calculate plan analytics using the canonical helper
+                $plan_analytics = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, $email, $p['id']);
 
                 $plans_data[] = [
                     'id' => $p['id'],
                     'title' => $p['title'],
-                    'total_tasks' => $tot,
-                    'completed' => $comp,
-                    'pending' => $tot - $comp,
-                    'pct' => $pct,
-                    'performance' => $perf['label'],
-                    'perf_class' => $perf['class'],
-                    'last_updated' => $lut ? date('d M Y h:i A', strtotime($lut)) : 'Never',
+                    'total_tasks' => $plan_analytics['total_tasks'],
+                    'completed' => $plan_analytics['completed_tasks'],
+                    'pending' => $plan_analytics['pending_tasks'],
+                    'pct' => $plan_analytics['completion_percentage'],
+                    'performance' => $plan_analytics['performance_label'] ?: 'No assessment data',
+                    'perf_class' => $plan_analytics['performance_class'] ?: 'gray',
+                    'last_updated' => $plan_analytics['last_activity'] ? date('d M Y h:i A', strtotime($plan_analytics['last_activity'])) : 'Never',
                     'start_date' => $p['start_date'] ? date('d M Y', strtotime($p['start_date'])) : 'TBD',
                     'end_date' => $p['end_date'] ? date('d M Y', strtotime($p['end_date'])) : 'TBD',
                     'assignment_type' => $p['assignment_type'] ?? null,
                     'assigned_value' => $p['assigned_value'] ?? null
                 ];
             }
-
-            // Streak & Overall Performance calculations
-            $streak = !empty($plan_streaks) ? max($plan_streaks) : 0;
-            if ($total_tasks > 0 && $perf_total_tasks === 0) {
-                $overall_pct = 100;
-            } else {
-                $overall_pct = $perf_total_tasks > 0 ? round(($perf_completed_tasks / $perf_total_tasks) * 100) : 0;
-            }
-            $overall_perf = get_performance_status($overall_pct);
 
             // Online status & screen presence
             $online = false;
@@ -480,7 +389,6 @@ if (isset($_GET['action'])) {
             $courses_data = [];
             $primary_course = $student['pepp_course'] ?: 'General Program';
 
-            // Build the course list
             foreach ($plans_data as $plan) {
                 $plan_course = $primary_course;
                 if (!empty($plan['assignment_type']) && $plan['assignment_type'] === 'course') {
@@ -496,8 +404,8 @@ if (isset($_GET['action'])) {
                         'completed' => 0,
                         'pending' => 0,
                         'pct' => 0,
-                        'performance' => 'Needs Improvement',
-                        'perf_class' => 'red',
+                        'performance' => 'No assessment data',
+                        'perf_class' => 'gray',
                         'last_updated' => 'Never',
                         'plans' => []
                     ];
@@ -526,8 +434,8 @@ if (isset($_GET['action'])) {
                     'completed' => 0,
                     'pending' => 0,
                     'pct' => 0,
-                    'performance' => 'Needs Improvement',
-                    'perf_class' => 'red',
+                    'performance' => 'No assessment data',
+                    'perf_class' => 'gray',
                     'last_updated' => 'Never',
                     'plans' => []
                 ];
@@ -535,9 +443,11 @@ if (isset($_GET['action'])) {
 
             foreach ($courses_data as $cname => &$c) {
                 $c['pct'] = $c['total_tasks'] > 0 ? round(($c['completed'] / $c['total_tasks']) * 100) : 0;
-                $perf = get_performance_status($c['pct']);
-                $c['performance'] = $perf['label'];
-                $c['perf_class'] = $perf['class'];
+
+                // Aggregate performance score at course level using canonical calculator
+                $c_analytics = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, $email, $c['name']);
+                $c['performance'] = $c_analytics['performance_label'] ?: 'No assessment data';
+                $c['perf_class'] = $c_analytics['performance_class'] ?: 'gray';
             }
             unset($c);
 
@@ -558,12 +468,14 @@ if (isset($_GET['action'])) {
                     'online' => $online,
                     'presence' => $presence,
                     'last_login' => $pres ? date('d M Y h:i A', strtotime($pres['created_at'])) : 'Never',
-                    'streak' => $streak,
-                    'attendance' => $overall_pct > 0 ? min(100, round($overall_pct * 1.1)) : 0,
-                    'engagement' => $overall_pct > 0 ? round($overall_pct * 0.95) : 0,
-                    'performance_pct' => $overall_pct,
-                    'performance_label' => $overall_perf['label'],
-                    'performance_class' => $overall_perf['class']
+                    'streak' => $course_analytics['active_streak'],
+                    'longest_streak' => $course_analytics['longest_streak'],
+                    'attendance' => $course_analytics['attendance_rate'], // NULL if no data
+                    'total_sessions' => $course_analytics['total_sessions'],
+                    'attended_sessions' => $course_analytics['attended_sessions'],
+                    'performance_pct' => $course_analytics['performance_score'], // NULL if no data
+                    'performance_label' => $course_analytics['performance_label'] ?: 'No assessment data',
+                    'performance_class' => $course_analytics['performance_class'] ?: 'gray'
                 ],
                 'courses' => array_values($courses_data)
             ]);
@@ -854,11 +766,15 @@ if (isset($_GET['action'])) {
                 ];
             }
 
+            // Calculate plan analytics using the canonical helper
+            $plan_analytics = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, $email, $plan_id);
+
             echo json_encode([
                 'timeline' => $timeline,
                 'subjects' => $subject_stats,
                 'chapters' => $chapter_stats,
-                'faculties' => $faculty_stats
+                'faculties' => $faculty_stats,
+                'analytics' => $plan_analytics
             ]);
         } catch (Exception $e) {
             echo json_encode(['error' => $e->getMessage()]);
@@ -3551,28 +3467,24 @@ include 'includes/admin_nav.php';
                         <span id="st-pending-tasks-val" class="dossier-stat-val" style="color:#d97706;">0</span>
                     </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #ef4444;">
-                        <span class="dossier-stat-label" style="color:#b91c1c;">Current Overdue Tasks</span>
+                        <span class="dossier-stat-label" style="color:#b91c1c;">Current Overdue Tasks <i class="fas fa-info-circle" title="Tasks whose scheduled date is in the past and are not yet completed." style="cursor:help; font-size:0.75rem; opacity:0.8; margin-left:2px;"></i></span>
                         <span id="st-overdue-tasks-val" class="dossier-stat-val" style="color:#b91c1c;">0</span>
                     </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #3b82f6;">
-                        <span class="dossier-stat-label" style="color:#1d4ed8;">Current Attendance Rate</span>
-                        <span id="st-attendance-rate-val" class="dossier-stat-val" style="color:#1d4ed8;">0%</span>
+                        <span class="dossier-stat-label" style="color:#1d4ed8;">Assessment Attendance <i class="fas fa-info-circle" title="Attended assessments ÷ eligible assessments." style="cursor:help; font-size:0.75rem; opacity:0.8; margin-left:2px;"></i></span>
+                        <span id="st-attendance-rate-val" class="dossier-stat-val" style="color:#1d4ed8;">No assessment data</span>
                     </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #8b5cf6;">
-                        <span class="dossier-stat-label" style="color:#6d28d9;">Current Completion Rate</span>
+                        <span class="dossier-stat-label" style="color:#6d28d9;">Current Completion Rate <i class="fas fa-info-circle" title="Completed tasks ÷ total tasks for this study plan." style="cursor:help; font-size:0.75rem; opacity:0.8; margin-left:2px;"></i></span>
                         <span id="st-completion-pct-val" class="dossier-stat-val" style="color:#6d28d9;">0%</span>
                     </div>
-                    <div class="dossier-stat-row" style="border-left: 3px solid #64748b;">
-                        <span class="dossier-stat-label" style="color:#475569;">Historical Completions</span>
-                        <span id="st-historical-completions-val" class="dossier-stat-val" style="color:#475569;">0</span>
-                    </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #eab308;">
-                        <span class="dossier-stat-label" style="color:#a16207;">Learning Streak</span>
+                        <span class="dossier-stat-label" style="color:#a16207;">Learning Streak <i class="fas fa-info-circle" title="Consecutive calendar days where at least one study-plan task was completed." style="cursor:help; font-size:0.75rem; opacity:0.8; margin-left:2px;"></i></span>
                         <span id="st-streak-val" class="dossier-stat-val" style="color:#a16207;">🔥 0 Days</span>
                     </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #64748b;">
-                        <span class="dossier-stat-label">Performance Status</span>
-                        <span id="st-perf-score-val" class="dossier-stat-val">-</span>
+                        <span class="dossier-stat-label" style="color:#475569;">Assessment Average <i class="fas fa-info-circle" title="Average score on completed assessments." style="cursor:help; font-size:0.75rem; opacity:0.8; margin-left:2px;"></i></span>
+                        <span id="st-perf-score-val" class="dossier-stat-val" style="color:#475569;">No assessment data</span>
                     </div>
                 </div>
             </div>
@@ -3993,26 +3905,19 @@ include 'includes/admin_nav.php';
                                 <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Presence:</span><strong style="color:var(--text-main); font-size:0.75rem;">${s.presence}</strong></div>
                             </div>
 
-                            <!-- Streaks / Attendance Metrics -->
-                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:15px; text-align:center;">
-                                <div style="background:#fff3c7; border-radius:10px; padding:10px 5px; color:#b45309; cursor:help;" title="Streak: Calculated as the maximum number of consecutive scheduled days (calendar dates for date-wise plans, day numbers starting from Day 1 for day-wise plans) where the student completed 100% of the assigned tasks.">
-                                    <div style="font-size:0.6rem; font-weight:800; text-transform:uppercase;">Streak</div>
-                                    <strong style="font-size:1.1rem;">🔥 ${s.streak} Days</strong>
+                            <!-- Streaks / Attendance / Performance Metrics -->
+                            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:20px; text-align:center;">
+                                <div style="background:#fff3c7; border-radius:10px; padding:10px 4px; color:#b45309; cursor:help;" title="Current Streak: Consecutive calendar days where the student completed at least one qualifying study-plan task.">
+                                    <div style="font-size:0.55rem; font-weight:800; text-transform:uppercase;">Streak</div>
+                                    <strong style="font-size:0.95rem; display:block; margin-top:4px;">🔥 ${s.streak} Days</strong>
                                 </div>
-                                <div style="background:#d1fae5; border-radius:10px; padding:10px 5px; color:#047857; cursor:help;" title="Attendance Proxy: Calculated as Overall Task Completion % scaled by a factor of 1.1 (max 100%) as a proxy for course attendance and activity participation.">
-                                    <div style="font-size:0.6rem; font-weight:800; text-transform:uppercase;">Attendance</div>
-                                    <strong style="font-size:1.1rem;">📊 ${s.attendance}%</strong>
+                                <div style="background:#d1fae5; border-radius:10px; padding:10px 4px; color:#047857; cursor:help;" title="Assessment Attendance (Course): Attended assessments ÷ eligible assessments across all plans in this course.">
+                                    <div style="font-size:0.55rem; font-weight:800; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Attendance</div>
+                                    <strong style="font-size:0.95rem; display:block; margin-top:4px;">📊 ${s.attendance !== null ? s.attendance + '%' : 'No data'}</strong>
                                 </div>
-                            </div>
-
-                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:20px; text-align:center;">
-                                <div style="background:#e0f2fe; border-radius:10px; padding:10px 5px; color:#0369a1; cursor:help;" title="Performance Score:&#10;- Date-wise plans: Calculated as % completion of tasks scheduled on or before today.&#10;- Day-wise plans: Calculated as overall plan completion %.">
-                                    <div style="font-size:0.6rem; font-weight:800; text-transform:uppercase;">Performance</div>
-                                    <strong style="font-size:1.1rem;">📈 ${s.performance_pct}%</strong>
-                                </div>
-                                <div style="background:#f3e8ff; border-radius:10px; padding:10px 5px; color:#6b21a8; cursor:help;" title="Engagement Index: Calculated as Overall Task Completion % scaled by a factor of 0.95, representing overall click-through, submission, and interaction rates.">
-                                    <div style="font-size:0.6rem; font-weight:800; text-transform:uppercase;">Engagement</div>
-                                    <strong style="font-size:1.1rem;">⚡ ${s.engagement}%</strong>
+                                <div style="background:#e0f2fe; border-radius:10px; padding:10px 4px; color:#0369a1; cursor:help;" title="Assessment Average (Course): Average percentage score on attended assessments across all plans in this course.">
+                                    <div style="font-size:0.55rem; font-weight:800; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Avg Score</div>
+                                    <strong style="font-size:0.95rem; display:block; margin-top:4px;">📈 ${s.performance_pct !== null ? s.performance_pct + '%' : 'No data'}</strong>
                                 </div>
                             </div>
 
@@ -4416,31 +4321,26 @@ include 'includes/admin_nav.php';
 
                 timelineActivities = data.timeline;
 
-                // Calculate dynamic metrics using ONLY CURRENT_ACTIVITY items
-                const activeTasks = data.timeline.filter(t => t.classification === 'CURRENT_ACTIVITY');
-                const total = activeTasks.length;
-                const completed = activeTasks.filter(t => t.status === 'Completed').length;
-                const pending = activeTasks.filter(t => t.status === 'Pending').length;
-                const overdue = activeTasks.filter(t => t.status === 'Overdue').length;
+                // Extract canonical plan analytics from the backend
+                const total = data.analytics.total_tasks;
+                const completed = data.analytics.completed_tasks;
+                const pending = data.analytics.pending_tasks;
+                const overdue = data.analytics.overdue_tasks;
+                const pct = data.analytics.completion_percentage;
 
-                const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
-
-                // Attendance mapped to completeness
-                const attendance = pct > 0 ? Math.min(100, Math.round(pct * 1.1)) : 0;
-
-                // Count historical completions (including soft-deleted and orphans)
-                const historicalCompletions = data.timeline.filter(t => t.classification !== 'CURRENT_ACTIVITY' && t.status === 'Completed').length;
+                const attendanceText = data.analytics.attendance_rate !== null ? `${data.analytics.attendance_rate}%` : 'No assessment data';
+                const performanceText = data.analytics.performance_score !== null ? `${data.analytics.performance_score}%` : 'No assessment data';
+                const streakVal = data.analytics.active_streak;
 
                 // Update summary KPI counters
                 document.getElementById('st-total-tasks-val').innerText = total;
                 document.getElementById('st-completed-tasks-val').innerText = completed;
                 document.getElementById('st-pending-tasks-val').innerText = pending;
                 document.getElementById('st-overdue-tasks-val').innerText = overdue;
-                document.getElementById('st-attendance-rate-val').innerText = `${attendance}%`;
+                document.getElementById('st-attendance-rate-val').innerText = attendanceText;
                 document.getElementById('st-completion-pct-val').innerText = `${pct}%`;
-                document.getElementById('st-historical-completions-val').innerText = historicalCompletions;
-                document.getElementById('st-streak-val').innerText = `🔥 ${streakDays} Days`;
-                document.getElementById('st-perf-score-val').innerText = overallPerformance;
+                document.getElementById('st-streak-val').innerText = `🔥 ${streakVal} Days`;
+                document.getElementById('st-perf-score-val').innerText = performanceText;
 
                 // Update SVG progress ring
                 const circle = document.getElementById('st-svg-progress-ring');
