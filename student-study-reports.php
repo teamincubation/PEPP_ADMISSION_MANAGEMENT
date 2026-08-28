@@ -127,7 +127,9 @@ if (!function_exists('student_has_plans')) {
         return db_count($pdo, "
             SELECT COUNT(*) FROM study_plan_assignments sa
             JOIN study_plans sp ON sa.study_plan_id = sp.id
-            WHERE sp.status = 'published' AND (
+            WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0
+              AND LOWER(sp.academic_year) = LOWER(?)
+              AND (
                 sa.assignment_type = 'all' OR
                 (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
                 (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
@@ -137,7 +139,7 @@ if (!function_exists('student_has_plans')) {
                     WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
                 ))
             )
-        ", [$pepp_course, $pepp_academic_year, $user_id, $email]) > 0;
+        ", [$pepp_academic_year, $pepp_course, $pepp_academic_year, $user_id, $email]) > 0;
     }
 }
 
@@ -320,12 +322,14 @@ if (isset($_GET['action'])) {
             // Get Course level analytics using the canonical helper
             $course_analytics = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, $email, $student['pepp_course']);
 
-            // Fetch assigned published plans for the student
+            // Fetch assigned published plans for the student, strictly isolated by academic year
             $stmt_as = $pdo->prepare("
                 SELECT sp.*, sa.assignment_type, sa.assigned_value
                 FROM study_plans sp
                 JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND (
+                WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0
+                  AND LOWER(sp.academic_year) = LOWER(?)
+                  AND (
                     sa.assignment_type = 'all' OR
                     (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
                     (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
@@ -336,7 +340,7 @@ if (isset($_GET['action'])) {
                     ))
                 )
             ");
-            $stmt_as->execute([$student['pepp_course'], $student['academic_year'], $student['user_id'], $student['email']]);
+            $stmt_as->execute([$student['academic_year'], $student['pepp_course'], $student['academic_year'], $student['user_id'], $student['email']]);
             $assigned_plans = $stmt_as->fetchAll(PDO::FETCH_ASSOC);
 
             $plans_data = [];
@@ -530,7 +534,7 @@ if (isset($_GET['action'])) {
                     (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
                     OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
                 )
-                WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity' AND an.completion_status IN ('completed', 'cleared')
+                WHERE LOWER(an.student_email) = LOWER(?) AND an.study_plan_id = ? AND an.action_type = 'complete_activity' AND an.completion_status IN ('completed', 'cleared')
                 ORDER BY an.id ASC
             ");
             $stmt_logs->execute([$email, $plan_id]);
@@ -2135,26 +2139,84 @@ if (isset($_GET['action'])) {
                 $stds = $stmt->fetchAll();
             }
 
+            // Prepare bulk students array for canonical course analytics
+            $bulk_students = [];
             foreach ($stds as $std) {
-                $c_analytics = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, $std['user_id'], $course_filter);
+                $bulk_students[] = [
+                    'email' => $std['email'],
+                    'user_id' => $std['user_id'],
+                    'pepp_academic_year' => $std['academic_year'],
+                    'pepp_course' => $std['pepp_course']
+                ];
+            }
+            $bulk_analytics = StudentStudyPlanAnalytics::getCourseAnalyticsBulk($pdo, $bulk_students, $course_filter);
 
-                $stmt_plans = $pdo->prepare("
-                    SELECT COUNT(DISTINCT sa.study_plan_id)
-                    FROM study_plan_assignments sa
-                    JOIN study_plans sp ON sa.study_plan_id = sp.id
-                    WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND (
-                        sa.assignment_type = 'all' OR
-                        (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
-                        (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
-                        (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
-                        (sa.assignment_type = 'form' AND EXISTS (
-                            SELECT 1 FROM campaign_form_submissions s
-                            WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
-                        ))
-                    )
+            // Fetch plans count for all students in bulk (academic year isolated)
+            $plans_count_by_student = [];
+            if (!empty($bulk_students)) {
+                $plan_assignments_stmt = $pdo->prepare("
+                    SELECT DISTINCT sp.id, sp.academic_year, sa.assignment_type, sa.assigned_value
+                    FROM study_plans sp
+                    JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
+                    WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0
+                      AND (
+                          sa.assignment_type = 'all' OR
+                          (sa.assignment_type = 'course' AND LOWER(sa.assigned_value) = LOWER(?)) OR
+                          sa.assignment_type = 'batch' OR
+                          sa.assignment_type = 'student'
+                      )
                 ");
-                $stmt_plans->execute([$std['pepp_course'], $std['academic_year'], $std['user_id'], $std['email']]);
-                $plans_count = (int)$stmt_plans->fetchColumn();
+                $plan_assignments_stmt->execute([$course_filter]);
+                $all_plan_assigns = $plan_assignments_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                $plans_meta = [];
+                foreach ($all_plan_assigns as $assign) {
+                    $plans_meta[$assign['id']]['academic_year'] = $assign['academic_year'];
+                    $plans_meta[$assign['id']]['assignments'][] = $assign;
+                }
+
+                foreach ($stds as $std) {
+                    $cnt = 0;
+                    $uid = $std['user_id'];
+                    $email_lower = strtolower(trim($std['email']));
+                    $ay = trim($std['academic_year']);
+                    $course = trim($std['pepp_course']);
+
+                    foreach ($plans_meta as $pid => $meta) {
+                        if (strtolower(trim($meta['academic_year'])) !== strtolower($ay)) {
+                            continue; // Academic Year Isolation
+                        }
+                        $assigned = false;
+                        foreach ($meta['assignments'] as $assign) {
+                            if ($assign['assignment_type'] === 'all') {
+                                $assigned = true;
+                            } else if ($assign['assignment_type'] === 'course' && strtolower($assign['assigned_value']) === strtolower($course)) {
+                                $assigned = true;
+                            } else if ($assign['assignment_type'] === 'batch' && strtolower($assign['assigned_value']) === strtolower($ay)) {
+                                $assigned = true;
+                            } else if ($assign['assignment_type'] === 'student' && $assign['assigned_value'] === $uid) {
+                                $assigned = true;
+                            }
+                        }
+                        if ($assigned) {
+                            $cnt++;
+                        }
+                    }
+                    $plans_count_by_student[$uid] = $cnt;
+                }
+            }
+
+            foreach ($stds as $std) {
+                $email_key = strtolower(trim($std['email']));
+                $c_analytics = $bulk_analytics[$email_key] ?? [
+                    'total_tasks' => 0,
+                    'completed_tasks' => 0,
+                    'completion_percentage' => 0,
+                    'performance_label' => 'No assessment data',
+                    'last_activity' => null
+                ];
+
+                $plans_count = $plans_count_by_student[$std['user_id']] ?? 0;
 
                 $total_tasks = $c_analytics['total_tasks'];
                 $completed = $c_analytics['completed_tasks'];

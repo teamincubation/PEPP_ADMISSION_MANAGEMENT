@@ -70,6 +70,7 @@ $pdo->exec("
         title TEXT,
         plan_type TEXT,
         status TEXT,
+        academic_year TEXT,
         start_date TEXT,
         end_date TEXT,
         is_deleted INTEGER DEFAULT 0
@@ -124,8 +125,8 @@ $pdo->exec("
     CREATE TABLE assessment_result_batches (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         study_plan_id INTEGER,
-        academic_year TEXT,
-        course_name TEXT,
+        academic_year TEXT DEFAULT '2026-27',
+        course_name TEXT DEFAULT 'MA/MSc Psychology (Premium)',
         activity_date_snapshot TEXT,
         status TEXT
     );
@@ -138,8 +139,8 @@ $pdo->prepare("
 ")->execute(['PEPP20268771', 'Fathima Rinfa', 'fathima@pepp.com', '+919999999999', 'MA/MSc Psychology (Premium)', '2026-27', '2026-08-01 10:00:00']);
 
 $pdo->prepare("
-    INSERT INTO study_plans (id, title, plan_type, status, start_date, end_date)
-    VALUES (1, 'August 2026', 'date_wise', 'published', '2026-08-01', '2026-08-31')
+    INSERT INTO study_plans (id, title, plan_type, status, academic_year, start_date, end_date)
+    VALUES (1, 'August 2026', 'date_wise', 'published', '2026-27', '2026-08-01', '2026-08-31')
 ")->execute();
 
 $pdo->prepare("
@@ -267,8 +268,8 @@ $pdo->exec("UPDATE study_plan_activities SET activity_date = '2026-08-10'");
 // --- TEST 7: Different study plans must remain isolated ---
 // Create study plan 2
 $pdo->prepare("
-    INSERT INTO study_plans (id, title, plan_type, status, start_date, end_date)
-    VALUES (2, 'September 2026', 'date_wise', 'published', '2026-09-01', '2026-09-30')
+    INSERT INTO study_plans (id, title, plan_type, status, academic_year, start_date, end_date)
+    VALUES (2, 'September 2026', 'date_wise', 'published', '2026-27', '2026-09-01', '2026-09-30')
 ")->execute();
 $pdo->prepare("
     INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value)
@@ -391,8 +392,8 @@ $dates = ['2026-08-20', '2026-08-21', '2026-08-22', '2026-08-24', '2026-08-25'];
 foreach ($dates as $idx => $d) {
     $pdo->prepare("
         INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at)
-        VALUES ('fathima@pepp.com', 1, 1, 'uid_1', 'complete_activity', 'completed', ?)
-    ")->execute(["$d 12:00:00"]);
+        VALUES ('fathima@pepp.com', 1, ?, ?, 'complete_activity', 'completed', ?)
+    ")->execute([$idx + 1, "uid_" . ($idx + 1), "$d 12:00:00"]);
 }
 
 $analytics15 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
@@ -416,7 +417,7 @@ assertTest("Test 16: Current Streak when last completion was yesterday", 1, $ana
 
 $pdo->prepare("
     INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at)
-    VALUES ('fathima@pepp.com', 1, 1, 'uid_1', 'complete_activity', 'completed', ?)
+    VALUES ('fathima@pepp.com', 1, 2, 'uid_2', 'complete_activity', 'completed', ?)
 ")->execute(["$today 10:00:00"]);
 
 $analytics16_2 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
@@ -508,8 +509,8 @@ assertTest("Test 22: Cleared activity is pending", 107, $analytics22['pending_ta
 // student has course: MA/MSc Psychology (Premium)
 // create a plan 3 assigned to BSc Psychology
 $pdo->prepare("
-    INSERT INTO study_plans (id, title, plan_type, status, start_date, end_date)
-    VALUES (3, 'BSc Plan', 'date_wise', 'published', '2026-08-01', '2026-08-31')
+    INSERT INTO study_plans (id, title, plan_type, status, academic_year, start_date, end_date)
+    VALUES (3, 'BSc Plan', 'date_wise', 'published', '2026-27', '2026-08-01', '2026-08-31')
 ")->execute();
 $pdo->prepare("
     INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value)
@@ -532,6 +533,206 @@ $pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, score, t
 $analytics24 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
 assertTest("Test 24: De-duplicate same-batch assessment attendance", 1, $analytics24['total_sessions']);
 assertTest("Test 24: De-duplicate same-batch performance", 80.0, (float)$analytics24['performance_score']);
+
+
+// --- TEST 25: Chronological states machine (Phase 4 completion state machine) ---
+$pdo->exec("DELETE FROM study_plan_analytics");
+// Case A: completed
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status) VALUES ('fathima@pepp.com', 1, 1, 'uid_1', 'complete_activity', 'completed')")->execute();
+$analytics25_A = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test 25 Case A: completed is completed", 1, $analytics25_A['completed_tasks']);
+
+// Case B: completed -> cleared
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status) VALUES ('fathima@pepp.com', 1, 1, 'uid_1', 'complete_activity', 'cleared')")->execute();
+$analytics25_B = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test 25 Case B: completed -> cleared is pending", 0, $analytics25_B['completed_tasks']);
+
+// Case C: completed -> cleared -> completed
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status) VALUES ('fathima@pepp.com', 1, 1, 'uid_1', 'complete_activity', 'completed')")->execute();
+$analytics25_C = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test 25 Case C: completed -> cleared -> completed is completed", 1, $analytics25_C['completed_tasks']);
+
+// Case F: completed -> cleared -> completed -> cleared
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status) VALUES ('fathima@pepp.com', 1, 1, 'uid_1', 'complete_activity', 'cleared')")->execute();
+$analytics25_F = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test 25 Case F: completed -> cleared -> completed -> cleared is pending", 0, $analytics25_F['completed_tasks']);
+
+
+// --- TEST 26: Streak de-duplication (same-day completions) (Phase 5) ---
+$pdo->exec("DELETE FROM study_plan_analytics");
+// Student completes three tasks on same day (today)
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 1, 'uid_1', 'complete_activity', 'completed', '$today 10:00:00')")->execute();
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 2, 'uid_2', 'complete_activity', 'completed', '$today 11:00:00')")->execute();
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 3, 'uid_3', 'complete_activity', 'completed', '$today 12:00:00')")->execute();
+
+$analytics26 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test 26: Multiple same-day completions count as one streak day (current)", 1, $analytics26['active_streak']);
+assertTest("Test 26: Multiple same-day completions count as one streak day (longest)", 1, $analytics26['longest_streak']);
+
+
+// --- TEST 27: Consecutive vs broken streaks (Phase 5) ---
+$pdo->exec("DELETE FROM study_plan_analytics");
+$now = new DateTimeImmutable('now', new DateTimeZone('Asia/Kolkata'));
+$today = $now->format('Y-m-d');
+$yesterday = $now->modify('-1 day')->format('Y-m-d');
+$day_before = $now->modify('-2 days')->format('Y-m-d');
+$four_days_ago = $now->modify('-4 days')->format('Y-m-d');
+
+// Scenario 1: Consecutive (today, yesterday, day_before)
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 1, 'uid_1', 'complete_activity', 'completed', '$today 12:00:00')")->execute();
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 2, 'uid_2', 'complete_activity', 'completed', '$yesterday 12:00:00')")->execute();
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 3, 'uid_3', 'complete_activity', 'completed', '$day_before 12:00:00')")->execute();
+
+$analytics27_consec = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test 27: Consecutive streak counts", 3, $analytics27_consec['active_streak']);
+
+// Scenario 2: Broken (today, day_before, 4 days ago)
+$pdo->exec("DELETE FROM study_plan_analytics");
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 1, 'uid_1', 'complete_activity', 'completed', '$today 12:00:00')")->execute();
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 2, 'uid_2', 'complete_activity', 'completed', '$day_before 12:00:00')")->execute();
+
+$analytics27_broken = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test 27: Broken streak reverts active streak to 1", 1, $analytics27_broken['active_streak']);
+
+
+// --- TEST 28: Current vs longest streak calculations (Phase 5) ---
+$pdo->exec("DELETE FROM study_plan_analytics");
+$days_5_ago = $now->modify('-5 days')->format('Y-m-d');
+$days_6_ago = $now->modify('-6 days')->format('Y-m-d');
+$days_7_ago = $now->modify('-7 days')->format('Y-m-d');
+$days_8_ago = $now->modify('-8 days')->format('Y-m-d');
+
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 1, 'uid_1', 'complete_activity', 'completed', '$today 12:00:00')")->execute();
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 2, 'uid_2', 'complete_activity', 'completed', '$yesterday 12:00:00')")->execute();
+
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 3, 'uid_3', 'complete_activity', 'completed', '$days_5_ago 12:00:00')")->execute();
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 4, 'uid_4', 'complete_activity', 'completed', '$days_6_ago 12:00:00')")->execute();
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 5, 'uid_5', 'complete_activity', 'completed', '$days_7_ago 12:00:00')")->execute();
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 6, 'uid_6', 'complete_activity', 'completed', '$days_8_ago 12:00:00')")->execute();
+
+$analytics28 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test 28: Current streak is 2", 2, $analytics28['active_streak']);
+assertTest("Test 28: Longest streak is 4", 4, $analytics28['longest_streak']);
+
+
+// --- TEST 29: Midnight boundaries & UTC -> IST conversion (Phase 3) ---
+$pdo->exec("DELETE FROM study_plan_analytics");
+// completed on 2026-08-10T19:00:00Z -> parsed as UTC and shifts +5:30 to 2026-08-11T00:30:00+05:30 -> Kolkata calendar date: 2026-08-11
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 1, 'uid_1', 'complete_activity', 'completed', '2026-08-10T19:00:00Z')")->execute();
+// completed on 2026-08-10T23:30:00+00:00 -> parsed and shifts +5:30 to 2026-08-11T05:00:00+05:30 -> Kolkata calendar date: 2026-08-11
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('fathima@pepp.com', 1, 2, 'uid_2', 'complete_activity', 'completed', '2026-08-10T23:30:00+00:00')")->execute();
+
+$analytics29 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test 29: UTC to IST shift correctly de-duplicates same-day local dates", 1, $analytics29['longest_streak']);
+
+
+// --- TEST 30: Assessment exclusion (invalid scores, total_score=0) (Phase 6) ---
+$pdo->exec("DELETE FROM assessment_results");
+$pdo->exec("DELETE FROM assessment_result_batches");
+
+$pdo->prepare("INSERT INTO assessment_result_batches (id, study_plan_id, status, course_name, academic_year) VALUES (15, 1, 'published', 'MA/MSc Psychology (Premium)', '2026-27')")->execute();
+// total score = 0
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, score, total_score, attendance_status) VALUES (15, 'fathima@pepp.com', 10.0, 0.0, 'attended')")->execute();
+// score exceeds total score
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, score, total_score, attendance_status) VALUES (15, 'fathima@pepp.com', 150.0, 100.0, 'attended')")->execute();
+// score is negative
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, score, total_score, attendance_status) VALUES (15, 'fathima@pepp.com', -20.0, 100.0, 'attended')")->execute();
+// valid score (100%)
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, score, total_score, attendance_status) VALUES (15, 'fathima@pepp.com', 50.0, 50.0, 'attended')")->execute();
+
+$analytics30 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test 30: Discard invalid scores from performance calculations", 100.0, (float)$analytics30['performance_score']);
+
+
+// --- TEST 31: Scoping isolation (course & academic year) (Phase 1) ---
+$pdo->prepare("
+    INSERT INTO study_plans (id, title, plan_type, status, academic_year, start_date, end_date)
+    VALUES (4, 'Old Plan 2025', 'date_wise', 'published', '2025-26', '2025-08-01', '2025-08-31')
+")->execute();
+$pdo->prepare("
+    INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value)
+    VALUES (4, 'course', 'MA/MSc Psychology (Premium)')
+")->execute();
+$pdo->prepare("
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, activity_date)
+    VALUES (401, 4, 'uid_401', '2025-08-15')
+")->execute();
+
+$analytics31_plan = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 4);
+assertTest("Test 31: Academic year isolation on plan level assignment validation", 0, $analytics31_plan['total_tasks']);
+
+$analytics31_course = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, 'fathima@pepp.com', 'MA/MSc Psychology (Premium)');
+assertTest("Test 31: Academic year isolation on course aggregation", 108, $analytics31_course['total_tasks']);
+
+
+// --- TEST 32: Excluded items (deleted, future, cleared overdue) (Phase 7) ---
+$pdo->exec("DELETE FROM study_plan_analytics");
+$yesterday_str = $yesterday;
+$pdo->exec("UPDATE study_plan_activities SET activity_date = '$yesterday_str' WHERE id = 200");
+
+$analytics32_1 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 2);
+assertTest("Test 32: Uncompleted activity in past is overdue", 1, $analytics32_1['overdue_tasks']);
+
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status) VALUES ('fathima@pepp.com', 2, 200, 'uid_200', 'complete_activity', 'completed')")->execute();
+$analytics32_2 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 2);
+assertTest("Test 32: Completed overdue activity is not overdue", 0, $analytics32_2['overdue_tasks']);
+
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status) VALUES ('fathima@pepp.com', 2, 200, 'uid_200', 'complete_activity', 'cleared')")->execute();
+$analytics32_3 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 2);
+assertTest("Test 32: Cleared overdue activity is overdue", 1, $analytics32_3['overdue_tasks']);
+
+$tomorrow_str = $now->modify('+1 day')->format('Y-m-d');
+$pdo->exec("UPDATE study_plan_activities SET activity_date = '$tomorrow_str' WHERE id = 200");
+$analytics32_4 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 2);
+assertTest("Test 32: Future activity is not overdue", 0, $analytics32_4['overdue_tasks']);
+
+
+// --- TEST 33: CSV Actual file verification (Phase 9) ---
+$csv_file_path = __DIR__ . '/scratch/test_export.csv';
+$csv_out = fopen($csv_file_path, 'w');
+fputcsv($csv_out, ['Student Name', 'Email', 'Tasks Done', 'Completed %']);
+$c_analytics_test = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, 'PEPP20268771', 'MA/MSc Psychology (Premium)');
+fputcsv($csv_out, [
+    'Fathima Rinfa',
+    'fathima@pepp.com',
+    $c_analytics_test['completed_tasks'] . ' / ' . $c_analytics_test['total_tasks'],
+    $c_analytics_test['completion_percentage'] . '%'
+]);
+fclose($csv_out);
+
+$csv_in = fopen($csv_file_path, 'r');
+$header_row = fgetcsv($csv_in);
+$data_row = fgetcsv($csv_in);
+fclose($csv_in);
+unlink($csv_file_path);
+
+assertTest("Test 33: CSV matches Student Name", 'Fathima Rinfa', $data_row[0]);
+assertTest("Test 33: CSV matches Tasks Done", $c_analytics_test['completed_tasks'] . ' / ' . $c_analytics_test['total_tasks'], $data_row[2]);
+assertTest("Test 33: CSV matches Completed %", $c_analytics_test['completion_percentage'] . '%', $data_row[3]);
+
+
+// --- TEST 34: Individual vs bulk analytics equality (Phase 8) ---
+$students_input = [
+    [
+        'email' => 'fathima@pepp.com',
+        'user_id' => 'PEPP20268771',
+        'pepp_academic_year' => '2026-27',
+        'pepp_course' => 'MA/MSc Psychology (Premium)'
+    ]
+];
+$bulk_results = StudentStudyPlanAnalytics::getCourseAnalyticsBulk($pdo, $students_input, 'MA/MSc Psychology (Premium)');
+$student_bulk = $bulk_results['fathima@pepp.com'] ?? [];
+
+assertTest("Test 34: Bulk total tasks matches individual", $c_analytics_test['total_tasks'], $student_bulk['total_tasks']);
+assertTest("Test 34: Bulk completed tasks matches individual", $c_analytics_test['completed_tasks'], $student_bulk['completed_tasks']);
+assertTest("Test 34: Bulk completion % matches individual", $c_analytics_test['completion_percentage'], $student_bulk['completion_percentage']);
+assertTest("Test 34: Bulk active streak matches individual", $c_analytics_test['active_streak'], $student_bulk['active_streak']);
+assertTest("Test 34: Bulk longest streak matches individual", $c_analytics_test['longest_streak'], $student_bulk['longest_streak']);
+
+
+// --- TEST 35: Mentoring bulk consistency (Phase 8) ---
+assertTest("Test 35: Mentoring bulk consistency progress matches", $c_analytics_test['completion_percentage'], $student_bulk['completion_percentage']);
+assertTest("Test 35: Mentoring bulk consistency attendance matches", $c_analytics_test['attendance_rate'], $student_bulk['attendance_rate']);
 
 
 echo "<h2>Test Execution Summary</h2>\n";

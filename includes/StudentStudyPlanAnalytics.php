@@ -27,19 +27,21 @@ class StudentStudyPlanAnalytics {
         $email = $user['email'];
         $user_id = $user['user_id'];
 
-        // 2. Validate study plan assignment for security/data-scoping
+        // 2. Validate study plan assignment for security/data-scoping & academic year isolation
         $stmt_val = $pdo->prepare("
             SELECT COUNT(*)
             FROM study_plan_assignments sa
             JOIN study_plans sp ON sa.study_plan_id = sp.id
-            WHERE sp.id = ? AND sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND (
+            WHERE sp.id = ? AND sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0
+              AND LOWER(sp.academic_year) = LOWER(?)
+              AND (
                 sa.assignment_type = 'all' OR
                 (sa.assignment_type = 'course' AND LOWER(sa.assigned_value) = LOWER(?)) OR
                 (sa.assignment_type = 'batch' AND LOWER(sa.assigned_value) = LOWER(?)) OR
                 (sa.assignment_type = 'student' AND sa.assigned_value = ?)
             )
         ");
-        $stmt_val->execute([$study_plan_id, $user['pepp_course'], $user['pepp_academic_year'], $user_id]);
+        $stmt_val->execute([$study_plan_id, $user['pepp_academic_year'], $user['pepp_course'], $user['pepp_academic_year'], $user_id]);
         if ((int)$stmt_val->fetchColumn() === 0) {
             return self::emptyAnalytics();
         }
@@ -107,31 +109,32 @@ class StudentStudyPlanAnalytics {
 
         $completion_percentage = round(($completed_tasks / $total_tasks) * 100);
 
-        // Fetch real consecutive day streaks (limited to active tasks in this plan)
-        $completed_dates = [];
+        // Compile logs for streaks: only the latest completion date for each task (Phase 4 & 5 state machine)
+        $latest_completed_dates = [];
         foreach ($all_logs as $log) {
             $key = !empty($log['activity_uid']) ? $log['activity_uid'] : 'id_' . $log['activity_id'];
-            if (isset($effective_completions[$key]) && $effective_completions[$key] === 'completed') {
-                if ($log['completion_status'] === 'completed' && !empty($log['created_at'])) {
-                    $log_dt = new DateTimeImmutable($log['created_at'], new DateTimeZone('Asia/Kolkata'));
-                    $completed_dates[] = $log_dt->format('Y-m-d');
+            if ($log['completion_status'] === 'completed') {
+                if (!empty($log['created_at'])) {
+                    $latest_completed_dates[$key] = self::convertToKolkataDate($log['created_at']);
                 }
+            } else if ($log['completion_status'] === 'cleared') {
+                unset($latest_completed_dates[$key]);
             }
         }
-
-        $completed_dates = array_values(array_unique($completed_dates));
+        $completed_dates = array_values(array_filter(array_unique(array_values($latest_completed_dates))));
         $streaks = self::calculateStreaksFromDates($completed_dates);
 
-        // Fetch real attendance from assessment results linked to this plan
+        // Fetch real attendance from assessment results linked to this plan, isolated by academic year
         $stmt_att = $pdo->prepare("
             SELECT ar.batch_id, ar.attendance_status
             FROM assessment_results ar
             JOIN assessment_result_batches arb ON ar.batch_id = arb.id
             WHERE (ar.user_id = ? OR (ar.user_id IS NULL AND LOWER(ar.student_email) = LOWER(?)))
               AND arb.study_plan_id = ? AND arb.status = 'published'
+              AND LOWER(arb.academic_year) = LOWER(?)
               AND (arb.activity_date_snapshot IS NULL OR arb.activity_date_snapshot <= ?)
         ");
-        $stmt_att->execute([$user_id, $email, $study_plan_id, $today]);
+        $stmt_att->execute([$user_id, $email, $study_plan_id, $user['pepp_academic_year'], $today]);
         $att_records = $stmt_att->fetchAll(PDO::FETCH_ASSOC);
 
         // De-duplicate results by batch_id to prevent join multiplication problems
@@ -152,7 +155,7 @@ class StudentStudyPlanAnalytics {
         }
         $attendance_rate = $total_sessions > 0 ? round(($attended_sessions / $total_sessions) * 100) : null;
 
-        // Fetch real performance score (average score on real assessments linked to this plan)
+        // Fetch real performance score (average score on real assessments linked to this plan), isolated by academic year
         $stmt_perf = $pdo->prepare("
             SELECT ar.batch_id, ar.score, ar.total_score
             FROM assessment_results ar
@@ -160,9 +163,10 @@ class StudentStudyPlanAnalytics {
             WHERE (ar.user_id = ? OR (ar.user_id IS NULL AND LOWER(ar.student_email) = LOWER(?)))
               AND arb.study_plan_id = ? AND arb.status = 'published'
               AND ar.attendance_status = 'attended' AND ar.score IS NOT NULL AND ar.total_score > 0
+              AND LOWER(arb.academic_year) = LOWER(?)
               AND (arb.activity_date_snapshot IS NULL OR arb.activity_date_snapshot <= ?)
         ");
-        $stmt_perf->execute([$user_id, $email, $study_plan_id, $today]);
+        $stmt_perf->execute([$user_id, $email, $study_plan_id, $user['pepp_academic_year'], $today]);
         $perf_records = $stmt_perf->fetchAll(PDO::FETCH_ASSOC);
 
         // De-duplicate scores by batch_id and handle invalid scores (negative or exceeding total)
@@ -231,19 +235,21 @@ class StudentStudyPlanAnalytics {
         $email = $user['email'];
         $user_id = $user['user_id'];
 
-        // Find all assigned plans for this student in this course
+        // Find all assigned plans for this student in this course, strictly isolated by academic year
         $stmt_plans = $pdo->prepare("
             SELECT DISTINCT sp.id
             FROM study_plans sp
             JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-            WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND (
+            WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0
+              AND LOWER(sp.academic_year) = LOWER(?)
+              AND (
                 sa.assignment_type = 'all' OR
                 (sa.assignment_type = 'course' AND LOWER(sa.assigned_value) = LOWER(?)) OR
                 (sa.assignment_type = 'batch' AND LOWER(sa.assigned_value) = LOWER(?)) OR
                 (sa.assignment_type = 'student' AND sa.assigned_value = ?)
             )
         ");
-        $stmt_plans->execute([$user['pepp_course'], $user['pepp_academic_year'], $user_id]);
+        $stmt_plans->execute([$user['pepp_academic_year'], $user['pepp_course'], $user['pepp_academic_year'], $user_id]);
         $plan_ids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
 
         if (empty($plan_ids)) {
@@ -255,6 +261,7 @@ class StudentStudyPlanAnalytics {
         $overdue_tasks = 0;
 
         foreach ($plan_ids as $plan_id) {
+            // Note: getPlanAnalytics already scopes by sp.academic_year internally
             $plan_data = self::getPlanAnalytics($pdo, $email, $plan_id);
             $total_tasks += $plan_data['total_tasks'];
             $completed_tasks += $plan_data['completed_tasks'];
@@ -285,18 +292,19 @@ class StudentStudyPlanAnalytics {
             $effective_completions[$key] = $log['completion_status'];
         }
 
-        $completed_dates = [];
+        // Compile logs for streaks: only the latest completion date for each task (Phase 4 & 5 state machine)
+        $latest_completed_dates = [];
         foreach ($all_logs as $log) {
             $key = !empty($log['activity_uid']) ? $log['activity_uid'] : 'id_' . $log['activity_id'];
-            if (isset($effective_completions[$key]) && $effective_completions[$key] === 'completed') {
-                if ($log['completion_status'] === 'completed' && !empty($log['created_at'])) {
-                    $log_dt = new DateTimeImmutable($log['created_at'], new DateTimeZone('Asia/Kolkata'));
-                    $completed_dates[] = $log_dt->format('Y-m-d');
+            if ($log['completion_status'] === 'completed') {
+                if (!empty($log['created_at'])) {
+                    $latest_completed_dates[$key] = self::convertToKolkataDate($log['created_at']);
                 }
+            } else if ($log['completion_status'] === 'cleared') {
+                unset($latest_completed_dates[$key]);
             }
         }
-
-        $completed_dates = array_values(array_unique($completed_dates));
+        $completed_dates = array_values(array_filter(array_unique(array_values($latest_completed_dates))));
         $streaks = self::calculateStreaksFromDates($completed_dates);
 
         // Real attendance from assessment results linked to this course and academic year/batch
@@ -482,5 +490,308 @@ class StudentStudyPlanAnalytics {
         if ($pct >= 60) return ['label' => 'Good', 'class' => 'blue', 'color' => '#3b82f6'];
         if ($pct >= 40) return ['label' => 'Average', 'class' => 'amber', 'color' => '#f59e0b'];
         return ['label' => 'Needs Improvement', 'class' => 'red', 'color' => '#ef4444'];
+    }
+
+    public static function convertToKolkataDate($timestamp_str) {
+        if (empty($timestamp_str)) {
+            return null;
+        }
+        try {
+            if (preg_match('/[TZ]|[+-]\d{2}(:\d{2})?$/i', $timestamp_str)) {
+                $dt = new DateTimeImmutable($timestamp_str);
+                return $dt->setTimezone(new DateTimeZone('Asia/Kolkata'))->format('Y-m-d');
+            } else {
+                $dt = new DateTimeImmutable($timestamp_str, new DateTimeZone('Asia/Kolkata'));
+                return $dt->format('Y-m-d');
+            }
+        } catch (Exception $e) {
+            return null;
+        }
+    }
+
+    public static function getCourseAnalyticsBulk($pdo, $students, $course_name) {
+        if (empty($students)) {
+            return [];
+        }
+
+        $student_emails = [];
+        $student_ids = [];
+        foreach ($students as $s) {
+            $student_emails[] = strtolower(trim($s['email']));
+            $uid = trim($s['user_id']);
+            if ($uid !== '') {
+                $student_ids[] = $uid;
+            }
+        }
+        $student_emails = array_values(array_unique($student_emails));
+        $student_ids = array_values(array_unique($student_ids));
+
+        $now = new DateTimeImmutable('now', new DateTimeZone('Asia/Kolkata'));
+        $today = $now->format('Y-m-d');
+
+        // Fetch all published, active study plan assignments matching the course
+        $stmt_plans = $pdo->prepare("
+            SELECT DISTINCT sp.id, sp.academic_year, sa.assignment_type, sa.assigned_value
+            FROM study_plans sp
+            JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
+            WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0
+              AND (
+                  sa.assignment_type = 'all' OR
+                  (sa.assignment_type = 'course' AND LOWER(sa.assigned_value) = LOWER(?)) OR
+                  sa.assignment_type = 'batch' OR
+                  sa.assignment_type = 'student'
+              )
+        ");
+        $stmt_plans->execute([$course_name]);
+        $all_assignments = $stmt_plans->fetchAll(PDO::FETCH_ASSOC);
+
+        // Group plans by plan_id
+        $plans_metadata = [];
+        foreach ($all_assignments as $assign) {
+            $plans_metadata[$assign['id']]['academic_year'] = $assign['academic_year'];
+            $plans_metadata[$assign['id']]['assignments'][] = $assign;
+        }
+
+        $plan_ids = array_keys($plans_metadata);
+        if (empty($plan_ids)) {
+            $results = [];
+            foreach ($students as $s) {
+                $results[$s['email']] = self::emptyAnalytics();
+            }
+            return $results;
+        }
+
+        // Fetch all active activities for these plans
+        $in_plan_ids = implode(',', array_map('intval', $plan_ids));
+        $activities = $pdo->query("
+            SELECT id, study_plan_id, activity_uid, activity_date, day_number
+            FROM study_plan_activities
+            WHERE study_plan_id IN ($in_plan_ids) AND is_deleted = 0
+        ")->fetchAll(PDO::FETCH_ASSOC);
+
+        $activities_by_plan = [];
+        foreach ($activities as $act) {
+            $activities_by_plan[$act['study_plan_id']][] = $act;
+        }
+
+        // Fetch all completion logs for these students for these plans
+        $email_placeholders = implode(',', array_fill(0, count($student_emails), '?'));
+        $stmt_logs = $pdo->prepare("
+            SELECT an.id, an.student_email, an.study_plan_id, an.activity_id, an.activity_uid, an.completion_status, an.created_at
+            FROM study_plan_analytics an
+            JOIN study_plan_activities act ON (
+                (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
+                OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
+            )
+            WHERE LOWER(an.student_email) IN ($email_placeholders)
+              AND an.study_plan_id IN ($in_plan_ids)
+              AND an.action_type = 'complete_activity'
+              AND act.is_deleted = 0
+            ORDER BY an.id ASC
+        ");
+        $stmt_logs->execute($student_emails);
+        $all_logs = $stmt_logs->fetchAll(PDO::FETCH_ASSOC);
+
+        $logs_by_student = [];
+        foreach ($all_logs as $log) {
+            $semail = strtolower($log['student_email']);
+            $logs_by_student[$semail][] = $log;
+        }
+
+        // Fetch all assessment results in bulk for these students
+        $id_placeholders = !empty($student_ids) ? implode(',', array_fill(0, count($student_ids), '?')) : "''";
+
+        $sql_assessments = "
+            SELECT ar.batch_id, ar.student_email, ar.user_id, ar.attendance_status, ar.score, ar.total_score,
+                   arb.course_name, arb.academic_year
+            FROM assessment_results ar
+            JOIN assessment_result_batches arb ON ar.batch_id = arb.id
+            WHERE arb.status = 'published'
+              AND LOWER(TRIM(arb.course_name)) = LOWER(TRIM(?))
+              AND (arb.activity_date_snapshot IS NULL OR arb.activity_date_snapshot <= ?)
+              AND (
+                  (ar.user_id IS NOT NULL AND ar.user_id IN ($id_placeholders))
+                  OR (ar.user_id IS NULL AND LOWER(ar.student_email) IN ($email_placeholders))
+              )
+        ";
+        $params_assessments = array_merge([$course_name, $today], $student_ids, $student_emails);
+        $stmt_assessments = $pdo->prepare($sql_assessments);
+        $stmt_assessments->execute($params_assessments);
+        $all_assessments = $stmt_assessments->fetchAll(PDO::FETCH_ASSOC);
+
+        // Group assessments by student user_id and email
+        $assessments_by_student_id = [];
+        $assessments_by_student_email = [];
+        foreach ($all_assessments as $ass) {
+            if (!empty($ass['user_id'])) {
+                $assessments_by_student_id[$ass['user_id']][] = $ass;
+            } else {
+                $assessments_by_student_email[strtolower($ass['student_email'])][] = $ass;
+            }
+        }
+
+        // Calculate analytics for each student
+        $results = [];
+        foreach ($students as $s) {
+            $email = strtolower(trim($s['email']));
+            $user_id = trim($s['user_id']);
+            $academic_year = trim($s['pepp_academic_year']);
+            $course = trim($s['pepp_course']);
+
+            // Filter plan IDs assigned to this student matching academic year
+            $assigned_plan_ids = [];
+            foreach ($plans_metadata as $pid => $meta) {
+                if (strtolower($meta['academic_year']) !== strtolower($academic_year)) {
+                    continue; // Strict academic year isolation
+                }
+                $assigned = false;
+                foreach ($meta['assignments'] as $assign) {
+                    if ($assign['assignment_type'] === 'all') {
+                        $assigned = true;
+                    } else if ($assign['assignment_type'] === 'course' && strtolower($assign['assigned_value']) === strtolower($course)) {
+                        $assigned = true;
+                    } else if ($assign['assignment_type'] === 'batch' && strtolower($assign['assigned_value']) === strtolower($academic_year)) {
+                        $assigned = true;
+                    } else if ($assign['assignment_type'] === 'student' && $assign['assigned_value'] === $user_id) {
+                        $assigned = true;
+                    }
+                }
+                if ($assigned) {
+                    $assigned_plan_ids[] = $pid;
+                }
+            }
+
+            if (empty($assigned_plan_ids)) {
+                $results[$s['email']] = self::emptyAnalytics();
+                continue;
+            }
+
+            $total_tasks = 0;
+            $completed_tasks = 0;
+            $overdue_tasks = 0;
+
+            // Fetch completions logs of this student for assigned plans
+            $student_logs = [];
+            if (isset($logs_by_student[$email])) {
+                $assigned_pids_flipped = array_flip($assigned_plan_ids);
+                foreach ($logs_by_student[$email] as $log) {
+                    if (isset($assigned_pids_flipped[$log['study_plan_id']])) {
+                        $student_logs[] = $log;
+                    }
+                }
+            }
+
+            $effective_completions = [];
+            foreach ($student_logs as $log) {
+                $key = !empty($log['activity_uid']) ? $log['activity_uid'] : 'id_' . $log['activity_id'];
+                $effective_completions[$key] = $log['completion_status'];
+            }
+
+            $completed_map = [];
+            foreach ($assigned_plan_ids as $pid) {
+                $plan_activities = $activities_by_plan[$pid] ?? [];
+                $total_tasks += count($plan_activities);
+                foreach ($plan_activities as $act) {
+                    $key = !empty($act['activity_uid']) ? $act['activity_uid'] : 'id_' . $act['id'];
+                    if (isset($effective_completions[$key]) && $effective_completions[$key] === 'completed') {
+                        $completed_tasks++;
+                        $completed_map[$act['id']] = true;
+                    } else {
+                        if (!empty($act['activity_date']) && $act['activity_date'] < $today) {
+                            $overdue_tasks++;
+                        }
+                    }
+                }
+            }
+
+            $pending_tasks = max(0, $total_tasks - $completed_tasks);
+            $completion_percentage = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
+
+            // Compile logs for streaks
+            $latest_completed_dates = [];
+            foreach ($student_logs as $log) {
+                $key = !empty($log['activity_uid']) ? $log['activity_uid'] : 'id_' . $log['activity_id'];
+                if ($log['completion_status'] === 'completed') {
+                    if (!empty($log['created_at'])) {
+                        $latest_completed_dates[$key] = self::convertToKolkataDate($log['created_at']);
+                    }
+                } else if ($log['completion_status'] === 'cleared') {
+                    unset($latest_completed_dates[$key]);
+                }
+            }
+            $completed_dates = array_values(array_filter(array_unique(array_values($latest_completed_dates))));
+            $streaks = self::calculateStreaksFromDates($completed_dates);
+
+            // Filter student's assessments matching the academic year
+            $student_assessments = [];
+            if ($user_id !== '' && isset($assessments_by_student_id[$user_id])) {
+                $student_assessments = $assessments_by_student_id[$user_id];
+            } else if (isset($assessments_by_student_email[$email])) {
+                $student_assessments = array_filter($assessments_by_student_email[$email], function($ass) {
+                    return empty($ass['user_id']);
+                });
+            }
+
+            $unique_att = [];
+            $unique_perf = [];
+            foreach ($student_assessments as $rec) {
+                if (strtolower($rec['academic_year']) !== strtolower($academic_year)) {
+                    continue;
+                }
+                $unique_att[$rec['batch_id']] = $rec['attendance_status'];
+                if ($rec['attendance_status'] === 'attended' && $rec['score'] !== null && $rec['total_score'] > 0) {
+                    $score = (float)$rec['score'];
+                    $total = (float)$rec['total_score'];
+                    if ($score >= 0 && $score <= $total) {
+                        $unique_perf[$rec['batch_id']] = ($score / $total) * 100;
+                    }
+                }
+            }
+
+            $attended_sessions = 0;
+            $total_sessions = 0;
+            foreach ($unique_att as $status) {
+                if ($status === 'attended' || $status === 'not_attended') {
+                    $total_sessions++;
+                    if ($status === 'attended') {
+                        $attended_sessions++;
+                    }
+                }
+            }
+            $attendance_rate = $total_sessions > 0 ? round(($attended_sessions / $total_sessions) * 100) : null;
+            $performance_score = count($unique_perf) > 0 ? round(array_sum($unique_perf) / count($unique_perf)) : null;
+
+            $performance_label = null;
+            $performance_class = null;
+            if ($performance_score !== null) {
+                $status_mapping = self::getPerformanceStatusMapping($performance_score);
+                $performance_label = $status_mapping['label'];
+                $performance_class = $status_mapping['class'];
+            }
+
+            $results[$s['email']] = [
+                'total_tasks' => $total_tasks,
+                'completed_tasks' => $completed_tasks,
+                'pending_tasks' => $pending_tasks,
+                'overdue_tasks' => $overdue_tasks,
+                'completion_percentage' => $completion_percentage,
+
+                'attended_sessions' => $attended_sessions,
+                'total_sessions' => $total_sessions,
+                'attendance_rate' => $attendance_rate,
+
+                'performance_score' => $performance_score,
+                'performance_label' => $performance_label,
+                'performance_class' => $performance_class,
+
+                'active_streak' => $streaks['current'],
+                'longest_streak' => $streaks['longest'],
+
+                'first_activity' => !empty($completed_dates) ? min($completed_dates) : null,
+                'last_activity' => !empty($completed_dates) ? max($completed_dates) : null
+            ];
+        }
+
+        return $results;
     }
 }

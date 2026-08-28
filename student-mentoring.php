@@ -314,10 +314,101 @@ if (mentor_tables_exist($pdo)) {
             $stmt->execute([$selected_course_name]);
             $raw_students = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+            // Prepare bulk inputs
+            $bulk_students = [];
+            $student_ids = [];
+            foreach ($raw_students as $s) {
+                $bulk_students[] = [
+                    'email' => $s['email'],
+                    'user_id' => $s['user_id'],
+                    'pepp_academic_year' => $s['pepp_academic_year'],
+                    'pepp_course' => $s['course']
+                ];
+                $uid = trim($s['user_id']);
+                if ($uid !== '') {
+                    $student_ids[] = $uid;
+                }
+            }
+
+            // Fetch course analytics in bulk (no N+1 queries!)
+            $bulk_analytics = StudentStudyPlanAnalytics::getCourseAnalyticsBulk($pdo, $bulk_students, $selected_course_name);
+
+            // Fetch call logs and remarks counts in bulk
+            $last_calls_by_student = [];
+            $remarks_count_by_student = [];
+            if (!empty($student_ids)) {
+                $id_placeholders = implode(',', array_fill(0, count($student_ids), '?'));
+
+                // Fetch last call timestamp
+                $call_stmt = $pdo->prepare("
+                    SELECT student_user_id, MAX(call_timestamp) as last_call
+                    FROM mentor_call_logs
+                    WHERE student_user_id IN ($id_placeholders)
+                    GROUP BY student_user_id
+                ");
+                $call_stmt->execute($student_ids);
+                $calls = $call_stmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($calls as $c) {
+                    $last_calls_by_student[$c['student_user_id']] = $c['last_call'];
+                }
+
+                // Fetch remarks counts
+                $remark_stmt = $pdo->prepare("
+                    SELECT student_user_id, COUNT(*) as remarks_cnt
+                    FROM mentor_remarks
+                    WHERE student_user_id IN ($id_placeholders)
+                    GROUP BY student_user_id
+                ");
+                $remark_stmt->execute($student_ids);
+                $rems = $remark_stmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($rems as $r) {
+                    $remarks_count_by_student[$r['student_user_id']] = (int)$r['remarks_cnt'];
+                }
+            }
+
             $students_with_metrics = [];
             foreach ($raw_students as $s) {
-                $m = get_student_mentoring_details($pdo, $s);
-                $s['metrics'] = $m;
+                $email_key = strtolower(trim($s['email']));
+                $course_analytics = $bulk_analytics[$email_key] ?? [
+                    'completion_percentage' => 0,
+                    'attendance_rate' => null,
+                    'active_streak' => 0,
+                    'longest_streak' => 0,
+                    'total_tasks' => 0,
+                    'completed_tasks' => 0,
+                    'pending_tasks' => 0,
+                    'overdue_tasks' => 0
+                ];
+
+                $last_call_time = $last_calls_by_student[$s['user_id']] ?? null;
+                $last_called_status = 'Never Called';
+                if ($last_call_time) {
+                    $diff = time() - strtotime($last_call_time);
+                    $days = round($diff / (60 * 60 * 24));
+                    if ($days === 0) {
+                        $last_called_status = 'called today';
+                    } elseif ($days === 1) {
+                        $last_called_status = 'called yesterday';
+                    } else {
+                        $last_called_status = "called {$days} days ago";
+                    }
+                }
+
+                $remarks_count = $remarks_count_by_student[$s['user_id']] ?? 0;
+
+                $s['metrics'] = [
+                    'progress' => $course_analytics['completion_percentage'],
+                    'attendance' => $course_analytics['attendance_rate'],
+                    'streak' => $course_analytics['active_streak'],
+                    'streak_target' => $course_analytics['longest_streak'],
+                    'last_call_time' => $last_call_time,
+                    'last_called_status' => $last_called_status,
+                    'remarks_count' => $remarks_count,
+                    'total_tasks' => $course_analytics['total_tasks'],
+                    'completed_tasks' => $course_analytics['completed_tasks'],
+                    'pending_tasks' => $course_analytics['pending_tasks'],
+                    'overdue_tasks' => $course_analytics['overdue_tasks']
+                ];
                 $students_with_metrics[] = $s;
             }
 
