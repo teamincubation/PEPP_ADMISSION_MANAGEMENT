@@ -51,8 +51,10 @@ $GLOBALS['ADMIN_PAGES'] = [
     'installments'  => ['Installment Payments',    'fa-money-bill-wave'],
     'whatsapp'      => ['Manual WP Log',           'fa-comment'],
     'whatsapp-inbox'=> ['WhatsApp Inbox',          'fa-whatsapp'],
+    'whatsapp-marketing-templates' => ['WhatsApp Templates', 'fa-message'],
     'invoices'      => ['Invoices',                'fa-file-invoice'],
     'communication' => ['Communication Engine',    'fa-network-wired'],
+    'email-campaigns' => ['Email Campaigns',       'fa-envelope-circle-check'],
     'email-reports' => ['Email Reports',           'fa-envelope-open-text'],
     'courses'       => ['Course Management',       'fa-book-open'],
     'faculties'     => ['Faculties',               'fa-chalkboard-user'],
@@ -70,6 +72,7 @@ $GLOBALS['ADMIN_PAGES'] = [
     'ld-work-report'=> ['L&D Work Report',         'fa-chart-simple'],
     'employee-management' => ['Employee Management', 'fa-id-badge'],
     'student-mentoring'   => ['Student Mentoring',   'fa-people-arrows'],
+    'student-study-reports' => ['Student Reports',   'fa-chart-line'],
     'assessment-results'  => ['Assessment Results',  'fa-chart-column'],
     'settings'      => ['Settings',                'fa-gear'],
 ];
@@ -124,6 +127,10 @@ function ensure_credential_visibility_column($pdo) {
         if (!$cols_wa_chat) {
             $pdo->exec("ALTER TABLE admins ADD COLUMN `allow_whatsapp_chat` TINYINT(1) NOT NULL DEFAULT 1");
         }
+        $cols_phone_call = $pdo->query("SHOW COLUMNS FROM admins LIKE 'allow_phone_call'")->fetch();
+        if (!$cols_phone_call) {
+            $pdo->exec("ALTER TABLE admins ADD COLUMN `allow_phone_call` TINYINT(1) NOT NULL DEFAULT 1");
+        }
         $ensured = true;
     } catch (Exception $e) {
         error_log("Failed to ensure admins schema updates: " . $e->getMessage());
@@ -147,6 +154,12 @@ function can_admin_whatsapp_chat() {
     global $admin_role, $admin_row;
     if ($admin_role === 'super_admin') return true;
     return isset($admin_row['allow_whatsapp_chat']) ? (int)$admin_row['allow_whatsapp_chat'] === 1 : true;
+}
+
+function can_admin_phone_call() {
+    global $admin_role, $admin_row;
+    if ($admin_role === 'super_admin') return true;
+    return isset($admin_row['allow_phone_call']) ? (int)$admin_row['allow_phone_call'] === 1 : true;
 }
 
 function can_admin_delete() {
@@ -448,9 +461,11 @@ function get_first_accessible_page_url() {
         'assessment-results' => 'assessment-results.php',
         'task-tracker'  => 'task-tracker.php',
         'ld-work-report'=> 'ld-work-report.php',
+        'student-study-reports' => 'student-study-reports.php',
         'employee-management' => 'employee-management.php',
         'student-mentoring'   => 'student-mentoring.php',
         'settings'      => 'settings.php',
+        'email-campaigns' => 'email-campaigns.php',
     ];
     $perms = array_map('trim', explode(',', $admin_perms));
     foreach ($page_urls as $key => $url) {

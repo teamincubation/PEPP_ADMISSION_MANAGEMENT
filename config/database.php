@@ -141,7 +141,8 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 can_delete INTEGER DEFAULT 1,
                 can_export INTEGER DEFAULT 1,
                 allow_copy_email INTEGER DEFAULT 1,
-                allow_whatsapp_chat INTEGER DEFAULT 1
+                allow_whatsapp_chat INTEGER DEFAULT 1,
+                allow_phone_call INTEGER DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS admin_activity_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

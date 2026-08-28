@@ -705,11 +705,11 @@ include 'includes/admin_nav.php';
                     </td>
                     <td class="actions-cell" style="text-align:right; white-space:nowrap;">
                         <a href="student-study-reports.php?source=courses&student_id=<?= urlencode($s['user_id']) ?>" target="_blank" class="btn btn-sm btn-soft-violet" title="View Student Report"><i class="fas fa-chart-line"></i> Report</a>
-                        <button type="button" class="btn btn-sm btn-soft-blue" onclick="openCall('<?= e($s['user_id']) ?>', '<?= e($s['full_name']) ?>')" title="Log Call"><i class="fas fa-phone"></i> Log Call</button>
-                        <?php if (is_credential_restricted('students')): ?>
-                            <button type="button" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat (Restricted)" style="opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i> Chat</button>
-                        <?php else: ?>
+                        <button type="button" class="btn btn-sm btn-soft-blue" onclick="openCall('<?= e($s['user_id']) ?>', '<?= e($s['full_name']) ?>', '<?= e(($s['whatsapp_country_code'] ?: '+91') . ' ' . format_credential_text($s['whatsapp_number'], 'phone', 'students')) ?>', '<?= e(preg_replace('/\D/', '', ($s['whatsapp_country_code'] ?: '+91') . $s['whatsapp_number'])) ?>')" title="Log Call"><i class="fas fa-phone"></i> Log Call</button>
+                        <?php if (can_admin_whatsapp_chat()): ?>
                             <a href="https://wa.me/<?= $wa_phone ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
+                        <?php else: ?>
+                            <button type="button" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat (Restricted)" style="opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i> Chat (Restricted)</button>
                         <?php endif; ?>
                         <button type="button" class="btn btn-sm btn-outline" onclick="openRemark('<?= e($s['user_id']) ?>', '<?= e($s['full_name']) ?>')" title="Add/View Remarks"><i class="fas fa-comment-dots"></i> Remarks (<?= $m['remarks_count'] ?>)</button>
                     </td>
@@ -772,10 +772,16 @@ include 'includes/admin_nav.php';
                     $cl_wa = preg_replace('/\D/', '', ($cl['whatsapp_country_code'] ?: '+91') . $cl['whatsapp_number']);
                     if ($cl_wa):
                     ?>
-                        <?php if (is_credential_restricted('students')): ?>
-                            <button type="button" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat (Restricted)" style="opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i> Chat</button>
-                        <?php else: ?>
+                        <?php if (can_admin_whatsapp_chat()): ?>
                             <a href="https://wa.me/<?php echo $cl_wa; ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
+                        <?php else: ?>
+                            <button type="button" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat (Restricted)" style="opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i> Chat (Restricted)</button>
+                        <?php endif; ?>
+
+                        <?php if (can_admin_phone_call()): ?>
+                            <a href="tel:<?php echo $cl_wa; ?>" class="btn btn-sm btn-outline" title="Call Student"><i class="fas fa-phone"></i></a>
+                        <?php else: ?>
+                            <button type="button" class="btn btn-sm btn-outline" title="Call Student (Restricted)" style="opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-phone"></i></button>
                         <?php endif; ?>
                     <?php endif; ?>
 
@@ -849,10 +855,16 @@ include 'includes/admin_nav.php';
                     $rm_wa = preg_replace('/\D/', '', ($rm['whatsapp_country_code'] ?: '+91') . $rm['whatsapp_number']);
                     if ($rm_wa):
                     ?>
-                        <?php if (is_credential_restricted('students')): ?>
-                            <button type="button" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat (Restricted)" style="opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i> Chat</button>
-                        <?php else: ?>
+                        <?php if (can_admin_whatsapp_chat()): ?>
                             <a href="https://wa.me/<?php echo $rm_wa; ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
+                        <?php else: ?>
+                            <button type="button" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat (Restricted)" style="opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i> Chat (Restricted)</button>
+                        <?php endif; ?>
+
+                        <?php if (can_admin_phone_call()): ?>
+                            <a href="tel:<?php echo $rm_wa; ?>" class="btn btn-sm btn-outline" title="Call Student"><i class="fas fa-phone"></i></a>
+                        <?php else: ?>
+                            <button type="button" class="btn btn-sm btn-outline" title="Call Student (Restricted)" style="opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-phone"></i></button>
                         <?php endif; ?>
                     <?php endif; ?>
 
@@ -1047,9 +1059,20 @@ include 'includes/admin_nav.php';
 </div>
 
 <script>
-function openCall(id, name) {
+const isCredentialRestricted = <?php echo is_credential_restricted('students') ? 'true' : 'false'; ?>;
+const canWhatsappChat = <?php echo can_admin_whatsapp_chat() ? 'true' : 'false'; ?>;
+const canPhoneCall = <?php echo can_admin_phone_call() ? 'true' : 'false'; ?>;
+const canAccessStudents = <?php echo can_access('students') ? 'true' : 'false'; ?>;
+
+function openCall(id, name, displayNum, rawNum) {
     document.getElementById('callStudentId').value = id;
-    document.getElementById('callStudentName').textContent = 'Student: ' + name + ' (' + id + ')';
+    let html = 'Student: ' + name + ' (' + id + ')';
+    if (canPhoneCall) {
+        html += '<br><a href="tel:' + rawNum + '" style="color:var(--accent); font-weight:700; text-decoration:underline; margin-top:4px; display:inline-block;"><i class="fas fa-phone-volume"></i> Click to Call: ' + displayNum + '</a>';
+    } else {
+        html += '<br><span style="color:var(--text-muted); font-size:0.75rem; margin-top:4px; display:inline-block;"><i class="fas fa-phone-slash"></i> Call (Restricted): ' + displayNum + '</span>';
+    }
+    document.getElementById('callStudentName').innerHTML = html;
     openModal('callModal');
 }
 function openRemark(id, name) {

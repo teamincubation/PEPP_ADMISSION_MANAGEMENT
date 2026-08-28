@@ -1,6 +1,6 @@
 <?php
 require_once 'includes/auth.php';
-require_permission('studyplans');
+require_permission('student-study-reports');
 require_once 'config/database.php';
 
 // Helper to escape output
@@ -546,6 +546,8 @@ if (isset($_GET['action'])) {
                     'name' => r_esc($student['name']),
                     'user_id' => $student['user_id'],
                     'email' => is_credential_restricted('students') ? format_credential_text($student['email'], 'email', 'students') : $student['email'],
+                    'raw_email' => can_admin_copy_original_email() ? $student['email'] : format_credential_text($student['email'], 'email', 'students'),
+                    'raw_phone' => (can_admin_whatsapp_chat() || can_admin_phone_call()) ? $student['phone'] : format_credential_text($student['phone'], 'phone', 'students'),
                     'masked_email' => format_credential_text($student['email'], 'email', 'students'),
                     'masked_phone' => format_credential_text($student['phone'], 'phone', 'students'),
                     'course' => r_esc($student['pepp_course']),
@@ -1146,8 +1148,10 @@ if (isset($_GET['action'])) {
                 if ($comp === 0) {
                     $data[] = [
                         'name' => r_esc($s['name']),
-                        'email' => $s['email'],
-                        'phone' => $s['phone'],
+                        'email' => is_credential_restricted('students') ? format_credential_text($s['email'], 'email', 'students') : $s['email'],
+                        'phone' => is_credential_restricted('students') ? format_credential_text($s['phone'], 'phone', 'students') : $s['phone'],
+                        'raw_email' => can_admin_copy_original_email() ? $s['email'] : format_credential_text($s['email'], 'email', 'students'),
+                        'raw_phone' => (can_admin_whatsapp_chat() || can_admin_phone_call()) ? $s['phone'] : format_credential_text($s['phone'], 'phone', 'students'),
                         'masked_email' => format_credential_text($s['email'], 'email', 'students'),
                         'masked_phone' => format_credential_text($s['phone'], 'phone', 'students'),
                         'overdue_days' => $overdue_days,
@@ -3630,6 +3634,10 @@ include 'includes/admin_nav.php';
     const isSuperAdmin = <?php echo is_super_admin() ? 'true' : 'false'; ?>;
     const csrfToken = '<?php echo csrf_token(); ?>';
     const isCredentialRestricted = <?php echo is_credential_restricted('students') ? 'true' : 'false'; ?>;
+    const canWhatsappChat = <?php echo can_admin_whatsapp_chat() ? 'true' : 'false'; ?>;
+    const canPhoneCall = <?php echo can_admin_phone_call() ? 'true' : 'false'; ?>;
+    const canCopyEmail = <?php echo can_admin_copy_original_email() ? 'true' : 'false'; ?>;
+    const canAccessStudents = <?php echo can_access('students') ? 'true' : 'false'; ?>;
 
     document.addEventListener('DOMContentLoaded', function() {
         if (sourceVal === 'courses') {
@@ -4010,16 +4018,29 @@ include 'includes/admin_nav.php';
 
                             <!-- Communication Actions -->
                             <div style="display:flex; flex-direction:column; gap:8px;">
-                                ${isCredentialRestricted ? `
-                                    <button class="btn btn-whatsapp" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i> Chat on WhatsApp (Restricted)</button>
-                                    <button class="btn btn-primary" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-envelope"></i> Send Email (Restricted)</button>
-                                    <button class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-phone"></i> Call Student (Restricted)</button>
+                                ${canWhatsappChat ? `
+                                    <a href="https://wa.me/${s.raw_phone.replace(/\D/g, '')}" target="_blank" class="btn btn-whatsapp" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fab fa-whatsapp"></i> Chat on WhatsApp</a>
                                 ` : `
-                                    <a href="https://wa.me/${s.masked_phone.replace(/\D/g, '')}" target="_blank" class="btn btn-whatsapp" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fab fa-whatsapp"></i> Chat on WhatsApp</a>
-                                    <a href="mailto:${s.email}" class="btn btn-primary" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-envelope"></i> Send Email</a>
-                                    <a href="tel:${s.masked_phone}" class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-phone"></i> Call Student</a>
+                                    <button class="btn btn-whatsapp" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i> Chat on WhatsApp (Restricted)</button>
                                 `}
-                                <a href="student-details.php?user_id=${s.user_id}" class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-user-graduate"></i> View Profile Page</a>
+
+                                ${(!isCredentialRestricted || canCopyEmail) ? `
+                                    <a href="mailto:${s.raw_email || s.email}" class="btn btn-primary" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-envelope"></i> Send Email</a>
+                                ` : `
+                                    <button class="btn btn-primary" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-envelope"></i> Send Email (Restricted)</button>
+                                `}
+
+                                ${canPhoneCall ? `
+                                    <a href="tel:${s.raw_phone}" class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-phone"></i> Call Student</a>
+                                ` : `
+                                    <button class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-phone"></i> Call Student (Restricted)</button>
+                                `}
+
+                                ${canAccessStudents ? `
+                                    <a href="student-details.php?user_id=${s.user_id}" class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem;"><i class="fas fa-user-graduate"></i> View Profile Page</a>
+                                ` : `
+                                    <button class="btn btn-outline" style="width:100%; text-align:center; padding: 8px 12px; font-size: 0.85rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-user-graduate"></i> View Profile Page (Restricted)</button>
+                                `}
                             </div>
                         </div>
 
@@ -5114,7 +5135,7 @@ include 'includes/admin_nav.php';
                     return;
                 }
                 data.forEach(s => {
-                    const waLink = `https://wa.me/${s.phone.replace(/\\D/g, '')}`;
+                    const waLink = `https://wa.me/${s.raw_phone.replace(/\D/g, '')}`;
                     tbody.innerHTML += `
                         <tr>
                             <td style="padding:8px; font-weight:700; color:var(--text-main);">${s.name}<br><small style="color:var(--text-muted);">${s.masked_email}</small></td>
@@ -5122,14 +5143,22 @@ include 'includes/admin_nav.php';
                             <td style="padding:8px; text-align:center; color:#ef4444; font-weight:800;">${s.overdue_days} Days</td>
                             <td style="padding:8px; text-align:right;">
                                 <div style="display:inline-flex; gap:4px;">
-                                    ${isCredentialRestricted ? `
-                                        <button class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.65rem; opacity:0.6; cursor:not-allowed;" title="Send WhatsApp alert (Restricted)" disabled><i class="fab fa-whatsapp"></i></button>
-                                        <button class="btn btn-xs btn-primary" style="padding:3px 6px; font-size:0.65rem; opacity:0.6; cursor:not-allowed;" title="Send Email alert (Restricted)" disabled><i class="fas fa-envelope"></i></button>
-                                        <button class="btn btn-xs btn-info" style="padding:3px 6px; font-size:0.65rem; opacity:0.6; cursor:not-allowed;" title="Call student (Restricted)" disabled><i class="fas fa-phone"></i></button>
-                                    ` : `
+                                    ${canWhatsappChat ? `
                                         <a href="${waLink}" target="_blank" class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.65rem;" title="Send WhatsApp alert"><i class="fab fa-whatsapp"></i></a>
-                                        <a href="mailto:${s.email}?subject=Pending Task Alert" class="btn btn-xs btn-primary" style="padding:3px 6px; font-size:0.65rem;" title="Send Email alert"><i class="fas fa-envelope"></i></a>
-                                        <a href="tel:${s.phone}" class="btn btn-xs btn-info" style="padding:3px 6px; font-size:0.65rem;" title="Call student"><i class="fas fa-phone"></i></a>
+                                    ` : `
+                                        <button class="btn btn-xs btn-success" style="padding:3px 6px; font-size:0.65rem; opacity:0.6; cursor:not-allowed;" title="Send WhatsApp alert (Restricted)" disabled><i class="fab fa-whatsapp"></i></button>
+                                    `}
+
+                                    ${(!isCredentialRestricted || canCopyEmail) ? `
+                                        <a href="mailto:${s.raw_email || s.email}?subject=Pending Task Alert" class="btn btn-xs btn-primary" style="padding:3px 6px; font-size:0.65rem;" title="Send Email alert"><i class="fas fa-envelope"></i></a>
+                                    ` : `
+                                        <button class="btn btn-xs btn-primary" style="padding:3px 6px; font-size:0.65rem; opacity:0.6; cursor:not-allowed;" title="Send Email alert (Restricted)" disabled><i class="fas fa-envelope"></i></button>
+                                    `}
+
+                                    ${canPhoneCall ? `
+                                        <a href="tel:${s.raw_phone}" class="btn btn-xs btn-info" style="padding:3px 6px; font-size:0.65rem;" title="Call student"><i class="fas fa-phone"></i></a>
+                                    ` : `
+                                        <button class="btn btn-xs btn-info" style="padding:3px 6px; font-size:0.65rem; opacity:0.6; cursor:not-allowed;" title="Call student (Restricted)" disabled><i class="fas fa-phone"></i></button>
                                     `}
                                 </div>
                             </td>

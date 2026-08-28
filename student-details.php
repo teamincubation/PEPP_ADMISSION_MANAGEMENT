@@ -1,7 +1,7 @@
 <?php
 require_once 'includes/auth.php';
 require_once 'config/database.php';
-if (!can_access('students') && !can_access('peppkit') && !can_access('onboarding') && !can_access('installments') && !can_access('approvals') && !can_access('cards')) {
+if (!can_access('students')) {
     require_permission('students');
 }
 if (file_exists(__DIR__ . '/includes/referral_helper.php')) {
@@ -1146,10 +1146,17 @@ include 'includes/admin_nav.php';
         <?php else: ?>
             <a class="btn btn-sm btn-whatsapp" href="https://wa.me/<?php echo e($use_wa); ?>" target="_blank"><i class="fab fa-whatsapp"></i> WhatsApp</a>
         <?php endif; ?>
-        <?php if ($admin_credential_visibility === 'visible' || is_super_admin()): ?>
+
+        <?php if (!is_credential_restricted('students') || can_admin_copy_original_email()): ?>
             <a class="btn btn-sm btn-outline" href="mailto:<?php echo e($student['email']); ?>"><i class="fas fa-envelope"></i> Email</a>
         <?php else: ?>
-            <a class="btn btn-sm btn-outline" href="javascript:void(0)" onclick="alert('Access to student email is restricted.')" style="opacity:0.6;"><i class="fas fa-envelope"></i> Email</a>
+            <a class="btn btn-sm btn-outline" href="javascript:void(0)" onclick="alert('Access to student email is restricted.')" style="opacity:0.6; cursor:not-allowed;" title="Email restricted"><i class="fas fa-envelope"></i> Email</a>
+        <?php endif; ?>
+
+        <?php if (can_admin_phone_call()): ?>
+            <a class="btn btn-sm btn-outline" href="tel:<?php echo e($raw_wa); ?>"><i class="fas fa-phone"></i> Call</a>
+        <?php else: ?>
+            <a class="btn btn-sm btn-outline" href="javascript:void(0)" onclick="alert('Access to call student is restricted.')" style="opacity:0.6; cursor:not-allowed;" title="Call restricted"><i class="fas fa-phone"></i> Call</a>
         <?php endif; ?>
     </div>
 </div>
