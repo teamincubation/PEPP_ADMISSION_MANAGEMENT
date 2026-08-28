@@ -3142,6 +3142,44 @@ include 'includes/admin_nav.php';
         background: #eef2ff;
         font-weight: 700;
     }
+    @media print {
+        body {
+            background: #ffffff !important;
+            color: #000000 !important;
+        }
+        .admin-header, .sidebar, .breadcrumbs-bar, .container-fluid > *:not(#student-task-modal-backdrop),
+        .modal-nav-tabs, .timeline-modal-header button, #st-modal-dossier-pane,
+        .lightbox-backdrop, .card-config-modal-backdrop {
+            display: none !important;
+        }
+        .timeline-modal-backdrop {
+            display: block !important;
+            position: static !important;
+            background: none !important;
+            padding: 0 !important;
+            overflow: visible !important;
+        }
+        .timeline-modal {
+            max-width: 100% !important;
+            width: 100% !important;
+            max-height: none !important;
+            box-shadow: none !important;
+            border: none !important;
+            padding: 0 !important;
+        }
+        #st-modal-analytics-pane {
+            display: block !important;
+            max-height: none !important;
+            overflow: visible !important;
+            padding: 0 !important;
+        }
+        .analytics-section-card {
+            box-shadow: none !important;
+            border: 1px solid #cbd5e1 !important;
+            page-break-inside: avoid;
+            margin-bottom: 15px !important;
+        }
+    }
 </style>
 
 <div class="container-fluid" style="padding: 1.5rem 0;">
@@ -3643,11 +3681,11 @@ include 'includes/admin_nav.php';
 
             <!-- Quick Actions -->
             <div style="display:flex; gap:8px; align-items:center;">
-                <button type="button" class="btn btn-sm btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" onclick="window.print()"><i class="fas fa-print"></i> Print Report</button>
+                <button type="button" class="btn btn-sm btn-outline" id="st-modal-print-btn" style="padding: 6px 12px; font-size: 0.8rem;" onclick="printStudentLearningAnalyticsReport()"><i class="fas fa-print"></i> Print Report</button>
                 <button type="button" class="btn btn-sm btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" onclick="exportTimelineExcel()"><i class="fas fa-file-excel"></i> Excel</button>
                 <button type="button" class="btn btn-sm btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" onclick="exportTimelineCSV()"><i class="fas fa-file-csv"></i> CSV</button>
                 <button type="button" class="btn btn-sm btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" onclick="shareTimelineReport()"><i class="fas fa-share-nodes"></i> Share Link</button>
-                <button type="button" class="btn btn-sm btn-soft-red" style="padding: 6px 12px; margin-left: 10px;" onclick="closeTimelineModal()"><i class="fas fa-xmark"></i></button>
+                <button type="button" class="btn btn-sm btn-soft-red" id="st-modal-close-btn" style="padding: 6px 12px; margin-left: 10px;" onclick="closeTimelineModal()"><i class="fas fa-xmark"></i></button>
             </div>
         </div>
 
@@ -4034,6 +4072,8 @@ include 'includes/admin_nav.php';
     let currentSelectedStudentName = '';
     let currentSelectedStudentCourse = '';
     let currentSelectedStudentId = '';
+    let currentSelectedStudentPhoto = '';
+    let currentSelectedStudentStatus = 'Active';
     let timelineActivities = [];
 
     // ── LIGHTBOX HELPERS ──
@@ -4117,12 +4157,17 @@ include 'includes/admin_nav.php';
                 const s = data.student;
                 currentSelectedStudentName = s.name;
                 currentSelectedStudentCourse = s.course;
+                currentSelectedStudentId = s.user_id;
+                currentSelectedStudentEmail = s.masked_email;
+                currentSelectedStudentPhoto = s.photo || '';
+                currentSelectedStudentStatus = s.status || 'Active';
+
                 const searchInput = document.getElementById('global-student-search-input');
                 if (searchInput) {
                     searchInput.value = s.name;
                 }
                 const statusBadgeClass = s.status === 'active' ? 'green' : 'gray';
-                const profilePhotoSrc = s.photo ? '../' + s.photo : 'assets/img/default-avatar.svg';
+                const profilePhotoSrc = s.photo ? s.photo : 'assets/img/default-avatar.svg';
 
                 // Build modern visual dashboard HTML structure
                 let html = `
@@ -4515,7 +4560,745 @@ include 'includes/admin_nav.php';
     // ── TIMELINE DIALOG MODAL OPEN/CLOSE ──
     function openTimelineModal() {
         const backdrop = document.getElementById('student-task-modal-backdrop');
-        backdrop.classList.add('show');
+        if (backdrop) {
+            backdrop.classList.add('show');
+        }
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeTimelineModal() {
+        const backdrop = document.getElementById('student-task-modal-backdrop');
+        if (backdrop) {
+            backdrop.classList.remove('show');
+        }
+        document.body.style.overflow = '';
+    }
+
+    // Global keyboard listener for Escape key to close modals safely
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' || e.key === 'Esc') {
+            closeTimelineModal();
+            if (typeof closeLightbox === 'function') closeLightbox();
+            if (typeof closeCardsConfigModal === 'function') closeCardsConfigModal();
+        }
+    });
+
+    // ── PROFESSIONAL LEARNING ANALYTICS REPORT PDF / PRINT GENERATOR ──
+    function printStudentLearningAnalyticsReport() {
+        const payload = window.currentPlanAnalyticsPayload;
+        if (!payload || !payload.analytics) {
+            alert('Learning analytics data is not yet loaded. Please wait for data to load.');
+            return;
+        }
+
+        const a = payload.analytics;
+        const prof = a.student_profile || a.student_info || payload.studentProfile || payload.studentInfo || {};
+        const st = prof;
+        const mp = payload.multiPlanData || {};
+        const planTitle = payload.planTitle || 'Study Plan';
+        const cohort = a.cohort_ranking || {};
+        const curStudent = cohort.current_student || null;
+
+        const profName = prof.name || currentSelectedStudentName || 'Student';
+        const profId = prof.student_id || prof.user_id || currentSelectedStudentId || '';
+        const rawMaskedEmail = prof.masked_email || a.masked_email || currentSelectedStudentEmail || '';
+        const profEmail = (rawMaskedEmail && rawMaskedEmail !== 'null' && rawMaskedEmail !== 'undefined') ? rawMaskedEmail : 'Not available';
+        const profCourse = prof.course || currentSelectedStudentCourse || '';
+        const profYear = prof.academic_year || a.academic_year || '2026-27';
+        const profStatus = prof.status || currentSelectedStudentStatus || 'Active';
+        const profPhoto = prof.photo || prof.photo_url || currentSelectedStudentPhoto || '';
+
+        const totalTasks = a.total_tasks || 0;
+        const completedTasks = a.completed_tasks || 0;
+        const pendingTasks = a.pending_tasks || 0;
+        const overdueTasks = a.overdue_tasks || 0;
+        const compPct = a.completion_percentage || 0;
+
+        const attRate = a.attendance_rate !== null ? a.attendance_rate : null;
+        const perfScore = a.performance_score !== null ? a.performance_score : null;
+        const consistencyPct = a.consistency_percentage || 0;
+        const activeStreak = a.active_streak || 0;
+        const longestStreak = a.longest_streak || 0;
+        const totalPlanDays = a.total_plan_calendar_days || 0;
+        const activeDays = a.active_study_days || 0;
+
+        const rankVal = curStudent ? curStudent.rank : 1;
+        const cohortSize = cohort.cohort_size || 1;
+        const badge = curStudent ? curStudent.badge : '⭐ Strong Performer';
+        const perfIndex = curStudent ? curStudent.performance_index : compPct;
+        const percentileText = curStudent ? curStudent.percentile_text : 'Top 100%';
+
+        const nowStr = new Date().toLocaleString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:true });
+        const reportId = 'PEPP-LAR-' + (profId || 'STD') + '-' + Date.now().toString().slice(-6);
+
+        let docHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Student Learning Analytics Report - ${r_esc_js(profName)}</title>
+    <style>
+        @page {
+            size: A4 portrait;
+            margin: 12mm 15mm 15mm 15mm;
+        }
+        * {
+            box-sizing: border-box;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            color: #1e293b;
+            background: #ffffff;
+            margin: 0;
+            padding: 0;
+            font-size: 9.5pt;
+            line-height: 1.4;
+        }
+        .pdf-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #4f46e5;
+            padding-bottom: 10px;
+            margin-bottom: 12px;
+        }
+        .pdf-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .pdf-logo-box {
+            background: #4f46e5;
+            color: #ffffff;
+            font-weight: 900;
+            font-size: 14pt;
+            padding: 4px 10px;
+            border-radius: 6px;
+            letter-spacing: 0.05em;
+        }
+        .pdf-title-box h1 {
+            margin: 0;
+            font-size: 13pt;
+            font-weight: 800;
+            color: #0f172a;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .pdf-title-box p {
+            margin: 1px 0 0 0;
+            font-size: 8pt;
+            color: #64748b;
+        }
+        .pdf-meta-box {
+            text-align: right;
+            font-size: 7.5pt;
+            color: #64748b;
+        }
+        .pdf-meta-box strong {
+            color: #1e293b;
+        }
+        .student-profile-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .student-name {
+            font-size: 13pt;
+            font-weight: 800;
+            color: #0f172a;
+            margin: 0 0 4px 0;
+        }
+        .student-details {
+            display: flex;
+            gap: 14px;
+            font-size: 8pt;
+            color: #475569;
+            flex-wrap: wrap;
+        }
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .kpi-box {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 8px;
+            text-align: center;
+        }
+        .kpi-val {
+            font-size: 12pt;
+            font-weight: 800;
+            color: #0f172a;
+            margin-top: 2px;
+        }
+        .kpi-lbl {
+            font-size: 7pt;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+        }
+        .section-card {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            page-break-inside: avoid;
+            background: #ffffff;
+        }
+        .section-title {
+            font-size: 9.5pt;
+            font-weight: 800;
+            color: #1e1b4b;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            margin: 0 0 8px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #f1f5f9;
+            padding-bottom: 4px;
+        }
+        .ranking-hero {
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+        .report-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 8pt;
+            margin-top: 6px;
+        }
+        .report-table th {
+            background: #f1f5f9;
+            color: #475569;
+            font-weight: 700;
+            text-align: left;
+            padding: 5px 8px;
+            border: 1px solid #e2e8f0;
+            text-transform: uppercase;
+            font-size: 7pt;
+        }
+        .report-table td {
+            padding: 5px 8px;
+            border: 1px solid #e2e8f0;
+            color: #1e293b;
+        }
+        .report-table tr.current-row td {
+            background: #eef2ff;
+            font-weight: 700;
+        }
+        .progress-bar-bg {
+            background: #e2e8f0;
+            height: 6px;
+            border-radius: 3px;
+            overflow: hidden;
+            width: 100%;
+        }
+        .progress-bar-fill {
+            background: #4f46e5;
+            height: 100%;
+        }
+        .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 7pt;
+            font-weight: 700;
+        }
+        .badge-green { background: #dcfce7; color: #166534; }
+        .badge-blue { background: #dbeafe; color: #1e40af; }
+        .badge-amber { background: #fef3c7; color: #92400e; }
+        .badge-red { background: #fee2e2; color: #991b1b; }
+        .badge-purple { background: #f3e8ff; color: #6b21a8; }
+        .pdf-footer {
+            margin-top: 15px;
+            padding-top: 8px;
+            border-top: 1px solid #e2e8f0;
+            display: flex;
+            justify-content: space-between;
+            font-size: 7pt;
+            color: #94a3b8;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <div class="pdf-header">
+        <div class="pdf-brand">
+            <div class="pdf-logo-box">PEPP</div>
+            <div class="pdf-title-box">
+                <h1>Student Learning Analytics Report</h1>
+                <p>Academic Progress, Chapter Mastery & Study Plan Performance Audit</p>
+            </div>
+        </div>
+        <div class="pdf-meta-box">
+            <div>Report ID: <strong>${reportId}</strong></div>
+            <div>Generated: <strong>${nowStr}</strong></div>
+            <div>Academic Year: <strong>${r_esc_js(profYear)}</strong></div>
+        </div>
+    </div>
+
+    <!-- Student Profile Overview -->
+    <div class="student-profile-card">
+        <div style="display: flex; align-items: center; gap: 14px;">
+            <div style="width: 52px; height: 52px; border-radius: 50%; background: #e0e7ff; color: #4f46e5; display: flex; align-items: center; justify-content: center; font-size: 13pt; font-weight: 800; border: 2px solid #4f46e5; overflow: hidden; flex-shrink: 0;">
+                ${profPhoto ? `<img src="${r_esc_js(profPhoto)}" style="width:100%; height:100%; object-fit:cover;" onerror="this.src='assets/img/default-avatar.svg';">` : `<img src="assets/img/default-avatar.svg" style="width:100%; height:100%; object-fit:cover;" onerror="this.outerHTML='<span style=\\\'font-size:10pt;\\\'>PEPP</span>';">`}
+            </div>
+            <div>
+                <h2 class="student-name" style="margin:0 0 3px 0;">${r_esc_js(profName)}</h2>
+                <div class="student-details">
+                    <span>Student ID: <strong>${r_esc_js(profId)}</strong></span>
+                    <span>Email: <strong>${r_esc_js(profEmail)}</strong></span>
+                    <span>Course: <strong>${r_esc_js(profCourse)}</strong></span>
+                    <span>Academic Year: <strong>${r_esc_js(profYear)}</strong></span>
+                    <span>Study Plan: <strong>${r_esc_js(planTitle)}</strong></span>
+                </div>
+            </div>
+        </div>
+        <div style="text-align:right;">
+            <span class="badge badge-green">${r_esc_js(profStatus)}</span>
+        </div>
+    </div>
+
+    <!-- Section 1: KPI Grid -->
+    <div class="kpi-grid">
+        <div class="kpi-box">
+            <div class="kpi-lbl">Total Tasks</div>
+            <div class="kpi-val">${totalTasks}</div>
+        </div>
+        <div class="kpi-box" style="border-top: 2px solid #10b981;">
+            <div class="kpi-lbl" style="color:#047857;">Completed</div>
+            <div class="kpi-val" style="color:#047857;">${completedTasks}</div>
+        </div>
+        <div class="kpi-box" style="border-top: 2px solid #f59e0b;">
+            <div class="kpi-lbl" style="color:#d97706;">Pending</div>
+            <div class="kpi-val" style="color:#d97706;">${pendingTasks}</div>
+        </div>
+        <div class="kpi-box" style="border-top: 2px solid #ef4444;">
+            <div class="kpi-lbl" style="color:#b91c1c;">Overdue</div>
+            <div class="kpi-val" style="color:#b91c1c;">${overdueTasks}</div>
+        </div>
+        <div class="kpi-box" style="border-top: 2px solid #4f46e5;">
+            <div class="kpi-lbl" style="color:#4f46e5;">Completion Rate</div>
+            <div class="kpi-val" style="color:#4f46e5;">${compPct}%</div>
+        </div>
+        <div class="kpi-box" style="border-top: 2px solid #3b82f6;">
+            <div class="kpi-lbl" style="color:#1d4ed8;">Test Attendance</div>
+            <div class="kpi-val" style="color:#1d4ed8;">${attRate !== null ? attRate + '%' : 'N/A'}</div>
+        </div>
+        <div class="kpi-box" style="border-top: 2px solid #8b5cf6;">
+            <div class="kpi-lbl" style="color:#6d28d9;">Test Average</div>
+            <div class="kpi-val" style="color:#6d28d9;">${perfScore !== null ? perfScore + '%' : 'N/A'}</div>
+        </div>
+        <div class="kpi-box" style="border-top: 2px solid #06b6d4;">
+            <div class="kpi-lbl" style="color:#0e7490;">Consistency</div>
+            <div class="kpi-val" style="color:#0e7490;">${consistencyPct}%</div>
+        </div>
+        <div class="kpi-box" style="border-top: 2px solid #f97316;">
+            <div class="kpi-lbl" style="color:#c2410c;">Active Streak</div>
+            <div class="kpi-val" style="color:#c2410c;">${activeStreak}d</div>
+        </div>
+        <div class="kpi-box" style="border-top: 2px solid #eab308;">
+            <div class="kpi-lbl" style="color:#854d0e;">Max Streak</div>
+            <div class="kpi-val" style="color:#854d0e;">${longestStreak}d</div>
+        </div>
+    </div>
+
+    <!-- Section 2: Study Plan Performance & Cohort Ranking -->
+    <div class="section-card">
+        <div class="section-title">
+            <span>🏆 Study Plan Performance & Cohort Ranking</span>
+            <span style="font-size:7.5pt; font-weight:normal; color:#64748b;">Cohort: ${r_esc_js(cohort.study_plan_title || planTitle)} (${r_esc_js(cohort.academic_year || '2026-27')})</span>
+        </div>
+        <div class="ranking-hero">
+            <div>
+                <div style="font-size:7pt; font-weight:700; color:#64748b; text-transform:uppercase;">Study Plan Rank</div>
+                <div style="font-size:16pt; font-weight:900; color:#4f46e5;">#${rankVal} <span style="font-size:9pt; font-weight:600; color:#64748b;">/ ${cohortSize}</span></div>
+                <div style="font-size:7.5pt; font-weight:700; color:#047857;">${percentileText}</div>
+            </div>
+            <div>
+                <div style="font-size:7pt; font-weight:700; color:#64748b; text-transform:uppercase;">Performance Index</div>
+                <div style="font-size:16pt; font-weight:900; color:#0f172a;">${perfIndex}%</div>
+                <div style="font-size:7.5pt; color:#64748b;">Weighted Composite Score</div>
+            </div>
+            <div>
+                <div style="font-size:7pt; font-weight:700; color:#64748b; text-transform:uppercase;">Cohort Standing</div>
+                <div style="font-size:12pt; font-weight:800; color:#0f172a; margin-top:3px;">${badge}</div>
+            </div>
+        </div>
+        ${cohort.leaderboard && cohort.leaderboard.length > 0 ? `
+            <table class="report-table">
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Student</th>
+                        <th>Course</th>
+                        <th>Completion</th>
+                        <th>Test Avg</th>
+                        <th>Test Att</th>
+                        <th>Consistency</th>
+                        <th>Index</th>
+                        <th>Standing</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${cohort.leaderboard.slice(0, 5).map(lb => `
+                        <tr class="${lb.is_current ? 'current-row' : ''}">
+                            <td><strong>#${lb.rank}</strong></td>
+                            <td>${r_esc_js(lb.name)} ${lb.is_current ? '<strong>(YOU)</strong>' : ''}</td>
+                            <td>${r_esc_js(lb.course)}</td>
+                            <td>${lb.completion_pct}%</td>
+                            <td>${lb.assessment_score !== null ? lb.assessment_score + '%' : '—'}</td>
+                            <td>${lb.attendance_rate !== null ? lb.attendance_rate + '%' : '—'}</td>
+                            <td>${lb.consistency_pct}%</td>
+                            <td><strong>${lb.performance_index}%</strong></td>
+                            <td>${lb.badge || 'Active'}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        ` : ''}
+    </div>
+
+    <!-- Section 3: Overall Performance Profile -->
+    <div class="section-card">
+        <div class="section-title">
+            <span>📊 Overall Performance Profile (4 Dimensions)</span>
+            <span style="font-size:7pt; font-weight:normal; color:#64748b;">Weighted Assessment Normalization Applied</span>
+        </div>
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <th>Dimension</th>
+                    <th>Standard Weight</th>
+                    <th>Actual Metric Value</th>
+                    <th>Evaluation Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Activity Completion</strong></td>
+                    <td>40%</td>
+                    <td>${completedTasks} / ${totalTasks} tasks (${compPct}%)</td>
+                    <td><span class="badge ${compPct >= 80 ? 'badge-green' : compPct >= 50 ? 'badge-blue' : 'badge-amber'}">${compPct >= 80 ? 'Strong Completion' : 'In Progress'}</span></td>
+                </tr>
+                <tr>
+                    <td><strong>Assessment Score Average</strong></td>
+                    <td>30%</td>
+                    <td>${perfScore !== null ? perfScore + '%' : 'No published test (Normalized without penalty)'}</td>
+                    <td><span class="badge ${perfScore !== null ? (perfScore >= 75 ? 'badge-green' : 'badge-amber') : 'badge-purple'}">${perfScore !== null ? (perfScore >= 75 ? 'Proficient' : 'Needs Review') : 'Normalized'}</span></td>
+                </tr>
+                <tr>
+                    <td><strong>Assessment Attendance Rate</strong></td>
+                    <td>20%</td>
+                    <td>${attRate !== null ? attRate + '%' : 'No published test (Normalized without penalty)'}</td>
+                    <td><span class="badge ${attRate !== null ? (attRate >= 80 ? 'badge-green' : 'badge-amber') : 'badge-purple'}">${attRate !== null ? (attRate >= 80 ? 'Regular' : 'Irregular') : 'Normalized'}</span></td>
+                </tr>
+                <tr>
+                    <td><strong>Learning Consistency</strong></td>
+                    <td>10%</td>
+                    <td>${activeDays} / ${totalPlanDays} Calendar Days (${consistencyPct}%)</td>
+                    <td><span class="badge ${consistencyPct >= 60 ? 'badge-green' : 'badge-amber'}">${consistencyPct >= 60 ? 'Consistent' : 'Developing'}</span></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Section 4: Chapter-wise Student Progress -->
+    ${(a.chapters && a.chapters.length > 0) ? `
+        <div class="section-card">
+            <div class="section-title">
+                <span>📚 Chapter-wise Student Progress</span>
+                <span style="font-size:7pt; font-weight:normal; color:#64748b;">${a.chapters.length} Canonical Chapters</span>
+            </div>
+            <table class="report-table">
+                <thead>
+                    <tr>
+                        <th style="width:30%;">Chapter Name</th>
+                        <th style="width:10%;">Total</th>
+                        <th style="width:10%;">Completed</th>
+                        <th style="width:10%;">Pending</th>
+                        <th style="width:10%;">Overdue</th>
+                        <th style="width:10%;">Rate</th>
+                        <th style="width:20%;">Progress Bar</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${a.chapters.map(c => `
+                        <tr>
+                            <td><strong>${r_esc_js(c.chapter_name)}</strong></td>
+                            <td>${c.total_activities}</td>
+                            <td style="color:#047857; font-weight:700;">${c.completed_activities}</td>
+                            <td>${c.pending_activities}</td>
+                            <td>${c.overdue_activities > 0 ? `<span style="color:#b91c1c; font-weight:700;">${c.overdue_activities}</span>` : '0'}</td>
+                            <td><strong>${c.completion_percentage}%</strong></td>
+                            <td>
+                                <div class="progress-bar-bg">
+                                    <div class="progress-bar-fill" style="width:${c.completion_percentage}%; background:${c.completion_percentage >= 80 ? '#10b981' : '#4f46e5'};"></div>
+                                </div>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    ` : ''}
+
+    <!-- Section 5: Chapter-wise Assessment Performance -->
+    ${(a.chapter_assessments && a.chapter_assessments.length > 0) ? `
+        <div class="section-card">
+            <div class="section-title">
+                <span>📝 Chapter-wise Assessment Performance</span>
+                <span style="font-size:7pt; font-weight:normal; color:#64748b;">Published Tests Audit</span>
+            </div>
+            <table class="report-table">
+                <thead>
+                    <tr>
+                        <th>Chapter Name</th>
+                        <th>Published Tests</th>
+                        <th>Attended Tests</th>
+                        <th>Attendance %</th>
+                        <th>Average Score %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${a.chapter_assessments.map(ca => `
+                        <tr>
+                            <td><strong>${r_esc_js(ca.chapter_name)}</strong></td>
+                            <td>${ca.published_assessments}</td>
+                            <td>${ca.attended_assessments}</td>
+                            <td>${ca.attendance_percentage !== null ? ca.attendance_percentage + '%' : '—'}</td>
+                            <td><strong>${ca.average_score !== null ? ca.average_score + '%' : '—'}</strong></td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    ` : ''}
+
+    <!-- Section 6: Learning Progress Timeline -->
+    ${(a.progress_timeline && a.progress_timeline.length > 0) ? `
+        <div class="section-card">
+            <div class="section-title">
+                <span>📈 Learning Progress Timeline (Milestones)</span>
+                <span style="font-size:7pt; font-weight:normal; color:#64748b;">Cumulative Progression Curve</span>
+            </div>
+            <table class="report-table">
+                <thead>
+                    <tr>
+                        <th>Milestone Date</th>
+                        <th>Scheduled</th>
+                        <th>Completed</th>
+                        <th>Cum. Scheduled</th>
+                        <th>Cum. Completed</th>
+                        <th>Cumulative Progress %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${a.progress_timeline.map(pt => `
+                        <tr>
+                            <td><strong>${r_esc_js(pt.date_formatted || pt.date)}</strong></td>
+                            <td>${pt.scheduled_activities}</td>
+                            <td>${pt.completed_activities}</td>
+                            <td>${pt.cumulative_scheduled}</td>
+                            <td><span style="color:#047857; font-weight:700;">${pt.cumulative_completed}</span></td>
+                            <td><strong>${pt.completion_percentage}%</strong></td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    ` : ''}
+
+    <!-- Section 7: Topic Mastery Analysis -->
+    ${(a.strongest_topics && a.strongest_topics.length > 0) || (a.needs_attention_topics && a.needs_attention_topics.length > 0) ? `
+        <div class="section-card">
+            <div class="section-title">
+                <span>🎯 Topic Mastery Analysis</span>
+                <span style="font-size:7pt; font-weight:normal; color:#64748b;">Strongest Topics vs Topics Needing Attention</span>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+                <div>
+                    <div style="font-size:7.5pt; font-weight:700; color:#047857; text-transform:uppercase; margin-bottom:4px;">Strongest Topics (100% Mastery)</div>
+                    <table class="report-table">
+                        <thead><tr><th>Topic</th><th>Completed</th><th>%</th></tr></thead>
+                        <tbody>
+                            ${(a.strongest_topics || []).slice(0, 5).map(t => `
+                                <tr>
+                                    <td><strong>${r_esc_js(t.topic_name || t.topic)}</strong></td>
+                                    <td>${t.completed}/${t.total}</td>
+                                    <td><span class="badge badge-green">${t.completion_percentage}%</span></td>
+                                </tr>
+                            `).join('') || '<tr><td colspan="3" style="color:#64748b;">No topic records</td></tr>'}
+                        </tbody>
+                    </table>
+                </div>
+                <div>
+                    <div style="font-size:7.5pt; font-weight:700; color:#b91c1c; text-transform:uppercase; margin-bottom:4px;">Topics Needing Attention</div>
+                    <table class="report-table">
+                        <thead><tr><th>Topic</th><th>Pending</th><th>%</th></tr></thead>
+                        <tbody>
+                            ${(a.needs_attention_topics || []).slice(0, 5).map(t => `
+                                <tr>
+                                    <td><strong>${r_esc_js(t.topic_name || t.topic)}</strong></td>
+                                    <td>${t.pending}</td>
+                                    <td><span class="badge ${t.completion_percentage === 0 ? 'badge-red' : 'badge-amber'}">${t.completion_percentage}%</span></td>
+                                </tr>
+                            `).join('') || '<tr><td colspan="3" style="color:#64748b;">All topics up to date</td></tr>'}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    ` : ''}
+
+    <!-- Section 8: Multi-Plan Comparative Matrix (if applicable) -->
+    ${(mp.plans && mp.plans.length > 1) ? `
+        <div class="section-card">
+            <div class="section-title">
+                <span>📊 Multi-Plan Comparative Matrix (${r_esc_js(st.academic_year || '2026-27')})</span>
+                <span style="font-size:7pt; font-weight:normal; color:#64748b;">${mp.plans.length} Assigned Plans</span>
+            </div>
+            <table class="report-table">
+                <thead>
+                    <tr>
+                        <th>Study Plan</th>
+                        <th>Tasks</th>
+                        <th>Completion</th>
+                        <th>Test Avg</th>
+                        <th>Test Att</th>
+                        <th>Consistency</th>
+                        <th>Performance Index</th>
+                        <th>Cohort Rank</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${mp.plans.map(p => `
+                        <tr class="${p.study_plan_id == a.study_plan_id ? 'current-row' : ''}">
+                            <td><strong>${r_esc_js(p.study_plan_name)}</strong> ${p.study_plan_id == a.study_plan_id ? '(Active)' : ''}</td>
+                            <td>${p.completed_tasks}/${p.total_tasks}</td>
+                            <td><strong>${p.completion_percentage}%</strong></td>
+                            <td>${p.assessment_average !== null ? p.assessment_average + '%' : '—'}</td>
+                            <td>${p.assessment_attendance !== null ? p.assessment_attendance + '%' : '—'}</td>
+                            <td>${p.consistency}%</td>
+                            <td><strong>${p.performance_index}%</strong></td>
+                            <td>${p.rank !== null ? `#${p.rank} / ${p.cohort_size}` : '—'}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    ` : ''}
+
+    <!-- Section 9: Cohort Performance Distribution -->
+    ${(cohort.distribution && cohort.distribution.length > 0) ? `
+        <div class="section-card">
+            <div class="section-title">
+                <span>📊 Cohort Performance Distribution</span>
+                <span style="font-size:7pt; font-weight:normal; color:#64748b;">Score Buckets (${cohortSize} Total Students)</span>
+            </div>
+            <table class="report-table">
+                <thead>
+                    <tr>
+                        <th>Score Bucket</th>
+                        <th>Student Count</th>
+                        <th>Cohort Percentage</th>
+                        <th>Current Student Position</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${cohort.distribution.map(d => `
+                        <tr class="${d.is_current_student_bucket ? 'current-row' : ''}">
+                            <td><strong>${d.bucket}%</strong></td>
+                            <td>${d.count} students</td>
+                            <td>${cohortSize > 0 ? Math.round((d.count / cohortSize) * 100) : 0}%</td>
+                            <td>${d.is_current_student_bucket ? '<span class="badge badge-green">Current Student [YOU]</span>' : '—'}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    ` : ''}
+
+    <!-- Section 10: Actionable Mentor Insights -->
+    ${(a.mentor_insights && a.mentor_insights.length > 0) ? `
+        <div class="section-card">
+            <div class="section-title">
+                <span>⚠️ Actionable Mentor Attention & Academic Insights</span>
+                <span style="font-size:7pt; font-weight:normal; color:#64748b;">${a.mentor_insights.length} Observations</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:6px;">
+                ${a.mentor_insights.map(ins => `
+                    <div style="background:${ins.type === 'danger' ? '#fef2f2' : ins.type === 'warning' ? '#fffbeb' : ins.type === 'success' ? '#f0fdf4' : '#eff6ff'}; border:1px solid ${ins.type === 'danger' ? '#fecaca' : ins.type === 'warning' ? '#fef3c7' : ins.type === 'success' ? '#bbf7d0' : '#bfdbfe'}; border-radius:6px; padding:6px 10px; font-size:8pt;">
+                        <strong style="color:${ins.type === 'danger' ? '#991b1b' : ins.type === 'warning' ? '#92400e' : ins.type === 'success' ? '#166534' : '#1e40af'}; display:block;">${r_esc_js(ins.title)}</strong>
+                        <span style="color:#334155;">${r_esc_js(ins.message)}</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    ` : ''}
+
+    <!-- Footer -->
+    <div class="pdf-footer">
+        <span>PEPP ERP Academic Monitoring System • Official Learning Analytics Report</span>
+        <span>Strictly Confidential • Authorized Academic Use Only</span>
+    </div>
+
+</body>
+</html>`;
+
+        // Render printable document in an isolated iframe
+        let printFrame = document.getElementById('pepp-pdf-print-frame');
+        if (!printFrame) {
+            printFrame = document.createElement('iframe');
+            printFrame.id = 'pepp-pdf-print-frame';
+            printFrame.style.position = 'fixed';
+            printFrame.style.right = '0';
+            printFrame.style.bottom = '0';
+            printFrame.style.width = '0';
+            printFrame.style.height = '0';
+            printFrame.style.border = '0';
+            document.body.appendChild(printFrame);
+        }
+
+        const doc = printFrame.contentWindow.document;
+        doc.open();
+        doc.write(docHtml);
+        doc.close();
+
+        setTimeout(function() {
+            try {
+                printFrame.contentWindow.focus();
+                printFrame.contentWindow.print();
+            } catch(e) {
+                // Fallback: open popup window
+                const printWin = window.open('', '_blank');
+                if (printWin) {
+                    printWin.document.open();
+                    printWin.document.write(docHtml);
+                    printWin.document.close();
+                    printWin.focus();
+                    printWin.print();
+                }
+            }
+        }, 300);
     }
 
     // ── MODAL TAB SWITCHER ──
@@ -4546,10 +5329,28 @@ include 'includes/admin_nav.php';
         if (!container) return;
 
         const a = analytics || {};
-        const st = studentInfo || {};
+        const prof = a.student_profile || a.student_info || studentInfo || {};
+        const st = prof;
         const mp = multiPlanData || {};
         const cohort = a.cohort_ranking || {};
         const curStudent = cohort.current_student || null;
+
+        const profName = prof.name || currentSelectedStudentName || 'Student';
+        const profId = prof.student_id || prof.user_id || currentSelectedStudentId || '';
+        const rawMaskedEmail = prof.masked_email || a.masked_email || currentSelectedStudentEmail || '';
+        const profEmail = (rawMaskedEmail && rawMaskedEmail !== 'null' && rawMaskedEmail !== 'undefined') ? rawMaskedEmail : 'Not available';
+        const profCourse = prof.course || currentSelectedStudentCourse || '';
+        const profYear = prof.academic_year || a.academic_year || '2026-27';
+        const profStatus = prof.status || currentSelectedStudentStatus || 'Active';
+        const profPhoto = prof.photo || prof.photo_url || currentSelectedStudentPhoto || '';
+
+        window.currentPlanAnalyticsPayload = {
+            analytics: a,
+            studentProfile: prof,
+            studentInfo: prof,
+            multiPlanData: mp,
+            planTitle: planTitle
+        };
 
         const totalTasks = a.total_tasks || 0;
         const completedTasks = a.completed_tasks || 0;
@@ -4579,22 +5380,22 @@ include 'includes/admin_nav.php';
             <div class="analytics-section-card" style="background:linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);">
                 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
                     <div style="display:flex; align-items:center; gap:16px;">
-                        <div style="width:60px; height:60px; border-radius:50%; background:#e0e7ff; color:var(--accent); display:flex; align-items:center; justify-content:center; font-size:1.5rem; font-weight:800; border:2px solid var(--accent); overflow:hidden;">
-                            ${st.photo ? `<img src="../${st.photo}" style="width:100%; height:100%; object-fit:cover;" onerror="this.src='assets/img/default-avatar.svg';">` : `<i class="fas fa-user-graduate"></i>`}
+                        <div style="width:64px; height:64px; border-radius:50%; background:#e0e7ff; color:var(--accent); display:flex; align-items:center; justify-content:center; font-size:1.5rem; font-weight:800; border:2.5px solid var(--accent); overflow:hidden; flex-shrink:0;">
+                            ${profPhoto ? `<img src="${r_esc_js(profPhoto)}" style="width:100%; height:100%; object-fit:cover;" onerror="this.src='assets/img/default-avatar.svg'; this.onerror=null;">` : `<img src="assets/img/default-avatar.svg" style="width:100%; height:100%; object-fit:cover;" onerror="this.outerHTML='<i class=\\\'fas fa-user-graduate\\\'></i>';">`}
                         </div>
                         <div>
-                            <h4 style="font-size:1.15rem; font-weight:800; color:var(--text-main); margin:0 0 4px 0;">${st.name || currentSelectedStudentName}</h4>
+                            <h4 style="font-size:1.2rem; font-weight:800; color:var(--text-main); margin:0 0 4px 0;">${r_esc_js(profName)}</h4>
                             <div style="font-size:0.75rem; color:var(--text-muted); display:flex; gap:12px; flex-wrap:wrap;">
-                                <span>ID: <strong style="color:var(--text-main);">${st.user_id || currentSelectedStudentId}</strong></span>
-                                <span>Email: <strong style="color:var(--text-main);">${st.masked_email || currentSelectedStudentEmail}</strong></span>
-                                <span>Course: <strong style="color:var(--text-main);">${st.course || currentSelectedStudentCourse}</strong></span>
-                                <span>Academic Year: <strong style="color:var(--text-main);">${st.academic_year || '2026-27'}</strong></span>
+                                <span>ID: <strong style="color:var(--text-main);">${r_esc_js(profId)}</strong></span>
+                                <span>Email: <strong style="color:var(--text-main);">${r_esc_js(profEmail)}</strong></span>
+                                <span>Course: <strong style="color:var(--text-main);">${r_esc_js(profCourse)}</strong></span>
+                                <span>Academic Year: <strong style="color:var(--text-main);">${r_esc_js(profYear)}</strong></span>
                             </div>
                         </div>
                     </div>
                     <div style="text-align:right;">
-                        <span class="badge ${st.status === 'active' ? 'green' : 'gray'}" style="text-transform:uppercase; font-size:0.7rem;">${st.status || 'Active'}</span>
-                        <div style="font-size:0.72rem; color:var(--text-muted); margin-top:4px;">Study Plan: <strong>${planTitle}</strong></div>
+                        <span class="badge ${String(profStatus).toLowerCase() === 'active' || String(profStatus).toLowerCase() === 'approved' ? 'green' : 'gray'}" style="text-transform:uppercase; font-size:0.7rem;">${r_esc_js(profStatus)}</span>
+                        <div style="font-size:0.72rem; color:var(--text-muted); margin-top:4px;">Study Plan: <strong>${r_esc_js(planTitle)}</strong></div>
                     </div>
                 </div>
             </div>
@@ -5222,7 +6023,17 @@ include 'includes/admin_nav.php';
 
                 timelineActivities = data.timeline;
 
-                // Extract canonical plan analytics from the backend
+                // Extract canonical student profile and plan analytics from the backend
+                const sp = data.analytics.student_profile || data.analytics.student_info || {};
+                if (sp.name) currentSelectedStudentName = sp.name;
+                if (sp.student_id || sp.user_id) currentSelectedStudentId = sp.student_id || sp.user_id;
+                if (sp.course) currentSelectedStudentCourse = sp.course;
+                if (sp.masked_email) currentSelectedStudentEmail = sp.masked_email;
+                if (sp.photo) currentSelectedStudentPhoto = sp.photo;
+                if (sp.status) currentSelectedStudentStatus = sp.status;
+
+                subtitleEl.innerHTML = `Student: <strong>${r_esc_js(sp.name || currentSelectedStudentName)}</strong> (${r_esc_js(sp.masked_email || currentSelectedStudentEmail || sp.student_id || currentSelectedStudentId)}) &nbsp;|&nbsp; Course: <strong>${r_esc_js(sp.course || currentSelectedStudentCourse)}</strong>`;
+
                 const total = data.analytics.total_tasks;
                 const completed = data.analytics.completed_tasks;
                 const pending = data.analytics.pending_tasks;
@@ -5235,14 +6046,8 @@ include 'includes/admin_nav.php';
                 const performanceText = data.analytics.performance_score !== null ? `${data.analytics.performance_score}%` : 'No assessment data';
                 const streakVal = data.analytics.active_streak;
 
-                // Render Analytics Hub
-                renderLearningAnalyticsHub(data.analytics, {
-                    name: currentSelectedStudentName,
-                    user_id: currentSelectedStudentId,
-                    masked_email: currentSelectedStudentEmail,
-                    course: currentSelectedStudentCourse,
-                    academic_year: data.analytics.academic_year || '2026-27'
-                }, {}, planTitle);
+                // Render Analytics Hub with single source of truth
+                renderLearningAnalyticsHub(data.analytics, sp, {}, planTitle);
 
                 // Update summary KPI counters in Dossier sidebar
                 document.getElementById('st-total-tasks-val').innerText = total;

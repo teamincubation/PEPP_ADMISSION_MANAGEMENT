@@ -1317,6 +1317,94 @@ assertTest("Test AL: Activity chapter is preserved as 'Core Neuroscience'", 'Cor
 assertTest("Test AL: Activity topic is 'Synapses'", 'Synapses', $row_prot['topic']);
 assertTest("Test AL: Chapter is NEVER replaced by Topic or Subject", true, $row_prot['chapter'] !== $row_prot['topic']);
 
+// --- TEST AM: Modal Close Button, Escape Key & Lifecycle Architecture ---
+$reports_file_content = file_get_contents(__DIR__ . '/student-study-reports.php');
+assertTest("Test AM: closeTimelineModal() function is defined", true, strpos($reports_file_content, 'function closeTimelineModal()') !== false);
+assertTest("Test AM: closeTimelineModal() removes .show class", true, strpos($reports_file_content, "backdrop.classList.remove('show')") !== false);
+assertTest("Test AM: closeTimelineModal() restores body scrolling", true, strpos($reports_file_content, "document.body.style.overflow = ''") !== false);
+assertTest("Test AM: Modal Close X button has ID st-modal-close-btn and invokes closeTimelineModal()", true, strpos($reports_file_content, 'id="st-modal-close-btn"') !== false && strpos($reports_file_content, 'onclick="closeTimelineModal()"') !== false);
+assertTest("Test AM: Modal backdrop onclick invokes closeTimelineModal()", true, strpos($reports_file_content, 'id="student-task-modal-backdrop" onclick="closeTimelineModal()"') !== false);
+assertTest("Test AM: Global Escape key listener handles modal close", true, strpos($reports_file_content, "e.key === 'Escape'") !== false && strpos($reports_file_content, "closeTimelineModal()") !== false);
+
+
+// --- TEST AN: Professional Learning Analytics PDF / Print Report Generator ---
+assertTest("Test AN: printStudentLearningAnalyticsReport() function is defined", true, strpos($reports_file_content, 'function printStudentLearningAnalyticsReport()') !== false);
+assertTest("Test AN: Print Report button triggers printStudentLearningAnalyticsReport()", true, strpos($reports_file_content, 'id="st-modal-print-btn"') !== false && strpos($reports_file_content, 'onclick="printStudentLearningAnalyticsReport()"') !== false);
+assertTest("Test AN: PDF generator consumes canonical currentPlanAnalyticsPayload", true, strpos($reports_file_content, 'window.currentPlanAnalyticsPayload') !== false);
+assertTest("Test AN: PDF generator formats as A4 portrait with crisp margin rules", true, strpos($reports_file_content, 'size: A4 portrait;') !== false);
+assertTest("Test AN: PDF generator includes PEPP Learning brand and Student Learning Analytics title", true, strpos($reports_file_content, 'Student Learning Analytics Report') !== false && strpos($reports_file_content, 'PEPP') !== false);
+assertTest("Test AN: PDF generator excludes raw dossier checklist rows", true, strpos($reports_file_content, "docHtml") !== false && strpos($reports_file_content, "timeline-item-card") === false);
+assertTest("Test AN: @media print CSS is defined to isolate the Analytics Hub", true, strpos($reports_file_content, '@media print') !== false && strpos($reports_file_content, '#st-modal-dossier-pane') !== false);
+
+
+// --- TEST AO: Student Profile Resolution (Canonical name, user_id, user_photo, status, course, academic_year) ---
+$pdo->prepare("
+    UPDATE users
+    SET user_photo = 'uploads/photos/fathima.jpg', student_status = 'Active'
+    WHERE user_id = 'PEPP20268771'
+")->execute();
+$analytics_prof = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'PEPP20268771', 2);
+assertTest("Test AO: Student profile is returned in plan analytics", true, isset($analytics_prof['student_profile']));
+assertTest("Test AO: Student Name resolved from database", 'Fathima Rinfa', $analytics_prof['student_profile']['name']);
+assertTest("Test AO: Student ID resolved from database", 'PEPP20268771', $analytics_prof['student_profile']['student_id']);
+assertTest("Test AO: Student Photo resolved from database", 'uploads/photos/fathima.jpg', $analytics_prof['student_profile']['photo']);
+assertTest("Test AO: Student Status resolved from database", 'Active', $analytics_prof['student_profile']['status']);
+assertTest("Test AO: Student Course resolved from database", 'MA/MSc Psychology (Premium)', $analytics_prof['student_profile']['course']);
+assertTest("Test AO: Student Academic Year resolved from database", '2026-27', $analytics_prof['student_profile']['academic_year']);
+
+
+// --- TEST AP: Email Privacy & Deterministic Masking ---
+assertTest("Test AP: Email mask fathima@pepp.com", 'f*****a@pepp.com', StudentStudyPlanAnalytics::maskEmail('fathima@pepp.com'));
+assertTest("Test AP: Email mask john.doe@gmail.com", 'j******e@gmail.com', StudentStudyPlanAnalytics::maskEmail('john.doe@gmail.com'));
+assertTest("Test AP: Email mask short username a@pepp.com", 'a***@pepp.com', StudentStudyPlanAnalytics::maskEmail('a@pepp.com'));
+assertTest("Test AP: Email mask 2-char username ab@pepp.com", 'a***b@pepp.com', StudentStudyPlanAnalytics::maskEmail('ab@pepp.com'));
+assertTest("Test AP: Student profile contains masked_email", 'f*****a@pepp.com', $analytics_prof['student_profile']['masked_email']);
+assertTest("Test AP: Student profile masked_email is not unmasked email", true, $analytics_prof['student_profile']['masked_email'] !== 'fathima@pepp.com');
+assertTest("Test AP: Student profile does NOT expose unmasked email", false, isset($analytics_prof['student_profile']['email']));
+assertTest("Test AP: Root analytics payload does NOT expose student_email", false, isset($analytics_prof['student_email']));
+assertTest("Test AP: Cohort current_student does NOT expose unmasked email", false, isset($analytics_prof['cohort_ranking']['current_student']['email']));
+if (!empty($analytics_prof['cohort_ranking']['leaderboard'])) {
+    assertTest("Test AP: Leaderboard row does NOT expose unmasked email", false, isset($analytics_prof['cohort_ranking']['leaderboard'][0]['email']));
+    assertTest("Test AP: Leaderboard row exposes masked_email", true, isset($analytics_prof['cohort_ranking']['leaderboard'][0]['masked_email']));
+}
+
+
+// --- TEST AQ: Missing Profile Data Fallback Handling ---
+assertTest("Test AQ: Empty email masks to 'Not available'", 'Not available', StudentStudyPlanAnalytics::maskEmail(''));
+assertTest("Test AQ: String 'null' masks to 'Not available'", 'Not available', StudentStudyPlanAnalytics::maskEmail('null'));
+assertTest("Test AQ: String 'NULL' masks to 'Not available'", 'Not available', StudentStudyPlanAnalytics::maskEmail('NULL'));
+assertTest("Test AQ: Invalid email without @ masks to 'Not available'", 'Not available', StudentStudyPlanAnalytics::maskEmail('invalidemail'));
+
+// Student without photo
+$pdo->prepare("DELETE FROM users WHERE user_id = 'PEPP20269999'")->execute();
+$pdo->prepare("
+    INSERT INTO users (user_id, name, email, phone, pepp_course, pepp_academic_year, user_photo, student_status, status, created_at)
+    VALUES ('PEPP20269999', 'No Photo Student', 'nophoto@pepp.com', '+919999999998', 'MA/MSc Psychology (Premium)', '2026-27', '', 'Active', 'approved', '2026-08-01 10:00:00')
+")->execute();
+$pdo->prepare("
+    INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value)
+    VALUES (2, 'student', 'PEPP20269999')
+")->execute();
+$analytics_no_photo = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'PEPP20269999', 2);
+assertTest("Test AQ: Student with empty photo returns empty string", '', $analytics_no_photo['student_profile']['photo']);
+assertTest("Test AQ: Empty analytics provides default student profile structure", 'Not available', StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'NONEXISTENT', 999)['student_profile']['masked_email']);
+
+
+// --- TEST AR: Web & PDF Profile Parity (Single Source of Truth) ---
+assertTest("Test AR: student-study-reports.php does not contain broken '../' image prefix in analytics hub", true, strpos($reports_file_content, 'src="../${st.photo}"') === false && strpos($reports_file_content, 'src="../${profPhoto}"') === false);
+assertTest("Test AR: renderLearningAnalyticsHub uses single source studentProfile", true, strpos($reports_file_content, 'a.student_profile') !== false);
+assertTest("Test AR: PDF generator includes student photo rendering with fallback", true, strpos($reports_file_content, 'onerror="this.src=\'assets/img/default-avatar.svg\';"') !== false);
+assertTest("Test AR: PDF generator binds masked_email from canonical student profile", true, strpos($reports_file_content, 'profEmail') !== false);
+
+
+// --- TEST AS: Student Isolation & Data Safety ---
+$analytics_student_a = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'PEPP20268771', 2);
+$analytics_student_b = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'PEPP20269999', 2);
+assertTest("Test AS: Student A ID matches isolated user_id", 'PEPP20268771', $analytics_student_a['student_profile']['student_id']);
+assertTest("Test AS: Student B ID matches isolated user_id", 'PEPP20269999', $analytics_student_b['student_profile']['student_id']);
+assertTest("Test AS: Student A photo does not leak into Student B", true, $analytics_student_a['student_profile']['photo'] !== $analytics_student_b['student_profile']['photo']);
+assertTest("Test AS: Student A email does not leak into Student B", true, $analytics_student_a['student_profile']['masked_email'] !== $analytics_student_b['student_profile']['masked_email']);
+
 
 echo "<h2>Test Execution Summary</h2>\n";
 $percent = $total_tests > 0 ? round(($passed_tests / $total_tests) * 100) : 0;

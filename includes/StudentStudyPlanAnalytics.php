@@ -27,6 +27,36 @@ class StudentStudyPlanAnalytics {
     }
 
     /**
+     * Deterministic, privacy-preserving email masking.
+     * e.g., fathima@gmail.com => f*****a@gmail.com
+     * If empty, null, or invalid => 'Not available'
+     */
+    public static function maskEmail($email) {
+        $email = trim((string)$email);
+        if ($email === '' || strcasecmp($email, 'null') === 0 || strpos($email, '@') === false) {
+            return 'Not available';
+        }
+        $parts = explode('@', $email, 2);
+        $name = $parts[0];
+        $domain = $parts[1] ?? '';
+        if ($domain === '') {
+            return 'Not available';
+        }
+        $len = strlen($name);
+        if ($len <= 1) {
+            $masked_name = $name . '***';
+        } elseif ($len === 2) {
+            $masked_name = substr($name, 0, 1) . '***' . substr($name, -1);
+        } else {
+            $first = substr($name, 0, 1);
+            $last = ($len > 3) ? substr($name, -1) : '';
+            $star_count = max(4, $len - ($last !== '' ? 2 : 1));
+            $masked_name = $first . str_repeat('*', $star_count) . $last;
+        }
+        return $masked_name . '@' . $domain;
+    }
+
+    /**
      * Get analytics scoped strictly to a single Study Plan with detailed chapter, topic,
      * assessment, consistency, timeline, and cohort ranking data.
      */
@@ -50,6 +80,10 @@ class StudentStudyPlanAnalytics {
         $user_id = $user['user_id'];
         $academic_year = $user['pepp_academic_year'];
         $course_name = $user['pepp_course'];
+        $user_photo = !empty($user['user_photo']) ? trim((string)$user['user_photo']) : '';
+        $student_status = !empty($user['student_status']) ? trim((string)$user['student_status']) : 'Active';
+        $student_name = !empty($user['name']) ? trim((string)$user['name']) : '';
+        $masked_email = self::maskEmail($email);
 
         // 2. Validate study plan assignment for security/data-scoping & academic year isolation
         $stmt_val = $pdo->prepare("
@@ -439,10 +473,32 @@ class StudentStudyPlanAnalytics {
             'consistency_percentage' => $consistency_percentage
         ], $chapters, $topics, $cohort_ranking);
 
+        $student_profile = [
+            'name' => $student_name,
+            'student_id' => $user_id,
+            'user_id' => $user_id,
+            'masked_email' => $masked_email,
+            'photo' => $user_photo,
+            'photo_url' => $user_photo,
+            'course' => $course_name,
+            'academic_year' => $academic_year,
+            'status' => $student_status,
+            'study_plan' => $plan_title
+        ];
+
         return [
             'study_plan_id' => $study_plan_id,
             'study_plan_title' => $plan_title,
             'academic_year' => $academic_year,
+
+            'student_id' => $user_id,
+            'user_id' => $user_id,
+            'student_name' => $student_name,
+            'masked_email' => $masked_email,
+            'student_photo' => $user_photo,
+            'student_status' => $student_status,
+            'student_profile' => $student_profile,
+            'student_info' => $student_profile,
 
             'total_tasks' => $total_tasks,
             'total_activities' => $total_tasks,
@@ -726,7 +782,7 @@ class StudentStudyPlanAnalytics {
 
             $ranked_cohort[] = [
                 'user_id' => $st['user_id'],
-                'email' => $st['email'],
+                'masked_email' => self::maskEmail($st['email']),
                 'name' => $st['name'],
                 'course' => $st['pepp_course'],
                 'academic_year' => $st['pepp_academic_year'],
@@ -842,10 +898,7 @@ class StudentStudyPlanAnalytics {
         // Mask emails for leaderboard privacy
         $leaderboard = [];
         foreach (array_slice($ranked_cohort, 0, 15) as $r) {
-            $email_parts = explode('@', $r['email']);
-            $masked_em = (strlen($email_parts[0]) > 2)
-                ? substr($email_parts[0], 0, 2) . '***@' . ($email_parts[1] ?? '')
-                : $r['email'];
+            $masked_em = $r['masked_email'] ?? self::maskEmail($r['email'] ?? '');
 
             $leaderboard[] = [
                 'rank' => $r['rank'],
@@ -1330,6 +1383,36 @@ class StudentStudyPlanAnalytics {
 
     private static function emptyAnalytics() {
         return [
+            'student_id' => null,
+            'user_id' => null,
+            'student_name' => '',
+            'masked_email' => 'Not available',
+            'student_photo' => '',
+            'student_status' => 'inactive',
+            'student_profile' => [
+                'name' => '',
+                'student_id' => '',
+                'user_id' => '',
+                'masked_email' => 'Not available',
+                'photo' => '',
+                'photo_url' => '',
+                'course' => '',
+                'academic_year' => '',
+                'status' => 'inactive',
+                'study_plan' => ''
+            ],
+            'student_info' => [
+                'name' => '',
+                'student_id' => '',
+                'user_id' => '',
+                'masked_email' => 'Not available',
+                'photo' => '',
+                'photo_url' => '',
+                'course' => '',
+                'academic_year' => '',
+                'status' => 'inactive',
+                'study_plan' => ''
+            ],
             'total_tasks' => 0,
             'total_activities' => 0,
             'completed_tasks' => 0,
