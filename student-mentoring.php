@@ -79,8 +79,11 @@ function get_student_mentoring_details($pdo, $student) {
     return [
         'progress' => $course_analytics['completion_percentage'],
         'attendance' => $course_analytics['attendance_rate'],
+        'attended_sessions' => $course_analytics['attended_sessions'] ?? 0,
+        'total_sessions' => $course_analytics['total_sessions'] ?? 0,
         'streak' => $course_analytics['active_streak'],
         'streak_target' => $course_analytics['longest_streak'],
+        'total_plan_calendar_days' => $course_analytics['total_plan_calendar_days'] ?? 0,
         'last_call_time' => $last_call_time,
         'last_called_status' => $last_called_status,
         'remarks_count' => $remarks_count,
@@ -372,8 +375,11 @@ if (mentor_tables_exist($pdo)) {
                 $course_analytics = $bulk_analytics[$email_key] ?? [
                     'completion_percentage' => 0,
                     'attendance_rate' => null,
+                    'attended_sessions' => 0,
+                    'total_sessions' => 0,
                     'active_streak' => 0,
                     'longest_streak' => 0,
+                    'total_plan_calendar_days' => 0,
                     'total_tasks' => 0,
                     'completed_tasks' => 0,
                     'pending_tasks' => 0,
@@ -399,8 +405,11 @@ if (mentor_tables_exist($pdo)) {
                 $s['metrics'] = [
                     'progress' => $course_analytics['completion_percentage'],
                     'attendance' => $course_analytics['attendance_rate'],
+                    'attended_sessions' => $course_analytics['attended_sessions'] ?? 0,
+                    'total_sessions' => $course_analytics['total_sessions'] ?? 0,
                     'streak' => $course_analytics['active_streak'],
                     'streak_target' => $course_analytics['longest_streak'],
+                    'total_plan_calendar_days' => $course_analytics['total_plan_calendar_days'] ?? 0,
                     'last_call_time' => $last_call_time,
                     'last_called_status' => $last_called_status,
                     'remarks_count' => $remarks_count,
@@ -691,10 +700,18 @@ include 'includes/admin_nav.php';
                             </div>
                             <span style="font-size:0.75rem; font-weight:700;"><?= $m['progress'] ?>%</span>
                         </div>
-                        <span class="badge green" style="font-size:0.65rem;"><i class="fas fa-chart-line"></i> Assessment Attendance: <?= $m['attendance'] !== null ? $m['attendance'] . '%' : 'No assessment data' ?></span>
+                        <?php if ((int)($m['total_sessions'] ?? 0) > 0): ?>
+                            <span class="badge green" style="font-size:0.65rem;"><i class="fas fa-chart-line"></i> Assessment Attendance: <?= (int)$m['attended_sessions'] ?>/<?= (int)$m['total_sessions'] ?> (<?= (int)$m['attendance'] ?>%)</span>
+                        <?php else: ?>
+                            <span class="badge gray" style="font-size:0.65rem;"><i class="fas fa-chart-line"></i> Assessment Attendance: No assessment data</span>
+                        <?php endif; ?>
                     </td>
                     <td data-label="Streak">
-                        <span style="font-weight:700; color:#b45309; font-size:0.85rem;" title="Streak details: Current Streak / Longest Streak">🔥 <?= $m['streak'] ?> / <?= $m['streak_target'] ?> Days</span>
+                        <?php
+                            $plan_days = (int)($m['total_plan_calendar_days'] ?? 0);
+                            $streak_display = $plan_days > 0 ? ($m['streak'] . ' / ' . $plan_days . ' Days') : ($m['streak'] . ' / 0 Days');
+                        ?>
+                        <span style="font-weight:700; color:#b45309; font-size:0.85rem;" title="Current Streak: <?= $m['streak'] ?> Days | Longest Streak: <?= $m['streak_target'] ?> Days | Plan Duration: <?= $plan_days ?> Days">🔥 <?= $streak_display ?></span>
                     </td>
                     <td data-label="Last Call">
                         <div class="cell-sub" style="font-size:0.8rem;">

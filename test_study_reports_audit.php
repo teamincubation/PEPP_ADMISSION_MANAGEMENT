@@ -124,11 +124,15 @@ $pdo->exec("
     );
     CREATE TABLE assessment_result_batches (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        activity_id INTEGER,
         study_plan_id INTEGER,
         academic_year TEXT DEFAULT '2026-27',
+        course_id INTEGER DEFAULT 0,
         course_name TEXT DEFAULT 'MA/MSc Psychology (Premium)',
         activity_date_snapshot TEXT,
-        status TEXT
+        version INTEGER DEFAULT 1,
+        status TEXT,
+        is_deleted INTEGER DEFAULT 0
     );
 ");
 
@@ -690,19 +694,19 @@ assertTest("Test 32: Future activity is not overdue", 0, $analytics32_4['overdue
 // --- TEST 33: CSV Actual file verification (Phase 9) ---
 $csv_file_path = __DIR__ . '/scratch/test_export.csv';
 $csv_out = fopen($csv_file_path, 'w');
-fputcsv($csv_out, ['Student Name', 'Email', 'Tasks Done', 'Completed %']);
+fputcsv($csv_out, ['Student Name', 'Email', 'Tasks Done', 'Completed %'], ',', '"', "\\");
 $c_analytics_test = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, 'PEPP20268771', 'MA/MSc Psychology (Premium)');
 fputcsv($csv_out, [
     'Fathima Rinfa',
     'fathima@pepp.com',
     $c_analytics_test['completed_tasks'] . ' / ' . $c_analytics_test['total_tasks'],
     $c_analytics_test['completion_percentage'] . '%'
-]);
+], ',', '"', "\\");
 fclose($csv_out);
 
 $csv_in = fopen($csv_file_path, 'r');
-$header_row = fgetcsv($csv_in);
-$data_row = fgetcsv($csv_in);
+$header_row = fgetcsv($csv_in, null, ',', '"', "\\");
+$data_row = fgetcsv($csv_in, null, ',', '"', "\\");
 fclose($csv_in);
 unlink($csv_file_path);
 
@@ -733,6 +737,149 @@ assertTest("Test 34: Bulk longest streak matches individual", $c_analytics_test[
 // --- TEST 35: Mentoring bulk consistency (Phase 8) ---
 assertTest("Test 35: Mentoring bulk consistency progress matches", $c_analytics_test['completion_percentage'], $student_bulk['completion_percentage']);
 assertTest("Test 35: Mentoring bulk consistency attendance matches", $c_analytics_test['attendance_rate'], $student_bulk['attendance_rate']);
+
+
+// =========================================================================
+// --- TEST ENHANCEMENTS: TESTS A THROUGH G (UI / Analytics Parity) ---
+// =========================================================================
+
+// --- TEST A: Plan Calendar Days Calculation ---
+$days_aug = StudentStudyPlanAnalytics::calculatePlanCalendarDays('2026-08-09', '2026-08-31');
+assertTest("Test A: Inclusive calendar days 09 Aug -> 31 Aug is 23", 23, $days_aug);
+
+$days_single = StudentStudyPlanAnalytics::calculatePlanCalendarDays('2026-08-09', '2026-08-09');
+assertTest("Test A: Single day plan (09 Aug -> 09 Aug) is 1 day", 1, $days_single);
+
+$days_invalid = StudentStudyPlanAnalytics::calculatePlanCalendarDays('2026-08-31', '2026-08-09');
+assertTest("Test A: Invalid date range (end < start) returns 0", 0, $days_invalid);
+
+$days_empty = StudentStudyPlanAnalytics::calculatePlanCalendarDays(null, '2026-08-31');
+assertTest("Test A: Missing start date returns 0", 0, $days_empty);
+
+
+// --- TEST B: Streak Presentation Data ---
+$streak_current = 2;
+$streak_longest = 5;
+$plan_days = 23;
+$streak_display = $plan_days > 0 ? ($streak_current . ' / ' . $plan_days . ' Days') : ($streak_current . ' / 0 Days');
+assertTest("Test B: Mentoring streak display format", "2 / 23 Days", $streak_display);
+assertTest("Test B: Longest streak preserved separately", 5, $streak_longest);
+
+
+// --- TEST C: Single Assessment Attendance Calculation ---
+// Create test user and single published assessment
+$pdo->prepare("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status) VALUES ('PEPP_TEST_ATT1', 'Test Student 1', 'test_att1@pepp.com', 'MSc Test Course', '2026-27', 'approved')")->execute();
+$pdo->prepare("INSERT INTO study_plans (id, title, academic_year, start_date, end_date, plan_type, status, is_deleted) VALUES (901, 'Test Plan 1', '2026-27', '2026-08-09', '2026-08-31', 'date_wise', 'published', 0)")->execute();
+$pdo->prepare("INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value, is_deleted) VALUES (901, 'course', 'MSc Test Course', 0)")->execute();
+$pdo->prepare("INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, activity_title, activity_date, is_deleted) VALUES (9001, 901, 'uid_9001', 'Task 1', '2026-08-10', 0)")->execute();
+
+$pdo->prepare("INSERT INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, course_name, version, status, is_deleted) VALUES (901, 9001, 901, '2026-27', 'All Courses', 1, 'published', 0)")->execute();
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, user_id, score, total_score, attendance_status) VALUES (901, 'test_att1@pepp.com', 'PEPP_TEST_ATT1', 40.0, 50.0, 'attended')")->execute();
+
+$c_analytics_c = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, 'test_att1@pepp.com', 'MSc Test Course');
+assertTest("Test C: Attended sessions is 1", 1, $c_analytics_c['attended_sessions']);
+assertTest("Test C: Total published sessions is 1", 1, $c_analytics_c['total_sessions']);
+assertTest("Test C: Attendance rate is 100%", 100.0, (float)$c_analytics_c['attendance_rate']);
+
+
+// --- TEST D: Multiple Assessments Attendance (4 out of 5) ---
+$pdo->prepare("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status) VALUES ('PEPP_TEST_ATT5', 'Test Student 5', 'test_att5@pepp.com', 'MSc Multi Course', '2026-27', 'approved')")->execute();
+$pdo->prepare("INSERT INTO study_plans (id, title, academic_year, start_date, end_date, plan_type, status, is_deleted) VALUES (902, 'Test Plan 2', '2026-27', '2026-08-01', '2026-08-25', 'date_wise', 'published', 0)")->execute();
+$pdo->prepare("INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value, is_deleted) VALUES (902, 'course', 'MSc Multi Course', 0)")->execute();
+$pdo->prepare("INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, activity_title, activity_date, is_deleted) VALUES (9002, 902, 'uid_9002', 'Task 2', '2026-08-10', 0)")->execute();
+
+for ($b = 911; $b <= 915; $b++) {
+    $att_status = ($b <= 914) ? 'attended' : 'not_attended';
+    $pdo->prepare("INSERT INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, course_name, version, status, is_deleted) VALUES (?, 9002, 902, '2026-27', 'All Courses', 1, 'published', 0)")->execute([$b]);
+    $pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, user_id, score, total_score, attendance_status) VALUES (?, 'test_att5@pepp.com', 'PEPP_TEST_ATT5', 35.0, 50.0, ?)")->execute([$b, $att_status]);
+}
+
+$c_analytics_d = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, 'test_att5@pepp.com', 'MSc Multi Course');
+assertTest("Test D: Attended sessions is 4", 4, $c_analytics_d['attended_sessions']);
+assertTest("Test D: Total sessions is 5", 5, $c_analytics_d['total_sessions']);
+assertTest("Test D: Attendance rate is 80%", 80.0, (float)$c_analytics_d['attendance_rate']);
+
+
+// --- TEST E: No Published Assessments Fallback ---
+$pdo->prepare("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status) VALUES ('PEPP_TEST_ZERO', 'Test Student Zero', 'test_zero@pepp.com', 'MSc Zero Course', '2026-27', 'approved')")->execute();
+$pdo->prepare("INSERT INTO study_plans (id, title, academic_year, start_date, end_date, plan_type, status, is_deleted) VALUES (903, 'Test Plan 3', '2026-27', '2026-08-01', '2026-08-25', 'date_wise', 'published', 0)")->execute();
+$pdo->prepare("INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value, is_deleted) VALUES (903, 'course', 'MSc Zero Course', 0)")->execute();
+$pdo->prepare("INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, activity_title, activity_date, is_deleted) VALUES (9003, 903, 'uid_9003', 'Task 3', '2026-08-10', 0)")->execute();
+
+$c_analytics_e = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, 'test_zero@pepp.com', 'MSc Zero Course');
+assertTest("Test E: Attended sessions is 0", 0, $c_analytics_e['attended_sessions']);
+assertTest("Test E: Total sessions is 0", 0, $c_analytics_e['total_sessions']);
+assertTest("Test E: Attendance rate is null", null, $c_analytics_e['attendance_rate']);
+$att_ui_text = $c_analytics_e['total_sessions'] > 0 ? "{$c_analytics_e['attended_sessions']}/{$c_analytics_e['total_sessions']} ({$c_analytics_e['attendance_rate']}%)" : ($c_analytics_e['attendance_rate'] !== null ? "{$c_analytics_e['attendance_rate']}%" : "No assessment data");
+assertTest("Test E: UI fallback is 'No assessment data'", "No assessment data", $att_ui_text);
+
+
+// --- TEST F: Assessment Average Percentage Calculation ---
+// Seed: score 30 out of 50
+$pdo->prepare("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status) VALUES ('PEPP_TEST_SCORE', 'Test Student Score', 'test_score@pepp.com', 'MSc Score Course', '2026-27', 'approved')")->execute();
+$pdo->prepare("INSERT INTO study_plans (id, title, academic_year, start_date, end_date, plan_type, status, is_deleted) VALUES (904, 'Test Plan 4', '2026-27', '2026-08-01', '2026-08-25', 'date_wise', 'published', 0)")->execute();
+$pdo->prepare("INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value, is_deleted) VALUES (904, 'course', 'MSc Score Course', 0)")->execute();
+$pdo->prepare("INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, activity_title, activity_date, is_deleted) VALUES (9004, 904, 'uid_9004', 'Task 4', '2026-08-10', 0)")->execute();
+
+$pdo->prepare("INSERT INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, course_name, version, status, is_deleted) VALUES (921, 9004, 904, '2026-27', 'All Courses', 1, 'published', 0)")->execute();
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, user_id, score, total_score, attendance_status) VALUES (921, 'test_score@pepp.com', 'PEPP_TEST_SCORE', 30.0, 50.0, 'attended')")->execute();
+
+$c_analytics_f = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, 'test_score@pepp.com', 'MSc Score Course');
+assertTest("Test F: Assessment average percentage (30/50) is 60%", 60.0, (float)$c_analytics_f['performance_score']);
+
+
+// --- TEST G: Full UI/API Parity & Shaziya P Scenario Verification ---
+// Setup Shaziya P: MA/MSc Psychology (Standard), August 2026, 107 tasks, 105 completed, 2 pending, 98% progress, Mega Test 30/50 attended -> 60%
+$pdo->prepare("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status) VALUES ('PEPP20268888', 'Shaziya P', 'shaziya@pepp.com', 'MA/MSc Psychology (Standard)', '2026-27', 'approved')")->execute();
+$pdo->prepare("INSERT INTO study_plans (id, title, academic_year, start_date, end_date, plan_type, status, is_deleted) VALUES (905, 'August 2026 Study Plan', '2026-27', '2026-08-09', '2026-08-31', 'date_wise', 'published', 0)")->execute();
+$pdo->prepare("INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value, is_deleted) VALUES (905, 'course', 'MA/MSc Psychology (Standard)', 0)")->execute();
+
+// Seed 107 activities
+for ($act_i = 1; $act_i <= 107; $act_i++) {
+    $act_date = '2026-08-10';
+    $pdo->prepare("INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, activity_title, activity_date, is_deleted) VALUES (?, 905, ?, ?, ?, 0)")->execute([
+        10000 + $act_i,
+        'uid_shaziya_' . $act_i,
+        'Shaziya Task ' . $act_i,
+        $act_date
+    ]);
+}
+
+// Complete 105 activities (2 pending)
+for ($act_i = 1; $act_i <= 105; $act_i++) {
+    $pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('shaziya@pepp.com', 905, ?, ?, 'complete_activity', 'completed', '2026-08-28 10:00:00')")->execute([
+        10000 + $act_i,
+        'uid_shaziya_' . $act_i
+    ]);
+}
+
+// Seed published Mega Test 30/50
+$pdo->prepare("INSERT INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, course_name, version, status, is_deleted) VALUES (931, 10001, 905, '2026-27', 'All Courses', 1, 'published', 0)")->execute();
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, user_id, score, total_score, attendance_status) VALUES (931, 'shaziya@pepp.com', 'PEPP20268888', 30.0, 50.0, 'attended')")->execute();
+
+// Individual analytics check
+$shaziya_analytics = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, 'shaziya@pepp.com', 'MA/MSc Psychology (Standard)');
+assertTest("Test G: Shaziya total tasks", 107, $shaziya_analytics['total_tasks']);
+assertTest("Test G: Shaziya completed tasks", 105, $shaziya_analytics['completed_tasks']);
+assertTest("Test G: Shaziya pending tasks", 2, $shaziya_analytics['pending_tasks']);
+assertTest("Test G: Shaziya completion % is 98%", 98.0, (float)$shaziya_analytics['completion_percentage']);
+assertTest("Test G: Shaziya total plan calendar days is 23", 23, $shaziya_analytics['total_plan_calendar_days']);
+assertTest("Test G: Shaziya attended sessions is 1", 1, $shaziya_analytics['attended_sessions']);
+assertTest("Test G: Shaziya total sessions is 1", 1, $shaziya_analytics['total_sessions']);
+assertTest("Test G: Shaziya attendance rate is 100%", 100.0, (float)$shaziya_analytics['attendance_rate']);
+assertTest("Test G: Shaziya performance score (30/50) is 60%", 60.0, (float)$shaziya_analytics['performance_score']);
+
+// Bulk analytics check
+$shaziya_bulk = StudentStudyPlanAnalytics::getCourseAnalyticsBulk($pdo, [
+    ['email' => 'shaziya@pepp.com', 'user_id' => 'PEPP20268888', 'pepp_academic_year' => '2026-27', 'pepp_course' => 'MA/MSc Psychology (Standard)']
+], 'MA/MSc Psychology (Standard)')['shaziya@pepp.com'] ?? [];
+
+assertTest("Test G: Bulk Shaziya total tasks matches individual", $shaziya_analytics['total_tasks'], $shaziya_bulk['total_tasks']);
+assertTest("Test G: Bulk Shaziya completed tasks matches individual", $shaziya_analytics['completed_tasks'], $shaziya_bulk['completed_tasks']);
+assertTest("Test G: Bulk Shaziya completion % matches individual", $shaziya_analytics['completion_percentage'], $shaziya_bulk['completion_percentage']);
+assertTest("Test G: Bulk Shaziya total plan calendar days matches individual", $shaziya_analytics['total_plan_calendar_days'], $shaziya_bulk['total_plan_calendar_days']);
+assertTest("Test G: Bulk Shaziya attendance rate matches individual", $shaziya_analytics['attendance_rate'], $shaziya_bulk['attendance_rate']);
+assertTest("Test G: Bulk Shaziya performance score matches individual", $shaziya_analytics['performance_score'], $shaziya_bulk['performance_score']);
 
 
 echo "<h2>Test Execution Summary</h2>\n";

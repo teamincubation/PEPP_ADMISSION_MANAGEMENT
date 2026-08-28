@@ -479,7 +479,8 @@ if (isset($_GET['action'])) {
                     'attended_sessions' => $course_analytics['attended_sessions'],
                     'performance_pct' => $course_analytics['performance_score'], // NULL if no data
                     'performance_label' => $course_analytics['performance_label'] ?: 'No assessment data',
-                    'performance_class' => $course_analytics['performance_class'] ?: 'gray'
+                    'performance_class' => $course_analytics['performance_class'] ?: 'gray',
+                    'total_plan_calendar_days' => $course_analytics['total_plan_calendar_days'] ?? 0
                 ],
                 'courses' => array_values($courses_data)
             ]);
@@ -3951,11 +3952,11 @@ include 'includes/admin_nav.php';
                                     <strong style="font-size:0.95rem; display:block; margin-top:4px;">🔥 ${s.streak} Days</strong>
                                 </div>
                                 <div style="background:#d1fae5; border-radius:10px; padding:10px 4px; color:#047857; cursor:help;" title="Assessment Attendance (Course): Attended assessments ÷ eligible assessments across all plans in this course.">
-                                    <div style="font-size:0.55rem; font-weight:800; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Attendance</div>
-                                    <strong style="font-size:0.95rem; display:block; margin-top:4px;">📊 ${s.attendance !== null ? s.attendance + '%' : 'No data'}</strong>
+                                    <div style="font-size:0.55rem; font-weight:800; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Assessment Attendance</div>
+                                    <strong style="font-size:0.85rem; display:block; margin-top:4px;">📊 ${s.total_sessions > 0 ? (s.attended_sessions + '/' + s.total_sessions + ' (' + s.attendance + '%)') : (s.attendance !== null ? s.attendance + '%' : 'No data')}</strong>
                                 </div>
                                 <div style="background:#e0f2fe; border-radius:10px; padding:10px 4px; color:#0369a1; cursor:help;" title="Assessment Average (Course): Average percentage score on attended assessments across all plans in this course.">
-                                    <div style="font-size:0.55rem; font-weight:800; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Avg Score</div>
+                                    <div style="font-size:0.55rem; font-weight:800; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Assessment Average</div>
                                     <strong style="font-size:0.95rem; display:block; margin-top:4px;">📈 ${s.performance_pct !== null ? s.performance_pct + '%' : 'No data'}</strong>
                                 </div>
                             </div>
@@ -4367,7 +4368,9 @@ include 'includes/admin_nav.php';
                 const overdue = data.analytics.overdue_tasks;
                 const pct = data.analytics.completion_percentage;
 
-                const attendanceText = data.analytics.attendance_rate !== null ? `${data.analytics.attendance_rate}%` : 'No assessment data';
+                const attendanceText = (data.analytics.total_sessions && data.analytics.total_sessions > 0)
+                    ? `${data.analytics.attended_sessions}/${data.analytics.total_sessions} (${data.analytics.attendance_rate}%)`
+                    : (data.analytics.attendance_rate !== null ? `${data.analytics.attendance_rate}%` : 'No assessment data');
                 const performanceText = data.analytics.performance_score !== null ? `${data.analytics.performance_score}%` : 'No assessment data';
                 const streakVal = data.analytics.active_streak;
 
