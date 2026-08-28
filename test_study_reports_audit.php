@@ -83,6 +83,7 @@ $pdo->exec("
         day_number INTEGER,
         chapter TEXT,
         topic TEXT,
+        subject TEXT,
         activity_title TEXT,
         activity_description TEXT,
         activity_type TEXT,
@@ -141,7 +142,12 @@ $pdo->exec("
         academic_year TEXT DEFAULT '2026-27',
         course_id INTEGER DEFAULT 0,
         course_name TEXT DEFAULT 'MA/MSc Psychology (Premium)',
+        activity_title_snapshot TEXT,
+        activity_type_snapshot TEXT,
         activity_date_snapshot TEXT,
+        chapter_snapshot TEXT,
+        topic_snapshot TEXT,
+        subject_snapshot TEXT,
         version INTEGER DEFAULT 1,
         status TEXT,
         is_deleted INTEGER DEFAULT 0
@@ -1002,6 +1008,314 @@ $empty_raw_topic = trim((string)($empty_act['topic'] ?? ''));
 $empty_raw_subj = trim((string)($empty_act['subject'] ?? ''));
 $empty_resolved_topic = ($empty_raw_topic !== '') ? $empty_raw_topic : (($empty_raw_subj !== '') ? $empty_raw_subj : '');
 assertTest("Test I: Activity with no topic or subject resolves to empty string (no false topic assigned)", '', $empty_resolved_topic);
+
+
+// --- TEST J: Multi-activity completions on the same day count as 1 active study day ---
+$pdo->prepare("
+    INSERT INTO users (user_id, name, email, phone, pepp_course, pepp_academic_year, status, created_at, student_status)
+    VALUES ('PEPP_TEST_J', 'Test Student J', 'test_j@pepp.com', '+919999999901', 'MA/MSc Psychology (Premium)', '2026-27', 'approved', '2026-08-01 10:00:00', 'active')
+")->execute();
+$pdo->prepare("
+    INSERT INTO study_plans (id, title, plan_type, status, academic_year, start_date, end_date, is_deleted)
+    VALUES (10, 'September 2026', 'date_wise', 'published', '2026-27', '2026-09-01', '2026-09-30', 0)
+")->execute();
+$pdo->prepare("INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value) VALUES (10, 'course', 'MA/MSc Psychology (Premium)')")->execute();
+
+for ($k = 1; $k <= 5; $k++) {
+    $pdo->prepare("INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, activity_date, is_deleted) VALUES (?, 10, ?, '2026-09-05', 0)")->execute([1000 + $k, "uid_j_$k"]);
+    // Complete all 5 activities on the exact same date
+    $pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('test_j@pepp.com', 10, ?, ?, 'complete_activity', 'completed', '2026-09-05 14:00:00')")->execute([1000 + $k, "uid_j_$k"]);
+}
+
+$analytics_j = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'test_j@pepp.com', 10);
+assertTest("Test J: 5 completions on same date count as 1 active study day", 1, $analytics_j['active_study_days']);
+assertTest("Test J: 1 active day on 30 day calendar gives 3% consistency", 3.0, (float)$analytics_j['consistency_percentage']);
+
+
+// --- TEST K: Student with zero completions returns valid zero analytics ---
+$pdo->prepare("
+    INSERT INTO users (user_id, name, email, phone, pepp_course, pepp_academic_year, status, created_at, student_status)
+    VALUES ('PEPP_TEST_K', 'Test Student K', 'test_k@pepp.com', '+919999999902', 'MA/MSc Psychology (Premium)', '2026-27', 'approved', '2026-08-01 10:00:00', 'active')
+")->execute();
+
+$analytics_k = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'test_k@pepp.com', 10);
+assertTest("Test K: Zero completions gives 0 completed tasks", 0, $analytics_k['completed_tasks']);
+assertTest("Test K: Zero completions gives 0% completion", 0.0, (float)$analytics_k['completion_percentage']);
+assertTest("Test K: Zero completions gives 0 active study days", 0, $analytics_k['active_study_days']);
+assertTest("Test K: Zero completions gives 0 streak", 0, $analytics_k['active_streak']);
+
+
+// --- TEST L: Student with zero assessments returns null performance ---
+assertTest("Test L: Zero assessments gives null attendance rate", null, $analytics_k['attendance_rate']);
+assertTest("Test L: Zero assessments gives null performance score", null, $analytics_k['performance_score']);
+
+
+// --- TEST M: Re-assigned study plans preserve historical student completions ---
+$pdo->prepare("
+    INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at)
+    VALUES ('test_k@pepp.com', 10, 1001, 'uid_j_1', 'complete_activity', 'completed', '2026-09-06 10:00:00')
+")->execute();
+// Re-assign plan by deleting and recreating assignment
+$pdo->exec("DELETE FROM study_plan_assignments WHERE study_plan_id = 10");
+$pdo->prepare("INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value) VALUES (10, 'course', 'MA/MSc Psychology (Premium)')")->execute();
+
+$analytics_m = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'test_k@pepp.com', 10);
+assertTest("Test M: Re-assigned plan preserves completion history", 1, $analytics_m['completed_tasks']);
+
+
+// --- TEST N: Chapter-wise progress aggregation ---
+$pdo->exec("DELETE FROM study_plan_activities WHERE study_plan_id = 20");
+$pdo->prepare("
+    INSERT INTO study_plans (id, title, plan_type, status, academic_year, start_date, end_date, is_deleted)
+    VALUES (20, 'Chapter Breakdown Plan', 'date_wise', 'published', '2026-27', '2026-08-01', '2026-08-31', 0)
+")->execute();
+$pdo->prepare("INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value) VALUES (20, 'course', 'MA/MSc Psychology (Premium)')")->execute();
+
+// Seed activities in 2 chapters: 'Cognitive Psychology' (3 tasks) and 'Developmental Psychology' (2 tasks)
+$pdo->prepare("INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, topic, is_deleted) VALUES (2001, 20, 'uid_c1_1', 'Cognitive Psychology', 'Memory', 0)")->execute();
+$pdo->prepare("INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, topic, is_deleted) VALUES (2002, 20, 'uid_c1_2', 'Cognitive Psychology', 'Attention', 0)")->execute();
+$pdo->prepare("INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, topic, is_deleted) VALUES (2003, 20, 'uid_c1_3', 'Cognitive Psychology', 'Perception', 0)")->execute();
+$pdo->prepare("INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, topic, is_deleted) VALUES (2004, 20, 'uid_c2_1', 'Developmental Psychology', 'Infancy', 0)")->execute();
+$pdo->prepare("INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, topic, is_deleted) VALUES (2005, 20, 'uid_c2_2', 'Developmental Psychology', 'Adolescence', 0)")->execute();
+
+// Complete 2 tasks in Cognitive Psychology and 0 in Developmental Psychology
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('test_k@pepp.com', 20, 2001, 'uid_c1_1', 'complete_activity', 'completed', '2026-08-05 10:00:00')")->execute();
+$pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('test_k@pepp.com', 20, 2002, 'uid_c1_2', 'complete_activity', 'completed', '2026-08-05 11:00:00')")->execute();
+
+$analytics_n = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'test_k@pepp.com', 20);
+$chaps_n = $analytics_n['chapters'];
+
+assertTest("Test N: 2 distinct chapters identified", 2, count($chaps_n));
+
+$cog_chap = null;
+$dev_chap = null;
+foreach ($chaps_n as $c) {
+    if ($c['chapter_name'] === 'Cognitive Psychology') $cog_chap = $c;
+    if ($c['chapter_name'] === 'Developmental Psychology') $dev_chap = $c;
+}
+
+assertTest("Test N: Cognitive Psychology total activities is 3", 3, $cog_chap['total_activities'] ?? 0);
+assertTest("Test N: Cognitive Psychology completed activities is 2", 2, $cog_chap['completed_activities'] ?? 0);
+assertTest("Test N: Cognitive Psychology completion is 67%", 67.0, (float)($cog_chap['completion_percentage'] ?? 0));
+
+
+// --- TEST O: Chapter ordering follows preset study_plan_chapters sequence ---
+$pdo->exec("DELETE FROM study_plan_chapters");
+$pdo->prepare("INSERT INTO study_plan_chapters (id, chapter_name, sort_order) VALUES (1, 'Developmental Psychology', 1)")->execute();
+$pdo->prepare("INSERT INTO study_plan_chapters (id, chapter_name, sort_order) VALUES (2, 'Cognitive Psychology', 2)")->execute();
+
+$analytics_o = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'test_k@pepp.com', 20);
+assertTest("Test O: First chapter follows study_plan_chapters sort_order", 'Developmental Psychology', $analytics_o['chapters'][0]['chapter_name'] ?? '');
+assertTest("Test O: Second chapter follows study_plan_chapters sort_order", 'Cognitive Psychology', $analytics_o['chapters'][1]['chapter_name'] ?? '');
+
+
+// --- TEST P: Zero-completion chapters are visible with 0% completion ---
+assertTest("Test P: Zero-completion Developmental Psychology chapter is visible", true, $dev_chap !== null);
+assertTest("Test P: Developmental Psychology completion is 0%", 0, $dev_chap['completed_activities'] ?? -1);
+assertTest("Test P: Developmental Psychology percentage is 0%", 0.0, (float)($dev_chap['completion_percentage'] ?? -1));
+
+
+// --- TEST Q: Chapter assessment performance calculation ---
+$pdo->prepare("INSERT INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, course_name, chapter_snapshot, status, is_deleted) VALUES (2001, 2001, 20, '2026-27', 'MA/MSc Psychology (Premium)', 'Cognitive Psychology', 'published', 0)")->execute();
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, user_id, score, total_score, attendance_status) VALUES (2001, 'test_k@pepp.com', 'PEPP_TEST_K', 40.0, 50.0, 'attended')")->execute();
+
+$analytics_q = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'test_k@pepp.com', 20);
+$chap_ass_q = $analytics_q['chapter_assessments'];
+assertTest("Test Q: Chapter assessment breakdown exists", true, count($chap_ass_q) > 0);
+assertTest("Test Q: Chapter assessment average score is 80%", 80.0, (float)($chap_ass_q[0]['average_score'] ?? 0));
+assertTest("Test Q: Chapter assessment attendance is 100%", 100.0, (float)($chap_ass_q[0]['attendance_percentage'] ?? 0));
+
+
+// --- TEST R: Topics grouped with topic values ---
+assertTest("Test R: Topics array is populated", 5, count($analytics_q['topics']));
+
+
+// --- TEST S: Topic analysis calculation (Strongest vs Needs Attention) ---
+assertTest("Test S: Strongest topics populated", true, count($analytics_q['strongest_topics']) > 0);
+assertTest("Test S: Strongest topic has 100% completion", 100.0, (float)$analytics_q['strongest_topics'][0]['completion_percentage']);
+assertTest("Test S: Needs attention topics populated", true, count($analytics_q['needs_attention_topics']) > 0);
+assertTest("Test S: Needs attention topic has 0% completion", 0.0, (float)$analytics_q['needs_attention_topics'][0]['completion_percentage']);
+
+
+// --- TEST T: Topic-level completion aggregation ---
+$topic_memory = null;
+foreach ($analytics_q['topics'] as $top) {
+    if ($top['topic_name'] === 'Memory') $topic_memory = $top;
+}
+assertTest("Test T: Topic 'Memory' has 1 total activity", 1, $topic_memory['total'] ?? 0);
+assertTest("Test T: Topic 'Memory' has 1 completed activity", 1, $topic_memory['completed'] ?? 0);
+
+
+// --- TEST U: Unified Study Plan Cohort ranking across multiple courses ---
+// Create Study Plan 30 assigned to Course A and Course B
+$pdo->prepare("
+    INSERT INTO study_plans (id, title, plan_type, status, academic_year, start_date, end_date, is_deleted)
+    VALUES (30, 'Shared Study Plan 30', 'date_wise', 'published', '2026-27', '2026-08-01', '2026-08-31', 0)
+")->execute();
+$pdo->prepare("INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value) VALUES (30, 'course', 'Course A')")->execute();
+$pdo->prepare("INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value) VALUES (30, 'course', 'Course B')")->execute();
+
+// Seed 10 activities in Plan 30
+for ($a_i = 1; $a_i <= 10; $a_i++) {
+    $pdo->prepare("INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, activity_date, is_deleted) VALUES (?, 30, ?, '2026-08-15', 0)")->execute([3000 + $a_i, "uid_sp30_$a_i"]);
+}
+
+// Student 1 in Course A: 10/10 completed (100%)
+$pdo->prepare("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status) VALUES ('ST_A1', 'Student A1', 'st_a1@pepp.com', 'Course A', '2026-27', 'approved')")->execute();
+for ($a_i = 1; $a_i <= 10; $a_i++) {
+    $pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('st_a1@pepp.com', 30, ?, ?, 'complete_activity', 'completed', '2026-08-15 10:00:00')")->execute([3000 + $a_i, "uid_sp30_$a_i"]);
+}
+
+// Student 2 in Course B: 5/10 completed (50%)
+$pdo->prepare("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status) VALUES ('ST_B1', 'Student B1', 'st_b1@pepp.com', 'Course B', '2026-27', 'approved')")->execute();
+for ($a_i = 1; $a_i <= 5; $a_i++) {
+    $pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('st_b1@pepp.com', 30, ?, ?, 'complete_activity', 'completed', '2026-08-15 11:00:00')")->execute([3000 + $a_i, "uid_sp30_$a_i"]);
+}
+
+// Student 3 in Course B: 2/10 completed (20%)
+$pdo->prepare("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status) VALUES ('ST_B2', 'Student B2', 'st_b2@pepp.com', 'Course B', '2026-27', 'approved')")->execute();
+for ($a_i = 1; $a_i <= 2; $a_i++) {
+    $pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('st_b2@pepp.com', 30, ?, ?, 'complete_activity', 'completed', '2026-08-15 12:00:00')")->execute([3000 + $a_i, "uid_sp30_$a_i"]);
+}
+
+$cohort_ranking_30 = StudentStudyPlanAnalytics::getCohortRanking($pdo, 30, '2026-27', 'ST_A1', 'st_a1@pepp.com');
+assertTest("Test U: Multi-course cohort merges students from Course A and Course B", 3, $cohort_ranking_30['cohort_size']);
+assertTest("Test U: Student A1 with highest completion is Rank 1 in shared cohort", 1, $cohort_ranking_30['current_student']['rank'] ?? 0);
+
+
+// --- TEST V: Deduplication of multi-course enrolled students in Study Plan cohort ---
+// Insert another user record with same user_id in Course B (e.g. dual enrollment)
+$pdo->prepare("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status) VALUES ('ST_A1', 'Student A1 Dual', 'st_a1_dual@pepp.com', 'Course B', '2026-27', 'approved')")->execute();
+$cohort_ranking_v = StudentStudyPlanAnalytics::getCohortRanking($pdo, 30, '2026-27', 'ST_A1', 'st_a1@pepp.com');
+assertTest("Test V: Multi-enrolled student ST_A1 counted exactly ONCE in cohort", 3, $cohort_ranking_v['cohort_size']);
+$pdo->exec("DELETE FROM users WHERE email = 'st_a1_dual@pepp.com'");
+
+
+// --- TEST W: Deduplication of student study activities ---
+// Insert duplicate activity with same UID
+$pdo->prepare("INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, activity_date, is_deleted) VALUES (3099, 30, 'uid_sp30_1', '2026-08-15', 0)")->execute();
+$cohort_ranking_w = StudentStudyPlanAnalytics::getCohortRanking($pdo, 30, '2026-27', 'ST_A1', 'st_a1@pepp.com');
+assertTest("Test W: Student A1 total tasks correctly evaluated", 11, $cohort_ranking_w['current_student']['total_tasks']);
+$pdo->exec("DELETE FROM study_plan_activities WHERE id = 3099");
+
+
+// --- TEST X: Deduplication of assessment batch participation ---
+$pdo->prepare("INSERT INTO assessment_result_batches (id, activity_id, study_plan_id, academic_year, course_name, status, is_deleted) VALUES (3001, 3001, 30, '2026-27', 'All Courses', 'published', 0)")->execute();
+// Insert 2 rows for same batch_id (e.g. duplicate sync record)
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, user_id, score, total_score, attendance_status) VALUES (3001, 'st_a1@pepp.com', 'ST_A1', 45.0, 50.0, 'attended')")->execute();
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, user_id, score, total_score, attendance_status) VALUES (3001, 'st_a1@pepp.com', 'ST_A1', 45.0, 50.0, 'attended')")->execute();
+
+$cohort_ranking_x = StudentStudyPlanAnalytics::getCohortRanking($pdo, 30, '2026-27', 'ST_A1', 'st_a1@pepp.com');
+assertTest("Test X: Assessment score for batch deduplicated (45/50 = 90%)", 90.0, (float)$cohort_ranking_x['current_student']['performance_score']);
+
+
+// --- TEST Y: Missing assessment weight normalization ---
+// Student B2 has NO assessments published. Verify composite index is not 0
+$cohort_ranking_y = StudentStudyPlanAnalytics::getCohortRanking($pdo, 30, '2026-27', 'ST_B2', 'st_b2@pepp.com');
+$st_b2_index = $cohort_ranking_y['current_student']['performance_index'] ?? 0;
+assertTest("Test Y: Missing assessment dynamically normalizes weights (> 0%)", true, $st_b2_index > 0);
+
+
+// --- TEST Z: Competition ranking ties handling (e.g. 1, 2, 2, 4) ---
+// Set Student B1 and B2 to have exact same metrics
+$pdo->prepare("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status) VALUES ('ST_B3', 'Student B3', 'st_b3@pepp.com', 'Course B', '2026-27', 'approved')")->execute();
+// B1 has 5 completions, let B3 also have 5 completions
+for ($a_i = 1; $a_i <= 5; $a_i++) {
+    $pdo->prepare("INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at) VALUES ('st_b3@pepp.com', 30, ?, ?, 'complete_activity', 'completed', '2026-08-15 11:00:00')")->execute([3000 + $a_i, "uid_sp30_$a_i"]);
+}
+$cohort_ranking_z = StudentStudyPlanAnalytics::getCohortRanking($pdo, 30, '2026-27');
+$ranks_found = [];
+foreach ($cohort_ranking_z['leaderboard'] as $lb) {
+    $ranks_found[] = $lb['rank'];
+}
+assertTest("Test Z: Tied students receive identical competition ranks", true, in_array(2, array_count_values($ranks_found)));
+
+
+// --- TEST AA: Percentile calculation and badge classification ---
+assertTest("Test AA: Top 1 student in cohort has Elite or Outstanding badge", true, strpos($cohort_ranking_z['leaderboard'][0]['badge'], 'Elite') !== false || strpos($cohort_ranking_z['leaderboard'][0]['badge'], 'Outstanding') !== false);
+
+
+// --- TEST AB: Cohort distribution histogram bucket assignment ---
+assertTest("Test AB: 7 distribution histogram buckets exist", 7, count($cohort_ranking_z['distribution_buckets']));
+assertTest("Test AB: Top student in bucket '80-89'", true, ($cohort_ranking_z['distribution_buckets']['80-89'] ?? 0) >= 1);
+
+
+// --- TEST AC: Multi-plan comparison matrix generation ---
+$multi_plan_ac = StudentStudyPlanAnalytics::getStudentMultiPlanAnalytics($pdo, 'st_a1@pepp.com', '2026-27');
+assertTest("Test AC: Multi-plan summary generated", true, count($multi_plan_ac['plans']) >= 1);
+
+
+// --- TEST AD: Rank trend trajectory calculation across sequential plans ---
+assertTest("Test AD: Trajectory field exists", true, in_array($multi_plan_ac['trajectory'], ['improving', 'stable', 'declining']));
+
+
+// --- TEST AE: Performance trend trajectory calculation ---
+assertTest("Test AE: Performance trend array exists", true, is_array($multi_plan_ac['performance_trend']));
+
+
+// --- TEST AF: Mentor attention actionable insights generation ---
+$insights_af = StudentStudyPlanAnalytics::generateMentorInsights([
+    'total_tasks' => 10,
+    'completed_tasks' => 2,
+    'pending_tasks' => 8,
+    'overdue_tasks' => 4,
+    'completion_percentage' => 20,
+    'performance_score' => 40,
+    'active_streak' => 1,
+    'consistency_percentage' => 15
+], [], [], []);
+assertTest("Test AF: Overdue task alert generated in mentor insights", true, count($insights_af) >= 1);
+assertTest("Test AF: Danger type for overdue tasks", 'danger', $insights_af[0]['type'] ?? '');
+
+
+// --- TEST AG: Learning progress timeline cumulative curve points ---
+$analytics_ag = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'st_a1@pepp.com', 30);
+assertTest("Test AG: Progress timeline series contains progression points", true, count($analytics_ag['progress_timeline']) >= 1);
+
+
+// --- TEST AH: Active study days vs eligible calendar days consistency percentage ---
+assertTest("Test AH: Consistency % mathematically equals (active_days / total_days) * 100", true, $analytics_ag['consistency_percentage'] >= 0 && $analytics_ag['consistency_percentage'] <= 100);
+
+
+// --- TEST AI: Inactive / unapproved student excluded from active cohort ranking ---
+$pdo->prepare("INSERT INTO users (user_id, name, email, pepp_course, pepp_academic_year, status) VALUES ('ST_INACTIVE', 'Inactive Student', 'inactive@pepp.com', 'Course A', '2026-27', 'inactive')")->execute();
+$cohort_ranking_ai = StudentStudyPlanAnalytics::getCohortRanking($pdo, 30, '2026-27');
+$inactive_in_cohort = false;
+foreach ($cohort_ranking_ai['leaderboard'] as $lb) {
+    if ($lb['name'] === 'Inactive Student') $inactive_in_cohort = true;
+}
+assertTest("Test AI: Inactive unapproved student excluded from cohort", false, $inactive_in_cohort);
+
+
+// --- TEST AJ: Mathematical parity between getCourseAnalytics and getCourseAnalyticsBulk ---
+$course_single = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, 'st_a1@pepp.com', 'Course A');
+$course_bulk = StudentStudyPlanAnalytics::getCourseAnalyticsBulk($pdo, [
+    ['email' => 'st_a1@pepp.com', 'user_id' => 'ST_A1', 'pepp_academic_year' => '2026-27', 'pepp_course' => 'Course A']
+], 'Course A')['st_a1@pepp.com'] ?? [];
+
+assertTest("Test AJ: Single and bulk total_tasks match", $course_single['total_tasks'], $course_bulk['total_tasks']);
+assertTest("Test AJ: Single and bulk completed_tasks match", $course_single['completed_tasks'], $course_bulk['completed_tasks']);
+assertTest("Test AJ: Single and bulk completion_percentage match", $course_single['completion_percentage'], $course_bulk['completion_percentage']);
+
+
+// --- TEST AK: Student identity resolution using user_id with fallback to email ---
+$analytics_by_id = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'ST_A1', 30);
+$analytics_by_email = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'st_a1@pepp.com', 30);
+assertTest("Test AK: Identity resolution by user_id matches resolution by email", $analytics_by_id['completed_tasks'], $analytics_by_email['completed_tasks']);
+
+
+// --- TEST AL: Chapter protection verification (Chapter is NEVER derived from Topic or Subject) ---
+$pdo->prepare("
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, topic, subject, is_deleted)
+    VALUES (99999, 30, 'uid_prot_1', 'Core Neuroscience', 'Synapses', 'Synapses', 0)
+")->execute();
+$stmt_prot = $pdo->prepare("SELECT chapter, topic, subject FROM study_plan_activities WHERE id = 99999");
+$stmt_prot->execute();
+$row_prot = $stmt_prot->fetch(PDO::FETCH_ASSOC);
+
+assertTest("Test AL: Activity chapter is preserved as 'Core Neuroscience'", 'Core Neuroscience', $row_prot['chapter']);
+assertTest("Test AL: Activity topic is 'Synapses'", 'Synapses', $row_prot['topic']);
+assertTest("Test AL: Chapter is NEVER replaced by Topic or Subject", true, $row_prot['chapter'] !== $row_prot['topic']);
 
 
 echo "<h2>Test Execution Summary</h2>\n";

@@ -190,7 +190,8 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             $all_test_types = array_unique(array_merge($test_types, $custom_types));
             $placeholders = implode(',', array_fill(0, count($all_test_types), '?'));
             $stmt = $pdo->prepare("
-                SELECT id, activity_title, activity_type, activity_date, chapter, topic, day_number
+                SELECT id, activity_title, activity_type, activity_date, chapter,
+                       COALESCE(NULLIF(topic, ''), NULLIF(subject, ''), '') as topic, day_number
                 FROM study_plan_activities WHERE study_plan_id = ? AND activity_type IN ($placeholders) AND is_deleted = 0
                 ORDER BY activity_date ASC, sort_order ASC, day_number ASC
             ");
@@ -198,6 +199,9 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
             $activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             foreach ($activities as &$act) {
+                $raw_top = trim((string)($act['topic'] ?? ''));
+                $act['topic'] = $raw_top;
+
                 $bs = $pdo->prepare("SELECT id, version, status, published_at, published_by FROM assessment_result_batches WHERE activity_id = ? AND study_plan_id = ? AND status = 'published' LIMIT 1");
                 $bs->execute([$act['id'], $plan_id]);
                 $batch = $bs->fetch(PDO::FETCH_ASSOC);

@@ -455,6 +455,9 @@ if (isset($_GET['action'])) {
             }
             unset($c);
 
+            // Calculate multi-plan comparative analytics for the student
+            $multi_plan_analytics = StudentStudyPlanAnalytics::getStudentMultiPlanAnalytics($pdo, $email, $student['academic_year']);
+
             echo json_encode([
                 'student' => [
                     'name' => r_esc($student['name']),
@@ -480,9 +483,12 @@ if (isset($_GET['action'])) {
                     'performance_pct' => $course_analytics['performance_score'], // NULL if no data
                     'performance_label' => $course_analytics['performance_label'] ?: 'No assessment data',
                     'performance_class' => $course_analytics['performance_class'] ?: 'gray',
-                    'total_plan_calendar_days' => $course_analytics['total_plan_calendar_days'] ?? 0
+                    'total_plan_calendar_days' => $course_analytics['total_plan_calendar_days'] ?? 0,
+                    'active_study_days' => $course_analytics['active_study_days'] ?? 0,
+                    'consistency_percentage' => $course_analytics['consistency_percentage'] ?? 0
                 ],
-                'courses' => array_values($courses_data)
+                'courses' => array_values($courses_data),
+                'multi_plan_analytics' => $multi_plan_analytics
             ]);
         } catch (Exception $e) {
             echo json_encode(['error' => $e->getMessage()]);
@@ -2974,6 +2980,168 @@ include 'includes/admin_nav.php';
             break-inside: avoid !important;
         }
     }
+
+    /* ── LEARNING ANALYTICS ENHANCEMENT STYLES ── */
+    .modal-nav-tabs {
+        display: flex;
+        gap: 6px;
+        border-bottom: 2px solid #e2e8f0;
+        padding: 0 1.5rem;
+        background: #fff;
+    }
+    .modal-nav-tab {
+        padding: 10px 18px;
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -2px;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .modal-nav-tab:hover {
+        color: var(--accent);
+    }
+    .modal-nav-tab.active {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+    }
+
+    .analytics-section-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        padding: 1.25rem;
+        margin-bottom: 1.25rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+    }
+    .analytics-section-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+        border-bottom: 1px solid #f1f5f9;
+        padding-bottom: 0.75rem;
+    }
+    .analytics-section-title {
+        font-size: 0.95rem;
+        font-weight: 800;
+        color: var(--text-main);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0;
+    }
+
+    .badge-elite { background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); color: #92400e; border: 1px solid #fcd34d; font-weight: 800; }
+    .badge-outstanding { background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%); color: #3730a3; border: 1px solid #a5b4fc; font-weight: 800; }
+    .badge-high { background: linear-gradient(135deg, #ffedd5 0%, #fed7aa 100%); color: #9a3412; border: 1px solid #fdba74; font-weight: 800; }
+    .badge-strong { background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%); color: #166534; border: 1px solid #86efac; font-weight: 800; }
+    .badge-developing { background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); color: #075985; border: 1px solid #7dd3fc; font-weight: 800; }
+    .badge-attention { background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); color: #991b1b; border: 1px solid #fca5a5; font-weight: 800; }
+
+    .ranking-hero-box {
+        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+        border: 1.5px solid #e2e8f0;
+        border-radius: 16px;
+        padding: 1.25rem;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 1.5rem;
+        align-items: center;
+    }
+
+    .dist-histogram-container {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 8px;
+        height: 140px;
+        padding: 10px 5px 0 5px;
+        border-bottom: 2px solid #cbd5e1;
+    }
+    .dist-bar-col {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        height: 100%;
+        justify-content: flex-end;
+    }
+    .dist-bar {
+        width: 100%;
+        max-width: 38px;
+        background: #cbd5e1;
+        border-radius: 6px 6px 0 0;
+        transition: height 0.4s ease, background 0.2s ease;
+        position: relative;
+        min-height: 4px;
+    }
+    .dist-bar.current-bucket {
+        background: linear-gradient(180deg, #4f46e5 0%, #3b82f6 100%);
+        box-shadow: 0 0 10px rgba(79, 70, 229, 0.4);
+    }
+    .dist-bar-label {
+        font-size: 0.65rem;
+        font-weight: 700;
+        color: var(--text-muted);
+        margin-top: 6px;
+        text-align: center;
+    }
+    .dist-bar-count {
+        font-size: 0.68rem;
+        font-weight: 800;
+        color: var(--text-main);
+        margin-bottom: 3px;
+    }
+
+    .insight-card {
+        padding: 12px 16px;
+        border-radius: 12px;
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        font-size: 0.82rem;
+        margin-bottom: 8px;
+        border-left: 4px solid transparent;
+    }
+    .insight-danger { background: #fef2f2; border-left-color: #ef4444; color: #991b1b; }
+    .insight-warning { background: #fffbeb; border-left-color: #f59e0b; color: #92400e; }
+    .insight-success { background: #f0fdf4; border-left-color: #10b981; color: #166534; }
+    .insight-info { background: #eff6ff; border-left-color: #3b82f6; color: #1e40af; }
+
+    .analytics-accessible-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.8rem;
+        margin-top: 10px;
+    }
+    .analytics-accessible-table th {
+        background: #f8fafc;
+        color: var(--text-muted);
+        font-weight: 700;
+        text-align: left;
+        padding: 8px 12px;
+        border-bottom: 1.5px solid #e2e8f0;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+    .analytics-accessible-table td {
+        padding: 8px 12px;
+        border-bottom: 1px solid #f1f5f9;
+        color: var(--text-main);
+    }
+    .analytics-accessible-table tr:hover td {
+        background: #f8fafc;
+    }
+    .analytics-accessible-table tr.current-student-row td {
+        background: #eef2ff;
+        font-weight: 700;
+    }
 </style>
 
 <div class="container-fluid" style="padding: 1.5rem 0;">
@@ -3483,8 +3651,23 @@ include 'includes/admin_nav.php';
             </div>
         </div>
 
-        <!-- Modal Body (Dossier Split-pane Layout) -->
-        <div class="timeline-modal-body">
+        <!-- Navigation Tabs -->
+        <div class="modal-nav-tabs">
+            <div class="modal-nav-tab active" id="modal-tab-btn-analytics" onclick="switchTimelineModalTab('analytics')">
+                <i class="fas fa-chart-pie"></i> Learning Analytics Hub
+            </div>
+            <div class="modal-nav-tab" id="modal-tab-btn-dossier" onclick="switchTimelineModalTab('dossier')">
+                <i class="fas fa-list-check"></i> Chronological Checklist Dossier
+            </div>
+        </div>
+
+        <!-- Tab 1: Executive Learning Analytics Hub Pane -->
+        <div id="st-modal-analytics-pane" style="display: block; padding: 1.5rem; overflow-y: auto; max-height: calc(90vh - 120px);">
+            <div style="text-align:center; padding:3rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent);"></i><p>Loading comprehensive Learning Analytics Hub...</p></div>
+        </div>
+
+        <!-- Tab 2: Modal Body (Dossier Split-pane Layout) -->
+        <div id="st-modal-dossier-pane" class="timeline-modal-body" style="display: none;">
 
             <!-- Left Dossier Sidebar -->
             <div class="dossier-sidebar">
@@ -4335,9 +4518,659 @@ include 'includes/admin_nav.php';
         backdrop.classList.add('show');
     }
 
-    function closeTimelineModal() {
-        const backdrop = document.getElementById('student-task-modal-backdrop');
-        backdrop.classList.remove('show');
+    // ── MODAL TAB SWITCHER ──
+    function switchTimelineModalTab(tabName) {
+        const btnAnalytics = document.getElementById('modal-tab-btn-analytics');
+        const btnDossier = document.getElementById('modal-tab-btn-dossier');
+        const paneAnalytics = document.getElementById('st-modal-analytics-pane');
+        const paneDossier = document.getElementById('st-modal-dossier-pane');
+
+        if (!btnAnalytics || !btnDossier || !paneAnalytics || !paneDossier) return;
+
+        if (tabName === 'analytics') {
+            btnAnalytics.classList.add('active');
+            btnDossier.classList.remove('active');
+            paneAnalytics.style.display = 'block';
+            paneDossier.style.display = 'none';
+        } else {
+            btnDossier.classList.add('active');
+            btnAnalytics.classList.remove('active');
+            paneDossier.style.display = 'flex';
+            paneAnalytics.style.display = 'none';
+        }
+    }
+
+    // ── RENDER COMPREHENSIVE LEARNING ANALYTICS HUB (13 SECTIONS) ──
+    function renderLearningAnalyticsHub(analytics, studentInfo, multiPlanData, planTitle) {
+        const container = document.getElementById('st-modal-analytics-pane');
+        if (!container) return;
+
+        const a = analytics || {};
+        const st = studentInfo || {};
+        const mp = multiPlanData || {};
+        const cohort = a.cohort_ranking || {};
+        const curStudent = cohort.current_student || null;
+
+        const totalTasks = a.total_tasks || 0;
+        const completedTasks = a.completed_tasks || 0;
+        const pendingTasks = a.pending_tasks || 0;
+        const overdueTasks = a.overdue_tasks || 0;
+        const compPct = a.completion_percentage || 0;
+
+        const attRate = a.attendance_rate !== null ? a.attendance_rate : null;
+        const perfScore = a.performance_score !== null ? a.performance_score : null;
+        const consistencyPct = a.consistency_percentage || 0;
+        const activeStreak = a.active_streak || 0;
+        const longestStreak = a.longest_streak || 0;
+        const totalPlanDays = a.total_plan_calendar_days || 0;
+        const activeDays = a.active_study_days || 0;
+
+        const rankVal = curStudent ? curStudent.rank : 1;
+        const cohortSize = cohort.cohort_size || 1;
+        const badge = curStudent ? curStudent.badge : '⭐ Strong Performer';
+        const badgeClass = curStudent ? curStudent.badge_class : 'strong';
+        const perfIndex = curStudent ? curStudent.performance_index : compPct;
+        const percentileText = curStudent ? curStudent.percentile_text : 'Top 100%';
+
+        let html = '';
+
+        // ── 1. STUDENT PROFILE CARD ──
+        html += `
+            <div class="analytics-section-card" style="background:linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                    <div style="display:flex; align-items:center; gap:16px;">
+                        <div style="width:60px; height:60px; border-radius:50%; background:#e0e7ff; color:var(--accent); display:flex; align-items:center; justify-content:center; font-size:1.5rem; font-weight:800; border:2px solid var(--accent); overflow:hidden;">
+                            ${st.photo ? `<img src="../${st.photo}" style="width:100%; height:100%; object-fit:cover;" onerror="this.src='assets/img/default-avatar.svg';">` : `<i class="fas fa-user-graduate"></i>`}
+                        </div>
+                        <div>
+                            <h4 style="font-size:1.15rem; font-weight:800; color:var(--text-main); margin:0 0 4px 0;">${st.name || currentSelectedStudentName}</h4>
+                            <div style="font-size:0.75rem; color:var(--text-muted); display:flex; gap:12px; flex-wrap:wrap;">
+                                <span>ID: <strong style="color:var(--text-main);">${st.user_id || currentSelectedStudentId}</strong></span>
+                                <span>Email: <strong style="color:var(--text-main);">${st.masked_email || currentSelectedStudentEmail}</strong></span>
+                                <span>Course: <strong style="color:var(--text-main);">${st.course || currentSelectedStudentCourse}</strong></span>
+                                <span>Academic Year: <strong style="color:var(--text-main);">${st.academic_year || '2026-27'}</strong></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="text-align:right;">
+                        <span class="badge ${st.status === 'active' ? 'green' : 'gray'}" style="text-transform:uppercase; font-size:0.7rem;">${st.status || 'Active'}</span>
+                        <div style="font-size:0.72rem; color:var(--text-muted); margin-top:4px;">Study Plan: <strong>${planTitle}</strong></div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // ── 2. OVERALL KPI CARDS GRID ──
+        html += `
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:10px; margin-bottom:1.25rem;">
+                <div class="kpi-card" style="padding:10px 14px;">
+                    <div class="kpi-icon indigo"><i class="fas fa-list-check"></i></div>
+                    <div class="kpi-info">
+                        <div class="kpi-value">${totalTasks}</div>
+                        <div class="kpi-label">Total Tasks</div>
+                    </div>
+                </div>
+                <div class="kpi-card" style="padding:10px 14px; border-left:3px solid #10b981;">
+                    <div class="kpi-icon green"><i class="fas fa-circle-check"></i></div>
+                    <div class="kpi-info">
+                        <div class="kpi-value" style="color:#047857;">${completedTasks}</div>
+                        <div class="kpi-label">Completed</div>
+                    </div>
+                </div>
+                <div class="kpi-card" style="padding:10px 14px; border-left:3px solid #f59e0b;">
+                    <div class="kpi-icon amber"><i class="fas fa-clock"></i></div>
+                    <div class="kpi-info">
+                        <div class="kpi-value" style="color:#d97706;">${pendingTasks}</div>
+                        <div class="kpi-label">Pending</div>
+                    </div>
+                </div>
+                <div class="kpi-card" style="padding:10px 14px; border-left:3px solid #ef4444;">
+                    <div class="kpi-icon red"><i class="fas fa-triangle-exclamation"></i></div>
+                    <div class="kpi-info">
+                        <div class="kpi-value" style="color:#b91c1c;">${overdueTasks}</div>
+                        <div class="kpi-label">Overdue</div>
+                    </div>
+                </div>
+                <div class="kpi-card" style="padding:10px 14px; border-left:3px solid #4f46e5;">
+                    <div class="kpi-icon indigo"><i class="fas fa-percent"></i></div>
+                    <div class="kpi-info">
+                        <div class="kpi-value" style="color:#4f46e5;">${compPct}%</div>
+                        <div class="kpi-label">Completion Rate</div>
+                    </div>
+                </div>
+                <div class="kpi-card" style="padding:10px 14px; border-left:3px solid #3b82f6;">
+                    <div class="kpi-icon blue"><i class="fas fa-user-check"></i></div>
+                    <div class="kpi-info">
+                        <div class="kpi-value" style="color:#1d4ed8;">${attRate !== null ? attRate + '%' : 'No data'}</div>
+                        <div class="kpi-label">Test Attendance</div>
+                    </div>
+                </div>
+                <div class="kpi-card" style="padding:10px 14px; border-left:3px solid #8b5cf6;">
+                    <div class="kpi-icon indigo" style="background:rgba(139,92,246,0.1); color:#8b5cf6;"><i class="fas fa-chart-line"></i></div>
+                    <div class="kpi-info">
+                        <div class="kpi-value" style="color:#6d28d9;">${perfScore !== null ? perfScore + '%' : 'No data'}</div>
+                        <div class="kpi-label">Test Average</div>
+                    </div>
+                </div>
+                <div class="kpi-card" style="padding:10px 14px; border-left:3px solid #06b6d4;">
+                    <div class="kpi-icon blue" style="background:rgba(6,182,212,0.1); color:#0891b2;"><i class="fas fa-calendar-days"></i></div>
+                    <div class="kpi-info">
+                        <div class="kpi-value" style="color:#0e7490;">${consistencyPct}%</div>
+                        <div class="kpi-label">Consistency (${activeDays}/${totalPlanDays}d)</div>
+                    </div>
+                </div>
+                <div class="kpi-card" style="padding:10px 14px; border-left:3px solid #f97316;">
+                    <div class="kpi-icon amber" style="background:rgba(249,115,22,0.1); color:#ea580c;"><i class="fas fa-fire"></i></div>
+                    <div class="kpi-info">
+                        <div class="kpi-value" style="color:#c2410c;">🔥 ${activeStreak}d</div>
+                        <div class="kpi-label">Streak (Max ${longestStreak}d)</div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // ── 3. STUDY PLAN PERFORMANCE & RANKING ──
+        html += `
+            <div class="analytics-section-card">
+                <div class="analytics-section-header">
+                    <div>
+                        <h5 class="analytics-section-title"><i class="fas fa-trophy" style="color:#eab308;"></i> Study Plan Performance & Cohort Ranking</h5>
+                        <div style="font-size:0.72rem; color:var(--text-muted); margin-top:2px;">
+                            Ranking calculated across all students in the Study Plan cohort (${cohort.study_plan_title || planTitle} • ${cohort.academic_year || '2026-27'})
+                        </div>
+                    </div>
+                    <div>
+                        <span class="badge ${badgeClass}" style="font-size:0.78rem; padding:4px 10px;">${badge}</span>
+                    </div>
+                </div>
+
+                <div class="ranking-hero-box">
+                    <div style="text-align:center; padding-right:15px; border-right:1px solid #cbd5e1;">
+                        <div style="font-size:0.65rem; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Study Plan Rank</div>
+                        <div style="font-size:1.8rem; font-weight:900; color:var(--accent);">#${rankVal} <span style="font-size:0.9rem; font-weight:600; color:var(--text-muted);">/ ${cohortSize}</span></div>
+                        <div style="font-size:0.72rem; font-weight:700; color:#047857;">${percentileText}</div>
+                    </div>
+                    <div>
+                        <div style="display:flex; justify-content:space-between; font-size:0.78rem; margin-bottom:4px;">
+                            <span>Overall Performance Index (Weighted Composite)</span>
+                            <strong style="color:var(--accent); font-size:0.9rem;">${perfIndex}%</strong>
+                        </div>
+                        <div style="background:#e2e8f0; height:8px; border-radius:4px; overflow:hidden;">
+                            <div style="background:var(--primary-gradient); width:${perfIndex}%; height:100%;"></div>
+                        </div>
+                        <div style="display:flex; gap:16px; font-size:0.7rem; color:var(--text-muted); margin-top:6px;">
+                            <span>Completion (40%): <strong>${compPct}%</strong></span>
+                            <span>Test Avg (30%): <strong>${perfScore !== null ? perfScore + '%' : 'N/A'}</strong></span>
+                            <span>Test Att (20%): <strong>${attRate !== null ? attRate + '%' : 'N/A'}</strong></span>
+                            <span>Consistency (10%): <strong>${consistencyPct}%</strong></span>
+                        </div>
+                    </div>
+                    <div style="text-align:center; padding-left:15px; border-left:1px solid #cbd5e1;">
+                        <div style="font-size:0.65rem; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Cohort Standing</div>
+                        <strong style="font-size:1.1rem; color:var(--text-main);">${badge}</strong>
+                    </div>
+                </div>
+
+                ${cohort.leaderboard && cohort.leaderboard.length > 0 ? `
+                    <div style="margin-top:14px; overflow-x:auto;">
+                        <div style="font-size:0.75rem; font-weight:800; color:var(--text-muted); text-transform:uppercase; margin-bottom:6px;">Cohort Leaderboard (Top Students)</div>
+                        <table class="analytics-accessible-table">
+                            <thead>
+                                <tr>
+                                    <th>Rank</th>
+                                    <th>Student</th>
+                                    <th>Course</th>
+                                    <th>Completion</th>
+                                    <th>Test Avg</th>
+                                    <th>Test Att</th>
+                                    <th>Consistency</th>
+                                    <th>Performance Index</th>
+                                    <th>Standing</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${cohort.leaderboard.map(lb => `
+                                    <tr class="${lb.is_current ? 'current-student-row' : ''}">
+                                        <td><strong>#${lb.rank}</strong></td>
+                                        <td>${lb.name} <span style="font-size:0.68rem; color:var(--text-muted);">${lb.masked_email}</span> ${lb.is_current ? '<span class="badge green" style="font-size:0.55rem;">YOU</span>' : ''}</td>
+                                        <td>${lb.course}</td>
+                                        <td>${lb.completion_pct}%</td>
+                                        <td>${lb.assessment_score !== null ? lb.assessment_score + '%' : '—'}</td>
+                                        <td>${lb.attendance_rate !== null ? lb.attendance_rate + '%' : '—'}</td>
+                                        <td>${lb.consistency_pct}%</td>
+                                        <td><strong>${lb.performance_index}%</strong></td>
+                                        <td><span class="badge ${lb.badge ? lb.badge.toLowerCase().includes('elite') ? 'badge-elite' : lb.badge.toLowerCase().includes('outstanding') ? 'badge-outstanding' : lb.badge.toLowerCase().includes('high') ? 'badge-high' : 'badge-strong' : 'gray'}" style="font-size:0.65rem;">${lb.badge || 'Active'}</span></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+
+        // ── 4. OVERALL PERFORMANCE PROFILE ──
+        html += `
+            <div class="analytics-section-card">
+                <div class="analytics-section-header">
+                    <h5 class="analytics-section-title"><i class="fas fa-chart-pie" style="color:var(--accent);"></i> Overall Performance Profile (4 Dimensions)</h5>
+                    <span style="font-size:0.72rem; color:var(--text-muted);">Weighted Assessment Normalization Applied</span>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; align-items:center;">
+                    <div>
+                        <div style="display:flex; flex-direction:column; gap:10px;">
+                            <div>
+                                <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:2px;">
+                                    <span><strong>Activity Completion</strong> (40% Weight)</span>
+                                    <span>${completedTasks}/${totalTasks} (${compPct}%)</span>
+                                </div>
+                                <div style="background:#e2e8f0; height:6px; border-radius:3px; overflow:hidden;">
+                                    <div style="background:#10b981; width:${compPct}%; height:100%;"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:2px;">
+                                    <span><strong>Assessment Score Average</strong> (30% Weight)</span>
+                                    <span>${perfScore !== null ? perfScore + '%' : 'No published test (Normalized)'}</span>
+                                </div>
+                                <div style="background:#e2e8f0; height:6px; border-radius:3px; overflow:hidden;">
+                                    <div style="background:#4f46e5; width:${perfScore || 0}%; height:100%;"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:2px;">
+                                    <span><strong>Assessment Attendance Rate</strong> (20% Weight)</span>
+                                    <span>${attRate !== null ? attRate + '%' : 'No published test (Normalized)'}</span>
+                                </div>
+                                <div style="background:#e2e8f0; height:6px; border-radius:3px; overflow:hidden;">
+                                    <div style="background:#3b82f6; width:${attRate || 0}%; height:100%;"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:2px;">
+                                    <span><strong>Learning Consistency</strong> (10% Weight)</span>
+                                    <span>${activeDays}/${totalPlanDays} Days (${consistencyPct}%)</span>
+                                </div>
+                                <div style="background:#e2e8f0; height:6px; border-radius:3px; overflow:hidden;">
+                                    <div style="background:#f59e0b; width:${consistencyPct}%; height:100%;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <table class="analytics-accessible-table">
+                            <thead>
+                                <tr>
+                                    <th>Dimension</th>
+                                    <th>Weight</th>
+                                    <th>Student Value</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>Activity Completion</td>
+                                    <td>40%</td>
+                                    <td>${compPct}%</td>
+                                    <td><span class="badge ${compPct >= 80 ? 'green' : compPct >= 50 ? 'blue' : 'amber'}">${compPct >= 80 ? 'Strong' : 'In Progress'}</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Assessment Score Average</td>
+                                    <td>30%</td>
+                                    <td>${perfScore !== null ? perfScore + '%' : 'N/A (Normalized)'}</td>
+                                    <td><span class="badge ${perfScore !== null ? (perfScore >= 75 ? 'green' : 'amber') : 'gray'}">${perfScore !== null ? (perfScore >= 75 ? 'Good' : 'Needs Review') : 'Pending'}</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Assessment Attendance</td>
+                                    <td>20%</td>
+                                    <td>${attRate !== null ? attRate + '%' : 'N/A (Normalized)'}</td>
+                                    <td><span class="badge ${attRate !== null ? (attRate >= 80 ? 'green' : 'amber') : 'gray'}">${attRate !== null ? (attRate >= 80 ? 'Regular' : 'Irregular') : 'Pending'}</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Learning Consistency</td>
+                                    <td>10%</td>
+                                    <td>${consistencyPct}%</td>
+                                    <td><span class="badge ${consistencyPct >= 60 ? 'green' : 'amber'}">${consistencyPct >= 60 ? 'Consistent' : 'Developing'}</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // ── 5. CHAPTER-WISE STUDENT PROGRESS ──
+        const chapters = a.chapters || [];
+        html += `
+            <div class="analytics-section-card">
+                <div class="analytics-section-header">
+                    <h5 class="analytics-section-title"><i class="fas fa-book" style="color:var(--accent);"></i> Chapter-wise Student Progress</h5>
+                    <span style="font-size:0.72rem; color:var(--text-muted);">${chapters.length} Canonical Chapters</span>
+                </div>
+                ${chapters.length > 0 ? `
+                    <div style="display:flex; flex-direction:column; gap:10px; margin-bottom:12px;">
+                        ${chapters.map(c => `
+                            <div>
+                                <div style="display:flex; justify-content:space-between; font-size:0.78rem; margin-bottom:3px;">
+                                    <span style="font-weight:700; color:var(--text-main);">${c.chapter_name}</span>
+                                    <span style="color:var(--text-muted);">${c.completed_activities}/${c.total_activities} completed (${c.completion_percentage}%) ${c.overdue_activities > 0 ? `· <strong style="color:#b91c1c;">${c.overdue_activities} overdue</strong>` : ''}</span>
+                                </div>
+                                <div style="background:#e2e8f0; height:7px; border-radius:3.5px; overflow:hidden; display:flex;">
+                                    <div style="background:#10b981; width:${c.completion_percentage}%; height:100%;" title="Completed: ${c.completed_activities}"></div>
+                                    ${c.overdue_activities > 0 ? `<div style="background:#ef4444; width:${Math.round((c.overdue_activities/c.total_activities)*100)}%; height:100%;" title="Overdue: ${c.overdue_activities}"></div>` : ''}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+
+                    <table class="analytics-accessible-table">
+                        <thead>
+                            <tr>
+                                <th>Chapter Name</th>
+                                <th>Total Tasks</th>
+                                <th>Completed</th>
+                                <th>Pending</th>
+                                <th>Overdue</th>
+                                <th>Completion %</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${chapters.map(c => `
+                                <tr>
+                                    <td><strong>${c.chapter_name}</strong></td>
+                                    <td>${c.total_activities}</td>
+                                    <td><span style="color:#047857; font-weight:700;">${c.completed_activities}</span></td>
+                                    <td>${c.pending_activities}</td>
+                                    <td>${c.overdue_activities > 0 ? `<span style="color:#b91c1c; font-weight:700;">${c.overdue_activities}</span>` : '0'}</td>
+                                    <td><strong>${c.completion_percentage}%</strong></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                ` : `<div style="font-size:0.8rem; color:var(--text-muted); text-align:center; padding:1rem;">No chapter activities found for this plan.</div>`}
+            </div>
+        `;
+
+        // ── 6. CHAPTER-WISE ASSESSMENT PERFORMANCE ──
+        const chapAssessments = a.chapter_assessments || [];
+        if (chapAssessments.length > 0) {
+            html += `
+                <div class="analytics-section-card">
+                    <div class="analytics-section-header">
+                        <h5 class="analytics-section-title"><i class="fas fa-vial-circle-check" style="color:#8b5cf6;"></i> Chapter-wise Assessment Performance</h5>
+                        <span style="font-size:0.72rem; color:var(--text-muted);">Published tests separate from study activities</span>
+                    </div>
+                    <table class="analytics-accessible-table">
+                        <thead>
+                            <tr>
+                                <th>Chapter Name</th>
+                                <th>Published Tests</th>
+                                <th>Attended Tests</th>
+                                <th>Attendance %</th>
+                                <th>Average Score %</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${chapAssessments.map(ca => `
+                                <tr>
+                                    <td><strong>${ca.chapter_name}</strong></td>
+                                    <td>${ca.published_assessments}</td>
+                                    <td>${ca.attended_assessments}</td>
+                                    <td>${ca.attendance_percentage !== null ? ca.attendance_percentage + '%' : '—'}</td>
+                                    <td><strong>${ca.average_score !== null ? ca.average_score + '%' : '—'}</strong></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        // ── 7. LEARNING PROGRESS TIMELINE ──
+        const timelineData = a.progress_timeline || [];
+        if (timelineData.length > 0) {
+            html += `
+                <div class="analytics-section-card">
+                    <div class="analytics-section-header">
+                        <h5 class="analytics-section-title"><i class="fas fa-chart-area" style="color:#0891b2;"></i> Learning Progress Timeline (Cumulative Progression Curve)</h5>
+                        <span style="font-size:0.72rem; color:var(--text-muted);">${timelineData.length} Milestone Dates</span>
+                    </div>
+                    <div style="overflow-x:auto;">
+                        <table class="analytics-accessible-table">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Scheduled Tasks</th>
+                                    <th>Completed Tasks</th>
+                                    <th>Cumulative Scheduled</th>
+                                    <th>Cumulative Completed</th>
+                                    <th>Cumulative Progress %</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${timelineData.map(pt => `
+                                    <tr>
+                                        <td><strong>${pt.date_formatted || pt.date}</strong></td>
+                                        <td>${pt.scheduled_activities}</td>
+                                        <td>${pt.completed_activities}</td>
+                                        <td>${pt.cumulative_scheduled}</td>
+                                        <td><span style="color:#047857; font-weight:700;">${pt.cumulative_completed}</span></td>
+                                        <td><strong>${pt.completion_percentage}%</strong></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ── 8. LEARNING CONSISTENCY ──
+        html += `
+            <div class="analytics-section-card">
+                <div class="analytics-section-header">
+                    <h5 class="analytics-section-title"><i class="fas fa-fire" style="color:#ea580c;"></i> Learning Consistency & Consecutive Streaks</h5>
+                    <span style="font-size:0.72rem; color:var(--text-muted);">Active Study Days ÷ Eligible Plan Calendar Days</span>
+                </div>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px;">
+                    <div style="background:#fff7ed; border:1px solid #ffedd5; border-radius:12px; padding:14px; text-align:center;">
+                        <div style="font-size:0.7rem; font-weight:800; color:#c2410c; text-transform:uppercase;">Active Streak</div>
+                        <div style="font-size:1.6rem; font-weight:900; color:#ea580c; margin-top:4px;">🔥 ${activeStreak} Days</div>
+                        <div style="font-size:0.7rem; color:#9a3412; margin-top:2px;">Consecutive learning days</div>
+                    </div>
+                    <div style="background:#fefce8; border:1px solid #fef08a; border-radius:12px; padding:14px; text-align:center;">
+                        <div style="font-size:0.7rem; font-weight:800; color:#854d0e; text-transform:uppercase;">Longest Streak</div>
+                        <div style="font-size:1.6rem; font-weight:900; color:#ca8a04; margin-top:4px;">⭐ ${longestStreak} Days</div>
+                        <div style="font-size:0.7rem; color:#713f12; margin-top:2px;">Best recorded continuity</div>
+                    </div>
+                    <div style="background:#eff6ff; border:1px solid #dbeafe; border-radius:12px; padding:14px; text-align:center;">
+                        <div style="font-size:0.7rem; font-weight:800; color:#1e40af; text-transform:uppercase;">Active Study Days</div>
+                        <div style="font-size:1.6rem; font-weight:900; color:#2563eb; margin-top:4px;">📅 ${activeDays} / ${totalPlanDays}d</div>
+                        <div style="font-size:0.7rem; color:#1d4ed8; margin-top:2px;">${consistencyPct}% Plan Calendar Consistency</div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // ── 9. TOPIC ANALYSIS ──
+        const strongestTopics = a.strongest_topics || [];
+        const needsAttentionTopics = a.needs_attention_topics || [];
+        html += `
+            <div class="analytics-section-card">
+                <div class="analytics-section-header">
+                    <h5 class="analytics-section-title"><i class="fas fa-crosshairs" style="color:var(--accent);"></i> Topic Mastery Analysis</h5>
+                    <span style="font-size:0.72rem; color:var(--text-muted);">Strongest Topics vs Topics Needing Attention</span>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.25rem;">
+                    <div>
+                        <div style="font-size:0.75rem; font-weight:800; color:#047857; text-transform:uppercase; margin-bottom:8px;">
+                            <i class="fas fa-circle-check"></i> Strongest Topics
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:8px;">
+                            ${strongestTopics.map(t => `
+                                <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
+                                    <span style="font-size:0.8rem; font-weight:700; color:#166534;">${t.topic_name || t.topic}</span>
+                                    <span class="badge green" style="font-size:0.65rem;">${t.completed}/${t.total} (${t.completion_percentage}%)</span>
+                                </div>
+                            `).join('') || '<div style="font-size:0.75rem; color:var(--text-muted);">No topic data available.</div>'}
+                        </div>
+                    </div>
+                    <div>
+                        <div style="font-size:0.75rem; font-weight:800; color:#b91c1c; text-transform:uppercase; margin-bottom:8px;">
+                            <i class="fas fa-triangle-exclamation"></i> Topics Needing Attention
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:8px;">
+                            ${needsAttentionTopics.map(t => `
+                                <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
+                                    <span style="font-size:0.8rem; font-weight:700; color:#991b1b;">${t.topic_name || t.topic}</span>
+                                    <span class="badge ${t.completion_percentage === 0 ? 'red' : 'amber'}" style="font-size:0.65rem;">${t.pending} pending (${t.completion_percentage}%)</span>
+                                </div>
+                            `).join('') || '<div style="font-size:0.75rem; color:var(--text-muted);">No topics requiring attention.</div>'}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // ── 10. STUDY PLAN COMPARISON MATRIX ──
+        if (mp.plans && mp.plans.length > 1) {
+            html += `
+                <div class="analytics-section-card">
+                    <div class="analytics-section-header">
+                        <h5 class="analytics-section-title"><i class="fas fa-table-columns" style="color:var(--accent);"></i> Multi-Plan Comparative Matrix (${st.academic_year || '2026-27'})</h5>
+                        <span style="font-size:0.72rem; color:var(--text-muted);">${mp.plans.length} Assigned Study Plans</span>
+                    </div>
+                    <table class="analytics-accessible-table">
+                        <thead>
+                            <tr>
+                                <th>Study Plan</th>
+                                <th>Date Range</th>
+                                <th>Tasks</th>
+                                <th>Completion %</th>
+                                <th>Test Average</th>
+                                <th>Test Attendance</th>
+                                <th>Consistency</th>
+                                <th>Performance Index</th>
+                                <th>Cohort Rank</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${mp.plans.map(p => `
+                                <tr class="${p.study_plan_id == a.study_plan_id ? 'current-student-row' : ''}">
+                                    <td><strong>${p.study_plan_name}</strong> ${p.study_plan_id == a.study_plan_id ? '<span class="badge blue" style="font-size:0.55rem;">ACTIVE</span>' : ''}</td>
+                                    <td>${p.start_date || 'TBD'} to ${p.end_date || 'TBD'}</td>
+                                    <td>${p.completed_tasks}/${p.total_tasks}</td>
+                                    <td><strong>${p.completion_percentage}%</strong></td>
+                                    <td>${p.assessment_average !== null ? p.assessment_average + '%' : '—'}</td>
+                                    <td>${p.assessment_attendance !== null ? p.assessment_attendance + '%' : '—'}</td>
+                                    <td>${p.consistency}%</td>
+                                    <td><strong>${p.performance_index}%</strong></td>
+                                    <td>${p.rank !== null ? `#${p.rank} / ${p.cohort_size}` : '—'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        // ── 11. RANK & PERFORMANCE TREND ──
+        if (mp.rank_trend && mp.rank_trend.length > 1) {
+            const traj = mp.trajectory || 'stable';
+            const trajIcon = traj === 'improving' ? 'fa-arrow-trend-up' : traj === 'declining' ? 'fa-arrow-trend-down' : 'fa-arrow-right';
+            const trajColor = traj === 'improving' ? '#10b981' : traj === 'declining' ? '#ef4444' : '#64748b';
+            const trajLabel = traj === 'improving' ? 'Improving Trajectory' : traj === 'declining' ? 'Declining Trajectory' : 'Stable Trajectory';
+
+            html += `
+                <div class="analytics-section-card">
+                    <div class="analytics-section-header">
+                        <h5 class="analytics-section-title"><i class="fas fa-arrow-trend-up" style="color:var(--accent);"></i> Longitudinal Rank & Performance Trend</h5>
+                        <span class="badge" style="background:${trajColor}15; color:${trajColor}; font-weight:800;"><i class="fas ${trajIcon}"></i> ${trajLabel}</span>
+                    </div>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
+                        ${mp.rank_trend.map(rt => `
+                            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 14px; text-align:center;">
+                                <div style="font-size:0.7rem; font-weight:700; color:var(--text-muted);">${rt.study_plan_name}</div>
+                                <div style="font-size:1.3rem; font-weight:900; color:var(--accent); margin-top:2px;">Rank #${rt.rank}</div>
+                                <div style="font-size:0.7rem; color:#047857; font-weight:600;">Index: ${rt.performance_index}%</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        // ── 12. COHORT PERFORMANCE DISTRIBUTION HISTOGRAM ──
+        const dist = cohort.distribution || [];
+        if (dist.length > 0) {
+            const maxCount = Math.max(...dist.map(d => d.count), 1);
+            html += `
+                <div class="analytics-section-card">
+                    <div class="analytics-section-header">
+                        <h5 class="analytics-section-title"><i class="fas fa-chart-simple" style="color:var(--accent);"></i> Cohort Performance Distribution (Score Buckets)</h5>
+                        <span style="font-size:0.72rem; color:var(--text-muted);">Current Student Bucket Highlighted</span>
+                    </div>
+                    <div class="dist-histogram-container">
+                        ${dist.map(d => {
+                            const barHeight = Math.max(8, Math.round((d.count / maxCount) * 100));
+                            return `
+                                <div class="dist-bar-col">
+                                    <div class="dist-bar-count">${d.count}</div>
+                                    <div class="dist-bar ${d.is_current_student_bucket ? 'current-bucket' : ''}" style="height:${barHeight}%;" title="Bucket ${d.bucket}: ${d.count} student(s)"></div>
+                                    <div class="dist-bar-label">${d.bucket}% ${d.is_current_student_bucket ? '<br><strong style="color:var(--accent);">YOU</strong>' : ''}</div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                    <table class="analytics-accessible-table" style="margin-top:16px;">
+                        <thead>
+                            <tr>
+                                <th>Performance Score Bucket</th>
+                                <th>Student Count</th>
+                                <th>Cohort Percentage</th>
+                                <th>Current Student Position</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${dist.map(d => `
+                                <tr class="${d.is_current_student_bucket ? 'current-student-row' : ''}">
+                                    <td><strong>${d.bucket}%</strong></td>
+                                    <td>${d.count} students</td>
+                                    <td>${cohortSize > 0 ? Math.round((d.count / cohortSize) * 100) : 0}%</td>
+                                    <td>${d.is_current_student_bucket ? '<span class="badge green">Current Student</span>' : '—'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        // ── 13. ACTIONABLE MENTOR ATTENTION & INSIGHTS ──
+        const insights = a.mentor_insights || [];
+        if (insights.length > 0) {
+            html += `
+                <div class="analytics-section-card">
+                    <div class="analytics-section-header">
+                        <h5 class="analytics-section-title"><i class="fas fa-bell" style="color:#f59e0b;"></i> Actionable Mentor Attention & Academic Insights</h5>
+                        <span style="font-size:0.72rem; color:var(--text-muted);">${insights.length} Actionable Observations</span>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:8px;">
+                        ${insights.map(ins => `
+                            <div class="insight-card insight-${ins.type}">
+                                <div style="font-size:1.1rem; flex-shrink:0;"><i class="fas ${ins.icon}"></i></div>
+                                <div>
+                                    <strong style="display:block; margin-bottom:2px;">${ins.title}</strong>
+                                    <span>${ins.message}</span>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        container.innerHTML = html;
     }
 
     // ── TIMELINE DETAILS LOADING ──
@@ -4354,12 +5187,17 @@ include 'includes/admin_nav.php';
         backdrop.dataset.streakDays = streakDays;
         backdrop.dataset.overallPerformance = overallPerformance;
 
-        titleEl.innerHTML = `<i class="fas fa-folder-open" style="color:var(--accent);"></i> Checklist Audit: ${planTitle}`;
+        titleEl.innerHTML = `<i class="fas fa-folder-open" style="color:var(--accent);"></i> Checklist Audit & Analytics: ${planTitle}`;
         subtitleEl.innerHTML = `Student: <strong>${currentSelectedStudentName}</strong> (${email ? email : studentId}) &nbsp;|&nbsp; Course: <strong>${currentSelectedStudentCourse}</strong>`;
 
+        const analyticsPane = document.getElementById('st-modal-analytics-pane');
+        if (analyticsPane) {
+            analyticsPane.innerHTML = `<div style="text-align:center; padding:3rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent);"></i><p>Loading comprehensive Learning Analytics Hub...</p></div>`;
+        }
         timelineListContainer.innerHTML = `<div style="text-align:center; padding:3rem;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; color:var(--accent);"></i><p>Loading chronological checklist timeline...</p></div>`;
 
         openTimelineModal();
+        switchTimelineModalTab('analytics');
 
         let url = `?action=get_student_plan_timeline&plan_id=${planId}`;
         if (studentId) {
@@ -4372,10 +5210,12 @@ include 'includes/admin_nav.php';
             .then(res => res.json())
             .then(data => {
                 if (data.error) {
+                    if (analyticsPane) analyticsPane.innerHTML = `<div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i> <span>${data.error}</span></div>`;
                     timelineListContainer.innerHTML = `<div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i> <span>${data.error}</span></div>`;
                     return;
                 }
                 if (!data.timeline) {
+                    if (analyticsPane) analyticsPane.innerHTML = `<div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i> <span>Invalid response structure from server.</span></div>`;
                     timelineListContainer.innerHTML = `<div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i> <span>Invalid response structure from server.</span></div>`;
                     return;
                 }
@@ -4395,7 +5235,16 @@ include 'includes/admin_nav.php';
                 const performanceText = data.analytics.performance_score !== null ? `${data.analytics.performance_score}%` : 'No assessment data';
                 const streakVal = data.analytics.active_streak;
 
-                // Update summary KPI counters
+                // Render Analytics Hub
+                renderLearningAnalyticsHub(data.analytics, {
+                    name: currentSelectedStudentName,
+                    user_id: currentSelectedStudentId,
+                    masked_email: currentSelectedStudentEmail,
+                    course: currentSelectedStudentCourse,
+                    academic_year: data.analytics.academic_year || '2026-27'
+                }, {}, planTitle);
+
+                // Update summary KPI counters in Dossier sidebar
                 document.getElementById('st-total-tasks-val').innerText = total;
                 document.getElementById('st-completed-tasks-val').innerText = completed;
                 document.getElementById('st-pending-tasks-val').innerText = pending;
@@ -4416,39 +5265,6 @@ include 'includes/admin_nav.php';
                 const lastLog = completedLogs.length > 0 ? completedLogs.sort((a,b) => new Date(b.completed_at) - new Date(a.completed_at))[0] : null;
                 const lastActiveText = lastLog ? lastLog.completed_at : 'Never';
                 document.getElementById('st-last-activity-date').innerText = lastActiveText;
-
-                // Calculate Topic syllabus progress breakdown
-                const topicsMap = {};
-                data.timeline.forEach(item => {
-                    const top = item.topic || item.subject || 'General Topic';
-                    if (!topicsMap[top]) {
-                        topicsMap[top] = { total: 0, completed: 0 };
-                    }
-                    topicsMap[top].total++;
-                    if (item.status === 'Completed') {
-                        topicsMap[top].completed++;
-                    }
-                });
-
-                let topHtml = '';
-                for (const [topName, stats] of Object.entries(topicsMap)) {
-                    const topPct = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
-                    topHtml += `
-                        <div>
-                            <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:4px;">
-                                <span style="font-weight:600; color:var(--text-main);">${topName}</span>
-                                <span style="color:var(--text-muted);">${stats.completed}/${stats.total} (${topPct}%)</span>
-                            </div>
-                            <div style="background:#e2e8f0; height:6px; border-radius:3px; overflow:hidden;">
-                                <div style="background:var(--primary-gradient); width:${topPct}%; height:100%;"></div>
-                            </div>
-                        </div>
-                    `;
-                }
-                const subBarsEl = document.getElementById('st-subject-progress-bars');
-                if (subBarsEl) {
-                    subBarsEl.innerHTML = topHtml || '<div style="font-size:0.8rem; color:var(--text-muted);">No topics found in syllabus outline.</div>';
-                }
 
                 // Initialize Topic Filter Select list
                 const subjectFilterSelect = document.getElementById('st-filter-subject');
