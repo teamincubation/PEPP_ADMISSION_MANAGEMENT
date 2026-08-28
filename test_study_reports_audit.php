@@ -433,6 +433,107 @@ $analytics18 = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, 'fathima@pepp
 assertTest("Test 18: Aggregated total tasks across course", 108, $analytics18['total_tasks']);
 
 
+echo "<h2>Executing Extended Data Integrity Tests (Identity, Cleared, Scores)</h2>\n";
+
+// --- TEST 19: Student identity priority and email-change scenario ---
+// Update student email to fathima_new@pepp.com
+$pdo->exec("UPDATE users SET email = 'fathima_new@pepp.com' WHERE user_id = 'PEPP20268771'");
+// Fetch plan analytics with old user_id or new email
+$analytics19_1 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'PEPP20268771', 1);
+$analytics19_2 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima_new@pepp.com', 1);
+assertTest("Test 19: Resolve by user_id after email change", 107, $analytics19_1['total_tasks']);
+assertTest("Test 19: Resolve by new email", 107, $analytics19_2['total_tasks']);
+
+// Restore email for subsequent tests
+$pdo->exec("UPDATE users SET email = 'fathima@pepp.com' WHERE user_id = 'PEPP20268771'");
+
+
+// --- TEST 20: Identity priority in assessment results (user_id match) ---
+// Insert assessment with student's user_id but a legacy mismatching email
+$pdo->exec("DELETE FROM assessment_results");
+$pdo->exec("DELETE FROM assessment_result_batches");
+$pdo->prepare("INSERT INTO assessment_result_batches (id, study_plan_id, status) VALUES (5, 1, 'published')")->execute();
+$pdo->prepare("
+    INSERT INTO assessment_results (batch_id, student_email, score, total_score, attendance_status, user_id)
+    VALUES (5, 'mismatch@pepp.com', 95.0, 100.0, 'attended', 'PEPP20268771')
+")->execute();
+
+$analytics20 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'PEPP20268771', 1);
+assertTest("Test 20: Matches assessment using user_id even if email mismatches", 95.0, (float)$analytics20['performance_score']);
+
+
+// --- TEST 21: Invalid assessment scores (NULL score, total_score = 0, negative score) ---
+$pdo->exec("DELETE FROM assessment_results");
+$pdo->exec("DELETE FROM assessment_result_batches");
+
+$pdo->prepare("INSERT INTO assessment_result_batches (id, study_plan_id, status) VALUES (6, 1, 'published')")->execute();
+// NULL score
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, score, total_score, attendance_status) VALUES (6, 'fathima@pepp.com', NULL, 100.0, 'attended')")->execute();
+
+// total_score = 0
+$pdo->prepare("INSERT INTO assessment_result_batches (id, study_plan_id, status) VALUES (7, 1, 'published')")->execute();
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, score, total_score, attendance_status) VALUES (7, 'fathima@pepp.com', 10.0, 0.0, 'attended')")->execute();
+
+// Negative score
+$pdo->prepare("INSERT INTO assessment_result_batches (id, study_plan_id, status) VALUES (8, 1, 'published')")->execute();
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, score, total_score, attendance_status) VALUES (8, 'fathima@pepp.com', -10.0, 100.0, 'attended')")->execute();
+
+// Valid score (90%)
+$pdo->prepare("INSERT INTO assessment_result_batches (id, study_plan_id, status) VALUES (9, 1, 'published')")->execute();
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, score, total_score, attendance_status) VALUES (9, 'fathima@pepp.com', 9.0, 10.0, 'attended')")->execute();
+
+$analytics21 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test 21: Performance average ignores NULL and total_score=0", 90.0, (float)$analytics21['performance_score']);
+
+
+// --- TEST 22: Cleared completions logic (completed -> cleared) ---
+$pdo->exec("DELETE FROM study_plan_analytics");
+// 1. Mark activity 1 completed
+$pdo->prepare("
+    INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status)
+    VALUES ('fathima@pepp.com', 1, 1, 'uid_1', 'complete_activity', 'completed')
+")->execute();
+// 2. Mark activity 1 cleared
+$pdo->prepare("
+    INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status)
+    VALUES ('fathima@pepp.com', 1, 1, 'uid_1', 'complete_activity', 'cleared')
+")->execute();
+
+$analytics22 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test 22: Cleared completions are NOT counted in completed count", 0, $analytics22['completed_tasks']);
+assertTest("Test 22: Cleared activity is pending", 107, $analytics22['pending_tasks']);
+
+
+// --- TEST 23: Study plan scoping validation ---
+// student has course: MA/MSc Psychology (Premium)
+// create a plan 3 assigned to BSc Psychology
+$pdo->prepare("
+    INSERT INTO study_plans (id, title, plan_type, status, start_date, end_date)
+    VALUES (3, 'BSc Plan', 'date_wise', 'published', '2026-08-01', '2026-08-31')
+")->execute();
+$pdo->prepare("
+    INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value)
+    VALUES (3, 'course', 'BSc Psychology')
+")->execute();
+
+$analytics23 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 3);
+// Should return empty analytics because BSc Plan is not assigned to Fathima Rinfa (she is in MA/MSc)
+assertTest("Test 23: Plan assignment validation (unauthorized plan returns empty analytics)", 0, $analytics23['total_tasks']);
+
+
+// --- TEST 24: Duplicate assessment records ---
+// Add two identical results for same batch
+$pdo->exec("DELETE FROM assessment_results");
+$pdo->exec("DELETE FROM assessment_result_batches");
+$pdo->prepare("INSERT INTO assessment_result_batches (id, study_plan_id, status) VALUES (10, 1, 'published')")->execute();
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, score, total_score, attendance_status) VALUES (10, 'fathima@pepp.com', 80.0, 100.0, 'attended')")->execute();
+$pdo->prepare("INSERT INTO assessment_results (batch_id, student_email, score, total_score, attendance_status) VALUES (10, 'fathima@pepp.com', 80.0, 100.0, 'attended')")->execute();
+
+$analytics24 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
+assertTest("Test 24: De-duplicate same-batch assessment attendance", 1, $analytics24['total_sessions']);
+assertTest("Test 24: De-duplicate same-batch performance", 80.0, (float)$analytics24['performance_score']);
+
+
 echo "<h2>Test Execution Summary</h2>\n";
 $percent = $total_tests > 0 ? round(($passed_tests / $total_tests) * 100) : 0;
 echo "<div style='font-size: 1.2rem; font-weight: bold; margin-top: 20px;'>";

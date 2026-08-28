@@ -530,7 +530,7 @@ if (isset($_GET['action'])) {
                     (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
                     OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
                 )
-                WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed'
+                WHERE an.student_email = ? AND an.study_plan_id = ? AND an.action_type = 'complete_activity' AND an.completion_status IN ('completed', 'cleared')
                 ORDER BY an.id ASC
             ");
             $stmt_logs->execute([$email, $plan_id]);
@@ -2136,11 +2136,13 @@ if (isset($_GET['action'])) {
             }
 
             foreach ($stds as $std) {
+                $c_analytics = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, $std['user_id'], $course_filter);
+
                 $stmt_plans = $pdo->prepare("
-                    SELECT DISTINCT sa.study_plan_id
+                    SELECT COUNT(DISTINCT sa.study_plan_id)
                     FROM study_plan_assignments sa
                     JOIN study_plans sp ON sa.study_plan_id = sp.id
-                    WHERE sp.status = 'published' AND (
+                    WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND (
                         sa.assignment_type = 'all' OR
                         (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
                         (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
@@ -2152,41 +2154,16 @@ if (isset($_GET['action'])) {
                     )
                 ");
                 $stmt_plans->execute([$std['pepp_course'], $std['academic_year'], $std['user_id'], $std['email']]);
-                $plan_ids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
-                $plans_count = count($plan_ids);
+                $plans_count = (int)$stmt_plans->fetchColumn();
 
-                $total_tasks = 0;
-                $completed = 0;
-                $last_active = null;
-
-                if ($plans_count > 0) {
-                    $in_clause = implode(',', array_fill(0, $plans_count, '?'));
-                    $stmt_tasks = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause) AND is_deleted = 0");
-                    $stmt_tasks->execute($plan_ids);
-                    $total_tasks = (int)$stmt_tasks->fetchColumn();
-
-                    if ($total_tasks > 0) {
-                        $stmt_comp = $pdo->prepare("
-                            SELECT COUNT(DISTINCT act.id), MAX(an.created_at)
-                            FROM study_plan_analytics an
-                            JOIN study_plan_activities act ON (
-                                (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
-                                OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
-                            )
-                            WHERE an.student_email = ? AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0 AND an.study_plan_id IN ($in_clause)
-                        ");
-                        $stmt_comp->execute(array_merge([$std['email']], $plan_ids));
-                        $res = $stmt_comp->fetch(PDO::FETCH_NUM);
-                        $completed = (int)($res[0] ?? 0);
-                        $last_active = $res[1] ?? null;
-                    }
-                }
-
-                $pct = $total_tasks > 0 ? round(($completed / $total_tasks) * 100) : 0;
-                $perf = get_performance_status($pct);
+                $total_tasks = $c_analytics['total_tasks'];
+                $completed = $c_analytics['completed_tasks'];
+                $pct = $c_analytics['completion_percentage'];
+                $perf_label = $c_analytics['performance_label'] ?: 'No assessment data';
+                $last_active = $c_analytics['last_activity'];
 
                 if ($search !== '' && stripos($std['name'], $search) === false && stripos($std['email'], $search) === false) continue;
-                if ($status !== '' && strcasecmp($perf['label'], $status) !== 0) continue;
+                if ($status !== '' && strcasecmp($perf_label, $status) !== 0) continue;
 
                 $export_list[] = [
                     'name' => $std['name'],
@@ -2194,7 +2171,7 @@ if (isset($_GET['action'])) {
                     'plans' => $plans_count,
                     'tasks' => $completed . ' / ' . $total_tasks,
                     'pct' => $pct . '%',
-                    'perf' => $perf['label'],
+                    'perf' => $perf_label,
                     'active' => $last_active ? date('d M Y h:i A', strtotime($last_active)) : 'Never'
                 ];
             }
