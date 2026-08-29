@@ -153,6 +153,63 @@ assert_equals("legacy session_id populated automatically", 'test-session-ref-123
 assert_equals("legacy target_type auto-detected", 'student', $row['target_type'] ?? null);
 assert_equals("legacy target_id auto-detected", 'PL-2026-99', $row['target_id'] ?? null);
 
+// 10. Test get_activity_type_where helper definitions
+if (!function_exists('get_activity_type_where')) {
+    function get_activity_type_where($f_type) {
+        switch ($f_type) {
+            case 'session':
+            case 'auth':
+                return "action_type IN ('login','logout','auto_logout','forced_logout','failed_login')";
+            case 'page_view':
+                return "action_type = 'page_view'";
+            case 'staff_mgmt':
+                return "(action_type IN ('staff_profile_update','staff_status_change','staff_admin_linked','staff_admin_unlinked','staff_created','staff_deleted') OR action_type LIKE 'staff_%')";
+            case 'admin_mgmt':
+                return "(action_type IN ('permissions_changed','admin_created','admin_deleted','admin_status_changed','password_reset','password_changed','admin_access_updated') OR action_type LIKE 'admin_%')";
+            case 'security':
+            case 'sensitive_data':
+                return "(action_type IN ('sensitive_data_reveal','sensitive_data_copy','password_reset','password_changed','data_export','activity_cleared','activity_deleted') OR action_type LIKE '%sensitive%' OR action_type LIKE '%security%')";
+            case 'student_action':
+                return "(action_type IN ('student_approved','student_rejected','student_updated','student_reverted','student_deleted') OR action_type LIKE 'student_%')";
+            case 'whatsapp':
+                return "action_type = 'whatsapp_message'";
+            case 'creates':
+                return "(action_type LIKE '%create%' OR action_type LIKE '%add%' OR action_type IN ('admin_created','staff_admin_linked'))";
+            case 'updates':
+                return "(action_type LIKE '%update%' OR action_type LIKE '%edit%' OR action_type LIKE '%change%' OR action_type IN ('permissions_changed','staff_status_change'))";
+            case 'deletes':
+                return "(action_type LIKE '%delete%' OR action_type LIKE '%clear%' OR action_type IN ('admin_deleted','activity_deleted','activity_cleared','staff_admin_unlinked'))";
+            case 'admin_event':
+                return "(action_type NOT IN ('login','logout','auto_logout','forced_logout','failed_login','page_view','heartbeat') AND is_heartbeat = 0)";
+            case 'heartbeat':
+                return "(action_type = 'heartbeat' OR is_heartbeat = 1)";
+            case 'all_activities':
+                return null;
+            case 'all_meaningful':
+            case '':
+            default:
+                return "(action_type != 'heartbeat' AND is_heartbeat = 0)";
+        }
+    }
+}
+
+assert_equals("default filter excludes heartbeat", "(action_type != 'heartbeat' AND is_heartbeat = 0)", get_activity_type_where(''));
+assert_equals("all_meaningful filter excludes heartbeat", "(action_type != 'heartbeat' AND is_heartbeat = 0)", get_activity_type_where('all_meaningful'));
+assert_equals("heartbeat filter targets heartbeat", "(action_type = 'heartbeat' OR is_heartbeat = 1)", get_activity_type_where('heartbeat'));
+assert_equals("page_view filter targets page_view", "action_type = 'page_view'", get_activity_type_where('page_view'));
+assert_equals("all_activities returns null (unfiltered)", null, get_activity_type_where('all_activities'));
+
+// 11. Test audit timeline query filtering
+$total_in_db = (int)$pdo->query("SELECT COUNT(*) FROM admin_activity_log")->fetchColumn();
+$meaningful_cond = get_activity_type_where('');
+$meaningful_count = (int)$pdo->query("SELECT COUNT(*) FROM admin_activity_log WHERE $meaningful_cond")->fetchColumn();
+$heartbeat_cond = get_activity_type_where('heartbeat');
+$heartbeat_count = (int)$pdo->query("SELECT COUNT(*) FROM admin_activity_log WHERE $heartbeat_cond")->fetchColumn();
+
+assert_equals("Database contains both heartbeats and meaningful events", $meaningful_count + $heartbeat_count, $total_in_db);
+assert_equals("Default audit query excludes exactly heartbeat records", 2, $heartbeat_count);
+assert_equals("Meaningful audit actions remain visible in timeline", true, $meaningful_count > 0);
+
 echo "\n=== Regression Test Results ===\n";
 echo "Total Assertions: $total_assertions\n";
 echo "Failed Assertions: $failed_assertions\n";

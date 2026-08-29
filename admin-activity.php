@@ -37,6 +37,47 @@ function table_exists($pdo, $t) {
 }
 
 /**
+ * Returns the SQL WHERE condition for filtering admin_activity_log by activity type.
+ * By default (empty filter or 'all_meaningful'), heartbeat telemetry records are excluded from the main audit timeline.
+ */
+function get_activity_type_where($f_type) {
+    switch ($f_type) {
+        case 'session':
+        case 'auth':
+            return "action_type IN ('login','logout','auto_logout','forced_logout','failed_login')";
+        case 'page_view':
+            return "action_type = 'page_view'";
+        case 'staff_mgmt':
+            return "(action_type IN ('staff_profile_update','staff_status_change','staff_admin_linked','staff_admin_unlinked','staff_created','staff_deleted') OR action_type LIKE 'staff_%')";
+        case 'admin_mgmt':
+            return "(action_type IN ('permissions_changed','admin_created','admin_deleted','admin_status_changed','password_reset','password_changed','admin_access_updated') OR action_type LIKE 'admin_%')";
+        case 'security':
+        case 'sensitive_data':
+            return "(action_type IN ('sensitive_data_reveal','sensitive_data_copy','password_reset','password_changed','data_export','activity_cleared','activity_deleted') OR action_type LIKE '%sensitive%' OR action_type LIKE '%security%')";
+        case 'student_action':
+            return "(action_type IN ('student_approved','student_rejected','student_updated','student_reverted','student_deleted') OR action_type LIKE 'student_%')";
+        case 'whatsapp':
+            return "action_type = 'whatsapp_message'";
+        case 'creates':
+            return "(action_type LIKE '%create%' OR action_type LIKE '%add%' OR action_type IN ('admin_created','staff_admin_linked'))";
+        case 'updates':
+            return "(action_type LIKE '%update%' OR action_type LIKE '%edit%' OR action_type LIKE '%change%' OR action_type IN ('permissions_changed','staff_status_change'))";
+        case 'deletes':
+            return "(action_type LIKE '%delete%' OR action_type LIKE '%clear%' OR action_type IN ('admin_deleted','activity_deleted','activity_cleared','staff_admin_unlinked'))";
+        case 'admin_event':
+            return "(action_type NOT IN ('login','logout','auto_logout','forced_logout','failed_login','page_view','heartbeat') AND is_heartbeat = 0)";
+        case 'heartbeat':
+            return "(action_type = 'heartbeat' OR is_heartbeat = 1)";
+        case 'all_activities':
+            return null; // include all records without filtering
+        case 'all_meaningful':
+        case '':
+        default:
+            return "(action_type != 'heartbeat' AND is_heartbeat = 0)";
+    }
+}
+
+/**
  * Collect activity rows from all three sources, merged & sorted in PHP.
  */
 function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_session, $f_module, $f_page, $f_idle, $limit = 5000) {
@@ -49,14 +90,9 @@ function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_sess
         try {
             $w = ['1=1']; $p = [];
 
-            if ($f_type === 'session') {
-                $w[] = "action_type IN ('login','logout','auto_logout','forced_logout')";
-            } elseif ($f_type === 'page_view') {
-                $w[] = "action_type = 'page_view'";
-            } elseif ($f_type === 'heartbeat') {
-                $w[] = "action_type = 'heartbeat'";
-            } elseif ($f_type === 'admin_event') {
-                $w[] = "action_type NOT IN ('login','logout','auto_logout','forced_logout','page_view','heartbeat')";
+            $type_cond = get_activity_type_where($f_type);
+            if ($type_cond !== null) {
+                $w[] = $type_cond;
             }
 
             if ($f_admin !== '') { $w[] = "admin_username = ?"; $p[] = $f_admin; }
@@ -109,7 +145,7 @@ function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_sess
     }
 
     // 2. Query track_records (student actions)
-    $include_track = ($f_session === '' && $f_idle !== 1 && ($f_type === '' || $f_type === 'student_action') && ($f_module === '' || $f_module === 'Students'));
+    $include_track = ($f_session === '' && $f_idle !== 1 && in_array($f_type, ['', 'all_meaningful', 'student_action', 'creates', 'updates', 'deletes', 'all_activities'], true) && ($f_module === '' || $f_module === 'Students'));
     if ($include_track && table_exists($pdo, 'track_records')) {
         try {
             $w = ['1=1']; $p = [];
@@ -158,7 +194,7 @@ function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_sess
     }
 
     // 3. Query whatsapp_notifications
-    $include_wa = ($f_session === '' && $f_idle !== 1 && ($f_type === '' || $f_type === 'whatsapp') && ($f_module === '' || $f_module === 'Communication'));
+    $include_wa = ($f_session === '' && $f_idle !== 1 && in_array($f_type, ['', 'all_meaningful', 'whatsapp', 'all_activities'], true) && ($f_module === '' || $f_module === 'Communication'));
     if ($include_wa && table_exists($pdo, 'whatsapp_notifications')) {
         try {
             $w = ['1=1']; $p = [];
@@ -220,14 +256,9 @@ function get_session_headers($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_s
     // 1. Query admin_activity_log
     if (table_exists($pdo, 'admin_activity_log')) {
         $w = ['1=1']; $p = [];
-        if ($f_type === 'session') {
-            $w[] = "action_type IN ('login','logout','auto_logout','forced_logout')";
-        } elseif ($f_type === 'page_view') {
-            $w[] = "action_type = 'page_view'";
-        } elseif ($f_type === 'heartbeat') {
-            $w[] = "action_type = 'heartbeat'";
-        } elseif ($f_type === 'admin_event') {
-            $w[] = "action_type NOT IN ('login','logout','auto_logout','forced_logout','page_view','heartbeat')";
+        $type_cond = get_activity_type_where($f_type);
+        if ($type_cond !== null) {
+            $w[] = $type_cond;
         }
         if ($f_admin !== '') { $w[] = "admin_username = ?"; $p[] = $f_admin; }
         if ($f_session !== '') { $w[] = "session_id = ?"; $p[] = $f_session; }
@@ -268,7 +299,7 @@ function get_session_headers($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_s
     }
 
     // 2. Query track_records
-    $include_track = ($f_session === '' && $f_idle !== 1 && ($f_type === '' || $f_type === 'student_action') && ($f_module === '' || $f_module === 'Students'));
+    $include_track = ($f_session === '' && $f_idle !== 1 && in_array($f_type, ['', 'all_meaningful', 'student_action', 'creates', 'updates', 'deletes', 'all_activities'], true) && ($f_module === '' || $f_module === 'Students'));
     if ($include_track && table_exists($pdo, 'track_records')) {
         $w = ['1=1']; $p = [];
         if ($f_admin !== '') { $w[] = "performed_by = ?"; $p[] = $f_admin; }
@@ -307,7 +338,7 @@ function get_session_headers($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_s
     }
 
     // 3. Query whatsapp_notifications
-    $include_wa = ($f_session === '' && $f_idle !== 1 && ($f_type === '' || $f_type === 'whatsapp') && ($f_module === '' || $f_module === 'Communication'));
+    $include_wa = ($f_session === '' && $f_idle !== 1 && in_array($f_type, ['', 'all_meaningful', 'whatsapp', 'all_activities'], true) && ($f_module === '' || $f_module === 'Communication'));
     if ($include_wa && table_exists($pdo, 'whatsapp_notifications')) {
         $w = ['1=1']; $p = [];
         if ($f_admin !== '') { $w[] = "sent_by = ?"; $p[] = $f_admin; }
@@ -363,14 +394,9 @@ function fetch_session_activities($pdo, $sids, $f_admin, $f_type, $f_from, $f_to
     // 1. From admin_activity_log
     if (table_exists($pdo, 'admin_activity_log')) {
         $w = ['1=1']; $p = [];
-        if ($f_type === 'session') {
-            $w[] = "action_type IN ('login','logout','auto_logout','forced_logout')";
-        } elseif ($f_type === 'page_view') {
-            $w[] = "action_type = 'page_view'";
-        } elseif ($f_type === 'heartbeat') {
-            $w[] = "action_type = 'heartbeat'";
-        } elseif ($f_type === 'admin_event') {
-            $w[] = "action_type NOT IN ('login','logout','auto_logout','forced_logout','page_view','heartbeat')";
+        $type_cond = get_activity_type_where($f_type);
+        if ($type_cond !== null) {
+            $w[] = $type_cond;
         }
         if ($f_admin !== '') { $w[] = "admin_username = ?"; $p[] = $f_admin; }
         if ($f_module !== '') { $w[] = "module = ?"; $p[] = $f_module; }
@@ -433,7 +459,7 @@ function fetch_session_activities($pdo, $sids, $f_admin, $f_type, $f_from, $f_to
 
     // 2. From track_records
     if ($has_legacy) {
-        $include_track = ($f_idle !== 1 && ($f_type === '' || $f_type === 'student_action') && ($f_module === '' || $f_module === 'Students'));
+        $include_track = ($f_idle !== 1 && in_array($f_type, ['', 'all_meaningful', 'student_action', 'creates', 'updates', 'deletes', 'all_activities'], true) && ($f_module === '' || $f_module === 'Students'));
         if ($include_track && table_exists($pdo, 'track_records')) {
             $w = ['1=1']; $p = [];
             if ($f_admin !== '') { $w[] = "performed_by = ?"; $p[] = $f_admin; }
@@ -480,7 +506,7 @@ function fetch_session_activities($pdo, $sids, $f_admin, $f_type, $f_from, $f_to
         }
 
         // 3. From whatsapp_notifications
-        $include_wa = ($f_idle !== 1 && ($f_type === '' || $f_type === 'whatsapp') && ($f_module === '' || $f_module === 'Communication'));
+        $include_wa = ($f_idle !== 1 && in_array($f_type, ['', 'all_meaningful', 'whatsapp', 'all_activities'], true) && ($f_module === '' || $f_module === 'Communication'));
         if ($include_wa && table_exists($pdo, 'whatsapp_notifications')) {
             $w = ['1=1']; $p = [];
             if ($f_admin !== '') { $w[] = "sent_by = ?"; $p[] = $f_admin; }
@@ -676,7 +702,7 @@ try {
     }
 
     if (table_exists($pdo, 'admin_activity_log')) {
-        $stmt = $pdo->query("SELECT COUNT(*) FROM admin_activity_log WHERE $cur_date_cond");
+        $stmt = $pdo->query("SELECT COUNT(*) FROM admin_activity_log WHERE $cur_date_cond AND (action_type != 'heartbeat' AND is_heartbeat = 0)");
         $today_activities = (int)$stmt->fetchColumn();
 
         $stmt = $pdo->query("SELECT COUNT(*) FROM admin_activity_log WHERE is_heartbeat = 1 AND is_idle = 0 AND $cur_date_cond");
@@ -773,7 +799,7 @@ try {
     sort($admin_list);
 } catch (Exception $e) { error_log('activity admin list: ' . $e->getMessage()); }
 
-$has_filter = ($f_admin || $f_type || $f_from || $f_to || $f_q || $f_session || $f_module || $f_page || $f_idle !== '');
+$has_filter = ($f_admin || ($f_type !== '' && $f_type !== 'all_meaningful') || $f_from || $f_to || $f_q || $f_session || $f_module || $f_page || $f_idle !== '');
 
 function aqs($overrides = []) {
     $q = array_merge($_GET, $overrides);
@@ -785,9 +811,13 @@ function act_badge($act) {
     if ($act === 'login') return ['green', 'fa-right-to-bracket', 'Login'];
     if ($act === 'logout') return ['gray', 'fa-right-from-bracket', 'Logout'];
     if (in_array($act, ['auto_logout', 'forced_logout'], true)) return ['amber', 'fa-clock', $act === 'auto_logout' ? 'Auto-logout' : 'Forced logout'];
+    if ($act === 'failed_login') return ['red', 'fa-triangle-exclamation', 'Failed Login'];
     if ($act === 'whatsapp_message') return ['teal', 'fa-comment', 'WhatsApp'];
     if ($act === 'page_view') return ['blue', 'fa-eye', 'Page View'];
     if ($act === 'heartbeat') return ['sky', 'fa-pulse fa-heartbeat', 'Heartbeat'];
+    if (in_array($act, ['sensitive_data_reveal', 'sensitive_data_copy'], true)) return ['amber', 'fa-shield-halved', ucwords(str_replace('_', ' ', $act))];
+    if (strpos($act, 'staff_') === 0) return ['indigo', 'fa-id-badge', ucwords(str_replace('_', ' ', $act))];
+    if (strpos($act, 'student_') === 0) return ['emerald', 'fa-user-graduate', ucwords(str_replace('_', ' ', $act))];
     if (strpos($act, 'admin_') === 0 || strpos($act, 'lead_') === 0 || strpos($act, 'invoice') === 0 ||
         in_array($act, ['permissions_changed', 'password_reset', 'password_changed', 'data_export', 'activity_deleted', 'activity_cleared', 'student_reverted'], true))
         return ['violet', 'fa-user-shield', ucwords(str_replace('_', ' ', $act))];
@@ -917,16 +947,23 @@ include 'includes/admin_nav.php';
                     <?php endforeach; ?>
                 </select>
             </div>
-            <div class="field" style="flex:1; min-width:150px;">
-                <label>Type / Action</label>
+            <div class="field" style="flex:1; min-width:160px;">
+                <label>Event Type / Category</label>
                 <select name="type">
-                    <option value="">All actions</option>
-                    <option value="session"        <?php echo $f_type === 'session' ? 'selected' : ''; ?>>Logins / Logouts</option>
-                    <option value="page_view"      <?php echo $f_type === 'page_view' ? 'selected' : ''; ?>>Page Views</option>
-                    <option value="heartbeat"      <?php echo $f_type === 'heartbeat' ? 'selected' : ''; ?>>Heartbeats</option>
-                    <option value="student_action" <?php echo $f_type === 'student_action' ? 'selected' : ''; ?>>Student actions</option>
-                    <option value="whatsapp"       <?php echo $f_type === 'whatsapp' ? 'selected' : ''; ?>>WhatsApp messages</option>
-                    <option value="admin_event"    <?php echo $f_type === 'admin_event' ? 'selected' : ''; ?>>System events</option>
+                    <option value="">All Meaningful Activity (Default)</option>
+                    <option value="page_view"      <?php echo $f_type === 'page_view' ? 'selected' : ''; ?>>Page Visits</option>
+                    <option value="staff_mgmt"     <?php echo $f_type === 'staff_mgmt' ? 'selected' : ''; ?>>Staff Management</option>
+                    <option value="admin_mgmt"     <?php echo $f_type === 'admin_mgmt' ? 'selected' : ''; ?>>Admin Management</option>
+                    <option value="security"       <?php echo $f_type === 'security' ? 'selected' : ''; ?>>Security &amp; Sensitive Access</option>
+                    <option value="student_action" <?php echo $f_type === 'student_action' ? 'selected' : ''; ?>>Student Actions</option>
+                    <option value="whatsapp"       <?php echo $f_type === 'whatsapp' ? 'selected' : ''; ?>>WhatsApp Messages</option>
+                    <option value="session"        <?php echo $f_type === 'session' ? 'selected' : ''; ?>>Logins &amp; Sessions</option>
+                    <option value="creates"        <?php echo $f_type === 'creates' ? 'selected' : ''; ?>>Create / Add Events</option>
+                    <option value="updates"        <?php echo $f_type === 'updates' ? 'selected' : ''; ?>>Update / Edit Events</option>
+                    <option value="deletes"        <?php echo $f_type === 'deletes' ? 'selected' : ''; ?>>Delete / Clear Events</option>
+                    <option value="admin_event"    <?php echo $f_type === 'admin_event' ? 'selected' : ''; ?>>System Events</option>
+                    <option value="heartbeat"      <?php echo $f_type === 'heartbeat' ? 'selected' : ''; ?>>Heartbeats &amp; Telemetry</option>
+                    <option value="all_activities" <?php echo $f_type === 'all_activities' ? 'selected' : ''; ?>>All Raw Records (incl. Heartbeats)</option>
                 </select>
             </div>
             <div class="field" style="flex:1; min-width:150px;">

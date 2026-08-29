@@ -416,6 +416,55 @@ run_test('Mentor report eligibility query successfully joins employees table for
     assert_true($found_photo, 'Linked mentor admin found in report cohort with staff photo');
 });
 
+run_test('resolve_staff_photo_url helper correctly resolves relative paths, external URLs and rejects traversals/non-images', function() {
+    if (!function_exists('resolve_staff_photo_url')) {
+        function resolve_staff_photo_url(?string $photo): string {
+            if (!$photo || trim($photo) === '') return '';
+            $photo = trim($photo);
+            if (preg_match('#^https?://#i', $photo) || strpos($photo, 'data:image/') === 0) {
+                if (strpos($photo, 'data:image/') === 0 || preg_match('/\.(jpe?g|png|gif|webp|bmp|svg)(\?.*)?$/i', $photo)) {
+                    return $photo;
+                }
+                return '';
+            }
+            if (!preg_match('/\.(jpe?g|png|gif|webp|bmp|svg)$/i', $photo)) {
+                return '';
+            }
+            if (strpos($photo, '../..') !== false || strpos($photo, '..\\..') !== false) {
+                return '';
+            }
+            $clean = preg_replace('#^[./\\\\]+#', '', $photo);
+            $clean = ltrim($clean, '/\\');
+            if (strpos($clean, 'photos/') === 0) {
+                $clean = 'uploads/' . $clean;
+            }
+            if (strpos($clean, 'uploads/') === 0) {
+                return '../' . $clean;
+            }
+            return '../uploads/photos/' . basename($clean);
+        }
+    }
+
+    // Canonical relative paths
+    assert_equals('../uploads/photos/emp_test.jpg', resolve_staff_photo_url('uploads/photos/emp_test.jpg'), 'Canonical uploads/photos/ path');
+    assert_equals('../uploads/photos/mentor1.png', resolve_staff_photo_url('photos/mentor1.png'), 'Legacy photos/ prefix normalized');
+    assert_equals('../uploads/photos/avatar.webp', resolve_staff_photo_url('avatar.webp'), 'Filename only normalized to ../uploads/photos/');
+
+    // External and Data URIs
+    assert_equals('https://cdn.example.com/photos/user.jpg', resolve_staff_photo_url('https://cdn.example.com/photos/user.jpg'), 'HTTPS URL preserved');
+    $data_uri = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    assert_equals($data_uri, resolve_staff_photo_url($data_uri), 'Data URI preserved');
+
+    // Security & Non-Image Rejections
+    assert_equals('', resolve_staff_photo_url('../../etc/passwd'), 'Directory traversal rejected');
+    assert_equals('', resolve_staff_photo_url('..\\..\\windows\\system32'), 'Windows traversal rejected');
+    assert_equals('', resolve_staff_photo_url('script.php'), 'PHP file extension rejected');
+    assert_equals('', resolve_staff_photo_url('resume.pdf'), 'PDF file extension rejected');
+    assert_equals('', resolve_staff_photo_url('archive.zip'), 'ZIP file extension rejected');
+    assert_equals('', resolve_staff_photo_url(''), 'Empty string returns empty');
+    assert_equals('', resolve_staff_photo_url(null), 'Null returns empty');
+});
+
 // ======================================================================
 // SECTION 6: Audit Activity Logging Compliance
 // ======================================================================

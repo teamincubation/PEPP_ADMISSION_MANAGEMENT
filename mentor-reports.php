@@ -57,6 +57,46 @@ function parse_user_agent_summary(?string $ua): string {
     return "{$browser} on {$os}";
 }
 
+// ── Helper: Resolve Staff Photo URL safely ───────────────────────────
+if (!function_exists('resolve_staff_photo_url')) {
+    function resolve_staff_photo_url(?string $photo): string {
+        if (!$photo || trim($photo) === '') return '';
+        $photo = trim($photo);
+
+        // 1. External absolute URLs or Data URIs
+        if (preg_match('#^https?://#i', $photo) || strpos($photo, 'data:image/') === 0) {
+            if (strpos($photo, 'data:image/') === 0 || preg_match('/\.(jpe?g|png|gif|webp|bmp|svg)(\?.*)?$/i', $photo)) {
+                return $photo;
+            }
+            return '';
+        }
+
+        // 2. Reject non-image extensions
+        if (!preg_match('/\.(jpe?g|png|gif|webp|bmp|svg)$/i', $photo)) {
+            return '';
+        }
+
+        // 3. Security: Block directory traversal
+        if (strpos($photo, '../..') !== false || strpos($photo, '..\\..') !== false) {
+            return '';
+        }
+
+        // 4. Normalize path
+        $clean = preg_replace('#^[./\\\\]+#', '', $photo);
+        $clean = ltrim($clean, '/\\');
+
+        if (strpos($clean, 'photos/') === 0) {
+            $clean = 'uploads/' . $clean;
+        }
+
+        if (strpos($clean, 'uploads/') === 0) {
+            return '../' . $clean;
+        }
+
+        return '../uploads/photos/' . basename($clean);
+    }
+}
+
 // ── 1. Fetch Authoritative Active Mentors ──────────────────────────────
 // Only admins with actual mentoring assignments, activity, or mentoring permissions
 $stmt_mentors = $pdo->query("
@@ -1541,12 +1581,11 @@ include __DIR__ . '/includes/admin_nav.php';
         <!-- ── 2. Mentor Profile Header Card ────────────────────────────── -->
         <div class="mentor-hero-card">
             <?php
-            $m_raw_photo = $selected_mentor['staff_photo'] ?? '';
-            $m_photo_valid = (!empty($m_raw_photo) && strpos($m_raw_photo, '..') === false && file_exists(__DIR__ . '/' . $m_raw_photo));
+            $m_photo_url = resolve_staff_photo_url($selected_mentor['staff_photo'] ?? '');
             ?>
             <div class="mentor-avatar-badge">
-                <div class="mentor-avatar" style="<?= $m_photo_valid ? 'background-image:url(' . htmlspecialchars($m_raw_photo, ENT_QUOTES, 'UTF-8') . '); background-size:cover; background-position:center; color:transparent;' : '' ?>">
-                    <?php if (!$m_photo_valid): ?>
+                <div class="mentor-avatar" style="<?= $m_photo_url ? 'background-image:url(' . htmlspecialchars($m_photo_url, ENT_QUOTES, 'UTF-8') . '); background-size:cover; background-position:center; color:transparent;' : '' ?>">
+                    <?php if (!$m_photo_url): ?>
                         <?= strtoupper(substr($selected_mentor['full_name'] ?: $selected_mentor['username'], 0, 1)) ?>
                     <?php endif; ?>
                 </div>
@@ -1767,12 +1806,11 @@ include __DIR__ . '/includes/admin_nav.php';
                                 </td>
                                 <td>
                                     <?php
-                                    $r_raw_photo = $rnk['staff_photo'] ?? '';
-                                    $r_photo_valid = (!empty($r_raw_photo) && strpos($r_raw_photo, '..') === false && file_exists(__DIR__ . '/' . $r_raw_photo));
+                                    $r_photo_url = resolve_staff_photo_url($rnk['staff_photo'] ?? '');
                                     ?>
                                     <div style="display:flex; align-items:center; gap:10px;">
-                                        <div style="width:34px; height:34px; border-radius:50%; background:<?= $r_photo_valid ? 'url(' . htmlspecialchars($r_raw_photo, ENT_QUOTES, 'UTF-8') . ') center/cover no-repeat' : 'linear-gradient(135deg, var(--pepp-orange), var(--pepp-orange-dark))' ?>; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.85rem; flex-shrink:0; border:1.5px solid #fff; box-shadow:0 2px 5px rgba(0,0,0,0.1);">
-                                            <?= $r_photo_valid ? '' : strtoupper(substr($rnk['full_name'] ?: $rnk['username'], 0, 1)) ?>
+                                        <div style="width:34px; height:34px; border-radius:50%; background:<?= $r_photo_url ? 'url(' . htmlspecialchars($r_photo_url, ENT_QUOTES, 'UTF-8') . ') center/cover no-repeat' : 'linear-gradient(135deg, var(--pepp-orange), var(--pepp-orange-dark))' ?>; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.85rem; flex-shrink:0; border:1.5px solid #fff; box-shadow:0 2px 5px rgba(0,0,0,0.1);">
+                                            <?= $r_photo_url ? '' : strtoupper(substr($rnk['full_name'] ?: $rnk['username'], 0, 1)) ?>
                                         </div>
                                         <div>
                                             <a href="?mentor_id=<?= (int)$rnk['id'] ?>&range=<?= urlencode($range_param) ?>" style="color:var(--text-dark); text-decoration:none; font-weight:700;">
