@@ -1463,10 +1463,24 @@ assertTest("Test AX: Raw email is not included in student_profile", false, isset
 assertTest("Test AX: PDF report isolates Learning Analytics Hub without raw checklist dossier rows", true, strpos($reports_file_content, 'printStudentLearningAnalyticsReport') !== false);
 
 
-// --- TEST AY: Learning Performance Highlights Data Architecture ---
-// Set activity types for test plan 1
-$pdo->exec("UPDATE study_plan_activities SET activity_type = 'Live Session', activity_title = 'Live Psychology Workshop' WHERE study_plan_id = 1 AND id = 1");
-$pdo->exec("UPDATE study_plan_activities SET activity_type = 'Mega Test', activity_title = 'Cognitive Mega Test 2026' WHERE study_plan_id = 1 AND id = 2");
+// --- TEST AY: Learning Performance Highlights Data Architecture & Strict Activity Filtering ---
+// Configure activities on plan 1 to test whitelist vs blacklist:
+// 1. Whitelisted: Watch Live Sessions with topic 'Question Paper Discussion'
+$pdo->exec("UPDATE study_plan_activities SET activity_type = 'Watch Live Sessions', topic = 'Question Paper Discussion', activity_title = 'Live Session' WHERE study_plan_id = 1 AND id = 1");
+// 2. Whitelisted: Attend Mega Test with topic 'IHBAS 2025'
+$pdo->exec("UPDATE study_plan_activities SET activity_type = 'Attend Mega Test', topic = 'IHBAS 2025', activity_title = 'Mega Test' WHERE study_plan_id = 1 AND id = 2");
+// 3. Blacklisted: Recorded Session (topic with 'Live')
+$pdo->exec("UPDATE study_plan_activities SET activity_type = 'Recorded Session', topic = 'Live Session Replay', activity_title = 'Recorded Session' WHERE study_plan_id = 1 AND id = 3");
+// 4. Blacklisted: Study Material
+$pdo->exec("UPDATE study_plan_activities SET activity_type = 'Study Material', topic = 'Neuroscience Handout', activity_title = 'Study Material' WHERE study_plan_id = 1 AND id = 4");
+// 5. Blacklisted: Read Material
+$pdo->exec("UPDATE study_plan_activities SET activity_type = 'Read Material', topic = 'Cognitive Chapter 1', activity_title = 'Read Chapter' WHERE study_plan_id = 1 AND id = 5");
+// 6. Blacklisted: Assignment
+$pdo->exec("UPDATE study_plan_activities SET activity_type = 'Assignment', topic = 'Case Study Analysis', activity_title = 'Assignment 1' WHERE study_plan_id = 1 AND id = 6");
+// 7. Blacklisted: Assessment (generic)
+$pdo->exec("UPDATE study_plan_activities SET activity_type = 'Assessment', topic = 'Weekly Quiz 1', activity_title = 'Assessment' WHERE study_plan_id = 1 AND id = 7");
+// 8. Blacklisted: Practice
+$pdo->exec("UPDATE study_plan_activities SET activity_type = 'Practice', topic = 'Memory Drills', activity_title = 'Practice Test' WHERE study_plan_id = 1 AND id = 8");
 
 $analytics_plan1 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'fathima@pepp.com', 1);
 assertTest("Test AY: learning_highlights exists in analytics payload", true, isset($analytics_plan1['learning_highlights']));
@@ -1474,20 +1488,32 @@ assertTest("Test AY: strongest_activities array exists", true, isset($analytics_
 assertTest("Test AY: needs_attention_activities array exists", true, isset($analytics_plan1['needs_attention_activities']) && is_array($analytics_plan1['needs_attention_activities']));
 assertTest("Test AY: all_activities array exists in learning_highlights", true, isset($analytics_plan1['learning_highlights']['all_activities']));
 
-// Check activity categorization
 $all_acts = $analytics_plan1['learning_highlights']['all_activities'];
-$has_live_session = false;
-$has_assessment = false;
-foreach ($all_acts as $act_item) {
-    if ($act_item['type_label'] === 'LIVE SESSION' || $act_item['type_category'] === 'live_session') {
-        $has_live_session = true;
-    }
-    if ($act_item['type_label'] === 'MEGA TEST' || $act_item['type_label'] === 'ASSESSMENT' || $act_item['type_category'] === 'assessment' || $act_item['type_category'] === 'mega_test') {
-        $has_assessment = true;
-    }
+assertTest("Test AY: Only whitelisted activity types enter learning_highlights (count is 2)", 2, count($all_acts));
+
+$act_types_present = array_map(function($a) { return $a['activity_type']; }, $all_acts);
+assertTest("Test AY: Watch Live Sessions is included", true, in_array('Watch Live Sessions', $act_types_present));
+assertTest("Test AY: Attend Mega Test is included", true, in_array('Attend Mega Test', $act_types_present));
+assertTest("Test AY: Recorded Session is excluded", false, in_array('Recorded Session', $act_types_present));
+assertTest("Test AY: Study Material is excluded", false, in_array('Study Material', $act_types_present));
+assertTest("Test AY: Read Material is excluded", false, in_array('Read Material', $act_types_present));
+assertTest("Test AY: Assignment is excluded", false, in_array('Assignment', $act_types_present));
+assertTest("Test AY: Assessment (generic) is excluded", false, in_array('Assessment', $act_types_present));
+assertTest("Test AY: Practice is excluded", false, in_array('Practice', $act_types_present));
+
+// Verify Labels and Topic Preservation
+$live_act = null;
+$mega_act = null;
+foreach ($all_acts as $a_item) {
+    if ($a_item['type_category'] === 'live_session') $live_act = $a_item;
+    if ($a_item['type_category'] === 'mega_test') $mega_act = $a_item;
 }
-assertTest("Test AY: Live session activity type categorized correctly", true, $has_live_session);
-assertTest("Test AY: Assessment / Mega test activity type categorized correctly", true, $has_assessment);
+
+assertTest("Test AY: Live session label is 'LIVE'", 'LIVE', $live_act['type_label'] ?? '');
+assertTest("Test AY: Live session title preserves Topic ('Question Paper Discussion')", 'Question Paper Discussion', $live_act['activity_title'] ?? '');
+
+assertTest("Test AY: Mega test label is 'MEGA TEST'", 'MEGA TEST', $mega_act['type_label'] ?? '');
+assertTest("Test AY: Mega test title preserves Topic ('IHBAS 2025')", 'IHBAS 2025', $mega_act['activity_title'] ?? '');
 
 // Check that no-data assessments are NOT falsely put in needs_attention_activities
 $needs_att = $analytics_plan1['needs_attention_activities'];

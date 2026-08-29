@@ -510,27 +510,52 @@ class StudentStudyPlanAnalytics {
         $all_highlights = [];
         foreach ($activities as $act) {
             $act_id = (int)$act['id'];
-            $title = trim($act['activity_title'] ?? ('Activity #' . $act_id));
-            $raw_type = trim($act['activity_type'] ?? '');
-            $type_lower = strtolower($raw_type . ' ' . $title);
+            $raw_type = trim((string)($act['activity_type'] ?? ''));
+            $raw_type_lower = strtolower($raw_type);
+
+            // Canonical Activity Whitelist: ONLY Live Sessions & Mega Tests
+            $is_live = in_array($raw_type_lower, ['watch live sessions', 'watch live session', 'live session', 'live sessions'], true);
+            $is_mega_test = in_array($raw_type_lower, ['attend mega test', 'mega test', 'mega tests'], true);
+
+            if (!$is_live && !$is_mega_test) {
+                // Strictly exclude Recorded Session, Study Material, Read Material, Assignment, generic Assessment, etc.
+                continue;
+            }
 
             // Determine Activity Type label and category
-            if (strpos($type_lower, 'mega') !== false) {
+            if ($is_mega_test) {
                 $type_label = 'MEGA TEST';
                 $type_category = 'mega_test';
                 $type_badge_class = 'purple';
-            } elseif (strpos($type_lower, 'test') !== false || strpos($type_lower, 'assessment') !== false || strpos($type_lower, 'exam') !== false || strpos($type_lower, 'quiz') !== false || strpos($type_lower, 'mock') !== false) {
-                $type_label = 'ASSESSMENT';
-                $type_category = 'assessment';
-                $type_badge_class = 'blue';
-            } elseif (strpos($type_lower, 'live') !== false || strpos($type_lower, 'session') !== false || strpos($type_lower, 'class') !== false || strpos($type_lower, 'lecture') !== false || strpos($type_lower, 'webinar') !== false) {
-                $type_label = 'LIVE SESSION';
+            } else {
+                $type_label = 'LIVE';
                 $type_category = 'live_session';
                 $type_badge_class = 'green';
+            }
+
+            // Resolve Activity Topic (use actual topic rather than generic placeholders)
+            $raw_topic = trim((string)($act['topic'] ?? ''));
+            $raw_subject = trim((string)($act['subject'] ?? ''));
+            $raw_act_title = trim((string)($act['activity_title'] ?? ''));
+
+            $generic_placeholders = [
+                'live session', 'live sessions', 'watch live session', 'watch live sessions',
+                'mega test', 'attend mega test', 'assessment', 'test', 'activity'
+            ];
+
+            $display_topic = '';
+            if ($raw_topic !== '' && !in_array(strtolower($raw_topic), $generic_placeholders, true)) {
+                $display_topic = $raw_topic;
+            } elseif ($raw_act_title !== '' && !in_array(strtolower($raw_act_title), $generic_placeholders, true)) {
+                $display_topic = $raw_act_title;
+            } elseif ($raw_topic !== '') {
+                $display_topic = $raw_topic;
+            } elseif ($raw_act_title !== '') {
+                $display_topic = $raw_act_title;
+            } elseif ($raw_subject !== '') {
+                $display_topic = $raw_subject;
             } else {
-                $type_label = !empty($raw_type) ? strtoupper($raw_type) : 'ACTIVITY';
-                $type_category = 'other';
-                $type_badge_class = 'gray';
+                $display_topic = 'Activity #' . $act_id;
             }
 
             $is_completed = isset($completed_map[$act_id]);
@@ -542,22 +567,24 @@ class StudentStudyPlanAnalytics {
             $status_label = '';
             $rank_display = null;
 
-            if ($assess_info && $assess_info['percentage'] !== null) {
-                $score_pct = $assess_info['percentage'];
-                $rank_display = $assess_info['rank_display'];
-                $performance_display = $score_pct . '%';
-                if ($rank_display) {
-                    $performance_display .= ' (Rank ' . $rank_display . ')';
+            if ($is_mega_test) {
+                if ($assess_info && $assess_info['percentage'] !== null) {
+                    $score_pct = $assess_info['percentage'];
+                    $rank_display = $assess_info['rank_display'];
+                    $performance_display = $score_pct . '%';
+                    if ($rank_display) {
+                        $performance_display .= ' (Rank ' . $rank_display . ')';
+                    }
+                    $status_label = 'Completed';
+                } elseif ($assess_info && $assess_info['attendance_status'] === 'not_attended') {
+                    $performance_display = 'Not Attempted';
+                    $status_label = 'Not Attempted';
+                } else {
+                    $performance_display = 'No assessment data';
+                    $status_label = $is_completed ? 'Completed' : ($is_overdue ? 'Overdue' : 'Pending');
                 }
-                $status_label = 'Completed';
-            } elseif ($assess_info && $assess_info['attendance_status'] === 'not_attended') {
-                $performance_display = 'Not Attempted';
-                $status_label = 'Not Attempted';
-            } elseif ($type_category === 'mega_test' || $type_category === 'assessment') {
-                $performance_display = 'No assessment data';
-                $status_label = $is_completed ? 'Completed' : ($is_overdue ? 'Overdue' : 'Pending');
             } else {
-                // Live Session or regular activity
+                // Live Session
                 $score_pct = $is_completed ? 100 : 0;
                 $performance_display = $is_completed ? '100%' : ($is_overdue ? 'Overdue' : 'Pending');
                 $status_label = $is_completed ? 'Completed' : ($is_overdue ? 'Overdue' : 'Pending');
@@ -565,7 +592,9 @@ class StudentStudyPlanAnalytics {
 
             $all_highlights[] = [
                 'activity_id' => $act_id,
-                'activity_title' => $title,
+                'activity_title' => $display_topic,
+                'activity_topic' => $display_topic,
+                'topic' => $raw_topic !== '' ? $raw_topic : $display_topic,
                 'activity_type' => $raw_type,
                 'type_label' => $type_label,
                 'type_category' => $type_category,
@@ -580,12 +609,12 @@ class StudentStudyPlanAnalytics {
             ];
         }
 
-        // Strongest Activities: High scores or Completed live sessions
+        // Strongest Activities: High scores (>= 70%) or Completed live sessions
         $strongest_candidates = [];
         foreach ($all_highlights as $item) {
             if ($item['score_pct'] !== null && $item['score_pct'] >= 70) {
                 $strongest_candidates[] = $item;
-            } elseif ($item['is_completed'] && ($item['type_category'] === 'live_session' || $item['type_category'] === 'other')) {
+            } elseif ($item['is_completed'] && $item['type_category'] === 'live_session') {
                 $strongest_candidates[] = $item;
             }
         }
@@ -600,7 +629,7 @@ class StudentStudyPlanAnalytics {
         $strongest_activities = array_slice($strongest_candidates, 0, 5);
 
         // Activities Needing Attention: Low scores (<60%) or Overdue or Incomplete Live Sessions
-        // Critical: Do NOT add assessments merely because of missing data.
+        // Critical: Do NOT add mega tests/assessments merely because of missing data. Only overdue or scored < 60%.
         $attention_candidates = [];
         foreach ($all_highlights as $item) {
             if ($item['score_pct'] !== null && $item['score_pct'] < 60) {

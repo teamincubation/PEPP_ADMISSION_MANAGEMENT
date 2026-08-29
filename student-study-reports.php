@@ -5179,11 +5179,11 @@ include 'includes/admin_nav.php';
     ` : ''}
 
     <!-- Section 7: Learning Performance Highlights -->
-    ${(a.learning_highlights && (a.learning_highlights.strongest_activities?.length > 0 || a.learning_highlights.needs_attention_activities?.length > 0)) || (a.strongest_activities && a.strongest_activities.length > 0) || (a.strongest_topics && a.strongest_topics.length > 0) ? `
+    ${(a.learning_highlights && ((a.learning_highlights.strongest_activities && a.learning_highlights.strongest_activities.length > 0) || (a.learning_highlights.needs_attention_activities && a.learning_highlights.needs_attention_activities.length > 0))) || (a.strongest_activities && a.strongest_activities.length > 0) ? `
         <div class="section-card">
             <div class="section-title">
                 <span>⚡ Learning Performance Highlights</span>
-                <span style="font-size:7pt; font-weight:normal; color:#64748b;">Live Sessions &amp; Mega Tests / Assessments</span>
+                <span style="font-size:7pt; font-weight:normal; color:#64748b;">Performance highlights from Live Sessions &amp; Mega Tests in this Study Plan</span>
             </div>
             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
                 <div>
@@ -5200,16 +5200,10 @@ include 'includes/admin_nav.php';
                             ${(((a.learning_highlights && a.learning_highlights.strongest_activities) || a.strongest_activities || []).length > 0) ? ((a.learning_highlights && a.learning_highlights.strongest_activities) || a.strongest_activities).slice(0, 5).map(act => `
                                 <tr>
                                     <td><strong>${r_esc_js(act.activity_title)}</strong></td>
-                                    <td><span class="badge ${act.type_category === 'live_session' ? 'badge-green' : act.type_category === 'mega_test' ? 'badge-purple' : 'badge-blue'}">${r_esc_js(act.type_label || 'ACTIVITY')}</span></td>
+                                    <td><span class="badge ${act.type_category === 'live_session' ? 'badge-green' : 'badge-purple'}">${r_esc_js(act.type_label || (act.type_category === 'live_session' ? 'LIVE' : 'MEGA TEST'))}</span></td>
                                     <td><strong style="color:#047857;">${r_esc_js(act.performance_display || '100%')}</strong></td>
                                 </tr>
-                            `).join('') : ((a.strongest_topics || []).slice(0, 5).map(t => `
-                                <tr>
-                                    <td><strong>${r_esc_js(t.topic_name || t.topic)}</strong></td>
-                                    <td><span class="badge badge-green">TOPIC</span></td>
-                                    <td><strong style="color:#047857;">${t.completion_percentage}%</strong></td>
-                                </tr>
-                            `).join('') || '<tr><td colspan="3" style="color:#64748b; text-align:center;">No qualifying activities</td></tr>')}
+                            `).join('') : '<tr><td colspan="3" style="color:#64748b; text-align:center;">No qualifying activities recorded</td></tr>'}
                         </tbody>
                     </table>
                 </div>
@@ -5227,16 +5221,10 @@ include 'includes/admin_nav.php';
                             ${(((a.learning_highlights && a.learning_highlights.needs_attention_activities) || a.needs_attention_activities || []).length > 0) ? ((a.learning_highlights && a.learning_highlights.needs_attention_activities) || a.needs_attention_activities).slice(0, 5).map(act => `
                                 <tr>
                                     <td><strong>${r_esc_js(act.activity_title)}</strong></td>
-                                    <td><span class="badge ${act.type_category === 'live_session' ? 'badge-green' : act.type_category === 'mega_test' ? 'badge-purple' : 'badge-blue'}">${r_esc_js(act.type_label || 'ACTIVITY')}</span></td>
+                                    <td><span class="badge ${act.type_category === 'live_session' ? 'badge-green' : 'badge-purple'}">${r_esc_js(act.type_label || (act.type_category === 'live_session' ? 'LIVE' : 'MEGA TEST'))}</span></td>
                                     <td><strong style="color:#b91c1c;">${r_esc_js(act.performance_display || act.status_label || 'Pending')}</strong></td>
                                 </tr>
-                            `).join('') : ((a.needs_attention_topics || []).slice(0, 5).map(t => `
-                                <tr>
-                                    <td><strong>${r_esc_js(t.topic_name || t.topic)}</strong></td>
-                                    <td><span class="badge badge-amber">TOPIC</span></td>
-                                    <td><strong style="color:#b91c1c;">${t.completion_percentage}%</strong></td>
-                                </tr>
-                            `).join('') || '<tr><td colspan="3" style="color:#64748b; text-align:center;">All activities up to date</td></tr>')}
+                            `).join('') : '<tr><td colspan="3" style="color:#64748b; text-align:center;">All activities up to date</td></tr>'}
                         </tbody>
                     </table>
                 </div>
@@ -5882,7 +5870,7 @@ include 'includes/admin_nav.php';
                     <div>
                         <h5 class="analytics-section-title"><i class="fas fa-bolt" style="color:#eab308;"></i> Learning Performance Highlights</h5>
                         <div style="font-size:0.72rem; color:var(--text-muted); margin-top:2px;">
-                            Performance highlights across Live Sessions &amp; Mega Tests / Assessments in this Study Plan
+                            Performance highlights from Live Sessions &amp; Mega Tests in this Study Plan
                         </div>
                     </div>
                 </div>
@@ -5897,19 +5885,14 @@ include 'includes/admin_nav.php';
                                     <div>
                                         <div style="font-size:0.82rem; font-weight:700; color:#166534;">${r_esc_js(act.activity_title)}</div>
                                         <div style="margin-top:3px;">
-                                            <span class="badge ${act.type_category === 'live_session' ? 'green' : act.type_category === 'mega_test' ? 'badge-elite' : 'blue'}" style="font-size:0.6rem; text-transform:uppercase; font-weight:800;">${r_esc_js(act.type_label || 'ACTIVITY')}</span>
+                                            <span class="badge ${act.type_category === 'live_session' ? 'green' : 'badge-elite'}" style="font-size:0.6rem; text-transform:uppercase; font-weight:800;">${r_esc_js(act.type_label || (act.type_category === 'live_session' ? 'LIVE' : 'MEGA TEST'))}</span>
                                         </div>
                                     </div>
                                     <div style="text-align:right;">
                                         <span class="badge green" style="font-size:0.75rem; font-weight:800;">${r_esc_js(act.performance_display || '100%')}</span>
                                     </div>
                                 </div>
-                            `).join('') : ((a.strongest_topics || []).slice(0, 5).map(t => `
-                                <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
-                                    <span style="font-size:0.8rem; font-weight:700; color:#166534;">${r_esc_js(t.topic_name || t.topic)}</span>
-                                    <span class="badge green" style="font-size:0.65rem;">${t.completed}/${t.total} (${t.completion_percentage}%)</span>
-                                </div>
-                            `).join('') || '<div style="font-size:0.75rem; color:var(--text-muted);">No qualifying activities recorded.</div>')}
+                            `).join('') : '<div style="font-size:0.75rem; color:var(--text-muted);">No qualifying activities recorded.</div>'}
                         </div>
                     </div>
                     <div>
@@ -5922,19 +5905,14 @@ include 'includes/admin_nav.php';
                                     <div>
                                         <div style="font-size:0.82rem; font-weight:700; color:#991b1b;">${r_esc_js(act.activity_title)}</div>
                                         <div style="margin-top:3px;">
-                                            <span class="badge ${act.type_category === 'live_session' ? 'green' : act.type_category === 'mega_test' ? 'badge-elite' : 'blue'}" style="font-size:0.6rem; text-transform:uppercase; font-weight:800;">${r_esc_js(act.type_label || 'ACTIVITY')}</span>
+                                            <span class="badge ${act.type_category === 'live_session' ? 'green' : 'badge-elite'}" style="font-size:0.6rem; text-transform:uppercase; font-weight:800;">${r_esc_js(act.type_label || (act.type_category === 'live_session' ? 'LIVE' : 'MEGA TEST'))}</span>
                                         </div>
                                     </div>
                                     <div style="text-align:right;">
                                         <span class="badge ${act.score_pct !== null ? (act.score_pct === 0 ? 'red' : 'amber') : (act.is_overdue ? 'red' : 'amber')}" style="font-size:0.75rem; font-weight:800;">${r_esc_js(act.performance_display || act.status_label || 'Pending')}</span>
                                     </div>
                                 </div>
-                            `).join('') : ((a.needs_attention_topics || []).slice(0, 5).map(t => `
-                                <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
-                                    <span style="font-size:0.8rem; font-weight:700; color:#991b1b;">${r_esc_js(t.topic_name || t.topic)}</span>
-                                    <span class="badge ${t.completion_percentage === 0 ? 'red' : 'amber'}" style="font-size:0.65rem;">${t.pending} pending (${t.completion_percentage}%)</span>
-                                </div>
-                            `).join('') || '<div style="font-size:0.75rem; color:var(--text-muted);">All activities up to date.</div>')}
+                            `).join('') : '<div style="font-size:0.75rem; color:var(--text-muted);">All activities up to date.</div>'}
                         </div>
                     </div>
                 </div>
