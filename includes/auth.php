@@ -582,10 +582,60 @@ function is_ld_intern($admin) {
 /** Get courses assigned to a mentor admin. Returns array of course_name strings. */
 function get_mentor_courses($pdo, $admin_id) {
     try {
-        $stmt = $pdo->prepare("SELECT course_name FROM mentor_course_assignments WHERE admin_id = ? ORDER BY course_name");
+        $courses = [];
+        // Check student-level assignments first
+        $stmt = $pdo->prepare("SELECT DISTINCT course_name FROM mentor_student_assignments WHERE admin_id = ? AND status = 'active' ORDER BY course_name");
         $stmt->execute([$admin_id]);
-        return $stmt->fetchAll(PDO::FETCH_COLUMN);
+        $st_courses = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        if (!empty($st_courses)) {
+            $courses = array_merge($courses, $st_courses);
+        }
+        // Fallback to legacy course-level assignments if table exists
+        try {
+            $stmt2 = $pdo->prepare("SELECT course_name FROM mentor_course_assignments WHERE admin_id = ? ORDER BY course_name");
+            $stmt2->execute([$admin_id]);
+            $c_courses = $stmt2->fetchAll(PDO::FETCH_COLUMN);
+            if (!empty($c_courses)) {
+                $courses = array_merge($courses, $c_courses);
+            }
+        } catch (Exception $e2) {}
+
+        return array_values(array_unique(array_filter($courses)));
     } catch (Exception $e) { return []; }
+}
+
+/** Get the active mentor details for a student. Returns associative array or null. */
+function get_student_active_mentor($pdo, $student_user_id) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT msa.id AS assignment_id, msa.student_user_id, msa.admin_id, msa.course_name,
+                   msa.assigned_by, msa.assigned_at, msa.status,
+                   a.username AS mentor_username, a.full_name AS mentor_full_name, a.email AS mentor_email
+            FROM mentor_student_assignments msa
+            JOIN admins a ON msa.admin_id = a.id
+            WHERE msa.student_user_id = ? AND msa.status = 'active'
+            LIMIT 1
+        ");
+        $stmt->execute([$student_user_id]);
+        $res = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $res ?: null;
+    } catch (Exception $e) { return null; }
+}
+
+/** Check if a student is actively assigned to a mentor (or superadmin). */
+function is_student_assigned_to_mentor($pdo, $student_user_id, $admin_id) {
+    if (is_super_admin()) {
+        return true;
+    }
+    try {
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*)
+            FROM mentor_student_assignments
+            WHERE student_user_id = ? AND admin_id = ? AND status = 'active'
+        ");
+        $stmt->execute([$student_user_id, $admin_id]);
+        return ($stmt->fetchColumn() > 0);
+    } catch (Exception $e) { return false; }
 }
 
 /** Get the active academic year in compact format (e.g. '2627'). */
