@@ -34,9 +34,10 @@ if (isset($_GET['get_course_students'])) {
     $course_name = trim($_GET['course_name'] ?? '');
     try {
         $stmt = $pdo->prepare("
-            SELECT u.id, u.user_id, u.name AS full_name, u.email, u.created_at, u.pepp_course
+            SELECT u.id, u.user_id, u.name AS full_name, u.email, u.created_at, u.pepp_course, u.student_status
             FROM users u
             WHERE u.pepp_course = ? AND u.status IN ('approved', 'active')
+              AND (u.student_status IS NULL OR u.student_status NOT IN ('dropout', 'completed'))
             ORDER BY u.created_at ASC, u.id ASC
         ");
         $stmt->execute([$course_name]);
@@ -67,9 +68,12 @@ if (isset($_GET['get_course_students'])) {
             $uid = $st['user_id'];
             $m_info = $active_mentors[$uid] ?? null;
             $joined_str = !empty($st['created_at']) ? date('d M Y', strtotime($st['created_at'])) : '—';
+            $st_status = strtolower(trim((string)($st['student_status'] ?? 'active'))) ?: 'active';
             $out[] = [
                 'user_id' => $uid,
                 'full_name' => $st['full_name'],
+                'student_status' => $st_status,
+                'status_reason' => get_student_status_reason($pdo, $uid, $st_status),
                 'joined_date' => $joined_str,
                 'current_mentor_id' => $m_info ? $m_info['admin_id'] : null,
                 'current_mentor_name' => $m_info ? $m_info['mentor_name'] : 'Not Assigned',
@@ -256,8 +260,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
         $call_time = trim($_POST['call_timestamp'] ?? date('Y-m-d H:i:s'));
         if (!$student_id) {
             $error_message = 'Student ID is required.';
-        } elseif (!is_super_admin() && !is_student_assigned_to_mentor($pdo, $student_id, $admin_id)) {
-            $error_message = 'Access Denied: You are not the active mentor for this student.';
+        } elseif (!is_super_admin() && !can_mentor_view_student($pdo, $admin_id, $student_id)) {
+            $error_message = 'Access Denied: You are not authorized to log calls for this student.';
         } else {
             try {
                 $pdo->prepare("INSERT INTO mentor_call_logs (student_user_id, admin_id, admin_username, call_timestamp, notes) VALUES (?,?,?,?,?)")
@@ -274,8 +278,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
         $remark = trim($_POST['remark_text'] ?? '');
         if (!$student_id || !$remark) {
             $error_message = 'Student ID and remark text are required.';
-        } elseif (!is_super_admin() && !is_student_assigned_to_mentor($pdo, $student_id, $admin_id)) {
-            $error_message = 'Access Denied: You are not the active mentor for this student.';
+        } elseif (!is_super_admin() && !can_mentor_view_student($pdo, $admin_id, $student_id)) {
+            $error_message = 'Access Denied: You are not authorized to add remarks for this student.';
         } else {
             try {
                 $pdo->prepare("INSERT INTO mentor_remarks (student_user_id, admin_id, admin_username, remark) VALUES (?,?,?,?)")
@@ -325,17 +329,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
                 $assigned_count = 0;
                 $reassigned_count = 0;
 
-                $stmt_chk_st = $pdo->prepare("SELECT user_id, name, pepp_course FROM users WHERE user_id = ? AND status IN ('approved', 'active')");
+                $stmt_chk_st = $pdo->prepare("
+                    SELECT user_id, name, pepp_course, student_status
+                    FROM users
+                    WHERE user_id = ? AND status IN ('approved', 'active')
+                      AND (student_status IS NULL OR student_status NOT IN ('dropout', 'completed'))
+                ");
                 $stmt_get_active = $pdo->prepare("SELECT id, admin_id FROM mentor_student_assignments WHERE student_user_id = ? AND status = 'active'");
                 $stmt_close_active = $pdo->prepare("UPDATE mentor_student_assignments SET status = 'inactive', ended_at = ? WHERE id = ?");
                 $stmt_insert_active = $pdo->prepare("INSERT INTO mentor_student_assignments (student_user_id, admin_id, course_name, assigned_by, assigned_at, status) VALUES (?, ?, ?, ?, ?, 'active')");
 
                 foreach ($student_user_ids as $st_id) {
-                    // 1. Verify student exists and belongs to course
+                    // 1. Verify student exists, belongs to course, and is not dropout/completed
                     $stmt_chk_st->execute([$st_id]);
                     $st_row = $stmt_chk_st->fetch(PDO::FETCH_ASSOC);
                     if (!$st_row) {
-                        throw new Exception("Student ID '{$st_id}' does not exist or is not approved.");
+                        throw new Exception("Student ID '{$st_id}' does not exist, is not approved, or is ineligible for mentoring.");
                     }
                     if ($st_row['pepp_course'] !== $course) {
                         throw new Exception("Student '{$st_row['name']}' ({$st_id}) belongs to '{$st_row['pepp_course']}', not '{$course}'.");
@@ -568,28 +577,30 @@ if (mentor_tables_exist($pdo)) {
     $remarks_list = [];
     $assignments = [];
 
-    // If super admin, show all student mentor assignments
+    // If super admin, show all student mentor assignments (excluding dropout and completed)
     if (is_super_admin()) {
         try {
             if ($selected_course_name !== '') {
                 $stmt = $pdo->prepare("
-                    SELECT msa.*, u.name AS student_name, u.email AS student_email, u.whatsapp_country_code, u.whatsapp_number,
+                    SELECT msa.*, u.name AS student_name, u.email AS student_email, u.whatsapp_country_code, u.whatsapp_number, u.student_status,
                            a.username AS mentor_username, a.full_name AS mentor_full_name
                     FROM mentor_student_assignments msa
                     LEFT JOIN users u ON msa.student_user_id = u.user_id
                     LEFT JOIN admins a ON msa.admin_id = a.id
                     WHERE msa.course_name = ?
+                      AND (u.student_status IS NULL OR u.student_status NOT IN ('dropout', 'completed'))
                     ORDER BY (msa.status = 'active') DESC, msa.assigned_at DESC
                 ");
                 $stmt->execute([$selected_course_name]);
                 $assignments = $stmt->fetchAll(PDO::FETCH_ASSOC);
             } else {
                 $assignments = $pdo->query("
-                    SELECT msa.*, u.name AS student_name, u.email AS student_email, u.whatsapp_country_code, u.whatsapp_number,
+                    SELECT msa.*, u.name AS student_name, u.email AS student_email, u.whatsapp_country_code, u.whatsapp_number, u.student_status,
                            a.username AS mentor_username, a.full_name AS mentor_full_name
                     FROM mentor_student_assignments msa
                     LEFT JOIN users u ON msa.student_user_id = u.user_id
                     LEFT JOIN admins a ON msa.admin_id = a.id
+                    WHERE (u.student_status IS NULL OR u.student_status NOT IN ('dropout', 'completed'))
                     ORDER BY (msa.status = 'active') DESC, msa.assigned_at DESC
                 ")->fetchAll(PDO::FETCH_ASSOC);
             }
@@ -601,18 +612,20 @@ if (mentor_tables_exist($pdo)) {
         try {
             if (is_super_admin()) {
                 $stmt = $pdo->prepare("
-                    SELECT u.user_id, u.name AS full_name, u.email, u.whatsapp_country_code, u.whatsapp_number, u.pepp_course AS course, u.status, u.pepp_academic_year, u.created_at
+                    SELECT u.user_id, u.name AS full_name, u.email, u.whatsapp_country_code, u.whatsapp_number, u.pepp_course AS course, u.status, u.student_status, u.pepp_academic_year, u.created_at
                     FROM users u
                     WHERE u.pepp_course = ? AND u.status IN ('approved','active')
+                      AND (u.student_status IS NULL OR u.student_status NOT IN ('dropout', 'completed'))
                     ORDER BY u.created_at ASC, u.id ASC
                 ");
                 $stmt->execute([$selected_course_name]);
             } else {
                 $stmt = $pdo->prepare("
-                    SELECT u.user_id, u.name AS full_name, u.email, u.whatsapp_country_code, u.whatsapp_number, u.pepp_course AS course, u.status, u.pepp_academic_year, u.created_at
+                    SELECT u.user_id, u.name AS full_name, u.email, u.whatsapp_country_code, u.whatsapp_number, u.pepp_course AS course, u.status, u.student_status, u.pepp_academic_year, u.created_at
                     FROM users u
                     JOIN mentor_student_assignments msa ON u.user_id = msa.student_user_id
                     WHERE u.pepp_course = ? AND u.status IN ('approved','active')
+                      AND (u.student_status IS NULL OR u.student_status NOT IN ('dropout', 'completed'))
                       AND msa.admin_id = ? AND msa.status = 'active'
                     ORDER BY u.created_at ASC, u.id ASC
                 ");
@@ -752,24 +765,27 @@ if (mentor_tables_exist($pdo)) {
             $students = $students_with_metrics;
         } catch (Exception $e) {}
 
-        // Load call logs for selected course (Mentors see calls for currently assigned students)
+        // Load call logs for selected course (Mentors see calls for currently assigned students, excluding dropout/completed)
         try {
             if (is_super_admin()) {
                 $stmt = $pdo->prepare("
-                    SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number, u.email
+                    SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number, u.email, u.student_status
                     FROM mentor_call_logs mcl
                     JOIN users u ON mcl.student_user_id = u.user_id
                     WHERE u.pepp_course = ?
+                      AND (u.student_status IS NULL OR u.student_status NOT IN ('dropout', 'completed'))
                     ORDER BY mcl.call_timestamp DESC LIMIT 100
                 ");
                 $stmt->execute([$selected_course_name]);
             } else {
                 $stmt = $pdo->prepare("
-                    SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number, u.email
+                    SELECT mcl.*, u.name AS student_name, u.whatsapp_country_code, u.whatsapp_number, u.email, u.student_status
                     FROM mentor_call_logs mcl
                     JOIN users u ON mcl.student_user_id = u.user_id
                     JOIN mentor_student_assignments msa ON u.user_id = msa.student_user_id
-                    WHERE u.pepp_course = ? AND msa.admin_id = ? AND msa.status = 'active'
+                    WHERE u.pepp_course = ?
+                      AND (u.student_status IS NULL OR u.student_status NOT IN ('dropout', 'completed'))
+                      AND msa.admin_id = ? AND msa.status = 'active'
                     ORDER BY mcl.call_timestamp DESC LIMIT 50
                 ");
                 $stmt->execute([$selected_course_name, $admin_id]);
@@ -777,24 +793,27 @@ if (mentor_tables_exist($pdo)) {
             $call_logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (Exception $e) {}
 
-        // Load remarks for selected course (Mentors see remarks for currently assigned students)
+        // Load remarks for selected course (Mentors see remarks for currently assigned students, excluding dropout/completed)
         try {
             if (is_super_admin()) {
                 $stmt = $pdo->prepare("
-                    SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number
+                    SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number, u.student_status
                     FROM mentor_remarks mr
                     JOIN users u ON mr.student_user_id = u.user_id
                     WHERE u.pepp_course = ?
+                      AND (u.student_status IS NULL OR u.student_status NOT IN ('dropout', 'completed'))
                     ORDER BY mr.created_at DESC LIMIT 100
                 ");
                 $stmt->execute([$selected_course_name]);
             } else {
                 $stmt = $pdo->prepare("
-                    SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number
+                    SELECT mr.*, u.name AS student_name, u.email, u.whatsapp_country_code, u.whatsapp_number, u.student_status
                     FROM mentor_remarks mr
                     JOIN users u ON mr.student_user_id = u.user_id
                     JOIN mentor_student_assignments msa ON u.user_id = msa.student_user_id
-                    WHERE u.pepp_course = ? AND msa.admin_id = ? AND msa.status = 'active'
+                    WHERE u.pepp_course = ?
+                      AND (u.student_status IS NULL OR u.student_status NOT IN ('dropout', 'completed'))
+                      AND msa.admin_id = ? AND msa.status = 'active'
                     ORDER BY mr.created_at DESC LIMIT 50
                 ");
                 $stmt->execute([$selected_course_name, $admin_id]);
@@ -1059,7 +1078,17 @@ include 'includes/admin_nav.php';
                     data-overdue="<?= (int)$m['overdue_tasks'] ?>"
                     data-attendance="<?= (int)$m['attendance'] ?>">
                     <td data-label="Student">
-                        <div class="cell-main"><?= e($s['full_name']) ?></div>
+                        <div class="cell-main">
+                            <?= e($s['full_name']) ?>
+                            <?php
+                                $st_badge = strtolower(trim((string)($s['student_status'] ?? 'active')));
+                                if ($st_badge === 'suspended'):
+                            ?>
+                                <span class="badge" style="background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5; font-size:0.65rem; font-weight:800; padding:1px 6px; border-radius:4px; vertical-align:middle; margin-left:4px;">SUSPENDED</span>
+                            <?php elseif ($st_badge === 'inactive'): ?>
+                                <span class="badge" style="background:#fef3c7; color:#92400e; border:1px solid #fcd34d; font-size:0.65rem; font-weight:800; padding:1px 6px; border-radius:4px; vertical-align:middle; margin-left:4px;">INACTIVE</span>
+                            <?php endif; ?>
+                        </div>
                         <div class="cell-sub"><?= htmlspecialchars(format_credential_text($s['email'], 'email', 'students'), ENT_QUOTES, 'UTF-8') ?> · <?= htmlspecialchars(($s['whatsapp_country_code'] ?: '+91') . ' ' . format_credential_text($s['whatsapp_number'], 'phone', 'students'), ENT_QUOTES, 'UTF-8') ?></div>
                     </td>
                     <td data-label="Course">
@@ -1157,6 +1186,14 @@ include 'includes/admin_nav.php';
                         <?php else: ?>
                             <?php echo e($cl['student_name'] ?: 'Unknown (' . $cl['student_user_id'] . ')'); ?>
                         <?php endif; ?>
+                        <?php
+                            $cl_st_badge = strtolower(trim((string)($cl['student_status'] ?? 'active')));
+                            if ($cl_st_badge === 'suspended'):
+                        ?>
+                            <span class="badge" style="background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5; font-size:0.65rem; font-weight:800; padding:1px 6px; border-radius:4px; vertical-align:middle; margin-left:4px;">SUSPENDED</span>
+                        <?php elseif ($cl_st_badge === 'inactive'): ?>
+                            <span class="badge" style="background:#fef3c7; color:#92400e; border:1px solid #fcd34d; font-size:0.65rem; font-weight:800; padding:1px 6px; border-radius:4px; vertical-align:middle; margin-left:4px;">INACTIVE</span>
+                        <?php endif; ?>
                     </div>
                     <div class="cell-sub"><?php echo e(($cl['whatsapp_country_code'] ?: '+91') . ' ' . format_credential_text($cl['whatsapp_number'], 'phone', 'students')); ?></div>
                 </td>
@@ -1239,6 +1276,14 @@ include 'includes/admin_nav.php';
                             </a>
                         <?php else: ?>
                             <?php echo e($rm['student_name'] ?: 'Unknown (' . $rm['student_user_id'] . ')'); ?>
+                        <?php endif; ?>
+                        <?php
+                            $rm_st_badge = strtolower(trim((string)($rm['student_status'] ?? 'active')));
+                            if ($rm_st_badge === 'suspended'):
+                        ?>
+                            <span class="badge" style="background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5; font-size:0.65rem; font-weight:800; padding:1px 6px; border-radius:4px; vertical-align:middle; margin-left:4px;">SUSPENDED</span>
+                        <?php elseif ($rm_st_badge === 'inactive'): ?>
+                            <span class="badge" style="background:#fef3c7; color:#92400e; border:1px solid #fcd34d; font-size:0.65rem; font-weight:800; padding:1px 6px; border-radius:4px; vertical-align:middle; margin-left:4px;">INACTIVE</span>
                         <?php endif; ?>
                     </div>
                     <div class="cell-sub"><?php echo e(($rm['whatsapp_country_code'] ?: '+91') . ' ' . format_credential_text($rm['whatsapp_number'], 'phone', 'students')); ?></div>

@@ -6,14 +6,14 @@
  * button and the automatic reminder windows (12h / 4h / 10m / start).
  */
 
-/** Learner email list for a session's course(s) - approved students only. */
+/** Learner email list for a session's course(s) - approved, active students only. */
 function session_learner_emails($pdo, $course_csv) {
     $courses = array_filter(array_map('trim', explode(',', (string)$course_csv)));
     if (!$courses) return [];
     try {
         $ph = implode(',', array_fill(0, count($courses), '?'));
         $stmt = $pdo->prepare("SELECT DISTINCT email, name FROM users
-            WHERE status = 'approved' AND email IS NOT NULL AND email <> '' AND pepp_course IN ($ph)");
+            WHERE status = 'approved' AND student_status = 'active' AND email IS NOT NULL AND email <> '' AND pepp_course IN ($ph)");
         $stmt->execute($courses);
         $out = [];
         foreach ($stmt->fetchAll() as $r) {

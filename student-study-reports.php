@@ -222,6 +222,18 @@ if (isset($_GET['action'])) {
         $student_user_id = trim($_GET['student_user_id'] ?? '');
         $results = [];
         if ($student_user_id !== '') {
+            $cur_admin_id = $admin_row['id'] ?? 0;
+            $source_context = $_GET['source'] ?? '';
+            $st_status = get_student_status($pdo, $student_user_id);
+
+            if (in_array($st_status, ['dropout', 'completed'], true) && (!is_super_admin() || $source_context === 'mentoring')) {
+                echo json_encode([]);
+                exit;
+            }
+            if (!is_super_admin() && !can_mentor_view_student($pdo, $cur_admin_id, $student_user_id)) {
+                echo json_encode([]);
+                exit;
+            }
             try {
                 $stmt = $pdo->prepare("
                     SELECT id, admin_username, call_timestamp, notes
@@ -242,6 +254,18 @@ if (isset($_GET['action'])) {
         $student_user_id = trim($_GET['student_user_id'] ?? '');
         $results = [];
         if ($student_user_id !== '') {
+            $cur_admin_id = $admin_row['id'] ?? 0;
+            $source_context = $_GET['source'] ?? '';
+            $st_status = get_student_status($pdo, $student_user_id);
+
+            if (in_array($st_status, ['dropout', 'completed'], true) && (!is_super_admin() || $source_context === 'mentoring')) {
+                echo json_encode([]);
+                exit;
+            }
+            if (!is_super_admin() && !can_mentor_view_student($pdo, $cur_admin_id, $student_user_id)) {
+                echo json_encode([]);
+                exit;
+            }
             try {
                 $stmt = $pdo->prepare("
                     SELECT id, admin_username, remark, created_at
@@ -263,14 +287,42 @@ if (isset($_GET['action'])) {
         $results = [];
         if ($q !== '') {
             $like = "%{$q}%";
+            $cur_admin_id = $admin_row['id'] ?? 0;
+            $source_context = $_GET['source'] ?? '';
             try {
-                $stmt = $pdo->prepare("
-                    SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year
-                    FROM users
-                    WHERE (name LIKE ? OR email LIKE ? OR phone LIKE ? OR user_id LIKE ?) AND status = 'approved'
-                    LIMIT 20
-                ");
-                $stmt->execute([$like, $like, $like, $like]);
+                if (!is_super_admin()) {
+                    // Non-superadmins only search their assigned active/suspended/inactive students
+                    $stmt = $pdo->prepare("
+                        SELECT u.user_id, u.name, u.email, u.phone, u.pepp_course, u.pepp_academic_year AS academic_year, u.student_status
+                        FROM users u
+                        JOIN mentor_student_assignments msa ON u.user_id = msa.student_user_id
+                        WHERE (u.name LIKE ? OR u.email LIKE ? OR u.phone LIKE ? OR u.user_id LIKE ?)
+                          AND u.status = 'approved'
+                          AND (u.student_status IS NULL OR u.student_status NOT IN ('dropout', 'completed'))
+                          AND msa.admin_id = ? AND msa.status = 'active'
+                        LIMIT 20
+                    ");
+                    $stmt->execute([$like, $like, $like, $like, $cur_admin_id]);
+                } elseif ($source_context === 'mentoring') {
+                    // In mentoring context, exclude dropout and completed
+                    $stmt = $pdo->prepare("
+                        SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year, student_status
+                        FROM users
+                        WHERE (name LIKE ? OR email LIKE ? OR phone LIKE ? OR user_id LIKE ?)
+                          AND status = 'approved'
+                          AND (student_status IS NULL OR student_status NOT IN ('dropout', 'completed'))
+                        LIMIT 20
+                    ");
+                    $stmt->execute([$like, $like, $like, $like]);
+                } else {
+                    $stmt = $pdo->prepare("
+                        SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year, student_status
+                        FROM users
+                        WHERE (name LIKE ? OR email LIKE ? OR phone LIKE ? OR user_id LIKE ?) AND status = 'approved'
+                        LIMIT 20
+                    ");
+                    $stmt->execute([$like, $like, $like, $like]);
+                }
                 $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 foreach ($users as $u) {
                     $has_plans = student_has_plans($pdo, $u['user_id'], $u['pepp_course'], $u['academic_year'], $u['email']);
@@ -299,24 +351,56 @@ if (isset($_GET['action'])) {
         try {
             if ($student_id !== '') {
                 $stmt = $pdo->prepare("
-                    SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year, created_at, student_status, user_photo
+                    SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year, created_at, student_status, user_photo, status
                     FROM users
-                    WHERE user_id = ? AND status = 'approved' LIMIT 1
+                    WHERE user_id = ? LIMIT 1
                 ");
                 $stmt->execute([$student_id]);
             } else {
                 $stmt = $pdo->prepare("
-                    SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year, created_at, student_status, user_photo
+                    SELECT user_id, name, email, phone, pepp_course, pepp_academic_year AS academic_year, created_at, student_status, user_photo, status
                     FROM users
-                    WHERE email = ? AND status = 'approved' LIMIT 1
+                    WHERE email = ? LIMIT 1
                 ");
                 $stmt->execute([$email]);
             }
             $student = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$student) {
+            if (!$student || $student['status'] !== 'approved') {
                 echo json_encode(['error' => 'Student details not found.']);
                 exit;
             }
+
+            $st_status = strtolower(trim((string)($student['student_status'] ?? 'active'))) ?: 'unknown';
+            $cur_admin_id = $admin_row['id'] ?? 0;
+            $source_context = $_GET['source'] ?? '';
+
+            // 1. Dropout / Completed check: NEVER accessible in mentoring workflow or to mentors
+            if (in_array($st_status, ['dropout', 'completed'], true)) {
+                if (!is_super_admin() || $source_context === 'mentoring') {
+                    echo json_encode(['error' => 'Access Denied: Student account is not active.']);
+                    exit;
+                }
+            }
+
+            // 2. IDOR check for mentors: Non-superadmins can only access students actively assigned to them
+            if (!is_super_admin()) {
+                if (!is_student_assigned_to_mentor($pdo, $student['user_id'], $cur_admin_id)) {
+                    echo json_encode(['error' => 'Access Denied: You do not have permission to view this student report.']);
+                    exit;
+                }
+            }
+
+            // 3. Status warning object for Suspended / Inactive students
+            $status_warning = null;
+            if ($st_status === 'suspended' || $st_status === 'inactive') {
+                $exact_reason = get_student_status_reason($pdo, $student['user_id'], $st_status);
+                $status_warning = [
+                    'status' => strtoupper($st_status),
+                    'reason' => $exact_reason ?: 'No specific reason recorded in status history.',
+                    'message' => 'This student is currently not an active student.'
+                ];
+            }
+
             $email = $student['email'];
 
             // Get Course level analytics using the canonical helper
@@ -471,6 +555,7 @@ if (isset($_GET['action'])) {
                     'academic_year' => r_esc($student['academic_year']),
                     'joined_date' => $student['created_at'] ? date('d M Y', strtotime($student['created_at'])) : 'N/A',
                     'status' => $student['student_status'] ?: 'inactive',
+                    'status_warning' => $status_warning,
                     'photo' => StudentStudyPlanAnalytics::resolveStudentPhotoUrl($student['user_photo'] ?? ''),
                     'raw_photo' => $student['user_photo'] ?? '',
                     'online' => $online,
@@ -510,6 +595,17 @@ if (isset($_GET['action'])) {
                     $email = $resolved_email;
                 }
             } catch (Exception $e) {}
+        }
+        $cur_admin_id = $admin_row['id'] ?? 0;
+        $source_context = $_GET['source'] ?? '';
+        $st_status = get_student_status($pdo, $student_id ?: $email);
+        if (in_array($st_status, ['dropout', 'completed'], true) && (!is_super_admin() || $source_context === 'mentoring')) {
+            echo json_encode(['error' => 'Access Denied: Student account is not active.']);
+            exit;
+        }
+        if (!is_super_admin() && !can_mentor_view_student($pdo, $cur_admin_id, $student_id ?: $email)) {
+            echo json_encode(['error' => 'Access Denied: You do not have permission to view this student timeline.']);
+            exit;
         }
         $plan_id = (int)($_GET['plan_id'] ?? $_GET['study_plan_id'] ?? 0);
         try {
@@ -4209,9 +4305,37 @@ include 'includes/admin_nav.php';
                 const statusBadgeClass = s.status === 'active' ? 'green' : 'gray';
                 const profilePhotoSrc = s.photo ? getAbsolutePhotoUrl(s.photo) : 'assets/img/default-avatar.svg';
 
+                function escapeHtml(str) {
+                    return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+                }
+
+                let warningBannerHtml = '';
+                if (s.status_warning) {
+                    warningBannerHtml = `
+                        <div class="student-status-warning-banner" style="grid-column: 1 / -1; background:#fef2f2; border:2px solid #ef4444; border-radius:16px; padding:18px 24px; margin-bottom:1.5rem; display:flex; align-items:center; gap:18px; box-shadow: 0 4px 12px rgba(239,68,68,0.1);">
+                            <div style="width:48px; height:48px; border-radius:12px; background:#fee2e2; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                                <i class="fas fa-exclamation-triangle" style="font-size:24px; color:#dc2626;"></i>
+                            </div>
+                            <div style="flex:1;">
+                                <div style="font-size:0.95rem; font-weight:800; color:#991b1b; text-transform:uppercase; letter-spacing:0.5px; display:flex; align-items:center; gap:8px;">
+                                    <span>⚠ STUDENT ACCOUNT STATUS:</span>
+                                    <span style="background:#dc2626; color:#fff; padding:2px 10px; border-radius:6px; font-size:0.8rem; font-weight:900;">${escapeHtml(s.status_warning.status)}</span>
+                                </div>
+                                <div style="font-size:0.9rem; color:#7f1d1d; margin-top:6px; line-height:1.4;">
+                                    <strong style="color:#991b1b;">Reason:</strong> ${escapeHtml(s.status_warning.reason)}
+                                </div>
+                                <div style="font-size:0.78rem; color:#b91c1c; margin-top:4px; font-weight:600;">
+                                    ${escapeHtml(s.status_warning.message)}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
                 // Build modern visual dashboard HTML structure
                 let html = `
                     <div style="display:grid; grid-template-columns: 330px 1fr; gap:1.5rem; align-items:start;">
+                        ${warningBannerHtml}
                         <!-- Left Panel: Profile Info Card -->
                         <div class="widget-card" style="padding:1.5rem; background:#fff; border:1px solid var(--border); border-radius:16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02);">
                             <div style="text-align:center; margin-bottom:20px; border-bottom:1px solid var(--border); padding-bottom:15px; position:relative;">

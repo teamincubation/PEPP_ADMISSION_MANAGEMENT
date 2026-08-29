@@ -1,12 +1,14 @@
 <?php
 session_start();
 require_once 'config/database.php';
+require_once 'includes/auth.php';
 
 // Toggle task completion AJAX handler
 if (isset($_GET['action']) && $_GET['action'] === 'toggle_completion') {
     header('Content-Type: application/json');
-    if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true) {
-        echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+    if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true || !can_student_access_study_plan($pdo, $_SESSION['sp_email'])) {
+        unset($_SESSION['sp_logged_in']);
+        echo json_encode(['success' => false, 'message' => 'Unauthorized or student account is not active.']);
         exit();
     }
 
@@ -24,24 +26,16 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_completion') {
     try {
         $pdo->beginTransaction();
 
-        // Authoritatively verify the activity exists, belongs to this plan and is not deleted
         $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ? AND is_deleted = 0");
         $stmt_act->execute([$activity_id]);
         $act = $stmt_act->fetch(PDO::FETCH_ASSOC);
 
-        if (!$act) {
+        if (!$act || (int)$act['study_plan_id'] !== $plan_id) {
             $pdo->rollBack();
-            echo json_encode(['success' => false, 'message' => 'Activity not found or deleted']);
+            echo json_encode(['success' => false, 'message' => 'Activity not found or unauthorized']);
             exit();
         }
 
-        if ((int)$act['study_plan_id'] !== $plan_id) {
-            $pdo->rollBack();
-            echo json_encode(['success' => false, 'message' => 'Security Error: Activity belongs to another study plan']);
-            exit();
-        }
-
-        // Prevent duplicate completions (student + activity_uid) using transactions and FOR UPDATE on MySQL
         $query = "
             SELECT id, created_at
             FROM study_plan_analytics
@@ -49,88 +43,38 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_completion') {
               AND action_type = 'complete_activity' AND completion_status = 'completed'
             LIMIT 1
         ";
-        if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
-            $query .= " FOR UPDATE";
-        }
-
-        $stmt_check = $pdo->prepare($query);
-        $stmt_check->execute([$email, $plan_id, $act['activity_uid']]);
-        $existing = $stmt_check->fetch();
+        $stmt_dup = $pdo->prepare($query);
+        $stmt_dup->execute([$email, $plan_id, $act['activity_uid']]);
+        $existing = $stmt_dup->fetch(PDO::FETCH_ASSOC);
 
         if ($existing) {
-            $pdo->commit();
-            $completed_at = date('d M Y h:i A', strtotime($existing['created_at']));
-            echo json_encode([
-                'success' => true,
-                'completed' => true,
-                'already_completed' => true,
-                'timestamp' => $completed_at
-            ]);
-        } else {
-            // Record completion and freeze snapshots of activity metadata
-            $stmt_ins = $pdo->prepare("
-                INSERT INTO study_plan_analytics
-                (study_plan_id, student_email, action_type, activity_id, activity_uid, ip_address, latitude, longitude, completion_status, created_at,
-                 activity_title_snapshot, activity_type_snapshot, activity_date_snapshot, day_number_snapshot, chapter_snapshot, subject_snapshot, topic_snapshot)
-                VALUES (?, ?, 'complete_activity', ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)
-            ");
-
-            $stmt_ins->execute([
-                $plan_id,
-                $email,
-                $act['id'],
-                $act['activity_uid'],
-                $_SERVER['REMOTE_ADDR'],
-                $latitude,
-                $longitude,
-                date('Y-m-d H:i:s'),
-                $act['activity_title'],
-                $act['activity_type'],
-                $act['activity_date'],
-                (int)$act['day_number'],
-                $act['chapter'] ?? null,
-                $act['subject'] ?? null,
-                $act['topic'] ?? null
-            ]);
-
-            $pdo->commit();
-            $completed_at = date('d M Y h:i A');
-            echo json_encode([
-                'success' => true,
-                'completed' => true,
-                'already_completed' => false,
-                'timestamp' => $completed_at
-            ]);
-        }
-    } catch (Exception $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
-
-        // Handle duplicate key violation gracefully
-        if ($e->getCode() == 23000 || strpos($e->getMessage(), '23000') !== false || strpos($e->getMessage(), 'Duplicate entry') !== false) {
-            try {
-                $stmt_existing = $pdo->prepare("
-                    SELECT created_at FROM study_plan_analytics
-                    WHERE student_email = ? AND study_plan_id = ? AND activity_uid = ?
-                      AND action_type = 'complete_activity' AND completion_status = 'completed'
-                    LIMIT 1
-                ");
-                $stmt_existing->execute([$email, $plan_id, $act['activity_uid']]);
-                $ex_row = $stmt_existing->fetch();
-                $completed_at = $ex_row ? date('d M Y h:i A', strtotime($ex_row['created_at'])) : date('d M Y h:i A');
-            } catch (Exception $ex_inner) {
-                $completed_at = date('d M Y h:i A');
-            }
-
-            echo json_encode([
-                'success' => true,
-                'completed' => true,
-                'already_completed' => true,
-                'timestamp' => $completed_at
-            ]);
+            $pdo->rollBack();
+            echo json_encode(['success' => true, 'already_completed' => true, 'completed_at' => $existing['created_at']]);
             exit();
         }
 
-        echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+        $stmt = $pdo->prepare("
+            INSERT INTO study_plan_analytics
+            (study_plan_id, student_email, activity_uid, action_type, completion_status, ip_address, user_agent, latitude, longitude, created_at)
+            VALUES (?, ?, ?, 'complete_activity', 'completed', ?, ?, ?, ?, NOW())
+        ");
+        $stmt->execute([
+            $plan_id,
+            $email,
+            $act['activity_uid'],
+            $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1',
+            $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown',
+            $latitude,
+            $longitude
+        ]);
+
+        $pdo->commit();
+        echo json_encode(['success' => true, 'completed_at' => date('Y-m-d H:i:s')]);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
     exit();
 }
@@ -138,8 +82,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_completion') {
 // Log location AJAX handler
 if (isset($_GET['action']) && $_GET['action'] === 'log_location') {
     header('Content-Type: application/json');
-    if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true) {
-        echo json_encode(['success' => false]);
+    if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true || !can_student_access_study_plan($pdo, $_SESSION['sp_email'])) {
+        unset($_SESSION['sp_logged_in']);
+        echo json_encode(['success' => false, 'message' => 'Unauthorized or student account is not active.']);
         exit();
     }
 
@@ -185,35 +130,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $error = 'Email Address is required.';
     } else {
         try {
-            // 1. Check Course Enrolled Students
+            // 1. Check Course Enrolled Students in users table
             $stmt = $pdo->prepare("
                 SELECT u.*
                 FROM users u
-                WHERE u.email = ? AND u.status = 'approved'
+                WHERE u.email = ?
                 LIMIT 1
             ");
             $stmt->execute([$email]);
             $student = $stmt->fetch();
 
-            // 2. Check Custom Campaign Form Submissions
-            $stmt_form = $pdo->prepare("
-                SELECT DISTINCT s.*, f.title as form_title
-                FROM campaign_form_submissions s
-                JOIN campaign_forms f ON s.form_id = f.id
-                LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
-                WHERE (s.respondent_identifier = ? OR a.answer_text = ?) AND s.is_deleted = 0
-                LIMIT 1
-            ");
-            $stmt_form->execute([$email, $email]);
-            $form_user = $stmt_form->fetch();
+            if ($student) {
+                if ($student['status'] !== 'approved' || !is_student_active($pdo, $email)) {
+                    $st_status = get_student_status($pdo, $email);
+                    $reason = get_student_status_reason($pdo, $email, $st_status);
+                    $error = "Your account is currently " . strtoupper($st_status) . ($reason ? " (Reason: {$reason})" : "") . ". Please contact PEPP support for assistance.";
+                    unset($_SESSION['sp_logged_in']);
+                } else {
+                    $_SESSION['sp_logged_in'] = true;
+                    $_SESSION['sp_email'] = $email;
+                    $_SESSION['sp_name'] = $student['name'];
+                    $_SESSION['sp_course'] = $student['pepp_course'];
+                    $_SESSION['sp_year'] = $student['pepp_academic_year'] ?? $student['academic_year'] ?? null;
+                    $_SESSION['sp_student_id'] = $student['user_id'];
 
-            if ($student || $form_user) {
-                // Fetch real name from answers if custom form user
-                $name = 'Student';
-                if ($student) {
-                    $name = $student['name'];
-                } elseif ($form_user) {
-                    // Try to resolve Name from answers
+                    header('Location: studyplan.php');
+                    exit();
+                }
+            } else {
+                // 2. Check Custom Campaign Form Submissions
+                $stmt_form = $pdo->prepare("
+                    SELECT DISTINCT s.*, f.title as form_title
+                    FROM campaign_form_submissions s
+                    JOIN campaign_forms f ON s.form_id = f.id
+                    LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
+                    WHERE (s.respondent_identifier = ? OR a.answer_text = ?) AND s.is_deleted = 0
+                    LIMIT 1
+                ");
+                $stmt_form->execute([$email, $email]);
+                $form_user = $stmt_form->fetch();
+
+                if ($form_user) {
                     $stmt_name = $pdo->prepare("
                         SELECT a.answer_text
                         FROM campaign_form_answers a
@@ -225,19 +182,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $stmt_name->execute([$form_user['id']]);
                     $resolved = $stmt_name->fetchColumn();
                     $name = $resolved ?: ($form_user['respondent_identifier'] ?: 'User');
+
+                    $_SESSION['sp_logged_in'] = true;
+                    $_SESSION['sp_email'] = $email;
+                    $_SESSION['sp_name'] = $name;
+                    $_SESSION['sp_course'] = null;
+                    $_SESSION['sp_year'] = null;
+                    $_SESSION['sp_student_id'] = null;
+
+                    header('Location: studyplan.php');
+                    exit();
+                } else {
+                    $error = 'No active access details found for this email address. Please make sure you enter your registered email address.';
                 }
-
-                $_SESSION['sp_logged_in'] = true;
-                $_SESSION['sp_email'] = $email;
-                $_SESSION['sp_name'] = $name;
-                $_SESSION['sp_course'] = $student ? $student['pepp_course'] : null;
-                $_SESSION['sp_year'] = $student ? $student['academic_year'] : null;
-                $_SESSION['sp_student_id'] = $student ? $student['user_id'] : null;
-
-                header('Location: studyplan.php');
-                exit();
-            } else {
-                $error = 'No active access details found for this email address. Please make sure you enter your registered email address.';
             }
         } catch (Exception $e) {
             $error = 'Database verification error. Please try again later.';
@@ -246,13 +203,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 if (isset($_GET['logout'])) {
-    unset($_SESSION['sp_logged_in']);
+    unset($_SESSION['sp_logged_in'], $_SESSION['sp_email'], $_SESSION['sp_name'], $_SESSION['sp_course'], $_SESSION['sp_year'], $_SESSION['sp_student_id']);
     session_destroy();
     header('Location: studyplan.php');
     exit();
 }
 
 $is_logged_in = isset($_SESSION['sp_logged_in']) && $_SESSION['sp_logged_in'] === true;
+if ($is_logged_in) {
+    // Revalidate student status on every page request
+    if (!can_student_access_study_plan($pdo, $_SESSION['sp_email'])) {
+        $st_status = get_student_status($pdo, $_SESSION['sp_email']);
+        $reason = get_student_status_reason($pdo, $_SESSION['sp_email'], $st_status);
+        unset($_SESSION['sp_logged_in'], $_SESSION['sp_email'], $_SESSION['sp_name'], $_SESSION['sp_course'], $_SESSION['sp_year'], $_SESSION['sp_student_id']);
+        $is_logged_in = false;
+        $error = "Your session has ended because your account is currently " . strtoupper($st_status) . ($reason ? " (Reason: {$reason})" : "") . ".";
+    }
+}
 
 // Predefined activity types presets
 $types_config = [

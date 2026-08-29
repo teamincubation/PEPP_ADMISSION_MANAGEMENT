@@ -383,6 +383,49 @@ class CommunicationEngine {
                 }
             }
 
+            // Fail-closed student status validation:
+            // Transactional communications (invoices, installments, receipts, security alerts) are explicitly whitelisted and proceed for all students.
+            // All academic, session, study plan, AND unknown/future unclassified communications FAIL CLOSED for non-active students.
+            $transactional_events = [
+                'invoice_email',
+                'installment_reminder',
+                'installment_email',
+                'payment_receipt',
+                'payment_confirmation',
+                'payment_reminder',
+                'fee_update',
+                'activity_log_export',
+                'email_reports_export',
+                'monthly_backup',
+                'system_alert',
+                'password_reset',
+                'account_security',
+                'auth_verification'
+            ];
+            $eventName = strtolower(trim((string)($item['event_name'] ?? '')));
+            $isTransactional = in_array($eventName, $transactional_events, true)
+                || strpos($eventName, 'installment_') === 0
+                || strpos($eventName, 'payment_') === 0
+                || strpos($eventName, 'invoice_') === 0
+                || strpos($eventName, 'fee_') === 0;
+
+            if (!$isTransactional) {
+                $recipientIdent = !empty($item['student_uid']) ? $item['student_uid'] : $item['recipient'];
+                require_once __DIR__ . '/../auth.php';
+                $st_status = get_student_status($this->pdo, $recipientIdent);
+
+                // If recipient is a student in the users table and is not strictly active -> cancel
+                if ($st_status !== 'unknown' && !is_student_active($this->pdo, $recipientIdent)) {
+                    $reason = get_student_status_reason($this->pdo, $recipientIdent, $st_status);
+                    $cancelMsg = "Non-transactional communication skipped: student status is '{$st_status}'" . ($reason ? " (Reason: {$reason})" : "");
+                    $cancelStmt = $this->pdo->prepare("UPDATE communication_queue SET status = 'cancelled', error_message = ?, updated_at = NOW() WHERE id = ?");
+                    $cancelStmt->execute([$cancelMsg, $queueId]);
+                    error_log("[COMMUNICATION_CANCELLED] queue_id={$queueId} recipient={$recipientIdent} event={$eventName} status={$st_status}");
+                    $this->pdo->commit();
+                    return false;
+                }
+            }
+
             // Check campaign status and compliance if this queue item is part of a bulk campaign
             $campStmt = $this->pdo->prepare("
                 SELECT c.id as campaign_id, c.status as campaign_status, c.target_audience, r.lead_id, r.id as recipient_id
