@@ -99,22 +99,68 @@ if (!function_exists('resolve_staff_photo_url')) {
 
 // ── 1. Fetch Authoritative Active Mentors ──────────────────────────────
 // Only admins with actual mentoring assignments, activity, or mentoring permissions
-$stmt_mentors = $pdo->query("
-    SELECT DISTINCT a.id, a.username, a.full_name, a.email, a.role, a.admin_type, a.status,
-           e.photo AS staff_photo, e.employee_id AS staff_code
-    FROM admins a
-    LEFT JOIN employees e ON a.id = e.admin_id
-    WHERE a.status = 'active'
-      AND (
-        a.id IN (SELECT DISTINCT admin_id FROM mentor_student_assignments)
-        OR a.id IN (SELECT DISTINCT admin_id FROM mentor_course_assignments)
-        OR a.id IN (SELECT DISTINCT admin_id FROM mentor_call_logs)
-        OR a.id IN (SELECT DISTINCT admin_id FROM mentor_remarks)
-        OR a.permissions LIKE '%student-mentoring%'
-      )
-    ORDER BY a.full_name ASC, a.username ASC
-");
-$all_mentors = $stmt_mentors->fetchAll(PDO::FETCH_ASSOC);
+$has_employees = false;
+try { $has_employees = (bool)$pdo->query("SELECT 1 FROM employees LIMIT 1"); } catch (Throwable $e) {}
+
+$has_admin_type = false;
+try { $has_admin_type = (bool)$pdo->query("SELECT admin_type FROM admins LIMIT 1"); } catch (Throwable $e) {}
+
+$has_full_name = false;
+try { $has_full_name = (bool)$pdo->query("SELECT full_name FROM admins LIMIT 1"); } catch (Throwable $e) {}
+
+$has_email = false;
+try { $has_email = (bool)$pdo->query("SELECT email FROM admins LIMIT 1"); } catch (Throwable $e) {}
+
+$admin_type_col = $has_admin_type ? "a.admin_type" : "a.role AS admin_type";
+$full_name_col = $has_full_name ? "a.full_name" : "a.username AS full_name";
+$email_col = $has_email ? "a.email" : "'' AS email";
+$staff_joins = $has_employees ? "LEFT JOIN employees e ON a.id = e.admin_id" : "";
+$staff_cols = $has_employees ? "e.photo AS staff_photo, e.employee_id AS staff_code" : "NULL AS staff_photo, NULL AS staff_code";
+
+$mentor_where_clauses = ["a.permissions LIKE '%student-mentoring%'", "a.role = 'super_admin'"];
+try {
+    if ($pdo->query("SELECT 1 FROM mentor_student_assignments LIMIT 1")) {
+        $mentor_where_clauses[] = "a.id IN (SELECT DISTINCT admin_id FROM mentor_student_assignments)";
+    }
+} catch (Throwable $e) {}
+try {
+    if ($pdo->query("SELECT 1 FROM mentor_course_assignments LIMIT 1")) {
+        $mentor_where_clauses[] = "a.id IN (SELECT DISTINCT admin_id FROM mentor_course_assignments)";
+    }
+} catch (Throwable $e) {}
+try {
+    if ($pdo->query("SELECT 1 FROM mentor_call_logs LIMIT 1")) {
+        $mentor_where_clauses[] = "a.id IN (SELECT DISTINCT admin_id FROM mentor_call_logs)";
+    }
+} catch (Throwable $e) {}
+try {
+    if ($pdo->query("SELECT 1 FROM mentor_remarks LIMIT 1")) {
+        $mentor_where_clauses[] = "a.id IN (SELECT DISTINCT admin_id FROM mentor_remarks)";
+    }
+} catch (Throwable $e) {}
+
+$mentor_where_sql = implode(" OR ", $mentor_where_clauses);
+
+$all_mentors = [];
+try {
+    $stmt_mentors = $pdo->query("
+        SELECT DISTINCT a.id, a.username, $full_name_col, $email_col, a.role, $admin_type_col, a.status,
+               $staff_cols
+        FROM admins a
+        $staff_joins
+        WHERE a.status = 'active'
+          AND ($mentor_where_sql)
+        ORDER BY $full_name_col ASC, a.username ASC
+    ");
+    $all_mentors = $stmt_mentors->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    error_log("Mentor reports mentor query error: " . $e->getMessage());
+    try {
+        $all_mentors = $pdo->query("SELECT id, username, role, status FROM admins WHERE status = 'active'")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e2) {
+        $all_mentors = [];
+    }
+}
 
 // Selected Mentor ID
 $selected_mentor_id = isset($_GET['mentor_id']) ? (int)$_GET['mentor_id'] : 0;
@@ -222,58 +268,68 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $selected_mentor) {
     fputcsv($out, ['--- METRIC SUMMARY ---']);
     fputcsv($out, ['Metric', 'Value']);
 
-    // Calls in range
-    $stmt_c_exp = $pdo->prepare("SELECT COUNT(*) FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?");
-    $stmt_c_exp->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-    $calls_exp = (int)$stmt_c_exp->fetchColumn();
+    $calls_exp = 0;
+    try {
+        $stmt_c_exp = $pdo->prepare("SELECT COUNT(*) FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?");
+        $stmt_c_exp->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
+        $calls_exp = (int)$stmt_c_exp->fetchColumn();
+    } catch (Throwable $e) {}
     fputcsv($out, ['Total Calls Logged', $calls_exp]);
 
-    // Remarks in range
-    $stmt_r_exp = $pdo->prepare("SELECT COUNT(*) FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?");
-    $stmt_r_exp->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-    $remarks_exp = (int)$stmt_r_exp->fetchColumn();
+    $remarks_exp = 0;
+    try {
+        $stmt_r_exp = $pdo->prepare("SELECT COUNT(*) FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?");
+        $stmt_r_exp->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
+        $remarks_exp = (int)$stmt_r_exp->fetchColumn();
+    } catch (Throwable $e) {}
     fputcsv($out, ['Total Remarks Added', $remarks_exp]);
 
-    // Assigned active students (Strict Canonical Invariant: status = 'approved' AND student_status = 'active')
-    $stmt_st_exp = $pdo->prepare("
-        SELECT COUNT(DISTINCT msa.student_user_id)
-        FROM mentor_student_assignments msa
-        JOIN users u ON msa.student_user_id = u.user_id
-        WHERE msa.admin_id = ? AND msa.status = 'active'
-          AND u.status = 'approved'
-          AND u.student_status = 'active'
-    ");
-    $stmt_st_exp->execute([$selected_mentor_id]);
-    $assigned_exp = (int)$stmt_st_exp->fetchColumn();
+    $assigned_exp = 0;
+    try {
+        $stmt_st_exp = $pdo->prepare("
+            SELECT COUNT(DISTINCT msa.student_user_id)
+            FROM mentor_student_assignments msa
+            JOIN users u ON msa.student_user_id = u.user_id
+            WHERE msa.admin_id = ? AND msa.status = 'active'
+              AND u.status = 'approved'
+              AND u.student_status = 'active'
+        ");
+        $stmt_st_exp->execute([$selected_mentor_id]);
+        $assigned_exp = (int)$stmt_st_exp->fetchColumn();
+    } catch (Throwable $e) {}
     fputcsv($out, ['Assigned Active Students', $assigned_exp]);
 
     fputcsv($out, []);
     fputcsv($out, ['--- RECENT CALL LOGS IN PERIOD ---']);
     fputcsv($out, ['Date & Time', 'Student ID', 'Call Notes']);
-    $stmt_cl_rows = $pdo->prepare("
-        SELECT call_timestamp, student_user_id, notes
-        FROM mentor_call_logs
-        WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?
-        ORDER BY call_timestamp DESC LIMIT 500
-    ");
-    $stmt_cl_rows->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-    while ($cr = $stmt_cl_rows->fetch(PDO::FETCH_ASSOC)) {
-        fputcsv($out, [csv_safe($cr['call_timestamp']), csv_safe($cr['student_user_id']), csv_safe($cr['notes'] ?? '')]);
-    }
+    try {
+        $stmt_cl_rows = $pdo->prepare("
+            SELECT call_timestamp, student_user_id, notes
+            FROM mentor_call_logs
+            WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?
+            ORDER BY call_timestamp DESC LIMIT 500
+        ");
+        $stmt_cl_rows->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
+        while ($cr = $stmt_cl_rows->fetch(PDO::FETCH_ASSOC)) {
+            fputcsv($out, [csv_safe($cr['call_timestamp']), csv_safe($cr['student_user_id']), csv_safe($cr['notes'] ?? '')]);
+        }
+    } catch (Throwable $e) {}
 
     fputcsv($out, []);
     fputcsv($out, ['--- RECENT REMARKS IN PERIOD ---']);
     fputcsv($out, ['Date & Time', 'Student ID', 'Remark']);
-    $stmt_rm_rows = $pdo->prepare("
-        SELECT created_at, student_user_id, remark
-        FROM mentor_remarks
-        WHERE admin_id = ? AND created_at BETWEEN ? AND ?
-        ORDER BY created_at DESC LIMIT 500
-    ");
-    $stmt_rm_rows->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-    while ($rr = $stmt_rm_rows->fetch(PDO::FETCH_ASSOC)) {
-        fputcsv($out, [csv_safe($rr['created_at']), csv_safe($rr['student_user_id']), csv_safe($rr['remark'])]);
-    }
+    try {
+        $stmt_rm_rows = $pdo->prepare("
+            SELECT created_at, student_user_id, remark
+            FROM mentor_remarks
+            WHERE admin_id = ? AND created_at BETWEEN ? AND ?
+            ORDER BY created_at DESC LIMIT 500
+        ");
+        $stmt_rm_rows->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
+        while ($rr = $stmt_rm_rows->fetch(PDO::FETCH_ASSOC)) {
+            fputcsv($out, [csv_safe($rr['created_at']), csv_safe($rr['student_user_id']), csv_safe($rr['remark'])]);
+        }
+    } catch (Throwable $e) {}
 
     fclose($out);
     exit();
@@ -302,7 +358,7 @@ $mentor_stats = [
 ];
 
 if ($selected_mentor) {
-    $m_username = $selected_mentor['username'];
+    $m_username = $selected_mentor['username'] ?? '';
 
     // A. Online / Offline Presence Check
     try {
@@ -311,12 +367,12 @@ if ($selected_mentor) {
         $presence_row = $stmt_pres->fetch(PDO::FETCH_ASSOC);
 
         if ($presence_row) {
-            $last_seen_ts = strtotime($presence_row['last_seen']);
+            $last_seen_ts = strtotime($presence_row['last_seen'] ?? '');
             $is_recent = (time() - $last_seen_ts) <= 300; // 5 minutes
             $is_not_idle = (int)($presence_row['is_idle'] ?? 0) === 0;
 
             $mentor_stats['is_online'] = ($is_recent && $is_not_idle);
-            $mentor_stats['last_active_time'] = $presence_row['last_seen'];
+            $mentor_stats['last_active_time'] = $presence_row['last_seen'] ?? null;
             $mentor_stats['current_page'] = $presence_row['current_page'] ?? null;
             $mentor_stats['login_time'] = $presence_row['login_time'] ?? null;
 
@@ -332,15 +388,17 @@ if ($selected_mentor) {
             }
         } else {
             // Fallback to admin_activity_log for last active
-            $stmt_last_act = $pdo->prepare("SELECT MAX(created_at) FROM admin_activity_log WHERE admin_username = ?");
-            $stmt_last_act->execute([$m_username]);
-            $last_act_str = $stmt_last_act->fetchColumn();
-            if ($last_act_str) {
-                $mentor_stats['last_active_time'] = $last_act_str;
-                $mentor_stats['last_active_label'] = date('d M Y, h:i A', strtotime($last_act_str));
-            }
+            try {
+                $stmt_last_act = $pdo->prepare("SELECT MAX(created_at) FROM admin_activity_log WHERE admin_username = ?");
+                $stmt_last_act->execute([$m_username]);
+                $last_act_str = $stmt_last_act->fetchColumn();
+                if ($last_act_str) {
+                    $mentor_stats['last_active_time'] = $last_act_str;
+                    $mentor_stats['last_active_label'] = date('d M Y, h:i A', strtotime($last_act_str));
+                }
+            } catch (Throwable $e2) {}
         }
-    } catch (Exception $e) {}
+    } catch (Throwable $e) {}
 
     // B. Assigned Active Students (Strict Canonical Invariant: status = 'approved' AND student_status = 'active')
     try {
@@ -356,9 +414,12 @@ if ($selected_mentor) {
             ORDER BY u.name ASC
         ");
         $stmt_assigned->execute([$selected_mentor_id]);
-        $mentor_stats['assigned_students'] = $stmt_assigned->fetchAll(PDO::FETCH_ASSOC);
+        $mentor_stats['assigned_students'] = $stmt_assigned->fetchAll(PDO::FETCH_ASSOC) ?: [];
         $mentor_stats['assigned_students_count'] = count($mentor_stats['assigned_students']);
-    } catch (Exception $e) {}
+    } catch (Throwable $e) {
+        $mentor_stats['assigned_students'] = [];
+        $mentor_stats['assigned_students_count'] = 0;
+    }
 
     $assigned_uids = array_column($mentor_stats['assigned_students'], 'student_user_id');
 
@@ -370,7 +431,7 @@ if ($selected_mentor) {
         ");
         $stmt_calls->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
         $mentor_stats['calls_count'] = (int)$stmt_calls->fetchColumn();
-    } catch (Exception $e) {}
+    } catch (Throwable $e) {}
 
     // D. Remarks in Period
     try {
@@ -380,7 +441,7 @@ if ($selected_mentor) {
         ");
         $stmt_remarks->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
         $mentor_stats['remarks_count'] = (int)$stmt_remarks->fetchColumn();
-    } catch (Exception $e) {}
+    } catch (Throwable $e) {}
 
     // E. Unique Students Contacted in Period & Contact Rate
     try {
@@ -411,7 +472,7 @@ if ($selected_mentor) {
                 $mentor_stats['uncontacted_count'] = max(0, $mentor_stats['assigned_students_count'] - $contacted_assigned);
             }
         }
-    } catch (Exception $e) {}
+    } catch (Throwable $e) {}
 
     // F. Active Days & Consecutive Streak (Meaningful Tracked Activity)
     try {
@@ -427,7 +488,7 @@ if ($selected_mentor) {
             ORDER BY act_date DESC
         ");
         $stmt_act_days->execute([$selected_mentor_id, $start_datetime, $end_datetime, $selected_mentor_id, $start_datetime, $end_datetime, $m_username, $start_datetime, $end_datetime]);
-        $active_dates = $stmt_act_days->fetchAll(PDO::FETCH_COLUMN);
+        $active_dates = $stmt_act_days->fetchAll(PDO::FETCH_COLUMN) ?: [];
         $mentor_stats['active_days_count'] = count($active_dates);
 
         // Calculate consecutive streak working backward from today or yesterday
@@ -441,7 +502,7 @@ if ($selected_mentor) {
             $check_date = date('Y-m-d', strtotime($check_date . ' -1 day'));
         }
         $mentor_stats['current_streak'] = $streak;
-    } catch (Exception $e) {}
+    } catch (Throwable $e) {}
 
     // G. Bulk Study Plan Analytics on Assigned Active Students
     if (!empty($mentor_stats['assigned_students'])) {
@@ -449,10 +510,10 @@ if ($selected_mentor) {
             $bulk_students = [];
             foreach ($mentor_stats['assigned_students'] as $ast) {
                 $bulk_students[] = [
-                    'email' => $ast['student_email'],
-                    'user_id' => $ast['student_user_id'],
-                    'pepp_academic_year' => $ast['pepp_academic_year'],
-                    'pepp_course' => $ast['course_name']
+                    'email' => $ast['student_email'] ?? '',
+                    'user_id' => $ast['student_user_id'] ?? '',
+                    'pepp_academic_year' => $ast['pepp_academic_year'] ?? '',
+                    'pepp_course' => $ast['course_name'] ?? ($ast['pepp_course'] ?? '')
                 ];
             }
             $bulk_analytics = StudentStudyPlanAnalytics::getCourseAnalyticsBulk($pdo, $bulk_students);
@@ -461,16 +522,22 @@ if ($selected_mentor) {
                 $sum_att = 0;
                 $valid_cnt = 0;
                 foreach ($bulk_analytics as $ba) {
-                    $sum_progress += (float)($ba['completion_percentage'] ?? 0);
-                    $sum_att += (float)($ba['attendance_rate'] ?? 0);
-                    $valid_cnt++;
+                    if (isset($ba['completion_percentage']) && $ba['completion_percentage'] !== null) {
+                        $sum_progress += (float)$ba['completion_percentage'];
+                        $valid_cnt++;
+                    }
+                    if (isset($ba['attendance_rate']) && $ba['attendance_rate'] !== null) {
+                        $sum_att += (float)$ba['attendance_rate'];
+                    }
                 }
                 if ($valid_cnt > 0) {
                     $mentor_stats['avg_student_progress'] = round($sum_progress / $valid_cnt, 1);
                     $mentor_stats['avg_student_attendance'] = round($sum_att / $valid_cnt, 1);
                 }
             }
-        } catch (Exception $e) {}
+        } catch (Throwable $e) {
+            error_log("Study plan analytics calculation error: " . $e->getMessage());
+        }
     }
 }
 
@@ -484,56 +551,71 @@ $target_remarks_per_student = max(0.5, ($total_days_in_window / 30.0) * 1.5); //
 
 foreach ($all_mentors as $mentor_entry) {
     $mid = (int)$mentor_entry['id'];
-    $muser = $mentor_entry['username'];
+    $muser = $mentor_entry['username'] ?? '';
+    $m_assigned_cnt = 0;
+    $m_calls = 0;
+    $m_remarks = 0;
+    $m_contacted = 0;
+    $m_active_days = 0;
 
     // Assigned active students (Strict Canonical Invariant: status = 'approved' AND student_status = 'active')
-    $stmt_c_ass = $pdo->prepare("
-        SELECT COUNT(DISTINCT msa.student_user_id)
-        FROM mentor_student_assignments msa
-        JOIN users u ON msa.student_user_id = u.user_id
-        WHERE msa.admin_id = ? AND msa.status = 'active'
-          AND u.status = 'approved'
-          AND u.student_status = 'active'
-    ");
-    $stmt_c_ass->execute([$mid]);
-    $m_assigned_cnt = (int)$stmt_c_ass->fetchColumn();
+    try {
+        $stmt_c_ass = $pdo->prepare("
+            SELECT COUNT(DISTINCT msa.student_user_id)
+            FROM mentor_student_assignments msa
+            JOIN users u ON msa.student_user_id = u.user_id
+            WHERE msa.admin_id = ? AND msa.status = 'active'
+              AND u.status = 'approved'
+              AND u.student_status = 'active'
+        ");
+        $stmt_c_ass->execute([$mid]);
+        $m_assigned_cnt = (int)$stmt_c_ass->fetchColumn();
+    } catch (Throwable $e) {}
 
     // Calls in range
-    $stmt_m_calls = $pdo->prepare("SELECT COUNT(*) FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?");
-    $stmt_m_calls->execute([$mid, $start_datetime, $end_datetime]);
-    $m_calls = (int)$stmt_m_calls->fetchColumn();
+    try {
+        $stmt_m_calls = $pdo->prepare("SELECT COUNT(*) FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?");
+        $stmt_m_calls->execute([$mid, $start_datetime, $end_datetime]);
+        $m_calls = (int)$stmt_m_calls->fetchColumn();
+    } catch (Throwable $e) {}
 
     // Remarks in range
-    $stmt_m_rem = $pdo->prepare("SELECT COUNT(*) FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?");
-    $stmt_m_rem->execute([$mid, $start_datetime, $end_datetime]);
-    $m_remarks = (int)$stmt_m_rem->fetchColumn();
+    try {
+        $stmt_m_rem = $pdo->prepare("SELECT COUNT(*) FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?");
+        $stmt_m_rem->execute([$mid, $start_datetime, $end_datetime]);
+        $m_remarks = (int)$stmt_m_rem->fetchColumn();
+    } catch (Throwable $e) {}
 
     // Unique students contacted in range
-    $stmt_m_cont = $pdo->prepare("
-        SELECT COUNT(DISTINCT student_user_id) FROM (
-            SELECT student_user_id FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?
-            UNION
-            SELECT student_user_id FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?
-        ) c
-    ");
-    $stmt_m_cont->execute([$mid, $start_datetime, $end_datetime, $mid, $start_datetime, $end_datetime]);
-    $m_contacted = (int)$stmt_m_cont->fetchColumn();
+    try {
+        $stmt_m_cont = $pdo->prepare("
+            SELECT COUNT(DISTINCT student_user_id) FROM (
+                SELECT student_user_id FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?
+                UNION
+                SELECT student_user_id FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?
+            ) c
+        ");
+        $stmt_m_cont->execute([$mid, $start_datetime, $end_datetime, $mid, $start_datetime, $end_datetime]);
+        $m_contacted = (int)$stmt_m_cont->fetchColumn();
+    } catch (Throwable $e) {}
 
     // Normalized Contact Rate
     $m_contact_rate = $m_assigned_cnt > 0 ? min(100.0, round(($m_contacted / $m_assigned_cnt) * 100, 1)) : ($m_contacted > 0 ? 100.0 : 0.0);
 
     // Active days in range
-    $stmt_m_days = $pdo->prepare("
-        SELECT COUNT(DISTINCT act_date) FROM (
-            SELECT DATE(call_timestamp) as act_date FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?
-            UNION
-            SELECT DATE(created_at) as act_date FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?
-            UNION
-            SELECT DATE(created_at) as act_date FROM admin_activity_log WHERE admin_username = ? AND created_at BETWEEN ? AND ? AND action_type IN ('login', 'call_logged', 'remark_added', 'student_assigned', 'student_updated', 'studyplan_reviewed')
-        ) d WHERE act_date IS NOT NULL
-    ");
-    $stmt_m_days->execute([$mid, $start_datetime, $end_datetime, $mid, $start_datetime, $end_datetime, $muser, $start_datetime, $end_datetime]);
-    $m_active_days = (int)$stmt_m_days->fetchColumn();
+    try {
+        $stmt_m_days = $pdo->prepare("
+            SELECT COUNT(DISTINCT act_date) FROM (
+                SELECT DATE(call_timestamp) as act_date FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?
+                UNION
+                SELECT DATE(created_at) as act_date FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?
+                UNION
+                SELECT DATE(created_at) as act_date FROM admin_activity_log WHERE admin_username = ? AND created_at BETWEEN ? AND ? AND action_type IN ('login', 'call_logged', 'remark_added', 'student_assigned', 'student_updated', 'studyplan_reviewed')
+            ) d WHERE act_date IS NOT NULL
+        ");
+        $stmt_m_days->execute([$mid, $start_datetime, $end_datetime, $mid, $start_datetime, $end_datetime, $muser, $start_datetime, $end_datetime]);
+        $m_active_days = (int)$stmt_m_days->fetchColumn();
+    } catch (Throwable $e) {}
 
     // Fair Normalized Scoring:
     // 1. Normalized Calls (20%): Evaluates calls per active student rather than raw volume
@@ -659,25 +741,29 @@ if ($range_param === 'today') {
     $hourly_calls = array_fill_keys($hours, 0);
     $hourly_remarks = array_fill_keys($hours, 0);
 
-    $stmt_today_c = $pdo->prepare("SELECT call_timestamp FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?");
-    $stmt_today_c->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-    while ($crow = $stmt_today_c->fetch(PDO::FETCH_ASSOC)) {
-        $h_num = (int)date('H', strtotime($crow['call_timestamp']));
-        $slot = sprintf('%02d:00', min(22, max(8, floor($h_num / 2) * 2)));
-        $hourly_calls[$slot] = ($hourly_calls[$slot] ?? 0) + 1;
-    }
+    try {
+        $stmt_today_c = $pdo->prepare("SELECT call_timestamp FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?");
+        $stmt_today_c->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
+        while ($crow = $stmt_today_c->fetch(PDO::FETCH_ASSOC)) {
+            $h_num = (int)date('H', strtotime($crow['call_timestamp']));
+            $slot = sprintf('%02d:00', min(22, max(8, floor($h_num / 2) * 2)));
+            $hourly_calls[$slot] = ($hourly_calls[$slot] ?? 0) + 1;
+        }
+    } catch (Throwable $e) {}
 
-    $stmt_today_r = $pdo->prepare("SELECT created_at FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?");
-    $stmt_today_r->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-    while ($rrow = $stmt_today_r->fetch(PDO::FETCH_ASSOC)) {
-        $h_num = (int)date('H', strtotime($rrow['created_at']));
-        $slot = sprintf('%02d:00', min(22, max(8, floor($h_num / 2) * 2)));
-        $hourly_remarks[$slot] = ($hourly_remarks[$slot] ?? 0) + 1;
-    }
+    try {
+        $stmt_today_r = $pdo->prepare("SELECT created_at FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?");
+        $stmt_today_r->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
+        while ($rrow = $stmt_today_r->fetch(PDO::FETCH_ASSOC)) {
+            $h_num = (int)date('H', strtotime($rrow['created_at']));
+            $slot = sprintf('%02d:00', min(22, max(8, floor($h_num / 2) * 2)));
+            $hourly_remarks[$slot] = ($hourly_remarks[$slot] ?? 0) + 1;
+        }
+    } catch (Throwable $e) {}
 
     foreach ($hours as $h) {
-        $c_val = $hourly_calls[$h];
-        $r_val = $hourly_remarks[$h];
+        $c_val = $hourly_calls[$h] ?? 0;
+        $r_val = $hourly_remarks[$h] ?? 0;
         $t_val = $c_val + $r_val;
 
         $chart_categories[] = $h;
@@ -695,13 +781,19 @@ if ($range_param === 'today') {
     }
 } elseif ($total_days_in_window > 90 || $range_param === 'all_time') {
     // Monthly aggregation for Overall / Long ranges
-    $stmt_mo_c = $pdo->prepare("SELECT SUBSTR(call_timestamp, 1, 7) as ym, COUNT(*) as cnt FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ? GROUP BY ym ORDER BY ym ASC");
-    $stmt_mo_c->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-    $raw_calls_mo = $stmt_mo_c->fetchAll(PDO::FETCH_KEY_PAIR);
+    $raw_calls_mo = [];
+    $raw_remarks_mo = [];
+    try {
+        $stmt_mo_c = $pdo->prepare("SELECT SUBSTR(call_timestamp, 1, 7) as ym, COUNT(*) as cnt FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ? GROUP BY ym ORDER BY ym ASC");
+        $stmt_mo_c->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
+        $raw_calls_mo = $stmt_mo_c->fetchAll(PDO::FETCH_KEY_PAIR) ?: [];
+    } catch (Throwable $e) {}
 
-    $stmt_mo_r = $pdo->prepare("SELECT SUBSTR(created_at, 1, 7) as ym, COUNT(*) as cnt FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ? GROUP BY ym ORDER BY ym ASC");
-    $stmt_mo_r->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-    $raw_remarks_mo = $stmt_mo_r->fetchAll(PDO::FETCH_KEY_PAIR);
+    try {
+        $stmt_mo_r = $pdo->prepare("SELECT SUBSTR(created_at, 1, 7) as ym, COUNT(*) as cnt FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ? GROUP BY ym ORDER BY ym ASC");
+        $stmt_mo_r->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
+        $raw_remarks_mo = $stmt_mo_r->fetchAll(PDO::FETCH_KEY_PAIR) ?: [];
+    } catch (Throwable $e) {}
 
     $all_yms = array_unique(array_merge(array_keys($raw_calls_mo), array_keys($raw_remarks_mo)));
     sort($all_yms);
@@ -730,13 +822,19 @@ if ($range_param === 'today') {
     }
 } else {
     // Daily aggregation for Weekly / Monthly / Standard ranges
-    $stmt_daily_c = $pdo->prepare("SELECT DATE(call_timestamp) as d, COUNT(*) as cnt FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ? GROUP BY d");
-    $stmt_daily_c->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-    $raw_calls_by_day = $stmt_daily_c->fetchAll(PDO::FETCH_KEY_PAIR);
+    $raw_calls_by_day = [];
+    $raw_remarks_by_day = [];
+    try {
+        $stmt_daily_c = $pdo->prepare("SELECT DATE(call_timestamp) as d, COUNT(*) as cnt FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ? GROUP BY d");
+        $stmt_daily_c->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
+        $raw_calls_by_day = $stmt_daily_c->fetchAll(PDO::FETCH_KEY_PAIR) ?: [];
+    } catch (Throwable $e) {}
 
-    $stmt_daily_r = $pdo->prepare("SELECT DATE(created_at) as d, COUNT(*) as cnt FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ? GROUP BY d");
-    $stmt_daily_r->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-    $raw_remarks_by_day = $stmt_daily_r->fetchAll(PDO::FETCH_KEY_PAIR);
+    try {
+        $stmt_daily_r = $pdo->prepare("SELECT DATE(created_at) as d, COUNT(*) as cnt FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ? GROUP BY d");
+        $stmt_daily_r->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
+        $raw_remarks_by_day = $stmt_daily_r->fetchAll(PDO::FETCH_KEY_PAIR) ?: [];
+    } catch (Throwable $e) {}
 
     $cur = strtotime($start_date);
     $end_ts = strtotime($end_date);
@@ -769,32 +867,42 @@ if ($range_param === 'today') {
 $max_daily_val = max(1, (!empty($chart_totals) ? max($chart_totals) : 1));
 
 // ── 7. Recent Interaction History (Calls + Remarks Union) ─────────────
-$stmt_interactions = $pdo->prepare("
-    SELECT 'call' as type, cl.call_timestamp as event_time, cl.student_user_id, cl.notes as note, u.name as student_name, u.pepp_course
-    FROM mentor_call_logs cl
-    LEFT JOIN users u ON cl.student_user_id = u.user_id
-    WHERE cl.admin_id = ? AND cl.call_timestamp BETWEEN ? AND ?
-    UNION ALL
-    SELECT 'remark' as type, rm.created_at as event_time, rm.student_user_id, rm.remark as note, u.name as student_name, u.pepp_course
-    FROM mentor_remarks rm
-    LEFT JOIN users u ON rm.student_user_id = u.user_id
-    WHERE rm.admin_id = ? AND rm.created_at BETWEEN ? AND ?
-    ORDER BY event_time DESC
-    LIMIT 50
-");
-$stmt_interactions->execute([$selected_mentor_id, $start_datetime, $end_datetime, $selected_mentor_id, $start_datetime, $end_datetime]);
-$recent_interactions = $stmt_interactions->fetchAll(PDO::FETCH_ASSOC);
+$recent_interactions = [];
+try {
+    $stmt_interactions = $pdo->prepare("
+        SELECT 'call' as type, cl.call_timestamp as event_time, cl.student_user_id, cl.notes as note, u.name as student_name, u.pepp_course
+        FROM mentor_call_logs cl
+        LEFT JOIN users u ON cl.student_user_id = u.user_id
+        WHERE cl.admin_id = ? AND cl.call_timestamp BETWEEN ? AND ?
+        UNION ALL
+        SELECT 'remark' as type, rm.created_at as event_time, rm.student_user_id, rm.remark as note, u.name as student_name, u.pepp_course
+        FROM mentor_remarks rm
+        LEFT JOIN users u ON rm.student_user_id = u.user_id
+        WHERE rm.admin_id = ? AND rm.created_at BETWEEN ? AND ?
+        ORDER BY event_time DESC
+        LIMIT 50
+    ");
+    $stmt_interactions->execute([$selected_mentor_id, $start_datetime, $end_datetime, $selected_mentor_id, $start_datetime, $end_datetime]);
+    $recent_interactions = $stmt_interactions->fetchAll(PDO::FETCH_ASSOC) ?: [];
+} catch (Throwable $e) {
+    $recent_interactions = [];
+}
 
 // ── 8. Superadmin Login & Location History (Strict Superadmin View) ────
-$stmt_login_hist = $pdo->prepare("
-    SELECT created_at, action_type, details, ip_address, location, user_agent
-    FROM admin_activity_log
-    WHERE admin_username = ? AND action_type IN ('login', 'logout', 'page_view')
-    ORDER BY created_at DESC
-    LIMIT 20
-");
-$stmt_login_hist->execute([$selected_mentor['username'] ?? '']);
-$login_history_rows = $stmt_login_hist->fetchAll(PDO::FETCH_ASSOC);
+$login_history_rows = [];
+try {
+    $stmt_login_hist = $pdo->prepare("
+        SELECT created_at, action_type, details, ip_address, location, user_agent
+        FROM admin_activity_log
+        WHERE admin_username = ? AND action_type IN ('login', 'logout', 'page_view')
+        ORDER BY created_at DESC
+        LIMIT 20
+    ");
+    $stmt_login_hist->execute([$selected_mentor['username'] ?? '']);
+    $login_history_rows = $stmt_login_hist->fetchAll(PDO::FETCH_ASSOC) ?: [];
+} catch (Throwable $e) {
+    $login_history_rows = [];
+}
 
 include __DIR__ . '/includes/admin_nav.php';
 ?>

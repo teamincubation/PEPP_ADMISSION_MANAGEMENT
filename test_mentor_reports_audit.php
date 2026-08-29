@@ -381,6 +381,29 @@ test_assert(parse_user_agent_summary('Mozilla/5.0 (Windows NT 10.0; Win64; x64) 
 test_assert(parse_user_agent_summary('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1') === 'Safari on macOS', "UA-02: Correctly parses Safari on macOS");
 test_assert(parse_user_agent_summary(null) === 'Not available', "UA-03: Gracefully handles null User Agent");
 
+require_once __DIR__ . '/includes/StudentStudyPlanAnalytics.php';
+
+// ── SECTION 8: Study Plan Analytics Signature & Resilience ────────────
+echo "\n--- SECTION 8: Bulk Study Plan Analytics & Schema Resilience ---\n";
+
+$mock_students = [
+    [
+        'email' => 'student1@example.com',
+        'user_id' => 'PL-2026-001',
+        'pepp_academic_year' => '2026-2027',
+        'pepp_course' => 'MA/MSc Psychology (Premium)'
+    ]
+];
+
+$bulk_res = StudentStudyPlanAnalytics::getCourseAnalyticsBulk($pdo, $mock_students);
+test_assert(is_array($bulk_res), "BULK-01: getCourseAnalyticsBulk works with 2 parameters without ArgumentCountError");
+
+$bulk_res_course = StudentStudyPlanAnalytics::getCourseAnalyticsBulk($pdo, $mock_students, 'MA/MSc Psychology (Premium)');
+test_assert(is_array($bulk_res_course), "BULK-02: getCourseAnalyticsBulk works with explicit 3 parameters");
+
+$empty_res = StudentStudyPlanAnalytics::getCourseAnalyticsBulk($pdo, []);
+test_assert($empty_res === [], "BULK-03: getCourseAnalyticsBulk returns empty array for empty student list");
+
 $mentor_reports_code = file_get_contents(__DIR__ . '/mentor-reports.php');
 test_assert(strpos($mentor_reports_code, 'require_super_admin()') !== false, "SEC-05: mentor-reports.php enforces require_super_admin()");
 test_assert(strpos($mentor_reports_code, 'csv_safe') !== false, "SEC-06: mentor-reports.php uses csv_safe for formula injection defense");

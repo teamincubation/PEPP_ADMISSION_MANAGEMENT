@@ -1910,46 +1910,58 @@ class StudentStudyPlanAnalytics {
         }
     }
 
-    public static function getCourseAnalyticsBulk($pdo, $students, $course_name) {
+    public static function getCourseAnalyticsBulk($pdo, $students, $course_name = '') {
         if (empty($students)) {
             return [];
         }
 
-        $student_emails = [];
-        $student_ids = [];
-        $academic_years = [];
-        foreach ($students as $s) {
-            $student_emails[] = strtolower(trim($s['email']));
-            $uid = trim($s['user_id']);
-            if ($uid !== '') {
-                $student_ids[] = $uid;
+        try {
+            $student_emails = [];
+            $student_ids = [];
+            $academic_years = [];
+            foreach ($students as $s) {
+                if (!empty($s['email'])) {
+                    $student_emails[] = strtolower(trim((string)$s['email']));
+                }
+                $uid = trim((string)($s['user_id'] ?? ''));
+                if ($uid !== '') {
+                    $student_ids[] = $uid;
+                }
+                if (!empty($s['pepp_academic_year'])) {
+                    $academic_years[] = strtolower(trim((string)$s['pepp_academic_year']));
+                }
             }
-            if (!empty($s['pepp_academic_year'])) {
-                $academic_years[] = strtolower(trim($s['pepp_academic_year']));
+            $student_emails = array_values(array_unique($student_emails));
+            $student_ids = array_values(array_unique($student_ids));
+            $academic_years = array_values(array_unique($academic_years));
+
+            $now = new DateTimeImmutable('now', new DateTimeZone('Asia/Kolkata'));
+            $today = $now->format('Y-m-d');
+
+            $params = [];
+            $course_filter = "";
+            if ($course_name !== '') {
+                $course_filter = "OR (sa.assignment_type = 'course' AND LOWER(sa.assigned_value) = LOWER(?))";
+                $params[] = $course_name;
+            } else {
+                $course_filter = "OR sa.assignment_type = 'course'";
             }
-        }
-        $student_emails = array_values(array_unique($student_emails));
-        $student_ids = array_values(array_unique($student_ids));
-        $academic_years = array_values(array_unique($academic_years));
 
-        $now = new DateTimeImmutable('now', new DateTimeZone('Asia/Kolkata'));
-        $today = $now->format('Y-m-d');
-
-        // Fetch all published, active study plan assignments matching the course
-        $stmt_plans = $pdo->prepare("
-            SELECT DISTINCT sp.id, sp.academic_year, sp.start_date, sp.end_date, sa.assignment_type, sa.assigned_value
-            FROM study_plans sp
-            JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-            WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0
-              AND (
-                  sa.assignment_type = 'all' OR
-                  (sa.assignment_type = 'course' AND LOWER(sa.assigned_value) = LOWER(?)) OR
-                  sa.assignment_type = 'batch' OR
-                  sa.assignment_type = 'student'
-              )
-        ");
-        $stmt_plans->execute([$course_name]);
-        $all_assignments = $stmt_plans->fetchAll(PDO::FETCH_ASSOC);
+            // Fetch all published, active study plan assignments matching the course
+            $stmt_plans = $pdo->prepare("
+                SELECT DISTINCT sp.id, sp.academic_year, sp.start_date, sp.end_date, sa.assignment_type, sa.assigned_value
+                FROM study_plans sp
+                JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
+                WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0
+                  AND (
+                      sa.assignment_type = 'all'
+                      $course_filter
+                      OR sa.assignment_type = 'batch'
+                      OR sa.assignment_type = 'student'
+                  )
+            ");
+            $stmt_plans->execute($params);
+            $all_assignments = $stmt_plans->fetchAll(PDO::FETCH_ASSOC);
 
         // Group plans by plan_id
         $plans_metadata = [];
@@ -2242,5 +2254,16 @@ class StudentStudyPlanAnalytics {
         }
 
         return $results;
+        } catch (Throwable $e) {
+            error_log("getCourseAnalyticsBulk error: " . $e->getMessage());
+            $results = [];
+            foreach ($students as $s) {
+                $email = $s['email'] ?? '';
+                if ($email !== '') {
+                    $results[$email] = self::emptyAnalytics();
+                }
+            }
+            return $results;
+        }
     }
 }
