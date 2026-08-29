@@ -41,6 +41,7 @@ if (!headers_sent()) {
 
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/activity_logger.php';
+require_once __DIR__ . '/student_auth.php';
 
 $GLOBALS['ADMIN_PAGES'] = [
     'dashboard'     => ['Dashboard',               'fa-gauge-high'],
@@ -277,10 +278,12 @@ if (isset($_GET['logout'])) {
 }
 
 /* ── Require login ──────────────────────────────────────────────────────── */
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-    if (PHP_SAPI !== 'cli' && empty($_SERVER['HTTP_X_TESTING_MODE'])) {
-        header('Location: login.php');
-        exit();
+if (!defined('PEPP_STUDENT_PORTAL')) {
+    if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
+        if (PHP_SAPI !== 'cli' && empty($_SERVER['HTTP_X_TESTING_MODE'])) {
+            header('Location: login.php');
+            exit();
+        }
     }
 }
 
@@ -655,135 +658,121 @@ function is_student_assigned_to_mentor($pdo, $student_user_id, $admin_id) {
     } catch (Exception $e) { return false; }
 }
 
-/**
- * Canonical helper: Get student's lifecycle status.
- * Returns normalized string: 'active', 'suspended', 'inactive', 'dropout', 'completed', or 'unknown'.
- * UNKNOWN / NULL / EMPTY / INVALID statuses never gain active privileges.
- */
-function get_student_status($pdo, $student_user_id_or_email) {
-    if (!$pdo || empty($student_user_id_or_email)) return 'unknown';
-    try {
-        $stmt = $pdo->prepare("SELECT student_status, status FROM users WHERE user_id = ? OR email = ? LIMIT 1");
-        $stmt->execute([$student_user_id_or_email, $student_user_id_or_email]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!$row) return 'unknown';
-        if ($row['status'] !== 'approved') {
-            return strtolower(trim((string)$row['status'])) ?: 'unknown';
+if (!function_exists('get_student_status')) {
+    function get_student_status($pdo, $student_user_id_or_email) {
+        if (!$pdo || empty($student_user_id_or_email)) return 'unknown';
+        try {
+            $stmt = $pdo->prepare("SELECT student_status, status FROM users WHERE user_id = ? OR email = ? LIMIT 1");
+            $stmt->execute([$student_user_id_or_email, $student_user_id_or_email]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$row) return 'unknown';
+            if ($row['status'] !== 'approved') {
+                return strtolower(trim((string)$row['status'])) ?: 'unknown';
+            }
+            $st = strtolower(trim((string)$row['student_status']));
+            $valid_statuses = ['active', 'suspended', 'inactive', 'dropout', 'completed'];
+            return in_array($st, $valid_statuses, true) ? $st : 'unknown';
+        } catch (Exception $e) {
+            error_log('get_student_status error: ' . $e->getMessage());
+            return 'unknown';
         }
-        $st = strtolower(trim((string)$row['student_status']));
-        $valid_statuses = ['active', 'suspended', 'inactive', 'dropout', 'completed'];
-        return in_array($st, $valid_statuses, true) ? $st : 'unknown';
-    } catch (Exception $e) {
-        error_log('get_student_status error: ' . $e->getMessage());
-        return 'unknown';
     }
 }
 
-/**
- * Canonical helper: Is the student strictly active?
- * Only students with status = 'approved' AND student_status = 'active' are active.
- */
-function is_student_active($pdo, $student_user_id_or_email) {
-    return (get_student_status($pdo, $student_user_id_or_email) === 'active');
+if (!function_exists('is_student_active')) {
+    function is_student_active($pdo, $student_user_id_or_email) {
+        return (get_student_status($pdo, $student_user_id_or_email) === 'active');
+    }
 }
 
-/**
- * Canonical helper: Retrieve the exact status reason stored in student_status_log.
- * Returns exact reason string or null.
- */
-function get_student_status_reason($pdo, $student_user_id_or_email, $target_status = null) {
-    if (!$pdo || empty($student_user_id_or_email)) return null;
-    try {
-        $user_id = $student_user_id_or_email;
-        if (strpos($student_user_id_or_email, '@') !== false) {
-            $stmt_u = $pdo->prepare("SELECT user_id FROM users WHERE email = ? LIMIT 1");
-            $stmt_u->execute([$student_user_id_or_email]);
-            $resolved = $stmt_u->fetchColumn();
-            if ($resolved) $user_id = $resolved;
-        }
+if (!function_exists('get_student_status_reason')) {
+    function get_student_status_reason($pdo, $student_user_id_or_email, $target_status = null) {
+        if (!$pdo || empty($student_user_id_or_email)) return null;
+        try {
+            $user_id = $student_user_id_or_email;
+            if (strpos($student_user_id_or_email, '@') !== false) {
+                $stmt_u = $pdo->prepare("SELECT user_id FROM users WHERE email = ? LIMIT 1");
+                $stmt_u->execute([$student_user_id_or_email]);
+                $resolved = $stmt_u->fetchColumn();
+                if ($resolved) $user_id = $resolved;
+            }
 
-        if ($target_status !== null) {
+            if ($target_status !== null) {
+                $stmt = $pdo->prepare("
+                    SELECT reason FROM student_status_log
+                    WHERE user_id = ? AND LOWER(new_status) = LOWER(?)
+                    ORDER BY changed_at DESC, id DESC LIMIT 1
+                ");
+                $stmt->execute([$user_id, $target_status]);
+            } else {
+                $stmt = $pdo->prepare("
+                    SELECT reason FROM student_status_log
+                    WHERE user_id = ?
+                    ORDER BY changed_at DESC, id DESC LIMIT 1
+                ");
+                $stmt->execute([$user_id]);
+            }
+            $reason = $stmt->fetchColumn();
+            return ($reason && trim((string)$reason) !== '') ? trim((string)$reason) : null;
+        } catch (Exception $e) {
+            error_log('get_student_status_reason error: ' . $e->getMessage());
+            return null;
+        }
+    }
+}
+
+if (!function_exists('can_student_access_study_plan')) {
+    function can_student_access_study_plan($pdo, $student_user_id_or_email) {
+        if (!$pdo || empty($student_user_id_or_email)) return false;
+        $st_status = get_student_status($pdo, $student_user_id_or_email);
+        if ($st_status !== 'unknown') {
+            return ($st_status === 'active');
+        }
+        try {
             $stmt = $pdo->prepare("
-                SELECT reason FROM student_status_log
-                WHERE user_id = ? AND LOWER(new_status) = LOWER(?)
-                ORDER BY changed_at DESC, id DESC LIMIT 1
+                SELECT COUNT(*) FROM campaign_form_submissions s
+                LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
+                WHERE (s.respondent_identifier = ? OR a.answer_text = ?) AND s.is_deleted = 0
             ");
-            $stmt->execute([$user_id, $target_status]);
-        } else {
+            $stmt->execute([$student_user_id_or_email, $student_user_id_or_email]);
+            return ($stmt->fetchColumn() > 0);
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+}
+
+if (!function_exists('can_send_academic_email')) {
+    function can_send_academic_email($pdo, $student_user_id_or_email) {
+        return is_student_active($pdo, $student_user_id_or_email);
+    }
+}
+
+if (!function_exists('can_mentor_view_student')) {
+    function can_mentor_view_student($pdo, $admin_id, $student_user_id) {
+        if (!$pdo || empty($student_user_id) || empty($admin_id)) return false;
+        $status = get_student_status($pdo, $student_user_id);
+        if (in_array($status, ['dropout', 'completed', 'unknown'], true)) {
+            return false;
+        }
+        try {
+            $stmt_adm = $pdo->prepare("SELECT role FROM admins WHERE id = ? LIMIT 1");
+            $stmt_adm->execute([$admin_id]);
+            $role = $stmt_adm->fetchColumn();
+            if ($role === 'super_admin') {
+                return true;
+            }
+
             $stmt = $pdo->prepare("
-                SELECT reason FROM student_status_log
-                WHERE user_id = ?
-                ORDER BY changed_at DESC, id DESC LIMIT 1
+                SELECT COUNT(*)
+                FROM mentor_student_assignments
+                WHERE student_user_id = ? AND admin_id = ? AND status = 'active'
             ");
-            $stmt->execute([$user_id]);
+            $stmt->execute([$student_user_id, $admin_id]);
+            return ($stmt->fetchColumn() > 0);
+        } catch (Exception $e) {
+            return false;
         }
-        $reason = $stmt->fetchColumn();
-        return ($reason && trim($reason) !== '') ? trim($reason) : null;
-    } catch (Exception $e) {
-        error_log('get_student_status_reason error: ' . $e->getMessage());
-        return null;
-    }
-}
-
-/**
- * Canonical helper: Can student access the study plan portal?
- * Enrolled students must be strictly approved and active.
- * Non-enrolled users must have a valid campaign form submission.
- */
-function can_student_access_study_plan($pdo, $student_user_id_or_email) {
-    if (!$pdo || empty($student_user_id_or_email)) return false;
-    $st_status = get_student_status($pdo, $student_user_id_or_email);
-    if ($st_status !== 'unknown') {
-        return ($st_status === 'active');
-    }
-    try {
-        $stmt = $pdo->prepare("
-            SELECT COUNT(*) FROM campaign_form_submissions s
-            LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
-            WHERE (s.respondent_identifier = ? OR a.answer_text = ?) AND s.is_deleted = 0
-        ");
-        $stmt->execute([$student_user_id_or_email, $student_user_id_or_email]);
-        return ($stmt->fetchColumn() > 0);
-    } catch (Exception $e) {
-        return false;
-    }
-}
-
-/**
- * Canonical helper: Can academic communications be sent to this student?
- */
-function can_send_academic_email($pdo, $student_user_id_or_email) {
-    return is_student_active($pdo, $student_user_id_or_email);
-}
-
-/**
- * Canonical helper: Can a mentor view / access a student in student mentoring or reports?
- * Dropout, Completed, and Unknown students are strictly blocked from mentor access.
- * Non-superadmin mentors can only access students actively assigned to them (IDOR protection).
- */
-function can_mentor_view_student($pdo, $admin_id, $student_user_id) {
-    if (!$pdo || empty($student_user_id) || empty($admin_id)) return false;
-    $status = get_student_status($pdo, $student_user_id);
-    if (in_array($status, ['dropout', 'completed', 'unknown'], true)) {
-        return false;
-    }
-    try {
-        $stmt_adm = $pdo->prepare("SELECT role FROM admins WHERE id = ? LIMIT 1");
-        $stmt_adm->execute([$admin_id]);
-        $role = $stmt_adm->fetchColumn();
-        if ($role === 'super_admin') {
-            return true;
-        }
-
-        $stmt = $pdo->prepare("
-            SELECT COUNT(*)
-            FROM mentor_student_assignments
-            WHERE student_user_id = ? AND admin_id = ? AND status = 'active'
-        ");
-        $stmt->execute([$student_user_id, $admin_id]);
-        return ($stmt->fetchColumn() > 0);
-    } catch (Exception $e) {
-        return false;
     }
 }
 

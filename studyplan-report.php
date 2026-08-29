@@ -6,15 +6,21 @@
  * Scoped strictly to the selected Study Plan ID with IDOR protection
  * and canonical student lifecycle security enforcement.
  */
+define('PEPP_STUDENT_PORTAL', true);
 require_once __DIR__ . '/config/database.php';
-require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/student_auth.php';
 require_once __DIR__ . '/includes/StudentStudyPlanAnalytics.php';
 
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
+if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+    @session_start();
 }
 
-// 1. Authentication Check
+// 1. Attempt persistent login from cookie if not in session
+if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true) {
+    authenticate_student_from_cookie($pdo);
+}
+
+// 2. Authentication Check
 if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true || empty($_SESSION['sp_email'])) {
     header('Location: studyplan.php');
     exit;
@@ -24,14 +30,20 @@ $email = trim($_SESSION['sp_email']);
 $student_name = $_SESSION['sp_name'] ?? 'Student';
 $study_plan_id = (int)($_GET['study_plan_id'] ?? $_GET['plan_id'] ?? 0);
 
-// 2. Canonical Security Revalidation (Active Student Check)
-$can_access = can_student_access_study_plan($pdo, $email);
+// 3. Canonical Security Revalidation (Active Student & Single-Device Check)
+$can_access = revalidate_student_study_plan_access($pdo);
 if (!$can_access) {
+    $forced_reason = $_SESSION['sp_force_logout_reason'] ?? '';
+    unset($_SESSION['sp_force_logout_reason']);
+
+    if ($forced_reason === 'single_device_conflict') {
+        header('Location: studyplan.php?reason=device_conflict');
+        exit;
+    }
+
     $st_status = get_student_status($pdo, $email);
     $exact_reason = get_student_status_reason($pdo, $email, $st_status);
-    
-    // Clear session for non-active users
-    unset($_SESSION['sp_logged_in'], $_SESSION['sp_email'], $_SESSION['sp_name']);
+    logout_student($pdo, 'status_downgrade');
     
     $status_label = strtoupper($st_status);
     $reason_msg = $exact_reason ? htmlspecialchars($exact_reason, ENT_QUOTES, 'UTF-8') : 'Your admission status does not permit Study Plan access.';

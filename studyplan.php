@@ -1,13 +1,18 @@
 <?php
-session_start();
-require_once 'config/database.php';
-require_once 'includes/auth.php';
+define('PEPP_STUDENT_PORTAL', true);
+if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+    @session_start();
+}
+require_once __DIR__ . '/config/database.php';
+require_once __DIR__ . '/includes/student_auth.php';
 
 // Toggle task completion AJAX handler
 if (isset($_GET['action']) && $_GET['action'] === 'toggle_completion') {
     header('Content-Type: application/json');
-    if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true || !can_student_access_study_plan($pdo, $_SESSION['sp_email'])) {
-        unset($_SESSION['sp_logged_in']);
+    if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true) {
+        authenticate_student_from_cookie($pdo);
+    }
+    if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true || !revalidate_student_study_plan_access($pdo)) {
         echo json_encode(['success' => false, 'message' => 'Unauthorized or student account is not active.']);
         exit();
     }
@@ -82,8 +87,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_completion') {
 // Log location AJAX handler
 if (isset($_GET['action']) && $_GET['action'] === 'log_location') {
     header('Content-Type: application/json');
-    if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true || !can_student_access_study_plan($pdo, $_SESSION['sp_email'])) {
-        unset($_SESSION['sp_logged_in']);
+    if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true) {
+        authenticate_student_from_cookie($pdo);
+    }
+    if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true || !revalidate_student_study_plan_access($pdo)) {
         echo json_encode(['success' => false, 'message' => 'Unauthorized or student account is not active.']);
         exit();
     }
@@ -125,100 +132,67 @@ function get_valid_url($url) {
 $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'login') {
     $email = trim($_POST['email'] ?? '');
+    $dob = trim($_POST['dob'] ?? $_POST['date_of_birth'] ?? '');
 
-    if (empty($email)) {
-        $error = 'Email Address is required.';
-    } else {
-        try {
-            // 1. Check Course Enrolled Students in users table
-            $stmt = $pdo->prepare("
-                SELECT u.*
-                FROM users u
-                WHERE u.email = ?
-                LIMIT 1
-            ");
-            $stmt->execute([$email]);
-            $student = $stmt->fetch();
-
-            if ($student) {
-                if ($student['status'] !== 'approved' || !is_student_active($pdo, $email)) {
-                    $st_status = get_student_status($pdo, $email);
-                    $reason = get_student_status_reason($pdo, $email, $st_status);
-                    $error = "Your account is currently " . strtoupper($st_status) . ($reason ? " (Reason: {$reason})" : "") . ". Please contact PEPP support for assistance.";
-                    unset($_SESSION['sp_logged_in']);
-                } else {
-                    $_SESSION['sp_logged_in'] = true;
-                    $_SESSION['sp_email'] = $email;
-                    $_SESSION['sp_name'] = $student['name'];
-                    $_SESSION['sp_course'] = $student['pepp_course'];
-                    $_SESSION['sp_year'] = $student['pepp_academic_year'] ?? $student['academic_year'] ?? null;
-                    $_SESSION['sp_student_id'] = $student['user_id'];
-
-                    header('Location: studyplan.php');
-                    exit();
-                }
-            } else {
-                // 2. Check Custom Campaign Form Submissions
-                $stmt_form = $pdo->prepare("
-                    SELECT DISTINCT s.*, f.title as form_title
-                    FROM campaign_form_submissions s
-                    JOIN campaign_forms f ON s.form_id = f.id
-                    LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
-                    WHERE (s.respondent_identifier = ? OR a.answer_text = ?) AND s.is_deleted = 0
-                    LIMIT 1
-                ");
-                $stmt_form->execute([$email, $email]);
-                $form_user = $stmt_form->fetch();
-
-                if ($form_user) {
-                    $stmt_name = $pdo->prepare("
-                        SELECT a.answer_text
-                        FROM campaign_form_answers a
-                        JOIN campaign_form_fields f ON a.field_id = f.id
-                        WHERE a.submission_id = ? AND (f.label LIKE '%name%' OR f.field_name LIKE '%name%')
-                        ORDER BY f.sort_order ASC
-                        LIMIT 1
-                    ");
-                    $stmt_name->execute([$form_user['id']]);
-                    $resolved = $stmt_name->fetchColumn();
-                    $name = $resolved ?: ($form_user['respondent_identifier'] ?: 'User');
-
-                    $_SESSION['sp_logged_in'] = true;
-                    $_SESSION['sp_email'] = $email;
-                    $_SESSION['sp_name'] = $name;
-                    $_SESSION['sp_course'] = null;
-                    $_SESSION['sp_year'] = null;
-                    $_SESSION['sp_student_id'] = null;
-
-                    header('Location: studyplan.php');
-                    exit();
-                } else {
-                    $error = 'No active access details found for this email address. Please make sure you enter your registered email address.';
-                }
-            }
-        } catch (Exception $e) {
-            $error = 'Database verification error. Please try again later.';
+    $auth_res = authenticate_student_by_credentials($pdo, $email, $dob);
+    if ($auth_res['success'] && !empty($auth_res['student'])) {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            @session_regenerate_id(true);
         }
+        $student = $auth_res['student'];
+        $_SESSION['sp_logged_in'] = true;
+        $_SESSION['sp_email'] = $student['email'];
+        $_SESSION['sp_name'] = $student['name'];
+        $_SESSION['sp_course'] = $student['pepp_course'] ?? null;
+        $_SESSION['sp_year'] = $student['pepp_academic_year'] ?? $student['academic_year'] ?? null;
+        $_SESSION['sp_student_id'] = $student['user_id'] ?? null;
+
+        // Establish secure persistent login token
+        create_student_persistent_login($pdo, $student['user_id'] ?? null, $student['email']);
+
+        // Preserve redirect parameters if present
+        $redirect_url = 'studyplan.php';
+        if (!empty($_GET['plan_id'])) {
+            $redirect_url .= '?plan_id=' . (int)$_GET['plan_id'];
+        } elseif (!empty($_GET['course_name'])) {
+            $redirect_url .= '?course_name=' . urlencode($_GET['course_name']);
+        }
+        header('Location: ' . $redirect_url);
+        exit();
+    } else {
+        $error = $auth_res['message'] ?? 'Unable to authenticate student.';
     }
 }
 
 if (isset($_GET['logout'])) {
-    unset($_SESSION['sp_logged_in'], $_SESSION['sp_email'], $_SESSION['sp_name'], $_SESSION['sp_course'], $_SESSION['sp_year'], $_SESSION['sp_student_id']);
-    session_destroy();
+    logout_student($pdo);
     header('Location: studyplan.php');
     exit();
 }
 
+// Attempt persistent login from cookie if not currently in active session
+if (!isset($_SESSION['sp_logged_in']) || $_SESSION['sp_logged_in'] !== true) {
+    authenticate_student_from_cookie($pdo);
+}
+
 $is_logged_in = isset($_SESSION['sp_logged_in']) && $_SESSION['sp_logged_in'] === true;
 if ($is_logged_in) {
-    // Revalidate student status on every page request
-    if (!can_student_access_study_plan($pdo, $_SESSION['sp_email'])) {
-        $st_status = get_student_status($pdo, $_SESSION['sp_email']);
-        $reason = get_student_status_reason($pdo, $_SESSION['sp_email'], $st_status);
-        unset($_SESSION['sp_logged_in'], $_SESSION['sp_email'], $_SESSION['sp_name'], $_SESSION['sp_course'], $_SESSION['sp_year'], $_SESSION['sp_student_id']);
+    $email_to_check = $_SESSION['sp_email'] ?? '';
+    // Revalidate student status and single active device session on every page request
+    if (!revalidate_student_study_plan_access($pdo)) {
+        $forced_reason = $_SESSION['sp_force_logout_reason'] ?? '';
+        unset($_SESSION['sp_force_logout_reason']);
         $is_logged_in = false;
-        $error = "Your session has ended because your account is currently " . strtoupper($st_status) . ($reason ? " (Reason: {$reason})" : "") . ".";
+        if ($forced_reason === 'single_device_conflict') {
+            $error = 'Your session has ended. This account was signed in from another device. Please sign in again to continue.';
+        } else {
+            $st_status = get_student_status($pdo, $email_to_check);
+            $reason = get_student_status_reason($pdo, $email_to_check, $st_status);
+            $error = "Your session has ended because your account is currently " . strtoupper($st_status) . ($reason ? " (Reason: {$reason})" : "") . ".";
+        }
     }
+} elseif (isset($_GET['reason']) && $_GET['reason'] === 'device_conflict') {
+    $error = 'Your session has ended. This account was signed in from another device. Please sign in again to continue.';
 }
 
 // Predefined activity types presets
@@ -952,22 +926,31 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                 <input type="hidden" name="action" value="login">
 
                 <div class="login-icon">
-                    <i class="fas fa-route"></i>
+                    <i class="fas fa-user-graduate"></i>
                 </div>
 
-                <h3 class="login-title">Student Study Portal</h3>
-                <p class="login-subtitle">Enter your registered email address to access your custom courses study plans.</p>
+                <h3 class="login-title">Student Study Plan Login</h3>
+                <p class="login-subtitle">Enter your registered email address and date of birth to access your study plans.</p>
 
                 <?php if ($error): ?>
                     <div class="error-message"><?php echo p_esc($error); ?></div>
                 <?php endif; ?>
 
                 <div class="form-group">
-                    <label>Registered Email Address</label>
-                    <input type="email" name="email" class="form-input" placeholder="e.g. student@example.com" required>
+                    <label style="font-weight:700; font-size:0.82rem; color:var(--text-main); margin-bottom:6px; display:flex; align-items:center; gap:6px;">
+                        <i class="fas fa-envelope" style="color:var(--accent);"></i> Registered Email Address
+                    </label>
+                    <input type="email" name="email" class="form-input" placeholder="e.g. student@example.com" value="<?php echo p_esc($_POST['email'] ?? ''); ?>" required autofocus autocomplete="email">
                 </div>
 
-                <button type="submit" class="btn-submit"><i class="fas fa-arrow-right-to-bracket"></i> Retrieve Study Journey</button>
+                <div class="form-group">
+                    <label style="font-weight:700; font-size:0.82rem; color:var(--text-main); margin-bottom:6px; display:flex; align-items:center; gap:6px;">
+                        <i class="fas fa-calendar-alt" style="color:var(--accent);"></i> Date of Birth
+                    </label>
+                    <input type="date" name="dob" class="form-input" value="<?php echo p_esc($_POST['dob'] ?? $_POST['date_of_birth'] ?? ''); ?>" required autocomplete="bday">
+                </div>
+
+                <button type="submit" class="btn-submit"><i class="fas fa-arrow-right-to-bracket"></i> Continue to Study Plan</button>
             </form>
 
             <!-- App Store shortcuts (Mobile/Tab only) -->
@@ -1272,31 +1255,6 @@ function toggleDateCollapse(dateStr) {
     }
 }
 
-var currentLat = null;
-var currentLon = null;
-
-// Background Geolocation coordinate fetcher
-if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(function(position) {
-        currentLat = position.coords.latitude;
-        currentLon = position.coords.longitude;
-
-        <?php if ($selected_plan_id > 0): ?>
-        var fd = new FormData();
-        fd.append('study_plan_id', <?php echo $selected_plan_id; ?>);
-        fd.append('latitude', currentLat);
-        fd.append('longitude', currentLon);
-
-        fetch('studyplan.php?action=log_location', {
-            method: 'POST',
-            body: fd
-        });
-        <?php endif; ?>
-    }, function(err) {
-        console.warn("Geolocation permission not granted / error", err);
-    });
-}
-
 function toggleTaskCompletion(activityId, planId) {
     var row = document.getElementById('activity-row-' + activityId);
     var btn = row.querySelector('.chk-circle-btn i');
@@ -1306,10 +1264,6 @@ function toggleTaskCompletion(activityId, planId) {
     var fd = new FormData();
     fd.append('activity_id', activityId);
     fd.append('study_plan_id', planId);
-    if (currentLat && currentLon) {
-        fd.append('latitude', currentLat);
-        fd.append('longitude', currentLon);
-    }
 
     fetch('studyplan.php?action=toggle_completion', {
         method: 'POST',
