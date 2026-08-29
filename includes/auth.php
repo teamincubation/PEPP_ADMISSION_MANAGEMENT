@@ -466,7 +466,7 @@ function is_super_admin() {
 }
 function can_access($page_key) {
     global $admin_perms;
-    if ($page_key === 'communication' || $page_key === 'email-reports' || $page_key === 'employee-management') {
+    if ($page_key === 'communication' || $page_key === 'email-reports' || $page_key === 'employee-management' || $page_key === 'mentor-reports') {
         return is_super_admin();
     }
     if (is_super_admin()) return true;
@@ -512,6 +512,7 @@ function get_first_accessible_page_url() {
         'task-tracker'  => 'task-tracker.php',
         'ld-work-report'=> 'ld-work-report.php',
         'student-study-reports' => 'student-study-reports.php',
+        'mentor-reports'      => 'mentor-reports.php',
         'employee-management' => 'employee-management.php',
         'student-mentoring'   => 'student-mentoring.php',
         'settings'      => 'settings.php',

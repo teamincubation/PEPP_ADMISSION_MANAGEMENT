@@ -408,6 +408,11 @@ function render_nav_item($key, $active_page, $nav_data) {
         case 'student-study-reports':
             echo '<a class="nav-item ' . nav_active('student-study-reports', $active_page) . '" href="student-study-reports.php"><i class="fas fa-chart-line"></i> Student Reports</a>';
             break;
+        case 'mentor-reports':
+            if (is_super_admin()) {
+                echo '<a class="nav-item ' . nav_active('mentor-reports', $active_page) . '" href="mentor-reports.php"><i class="fas fa-user-tie"></i> Mentors Report</a>';
+            }
+            break;
         case 'assessment-results':
             echo '<a class="nav-item ' . nav_active('assessment-results', $active_page) . '" href="assessment-results.php"><i class="fas fa-chart-column"></i> Assessment Results</a>';
             break;
@@ -493,7 +498,7 @@ $default_sidebar = [
         'id' => 'academics',
         'title' => 'Academics',
         'icon' => 'fas fa-graduation-cap',
-        'items' => ['courses', 'faculties', 'studyplans', 'student-study-reports', 'assessment-results']
+        'items' => ['courses', 'faculties', 'studyplans', 'student-study-reports', 'mentor-reports', 'assessment-results']
     ],
     [
         'id' => 'system',
