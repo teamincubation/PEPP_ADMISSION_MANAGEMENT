@@ -1100,7 +1100,7 @@ include 'includes/admin_nav.php';
                         </div>
                     </td>
                     <td class="actions-cell" style="text-align:right; white-space:nowrap;">
-                        <a href="student-study-reports.php?source=courses&student_id=<?= urlencode($s['user_id']) ?>" target="_blank" class="btn btn-sm btn-soft-violet" title="View Student Report"><i class="fas fa-chart-line"></i> Report</a>
+                        <a href="student-study-reports.php?source=mentoring&student_id=<?= urlencode($s['user_id']) ?>" target="_blank" class="btn btn-sm btn-soft-violet" title="View Student Report"><i class="fas fa-chart-line"></i> Report</a>
                         <button type="button" class="btn btn-sm btn-soft-blue" onclick="openCall('<?= e($s['user_id']) ?>', '<?= e($s['full_name']) ?>', '<?= e(($s['whatsapp_country_code'] ?: '+91') . ' ' . format_credential_text($s['whatsapp_number'], 'phone', 'students')) ?>', '<?= e(preg_replace('/\D/', '', ($s['whatsapp_country_code'] ?: '+91') . $s['whatsapp_number'])) ?>')" title="Log Call"><i class="fas fa-phone"></i> Log Call</button>
                         <?php if (can_admin_whatsapp_chat()): ?>
                             <a href="https://wa.me/<?= $wa_phone ?>" target="_blank" class="btn btn-sm btn-whatsapp" title="WhatsApp Chat"><i class="fab fa-whatsapp"></i> Chat</a>
@@ -1151,7 +1151,7 @@ include 'includes/admin_nav.php';
                 <td class="cell-main">
                     <div class="cell-main">
                         <?php if (!empty($cl['student_user_id'])): ?>
-                            <a href="student-study-reports.php?source=courses&student_id=<?php echo urlencode($cl['student_user_id']); ?>" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none;">
+                            <a href="student-study-reports.php?source=mentoring&student_id=<?php echo urlencode($cl['student_user_id']); ?>" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none;">
                                 <?php echo e($cl['student_name'] ?: 'Unknown (' . $cl['student_user_id'] . ')'); ?>
                             </a>
                         <?php else: ?>
@@ -1234,7 +1234,7 @@ include 'includes/admin_nav.php';
                 <td class="cell-main">
                     <div class="cell-main">
                         <?php if (!empty($rm['student_user_id'])): ?>
-                            <a href="student-study-reports.php?source=courses&student_id=<?php echo urlencode($rm['student_user_id']); ?>" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none;">
+                            <a href="student-study-reports.php?source=mentoring&student_id=<?php echo urlencode($rm['student_user_id']); ?>" target="_blank" style="color:var(--accent); font-weight:700; text-decoration:none;">
                                 <?php echo e($rm['student_name'] ?: 'Unknown (' . $rm['student_user_id'] . ')'); ?>
                             </a>
                         <?php else: ?>

@@ -1703,6 +1703,26 @@ assertTest("Test BB: PDF report Chapter-wise Assessment contains Assessment Rank
 assertTest("Test BB: PDF report renders Learning Performance Highlights section", true, strpos($reports_file_content, '⚡ Learning Performance Highlights') !== false);
 
 
+// --- TEST BC: Entry-Point UI Visibility (Mentoring vs Courses) ---
+$mentoring_file_content = file_get_contents(__DIR__ . '/student-mentoring.php');
+// A. Student Mentoring Report link contains source=mentoring
+assertTest("Test BC: student-mentoring.php Report link has source=mentoring", true, strpos($mentoring_file_content, 'student-study-reports.php?source=mentoring&student_id=') !== false);
+assertTest("Test BC: student-mentoring.php calls link has source=mentoring", true, strpos($mentoring_file_content, 'student-study-reports.php?source=mentoring&student_id=<?php echo urlencode($cl[\'student_user_id\']); ?>') !== false);
+assertTest("Test BC: student-mentoring.php remarks link has source=mentoring", true, strpos($mentoring_file_content, 'student-study-reports.php?source=mentoring&student_id=<?php echo urlencode($rm[\'student_user_id\']); ?>') !== false);
+
+// B. Server-side context detection in student-study-reports.php
+assertTest("Test BC: student-study-reports.php detects isMentoringReport context", true, strpos($reports_file_content, '$isMentoringReport = ($source === \'mentoring\');') !== false);
+assertTest("Test BC: student-study-reports.php handles source=courses and source=mentoring", true, strpos($reports_file_content, "if (\$source === 'courses' || \$source === 'mentoring')") !== false);
+
+// C. Conditional hiding of top Performance & Analytics Intelligence dashboard
+assertTest("Test BC: student-study-reports.php hides Breadcrumbs & Control Bar on source=mentoring", true, strpos($reports_file_content, "<?php if (!\$isMentoringReport): ?>\n    <!-- BREADCRUMBS & CONTROL BAR -->") !== false);
+assertTest("Test BC: student-study-reports.php hides KPI grid and Global search on source=mentoring", true, strpos($reports_file_content, "<?php elseif (\$source === 'courses' || \$source === 'mentoring'): ?>\n        <?php if (!\$isMentoringReport): ?>\n        <!-- KPI Cards Grid -->") !== false);
+
+// D. Student workspace and JS bootstrap preservation
+assertTest("Test BC: student-study-reports.php renders student-workspace unconditionally", true, strpos($reports_file_content, '<div id="student-workspace" style="display:none; margin-bottom:2rem;"></div>') !== false);
+assertTest("Test BC: student-study-reports.php JS bootstrap activates for both courses and mentoring", true, strpos($reports_file_content, "if (sourceVal === 'courses' || sourceVal === 'mentoring')") !== false);
+
+
 echo "<h2>Test Execution Summary</h2>\n";
 $percent = $total_tests > 0 ? round(($passed_tests / $total_tests) * 100) : 0;
 echo "<div style='font-size: 1.2rem; font-weight: bold; margin-top: 20px;'>";

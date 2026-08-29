@@ -2290,11 +2290,12 @@ if (isset($_GET['action'])) {
 
 // core database counts loaded only if a source context is selected
 $source = $_GET['source'] ?? '';
+$isMentoringReport = ($source === 'mentoring');
 $kpis = [];
 $assigned_courses = [];
 $assigned_forms = [];
 
-if ($source === 'courses') {
+if ($source === 'courses' || $source === 'mentoring') {
     $assigned_plans_subquery = "
         EXISTS (
             SELECT 1 FROM study_plan_assignments sa
@@ -3184,6 +3185,7 @@ include 'includes/admin_nav.php';
 </style>
 
 <div class="container-fluid" style="padding: 1.5rem 0;">
+    <?php if (!$isMentoringReport): ?>
     <!-- BREADCRUMBS & CONTROL BAR -->
     <div style="background:var(--card-bg); border:1px solid var(--border); border-radius:16px; padding:1.2rem; margin-bottom:1.5rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; box-shadow:var(--card-shadow);">
         <div style="display:flex; align-items:center; gap:12px;">
@@ -3212,6 +3214,7 @@ include 'includes/admin_nav.php';
             <button class="btn btn-outline btn-sm" onclick="window.print();"><i class="fas fa-print"></i> Print</button>
         </div>
     </div>
+    <?php endif; ?>
 
     <!-- 1. LANDING PORTAL VIEW (When source is empty) -->
     <?php if ($source === ''): ?>
@@ -3251,7 +3254,8 @@ include 'includes/admin_nav.php';
         </div>
 
     <!-- 2. PEPP COURSES WORKSPACE VIEW -->
-    <?php elseif ($source === 'courses'): ?>
+    <?php elseif ($source === 'courses' || $source === 'mentoring'): ?>
+        <?php if (!$isMentoringReport): ?>
         <!-- KPI Cards Grid -->
         <div class="kpi-grid" id="kpi-grid-container">
             <div class="kpi-card blue" id="card-total-students">
@@ -3356,10 +3360,12 @@ include 'includes/admin_nav.php';
                 <div id="search-autocomplete-box" class="search-autocomplete-box"></div>
             </div>
         </div>
+        <?php endif; ?>
 
         <!-- DYNAMIC WORKSPACE (Student Intelligence Dashboard populated here via JS) -->
         <div id="student-workspace" style="display:none; margin-bottom:2rem;"></div>
 
+        <?php if (!$isMentoringReport): ?>
         <!-- COURSE ANALYTICS MODULE -->
         <div class="chart-card" style="margin-top:20px;">
             <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid var(--border); padding-bottom:12px; margin-bottom:15px; flex-wrap:wrap; gap:8px;">
@@ -3566,6 +3572,7 @@ include 'includes/admin_nav.php';
                 </div>
             </div>
         </div>
+        <?php endif; ?>
 
     <!-- 3. CUSTOM FORMS & CAMPAIGNS WORKSPACE VIEW -->
     <?php elseif ($source === 'forms'): ?>
@@ -3846,7 +3853,7 @@ include 'includes/admin_nav.php';
     const canAccessStudents = <?php echo can_access('students') ? 'true' : 'false'; ?>;
 
     document.addEventListener('DOMContentLoaded', function() {
-        if (sourceVal === 'courses') {
+        if (sourceVal === 'courses' || sourceVal === 'mentoring') {
             // Autocomplete Search Trigger
             const input = document.getElementById('global-student-search-input');
             const box = document.getElementById('search-autocomplete-box');
@@ -3861,52 +3868,58 @@ include 'includes/admin_nav.php';
                 loadStudentIntelligenceDashboard(emailParam);
             }
 
-            input.addEventListener('input', function() {
-                const val = input.value.trim();
-                if (val.length < 2) {
-                    box.style.display = 'none';
-                    return;
-                }
+            if (input && box) {
+                input.addEventListener('input', function() {
+                    const val = input.value.trim();
+                    if (val.length < 2) {
+                        box.style.display = 'none';
+                        return;
+                    }
 
-                fetch('?action=global_student_search&q=' + encodeURIComponent(val))
-                    .then(res => res.json())
-                    .then(data => {
-                        box.innerHTML = '';
-                        if (data.length === 0) {
-                            box.innerHTML = '<div style="padding:12px; text-align:center; color:var(--text-muted);">No records found</div>';
-                            box.style.display = 'block';
-                            return;
-                        }
+                    fetch('?action=global_student_search&q=' + encodeURIComponent(val))
+                        .then(res => res.json())
+                        .then(data => {
+                            box.innerHTML = '';
+                            if (data.length === 0) {
+                                box.innerHTML = '<div style="padding:12px; text-align:center; color:var(--text-muted);">No records found</div>';
+                                box.style.display = 'block';
+                                return;
+                            }
 
-                        data.forEach(item => {
-                            const row = document.createElement('div');
-                            row.className = 'search-autocomplete-item';
-                            row.innerHTML = `
-                                <div style="font-weight:700; color:var(--text-main); font-size:0.85rem;">${item.name}</div>
-                                <div style="font-size:0.75rem; color:var(--text-muted); display:flex; justify-content:space-between; margin-top:2px;">
-                                    <span>${item.email}</span>
-                                    <strong>${item.subtitle}</strong>
-                                </div>
-                            `;
-                            row.addEventListener('click', function() {
-                                loadStudentIntelligenceDashboard(null, item.id);
-                                box.style.display = 'none';
-                                input.value = item.name;
+                            data.forEach(item => {
+                                const row = document.createElement('div');
+                                row.className = 'search-autocomplete-item';
+                                row.innerHTML = `
+                                    <div style="font-weight:700; color:var(--text-main); font-size:0.85rem;">${item.name}</div>
+                                    <div style="font-size:0.75rem; color:var(--text-muted); display:flex; justify-content:space-between; margin-top:2px;">
+                                        <span>${item.email}</span>
+                                        <strong>${item.subtitle}</strong>
+                                    </div>
+                                `;
+                                row.addEventListener('click', function() {
+                                    loadStudentIntelligenceDashboard(null, item.id);
+                                    box.style.display = 'none';
+                                    input.value = item.name;
+                                });
+                                box.appendChild(row);
                             });
-                            box.appendChild(row);
+                            box.style.display = 'block';
                         });
-                        box.style.display = 'block';
-                    });
-            });
+                });
 
-            document.addEventListener('click', function(e) {
-                if (e.target !== input && e.target !== box) {
-                    box.style.display = 'none';
-                }
-            });
+                document.addEventListener('click', function(e) {
+                    if (e.target !== input && e.target !== box) {
+                        box.style.display = 'none';
+                    }
+                });
+            }
 
-            restoreDashboardCardsConfig();
-            initKPIDrilldown();
+            if (document.getElementById('card-manager-slideover')) {
+                restoreDashboardCardsConfig();
+            }
+            if (document.getElementById('kpi-grid-container')) {
+                initKPIDrilldown();
+            }
 
         } else if (sourceVal === 'forms') {
             loadFormsDashboardSidebar();
