@@ -466,7 +466,7 @@ function is_super_admin() {
 }
 function can_access($page_key) {
     global $admin_perms;
-    if ($page_key === 'communication' || $page_key === 'email-reports' || $page_key === 'employee-management' || $page_key === 'mentor-reports') {
+    if ($page_key === 'communication' || $page_key === 'email-reports' || $page_key === 'mentor-reports') {
         return is_super_admin();
     }
     if (is_super_admin()) return true;

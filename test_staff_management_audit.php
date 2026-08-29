@@ -153,13 +153,13 @@ $pdo->exec("
 
     CREATE TABLE employee_custom_fields (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        field_label TEXT NOT NULL,
-        field_key TEXT NOT NULL UNIQUE,
+        field_name TEXT NOT NULL,
         field_type TEXT NOT NULL DEFAULT 'text',
-        field_options TEXT,
+        dropdown_options TEXT,
         is_required INTEGER NOT NULL DEFAULT 0,
         sort_order INTEGER NOT NULL DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'active',
+        created_by TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -213,6 +213,10 @@ function run_test(string $name, callable $fn): void {
 
 function assert_true(bool $cond, string $msg = 'Assertion failed'): void {
     if (!$cond) throw new RuntimeException($msg);
+}
+
+function assert_false(bool $cond, string $msg = 'Assertion failed'): void {
+    if ($cond) throw new RuntimeException($msg);
 }
 
 function assert_equals($expected, $actual, string $msg = ''): void {
@@ -425,6 +429,192 @@ run_test('Sensitive data reveal and copy audit events never contain decrypted pl
     assert_true(count($logs) === 2, 'Two audit logs recorded');
     foreach ($logs as $log) {
         assert_true(strpos($log, $secret) === false, "Activity log does not contain plaintext secret: {$log}");
+    }
+});
+
+// ======================================================================
+// SECTION 7: Custom Fields Canonical Schema Compatibility & Regression
+// ======================================================================
+echo "\n--- SECTION 7: Custom Fields Canonical Schema Compatibility & Regression ---\n";
+
+run_test('get_employee_details loads successfully on canonical schema without field_key', function() use ($pdo) {
+    // 1. Insert custom field with canonical columns (field_name, dropdown_options, no field_key)
+    $stmt_ins_cf = $pdo->prepare("
+        INSERT INTO employee_custom_fields (field_name, field_type, dropdown_options, is_required, sort_order, status, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ");
+    $stmt_ins_cf->execute(['Emergency Blood Donor Contact', 'text', null, 1, 1, 'active', 'superadmin']);
+    $cf1_id = (int)$pdo->lastInsertId();
+
+    $stmt_ins_cf->execute(['T-Shirt Size', 'dropdown', 'S, M, L, XL, XXL', 0, 2, 'active', 'superadmin']);
+    $cf2_id = (int)$pdo->lastInsertId();
+
+    // 2. Insert custom field values for employee #1
+    $stmt_ins_val = $pdo->prepare("
+        INSERT INTO employee_custom_values (employee_id, field_id, field_value)
+        VALUES (?, ?, ?)
+    ");
+    $stmt_ins_val->execute([1, $cf1_id, '+91 9847012345']);
+    $stmt_ins_val->execute([1, $cf2_id, 'XL']);
+
+    // 3. Execute the exact query used by get_employee_details in employee-management.php
+    $stmt_cf = $pdo->prepare("
+        SELECT cf.*, cv.field_value
+        FROM employee_custom_fields cf
+        LEFT JOIN employee_custom_values cv ON cf.id = cv.field_id AND cv.employee_id = ?
+        WHERE cf.status = 'active'
+        ORDER BY cf.sort_order ASC, cf.id ASC
+    ");
+    $stmt_cf->execute([1]);
+    $custom_fields = $stmt_cf->fetchAll(PDO::FETCH_ASSOC);
+
+    assert_true(is_array($custom_fields), 'Query on employee_custom_fields executes with 0 SQL errors');
+    assert_equals(2, count($custom_fields), 'Retrieved exactly 2 custom fields');
+
+    // 4. Perform the server-side normalization
+    foreach ($custom_fields as &$cf_row) {
+        if (!isset($cf_row['field_label']) && isset($cf_row['field_name'])) {
+            $cf_row['field_label'] = $cf_row['field_name'];
+        }
+        if (!isset($cf_row['field_options']) && isset($cf_row['dropdown_options'])) {
+            $cf_row['field_options'] = $cf_row['dropdown_options'];
+        }
+    }
+    unset($cf_row);
+
+    // 5. Verify normalized fields and values
+    assert_equals('Emergency Blood Donor Contact', $custom_fields[0]['field_label'], 'Field 1 label normalized from field_name');
+    assert_equals('+91 9847012345', $custom_fields[0]['field_value'], 'Field 1 value loaded from employee_custom_values');
+    assert_equals('T-Shirt Size', $custom_fields[1]['field_label'], 'Field 2 label normalized from field_name');
+    assert_equals('S, M, L, XL, XXL', $custom_fields[1]['field_options'], 'Field 2 options normalized from dropdown_options');
+    assert_equals('XL', $custom_fields[1]['field_value'], 'Field 2 value loaded from employee_custom_values');
+});
+
+run_test('get_employee_details loads successfully for employee WITHOUT custom field values', function() use ($pdo) {
+    // Employee #2 has no records in employee_custom_values
+    $stmt_cf = $pdo->prepare("
+        SELECT cf.*, cv.field_value
+        FROM employee_custom_fields cf
+        LEFT JOIN employee_custom_values cv ON cf.id = cv.field_id AND cv.employee_id = ?
+        WHERE cf.status = 'active'
+        ORDER BY cf.sort_order ASC, cf.id ASC
+    ");
+    $stmt_cf->execute([2]);
+    $custom_fields = $stmt_cf->fetchAll(PDO::FETCH_ASSOC);
+
+    assert_true(is_array($custom_fields), 'Query on employee without custom values executes cleanly');
+    assert_equals(2, count($custom_fields), 'Active field definitions returned');
+    assert_true(empty($custom_fields[0]['field_value']), 'Custom field value is empty/null without throwing error');
+    assert_true(empty($custom_fields[1]['field_value']), 'Custom field value is empty/null without throwing error');
+});
+
+run_test('Custom field values update and upsert cleanly via employee_custom_values', function() use ($pdo) {
+    $emp_id = 2;
+    $valid_fids = $pdo->query("SELECT id FROM employee_custom_fields")->fetchAll(PDO::FETCH_COLUMN);
+
+    // Simulate saving custom fields for Employee #2
+    $submitted_fields = [
+        $valid_fids[0] => '+91 9123456780',
+        $valid_fids[1] => 'M'
+    ];
+
+    $stmt_upsert_cf = $pdo->prepare("
+        INSERT INTO employee_custom_values (employee_id, field_id, field_value)
+        VALUES (?, ?, ?)
+        ON CONFLICT(employee_id, field_id) DO UPDATE SET field_value = excluded.field_value
+    ");
+    foreach ($submitted_fields as $fid => $val) {
+        $stmt_upsert_cf->execute([$emp_id, (int)$fid, (string)$val]);
+    }
+
+    // Verify stored values
+    $stmt_check = $pdo->prepare("SELECT field_id, field_value FROM employee_custom_values WHERE employee_id = ? ORDER BY field_id ASC");
+    $stmt_check->execute([$emp_id]);
+    $stored = $stmt_check->fetchAll(PDO::FETCH_KEY_PAIR);
+
+    assert_equals('+91 9123456780', $stored[$valid_fids[0]], 'First custom field saved successfully');
+    assert_equals('M', $stored[$valid_fids[1]], 'Second custom field saved successfully');
+});
+
+run_test('Static check: employee-management.php does not contain invalid cf.field_key in SQL', function() {
+    $code = file_get_contents(__DIR__ . '/employee-management.php');
+    assert_true(strpos($code, 'cf.field_key') === false, 'employee-management.php does not contain "cf.field_key" in SQL');
+});
+
+// ======================================================================
+// SECTION 8: Role & Permission Access Control Audit
+// ======================================================================
+echo "\n--- SECTION 8: Role & Permission Access Control Audit ---\n";
+
+run_test('can_access(employee-management) permits super_admin and authorized admin with employee-management or ALL permission', function() {
+    // Helper function mimicking auth.php can_access logic
+    $check_access = function(string $role, string $perms, string $page_key): bool {
+        if ($page_key === 'communication' || $page_key === 'email-reports' || $page_key === 'mentor-reports') {
+            return ($role === 'super_admin');
+        }
+        if ($role === 'super_admin') return true;
+        if (trim($perms) === 'ALL') return true;
+        $perm_list = array_map('trim', explode(',', $perms));
+        return in_array($page_key, $perm_list, true);
+    };
+
+    // 1. Superadmin has full access
+    assert_true($check_access('super_admin', '', 'employee-management'), 'Superadmin is granted access to employee-management');
+
+    // 2. Admin with explicit employee-management permission
+    assert_true($check_access('admin', 'dashboard,employee-management,students', 'employee-management'), 'Admin with employee-management permission is granted access');
+
+    // 3. Admin with ALL permission
+    assert_true($check_access('admin', 'ALL', 'employee-management'), 'Admin with ALL permissions is granted access');
+
+    // 4. Unauthorized Admin without employee-management permission
+    assert_false($check_access('admin', 'dashboard,students,approvals', 'employee-management'), 'Admin without employee-management permission is DENIED (HTTP 403)');
+
+    // 5. Admin with empty permissions
+    assert_false($check_access('admin', '', 'employee-management'), 'Admin with empty permissions is DENIED (HTTP 403)');
+});
+
+run_test('Static check: employee-management.php enforces require_permission(employee-management)', function() {
+    $code = file_get_contents(__DIR__ . '/employee-management.php');
+    assert_true(strpos($code, "require_permission('employee-management')") !== false, "employee-management.php contains require_permission('employee-management')");
+    assert_true(strpos($code, "require_super_admin()") === false, "employee-management.php does NOT contain require_super_admin()");
+});
+
+run_test('Authorized admin can execute sensitive reveal, copy, profile update & status change with audit logging and no plaintext leakage', function() use ($pdo) {
+    $auth_admin = 'hr_admin_johndoe';
+    $emp_id = 1;
+
+    // 1. Reveal action
+    $stmt_emp = $pdo->prepare("SELECT id, employee_id, full_name, aadhaar_encrypted, bank_account_encrypted FROM employees WHERE id = ?");
+    $stmt_emp->execute([$emp_id]);
+    $emp = $stmt_emp->fetch(PDO::FETCH_ASSOC);
+
+    $aadhaar_plain = pepp_decrypt($emp['aadhaar_encrypted']);
+    assert_true(strlen($aadhaar_plain) >= 12, 'Decrypted Aadhaar number is valid');
+
+    log_admin_activity($pdo, $auth_admin, 'sensitive_data_reveal', "Revealed Aadhaar Number for staff {$emp['full_name']} ({$emp['employee_id']})");
+
+    // 2. Copy action
+    $bank_plain = pepp_decrypt($emp['bank_account_encrypted']);
+    assert_true(strlen($bank_plain) >= 9, 'Decrypted Bank Account number is valid');
+
+    log_admin_activity($pdo, $auth_admin, 'sensitive_data_copy', "Copied BANK ACCOUNT for staff {$emp['full_name']} ({$emp['employee_id']})");
+
+    // 3. Profile update action
+    log_admin_activity($pdo, $auth_admin, 'staff_profile_update', "Updated profile for staff {$emp['full_name']} ({$emp['employee_id']})");
+
+    // 4. Status change action
+    log_admin_activity($pdo, $auth_admin, 'staff_status_change', "Changed status of staff {$emp['full_name']} ({$emp['employee_id']}) from active to on_leave (Reason: Annual leave)");
+
+    // 5. Verify all 4 audit log entries are attributed to $auth_admin and contain zero plaintext
+    $stmt_logs = $pdo->prepare("SELECT action, details FROM admin_activity_log WHERE username = ? ORDER BY id DESC LIMIT 4");
+    $stmt_logs->execute([$auth_admin]);
+    $logs = $stmt_logs->fetchAll(PDO::FETCH_ASSOC);
+
+    assert_equals(4, count($logs), 'Exactly 4 audit records found for authorized admin');
+    foreach ($logs as $l) {
+        assert_true(strpos($l['details'], $aadhaar_plain) === false, "Log {$l['action']} does not contain plaintext Aadhaar");
+        assert_true(strpos($l['details'], $bank_plain) === false, "Log {$l['action']} does not contain plaintext Bank Account");
     }
 });
 

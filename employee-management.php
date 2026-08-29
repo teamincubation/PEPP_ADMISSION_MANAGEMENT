@@ -15,7 +15,7 @@
 declare(strict_types=1);
 
 require_once 'includes/auth.php';
-require_super_admin();
+require_permission('employee-management');
 require_once 'includes/encryption_helper.php';
 require_once 'includes/file_helper.php';
 
@@ -57,6 +57,22 @@ function srr_tables_exist($pdo): bool {
         catch (Exception $e) { $ok = false; }
     }
     return $ok;
+}
+function get_employee_custom_field_columns($pdo): array {
+    static $cols = null;
+    if ($cols !== null) return $cols;
+    $cols = [];
+    try {
+        $stmt = $pdo->query("SELECT * FROM employee_custom_fields LIMIT 0");
+        $count = $stmt->columnCount();
+        for ($i = 0; $i < $count; $i++) {
+            $m = $stmt->getColumnMeta($i);
+            if ($m && isset($m['name'])) {
+                $cols[] = strtolower($m['name']);
+            }
+        }
+    } catch (Exception $e) {}
+    return $cols;
 }
 
 if (emp_tables_exist($pdo)) {
@@ -131,16 +147,32 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_employee_details' && isse
         // NEVER send encrypted ciphertexts over wire
         unset($emp['aadhaar_encrypted'], $emp['bank_account_encrypted']);
 
-        // Load custom fields with values
-        $stmt_cf = $pdo->prepare("
-            SELECT cf.id, cf.field_key, cf.field_label, cf.field_type, cf.field_options, cf.is_required, cv.field_value
-            FROM employee_custom_fields cf
-            LEFT JOIN employee_custom_values cv ON cf.id = cv.field_id AND cv.employee_id = ?
-            WHERE cf.status = 'active'
-            ORDER BY cf.sort_order ASC, cf.id ASC
-        ");
-        $stmt_cf->execute([(int)$_GET['id']]);
-        $custom_fields = $stmt_cf->fetchAll(PDO::FETCH_ASSOC);
+        // Load custom fields with values (canonical schema compatibility)
+        $custom_fields = [];
+        try {
+            $stmt_cf = $pdo->prepare("
+                SELECT cf.*, cv.field_value
+                FROM employee_custom_fields cf
+                LEFT JOIN employee_custom_values cv ON cf.id = cv.field_id AND cv.employee_id = ?
+                WHERE cf.status = 'active'
+                ORDER BY cf.sort_order ASC, cf.id ASC
+            ");
+            $stmt_cf->execute([(int)$_GET['id']]);
+            $custom_fields = $stmt_cf->fetchAll(PDO::FETCH_ASSOC);
+
+            // Normalize field labels and dropdown options for consistent frontend rendering
+            foreach ($custom_fields as &$cf_row) {
+                if (!isset($cf_row['field_label']) && isset($cf_row['field_name'])) {
+                    $cf_row['field_label'] = $cf_row['field_name'];
+                }
+                if (!isset($cf_row['field_options']) && isset($cf_row['dropdown_options'])) {
+                    $cf_row['field_options'] = $cf_row['dropdown_options'];
+                }
+            }
+            unset($cf_row);
+        } catch (Exception $e) {
+            $custom_fields = [];
+        }
 
         echo json_encode([
             'success' => true,
@@ -291,6 +323,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_custom_field' && isset($
         $stmt = $pdo->prepare("SELECT * FROM employee_custom_fields WHERE id = ? LIMIT 1");
         $stmt->execute([(int)$_GET['id']]);
         $cf = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($cf) {
+            if (!isset($cf['field_label']) && isset($cf['field_name'])) {
+                $cf['field_label'] = $cf['field_name'];
+            }
+            if (!isset($cf['field_options']) && isset($cf['dropdown_options'])) {
+                $cf['field_options'] = $cf['dropdown_options'];
+            }
+        }
         echo json_encode($cf ?: ['error' => 'Not found']);
     } catch (Exception $e) { echo json_encode(['error' => $e->getMessage()]); }
     exit;
@@ -632,9 +672,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
         $cf_order = (int)($_POST['cf_sort_order'] ?? 0);
         $allowed_types = ['text','number','email','date','dropdown','textarea','phone'];
 
-        if (!$cf_label || !$cf_key) {
-            $error_message = 'Field label and key are required.';
-        } elseif (!preg_match('/^[a-z][a-z0-9_]{1,49}$/', $cf_key)) {
+        if (!$cf_label) {
+            $error_message = 'Field label is required.';
+        } elseif (!empty($cf_key) && !preg_match('/^[a-z][a-z0-9_]{1,49}$/', $cf_key)) {
             $error_message = 'Field key must be lowercase letters/numbers/underscore, 2-50 chars, start with a letter.';
         } elseif (!in_array($cf_type, $allowed_types, true)) {
             $error_message = 'Invalid field type.';
@@ -642,14 +682,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
             $error_message = 'Dropdown fields require at least one option.';
         } else {
             try {
-                $stmt = $pdo->prepare("SELECT COUNT(*) FROM employee_custom_fields WHERE field_key = ?");
-                $stmt->execute([$cf_key]);
-                if ((int)$stmt->fetchColumn() > 0) {
-                    $error_message = 'A custom field with this key already exists.';
-                } else {
-                    $pdo->prepare("INSERT INTO employee_custom_fields (field_label, field_key, field_type, field_options, is_required, sort_order, status) VALUES (?,?,?,?,?,?,?)")
-                        ->execute([$cf_label, $cf_key, $cf_type, $cf_opts ?: null, $cf_req, $cf_order, 'active']);
-                    log_admin_activity($pdo, $admin_username, 'custom_field_added', "Added custom field: {$cf_label} ({$cf_key}, {$cf_type})");
+                $cols = get_employee_custom_field_columns($pdo);
+                $has_field_key = in_array('field_key', $cols, true);
+
+                if ($has_field_key && !empty($cf_key)) {
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM employee_custom_fields WHERE field_key = ?");
+                    $stmt->execute([$cf_key]);
+                    if ((int)$stmt->fetchColumn() > 0) {
+                        $error_message = 'A custom field with this key already exists.';
+                    }
+                }
+
+                if (empty($error_message)) {
+                    $insert_data = [];
+                    if (in_array('field_label', $cols, true)) {
+                        $insert_data['field_label'] = $cf_label;
+                    } elseif (in_array('field_name', $cols, true)) {
+                        $insert_data['field_name'] = $cf_label;
+                    }
+                    if ($has_field_key && !empty($cf_key)) {
+                        $insert_data['field_key'] = $cf_key;
+                    }
+                    if (in_array('field_type', $cols, true)) {
+                        $insert_data['field_type'] = $cf_type;
+                    }
+                    if (in_array('field_options', $cols, true)) {
+                        $insert_data['field_options'] = $cf_opts ?: null;
+                    } elseif (in_array('dropdown_options', $cols, true)) {
+                        $insert_data['dropdown_options'] = $cf_opts ?: null;
+                    }
+                    if (in_array('is_required', $cols, true)) {
+                        $insert_data['is_required'] = $cf_req;
+                    }
+                    if (in_array('sort_order', $cols, true)) {
+                        $insert_data['sort_order'] = $cf_order;
+                    }
+                    if (in_array('status', $cols, true)) {
+                        $insert_data['status'] = 'active';
+                    }
+                    if (in_array('created_by', $cols, true)) {
+                        $insert_data['created_by'] = $admin_username;
+                    }
+
+                    $col_names = implode(', ', array_keys($insert_data));
+                    $placeholders = implode(', ', array_fill(0, count($insert_data), '?'));
+                    $stmt = $pdo->prepare("INSERT INTO employee_custom_fields ({$col_names}) VALUES ({$placeholders})");
+                    $stmt->execute(array_values($insert_data));
+
+                    log_admin_activity($pdo, $admin_username, 'custom_field_added', "Added custom field: {$cf_label} ({$cf_type})");
                     $success_message = "Custom field \"{$cf_label}\" created.";
                 }
             } catch (Exception $e) { $error_message = 'Error: ' . $e->getMessage(); }
@@ -674,10 +754,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
             $error_message = 'Dropdown fields require at least one option.';
         } else {
             try {
-                $pdo->prepare("UPDATE employee_custom_fields SET field_label=?, field_type=?, field_options=?, is_required=?, sort_order=? WHERE id=?")
-                    ->execute([$cf_label, $cf_type, $cf_opts ?: null, $cf_req, $cf_order, $cf_id]);
-                log_admin_activity($pdo, $admin_username, 'custom_field_updated', "Updated custom field #{$cf_id}: {$cf_label}");
-                $success_message = "Custom field \"{$cf_label}\" updated.";
+                $cols = get_employee_custom_field_columns($pdo);
+                $update_sets = [];
+                $update_vals = [];
+
+                if (in_array('field_label', $cols, true)) {
+                    $update_sets[] = "field_label = ?";
+                    $update_vals[] = $cf_label;
+                } elseif (in_array('field_name', $cols, true)) {
+                    $update_sets[] = "field_name = ?";
+                    $update_vals[] = $cf_label;
+                }
+                if (in_array('field_type', $cols, true)) {
+                    $update_sets[] = "field_type = ?";
+                    $update_vals[] = $cf_type;
+                }
+                if (in_array('field_options', $cols, true)) {
+                    $update_sets[] = "field_options = ?";
+                    $update_vals[] = $cf_opts ?: null;
+                } elseif (in_array('dropdown_options', $cols, true)) {
+                    $update_sets[] = "dropdown_options = ?";
+                    $update_vals[] = $cf_opts ?: null;
+                }
+                if (in_array('is_required', $cols, true)) {
+                    $update_sets[] = "is_required = ?";
+                    $update_vals[] = $cf_req;
+                }
+                if (in_array('sort_order', $cols, true)) {
+                    $update_sets[] = "sort_order = ?";
+                    $update_vals[] = $cf_order;
+                }
+
+                if (!empty($update_sets)) {
+                    $update_vals[] = $cf_id;
+                    $stmt = $pdo->prepare("UPDATE employee_custom_fields SET " . implode(', ', $update_sets) . " WHERE id = ?");
+                    $stmt->execute($update_vals);
+
+                    log_admin_activity($pdo, $admin_username, 'custom_field_updated', "Updated custom field #{$cf_id}: {$cf_label}");
+                    $success_message = "Custom field \"{$cf_label}\" updated.";
+                }
             } catch (Exception $e) { $error_message = 'Error: ' . $e->getMessage(); }
         }
     }
@@ -1016,18 +1131,22 @@ include 'includes/admin_nav.php';
         <table class="data-table">
             <thead><tr><th>Order</th><th>Label</th><th>Key</th><th>Type</th><th>Required</th><th>Status</th><th style="text-align:right;">Actions</th></tr></thead>
             <tbody>
-            <?php foreach ($custom_fields as $cf): ?>
-                <tr style="<?php echo $cf['status'] !== 'active' ? 'opacity:.55;' : ''; ?>">
-                    <td class="cell-sub"><?php echo (int)$cf['sort_order']; ?></td>
-                    <td class="cell-main"><?php echo e($cf['field_label']); ?></td>
-                    <td><code style="font-size:.75rem;background:var(--muted);padding:2px 6px;border-radius:4px;"><?php echo e($cf['field_key']); ?></code></td>
+            <?php foreach ($custom_fields as $cf):
+                $cf_lbl = $cf['field_label'] ?? $cf['field_name'] ?? ('Field #' . $cf['id']);
+                $cf_key_display = $cf['field_key'] ?? ('cf_' . $cf['id']);
+                $cf_opts_display = $cf['field_options'] ?? $cf['dropdown_options'] ?? '';
+            ?>
+                <tr style="<?php echo ($cf['status'] ?? 'active') !== 'active' ? 'opacity:.55;' : ''; ?>">
+                    <td class="cell-sub"><?php echo (int)($cf['sort_order'] ?? 0); ?></td>
+                    <td class="cell-main"><?php echo e($cf_lbl); ?></td>
+                    <td><code style="font-size:.75rem;background:var(--muted);padding:2px 6px;border-radius:4px;"><?php echo e($cf_key_display); ?></code></td>
                     <td><span class="badge blue" style="font-size:.7rem;"><?php echo $cf_type_labels[$cf['field_type']] ?? ucfirst($cf['field_type']); ?></span>
-                        <?php if ($cf['field_type'] === 'dropdown' && !empty($cf['field_options'])): ?>
-                        <div class="cell-sub" style="margin-top:2px;font-size:.65rem;"><?php echo e(mb_strimwidth($cf['field_options'], 0, 60, '…')); ?></div>
+                        <?php if ($cf['field_type'] === 'dropdown' && !empty($cf_opts_display)): ?>
+                        <div class="cell-sub" style="margin-top:2px;font-size:.65rem;"><?php echo e(mb_strimwidth($cf_opts_display, 0, 60, '…')); ?></div>
                         <?php endif; ?>
                     </td>
-                    <td><span class="badge <?php echo $cf['is_required'] ? 'amber' : 'gray'; ?>"><?php echo $cf['is_required'] ? 'Required' : 'Optional'; ?></span></td>
-                    <td><span class="badge <?php echo $cf['status'] === 'active' ? 'green' : 'gray'; ?>"><?php echo ucfirst($cf['status']); ?></span></td>
+                    <td><span class="badge <?php echo !empty($cf['is_required']) ? 'amber' : 'gray'; ?>"><?php echo !empty($cf['is_required']) ? 'Required' : 'Optional'; ?></span></td>
+                    <td><span class="badge <?php echo ($cf['status'] ?? 'active') === 'active' ? 'green' : 'gray'; ?>"><?php echo ucfirst($cf['status'] ?? 'active'); ?></span></td>
                     <td style="text-align:right;white-space:nowrap;">
                         <button class="btn btn-sm btn-outline" onclick="editCf(<?php echo $cf['id']; ?>)" title="Edit"><i class="fas fa-pen"></i></button>
                         <form method="POST" style="display:inline;">
@@ -1609,20 +1728,23 @@ function openStaffEditModal(empId) {
             if (d.custom_fields && d.custom_fields.length > 0) {
                 d.custom_fields.forEach(cf => {
                     const wrap = document.createElement('div');
-                    wrap.innerHTML = '<label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">' + cf.field_label + (cf.is_required == 1 ? ' *' : '') + '</label>';
+                    const lbl = cf.field_label || cf.field_name || 'Custom Field';
+                    wrap.innerHTML = '<label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">' + lbl + (cf.is_required == 1 ? ' *' : '') + '</label>';
                     let inp = '';
+                    const optionsStr = cf.field_options || cf.dropdown_options || '';
                     if (cf.field_type === 'dropdown') {
-                        const opts = cf.field_options ? cf.field_options.split(',').map(o => o.trim()) : [];
+                        const opts = optionsStr ? optionsStr.split(',').map(o => o.trim()) : [];
                         inp = '<select name="custom_fields[' + cf.id + ']" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">';
                         inp += '<option value="">— Select —</option>';
                         opts.forEach(o => {
-                            inp += '<option value="' + o + '" ' + (cf.field_value === o ? 'selected' : '') + '>' + o + '</option>';
+                            const escapedOpt = o.replace(/"/g, '&quot;');
+                            inp += '<option value="' + escapedOpt + '" ' + (cf.field_value === o ? 'selected' : '') + '>' + o + '</option>';
                         });
                         inp += '</select>';
                     } else if (cf.field_type === 'textarea') {
                         inp = '<textarea name="custom_fields[' + cf.id + ']" rows="2" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card); resize:vertical;">' + (cf.field_value || '') + '</textarea>';
                     } else {
-                        inp = '<input type="' + (cf.field_type === 'number' ? 'number' : (cf.field_type === 'date' ? 'date' : 'text')) + '" name="custom_fields[' + cf.id + ']" value="' + (cf.field_value || '') + '" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">';
+                        inp = '<input type="' + (cf.field_type === 'number' ? 'number' : (cf.field_type === 'date' ? 'date' : 'text')) + '" name="custom_fields[' + cf.id + ']" value="' + (cf.field_value || '').replace(/"/g, '&quot;') + '" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">';
                     }
                     wrap.innerHTML += inp;
                     cfContainer.appendChild(wrap);
@@ -1765,10 +1887,10 @@ function editCf(id) {
 
     fetch('employee-management.php?action=load_custom_field&id='+id).then(r=>r.json()).then(d=>{
         if (d.error) { alert(d.error); return; }
-        document.getElementById('cfLabel').value = d.field_label || '';
+        document.getElementById('cfLabel').value = d.field_label || d.field_name || '';
         document.getElementById('cfKey').value = d.field_key || '';
         document.getElementById('cfType').value = d.field_type || 'text';
-        document.getElementById('cfOptions').value = d.field_options || '';
+        document.getElementById('cfOptions').value = d.field_options || d.dropdown_options || '';
         document.getElementById('cfOrder').value = d.sort_order || '0';
         document.getElementById('cfRequired').checked = (parseInt(d.is_required) === 1);
         cfTypeChanged();
