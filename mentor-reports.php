@@ -60,8 +60,10 @@ function parse_user_agent_summary(?string $ua): string {
 // ── 1. Fetch Authoritative Active Mentors ──────────────────────────────
 // Only admins with actual mentoring assignments, activity, or mentoring permissions
 $stmt_mentors = $pdo->query("
-    SELECT DISTINCT a.id, a.username, a.full_name, a.email, a.role, a.admin_type, a.status
+    SELECT DISTINCT a.id, a.username, a.full_name, a.email, a.role, a.admin_type, a.status,
+           e.photo AS staff_photo, e.employee_id AS staff_code
     FROM admins a
+    LEFT JOIN employees e ON a.id = e.admin_id
     WHERE a.status = 'active'
       AND (
         a.id IN (SELECT DISTINCT admin_id FROM mentor_student_assignments)
@@ -523,6 +525,7 @@ foreach ($all_mentors as $mentor_entry) {
         'id' => $mid,
         'username' => $mentor_entry['username'],
         'full_name' => $mentor_entry['full_name'] ?: $mentor_entry['username'],
+        'staff_photo' => $mentor_entry['staff_photo'] ?? null,
         'assigned_students' => $m_assigned_cnt,
         'calls' => $m_calls,
         'remarks' => $m_remarks,
@@ -1537,9 +1540,15 @@ include __DIR__ . '/includes/admin_nav.php';
 
         <!-- ── 2. Mentor Profile Header Card ────────────────────────────── -->
         <div class="mentor-hero-card">
+            <?php
+            $m_raw_photo = $selected_mentor['staff_photo'] ?? '';
+            $m_photo_valid = (!empty($m_raw_photo) && strpos($m_raw_photo, '..') === false && file_exists(__DIR__ . '/' . $m_raw_photo));
+            ?>
             <div class="mentor-avatar-badge">
-                <div class="mentor-avatar">
-                    <?= strtoupper(substr($selected_mentor['full_name'] ?: $selected_mentor['username'], 0, 1)) ?>
+                <div class="mentor-avatar" style="<?= $m_photo_valid ? 'background-image:url(' . htmlspecialchars($m_raw_photo, ENT_QUOTES, 'UTF-8') . '); background-size:cover; background-position:center; color:transparent;' : '' ?>">
+                    <?php if (!$m_photo_valid): ?>
+                        <?= strtoupper(substr($selected_mentor['full_name'] ?: $selected_mentor['username'], 0, 1)) ?>
+                    <?php endif; ?>
                 </div>
                 <div class="presence-dot <?= $mentor_stats['is_online'] ? 'online' : 'offline' ?>" title="<?= $mentor_stats['is_online'] ? 'Online / Active' : 'Offline' ?>"></div>
             </div>
@@ -1757,10 +1766,21 @@ include __DIR__ . '/includes/admin_nav.php';
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <a href="?mentor_id=<?= (int)$rnk['id'] ?>&range=<?= urlencode($range_param) ?>" style="color:var(--text-dark); text-decoration:none; font-weight:700;">
-                                        <?= htmlspecialchars($rnk['full_name'], ENT_QUOTES, 'UTF-8') ?>
-                                    </a>
-                                    <div style="font-size:0.75rem; color:var(--text-muted);"><?= htmlspecialchars($rnk['username'], ENT_QUOTES, 'UTF-8') ?></div>
+                                    <?php
+                                    $r_raw_photo = $rnk['staff_photo'] ?? '';
+                                    $r_photo_valid = (!empty($r_raw_photo) && strpos($r_raw_photo, '..') === false && file_exists(__DIR__ . '/' . $r_raw_photo));
+                                    ?>
+                                    <div style="display:flex; align-items:center; gap:10px;">
+                                        <div style="width:34px; height:34px; border-radius:50%; background:<?= $r_photo_valid ? 'url(' . htmlspecialchars($r_raw_photo, ENT_QUOTES, 'UTF-8') . ') center/cover no-repeat' : 'linear-gradient(135deg, var(--pepp-orange), var(--pepp-orange-dark))' ?>; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.85rem; flex-shrink:0; border:1.5px solid #fff; box-shadow:0 2px 5px rgba(0,0,0,0.1);">
+                                            <?= $r_photo_valid ? '' : strtoupper(substr($rnk['full_name'] ?: $rnk['username'], 0, 1)) ?>
+                                        </div>
+                                        <div>
+                                            <a href="?mentor_id=<?= (int)$rnk['id'] ?>&range=<?= urlencode($range_param) ?>" style="color:var(--text-dark); text-decoration:none; font-weight:700;">
+                                                <?= htmlspecialchars($rnk['full_name'], ENT_QUOTES, 'UTF-8') ?>
+                                            </a>
+                                            <div style="font-size:0.75rem; color:var(--text-muted);"><?= htmlspecialchars($rnk['username'], ENT_QUOTES, 'UTF-8') ?></div>
+                                        </div>
+                                    </div>
                                 </td>
                                 <td><?= (int)$rnk['assigned_students'] ?></td>
                                 <td><?= (int)$rnk['calls'] ?></td>
