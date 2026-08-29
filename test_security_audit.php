@@ -130,6 +130,13 @@ $heartbeat = file_get_contents(__DIR__ . '/api/activity-heartbeat.php');
 assert_contains($heartbeat, "'httponly' => true", "SEC-19: geolocation cookies have HttpOnly flag");
 assert_contains($heartbeat, "'samesite' => 'Lax'", "SEC-19: geolocation cookies have SameSite flag");
 
+// ── SEC-23: login.php password view toggle eye button ───────────────────
+$login_content = file_get_contents(__DIR__ . '/login.php');
+assert_contains($login_content, 'btn-toggle-password', "SEC-23: login.php has password toggle eye button");
+assert_contains($login_content, 'toggle-password-icon', "SEC-23: login.php has toggle eye icon element");
+assert_contains($login_content, 'password-wrapper', "SEC-23: login.php has password-wrapper container");
+assert_contains($login_content, 'aria-label="Toggle password visibility"', "SEC-23: login.php has accessible aria-label");
+
 echo "\n";
 
 // ═══════════════════════════════════════════════════════════════════════

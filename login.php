@@ -292,6 +292,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$locked) {
             color: #9ca3af;
         }
 
+        .password-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+        .password-wrapper input {
+            padding-right: 42px;
+        }
+        .btn-toggle-password {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            padding: 6px;
+            cursor: pointer;
+            color: #9ca3af;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color .15s ease;
+            border-radius: 6px;
+        }
+        .btn-toggle-password:hover {
+            color: #4b5563;
+        }
+        .btn-toggle-password:focus-visible {
+            outline: 2px solid #8b5cf6;
+            outline-offset: 2px;
+        }
         .btn-google {
             display: flex; align-items: center; justify-content: center;
             width: 100%; padding: 12px; border-radius: 10px;
@@ -345,7 +377,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$locked) {
             </div>
             <div class="field">
                 <label for="password">Password</label>
-                <input type="password" id="password" name="password" required autocomplete="current-password" <?php echo $locked ? 'disabled' : ''; ?>>
+                <div class="password-wrapper">
+                    <input type="password" id="password" name="password" required autocomplete="current-password" <?php echo $locked ? 'disabled' : ''; ?>>
+                    <button type="button" id="toggle-password" class="btn-toggle-password" aria-label="Toggle password visibility" title="Show/Hide password" tabindex="-1" <?php echo $locked ? 'disabled' : ''; ?>>
+                        <i class="fas fa-eye" id="toggle-password-icon"></i>
+                    </button>
+                </div>
             </div>
             <button type="submit" class="btn-login" <?php echo $locked ? 'disabled' : ''; ?>>
                 <i class="fas fa-right-to-bracket"></i>&nbsp; Sign in
@@ -354,5 +391,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$locked) {
 
         <div class="login-foot">&copy; <?php echo date('Y'); ?> PEPP Learning - Authorized personnel only</div>
     </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const toggleBtn = document.getElementById('toggle-password');
+        const pwdInput = document.getElementById('password');
+        const eyeIcon = document.getElementById('toggle-password-icon');
+
+        if (toggleBtn && pwdInput && eyeIcon) {
+            toggleBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                const isPassword = pwdInput.type === 'password';
+                pwdInput.type = isPassword ? 'text' : 'password';
+                
+                if (isPassword) {
+                    eyeIcon.classList.remove('fa-eye');
+                    eyeIcon.classList.add('fa-eye-slash');
+                    toggleBtn.setAttribute('aria-label', 'Hide password');
+                } else {
+                    eyeIcon.classList.remove('fa-eye-slash');
+                    eyeIcon.classList.add('fa-eye');
+                    toggleBtn.setAttribute('aria-label', 'Show password');
+                }
+            });
+        }
+    });
+    </script>
 </body>
 </html>
