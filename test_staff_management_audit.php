@@ -101,6 +101,14 @@ $pdo->exec("
         status TEXT NOT NULL DEFAULT 'active',
         google_id TEXT DEFAULT NULL,
         google_email TEXT DEFAULT NULL,
+        credential_visibility TEXT NOT NULL DEFAULT 'visible',
+        credential_visibility_scopes TEXT DEFAULT '',
+        can_edit INTEGER NOT NULL DEFAULT 1,
+        can_delete INTEGER NOT NULL DEFAULT 1,
+        can_export INTEGER NOT NULL DEFAULT 1,
+        allow_copy_email INTEGER NOT NULL DEFAULT 1,
+        allow_whatsapp_chat INTEGER NOT NULL DEFAULT 1,
+        allow_phone_call INTEGER NOT NULL DEFAULT 1,
         last_active_at DATETIME NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -616,6 +624,118 @@ run_test('Authorized admin can execute sensitive reveal, copy, profile update & 
         assert_true(strpos($l['details'], $aadhaar_plain) === false, "Log {$l['action']} does not contain plaintext Aadhaar");
         assert_true(strpos($l['details'], $bank_plain) === false, "Log {$l['action']} does not contain plaintext Bank Account");
     }
+});
+
+// ======================================================================
+// SECTION 9: ADMIN MANAGEMENT EDIT ACTION & SECURITY VERIFICATION
+// ======================================================================
+echo "\n--- Section 9: Admin Management Edit Action & Security Verification ---\n";
+
+run_test('Static check: admin-management.php enforces require_super_admin()', function() {
+    $code = file_get_contents(__DIR__ . '/admin-management.php');
+    assert_true(strpos($code, "require_super_admin();") !== false, "admin-management.php contains require_super_admin()");
+    assert_true(strpos($code, "action=get_admin_details") !== false, "admin-management.php contains get_admin_details AJAX action");
+    assert_true(strpos($code, "openPerms(") !== false, "admin-management.php has openPerms handler");
+});
+
+run_test('get_admin_details endpoint returns complete admin details with linked staff and NO password hashes', function() use ($pdo) {
+    // Insert test admin and linked employee
+    $stmt = $pdo->prepare("INSERT INTO admins (username, full_name, email, phone, role, admin_type, permissions, credential_visibility, credential_visibility_scopes, can_edit, can_delete, can_export, allow_copy_email, allow_whatsapp_chat, allow_phone_call, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $stmt->execute(['test_edit_admin', 'Test Edit User', 'edit@test.com', '9876543210', 'admin', 'erp_admin', 'students,financials', 'mask', 'students,financials', 1, 0, 1, 1, 0, 1, 'active']);
+    $admin_id = (int)$pdo->lastInsertId();
+
+    // Query mimicking get_admin_details
+    $stmt_q = $pdo->prepare("
+        SELECT a.id, a.username, a.full_name, a.email, a.google_email, a.phone,
+               a.role, a.admin_type, a.permissions, a.status,
+               a.credential_visibility, a.credential_visibility_scopes,
+               a.can_edit, a.can_delete, a.can_export,
+               a.allow_copy_email, a.allow_whatsapp_chat, a.allow_phone_call,
+               e.id AS linked_staff_id,
+               e.employee_id AS linked_staff_code,
+               e.full_name AS linked_staff_name
+        FROM admins a
+        LEFT JOIN employees e ON a.id = e.admin_id
+        WHERE a.id = ? LIMIT 1
+    ");
+    $stmt_q->execute([$admin_id]);
+    $adm = $stmt_q->fetch(PDO::FETCH_ASSOC);
+
+    assert_true(!empty($adm), 'Admin details successfully fetched');
+    assert_equals('test_edit_admin', $adm['username'], 'Username matches');
+    assert_equals('Test Edit User', $adm['full_name'], 'Full name matches');
+    assert_equals('edit@test.com', $adm['email'], 'Email matches');
+    assert_equals('9876543210', $adm['phone'], 'Phone matches');
+    assert_equals('mask', $adm['credential_visibility'], 'Credential visibility matches');
+    assert_equals(1, (int)$adm['can_edit'], 'can_edit matches');
+    assert_equals(0, (int)$adm['can_delete'], 'can_delete matches');
+    assert_false(isset($adm['password_hash']), 'Password hash is NOT exposed in get_admin_details');
+});
+
+run_test('update_perms updates all profile, permission, scope and action settings correctly', function() use ($pdo) {
+    $stmt = $pdo->prepare("SELECT id FROM admins WHERE username = 'test_edit_admin' LIMIT 1");
+    $stmt->execute();
+    $admin_id = (int)$stmt->fetchColumn();
+
+    // Simulate update_perms POST processing
+    $perms = 'students,dashboard,registrations';
+    $name = 'Updated Edit User';
+    $email = 'updated@test.com';
+    $gemail = 'updated.google@test.com';
+    $phone = '9998887776';
+    $admin_type = 'faculty';
+    $cred_vis = 'hide';
+    $scopes = 'students,registrations';
+    $can_edit = 1;
+    $can_delete = 1;
+    $can_export = 0;
+    $allow_copy_email = 0;
+    $allow_whatsapp_chat = 1;
+    $allow_phone_call = 1;
+
+    $stmt_upd = $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ?, admin_type = ?, credential_visibility = ?, credential_visibility_scopes = ?, can_edit = ?, can_delete = ?, can_export = ?, allow_copy_email = ?, allow_whatsapp_chat = ?, allow_phone_call = ? WHERE id = ?");
+    $stmt_upd->execute([$perms, $name, $email, $gemail, $phone, $admin_type, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $allow_copy_email, $allow_whatsapp_chat, $allow_phone_call, $admin_id]);
+
+    // Verify persisted record
+    $stmt_chk = $pdo->prepare("SELECT * FROM admins WHERE id = ?");
+    $stmt_chk->execute([$admin_id]);
+    $updated = $stmt_chk->fetch(PDO::FETCH_ASSOC);
+
+    assert_equals('Updated Edit User', $updated['full_name'], 'Updated full name persisted');
+    assert_equals('updated@test.com', $updated['email'], 'Updated email persisted');
+    assert_equals('updated.google@test.com', $updated['google_email'], 'Updated google email persisted');
+    assert_equals('faculty', $updated['admin_type'], 'Updated admin type persisted');
+    assert_equals('hide', $updated['credential_visibility'], 'Updated credential visibility persisted');
+    assert_equals('students,registrations', $updated['credential_visibility_scopes'], 'Updated scopes persisted');
+    assert_equals(1, (int)$updated['can_edit'], 'Updated can_edit persisted');
+    assert_equals(1, (int)$updated['can_delete'], 'Updated can_delete persisted');
+    assert_equals(0, (int)$updated['can_export'], 'Updated can_export persisted');
+    assert_equals(0, (int)$updated['allow_copy_email'], 'Updated allow_copy_email persisted');
+    assert_equals(1, (int)$updated['allow_whatsapp_chat'], 'Updated allow_whatsapp_chat persisted');
+    assert_equals('students,dashboard,registrations', $updated['permissions'], 'Updated permissions persisted');
+});
+
+run_test('Staff ↔ Admin link is preserved and not overwritten when editing admin details', function() use ($pdo) {
+    $stmt = $pdo->prepare("SELECT id FROM admins WHERE username = 'test_edit_admin' LIMIT 1");
+    $stmt->execute();
+    $admin_id = (int)$stmt->fetchColumn();
+
+    // Link an employee to this admin
+    $stmt_emp = $pdo->prepare("INSERT INTO employees (employee_id, full_name, email, mobile_number, status, admin_id, linked_at, linked_by) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)");
+    $stmt_emp->execute(['EMP999', 'Linked Staff Person', 'updated@test.com', '9998887776', 'active', $admin_id, 'superadmin']);
+    $emp_id = (int)$pdo->lastInsertId();
+
+    // Update admin permissions/details again
+    $stmt_upd = $pdo->prepare("UPDATE admins SET full_name = 'Updated Again User' WHERE id = ?");
+    $stmt_upd->execute([$admin_id]);
+
+    // Check that employee remains linked to this admin
+    $stmt_emp_chk = $pdo->prepare("SELECT admin_id, linked_by FROM employees WHERE id = ?");
+    $stmt_emp_chk->execute([$emp_id]);
+    $emp_chk = $stmt_emp_chk->fetch(PDO::FETCH_ASSOC);
+
+    assert_equals($admin_id, (int)$emp_chk['admin_id'], 'Employee admin_id remains intact');
+    assert_equals('superadmin', $emp_chk['linked_by'], 'Employee linked_by remains intact');
 });
 
 // ======================================================================

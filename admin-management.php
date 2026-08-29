@@ -145,6 +145,39 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_staff_list_for_linking') 
     exit;
 }
 
+// ── AJAX: Load Admin Details for Edit Modal ─────────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'get_admin_details' && isset($_GET['id'])) {
+    header('Content-Type: application/json');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+    try {
+        $admin_id = (int)$_GET['id'];
+        $stmt = $pdo->prepare("
+            SELECT a.id, a.username, a.full_name, a.email, a.google_email, a.phone,
+                   a.role, a.admin_type, a.permissions, a.status,
+                   a.credential_visibility, a.credential_visibility_scopes,
+                   a.can_edit, a.can_delete, a.can_export,
+                   a.allow_copy_email, a.allow_whatsapp_chat, a.allow_phone_call,
+                   e.id AS linked_staff_id,
+                   e.employee_id AS linked_staff_code,
+                   e.full_name AS linked_staff_name
+            FROM admins a
+            LEFT JOIN employees e ON a.id = e.admin_id
+            WHERE a.id = ? LIMIT 1
+        ");
+        $stmt->execute([$admin_id]);
+        $adm = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$adm) {
+            echo json_encode(['success' => false, 'error' => 'Admin record not found.']);
+            exit;
+        }
+        echo json_encode(['success' => true, 'admin' => $adm]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'error' => 'Failed to load admin details: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!csrf_verify()) {
         $error_message = 'Security token mismatch. Please retry.';
@@ -423,6 +456,13 @@ include 'includes/admin_nav.php';
                         <?php if (!empty($a['email']) || !empty($a['phone'])): ?>
                         <div class="cell-sub"><?php echo $a['email'] ? '<i class="fas fa-envelope"></i> ' . e($a['email']) : ''; ?><?php echo (!empty($a['email']) && !empty($a['phone'])) ? ' · ' : ''; ?><?php echo $a['phone'] ? '<i class="fas fa-phone"></i> ' . e($a['phone']) : ''; ?></div>
                         <?php endif; ?>
+                        <?php if (!empty($a['linked_staff_id'])): ?>
+                        <div style="margin-top:4px;">
+                            <span class="badge blue" style="font-size:0.65rem;" title="Linked Approved Staff: <?php echo e($a['linked_staff_name']); ?> (<?php echo e($a['linked_staff_code']); ?>)">
+                                <i class="fas fa-id-badge"></i> <?php echo e($a['linked_staff_name']); ?> (<?php echo e($a['linked_staff_code']); ?>)
+                            </span>
+                        </div>
+                        <?php endif; ?>
                     </td>
                     <td>
                         <span class="badge <?php echo $isSuper ? 'red' : 'blue'; ?>"><?php echo $isSuper ? 'Super Admin' : 'Admin'; ?></span>
@@ -460,20 +500,12 @@ include 'includes/admin_nav.php';
                     <td><span class="badge <?php echo $a['status'] === 'active' ? 'green' : 'gray'; ?>"><?php echo ucfirst($a['status']); ?></span></td>
                     <td style="text-align:right; white-space:nowrap;">
                         <?php if (!$isSuper): ?>
-                            <button class="btn btn-sm btn-outline" title="Edit access & details" onclick='openPerms(<?php echo json_encode([
-                                "id" => (int)$a["id"], "username" => $a["username"], "name" => (string)$a["full_name"],
-                                "email" => (string)($a["email"] ?? ""), "phone" => (string)($a["phone"] ?? ""), "gemail" => (string)($a["google_email"] ?? ""),
-                                "perms" => trim((string)$a["permissions"]),
-                                "credential_visibility" => (string)($a["credential_visibility"] ?? "visible"),
-                                "credential_visibility_scopes" => (string)($a["credential_visibility_scopes"] ?? ""),
-                                "can_edit" => (int)($a["can_edit"] ?? 1),
-                                "can_delete" => (int)($a["can_delete"] ?? 1),
-                                "can_export" => (int)($a["can_export"] ?? 1),
-                                "allow_copy_email" => (int)($a["allow_copy_email"] ?? 1),
-                                "allow_whatsapp_chat" => (int)($a["allow_whatsapp_chat"] ?? 1),
-                                "allow_phone_call" => (int)($a["allow_phone_call"] ?? 1),
-                                "admin_type" => (string)($a["admin_type"] ?? "erp_admin"),
-                            ], JSON_HEX_APOS | JSON_HEX_QUOT); ?>)'><i class="fas fa-key"></i></button>
+                            <button class="btn btn-sm btn-outline" title="Edit admin access & details" onclick="openPerms(<?php echo (int)$a['id']; ?>)"><i class="fas fa-pen-to-square"></i></button>
+                            <?php if (empty($a['linked_staff_id'])): ?>
+                                <button class="btn btn-sm btn-soft-blue" title="Link Staff Profile" onclick="openLinkStaffModal(<?php echo (int)$a['id']; ?>, '<?php echo e(addslashes($a['username'])); ?>', '<?php echo e(addslashes($a['full_name'] ?? '')); ?>', '<?php echo e(addslashes($a['email'] ?? '')); ?>', '<?php echo e(addslashes($a['phone'] ?? '')); ?>', '')"><i class="fas fa-link"></i></button>
+                            <?php else: ?>
+                                <button class="btn btn-sm btn-soft-amber" title="Unlink Staff (<?php echo e(addslashes($a['linked_staff_name'])); ?>)" onclick="unlinkStaff(<?php echo (int)$a['id']; ?>, '<?php echo e(addslashes($a['username'])); ?>', '<?php echo e(addslashes($a['linked_staff_name'])); ?>')"><i class="fas fa-link-slash"></i></button>
+                            <?php endif; ?>
                             <button class="btn btn-sm btn-soft-blue" title="Reset password" onclick="resetPassword(<?php echo (int)$a['id']; ?>, '<?php echo e(addslashes($a['username'])); ?>')"><i class="fas fa-lock-open"></i></button>
                             <form method="POST" style="display:inline;">
                                 <?php echo csrf_field(); ?>
@@ -577,26 +609,13 @@ include 'includes/admin_nav.php';
                                 <input type="checkbox" name="can_export" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Export
                             </label>
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                    <div class="field" style="grid-column: span 2; margin-top:-4px; margin-bottom:6px;">
-                        <label style="margin-bottom:6px; display:block;">Action Permissions (Global)</label>
-                        <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
-                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="can_edit" value="1" checked style="width:16px; height:16px; accent-color:var(--accent);"> Allow Edit / Modify
+                                <input type="checkbox" name="allow_copy_email" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Copy Original Email
                             </label>
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="can_delete" value="1" checked style="width:16px; height:16px; accent-color:var(--accent);"> Allow Delete
+                                <input type="checkbox" name="allow_whatsapp_chat" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow WhatsApp Chat
                             </label>
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="can_export" value="1" checked style="width:16px; height:16px; accent-color:var(--accent);"> Allow Export
-                            </label>
-                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="allow_copy_email" value="1" checked style="width:16px; height:16px; accent-color:var(--accent);"> Allow Copy Original Email
-                            </label>
-                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="allow_whatsapp_chat" value="1" checked style="width:16px; height:16px; accent-color:var(--accent);"> Allow WhatsApp Chat
-                            </label>
-                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="allow_phone_call" value="1" checked style="width:16px; height:16px; accent-color:var(--accent);"> Allow Phone Call
+                                <input type="checkbox" name="allow_phone_call" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Phone Call
                             </label>
                         </div>
                     </div>
@@ -622,19 +641,19 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
-<!-- ── PERMISSIONS MODAL ── -->
+<!-- ── PERMISSIONS & DETAILS MODAL ── -->
 <div class="modal-backdrop" id="perms-modal">
-    <div class="modal" style="max-width:560px;">
+    <div class="modal" style="max-width:580px;">
         <div class="modal-head">
-            <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-lock"></i></span>
-            <h2>Access &amp; Permissions: <span id="pm-username"></span></h2>
+            <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-user-pen"></i></span>
+            <h2>Edit Admin Account: <span id="pm-username"></span></h2>
             <button type="button" class="close-btn" onclick="closeModal('perms-modal')">&times;</button>
         </div>
         <form method="POST">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="update_perms">
             <input type="hidden" name="admin_id" id="pm-id">
-            <div class="modal-body">
+            <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
                 <div class="grid-2">
                     <div class="field">
                         <label>Full Name</label>
@@ -660,6 +679,7 @@ include 'includes/admin_nav.php';
                             <option value="employee">Employee</option>
                             <option value="faculty">Faculty</option>
                             <option value="intern">Intern</option>
+                            <option value="superadmin">Superadmin</option>
                         </select>
                     </div>
                     <div class="field">
@@ -690,6 +710,29 @@ include 'includes/admin_nav.php';
                             </label>
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
                                 <input type="checkbox" name="credential_visibility_scopes[]" value="financials" class="pm-scope" data-scope="financials" style="width:16px; height:16px; accent-color:var(--accent);"> Financials
+                            </label>
+                        </div>
+                    </div>
+                    <div class="field" style="grid-column: span 2; margin-top:-4px; margin-bottom:12px;">
+                        <label style="margin-bottom:6px; display:block;">Action Permissions (Global)</label>
+                        <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="can_edit" value="1" id="pm-can-edit" style="width:16px; height:16px; accent-color:var(--accent);"> Allow Edit / Modify
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="can_delete" value="1" id="pm-can-delete" style="width:16px; height:16px; accent-color:var(--accent);"> Allow Delete
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="can_export" value="1" id="pm-can-export" style="width:16px; height:16px; accent-color:var(--accent);"> Allow Export
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="allow_copy_email" value="1" id="pm-allow-copy-email" style="width:16px; height:16px; accent-color:var(--accent);"> Allow Copy Original Email
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="allow_whatsapp_chat" value="1" id="pm-allow-wa-chat" style="width:16px; height:16px; accent-color:var(--accent);"> Allow WhatsApp Chat
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="allow_phone_call" value="1" id="pm-allow-phone-call" style="width:16px; height:16px; accent-color:var(--accent);"> Allow Phone Call
                             </label>
                         </div>
                     </div>
@@ -810,26 +853,60 @@ function toggleAll(cb, boxId) {
     document.querySelectorAll('#' + boxId + ' input[type=checkbox]').forEach(c => { c.disabled = cb.checked; if (cb.checked) c.checked = false; });
 }
 
-function openPerms(a) {
+function openPerms(adminIdOrObj) {
+    if (typeof adminIdOrObj === 'number' || (typeof adminIdOrObj === 'string' && !isNaN(adminIdOrObj))) {
+        fetch('admin-management.php?action=get_admin_details&id=' + encodeURIComponent(adminIdOrObj))
+            .then(r => r.json())
+            .then(d => {
+                if (!d.success || !d.admin) {
+                    alert(d.error || 'Failed to load admin details.');
+                    return;
+                }
+                populateAndOpenPermsModal(d.admin);
+            })
+            .catch(err => {
+                console.error(err);
+                alert('Network error loading admin details.');
+            });
+    } else if (typeof adminIdOrObj === 'object' && adminIdOrObj !== null) {
+        populateAndOpenPermsModal(adminIdOrObj);
+    }
+}
+
+function populateAndOpenPermsModal(a) {
     document.getElementById('pm-id').value = a.id;
-    document.getElementById('pm-name').value = a.name || '';
+    document.getElementById('pm-name').value = a.full_name || a.name || '';
     document.getElementById('pm-email').value = a.email || '';
     document.getElementById('pm-phone').value = a.phone || '';
-    document.getElementById('pm-gemail').value = a.gemail || '';
+    document.getElementById('pm-gemail').value = a.google_email || a.gemail || '';
     document.getElementById('pm-cred-visibility').value = a.credential_visibility || 'visible';
+
     const scopes = a.credential_visibility_scopes ? a.credential_visibility_scopes.split(',').map(s => s.trim()) : [];
     document.querySelectorAll('.pm-scope').forEach(c => {
         c.checked = scopes.includes(c.dataset.scope);
     });
+
+    if (document.getElementById('pm-can-edit')) document.getElementById('pm-can-edit').checked = (parseInt(a.can_edit ?? 1) === 1);
+    if (document.getElementById('pm-can-delete')) document.getElementById('pm-can-delete').checked = (parseInt(a.can_delete ?? 1) === 1);
+    if (document.getElementById('pm-can-export')) document.getElementById('pm-can-export').checked = (parseInt(a.can_export ?? 1) === 1);
+    if (document.getElementById('pm-allow-copy-email')) document.getElementById('pm-allow-copy-email').checked = (parseInt(a.allow_copy_email ?? 1) === 1);
+    if (document.getElementById('pm-allow-wa-chat')) document.getElementById('pm-allow-wa-chat').checked = (parseInt(a.allow_whatsapp_chat ?? 1) === 1);
+    if (document.getElementById('pm-allow-phone-call')) document.getElementById('pm-allow-phone-call').checked = (parseInt(a.allow_phone_call ?? 1) === 1);
+
     document.getElementById('pm-admin-type').value = a.admin_type || 'erp_admin';
     document.getElementById('pm-username').textContent = a.username;
-    const isAll = (a.perms === 'ALL');
-    document.getElementById('pm-all') ? document.getElementById('pm-all').checked = isAll : null;
-    const granted = isAll ? [] : a.perms.split(',').map(s => s.trim());
+
+    const permsStr = (a.permissions !== undefined) ? (a.permissions || '') : (a.perms || '');
+    const isAll = (permsStr === 'ALL');
+    const pmAll = document.getElementById('pm-all');
+    if (pmAll) pmAll.checked = isAll;
+
+    const granted = isAll ? [] : permsStr.split(',').map(s => s.trim());
     document.querySelectorAll('.pm-perm').forEach(c => {
         c.checked = granted.includes(c.dataset.key);
         c.disabled = isAll;
     });
+
     openModal('perms-modal');
 }
 
