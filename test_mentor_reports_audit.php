@@ -224,6 +224,7 @@ $stmt_elig = $pdo->query("
     SELECT DISTINCT a.id, a.username, a.full_name, a.role, a.admin_type, a.status
     FROM admins a
     WHERE a.status = 'active'
+      AND a.role != 'super_admin'
       AND (
         a.id IN (SELECT DISTINCT admin_id FROM mentor_student_assignments)
         OR a.id IN (SELECT DISTINCT admin_id FROM mentor_course_assignments)
@@ -242,6 +243,7 @@ test_assert(in_array('mentor_anand', $eligible_usernames, true), "ELIG-03: Activ
 test_assert(!in_array('generic_faculty', $eligible_usernames, true), "ELIG-04: Generic faculty staff without mentoring role is EXCLUDED");
 test_assert(!in_array('inactive_mentor', $eligible_usernames, true), "ELIG-05: Inactive mentor is EXCLUDED");
 test_assert(!in_array('normal_admin', $eligible_usernames, true), "ELIG-06: Non-mentor regular admin is EXCLUDED");
+test_assert(!in_array('audit_superadmin', $eligible_usernames, true), "ELIG-07: Superadmin is strictly EXCLUDED from mentors list");
 
 echo "\n--- SECTION 3: Canonical Active-Student Lifecycle Filtering Tests ---\n";
 // The canonical active-student invariant: u.status = 'approved' AND u.student_status = 'active'

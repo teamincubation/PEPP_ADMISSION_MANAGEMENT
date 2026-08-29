@@ -117,7 +117,7 @@ $email_col = $has_email ? "a.email" : "'' AS email";
 $staff_joins = $has_employees ? "LEFT JOIN employees e ON a.id = e.admin_id" : "";
 $staff_cols = $has_employees ? "e.photo AS staff_photo, e.employee_id AS staff_code" : "NULL AS staff_photo, NULL AS staff_code";
 
-$mentor_where_clauses = ["a.permissions LIKE '%student-mentoring%'", "a.role = 'super_admin'"];
+$mentor_where_clauses = ["a.permissions LIKE '%student-mentoring%'"];
 try {
     if ($pdo->query("SELECT 1 FROM mentor_student_assignments LIMIT 1")) {
         $mentor_where_clauses[] = "a.id IN (SELECT DISTINCT admin_id FROM mentor_student_assignments)";
@@ -149,6 +149,7 @@ try {
         FROM admins a
         $staff_joins
         WHERE a.status = 'active'
+          AND a.role != 'super_admin'
           AND ($mentor_where_sql)
         ORDER BY $full_name_col ASC, a.username ASC
     ");
@@ -156,7 +157,7 @@ try {
 } catch (Throwable $e) {
     error_log("Mentor reports mentor query error: " . $e->getMessage());
     try {
-        $all_mentors = $pdo->query("SELECT id, username, role, status FROM admins WHERE status = 'active'")->fetchAll(PDO::FETCH_ASSOC);
+        $all_mentors = $pdo->query("SELECT id, username, role, status FROM admins WHERE status = 'active' AND role != 'super_admin'")->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e2) {
         $all_mentors = [];
     }
