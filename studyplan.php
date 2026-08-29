@@ -1052,8 +1052,8 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                                     }
                                 }
                             ?>
-                                <a href="?plan_id=<?php echo $p['id']; ?>" class="plan-row-card" style="display:flex; justify-content:space-between; align-items:center;">
-                                    <div>
+                                <div class="plan-row-card" style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="if (!event.target.closest('.plan-report-action-btn')) { window.location.href='?plan_id=<?php echo $p['id']; ?>'; }">
+                                    <div style="flex:1; min-width:0; padding-right:10px;">
                                         <div style="font-weight:700; font-size:0.95rem; color:var(--text-main); display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
                                             <span><?php echo p_esc($p['title']); ?></span>
                                             <?php if ($is_active_plan): ?>
@@ -1068,10 +1068,15 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                                             <?php endif; ?>
                                         </small>
                                     </div>
-                                    <div style="width:30px; height:30px; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-                                        <i class="fas fa-arrow-right"></i>
+                                    <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
+                                        <a href="studyplan-report.php?study_plan_id=<?php echo $p['id']; ?>" class="plan-report-action-btn" title="View Performance Report" style="display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:50%; background:#fff7ed; border:1px solid #fed7aa; color:#ea580c; text-decoration:none; transition:all 0.2s ease; box-shadow:0 1px 3px rgba(234,88,12,0.1);" onmouseover="this.style.background='#ffedd5'; this.style.transform='scale(1.05)';" onmouseout="this.style.background='#fff7ed'; this.style.transform='scale(1)';" onclick="event.stopPropagation();">
+                                            <i class="fas fa-chart-pie" style="font-size:0.85rem;"></i>
+                                        </a>
+                                        <div style="width:34px; height:34px; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                                            <i class="fas fa-arrow-right" style="font-size:0.85rem;"></i>
+                                        </div>
                                     </div>
-                                </a>
+                                </div>
                             <?php endforeach; ?>
                         </div>
                     <?php endif; ?>
@@ -1095,9 +1100,14 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                 $pending_pct = $total_tasks > 0 ? 100 - $completed_pct : 0;
             ?>
                 <!-- Render specific plan activities -->
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <a href="studyplan.php" style="text-decoration:none; color:var(--text-muted); font-size:0.85rem; font-weight:700;"><i class="fas fa-arrow-left"></i> All Plans</a>
-                    <span class="badge blue" style="font-size:0.75rem; font-weight:700; background:var(--accent-soft); color:var(--accent); padding:4px 10px; border-radius:30px;">v<?php echo $selected_plan['version']; ?></span>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <a href="studyplan.php" style="text-decoration:none; color:var(--text-muted); font-size:0.85rem; font-weight:700; display:inline-flex; align-items:center; gap:6px;"><i class="fas fa-arrow-left"></i> All Plans</a>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <a href="studyplan-report.php?study_plan_id=<?php echo $selected_plan['id']; ?>" class="plan-report-header-btn" style="display:inline-flex; align-items:center; gap:6px; background:#fff7ed; border:1px solid #fed7aa; color:#ea580c; text-decoration:none; padding:4px 12px; border-radius:30px; font-size:0.75rem; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; transition:all 0.2s ease;" onmouseover="this.style.background='#ffedd5';" onmouseout="this.style.background='#fff7ed';">
+                            <i class="fas fa-chart-pie"></i> View Report
+                        </a>
+                        <span class="badge blue" style="font-size:0.75rem; font-weight:700; background:var(--accent-soft); color:var(--accent); padding:4px 10px; border-radius:30px;">v<?php echo $selected_plan['version']; ?></span>
+                    </div>
                 </div>
 
                 <!-- Sticky Header for Task Counts -->
