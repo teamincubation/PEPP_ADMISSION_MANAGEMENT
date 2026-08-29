@@ -5135,7 +5135,7 @@ include 'includes/admin_nav.php';
                             <td>${ca.attendance_percentage !== null ? ca.attendance_percentage + '%' : '—'}</td>
                             <td><strong>${ca.average_score !== null ? ca.average_score + '%' : '—'}</strong></td>
                             <td>
-                                ${ca.rank !== null ? `<span class="badge badge-purple" style="font-weight:800;">🏆 #${ca.rank}${ca.total_participants ? ` / ${ca.total_participants}` : ''}</span>` : `<span class="badge" style="background:#f1f5f9; color:#64748b;">Not available</span>`}
+                                ${ca.rank !== null && (ca.cohort_size || ca.total_participants) ? `<span class="badge badge-purple" style="font-weight:800;">🏆 Rank #${ca.rank} / ${ca.cohort_size || ca.total_participants}</span>` : `<span class="badge" style="background:#f1f5f9; color:#64748b;">Not available</span>`}
                             </td>
                         </tr>
                     `).join('')}
@@ -5785,7 +5785,7 @@ include 'includes/admin_nav.php';
                                     <td>${ca.attendance_percentage !== null ? ca.attendance_percentage + '%' : '—'}</td>
                                     <td><strong>${ca.average_score !== null ? ca.average_score + '%' : '—'}</strong></td>
                                     <td>
-                                        ${ca.rank !== null ? `<span class="badge badge-elite" style="font-weight:800; font-size:0.75rem; padding:4px 8px;">🏆 Rank #${ca.rank}${ca.total_participants ? ` / ${ca.total_participants}` : ''}</span>` : `<span class="badge gray" style="font-size:0.7rem;">Rank: Not available</span>`}
+                                        ${ca.rank !== null && (ca.cohort_size || ca.total_participants) ? `<span class="badge badge-elite" style="font-weight:800; font-size:0.75rem; padding:4px 8px;">🏆 Rank #${ca.rank} / ${ca.cohort_size || ca.total_participants}</span>` : `<span class="badge gray" style="font-size:0.7rem;">Rank: Not available</span>`}
                                     </td>
                                 </tr>
                             `).join('')}

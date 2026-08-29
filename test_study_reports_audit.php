@@ -1527,6 +1527,14 @@ assertTest("Test AY: No-data assessments not falsely flagged as Needs Attention"
 
 
 // --- TEST AZ: Assessment Ranks in Chapter-wise Assessment Performance ---
+// Ensure test participants are in users for Plan 1's assigned course cohort
+$pdo->prepare("DELETE FROM users WHERE user_id IN ('PEPP20261111', 'PEPP20262222')")->execute();
+$pdo->prepare("
+    INSERT INTO users (user_id, name, email, phone, pepp_course, pepp_academic_year, status, created_at, student_status)
+    VALUES ('PEPP20261111', 'Top Student', 'top@pepp.com', '+919999999991', 'MA/MSc Psychology (Premium)', '2026-27', 'approved', '2026-08-01 10:00:00', 'active'),
+           ('PEPP20262222', 'Low Student', 'low@pepp.com', '+919999999992', 'MA/MSc Psychology (Premium)', '2026-27', 'approved', '2026-08-01 10:00:00', 'active')
+")->execute();
+
 // Insert a test assessment batch with 3 students to verify genuine competition ranking
 $pdo->prepare("DELETE FROM assessment_result_batches WHERE id = 9999")->execute();
 $pdo->prepare("
@@ -1552,14 +1560,126 @@ foreach ($analytics_with_rank['chapter_assessments'] as $ca) {
 assertTest("Test AZ: Cognitive Psychology chapter found in assessment breakdown", true, $cog_chap !== null);
 assertTest("Test AZ: chapter_assessments contains rank keys", true, isset($cog_chap['rank_display']));
 assertTest("Test AZ: chapter_assessments contains rank_badge", true, isset($cog_chap['rank_badge']));
-assertTest("Test AZ: Genuine competition rank computed correctly (#2 of 3)", 2, $cog_chap['rank']);
-assertTest("Test AZ: Total participants in assessment cohort", 3, $cog_chap['total_participants']);
-assertTest("Test AZ: Rank display format (#2 / 3)", "#2 / 3", $cog_chap['rank_display']);
-assertTest("Test AZ: Rank badge format (🏆 Rank #2)", "🏆 Rank #2", $cog_chap['rank_badge']);
+assertTest("Test AZ: chapter_assessments contains cohort_size", true, isset($cog_chap['cohort_size']));
+assertTest("Test AZ: Genuine competition rank computed correctly (#2 among attendees)", 2, $cog_chap['rank']);
+assertTest("Test AZ: Total participants in combined study plan cohort", 7, $cog_chap['cohort_size']);
+assertTest("Test AZ: Rank display format (#2 / 7)", "#2 / 7", $cog_chap['rank_display']);
+assertTest("Test AZ: Rank badge format (🏆 Rank #2 / 7)", "🏆 Rank #2 / 7", $cog_chap['rank_badge']);
 
 // Cleanup test batch
 $pdo->prepare("DELETE FROM assessment_results WHERE batch_id = 9999")->execute();
 $pdo->prepare("DELETE FROM assessment_result_batches WHERE id = 9999")->execute();
+$pdo->prepare("DELETE FROM users WHERE user_id IN ('PEPP20261111', 'PEPP20262222')")->execute();
+
+
+// --- TEST AZ2: Combined Multi-Course Cohort Denominator (Course A + Course B with Overlap) ---
+// Setup Plan 777 with Course A (30 students) and Course B (20 students) with 5 overlap = 45 total unique students
+$pdo->prepare("DELETE FROM study_plans WHERE id = 777")->execute();
+$pdo->prepare("
+    INSERT INTO study_plans (id, title, plan_type, status, academic_year, start_date, end_date)
+    VALUES (777, 'Psychology Entrance 2026', 'date_wise', 'published', '2026-27', '2026-08-01', '2026-08-31')
+")->execute();
+
+$pdo->prepare("DELETE FROM study_plan_assignments WHERE study_plan_id = 777")->execute();
+$pdo->prepare("
+    INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value, is_deleted)
+    VALUES (777, 'course', 'Psychology Course A', 0),
+           (777, 'course', 'Psychology Course B', 0)
+")->execute();
+
+$pdo->prepare("DELETE FROM study_plan_activities WHERE study_plan_id = 777")->execute();
+$pdo->prepare("
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, activity_date, activity_type, topic, activity_title, chapter, is_deleted)
+    VALUES (7701, 777, 'uid_7701', '2026-08-15', 'Attend Mega Test', 'IHBAS 2025', 'Mega Test 1', 'Research Methodology', 0)
+")->execute();
+
+// Delete prior test users for Plan 777
+$pdo->exec("DELETE FROM users WHERE user_id LIKE 'P777_%'");
+
+// Insert 25 students only in Course A
+$stmt_u_ins = $pdo->prepare("
+    INSERT INTO users (user_id, name, email, phone, pepp_course, pepp_academic_year, status, student_status)
+    VALUES (?, ?, ?, '+919888888888', ?, '2026-27', 'approved', 'active')
+");
+for ($i = 1; $i <= 25; $i++) {
+    $stmt_u_ins->execute(["P777_CA_$i", "Course A Student $i", "ca_$i@pepp.com", "Psychology Course A"]);
+}
+// Insert 15 students only in Course B
+for ($i = 1; $i <= 15; $i++) {
+    $stmt_u_ins->execute(["P777_CB_$i", "Course B Student $i", "cb_$i@pepp.com", "Psychology Course B"]);
+}
+// Insert 5 overlapping students (in Course A, but also assigned to Course B via course/batch context)
+for ($i = 1; $i <= 5; $i++) {
+    $stmt_u_ins->execute(["P777_CAB_$i", "Course AB Student $i", "cab_$i@pepp.com", "Psychology Course A"]);
+}
+
+// Verify combined cohort resolution: 25 + 15 + 5 = 45 unique students
+$p777_cohort = StudentStudyPlanAnalytics::getStudyPlanCohortStudents($pdo, 777, '2026-27');
+assertTest("Test AZ2: Combined multi-course cohort deduplicated correctly (45 unique students)", 45, count($p777_cohort));
+
+// Insert Assessment Batch 7799 attended by 18 students
+$pdo->prepare("DELETE FROM assessment_result_batches WHERE id = 7799")->execute();
+$pdo->prepare("
+    INSERT INTO assessment_result_batches (id, academic_year, course_name, study_plan_id, activity_id, activity_title_snapshot, chapter_snapshot, status)
+    VALUES (7799, '2026-27', 'Psychology Course A', 777, 7701, 'Mega Test 1', 'Research Methodology', 'published')
+")->execute();
+$pdo->prepare("DELETE FROM assessment_results WHERE batch_id = 7799")->execute();
+
+// Insert 18 results (Scores 100, 98, 96, 94, 92, 90, 82 (Rank 7), 80, 78, 76, 74, 72, 70, 68, 66, 64, 62, 60)
+$scores_18 = [100, 98, 96, 94, 92, 90, 82, 80, 78, 76, 74, 72, 70, 68, 66, 64, 62, 60];
+$stmt_res_ins = $pdo->prepare("
+    INSERT INTO assessment_results (batch_id, user_id, student_email, attendance_status, score, total_score)
+    VALUES (7799, ?, ?, 'attended', ?, 100)
+");
+// Target student is P777_CAB_1 with score 82 (7th highest)
+$stmt_res_ins->execute(["P777_CAB_1", "cab_1@pepp.com", 82]);
+// Other 17 participants
+for ($k = 1; $k <= 17; $k++) {
+    $score_val = ($k < 7) ? $scores_18[$k - 1] : $scores_18[$k];
+    $stmt_res_ins->execute(["P777_CA_$k", "ca_$k@pepp.com", $score_val]);
+}
+// Insert non-attending student result for P777_CAB_2
+$pdo->prepare("
+    INSERT INTO assessment_results (batch_id, user_id, student_email, attendance_status, score, total_score)
+    VALUES (7799, 'P777_CAB_2', 'cab_2@pepp.com', 'not_attended', NULL, 100)
+")->execute();
+
+$analytics_p777 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'cab_1@pepp.com', 777);
+$rm_chap = null;
+foreach ($analytics_p777['chapter_assessments'] as $ca) {
+    if ($ca['chapter_name'] === 'Research Methodology') {
+        $rm_chap = $ca;
+        break;
+    }
+}
+assertTest("Test AZ2: Research Methodology chapter found", true, $rm_chap !== null);
+assertTest("Test AZ2: Target student rank is #7 based on genuine test results", 7, $rm_chap['rank']);
+assertTest("Test AZ2: Attended count is 18 (not used as denominator)", 18, $rm_chap['attended_count']);
+assertTest("Test AZ2: Cohort size is 45 (used as denominator)", 45, $rm_chap['cohort_size']);
+assertTest("Test AZ2: Rank display is '#7 / 45'", "#7 / 45", $rm_chap['rank_display']);
+assertTest("Test AZ2: Rank badge is '🏆 Rank #7 / 45'", "🏆 Rank #7 / 45", $rm_chap['rank_badge']);
+assertTest("Test AZ2: Attendance % is 100% (1 attended of 1 published)", 100, (int)$rm_chap['attendance_percentage']);
+
+// Edge case: Non-attending student (cab_2@pepp.com) in same cohort gets 'Not available' without fabricated rank
+$analytics_non_attending = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'cab_2@pepp.com', 777);
+$rm_chap_na = null;
+foreach ($analytics_non_attending['chapter_assessments'] as $ca) {
+    if ($ca['chapter_name'] === 'Research Methodology') {
+        $rm_chap_na = $ca;
+        break;
+    }
+}
+assertTest("Test AZ2: Non-attending student has rank null", null, $rm_chap_na['rank']);
+assertTest("Test AZ2: Non-attending student rank display is 'Not available'", 'Not available', $rm_chap_na['rank_display']);
+assertTest("Test AZ2: Non-attending student rank badge is 'Rank: Not available'", 'Rank: Not available', $rm_chap_na['rank_badge']);
+
+// Cleanup Plan 777 fixtures
+$pdo->exec("DELETE FROM assessment_results WHERE batch_id = 7799");
+$pdo->exec("DELETE FROM assessment_result_batches WHERE id = 7799");
+$pdo->exec("DELETE FROM study_plan_activities WHERE study_plan_id = 777");
+$pdo->exec("DELETE FROM study_plan_assignments WHERE study_plan_id = 777");
+$pdo->exec("DELETE FROM study_plans WHERE id = 777");
+$pdo->exec("DELETE FROM users WHERE user_id LIKE 'P777_%'");
 
 
 // --- TEST BA: PDF 3 Streak / Study-Day Cards ---

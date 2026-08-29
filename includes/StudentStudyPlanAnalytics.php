@@ -251,6 +251,10 @@ class StudentStudyPlanAnalytics {
         $active_study_days = count($completed_dates);
         $consistency_percentage = $total_plan_calendar_days > 0 ? min(100, round(($active_study_days / $total_plan_calendar_days) * 100)) : 0;
 
+        // Resolve combined study plan cohort for accurate rank denominator calculation
+        $study_plan_cohort_map = self::getStudyPlanCohortStudents($pdo, $study_plan_id, $academic_year);
+        $study_plan_cohort_size = count($study_plan_cohort_map);
+
         // Fetch real attendance and performance from assessment results linked to this plan
         $stmt_att = $pdo->prepare("
             SELECT ar.batch_id, ar.attendance_status, ar.score, ar.total_score,
@@ -268,6 +272,7 @@ class StudentStudyPlanAnalytics {
         $att_records = $stmt_att->fetchAll(PDO::FETCH_ASSOC);
 
         // Compute genuine competition ranks for all batches linked to this student and plan
+        // The denominator is the total unique combined cohort of the Study Plan (not attended count)
         $batch_ranks = [];
         $batch_ids = array_unique(array_filter(array_column($att_records, 'batch_id')));
         if (!empty($batch_ids)) {
@@ -287,7 +292,9 @@ class StudentStudyPlanAnalytics {
             }
 
             foreach ($grouped_batches as $bid => $bresults) {
-                $total_cohort = count($bresults);
+                $attended_count = count($bresults);
+                $denominator = ($study_plan_cohort_size > 0) ? $study_plan_cohort_size : null;
+
                 $prev_score = null;
                 $cur_rank = 0;
                 $counter = 0;
@@ -300,11 +307,16 @@ class StudentStudyPlanAnalytics {
                     $match_user = (!empty($res_item['user_id']) && $res_item['user_id'] == $user_id);
                     $match_email = (!empty($res_item['student_email']) && strcasecmp($res_item['student_email'], $email) === 0);
                     if ($match_user || $match_email) {
+                        $rank_display = ($denominator !== null) ? "#{$cur_rank} / {$denominator}" : "Not available";
+                        $rank_badge = ($denominator !== null) ? "🏆 Rank #{$cur_rank} / {$denominator}" : "Rank: Not available";
+
                         $batch_ranks[$bid] = [
                             'rank' => $cur_rank,
-                            'total_participants' => $total_cohort,
-                            'rank_display' => "#{$cur_rank} / {$total_cohort}",
-                            'rank_badge' => "🏆 Rank #{$cur_rank}"
+                            'cohort_size' => $denominator,
+                            'total_participants' => $denominator,
+                            'attended_count' => $attended_count,
+                            'rank_display' => $rank_display,
+                            'rank_badge' => $rank_badge
                         ];
                         break;
                     }
@@ -448,7 +460,8 @@ class StudentStudyPlanAnalytics {
             $avg_sc = count($cdata['scores']) > 0 ? round(array_sum($cdata['scores']) / count($cdata['scores']), 1) : null;
 
             $best_rank = null;
-            $total_cohort_for_rank = null;
+            $cohort_size_for_rank = null;
+            $attended_count_for_rank = null;
             $rank_display = 'Not available';
             $rank_badge = 'Rank: Not available';
 
@@ -465,9 +478,10 @@ class StudentStudyPlanAnalytics {
                     });
                     $top_r = $chapter_ranks[0];
                     $best_rank = $top_r['rank'];
-                    $total_cohort_for_rank = $top_r['total_participants'];
-                    $rank_display = "#{$best_rank} / {$total_cohort_for_rank}";
-                    $rank_badge = "🏆 Rank #{$best_rank}";
+                    $cohort_size_for_rank = $top_r['cohort_size'];
+                    $attended_count_for_rank = $top_r['attended_count'];
+                    $rank_display = $top_r['rank_display'];
+                    $rank_badge = $top_r['rank_badge'];
                 }
             }
 
@@ -478,7 +492,9 @@ class StudentStudyPlanAnalytics {
                 'attendance_percentage' => $att_pct,
                 'average_score' => $avg_sc,
                 'rank' => $best_rank,
-                'total_participants' => $total_cohort_for_rank,
+                'cohort_size' => $cohort_size_for_rank,
+                'total_participants' => $cohort_size_for_rank,
+                'attended_count' => $attended_count_for_rank,
                 'rank_display' => $rank_display,
                 'rank_badge' => $rank_badge
             ];
@@ -501,6 +517,9 @@ class StudentStudyPlanAnalytics {
                     'total_score' => $rec['total_score'],
                     'percentage' => $pct,
                     'rank' => $rnk_info ? $rnk_info['rank'] : null,
+                    'cohort_size' => $rnk_info ? $rnk_info['cohort_size'] : null,
+                    'total_participants' => $rnk_info ? $rnk_info['cohort_size'] : null,
+                    'attended_count' => $rnk_info ? $rnk_info['attended_count'] : null,
                     'rank_display' => $rnk_info ? $rnk_info['rank_display'] : null,
                     'rank_badge' => $rnk_info ? $rnk_info['rank_badge'] : null
                 ];
@@ -862,33 +881,32 @@ class StudentStudyPlanAnalytics {
     }
 
     /**
-     * Calculate unified Study Plan cohort ranking across all courses assigned to this Study Plan.
-     * Merges multiple courses under the same Study Plan into one unified cohort.
-     * Deduplicates students, activities, and assessment records.
-     * Implements missing assessment weight normalization.
+     * Resolve the unique combined student cohort for a given Study Plan across all assigned courses/batches.
+     * Deduplicates students by user_id or email.
+     *
+     * @param PDO $pdo
+     * @param int $study_plan_id
+     * @param string|null $academic_year
+     * @return array Array of unique student records indexed by student key
      */
-    public static function getCohortRanking($pdo, $study_plan_id, $academic_year, $target_user_id = null, $target_email = null) {
-        $now = new DateTimeImmutable('now', new DateTimeZone('Asia/Kolkata'));
-        $today = $now->format('Y-m-d');
-
-        // 1. Fetch study plan info & verify academic year
-        $stmt_plan = $pdo->prepare("SELECT id, title, academic_year, start_date, end_date, plan_type FROM study_plans WHERE id = ? AND is_deleted = 0");
-        $stmt_plan->execute([$study_plan_id]);
-        $plan = $stmt_plan->fetch(PDO::FETCH_ASSOC);
-
-        if (!$plan || strtolower(trim($plan['academic_year'])) !== strtolower(trim($academic_year))) {
-            return self::emptyCohortRanking($study_plan_id, $academic_year);
+    public static function getStudyPlanCohortStudents($pdo, $study_plan_id, $academic_year = null) {
+        $study_plan_id = (int)$study_plan_id;
+        if ($study_plan_id <= 0) {
+            return [];
         }
 
-        $total_plan_calendar_days = self::calculatePlanCalendarDays($plan['start_date'], $plan['end_date']);
+        if (empty($academic_year)) {
+            $stmt_p = $pdo->prepare("SELECT academic_year FROM study_plans WHERE id = ?");
+            $stmt_p->execute([$study_plan_id]);
+            $academic_year = $stmt_p->fetchColumn() ?: '2026-27';
+        }
 
-        // 2. Resolve all assignments for this Study Plan
         $stmt_assign = $pdo->prepare("SELECT assignment_type, assigned_value FROM study_plan_assignments WHERE study_plan_id = ? AND is_deleted = 0");
         $stmt_assign->execute([$study_plan_id]);
         $assignments = $stmt_assign->fetchAll(PDO::FETCH_ASSOC);
 
         if (empty($assignments)) {
-            return self::emptyCohortRanking($study_plan_id, $academic_year);
+            return [];
         }
 
         $is_all = false;
@@ -910,18 +928,18 @@ class StudentStudyPlanAnalytics {
             }
         }
 
-        // 3. Fetch all eligible approved students in this academic year matching assignments
         $query_users = "
             SELECT user_id, email, name, pepp_course, pepp_academic_year, user_photo, student_status
             FROM users
             WHERE status = 'approved'
-              AND LOWER(TRIM(pepp_academic_year)) = LOWER(TRIM(?))
+              AND (
+                ? IS NULL OR ? = '' OR LOWER(TRIM(pepp_academic_year)) = LOWER(TRIM(?))
+              )
         ";
         $stmt_users = $pdo->prepare($query_users);
-        $stmt_users->execute([$academic_year]);
+        $stmt_users->execute([$academic_year, $academic_year, $academic_year]);
         $raw_users = $stmt_users->fetchAll(PDO::FETCH_ASSOC);
 
-        // Deduplicate students by user_id / email (a student in multiple courses appears ONCE)
         $cohort_students_map = [];
         foreach ($raw_users as $u) {
             $u_id = trim((string)($u['user_id'] ?? ''));
@@ -932,20 +950,50 @@ class StudentStudyPlanAnalytics {
             $eligible = false;
             if ($is_all) {
                 $eligible = true;
-            } elseif (in_array($u_course, $assigned_courses)) {
+            } elseif (in_array($u_course, $assigned_courses, true)) {
                 $eligible = true;
-            } elseif (in_array($u_id, $assigned_students)) {
+            } elseif (in_array($u_id, $assigned_students, true)) {
                 $eligible = true;
-            } elseif (in_array($u_batch, $assigned_batches)) {
+            } elseif (in_array($u_batch, $assigned_batches, true)) {
                 $eligible = true;
             }
 
             if ($eligible) {
                 $key = ($u_id !== '') ? $u_id : $u_email;
-                if (!isset($cohort_students_map[$key])) {
+                if ($key !== '' && !isset($cohort_students_map[$key])) {
                     $cohort_students_map[$key] = $u;
                 }
             }
+        }
+
+        return $cohort_students_map;
+    }
+
+    /**
+     * Calculate unified Study Plan cohort ranking across all courses assigned to this Study Plan.
+     * Merges multiple courses under the same Study Plan into one unified cohort.
+     * Deduplicates students, activities, and assessment records.
+     * Implements missing assessment weight normalization.
+     */
+    public static function getCohortRanking($pdo, $study_plan_id, $academic_year, $target_user_id = null, $target_email = null) {
+        $now = new DateTimeImmutable('now', new DateTimeZone('Asia/Kolkata'));
+        $today = $now->format('Y-m-d');
+
+        // 1. Fetch study plan info & verify academic year
+        $stmt_plan = $pdo->prepare("SELECT id, title, academic_year, start_date, end_date, plan_type FROM study_plans WHERE id = ? AND is_deleted = 0");
+        $stmt_plan->execute([$study_plan_id]);
+        $plan = $stmt_plan->fetch(PDO::FETCH_ASSOC);
+
+        if (!$plan || strtolower(trim($plan['academic_year'])) !== strtolower(trim($academic_year))) {
+            return self::emptyCohortRanking($study_plan_id, $academic_year);
+        }
+
+        $total_plan_calendar_days = self::calculatePlanCalendarDays($plan['start_date'], $plan['end_date']);
+
+        // 2 & 3. Resolve all eligible approved students in this academic year matching assignments
+        $cohort_students_map = self::getStudyPlanCohortStudents($pdo, $study_plan_id, $academic_year);
+        if (empty($cohort_students_map)) {
+            return self::emptyCohortRanking($study_plan_id, $academic_year);
         }
 
         $unique_students = array_values($cohort_students_map);
