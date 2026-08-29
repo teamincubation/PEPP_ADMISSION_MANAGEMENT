@@ -6,9 +6,17 @@
 
 require_once 'includes/auth.php';
 require_permission('email-reports');
-require_once 'includes/email_campaigns_helper.php';
 
-check_and_create_email_campaign_tables($pdo);
+if (file_exists(__DIR__ . '/includes/email_campaigns_helper.php')) {
+    require_once __DIR__ . '/includes/email_campaigns_helper.php';
+    if (function_exists('check_and_create_email_campaign_tables')) {
+        try {
+            check_and_create_email_campaign_tables($pdo);
+        } catch (Throwable $e) {
+            error_log("Email campaign tables init notice: " . $e->getMessage());
+        }
+    }
+}
 
 $active_page = 'email-reports';
 $page_title  = 'Email Dispatch Reports';
@@ -98,103 +106,133 @@ $sub_queries = [];
 // 1. Marketing Email Campaigns Queue
 $has_eq_table = false;
 try {
-    $has_eq_table = (bool)$pdo->query("SHOW TABLES LIKE 'email_queue'")->fetchColumn();
-} catch (Throwable $e) {}
+    $has_eq_table = (bool)$pdo->query("SELECT 1 FROM email_queue LIMIT 1");
+} catch (Throwable $e) {
+    try {
+        $has_eq_table = (bool)$pdo->query("SHOW TABLES LIKE 'email_queue'")->fetchColumn();
+    } catch (Throwable $e2) {}
+}
 
 if ($has_eq_table) {
-    $sub_queries[] = "
-        SELECT
-            eq.id as unique_id,
-            'email_campaigns' COLLATE utf8mb4_unicode_ci as module_type,
-            'Bulk Email Campaign' COLLATE utf8mb4_unicode_ci as module_label,
-            CAST(COALESCE(ec.subject, 'Marketing Campaign') AS CHAR) COLLATE utf8mb4_unicode_ci as campaign_title,
-            CAST(eq.recipient_email AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_email,
-            CAST(COALESCE(eq.recipient_name, '') AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_name,
-            CAST(eq.subject AS CHAR) COLLATE utf8mb4_unicode_ci as subject,
-            CAST(COALESCE(eq.body, '') AS CHAR) COLLATE utf8mb4_unicode_ci as body_preview,
-            CAST(eq.status AS CHAR) COLLATE utf8mb4_unicode_ci as status,
-            CAST(COALESCE(eq.error_message, '') AS CHAR) COLLATE utf8mb4_unicode_ci as error_message,
-            COALESCE(eq.sent_at, eq.created_at) as dispatched_at,
-            eq.created_at,
-            CAST(COALESCE(ec.created_by, 'System') AS CHAR) COLLATE utf8mb4_unicode_ci as admin_username
-        FROM email_queue eq
-        LEFT JOIN email_campaigns ec ON eq.campaign_id = ec.id
-        WHERE NOT EXISTS (
-            SELECT 1 FROM communication_queue cq
-            WHERE cq.recipient = eq.recipient_email AND cq.subject = eq.subject AND cq.channel = 'email'
-        )
-    ";
+    $has_ec_table = false;
+    try {
+        $has_ec_table = (bool)$pdo->query("SELECT 1 FROM email_campaigns LIMIT 1");
+    } catch (Throwable $e) {
+        try {
+            $has_ec_table = (bool)$pdo->query("SHOW TABLES LIKE 'email_campaigns'")->fetchColumn();
+        } catch (Throwable $e2) {}
+    }
+
+    if ($has_ec_table) {
+        $sub_queries[] = "
+            SELECT
+                eq.id as unique_id,
+                'email_campaigns' as module_type,
+                'Bulk Email Campaign' as module_label,
+                CAST(COALESCE(ec.subject, 'Marketing Campaign') AS CHAR) as campaign_title,
+                CAST(eq.recipient_email AS CHAR) as recipient_email,
+                CAST(COALESCE(eq.recipient_name, '') AS CHAR) as recipient_name,
+                CAST(eq.subject AS CHAR) as subject,
+                CAST(COALESCE(eq.body, '') AS CHAR) as body_preview,
+                CAST(eq.status AS CHAR) as status,
+                CAST(COALESCE(eq.error_message, '') AS CHAR) as error_message,
+                COALESCE(eq.sent_at, eq.created_at) as dispatched_at,
+                eq.created_at,
+                CAST(COALESCE(ec.created_by, 'System') AS CHAR) as admin_username
+            FROM email_queue eq
+            LEFT JOIN email_campaigns ec ON eq.campaign_id = ec.id
+        ";
+    } else {
+        $sub_queries[] = "
+            SELECT
+                eq.id as unique_id,
+                'email_campaigns' as module_type,
+                'Bulk Email Campaign' as module_label,
+                'Marketing Campaign' as campaign_title,
+                CAST(eq.recipient_email AS CHAR) as recipient_email,
+                CAST(COALESCE(eq.recipient_name, '') AS CHAR) as recipient_name,
+                CAST(eq.subject AS CHAR) as subject,
+                CAST(COALESCE(eq.body, '') AS CHAR) as body_preview,
+                CAST(eq.status AS CHAR) as status,
+                CAST(COALESCE(eq.error_message, '') AS CHAR) as error_message,
+                COALESCE(eq.sent_at, eq.created_at) as dispatched_at,
+                eq.created_at,
+                'System' as admin_username
+            FROM email_queue eq
+        ";
+    }
 }
 
 // 2. Communication Engine Queue (channel = 'email')
 $has_comm_table = false;
 try {
-    $has_comm_table = (bool)$pdo->query("SHOW TABLES LIKE 'communication_queue'")->fetchColumn();
-} catch (Throwable $e) {}
+    $has_comm_table = (bool)$pdo->query("SELECT 1 FROM communication_queue LIMIT 1");
+} catch (Throwable $e) {
+    try {
+        $has_comm_table = (bool)$pdo->query("SHOW TABLES LIKE 'communication_queue'")->fetchColumn();
+    } catch (Throwable $e2) {}
+}
 
 if ($has_comm_table) {
     $sub_queries[] = "
         SELECT
             cq.id as unique_id,
-            'communication_engine' COLLATE utf8mb4_unicode_ci as module_type,
+            'communication_engine' as module_type,
             CASE
-                WHEN cq.event_name = 'activity_log_export' THEN 'Activity Log Export' COLLATE utf8mb4_unicode_ci
-                WHEN cq.event_name = 'email_reports_export' THEN 'Email Reports Export' COLLATE utf8mb4_unicode_ci
-                WHEN ec.id IS NOT NULL THEN 'Bulk Email Campaign' COLLATE utf8mb4_unicode_ci
-                ELSE 'Communication Engine' COLLATE utf8mb4_unicode_ci
+                WHEN cq.event_name = 'activity_log_export' THEN 'Activity Log Export'
+                WHEN cq.event_name = 'email_reports_export' THEN 'Email Reports Export'
+                WHEN cq.event_name IS NOT NULL AND cq.event_name != '' THEN cq.event_name
+                WHEN cq.template_name IS NOT NULL AND cq.template_name != '' THEN cq.template_name
+                ELSE 'Communication Engine'
             END as module_label,
-            CASE
-                WHEN ec.id IS NOT NULL THEN CAST(COALESCE(ec.subject, 'Marketing Campaign') AS CHAR) COLLATE utf8mb4_unicode_ci
-                ELSE CAST(COALESCE(cq.template_name, cq.event_name, 'Direct Dispatch') AS CHAR) COLLATE utf8mb4_unicode_ci
-            END as campaign_title,
-            CAST(cq.recipient AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_email,
-            CAST(COALESCE(cq.recipient_name, '') AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_name,
-            CAST(COALESCE(cq.subject, 'Notification') AS CHAR) COLLATE utf8mb4_unicode_ci as subject,
-            CAST(COALESCE(cq.body_html, cq.body_text, '') AS CHAR) COLLATE utf8mb4_unicode_ci as body_preview,
-            CAST(cq.status AS CHAR) COLLATE utf8mb4_unicode_ci as status,
-            CAST(COALESCE(cq.error_message, '') AS CHAR) COLLATE utf8mb4_unicode_ci as error_message,
+            CAST(COALESCE(cq.template_name, cq.event_name, 'Direct Dispatch') AS CHAR) as campaign_title,
+            CAST(cq.recipient AS CHAR) as recipient_email,
+            CAST(COALESCE(cq.recipient_name, '') AS CHAR) as recipient_name,
+            CAST(COALESCE(cq.subject, 'Notification') AS CHAR) as subject,
+            CAST(COALESCE(cq.body_html, cq.body_text, '') AS CHAR) as body_preview,
+            CAST(cq.status AS CHAR) as status,
+            CAST(COALESCE(cq.error_message, '') AS CHAR) as error_message,
             COALESCE(cq.updated_at, cq.created_at) as dispatched_at,
             cq.created_at,
-            CASE
-                WHEN ec.id IS NOT NULL THEN CAST(COALESCE(ec.created_by, 'System') AS CHAR) COLLATE utf8mb4_unicode_ci
-                ELSE CAST(COALESCE(cq.sent_by, 'System') AS CHAR) COLLATE utf8mb4_unicode_ci
-            END as admin_username
+            CAST(COALESCE(cq.sent_by, 'System') AS CHAR) as admin_username
         FROM communication_queue cq
-        LEFT JOIN (
-            SELECT recipient_email, subject, MAX(campaign_id) as campaign_id
-            FROM email_queue
-            GROUP BY recipient_email, subject
-        ) eq ON (cq.recipient = eq.recipient_email AND cq.subject = eq.subject)
-        LEFT JOIN email_campaigns ec ON eq.campaign_id = ec.id
         WHERE cq.channel = 'email'
     ";
 }
 
 // 3. Invoice Email Dispatches
+$has_inv_table = false;
 $has_inv_col = false;
 try {
-    $has_inv_table = (bool)$pdo->query("SHOW TABLES LIKE 'invoices'")->fetchColumn();
+    $has_inv_table = (bool)$pdo->query("SELECT 1 FROM invoices LIMIT 1");
     if ($has_inv_table) {
-        $has_inv_col = (bool)$pdo->query("SHOW COLUMNS FROM invoices LIKE 'email_status'")->fetch();
+        $has_inv_col = (bool)$pdo->query("SELECT email_status FROM invoices LIMIT 1");
     }
-} catch (Throwable $e) {}
+} catch (Throwable $e) {
+    try {
+        $has_inv_table = (bool)$pdo->query("SHOW TABLES LIKE 'invoices'")->fetchColumn();
+        if ($has_inv_table) {
+            $has_inv_col = (bool)$pdo->query("SHOW COLUMNS FROM invoices LIKE 'email_status'")->fetch();
+        }
+    } catch (Throwable $e2) {}
+}
 
-if ($has_inv_col) {
+if ($has_inv_table && $has_inv_col) {
     $sub_queries[] = "
         SELECT
             inv.id as unique_id,
-            'invoices' COLLATE utf8mb4_unicode_ci as module_type,
-            'Invoices & Billing' COLLATE utf8mb4_unicode_ci as module_label,
-            CAST(CONCAT('Invoice #', COALESCE(inv.invoice_no, inv.id)) AS CHAR) COLLATE utf8mb4_unicode_ci as campaign_title,
-            CAST(inv.email AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_email,
-            CAST(COALESCE(inv.student_name, '') AS CHAR) COLLATE utf8mb4_unicode_ci as recipient_name,
-            CAST(CONCAT('Invoice #', COALESCE(inv.invoice_no, inv.id), ' - PEPP Learning') AS CHAR) COLLATE utf8mb4_unicode_ci as subject,
-            CAST(CONCAT('Invoice notification dispatched for ', COALESCE(inv.student_name, '')) AS CHAR) COLLATE utf8mb4_unicode_ci as body_preview,
-            CAST(CASE WHEN inv.email_status = 'sent' THEN 'sent' WHEN inv.email_status = 'failed' THEN 'failed' ELSE 'pending' END AS CHAR) COLLATE utf8mb4_unicode_ci as status,
-            CAST('' AS CHAR) COLLATE utf8mb4_unicode_ci as error_message,
+            'invoices' as module_type,
+            'Invoices & Billing' as module_label,
+            CAST(CONCAT('Invoice #', COALESCE(inv.invoice_no, inv.id)) AS CHAR) as campaign_title,
+            CAST(inv.email AS CHAR) as recipient_email,
+            CAST(COALESCE(inv.student_name, '') AS CHAR) as recipient_name,
+            CAST(CONCAT('Invoice #', COALESCE(inv.invoice_no, inv.id), ' - PEPP Learning') AS CHAR) as subject,
+            CAST(CONCAT('Invoice notification dispatched for ', COALESCE(inv.student_name, '')) AS CHAR) as body_preview,
+            CAST(CASE WHEN inv.email_status = 'sent' THEN 'sent' WHEN inv.email_status = 'failed' THEN 'failed' ELSE 'pending' END AS CHAR) as status,
+            CAST('' AS CHAR) as error_message,
             COALESCE(inv.paid_date, inv.created_at) as dispatched_at,
             inv.created_at,
-            CAST(COALESCE(inv.generated_by, 'System') AS CHAR) COLLATE utf8mb4_unicode_ci as admin_username
+            CAST(COALESCE(inv.generated_by, 'System') AS CHAR) as admin_username
         FROM invoices inv
         WHERE inv.email_status IS NOT NULL AND inv.email_status != ''
     ";
@@ -341,13 +379,17 @@ try {
             $pending_count++;
         }
     }
-} catch (Exception $ex) {}
+} catch (Throwable $ex) {
+    error_log("Email reports KPI error: " . $ex->getMessage());
+}
 
 // Fetch distinct admins for dropdown
 $admins_list = [];
 try {
     $admins_list = $pdo->query("SELECT DISTINCT username FROM admins ORDER BY username ASC")->fetchAll(PDO::FETCH_COLUMN);
-} catch (Exception $ex) {}
+} catch (Throwable $ex) {
+    $admins_list = [];
+}
 
 // Pagination Setup
 $page = max(1, (int)($_GET['page'] ?? 1));
@@ -355,10 +397,16 @@ $per_page = 25;
 $total_pages = max(1, ceil($total_all / $per_page));
 $offset = ($page - 1) * $per_page;
 
-$final_sql = $unified_sql . " ORDER BY dispatched_at DESC LIMIT $per_page OFFSET $offset";
-$stmt_page = $pdo->prepare($final_sql);
-$stmt_page->execute($params);
-$reports = $stmt_page->fetchAll(PDO::FETCH_ASSOC);
+$reports = [];
+try {
+    $final_sql = $unified_sql . " ORDER BY dispatched_at DESC LIMIT $per_page OFFSET $offset";
+    $stmt_page = $pdo->prepare($final_sql);
+    $stmt_page->execute($params);
+    $reports = $stmt_page->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $ex) {
+    error_log("Email reports rows fetch error: " . $ex->getMessage());
+    $reports = [];
+}
 
 include 'includes/admin_nav.php';
 ?>
