@@ -637,7 +637,7 @@ if ($is_local_dev) {
             } catch (Throwable $e) {}
         }
 
-        $pdo->exec("
+        $pdo->exec(<<<'SQL_SEED'
             INSERT OR REPLACE INTO admin_settings (setting_name, setting_value) VALUES ('whatsapp_webhook_verify_token', 'test_verify_token');
             INSERT OR REPLACE INTO admin_settings (setting_name, setting_value) VALUES ('whatsapp_app_secret', 'test_app_secret');
 
@@ -708,9 +708,10 @@ if ($is_local_dev) {
             (id, title, category, description, bg_image, canvas_width, canvas_height, resolution_dpi, aspect_ratio, status, elements_json, created_by, created_at)
             VALUES
             (10, 'Mega Test Result Template', 'Achievement', 'Mega Test result announcement template with top 4 ranks.', 'uploads/card_templates/mega_test_result_template.jpg', 1671, 2048, 300, '1671:2048', 'active',
-            '[{\"id\":\"test_number\",\"name\":\"Test Number\",\"type\":\"text\",\"textContent\":\"1\",\"left\":1215,\"top\":165,\"width\":120,\"height\":120,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":110,\"fontWeight\":\"700\",\"color\":\"#ffffff\",\"textAlign\":\"center\",\"lineHeight\":1.0,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0},{\"id\":\"chapter_name\",\"name\":\"Chapter Name\",\"type\":\"text\",\"textContent\":\"Test Chapter\",\"left\":290,\"top\":340,\"width\":800,\"height\":80,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":48,\"fontWeight\":\"700\",\"color\":\"#f59e0b\",\"textAlign\":\"left\",\"lineHeight\":1.2,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0},{\"id\":\"rank_badge_1\",\"name\":\"Rank 1 Badge\",\"type\":\"text\",\"textContent\":\"1st\",\"left\":125,\"top\":510,\"width\":90,\"height\":90,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":36,\"fontWeight\":\"700\",\"color\":\"#ffffff\",\"textAlign\":\"center\",\"lineHeight\":1.0,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0,\"showMarker\":true,\"markerColor\":\"#eab308\"},{\"id\":\"rank_photo_1\",\"name\":\"Rank 1 Photo\",\"type\":\"photo\",\"left\":260,\"top\":470,\"width\":170,\"height\":170,\"borderWidth\":0,\"borderColor\":\"#fecaca\",\"mask\":\"rounded\",\"opacity\":1,\"rotate\":0},{\"id\":\"rank_name_1\",\"name\":\"Rank 1 Student Name\",\"type\":\"text\",\"textContent\":\"Student Name\",\"left\":480,\"top\":495,\"width\":800,\"height\":55,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":42,\"fontWeight\":\"700\",\"color\":\"#1e293b\",\"textAlign\":\"left\",\"lineHeight\":1.2,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0},{\"id\":\"rank_institute_1\",\"name\":\"Rank 1 Institute\",\"type\":\"text\",\"textContent\":\"College Name\",\"left\":480,\"top\":555,\"width\":800,\"height\":45,\"fontFamily\":\"Google Sans Flex\",\"fontSize\":30,\"fontWeight\":\"400\",\"color\":\"#64748b\",\"textAlign\":\"left\",\"lineHeight\":1.2,\"letterSpacing\":0,\"opacity\":1,\"rotate\":0},{\"id\":\"metadata\",\"name\":\"Metadata\",\"type\":\"metadata\",\"coordinate_mode\":\"native\"}]',
+            '[{"id":"test_number","name":"Test Number","type":"text","textContent":"1","left":1215,"top":165,"width":120,"height":120,"fontFamily":"Google Sans Flex","fontSize":110,"fontWeight":"700","color":"#ffffff","textAlign":"center","lineHeight":1.0,"letterSpacing":0,"opacity":1,"rotate":0},{"id":"chapter_name","name":"Chapter Name","type":"text","textContent":"Test Chapter","left":290,"top":340,"width":800,"height":80,"fontFamily":"Google Sans Flex","fontSize":48,"fontWeight":"700","color":"#f59e0b","textAlign":"left","lineHeight":1.2,"letterSpacing":0,"opacity":1,"rotate":0},{"id":"rank_badge_1","name":"Rank 1 Badge","type":"text","textContent":"1st","left":125,"top":510,"width":90,"height":90,"fontFamily":"Google Sans Flex","fontSize":36,"fontWeight":"700","color":"#ffffff","textAlign":"center","lineHeight":1.0,"letterSpacing":0,"opacity":1,"rotate":0,"showMarker":true,"markerColor":"#eab308"},{"id":"rank_photo_1","name":"Rank 1 Photo","type":"photo","left":260,"top":470,"width":170,"height":170,"borderWidth":0,"borderColor":"#fecaca","mask":"rounded","opacity":1,"rotate":0},{"id":"rank_name_1","name":"Rank 1 Student Name","type":"text","textContent":"Student Name","left":480,"top":495,"width":800,"height":55,"fontFamily":"Google Sans Flex","fontSize":42,"fontWeight":"700","color":"#1e293b","textAlign":"left","lineHeight":1.2,"letterSpacing":0,"opacity":1,"rotate":0},{"id":"rank_institute_1","name":"Rank 1 Institute","type":"text","textContent":"College Name","left":480,"top":555,"width":800,"height":45,"fontFamily":"Google Sans Flex","fontSize":30,"fontWeight":"400","color":"#64748b","textAlign":"left","lineHeight":1.2,"letterSpacing":0,"opacity":1,"rotate":0},{"id":"metadata","name":"Metadata","type":"metadata","coordinate_mode":"native"}]',
             'system', DATETIME('now'));
-        ");
+SQL_SEED
+        );
         return;
     } catch (Throwable $e) {
         // In testing mode, continue if test harness defined custom mock tables
@@ -735,13 +736,318 @@ try {
     // utf8mb4_general_ci and clash with unicode_ci columns.
     try { $pdo->exec("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci"); } catch (Exception $e) { /* older servers */ }
     $pdo->exec("SET time_zone = '+05:30'");
+} catch (PDOException $e) {
+    error_log("Database connection failed: " . $e->getMessage());
+    // Don't leak credentials or internals to the browser
+    http_response_code(500);
+    die("Database connection failed. Please try again later.");
+}
 
-    // Some legacy files reference $conn
-    $conn = $pdo;
+// Some legacy files reference $conn
+$conn = $pdo;
 
     // Centralized Version-Aware Schema Migration Architecture
     if (!defined('PEPP_DB_SCHEMA_VERSION')) {
-        define('PEPP_DB_SCHEMA_VERSION', '2026.08.30.2');
+        define('PEPP_DB_SCHEMA_VERSION', '2026.08.31.1');
+    }
+
+    if (!function_exists('ensure_task_reminders_schema')) {
+        function ensure_task_reminders_schema(PDO $pdo, bool $force = false): bool {
+            static $task_schema_checked = false;
+            if ($task_schema_checked && !$force) {
+                return true;
+            }
+
+            try {
+                $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+                if ($driver === 'mysql') {
+                    // 1. task_reminder_types
+                    $pdo->exec("
+                        CREATE TABLE IF NOT EXISTS `task_reminder_types` (
+                            `id` INT AUTO_INCREMENT PRIMARY KEY,
+                            `name` VARCHAR(100) NOT NULL,
+                            `description` TEXT NULL,
+                            `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+                            `created_by_admin_id` INT NULL,
+                            `created_by_username` VARCHAR(100) NULL,
+                            `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+                            UNIQUE KEY `uniq_task_type_name` (`name`),
+                            INDEX `idx_trt_status_name` (`is_active`, `name`)
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+                    ");
+
+                    // 2. Extend reminders table with individual column checks
+                    if ($pdo->query("SHOW TABLES LIKE 'reminders'")->fetchColumn()) {
+                        $requiredCols = [
+                            'task_type_id' => "INT NULL",
+                            'created_by_admin_id' => "INT NULL",
+                            'created_by_username' => "VARCHAR(100) NULL",
+                            'assigned_by_admin_id' => "INT NULL",
+                            'assigned_by_username' => "VARCHAR(100) NULL",
+                            'assigned_to_admin_id' => "INT NULL",
+                            'assigned_to_username' => "VARCHAR(100) NULL",
+                            'assigned_at' => "DATETIME NULL",
+                            'completed_by_admin_id' => "INT NULL",
+                            'completed_by_username' => "VARCHAR(100) NULL",
+                            'completed_at' => "DATETIME NULL",
+                            'latest_remarks' => "TEXT NULL",
+                            'last_status_updated_at' => "DATETIME NULL"
+                        ];
+                        foreach ($requiredCols as $colName => $colDef) {
+                            try {
+                                $chk = $pdo->query("SHOW COLUMNS FROM `reminders` LIKE '{$colName}'")->fetch();
+                                if (!$chk) {
+                                    $pdo->exec("ALTER TABLE `reminders` ADD COLUMN `{$colName}` {$colDef}");
+                                }
+                            } catch (Throwable $eCol) {}
+                        }
+
+                        // Ensure status column allows standard varchar statuses
+                        try {
+                            $statusCol = $pdo->query("SHOW COLUMNS FROM `reminders` LIKE 'status'")->fetch();
+                            if ($statusCol && strpos(strtolower((string)$statusCol['Type']), 'enum') !== false) {
+                                $pdo->exec("ALTER TABLE `reminders` MODIFY COLUMN `status` VARCHAR(50) NOT NULL DEFAULT 'pending'");
+                            }
+                        } catch (Throwable $eStat) {}
+
+                        // Safe indexes
+                        $indexesToCreate = [
+                            'idx_rem_type' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_type` (`task_type_id`)',
+                            'idx_rem_assignee_status' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_assignee_status` (`assigned_to_admin_id`, `status`)',
+                            'idx_rem_creator' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_creator` (`created_by_admin_id`, `status`)',
+                            'idx_rem_due_time' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_due_time` (`remind_at`, `status`)'
+                        ];
+                        foreach ($indexesToCreate as $idxName => $alterSql) {
+                            try {
+                                $idxChk = $pdo->query("SHOW INDEX FROM `reminders` WHERE Key_name = '{$idxName}'")->fetch();
+                                if (!$idxChk) {
+                                    $pdo->exec($alterSql);
+                                }
+                            } catch (Throwable $eIdx) {}
+                        }
+                    }
+
+                    // 3. task_reminder_assignments
+                    $pdo->exec("
+                        CREATE TABLE IF NOT EXISTS `task_reminder_assignments` (
+                            `id` INT AUTO_INCREMENT PRIMARY KEY,
+                            `task_id` INT NOT NULL,
+                            `assigned_by_admin_id` INT NULL,
+                            `assigned_by_username` VARCHAR(100) NULL,
+                            `assigned_to_admin_id` INT NULL,
+                            `assigned_to_username` VARCHAR(100) NULL,
+                            `assigned_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            `ended_at` DATETIME NULL,
+                            `is_current` TINYINT(1) NOT NULL DEFAULT 1,
+                            INDEX `idx_tra_task` (`task_id`, `is_current`),
+                            INDEX `idx_tra_assignee` (`assigned_to_admin_id`, `is_current`),
+                            INDEX `idx_tra_assigned_by` (`assigned_by_admin_id`)
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+                    ");
+
+                    // 4. task_reminder_status_history
+                    $pdo->exec("
+                        CREATE TABLE IF NOT EXISTS `task_reminder_status_history` (
+                            `id` INT AUTO_INCREMENT PRIMARY KEY,
+                            `task_id` INT NOT NULL,
+                            `event_type` VARCHAR(50) NOT NULL,
+                            `old_status` VARCHAR(50) NULL,
+                            `new_status` VARCHAR(50) NULL,
+                            `changed_by_admin_id` INT NULL,
+                            `changed_by_username` VARCHAR(100) NULL,
+                            `remarks` TEXT NULL,
+                            `details_json` TEXT NULL,
+                            `changed_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            INDEX `idx_trsh_task_time` (`task_id`, `changed_at`),
+                            INDEX `idx_trsh_event` (`event_type`),
+                            INDEX `idx_trsh_changed_by` (`changed_by_admin_id`)
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+                    ");
+
+                    // 5. task_reminder_notifications
+                    $pdo->exec("
+                        CREATE TABLE IF NOT EXISTS `task_reminder_notifications` (
+                            `id` INT AUTO_INCREMENT PRIMARY KEY,
+                            `task_id` INT NOT NULL,
+                            `recipient_admin_id` INT NULL,
+                            `recipient_username` VARCHAR(64) NOT NULL,
+                            `sender_admin_id` INT NULL,
+                            `sender_username` VARCHAR(64) NULL,
+                            `notification_type` VARCHAR(32) NOT NULL,
+                            `event_key` VARCHAR(64) NOT NULL,
+                            `message` TEXT NULL,
+                            `is_read` TINYINT(1) NOT NULL DEFAULT 0,
+                            `is_dismissed` TINYINT(1) NOT NULL DEFAULT 0,
+                            `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            `read_at` DATETIME NULL,
+                            UNIQUE KEY `uniq_task_event_notif` (`task_id`, `recipient_username`, `notification_type`, `event_key`),
+                            INDEX `idx_trn_recipient_unread` (`recipient_username`, `is_read`, `created_at`)
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+                    ");
+
+                    // 6. Seed initial task types
+                    $cntTypes = (int)$pdo->query("SELECT COUNT(*) FROM `task_reminder_types`")->fetchColumn();
+                    if ($cntTypes === 0) {
+                        $pdo->exec("
+                            INSERT IGNORE INTO `task_reminder_types` (`name`, `description`, `is_active`, `created_by_username`, `created_at`) VALUES
+                            ('Daily Task Reminder', 'Routine daily reminders and operational duties', 1, 'System', NOW()),
+                            ('Mentoring', 'Student academic mentoring, progress review and counseling sessions', 1, 'System', NOW()),
+                            ('Session Scheduling', 'Scheduling online batches, faculty lectures, and mega tests', 1, 'System', NOW()),
+                            ('Student Follow-up', 'Calling students regarding admission, attendance, and general queries', 1, 'System', NOW()),
+                            ('Payment Follow-up', 'Fee installment recovery, payment verification, and voucher review', 1, 'System', NOW()),
+                            ('Academic Task', 'Curriculum planning, question paper design, and study material uploads', 1, 'System', NOW()),
+                            ('Administrative Task', 'Office paperwork, certificate generation, and staff coordination', 1, 'System', NOW()),
+                            ('Meeting', 'Internal staff, academic committee, and management meetings', 1, 'System', NOW()),
+                            ('Documentation', 'Student records, onboarding verifications, and compliance filing', 1, 'System', NOW()),
+                            ('General Task', 'General administrative task and miscellaneous reminders', 1, 'System', NOW()),
+                            ('Other', 'Custom tasks not covered in standard categories', 1, 'System', NOW());
+                        ");
+                    }
+
+                    // 7. In-place backfill for legacy reminders
+                    $generalTypeId = (int)$pdo->query("SELECT `id` FROM `task_reminder_types` WHERE `name` = 'General Task' LIMIT 1")->fetchColumn();
+                    if ($generalTypeId > 0) {
+                        $pdo->exec("UPDATE `reminders` SET `task_type_id` = {$generalTypeId} WHERE `task_type_id` IS NULL");
+                    }
+                    $pdo->exec("UPDATE `reminders` SET `created_by_username` = `created_by` WHERE `created_by_username` IS NULL AND `created_by` IS NOT NULL");
+                    $pdo->exec("UPDATE `reminders` SET `assigned_to_username` = `assigned_to` WHERE `assigned_to_username` IS NULL AND `assigned_to` IS NOT NULL");
+                    $pdo->exec("UPDATE `reminders` SET `assigned_by_username` = `created_by` WHERE `assigned_by_username` IS NULL AND `created_by` IS NOT NULL");
+                    $pdo->exec("UPDATE `reminders` SET `completed_by_username` = `completed_by` WHERE `completed_by_username` IS NULL AND `completed_by` IS NOT NULL");
+
+                    try {
+                        if ($pdo->query("SHOW TABLES LIKE 'admins'")->fetchColumn()) {
+                            $admins = $pdo->query("SELECT id, username FROM admins")->fetchAll(PDO::FETCH_ASSOC);
+                            $stmtUpdCreator = $pdo->prepare("UPDATE reminders SET created_by_admin_id = ? WHERE created_by_admin_id IS NULL AND created_by_username = ?");
+                            $stmtUpdAssignee = $pdo->prepare("UPDATE reminders SET assigned_to_admin_id = ? WHERE assigned_to_admin_id IS NULL AND assigned_to_username = ?");
+                            $stmtUpdAssigner = $pdo->prepare("UPDATE reminders SET assigned_by_admin_id = ? WHERE assigned_by_admin_id IS NULL AND assigned_by_username = ?");
+                            $stmtUpdCompleter = $pdo->prepare("UPDATE reminders SET completed_by_admin_id = ? WHERE completed_by_admin_id IS NULL AND completed_by_username = ?");
+                            foreach ($admins as $adm) {
+                                $stmtUpdCreator->execute([$adm['id'], $adm['username']]);
+                                $stmtUpdAssignee->execute([$adm['id'], $adm['username']]);
+                                $stmtUpdAssigner->execute([$adm['id'], $adm['username']]);
+                                $stmtUpdCompleter->execute([$adm['id'], $adm['username']]);
+                            }
+                        }
+                    } catch (Throwable $eAdm) {}
+
+                    try {
+                        $pdo->exec("
+                            INSERT IGNORE INTO `task_reminder_assignments` (`task_id`, `assigned_by_admin_id`, `assigned_by_username`, `assigned_to_admin_id`, `assigned_to_username`, `assigned_at`, `is_current`)
+                            SELECT r.`id`, r.`created_by_admin_id`, r.`created_by_username`, r.`assigned_to_admin_id`, r.`assigned_to_username`, COALESCE(r.`created_at`, NOW()), 1
+                            FROM `reminders` r
+                            WHERE NOT EXISTS (SELECT 1 FROM `task_reminder_assignments` tra WHERE tra.`task_id` = r.`id`);
+                        ");
+                        $pdo->exec("
+                            INSERT IGNORE INTO `task_reminder_status_history` (`task_id`, `event_type`, `old_status`, `new_status`, `changed_by_admin_id`, `changed_by_username`, `remarks`, `changed_at`)
+                            SELECT r.`id`, 'CREATED', NULL, r.`status`, r.`created_by_admin_id`, 'SYSTEM MIGRATION', 'Initial migration from legacy reminders', COALESCE(r.`created_at`, NOW())
+                            FROM `reminders` r
+                            WHERE NOT EXISTS (SELECT 1 FROM `task_reminder_status_history` trsh WHERE trsh.`task_id` = r.`id`);
+                        ");
+                    } catch (Throwable $eHist) {}
+                } else {
+                    // SQLite compatibility for tests
+                    $pdo->exec("
+                        CREATE TABLE IF NOT EXISTS `task_reminder_types` (
+                            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+                            `name` VARCHAR(100) NOT NULL UNIQUE,
+                            `description` TEXT NULL,
+                            `is_active` INTEGER NOT NULL DEFAULT 1,
+                            `created_by_admin_id` INTEGER NULL,
+                            `created_by_username` VARCHAR(100) NULL,
+                            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            `updated_at` DATETIME NULL
+                        );
+                        CREATE TABLE IF NOT EXISTS `task_reminder_assignments` (
+                            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+                            `task_id` INTEGER NOT NULL,
+                            `assigned_by_admin_id` INTEGER NULL,
+                            `assigned_by_username` VARCHAR(100) NULL,
+                            `assigned_to_admin_id` INTEGER NULL,
+                            `assigned_to_username` VARCHAR(100) NULL,
+                            `assigned_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            `ended_at` DATETIME NULL,
+                            `is_current` INTEGER NOT NULL DEFAULT 1
+                        );
+                        CREATE TABLE IF NOT EXISTS `task_reminder_status_history` (
+                            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+                            `task_id` INTEGER NOT NULL,
+                            `event_type` VARCHAR(50) NOT NULL,
+                            `old_status` VARCHAR(50) NULL,
+                            `new_status` VARCHAR(50) NULL,
+                            `changed_by_admin_id` INTEGER NULL,
+                            `changed_by_username` VARCHAR(100) NULL,
+                            `remarks` TEXT NULL,
+                            `details_json` TEXT NULL,
+                            `changed_at` DATETIME DEFAULT CURRENT_TIMESTAMP
+                        );
+                        CREATE TABLE IF NOT EXISTS `task_reminder_notifications` (
+                            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+                            `task_id` INTEGER NOT NULL,
+                            `recipient_admin_id` INTEGER NULL,
+                            `recipient_username` VARCHAR(100) NOT NULL,
+                            `sender_admin_id` INTEGER NULL,
+                            `sender_username` VARCHAR(100) NULL,
+                            `notification_type` VARCHAR(50) NOT NULL,
+                            `event_key` VARCHAR(100) NOT NULL,
+                            `message` TEXT NULL,
+                            `is_read` INTEGER NOT NULL DEFAULT 0,
+                            `is_dismissed` INTEGER NOT NULL DEFAULT 0,
+                            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            `read_at` DATETIME NULL
+                        );
+                    ");
+
+                    $sqliteCols = [
+                        'task_type_id' => "INTEGER NULL",
+                        'created_by_admin_id' => "INTEGER NULL",
+                        'created_by_username' => "VARCHAR(100) NULL",
+                        'assigned_by_admin_id' => "INTEGER NULL",
+                        'assigned_by_username' => "VARCHAR(100) NULL",
+                        'assigned_to_admin_id' => "INTEGER NULL",
+                        'assigned_to_username' => "VARCHAR(100) NULL",
+                        'assigned_at' => "DATETIME NULL",
+                        'completed_by_admin_id' => "INTEGER NULL",
+                        'completed_by_username' => "VARCHAR(100) NULL",
+                        'latest_remarks' => "TEXT NULL",
+                        'last_status_updated_at' => "DATETIME NULL"
+                    ];
+                    foreach ($sqliteCols as $colName => $colDef) {
+                        try {
+                            $pdo->query("SELECT `{$colName}` FROM `reminders` LIMIT 1");
+                        } catch (Exception $eSqliteCol) {
+                            try {
+                                $pdo->exec("ALTER TABLE reminders ADD COLUMN `{$colName}` {$colDef}");
+                            } catch (Exception $eAdd) {}
+                        }
+                    }
+
+                    $cntTypes = (int)$pdo->query("SELECT COUNT(*) FROM `task_reminder_types`")->fetchColumn();
+                    if ($cntTypes === 0) {
+                        $pdo->exec("
+                            INSERT OR IGNORE INTO `task_reminder_types` (`name`, `description`, `is_active`, `created_by_username`) VALUES
+                            ('Daily Task Reminder', 'Routine daily reminders and operational duties', 1, 'System'),
+                            ('Mentoring', 'Student academic mentoring, progress review and counseling sessions', 1, 'System'),
+                            ('Session Scheduling', 'Scheduling online batches, faculty lectures, and mega tests', 1, 'System'),
+                            ('Student Follow-up', 'Calling students regarding admission, attendance, and general queries', 1, 'System'),
+                            ('Payment Follow-up', 'Fee installment recovery, payment verification, and voucher review', 1, 'System'),
+                            ('Academic Task', 'Curriculum planning, question paper design, and study material uploads', 1, 'System'),
+                            ('Administrative Task', 'Office paperwork, certificate generation, and staff coordination', 1, 'System'),
+                            ('Meeting', 'Internal staff, academic committee, and management meetings', 1, 'System'),
+                            ('Documentation', 'Student records, onboarding verifications, and compliance filing', 1, 'System'),
+                            ('General Task', 'General administrative task and miscellaneous reminders', 1, 'System'),
+                            ('Other', 'Custom tasks not covered in standard categories', 1, 'System');
+                        ");
+                    }
+                }
+
+                $task_schema_checked = true;
+                return true;
+            } catch (Throwable $e) {
+                error_log("ensure_task_reminders_schema error: " . $e->getMessage());
+                return false;
+            }
+        }
     }
 
     if (!function_exists('ensure_pepp_database_schema')) {
@@ -764,6 +1070,8 @@ try {
                 }
 
                 if ($db_version === PEPP_DB_SCHEMA_VERSION && !$force) {
+                    // Always guarantee Task Reminders schema exists even on early return
+                    ensure_task_reminders_schema($pdo);
                     $schema_verified_in_process = true;
                     return true;
                 }
@@ -1770,269 +2078,16 @@ try {
                     $pdo->exec("ALTER TABLE admin_presence ADD COLUMN `$col_name` $col_def");
                 }
             }
-
-            // Upgrade study_plan_activities for MySQL
-            try {
-                if ($pdo->query("SHOW TABLES LIKE 'study_plan_activities'")->fetchColumn()) {
-                    $cols = $pdo->query("SHOW COLUMNS FROM study_plan_activities LIKE 'activity_uid'")->fetch();
-                    if (!$cols) {
-                        $pdo->exec("ALTER TABLE study_plan_activities
-                            ADD COLUMN activity_uid VARCHAR(100) DEFAULT NULL,
-                            ADD COLUMN is_deleted TINYINT(1) NOT NULL DEFAULT 0,
-                            ADD COLUMN deleted_at DATETIME DEFAULT NULL,
-                            ADD COLUMN deleted_by VARCHAR(100) DEFAULT NULL,
-                            ADD COLUMN deletion_reason TEXT DEFAULT NULL,
-                            ADD INDEX idx_spa_uid (activity_uid),
-                            ADD INDEX idx_spa_plan_date (study_plan_id, activity_date)");
-                    }
-                }
-            } catch (Exception $exUpd) {}
-
-            // Upgrade study_plan_analytics for MySQL
-            try {
-                if ($pdo->query("SHOW TABLES LIKE 'study_plan_analytics'")->fetchColumn()) {
-                    $cols = $pdo->query("SHOW COLUMNS FROM study_plan_analytics LIKE 'activity_uid'")->fetch();
-                    if (!$cols) {
-                        $pdo->exec("ALTER TABLE study_plan_analytics
-                            ADD COLUMN activity_uid VARCHAR(100) DEFAULT NULL,
-                            ADD COLUMN activity_title_snapshot VARCHAR(255) DEFAULT NULL,
-                            ADD COLUMN activity_type_snapshot VARCHAR(100) DEFAULT NULL,
-                            ADD COLUMN activity_date_snapshot DATE DEFAULT NULL,
-                            ADD COLUMN day_number_snapshot INT DEFAULT NULL,
-                            ADD COLUMN chapter_snapshot VARCHAR(255) DEFAULT NULL,
-                            ADD COLUMN subject_snapshot VARCHAR(255) DEFAULT NULL,
-                            ADD COLUMN topic_snapshot VARCHAR(255) DEFAULT NULL,
-                            ADD INDEX idx_anal_uid (activity_uid),
-                            ADD INDEX idx_anal_email_uid (student_email(191), activity_uid)");
-                    }
-                }
-            } catch (Exception $exUpd) {}
-
-            // Task Reminders Module Schema Migration
-            try {
-                $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
-                if ($driver === 'mysql') {
-                    $pdo->exec("
-                        CREATE TABLE IF NOT EXISTS `task_reminder_types` (
-                            `id` INT AUTO_INCREMENT PRIMARY KEY,
-                            `name` VARCHAR(100) NOT NULL,
-                            `description` TEXT NULL,
-                            `is_active` TINYINT(1) NOT NULL DEFAULT 1,
-                            `created_by_admin_id` INT NULL,
-                            `created_by_username` VARCHAR(100) NULL,
-                            `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            `updated_at` DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
-                            UNIQUE KEY `uniq_task_type_name` (`name`),
-                            INDEX `idx_trt_status_name` (`is_active`, `name`)
-                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-                    ");
-
-                    // Check and add columns to reminders
-                    $colsRem = $pdo->query("SHOW COLUMNS FROM `reminders` LIKE 'task_type_id'")->fetch();
-                    if (!$colsRem) {
-                        $pdo->exec("
-                            ALTER TABLE `reminders`
-                                ADD COLUMN `task_type_id` INT NULL AFTER `id`,
-                                ADD COLUMN `created_by_admin_id` INT NULL AFTER `status`,
-                                ADD COLUMN `created_by_username` VARCHAR(100) NULL AFTER `created_by_admin_id`,
-                                ADD COLUMN `assigned_by_admin_id` INT NULL AFTER `created_by_username`,
-                                ADD COLUMN `assigned_by_username` VARCHAR(100) NULL AFTER `assigned_by_admin_id`,
-                                ADD COLUMN `assigned_to_admin_id` INT NULL AFTER `assigned_by_username`,
-                                ADD COLUMN `assigned_to_username` VARCHAR(100) NULL AFTER `assigned_to_admin_id`,
-                                ADD COLUMN `assigned_at` DATETIME NULL DEFAULT CURRENT_TIMESTAMP AFTER `assigned_to_username`,
-                                ADD COLUMN `completed_by_admin_id` INT NULL AFTER `email_sent`,
-                                ADD COLUMN `completed_by_username` VARCHAR(100) NULL AFTER `completed_by_admin_id`,
-                                ADD COLUMN `latest_remarks` TEXT NULL AFTER `completed_at`,
-                                ADD COLUMN `last_status_updated_at` DATETIME NULL AFTER `latest_remarks`,
-                                MODIFY COLUMN `status` VARCHAR(50) NOT NULL DEFAULT 'pending';
-                        ");
-                    }
-
-                    $pdo->exec("
-                        CREATE TABLE IF NOT EXISTS `task_reminder_assignments` (
-                            `id` INT AUTO_INCREMENT PRIMARY KEY,
-                            `task_id` INT NOT NULL,
-                            `assigned_by_admin_id` INT NULL,
-                            `assigned_by_username` VARCHAR(100) NULL,
-                            `assigned_to_admin_id` INT NULL,
-                            `assigned_to_username` VARCHAR(100) NULL,
-                            `assigned_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            `ended_at` DATETIME NULL,
-                            `is_current` TINYINT(1) NOT NULL DEFAULT 1,
-                            INDEX `idx_tra_task` (`task_id`, `is_current`),
-                            INDEX `idx_tra_assignee` (`assigned_to_admin_id`, `is_current`),
-                            INDEX `idx_tra_assigned_by` (`assigned_by_admin_id`)
-                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-                    ");
-
-                    $pdo->exec("
-                        CREATE TABLE IF NOT EXISTS `task_reminder_status_history` (
-                            `id` INT AUTO_INCREMENT PRIMARY KEY,
-                            `task_id` INT NOT NULL,
-                            `event_type` VARCHAR(50) NOT NULL,
-                            `old_status` VARCHAR(50) NULL,
-                            `new_status` VARCHAR(50) NULL,
-                            `changed_by_admin_id` INT NULL,
-                            `changed_by_username` VARCHAR(100) NULL,
-                            `remarks` TEXT NULL,
-                            `details_json` TEXT NULL,
-                            `changed_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            INDEX `idx_trsh_task_time` (`task_id`, `changed_at`),
-                            INDEX `idx_trsh_event` (`event_type`),
-                            INDEX `idx_trsh_changed_by` (`changed_by_admin_id`)
-                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-                    ");
-
-                    $pdo->exec("
-                        CREATE TABLE IF NOT EXISTS `task_reminder_notifications` (
-                            `id` INT AUTO_INCREMENT PRIMARY KEY,
-                            `task_id` INT NOT NULL,
-                            `recipient_admin_id` INT NULL,
-                            `recipient_username` VARCHAR(100) NOT NULL,
-                            `sender_admin_id` INT NULL,
-                            `sender_username` VARCHAR(100) NULL,
-                            `notification_type` ENUM('TASK_ASSIGNED','TASK_DUE','TASK_OVERDUE','TASK_COMPLETED','TASK_REASSIGNED') NOT NULL,
-                            `event_key` VARCHAR(100) NOT NULL,
-                            `message` TEXT NULL,
-                            `is_read` TINYINT(1) NOT NULL DEFAULT 0,
-                            `is_dismissed` TINYINT(1) NOT NULL DEFAULT 0,
-                            `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            `read_at` DATETIME NULL,
-                            UNIQUE KEY `uniq_task_event_notif` (`task_id`, `recipient_username`, `notification_type`, `event_key`),
-                            INDEX `idx_trn_recipient_unread` (`recipient_username`, `is_read`, `created_at`)
-                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-                    ");
-
-                    // Seed default task types if missing
-                    $cntTypes = (int)$pdo->query("SELECT COUNT(*) FROM `task_reminder_types`")->fetchColumn();
-                    if ($cntTypes === 0) {
-                        $pdo->exec("
-                            INSERT IGNORE INTO `task_reminder_types` (`name`, `description`, `is_active`, `created_by_username`, `created_at`) VALUES
-                            ('Daily Task Reminder', 'Routine daily reminders and operational duties', 1, 'System', NOW()),
-                            ('Mentoring', 'Student academic mentoring, progress review and counseling sessions', 1, 'System', NOW()),
-                            ('Session Scheduling', 'Scheduling online batches, faculty lectures, and mega tests', 1, 'System', NOW()),
-                            ('Student Follow-up', 'Calling students regarding admission, attendance, and general queries', 1, 'System', NOW()),
-                            ('Payment Follow-up', 'Fee installment recovery, payment verification, and voucher review', 1, 'System', NOW()),
-                            ('Academic Task', 'Curriculum planning, question paper design, and study material uploads', 1, 'System', NOW()),
-                            ('Administrative Task', 'Office paperwork, certificate generation, and staff coordination', 1, 'System', NOW()),
-                            ('Meeting', 'Internal staff, academic committee, and management meetings', 1, 'System', NOW()),
-                            ('Documentation', 'Student records, onboarding verifications, and compliance filing', 1, 'System', NOW()),
-                            ('General Task', 'General administrative task and miscellaneous reminders', 1, 'System', NOW()),
-                            ('Other', 'Custom tasks not covered in standard categories', 1, 'System', NOW());
-                        ");
-                    }
-
-                    // In-place backfill for legacy reminders
-                    $generalTypeId = (int)$pdo->query("SELECT `id` FROM `task_reminder_types` WHERE `name` = 'General Task' LIMIT 1")->fetchColumn();
-                    if ($generalTypeId > 0) {
-                        $pdo->exec("UPDATE `reminders` SET `task_type_id` = {$generalTypeId} WHERE `task_type_id` IS NULL");
-                    }
-                    $pdo->exec("UPDATE `reminders` SET `created_by_username` = `created_by` WHERE `created_by_username` IS NULL AND `created_by` IS NOT NULL");
-                    $pdo->exec("UPDATE `reminders` SET `assigned_to_username` = `assigned_to` WHERE `assigned_to_username` IS NULL AND `assigned_to` IS NOT NULL");
-                    $pdo->exec("UPDATE `reminders` SET `assigned_by_username` = `created_by` WHERE `assigned_by_username` IS NULL AND `created_by` IS NOT NULL");
-                    $pdo->exec("UPDATE `reminders` SET `completed_by_username` = `completed_by` WHERE `completed_by_username` IS NULL AND `completed_by` IS NOT NULL");
-
-                    if (admins_table_exists($pdo)) {
-                        $pdo->exec("UPDATE `reminders` r JOIN `admins` a ON a.`username` = r.`created_by_username` SET r.`created_by_admin_id` = a.`id` WHERE r.`created_by_admin_id` IS NULL");
-                        $pdo->exec("UPDATE `reminders` r JOIN `admins` a ON a.`username` = r.`assigned_by_username` SET r.`assigned_by_admin_id` = a.`id` WHERE r.`assigned_by_admin_id` IS NULL");
-                        $pdo->exec("UPDATE `reminders` r JOIN `admins` a ON a.`username` = r.`assigned_to_username` SET r.`assigned_to_admin_id` = a.`id` WHERE r.`assigned_to_admin_id` IS NULL");
-                        $pdo->exec("UPDATE `reminders` r JOIN `admins` a ON a.`username` = r.`completed_by_username` SET r.`completed_by_admin_id` = a.`id` WHERE r.`completed_by_admin_id` IS NULL");
-                    }
-                } else {
-                    // SQLite compatibility for testing environment
-                    $pdo->exec("
-                        CREATE TABLE IF NOT EXISTS `task_reminder_types` (
-                            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
-                            `name` VARCHAR(100) NOT NULL UNIQUE,
-                            `description` TEXT NULL,
-                            `is_active` INTEGER NOT NULL DEFAULT 1,
-                            `created_by_admin_id` INTEGER NULL,
-                            `created_by_username` VARCHAR(100) NULL,
-                            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
-                            `updated_at` DATETIME NULL
-                        );
-                        CREATE TABLE IF NOT EXISTS `task_reminder_assignments` (
-                            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
-                            `task_id` INTEGER NOT NULL,
-                            `assigned_by_admin_id` INTEGER NULL,
-                            `assigned_by_username` VARCHAR(100) NULL,
-                            `assigned_to_admin_id` INTEGER NULL,
-                            `assigned_to_username` VARCHAR(100) NULL,
-                            `assigned_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
-                            `ended_at` DATETIME NULL,
-                            `is_current` INTEGER NOT NULL DEFAULT 1
-                        );
-                        CREATE TABLE IF NOT EXISTS `task_reminder_status_history` (
-                            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
-                            `task_id` INTEGER NOT NULL,
-                            `event_type` VARCHAR(50) NOT NULL,
-                            `old_status` VARCHAR(50) NULL,
-                            `new_status` VARCHAR(50) NULL,
-                            `changed_by_admin_id` INTEGER NULL,
-                            `changed_by_username` VARCHAR(100) NULL,
-                            `remarks` TEXT NULL,
-                            `details_json` TEXT NULL,
-                            `changed_at` DATETIME DEFAULT CURRENT_TIMESTAMP
-                        );
-                        CREATE TABLE IF NOT EXISTS `task_reminder_notifications` (
-                            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
-                            `task_id` INTEGER NOT NULL,
-                            `recipient_admin_id` INTEGER NULL,
-                            `recipient_username` VARCHAR(100) NOT NULL,
-                            `sender_admin_id` INTEGER NULL,
-                            `sender_username` VARCHAR(100) NULL,
-                            `notification_type` VARCHAR(50) NOT NULL,
-                            `event_key` VARCHAR(100) NOT NULL,
-                            `message` TEXT NULL,
-                            `is_read` INTEGER NOT NULL DEFAULT 0,
-                            `is_dismissed` INTEGER NOT NULL DEFAULT 0,
-                            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
-                            `read_at` DATETIME NULL
-                        );
-                    ");
-
-                    // Check columns on SQLite reminders
-                    try {
-                        $pdo->query("SELECT task_type_id FROM reminders LIMIT 1");
-                    } catch (Exception $eSqlite) {
-                        $pdo->exec("ALTER TABLE reminders ADD COLUMN task_type_id INTEGER NULL");
-                        $pdo->exec("ALTER TABLE reminders ADD COLUMN created_by_admin_id INTEGER NULL");
-                        $pdo->exec("ALTER TABLE reminders ADD COLUMN created_by_username VARCHAR(100) NULL");
-                        $pdo->exec("ALTER TABLE reminders ADD COLUMN assigned_by_admin_id INTEGER NULL");
-                        $pdo->exec("ALTER TABLE reminders ADD COLUMN assigned_by_username VARCHAR(100) NULL");
-                        $pdo->exec("ALTER TABLE reminders ADD COLUMN assigned_to_admin_id INTEGER NULL");
-                        $pdo->exec("ALTER TABLE reminders ADD COLUMN assigned_to_username VARCHAR(100) NULL");
-                        $pdo->exec("ALTER TABLE reminders ADD COLUMN assigned_at DATETIME NULL");
-                        $pdo->exec("ALTER TABLE reminders ADD COLUMN completed_by_admin_id INTEGER NULL");
-                        $pdo->exec("ALTER TABLE reminders ADD COLUMN completed_by_username VARCHAR(100) NULL");
-                        $pdo->exec("ALTER TABLE reminders ADD COLUMN latest_remarks TEXT NULL");
-                        $pdo->exec("ALTER TABLE reminders ADD COLUMN last_status_updated_at DATETIME NULL");
-                    }
-
-                    $cntTypes = (int)$pdo->query("SELECT COUNT(*) FROM `task_reminder_types`")->fetchColumn();
-                    if ($cntTypes === 0) {
-                        $pdo->exec("
-                            INSERT OR IGNORE INTO `task_reminder_types` (`name`, `description`, `is_active`, `created_by_username`) VALUES
-                            ('Daily Task Reminder', 'Routine daily reminders and operational duties', 1, 'System'),
-                            ('Mentoring', 'Student academic mentoring, progress review and counseling sessions', 1, 'System'),
-                            ('Session Scheduling', 'Scheduling online batches, faculty lectures, and mega tests', 1, 'System'),
-                            ('Student Follow-up', 'Calling students regarding admission, attendance, and general queries', 1, 'System'),
-                            ('Payment Follow-up', 'Fee installment recovery, payment verification, and voucher review', 1, 'System'),
-                            ('Academic Task', 'Curriculum planning, question paper design, and study material uploads', 1, 'System'),
-                            ('Administrative Task', 'Office paperwork, certificate generation, and staff coordination', 1, 'System'),
-                            ('Meeting', 'Internal staff, academic committee, and management meetings', 1, 'System'),
-                            ('Documentation', 'Student records, onboarding verifications, and compliance filing', 1, 'System'),
-                            ('General Task', 'General administrative task and miscellaneous reminders', 1, 'System'),
-                            ('Other', 'Custom tasks not covered in standard categories', 1, 'System');
-                        ");
-                    }
-                }
-            } catch (Exception $exRemMigration) {
-                error_log("Task Reminders schema migration failed: " . $exRemMigration->getMessage());
-            }
         } catch (Exception $e) {}
 
-        // Persist schema version to database
+        // Safe Task Reminders Module Schema Migration
+        $task_rem_ok = ensure_task_reminders_schema($pdo, true);
+        if (!$task_rem_ok) {
+            error_log("CRITICAL: Task Reminders schema verification failed. Schema version will not be advanced.");
+            return false;
+        }
+
+        // Persist schema version to database only if all migrations succeeded
         try {
             $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
             if ($driver === 'mysql') {
@@ -2064,9 +2119,3 @@ try {
 
 // Execute centralized version-aware schema verification
 ensure_pepp_database_schema($pdo);
-} catch (PDOException $e) {
-    error_log("Database connection failed: " . $e->getMessage());
-    // Don't leak credentials or internals to the browser
-    http_response_code(500);
-    die("Database connection failed. Please try again later.");
-}

@@ -35,6 +35,13 @@ if (!function_exists('reminders_table_exists')) {
     }
 }
 
+if (!function_exists('task_reminders_ensure_schema')) {
+    function task_reminders_ensure_schema(PDO $pdo): void {
+        if (function_exists('ensure_task_reminders_schema')) {
+            ensure_task_reminders_schema($pdo);
+        }
+    }
+}
 
 /**
  * Resolve admin identity (both ID and Username).
@@ -91,6 +98,7 @@ function task_reminder_get_admin_identity(PDO $pdo, ?string $username = null, ?i
  * Task Types Management Functions
  */
 function task_types_get_all(PDO $pdo, bool $only_active = true): array {
+    task_reminders_ensure_schema($pdo);
     try {
         $sql = "SELECT id, name, description, is_active, created_by_username, created_at FROM task_reminder_types";
         if ($only_active) {
@@ -118,6 +126,7 @@ function task_types_get_by_id(PDO $pdo, int $id): ?array {
 }
 
 function task_types_save(PDO $pdo, array $data, ?int $admin_id, string $username): array {
+    task_reminders_ensure_schema($pdo);
     $id = isset($data['id']) ? (int)$data['id'] : 0;
     $name = trim($data['name'] ?? '');
     $description = trim($data['description'] ?? '');
@@ -183,6 +192,7 @@ function task_types_usage_count(PDO $pdo, int $id): int {
  * Returns counts and due task IDs to keep response payload minimal (<2ms).
  */
 function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_username): array {
+    task_reminders_ensure_schema($pdo);
     $res = [
         'pending_count' => 0,
         'overdue_count' => 0,
@@ -257,6 +267,7 @@ function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_usern
  * Checks if a specific task is genuinely due, pending/in_progress, and authorized for the current admin.
  */
 function task_reminders_verify_due_alert(PDO $pdo, int $task_id, int $admin_id, string $admin_username): ?array {
+    task_reminders_ensure_schema($pdo);
     if (!reminders_table_exists($pdo) || $task_id <= 0) {
         return null;
     }
@@ -296,6 +307,7 @@ function task_reminders_verify_due_alert(PDO $pdo, int $task_id, int $admin_id, 
  * List "My Tasks" for current logged-in admin with derived overdue state.
  */
 function task_reminders_list_my_tasks(PDO $pdo, int $admin_id, string $admin_username, array $filters = []): array {
+    task_reminders_ensure_schema($pdo);
     if (!reminders_table_exists($pdo)) {
         return [];
     }
@@ -376,6 +388,7 @@ function task_reminders_list_my_tasks(PDO $pdo, int $admin_id, string $admin_use
  * Super Admins can optionally view all assigned tasks.
  */
 function task_reminders_list_assigned_by_me(PDO $pdo, int $admin_id, string $admin_username, array $filters = [], bool $is_super_admin = false): array {
+    task_reminders_ensure_schema($pdo);
     if (!reminders_table_exists($pdo)) {
         return [];
     }
@@ -461,6 +474,7 @@ function task_reminders_list_assigned_by_me(PDO $pdo, int $admin_id, string $adm
  * Task Details & Complete Timeline (with Authorization & IDOR check).
  */
 function task_reminders_get_details(PDO $pdo, int $task_id, int $admin_id, string $admin_username, bool $is_super_admin = false): ?array {
+    task_reminders_ensure_schema($pdo);
     if (!reminders_table_exists($pdo) || $task_id <= 0) {
         return null;
     }
@@ -530,6 +544,7 @@ function task_reminders_get_details(PDO $pdo, int $task_id, int $admin_id, strin
  * Task Reminders — Comprehensive Global History (Tab 3)
  */
 function task_reminders_list_history(PDO $pdo, array $filters = [], int $limit = 100, int $offset = 0): array {
+    task_reminders_ensure_schema($pdo);
     if (!reminders_table_exists($pdo)) {
         return [];
     }
@@ -598,6 +613,7 @@ function task_reminders_list_history(PDO $pdo, array $filters = [], int $limit =
  * Task Creation (Mandatory task_type_id, Immutable Assignment & History).
  */
 function task_reminders_create(PDO $pdo, array $data, int $creator_admin_id, string $creator_username): array {
+    task_reminders_ensure_schema($pdo);
     $task_type_id = isset($data['task_type_id']) ? (int)$data['task_type_id'] : 0;
     $title = trim($data['title'] ?? '');
     $notes = trim($data['notes'] ?? '');

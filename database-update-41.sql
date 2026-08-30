@@ -1,6 +1,7 @@
 -- ====================================================================
 -- PEPP Learning — Database Update 41: Task Reminders & Accountability Module
--- Run ONCE in database. Safe to re-run (idempotent).
+-- Idempotent schema migration for MySQL 5.7+ / 8.0+ / MariaDB
+-- (Also automatically self-healed by config/database.php)
 -- ====================================================================
 
 -- 1. Task Types Management Table
@@ -17,29 +18,29 @@ CREATE TABLE IF NOT EXISTS `task_reminder_types` (
     INDEX `idx_trt_status_name` (`is_active`, `name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 2. Extend reminders Table with Task Accountability Fields
-ALTER TABLE `reminders`
-    ADD COLUMN IF NOT EXISTS `task_type_id` INT NULL AFTER `id`,
-    ADD COLUMN IF NOT EXISTS `created_by_admin_id` INT NULL AFTER `status`,
-    ADD COLUMN IF NOT EXISTS `created_by_username` VARCHAR(100) NULL AFTER `created_by_admin_id`,
-    ADD COLUMN IF NOT EXISTS `assigned_by_admin_id` INT NULL AFTER `created_by_username`,
-    ADD COLUMN IF NOT EXISTS `assigned_by_username` VARCHAR(100) NULL AFTER `assigned_by_admin_id`,
-    ADD COLUMN IF NOT EXISTS `assigned_to_admin_id` INT NULL AFTER `assigned_by_username`,
-    ADD COLUMN IF NOT EXISTS `assigned_to_username` VARCHAR(100) NULL AFTER `assigned_to_admin_id`,
-    ADD COLUMN IF NOT EXISTS `assigned_at` DATETIME NULL DEFAULT CURRENT_TIMESTAMP AFTER `assigned_to_username`,
-    ADD COLUMN IF NOT EXISTS `completed_by_admin_id` INT NULL AFTER `email_sent`,
-    ADD COLUMN IF NOT EXISTS `completed_by_username` VARCHAR(100) NULL AFTER `completed_by_admin_id`,
-    ADD COLUMN IF NOT EXISTS `latest_remarks` TEXT NULL AFTER `completed_at`,
-    ADD COLUMN IF NOT EXISTS `last_status_updated_at` DATETIME NULL AFTER `latest_remarks`;
+-- 2. Extend reminders Table with Task Accountability Fields (Individual column migrations)
+-- Run each ALTER TABLE separately to ensure full MySQL/MariaDB compatibility
+ALTER TABLE `reminders` ADD COLUMN `task_type_id` INT NULL;
+ALTER TABLE `reminders` ADD COLUMN `created_by_admin_id` INT NULL;
+ALTER TABLE `reminders` ADD COLUMN `created_by_username` VARCHAR(100) NULL;
+ALTER TABLE `reminders` ADD COLUMN `assigned_by_admin_id` INT NULL;
+ALTER TABLE `reminders` ADD COLUMN `assigned_by_username` VARCHAR(100) NULL;
+ALTER TABLE `reminders` ADD COLUMN `assigned_to_admin_id` INT NULL;
+ALTER TABLE `reminders` ADD COLUMN `assigned_to_username` VARCHAR(100) NULL;
+ALTER TABLE `reminders` ADD COLUMN `assigned_at` DATETIME NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE `reminders` ADD COLUMN `completed_by_admin_id` INT NULL;
+ALTER TABLE `reminders` ADD COLUMN `completed_by_username` VARCHAR(100) NULL;
+ALTER TABLE `reminders` ADD COLUMN `latest_remarks` TEXT NULL;
+ALTER TABLE `reminders` ADD COLUMN `last_status_updated_at` DATETIME NULL;
 
 -- Modify status column to support standard lifecycles (pending, in_progress, completed, cancelled, dismissed)
 ALTER TABLE `reminders` MODIFY COLUMN `status` VARCHAR(50) NOT NULL DEFAULT 'pending';
 
 -- Add performance indexes to reminders
-CREATE INDEX IF NOT EXISTS `idx_rem_type` ON `reminders` (`task_type_id`);
-CREATE INDEX IF NOT EXISTS `idx_rem_assignee_status` ON `reminders` (`assigned_to_admin_id`, `status`);
-CREATE INDEX IF NOT EXISTS `idx_rem_creator` ON `reminders` (`created_by_admin_id`, `status`);
-CREATE INDEX IF NOT EXISTS `idx_rem_due_time` ON `reminders` (`remind_at`, `status`);
+ALTER TABLE `reminders` ADD INDEX `idx_rem_type` (`task_type_id`);
+ALTER TABLE `reminders` ADD INDEX `idx_rem_assignee_status` (`assigned_to_admin_id`, `status`);
+ALTER TABLE `reminders` ADD INDEX `idx_rem_creator` (`created_by_admin_id`, `status`);
+ALTER TABLE `reminders` ADD INDEX `idx_rem_due_time` (`remind_at`, `status`);
 
 -- 3. Immutable Task Assignment History
 CREATE TABLE IF NOT EXISTS `task_reminder_assignments` (
@@ -79,11 +80,11 @@ CREATE TABLE IF NOT EXISTS `task_reminder_notifications` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `task_id` INT NOT NULL,
     `recipient_admin_id` INT NULL,
-    `recipient_username` VARCHAR(100) NOT NULL,
+    `recipient_username` VARCHAR(64) NOT NULL,
     `sender_admin_id` INT NULL,
-    `sender_username` VARCHAR(100) NULL,
-    `notification_type` ENUM('TASK_ASSIGNED','TASK_DUE','TASK_OVERDUE','TASK_COMPLETED','TASK_REASSIGNED') NOT NULL,
-    `event_key` VARCHAR(100) NOT NULL,
+    `sender_username` VARCHAR(64) NULL,
+    `notification_type` VARCHAR(32) NOT NULL,
+    `event_key` VARCHAR(64) NOT NULL,
     `message` TEXT NULL,
     `is_read` TINYINT(1) NOT NULL DEFAULT 0,
     `is_dismissed` TINYINT(1) NOT NULL DEFAULT 0,
