@@ -565,7 +565,7 @@ if ($is_local_dev) {
             INSERT OR REPLACE INTO admin_settings (setting_name, setting_value) VALUES ('whatsapp_app_secret', 'test_app_secret');
 
             -- Seed Admins for testing login
-            INSERT OR REPLACE INTO admins (id, username, password_hash, role, permissions, status)
+            INSERT OR IGNORE INTO admins (id, username, password_hash, role, permissions, status)
             VALUES (1, 'admin', '', 'super_admin', 'ALL', 'active');
 
             -- Seed payment accounts

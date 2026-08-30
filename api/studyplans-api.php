@@ -1083,7 +1083,9 @@ try {
             exit();
 
         } catch (Exception $e) {
-            $pdo->rollBack();
+            if ($pdo->inTransaction()) {
+                try { $pdo->rollBack(); } catch (Exception $rbEx) {}
+            }
             echo json_encode([
                 'success' => false,
                 'message' => $e->getMessage()
@@ -1108,18 +1110,55 @@ try {
             exit();
         }
 
-        // Count unique students who completed this activity
-        $stmt_cnt = $pdo->prepare("
-            SELECT COUNT(DISTINCT student_email)
-            FROM study_plan_analytics
-            WHERE (activity_uid = ? OR (activity_id = ? AND (activity_uid IS NULL OR activity_uid = '')))
-              AND action_type = 'complete_activity'
-              AND completion_status = 'completed'
-        ");
-        $stmt_cnt->execute([$act['activity_uid'], $act['id']]);
-        $student_count = (int)$stmt_cnt->fetchColumn();
+        $plan_id = (int)$act['study_plan_id'];
+        $act_uid = trim($act['activity_uid'] ?? '');
 
-        // Generate confirmation token
+        // 1. Authoritative check in study_plan_analytics
+        $student_count = 0;
+        try {
+            $stmt_cnt = $pdo->prepare("
+                SELECT COUNT(*)
+                FROM study_plan_analytics
+                WHERE study_plan_id = ?
+                  AND (
+                      (activity_uid = ? AND ? != '')
+                      OR (activity_id = ? AND ? > 0)
+                  )
+            ");
+            $stmt_cnt->execute([$plan_id, $act_uid, $act_uid, $activity_id, $activity_id]);
+            $student_count += (int)$stmt_cnt->fetchColumn();
+        } catch (Exception $e) {}
+
+        // 2. Authoritative check in assessment_results via assessment_result_batches
+        try {
+            $stmt_att = $pdo->prepare("
+                SELECT COUNT(*)
+                FROM assessment_results ar
+                JOIN assessment_result_batches arb ON ar.batch_id = arb.id
+                WHERE arb.activity_id = ? AND (arb.is_deleted IS NULL OR arb.is_deleted = 0)
+            ");
+            $stmt_att->execute([$activity_id]);
+            $student_count += (int)$stmt_att->fetchColumn();
+        } catch (Exception $e) {}
+
+        if ($student_count > 0) {
+            // STRICT RULE: Deletion is blocked because student activity exists
+            echo json_encode([
+                'success' => true,
+                'deletable' => false,
+                'error_code' => 'ACTIVITY_HAS_STUDENT_DATA',
+                'student_count' => $student_count,
+                'activity_id' => $activity_id,
+                'activity_uid' => $act['activity_uid'],
+                'activity_title' => $act['activity_title'],
+                'day_number' => (int)$act['day_number'],
+                'activity_date' => $act['activity_date'],
+                'message' => "This activity cannot be deleted because student activity ({$student_count} record(s)) has already been recorded."
+            ]);
+            exit();
+        }
+
+        // Generate confirmation token for safe deletable activity
         $token = bin2hex(random_bytes(16));
         if (!isset($_SESSION['delete_tokens'])) {
             $_SESSION['delete_tokens'] = [];
@@ -1134,9 +1173,13 @@ try {
 
         echo json_encode([
             'success' => true,
-            'student_count' => $student_count,
+            'deletable' => true,
+            'student_count' => 0,
             'activity_id' => $activity_id,
             'activity_uid' => $act['activity_uid'],
+            'activity_title' => $act['activity_title'],
+            'day_number' => (int)$act['day_number'],
+            'activity_date' => $act['activity_date'],
             'confirmation_token' => $token
         ]);
         exit();
@@ -1145,7 +1188,6 @@ try {
     if ($action === 'delete_activity') {
         $activity_id = (int)($_POST['activity_id'] ?? 0);
         $token = trim($_POST['confirmation_token'] ?? '');
-        $expected_count = isset($_POST['expected_count']) ? (int)$_POST['expected_count'] : 0;
 
         if ($activity_id <= 0 || empty($token)) {
             echo json_encode(['success' => false, 'message' => 'Invalid parameters for deletion']);
@@ -1158,35 +1200,10 @@ try {
             exit();
         }
 
-        $pdo->beginTransaction();
+        $plan_id = (int)$token_data['study_plan_id'];
 
-        // Authoritative validation inside transaction (FOR UPDATE on MySQL only)
-        $query = "SELECT * FROM study_plan_activities WHERE id = ?";
-        if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
-            $query .= " FOR UPDATE";
-        }
-
-        $stmt_lock = $pdo->prepare($query);
-        $stmt_lock->execute([$activity_id]);
-        $act = $stmt_lock->fetch(PDO::FETCH_ASSOC);
-
-        if (!$act || (int)$act['study_plan_id'] !== (int)$token_data['study_plan_id'] || $act['activity_uid'] !== $token_data['activity_uid']) {
-            $pdo->rollBack();
-            echo json_encode(['success' => false, 'message' => 'Activity validation failed.']);
-            exit();
-        }
-
-        if ((int)$act['is_deleted'] === 1) {
-            $pdo->rollBack();
-            echo json_encode(['success' => false, 'message' => 'Activity has already been deleted.']);
-            exit();
-        }
-
-        $plan_id = (int)$act['study_plan_id'];
-
-        // Edit Lock Enforcement
+        // Edit Lock Enforcement — Checked BEFORE transaction
         if ($plan_id > 0 && !verify_study_plan_edit_lock_permission($pdo, $plan_id, $admin_username, $admin_id)) {
-            $pdo->rollBack();
             echo json_encode([
                 'success' => false,
                 'error_code' => 'EDIT_LOCK_HELD',
@@ -1195,21 +1212,70 @@ try {
             exit();
         }
 
-        // ── OPTIMISTIC CONCURRENCY PROTECTION ────────────────────────────
-        $client_version = isset($_POST['version']) ? (int)$_POST['version'] : 0;
+        // Fetch activity before transaction
+        $stmt_check = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ? AND study_plan_id = ?");
+        $stmt_check->execute([$activity_id, $plan_id]);
+        $act = $stmt_check->fetch(PDO::FETCH_ASSOC);
 
-        $query_ver = "SELECT version FROM study_plans WHERE id = ?";
-        if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
-            $query_ver .= " FOR UPDATE";
+        if (!$act || $act['activity_uid'] !== $token_data['activity_uid']) {
+            echo json_encode(['success' => false, 'message' => 'Activity validation failed.']);
+            exit();
         }
-        $stmt_ver_check = $pdo->prepare($query_ver);
-        $stmt_ver_check->execute([$plan_id]);
-        $db_version = $stmt_ver_check->fetchColumn();
+
+        if ((int)$act['is_deleted'] === 1) {
+            echo json_encode(['success' => false, 'message' => 'Activity has already been deleted.']);
+            exit();
+        }
+
+        $act_uid = trim($act['activity_uid'] ?? '');
+
+        // Authoritative Database check: Verify ZERO student activity before deleting
+        $current_student_count = 0;
+        try {
+            $stmt_cnt = $pdo->prepare("
+                SELECT COUNT(*)
+                FROM study_plan_analytics
+                WHERE study_plan_id = ?
+                  AND (
+                      (activity_uid = ? AND ? != '')
+                      OR (activity_id = ? AND ? > 0)
+                  )
+            ");
+            $stmt_cnt->execute([$plan_id, $act_uid, $act_uid, $activity_id, $activity_id]);
+            $current_student_count += (int)$stmt_cnt->fetchColumn();
+        } catch (Exception $e) {}
+
+        try {
+            $stmt_att = $pdo->prepare("
+                SELECT COUNT(*)
+                FROM assessment_results ar
+                JOIN assessment_result_batches arb ON ar.batch_id = arb.id
+                WHERE arb.activity_id = ? AND (arb.is_deleted IS NULL OR arb.is_deleted = 0)
+            ");
+            $stmt_att->execute([$activity_id]);
+            $current_student_count += (int)$stmt_att->fetchColumn();
+        } catch (Exception $e) {}
+
+        if ($current_student_count > 0) {
+            unset($_SESSION['delete_tokens'][$activity_id]);
+            echo json_encode([
+                'success' => false,
+                'error_code' => 'ACTIVITY_HAS_STUDENT_DATA',
+                'student_count' => $current_student_count,
+                'message' => 'This activity cannot be deleted because student activity has already been recorded.'
+            ]);
+            exit();
+        }
+
+        // Optimistic concurrency protection
+        $client_version = isset($_POST['version']) ? (int)$_POST['version'] : 0;
+        $stmt_ver = $pdo->prepare("SELECT version FROM study_plans WHERE id = ?");
+        $stmt_ver->execute([$plan_id]);
+        $db_version = $stmt_ver->fetchColumn();
 
         if ($db_version !== false) {
             $db_version = (int)$db_version;
             if ($client_version > 0 && $client_version !== $db_version) {
-                $pdo->rollBack();
                 echo json_encode([
                     'success' => false,
                     'error_code' => 'STALE_STUDY_PLAN',
@@ -1219,54 +1285,315 @@ try {
             }
         }
 
-        // Re-calculate completion count inside transaction
-        $stmt_cnt = $pdo->prepare("
-            SELECT COUNT(DISTINCT student_email)
-            FROM study_plan_analytics
-            WHERE (activity_uid = ? OR (activity_id = ? AND (activity_uid IS NULL OR activity_uid = '')))
-              AND action_type = 'complete_activity'
-              AND completion_status = 'completed'
-        ");
-        $stmt_cnt->execute([$act['activity_uid'], $act['id']]);
-        $current_count = (int)$stmt_cnt->fetchColumn();
+        try {
+            $pdo->beginTransaction();
 
-        if ($current_count !== $expected_count) {
-            $pdo->rollBack();
+            // Log pre-deleted state
+            log_activity_version($pdo, $activity_id, 'delete', $admin_username);
+
+            // Perform soft delete
+            $reason = trim($_POST['deletion_reason'] ?? 'Admin deleted');
+            $stmt_del = $pdo->prepare("UPDATE study_plan_activities SET is_deleted = 1, deleted_at = NOW(), deleted_by = ?, deletion_reason = ? WHERE id = ? AND study_plan_id = ?");
+            $stmt_del->execute([$admin_username, $reason, $activity_id, $plan_id]);
+
+            // Increment plan version
+            $pdo->prepare("UPDATE study_plans SET version = version + 1, updated_at = NOW() WHERE id = ?")->execute([$plan_id]);
+
+            // Write audit log
+            $stmt_audit = $pdo->prepare("INSERT INTO study_plan_audit_logs (study_plan_id, admin_username, action, details) VALUES (?, ?, 'delete_activity', ?)");
+            $stmt_audit->execute([
+                $plan_id,
+                $admin_username,
+                "Soft-deleted activity '{$act['activity_title']}' (ID: {$activity_id}, UID: {$act['activity_uid']}). Reason: {$reason}"
+            ]);
+
+            unset($_SESSION['delete_tokens'][$activity_id]);
+
+            $pdo->commit();
+
+            $new_ver = ($db_version !== false) ? $db_version + 1 : 1;
+            echo json_encode(['success' => true, 'version' => $new_ver, 'deleted_id' => $activity_id, 'deleted_uid' => $act['activity_uid']]);
+            exit();
+
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                try { $pdo->rollBack(); } catch (Exception $rbEx) {}
+            }
+            echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+            exit();
+        }
+    }
+
+    if ($action === 'bulk_delete_activities') {
+        $raw = file_get_contents('php://input');
+        $data = json_decode($raw, true);
+        if (!$data) {
+            $data = $_POST;
+        }
+
+        $plan_id = (int)($data['study_plan_id'] ?? 0);
+        $client_version = (int)($data['version'] ?? 0);
+        $reason = trim($data['deletion_reason'] ?? 'Admin bulk delete');
+        $activity_ids = $data['activity_ids'] ?? [];
+        $activity_uids = $data['activity_uids'] ?? [];
+
+        if ($plan_id <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Invalid Study Plan ID.']);
+            exit();
+        }
+
+        if (empty($activity_ids) && empty($activity_uids)) {
+            echo json_encode(['success' => false, 'message' => 'No activities selected for deletion.']);
+            exit();
+        }
+
+        // 1. Edit Lock Enforcement — Checked BEFORE transaction
+        if (!verify_study_plan_edit_lock_permission($pdo, $plan_id, $admin_username, $admin_id)) {
             echo json_encode([
                 'success' => false,
-                'count_changed' => true,
-                'current_count' => $current_count,
-                'message' => "The student completion count has changed in the background (was {$expected_count}, now {$current_count}). Please verify and try again."
+                'error_code' => 'EDIT_LOCK_HELD',
+                'message' => 'This Study Plan is currently locked for editing by another administrator.'
             ]);
             exit();
         }
 
-        // Log pre-deleted state
-        log_activity_version($pdo, $activity_id, 'delete', $admin_username);
+        // 2. Optimistic Concurrency Check
+        $stmt_ver = $pdo->prepare("SELECT version FROM study_plans WHERE id = ?");
+        $stmt_ver->execute([$plan_id]);
+        $db_version = $stmt_ver->fetchColumn();
 
-        // Perform soft delete
-        $reason = trim($_POST['deletion_reason'] ?? 'Admin deleted');
-        $stmt_del = $pdo->prepare("UPDATE study_plan_activities SET is_deleted = 1, deleted_at = NOW(), deleted_by = ?, deletion_reason = ? WHERE id = ?");
-        $stmt_del->execute([$admin_username, $reason, $activity_id]);
+        if ($db_version !== false) {
+            $db_version = (int)$db_version;
+            if ($client_version > 0 && $client_version !== $db_version) {
+                echo json_encode([
+                    'success' => false,
+                    'error_code' => 'STALE_STUDY_PLAN',
+                    'message' => 'This study plan was updated by another administrator. Please reload before modifying.'
+                ]);
+                exit();
+            }
+        }
 
-        // Increment plan version
-        $pdo->prepare("UPDATE study_plans SET version = version + 1, updated_at = NOW() WHERE id = ?")->execute([$plan_id]);
+        // 3. Fetch all requested activities belonging strictly to this Study Plan
+        $id_list = array_values(array_filter(array_map('intval', (array)$activity_ids), function($v) { return $v > 0; }));
+        $uid_list = array_values(array_filter(array_map('trim', (array)$activity_uids), function($v) { return !empty($v); }));
 
-        // Write audit log
-        $stmt_audit = $pdo->prepare("INSERT INTO study_plan_audit_logs (study_plan_id, admin_username, action, details) VALUES (?, ?, 'delete_activity', ?)");
-        $stmt_audit->execute([
-            $plan_id,
-            $admin_username,
-            "Soft-deleted activity '{$act['activity_title']}' (ID: {$activity_id}, UID: {$act['activity_uid']}). Reason: {$reason}"
-        ]);
+        $where_clauses = [];
+        $params = [$plan_id];
 
-        unset($_SESSION['delete_tokens'][$activity_id]);
+        if (!empty($id_list)) {
+            $id_placeholders = implode(',', array_fill(0, count($id_list), '?'));
+            $where_clauses[] = "id IN ($id_placeholders)";
+            foreach ($id_list as $id_val) $params[] = $id_val;
+        }
+        if (!empty($uid_list)) {
+            $uid_placeholders = implode(',', array_fill(0, count($uid_list), '?'));
+            $where_clauses[] = "activity_uid IN ($uid_placeholders)";
+            foreach ($uid_list as $uid_val) $params[] = $uid_val;
+        }
 
-        $pdo->commit();
+        if (empty($where_clauses)) {
+            echo json_encode(['success' => false, 'message' => 'No valid activities found to delete.']);
+            exit();
+        }
 
-        $new_ver = ($db_version !== false) ? $db_version + 1 : 1;
-        echo json_encode(['success' => true, 'version' => $new_ver]);
-        exit();
+        $sql_fetch = "SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 AND (" . implode(' OR ', $where_clauses) . ")";
+        $stmt_act = $pdo->prepare($sql_fetch);
+        $stmt_act->execute($params);
+        $target_activities = $stmt_act->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($target_activities)) {
+            echo json_encode([
+                'success' => true,
+                'deleted_count' => 0,
+                'protected_count' => 0,
+                'deleted_ids' => [],
+                'deleted_uids' => [],
+                'protected_activities' => [],
+                'message' => 'No active matching activities found for deletion.'
+            ]);
+            exit();
+        }
+
+        // 4. Batch query student activity / completion counts from study_plan_analytics and assessment_results
+        $target_uids = [];
+        $target_ids = [];
+        foreach ($target_activities as $act) {
+            if (!empty($act['activity_uid'])) {
+                $target_uids[] = $act['activity_uid'];
+            }
+            if (!empty($act['id'])) {
+                $target_ids[] = (int)$act['id'];
+            }
+        }
+
+        $analytics_conditions = [];
+        $an_params = [$plan_id];
+
+        if (!empty($target_uids)) {
+            $u_place = implode(',', array_fill(0, count($target_uids), '?'));
+            $analytics_conditions[] = "activity_uid IN ($u_place)";
+            foreach ($target_uids as $u) $an_params[] = $u;
+        }
+        if (!empty($target_ids)) {
+            $i_place = implode(',', array_fill(0, count($target_ids), '?'));
+            $analytics_conditions[] = "activity_id IN ($i_place)";
+            foreach ($target_ids as $i) $an_params[] = $i;
+        }
+
+        $counts_by_uid = [];
+        $counts_by_id = [];
+
+        if (!empty($analytics_conditions)) {
+            try {
+                $sql_an = "
+                    SELECT activity_uid, activity_id, COUNT(*) AS student_cnt
+                    FROM study_plan_analytics
+                    WHERE study_plan_id = ?
+                      AND (" . implode(' OR ', $analytics_conditions) . ")
+                    GROUP BY activity_uid, activity_id
+                ";
+                $stmt_an = $pdo->prepare($sql_an);
+                $stmt_an->execute($an_params);
+                $an_rows = $stmt_an->fetchAll(PDO::FETCH_ASSOC);
+
+                foreach ($an_rows as $row) {
+                    $cnt = (int)$row['student_cnt'];
+                    if (!empty($row['activity_uid'])) {
+                        $counts_by_uid[$row['activity_uid']] = ($counts_by_uid[$row['activity_uid']] ?? 0) + $cnt;
+                    }
+                    if (!empty($row['activity_id'])) {
+                        $counts_by_id[(int)$row['activity_id']] = ($counts_by_id[(int)$row['activity_id']] ?? 0) + $cnt;
+                    }
+                }
+            } catch (Exception $e) {}
+        }
+
+        // Assessment results batch query
+        $assessment_counts_by_id = [];
+        if (!empty($target_ids)) {
+            try {
+                $id_place = implode(',', array_fill(0, count($target_ids), '?'));
+                $sql_ass = "
+                    SELECT arb.activity_id, COUNT(*) AS assessment_cnt
+                    FROM assessment_results ar
+                    JOIN assessment_result_batches arb ON ar.batch_id = arb.id
+                    WHERE arb.activity_id IN ($id_place) AND (arb.is_deleted IS NULL OR arb.is_deleted = 0)
+                    GROUP BY arb.activity_id
+                ";
+                $stmt_ass = $pdo->prepare($sql_ass);
+                $stmt_ass->execute($target_ids);
+                $ass_rows = $stmt_ass->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($ass_rows as $arow) {
+                    $assessment_counts_by_id[(int)$arow['activity_id']] = (int)$arow['assessment_cnt'];
+                }
+            } catch (Exception $e) {}
+        }
+
+        // 5. Partition activities into Deletable (0 student data) vs Protected (>0 student data)
+        $deletable = [];
+        $protected = [];
+
+        foreach ($target_activities as $act) {
+            $uid = $act['activity_uid'] ?? '';
+            $id = (int)$act['id'];
+
+            $cnt = 0;
+            if (!empty($uid) && isset($counts_by_uid[$uid])) {
+                $cnt += $counts_by_uid[$uid];
+            }
+            if (!empty($id) && isset($counts_by_id[$id])) {
+                $cnt += $counts_by_id[$id];
+            }
+            if (!empty($id) && isset($assessment_counts_by_id[$id])) {
+                $cnt += $assessment_counts_by_id[$id];
+            }
+
+            if ($cnt > 0) {
+                $protected[] = [
+                    'id' => $id,
+                    'activity_uid' => $uid,
+                    'activity_title' => $act['activity_title'],
+                    'day_number' => (int)$act['day_number'],
+                    'activity_date' => $act['activity_date'],
+                    'student_count' => $cnt,
+                    'reason' => "Student activity recorded ({$cnt} record(s))"
+                ];
+            } else {
+                $deletable[] = $act;
+            }
+        }
+
+        // If ALL selected activities are protected, no mutation or transaction needed
+        if (empty($deletable)) {
+            echo json_encode([
+                'success' => true,
+                'deleted_count' => 0,
+                'protected_count' => count($protected),
+                'deleted_ids' => [],
+                'deleted_uids' => [],
+                'protected_activities' => $protected,
+                'version' => ($db_version !== false) ? $db_version : 1,
+                'message' => "0 activities deleted. All " . count($protected) . " selected activity(ies) have recorded student data and cannot be deleted."
+            ]);
+            exit();
+        }
+
+        // 6. Execute bulk deletion of deletable activities in ONE atomic transaction
+        try {
+            $pdo->beginTransaction();
+
+            $deletable_ids = array_map(function($a) { return (int)$a['id']; }, $deletable);
+            $deletable_uids = array_map(function($a) { return $a['activity_uid']; }, $deletable);
+
+            // Log activity versions
+            foreach ($deletable_ids as $del_id) {
+                log_activity_version($pdo, $del_id, 'delete', $admin_username);
+            }
+
+            // Perform batch soft-delete
+            $in_placeholders = implode(',', array_fill(0, count($deletable_ids), '?'));
+            $del_sql = "UPDATE study_plan_activities SET is_deleted = 1, deleted_at = NOW(), deleted_by = ?, deletion_reason = ? WHERE id IN ($in_placeholders) AND study_plan_id = ?";
+            $stmt_del = $pdo->prepare($del_sql);
+            $stmt_del->execute(array_merge([$admin_username, $reason], $deletable_ids, [$plan_id]));
+
+            // Bump version
+            $pdo->prepare("UPDATE study_plans SET version = version + 1, updated_at = NOW() WHERE id = ?")->execute([$plan_id]);
+
+            // Single Audit Log record
+            $count_del = count($deletable);
+            $count_prot = count($protected);
+            $audit_msg = "Bulk soft-deleted {$count_del} activity(ies). Protected {$count_prot} activity(ies) due to student data. Reason: {$reason}";
+            $stmt_audit = $pdo->prepare("INSERT INTO study_plan_audit_logs (study_plan_id, admin_username, action, details) VALUES (?, ?, 'bulk_delete_activities', ?)");
+            $stmt_audit->execute([$plan_id, $admin_username, $audit_msg]);
+
+            $pdo->commit();
+
+            $new_version = ($db_version !== false) ? $db_version + 1 : 1;
+            $msg = "{$count_del} activity(ies) deleted successfully.";
+            if ($count_prot > 0) {
+                $msg .= " {$count_prot} activity(ies) were protected because student activity exists.";
+            }
+
+            echo json_encode([
+                'success' => true,
+                'deleted_count' => $count_del,
+                'protected_count' => $count_prot,
+                'deleted_ids' => $deletable_ids,
+                'deleted_uids' => $deletable_uids,
+                'protected_activities' => $protected,
+                'version' => $new_version,
+                'message' => $msg
+            ]);
+            exit();
+
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                try { $pdo->rollBack(); } catch (Exception $rbEx) {}
+            }
+            echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+            exit();
+        }
     }
 
     if ($action === 'save_custom_activity_type') {

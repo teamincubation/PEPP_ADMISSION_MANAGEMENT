@@ -286,7 +286,13 @@ if (isset($_GET['logout'])) {
 if (!defined('PEPP_STUDENT_PORTAL')) {
     if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
         if (PHP_SAPI !== 'cli' && empty($_SERVER['HTTP_X_TESTING_MODE'])) {
-            header('Location: login.php');
+            if (str_contains($_SERVER['SCRIPT_NAME'] ?? '', '/api/') || (isset($_SERVER['HTTP_ACCEPT']) && str_contains($_SERVER['HTTP_ACCEPT'], 'application/json'))) {
+                header('Content-Type: application/json');
+                http_response_code(401);
+                echo json_encode(['success' => false, 'message' => 'Unauthorized access']);
+                exit();
+            }
+            header('Location: /login.php');
             exit();
         }
     }
@@ -477,7 +483,9 @@ function can_access($page_key) {
     if (is_super_admin()) return true;
     if (trim($admin_perms) === 'ALL') return true;
 
-    $perms = array_map('trim', explode(',', $admin_perms));
+    $perms = is_array($decoded = json_decode($admin_perms, true))
+        ? $decoded
+        : array_map('trim', explode(',', $admin_perms));
     if (($page_key === 'whatsapp-inbox' || $page_key === 'whatsapp-marketing-templates') && in_array('communication', $perms, true)) {
         return true;
     }

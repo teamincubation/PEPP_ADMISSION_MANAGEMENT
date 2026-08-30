@@ -78,6 +78,11 @@ function ensure_study_plan_edit_locks_table(PDO $pdo, bool $force = false): void
     static $ensured = false;
     if ($ensured && !$force) return;
 
+    // Never execute DDL statements inside an active transaction (in MySQL, DDL causes implicit commit)
+    if ($pdo->inTransaction()) {
+        return;
+    }
+
     try {
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         if ($driver === 'sqlite') {

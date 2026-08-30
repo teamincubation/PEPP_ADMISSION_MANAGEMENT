@@ -910,6 +910,7 @@ include 'includes/admin_nav.php';
                             <!-- Populated dynamically based on plan type (date_wise or day_wise) -->
                         </select>
                         <button type="button" id="bulk-move-btn" class="btn btn-sm btn-primary" style="padding:4px 12px; font-size:0.8rem; background:#2563eb; border-color:#2563eb;" onclick="executeBulkMove()"><i class="fas fa-arrows-turn-right"></i> Move Selected Tasks</button>
+                        <button type="button" id="bulk-delete-btn" class="btn btn-sm btn-danger" style="padding:4px 12px; font-size:0.8rem; background:#dc2626; border-color:#dc2626; color:#fff; font-weight:700;" onclick="openBulkDeleteModal()"><i class="fas fa-trash"></i> Delete Selected (<span id="bulk-delete-btn-count">0</span>)</button>
                     </div>
                 </div>
 
@@ -1102,21 +1103,53 @@ include 'includes/admin_nav.php';
 
 <!-- Modal: Delete Confirmation Warning -->
 <div class="modal-backdrop" id="delete-warning-modal">
-    <div class="modal" style="max-width:450px; padding:1.5rem; border-radius: 16px;">
+    <div class="modal" style="max-width:480px; padding:1.75rem; border-radius: 16px;">
         <div style="text-align:center; font-size:3rem; color:#ef4444; margin-bottom:12px;" id="delete-warning-icon">
             <i class="fas fa-triangle-exclamation"></i>
         </div>
-        <h3 style="font-weight:800; font-size:1.2rem; margin-bottom:8px; color: #1e293b; text-align:center;" id="delete-warning-title">Delete Activity</h3>
-        <div style="color:#64748b; font-size:0.9rem; margin-bottom:20px; text-align:center; line-height: 1.5;" id="delete-warning-message">
+        <h3 style="font-weight:800; font-size:1.25rem; margin-bottom:8px; color: #1e293b; text-align:center;" id="delete-warning-title">Delete Activity</h3>
+        <div style="color:#64748b; font-size:0.9rem; margin-bottom:18px; text-align:center; line-height: 1.5;" id="delete-warning-message">
             Are you sure you want to delete this activity?
         </div>
         <div style="margin-bottom:15px; display:none;" id="delete-reason-container">
-            <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:4px;">Reason for Deletion:</label>
-            <input type="text" id="delete-reason-input" class="form-control" style="width:100%; border:1px solid #cbd5e1; padding:6px; border-radius:6px; font-size:0.85rem;" placeholder="e.g., Task no longer needed" value="Admin deleted">
+            <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:4px;">Reason for Deletion (Optional):</label>
+            <input type="text" id="delete-reason-input" class="form-control" style="width:100%; border:1px solid #cbd5e1; padding:7px 10px; border-radius:6px; font-size:0.85rem;" placeholder="e.g., Task no longer needed" value="Admin deleted">
         </div>
-        <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <div style="display:flex; justify-content:flex-end; gap:8px;" id="delete-modal-buttons">
             <button type="button" class="btn btn-outline" onclick="closeModal('delete-warning-modal')">Cancel</button>
-            <button type="button" class="btn btn-danger" id="confirm-delete-btn" style="background:#ef4444; border-color:#ef4444; color:#fff;" onclick="executeDeleteActivity()"><i class="fas fa-trash"></i> Delete Activity</button>
+            <button type="button" class="btn btn-danger" id="confirm-delete-btn" style="background:#ef4444; border-color:#ef4444; color:#fff; font-weight:700;" onclick="executeDeleteActivity()"><i class="fas fa-trash"></i> Delete Activity</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Bulk Delete Confirmation -->
+<div class="modal-backdrop" id="bulk-delete-modal" style="display:none;">
+    <div class="modal" style="max-width:540px; padding:1.75rem; border-radius: 16px;">
+        <div style="text-align:center; font-size:2.8rem; color:#ef4444; margin-bottom:12px;">
+            <i class="fas fa-trash-can"></i>
+        </div>
+        <h3 style="font-weight:800; font-size:1.25rem; margin-bottom:8px; color: #1e293b; text-align:center;">Delete Selected Activities</h3>
+        <div style="color:#64748b; font-size:0.88rem; margin-bottom:14px; text-align:center;" id="bulk-delete-summary-text">
+            You have selected <strong>0 activities</strong> for deletion.
+        </div>
+
+        <div style="background:#fff1f2; border:1px solid #fecdd3; border-radius:10px; padding:10px 14px; margin-bottom:14px; font-size:0.82rem; color:#9f1239; line-height:1.4;">
+            <i class="fas fa-shield-halved" style="color:#e11d48; margin-right:4px;"></i>
+            <strong>Academic Data Protection:</strong> Activities with recorded student completion/progress data cannot be deleted and will be protected automatically.
+        </div>
+
+        <div style="max-height:180px; overflow-y:auto; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 14px; margin-bottom:14px;" id="bulk-delete-task-list">
+            <!-- Populated with selected activities -->
+        </div>
+
+        <div style="margin-bottom:16px;">
+            <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:4px;">Reason for Deletion (Optional):</label>
+            <input type="text" id="bulk-delete-reason-input" class="form-control" style="width:100%; border:1px solid #cbd5e1; padding:7px 10px; border-radius:6px; font-size:0.85rem;" placeholder="e.g., Curriculum adjustment / clean up duplicates" value="Admin bulk delete">
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button type="button" class="btn btn-outline" onclick="closeModal('bulk-delete-modal')">Cancel</button>
+            <button type="button" class="btn btn-danger" id="confirm-bulk-delete-btn" style="background:#ef4444; border-color:#ef4444; color:#fff; font-weight:700;" onclick="executeBulkDelete()"><i class="fas fa-trash"></i> Confirm Delete</button>
         </div>
     </div>
 </div>
@@ -1541,6 +1574,8 @@ include 'includes/admin_nav.php';
 
         var count = selectedTaskKeys.size;
         if (badgeCount) badgeCount.textContent = count;
+        var bulkDeleteBtnCount = document.getElementById('bulk-delete-btn-count');
+        if (bulkDeleteBtnCount) bulkDeleteBtnCount.textContent = count;
 
         if (selectAllBtn) {
             selectAllBtn.style.display = 'inline-flex';
@@ -2107,11 +2142,19 @@ include 'includes/admin_nav.php';
     var deleteExpectedCount = 0;
 
     function deleteActivityRow(index) {
+        if (isReadOnlyMode) {
+            alert('This Study Plan is currently locked in Read-Only mode. Activities cannot be deleted.');
+            return;
+        }
+
         var act = activities[index];
+        if (!act) return;
 
         // If it's a new unsaved activity, remove it locally immediately
         if (!act.id || act.id <= 0) {
-            if (confirm('Delete this new study activity?')) {
+            if (confirm('Delete this new study activity "' + (act.activity_title || 'Item') + '"?')) {
+                var taskKey = act.activity_uid || act.client_key || ('idx_' + index);
+                selectedTaskKeys.delete(taskKey);
                 activities.splice(index, 1);
                 renderActivitiesList();
                 updateLivePreview();
@@ -2143,33 +2186,36 @@ include 'includes/admin_nav.php';
                 deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
             }
 
+            var titleEl = document.getElementById('delete-warning-title');
+            var msgEl = document.getElementById('delete-warning-message');
+            var iconEl = document.getElementById('delete-warning-icon');
+            var reasonContainer = document.getElementById('delete-reason-container');
+            var reasonInput = document.getElementById('delete-reason-input');
+            var modalBtns = document.getElementById('delete-modal-buttons');
+
             if (data.success) {
-                deleteToken = data.confirmation_token;
-                deleteExpectedCount = data.student_count;
-
-                var titleEl = document.getElementById('delete-warning-title');
-                var msgEl = document.getElementById('delete-warning-message');
-                var iconEl = document.getElementById('delete-warning-icon');
-                var confirmBtn = document.getElementById('confirm-delete-btn');
-                var reasonContainer = document.getElementById('delete-reason-container');
-                var reasonInput = document.getElementById('delete-reason-input');
-
-                reasonInput.value = 'Admin deleted';
-
-                if (data.student_count > 0) {
-                    titleEl.innerText = 'Delete Activity — Student Data Warning';
-                    iconEl.innerHTML = '<i class="fas fa-triangle-exclamation"></i>';
+                if (data.deletable === false || data.error_code === 'ACTIVITY_HAS_STUDENT_DATA' || data.student_count > 0) {
+                    // BLOCKED: Student activity exists
+                    deleteToken = '';
+                    titleEl.innerText = 'Cannot Delete Activity';
+                    iconEl.innerHTML = '<i class="fas fa-lock"></i>';
                     iconEl.style.color = '#ef4444';
-                    msgEl.innerHTML = `⚠️ <strong>${data.student_count}</strong> student(s) have completed this activity.<br><br>The activity will be removed from the active study plan, but historical student completion records will be preserved for reporting.<br><br>This action cannot be automatically undone.`;
-                    reasonContainer.style.display = 'block';
+                    msgEl.innerHTML = `This activity <strong>"${escapeHtml(act.activity_title)}"</strong> cannot be deleted because <strong>${data.student_count}</strong> student(s) have already recorded learning/completion data against it.<br><br><span style="font-size:0.84rem; color:#475569;"><i class="fas fa-shield-halved" style="color:#6366f1;"></i> To protect student learning analytics and academic progress records, activities with recorded student usage cannot be deleted.</span>`;
+                    reasonContainer.style.display = 'none';
+                    modalBtns.innerHTML = '<button type="button" class="btn btn-outline" style="font-weight:700;" onclick="closeModal(\'delete-warning-modal\')">Close</button>';
                 } else {
+                    // SAFE: No student activity exists
+                    deleteToken = data.confirmation_token;
+                    deleteExpectedCount = 0;
                     titleEl.innerText = 'Delete Activity';
                     iconEl.innerHTML = '<i class="fas fa-circle-question"></i>';
                     iconEl.style.color = '#3b82f6';
-                    msgEl.innerHTML = 'Are you sure you want to delete this activity?<br><br>No student completion data has been recorded yet.';
+                    msgEl.innerHTML = `Are you sure you want to delete <strong>"${escapeHtml(act.activity_title)}"</strong>?<br><br><span style="font-size:0.84rem; color:#10b981;"><i class="fas fa-check-circle"></i> No student completion data recorded. Deletion is safe.</span>`;
+                    reasonInput.value = 'Admin deleted';
                     reasonContainer.style.display = 'block';
+                    modalBtns.innerHTML = '<button type="button" class="btn btn-outline" onclick="closeModal(\'delete-warning-modal\')">Cancel</button>' +
+                                          '<button type="button" class="btn btn-danger" id="confirm-delete-btn" style="background:#ef4444; border-color:#ef4444; color:#fff; font-weight:700;" onclick="executeDeleteActivity()"><i class="fas fa-trash"></i> Delete Activity</button>';
                 }
-
                 openModal('delete-warning-modal');
             } else {
                 alert(data.message || 'Error checking activity deletion.');
@@ -2191,14 +2237,15 @@ include 'includes/admin_nav.php';
         var confirmBtn = document.getElementById('confirm-delete-btn');
         var reasonInput = document.getElementById('delete-reason-input');
 
-        confirmBtn.disabled = true;
-        confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
+        if (confirmBtn) {
+            confirmBtn.disabled = true;
+            confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
+        }
 
         var formData = new FormData();
         formData.append('activity_id', activities[deleteIndex].id);
         formData.append('confirmation_token', deleteToken);
-        formData.append('expected_count', deleteExpectedCount);
-        formData.append('deletion_reason', reasonInput.value);
+        formData.append('deletion_reason', reasonInput ? reasonInput.value : 'Admin deleted');
         formData.append('version', studyPlanVersion);
 
         fetch('api/studyplans-api.php?action=delete_activity', {
@@ -2207,38 +2254,241 @@ include 'includes/admin_nav.php';
         })
         .then(r => r.json())
         .then(data => {
-            confirmBtn.disabled = false;
-            confirmBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Activity';
+            if (confirmBtn) {
+                confirmBtn.disabled = false;
+                confirmBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Activity';
+            }
 
             if (data.success) {
                 if (data.version) {
                     studyPlanVersion = data.version;
                 }
-                activities.splice(deleteIndex, 1);
+                var deletedId = data.deleted_id;
+                var deletedUid = data.deleted_uid;
+
+                var removeIdx = activities.findIndex(function(a) {
+                    return (deletedId && a.id == deletedId) || (deletedUid && a.activity_uid === deletedUid);
+                });
+                if (removeIdx < 0) removeIdx = deleteIndex;
+
+                if (removeIdx >= 0 && activities[removeIdx]) {
+                    var act = activities[removeIdx];
+                    var taskKey = act.activity_uid || act.client_key || ('idx_' + removeIdx);
+                    selectedTaskKeys.delete(taskKey);
+                    activities.splice(removeIdx, 1);
+                }
+
                 renderActivitiesList();
                 updateLivePreview();
                 closeModal('delete-warning-modal');
 
                 deleteIndex = -1;
-                deleteToken = null;
+                deleteToken = '';
                 deleteExpectedCount = 0;
+            } else if (data.error_code === 'ACTIVITY_HAS_STUDENT_DATA') {
+                closeModal('delete-warning-modal');
+                alert(data.message || 'Cannot delete activity because student records have been recorded.');
+            } else if (data.error_code === 'EDIT_LOCK_HELD') {
+                closeModal('delete-warning-modal');
+                enableReadOnlyMode();
+                openModal('modal-lock-lost');
             } else if (data.error_code === 'STALE_STUDY_PLAN') {
                 closeModal('delete-warning-modal');
                 openModal('stale-warning-modal');
-            } else if (data.count_changed) {
-                alert(data.message);
-                // Re-open warning dialog to get the fresh token & count
-                closeModal('delete-warning-modal');
-                deleteActivityRow(deleteIndex);
             } else {
                 alert(data.message || 'Error deleting activity.');
             }
         })
         .catch(err => {
-            confirmBtn.disabled = false;
-            confirmBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Activity';
+            if (confirmBtn) {
+                confirmBtn.disabled = false;
+                confirmBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Activity';
+            }
             console.error(err);
             alert('Connection error occurred while deleting activity.');
+        });
+    }
+
+    function openBulkDeleteModal() {
+        if (isReadOnlyMode) {
+            alert('This Study Plan is locked in Read-Only mode. Activities cannot be deleted.');
+            return;
+        }
+
+        if (selectedTaskKeys.size === 0) {
+            alert('Please select one or more activities to delete.');
+            return;
+        }
+
+        var selectedActivities = [];
+        activities.forEach(function(act, index) {
+            var key = act.activity_uid || act.client_key || ('idx_' + index);
+            if (selectedTaskKeys.has(key)) {
+                selectedActivities.push(act);
+            }
+        });
+
+        if (selectedActivities.length === 0) {
+            alert('No matching activities selected.');
+            return;
+        }
+
+        var isDateWise = document.getElementById('type-date-wise').checked;
+        var summaryEl = document.getElementById('bulk-delete-summary-text');
+        var listEl = document.getElementById('bulk-delete-task-list');
+
+        if (summaryEl) {
+            summaryEl.innerHTML = 'You have selected <strong>' + selectedActivities.length + ' activities</strong> for deletion.';
+        }
+
+        if (listEl) {
+            listEl.innerHTML = '';
+            selectedActivities.forEach(function(act) {
+                var dayText = isDateWise ? (act.activity_date || ('Day ' + (act.day_number || 1))) : ('Day ' + (act.day_number || 1));
+                var itemDiv = document.createElement('div');
+                itemDiv.style = 'padding:6px 0; border-bottom:1px solid #e2e8f0; font-size:0.83rem; display:flex; justify-content:space-between; align-items:center; gap:8px;';
+                itemDiv.innerHTML = '<div style="min-width:0; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' +
+                                        '<strong style="color:var(--text-main);">' + escapeHtml(dayText) + ':</strong> ' +
+                                        '<span style="color:#334155;">' + escapeHtml(act.activity_title || 'Untitled') + '</span>' +
+                                    '</div>' +
+                                    '<span class="badge" style="font-size:0.7rem; background:#f1f5f9; color:#475569; flex-shrink:0;">' + escapeHtml(act.activity_type || 'Activity') + '</span>';
+                listEl.appendChild(itemDiv);
+            });
+        }
+
+        openModal('bulk-delete-modal');
+    }
+
+    function executeBulkDelete() {
+        if (isReadOnlyMode) {
+            alert('This Study Plan is locked in Read-Only mode. Activities cannot be deleted.');
+            return;
+        }
+
+        if (selectedTaskKeys.size === 0) {
+            alert('No activities selected.');
+            return;
+        }
+
+        var confirmBtn = document.getElementById('confirm-bulk-delete-btn');
+        var reasonInput = document.getElementById('bulk-delete-reason-input');
+
+        var selectedActivities = [];
+        var selectedUids = [];
+        var selectedIds = [];
+        var unsavedIndexes = [];
+
+        activities.forEach(function(act, index) {
+            var key = act.activity_uid || act.client_key || ('idx_' + index);
+            if (selectedTaskKeys.has(key)) {
+                selectedActivities.push(act);
+                if (act.id && act.id > 0) {
+                    selectedIds.push(act.id);
+                    if (act.activity_uid) selectedUids.push(act.activity_uid);
+                } else {
+                    unsavedIndexes.push(index);
+                }
+            }
+        });
+
+        // 1. Instantly remove any selected unsaved new tasks locally
+        if (unsavedIndexes.length > 0) {
+            unsavedIndexes.sort((a, b) => b - a);
+            unsavedIndexes.forEach(function(idx) {
+                var act = activities[idx];
+                var key = act.activity_uid || act.client_key || ('idx_' + idx);
+                selectedTaskKeys.delete(key);
+                activities.splice(idx, 1);
+            });
+        }
+
+        // If only unsaved tasks were selected, we are done
+        if (selectedIds.length === 0 && selectedUids.length === 0) {
+            renderActivitiesList();
+            updateLivePreview();
+            closeModal('bulk-delete-modal');
+            alert(unsavedIndexes.length + ' new unsaved activity(ies) removed.');
+            return;
+        }
+
+        // 2. Call server bulk_delete_activities for saved tasks
+        if (confirmBtn) {
+            confirmBtn.disabled = true;
+            confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
+        }
+
+        var payload = {
+            study_plan_id: studyPlanId,
+            version: studyPlanVersion,
+            activity_ids: selectedIds,
+            activity_uids: selectedUids,
+            deletion_reason: reasonInput ? reasonInput.value : 'Admin bulk delete'
+        };
+
+        fetch('api/studyplans-api.php?action=bulk_delete_activities', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (confirmBtn) {
+                confirmBtn.disabled = false;
+                confirmBtn.innerHTML = '<i class="fas fa-trash"></i> Confirm Delete';
+            }
+
+            if (data.success) {
+                if (data.version) {
+                    studyPlanVersion = data.version;
+                }
+
+                // Remove deleted activities from state
+                var deletedIdSet = new Set((data.deleted_ids || []).map(Number));
+                var deletedUidSet = new Set(data.deleted_uids || []);
+
+                activities = activities.filter(function(act, idx) {
+                    var isDel = (act.id && deletedIdSet.has(Number(act.id))) ||
+                                (act.activity_uid && deletedUidSet.has(act.activity_uid));
+                    if (isDel) {
+                        var taskKey = act.activity_uid || act.client_key || ('idx_' + idx);
+                        selectedTaskKeys.delete(taskKey);
+                        return false;
+                    }
+                    return true;
+                });
+
+                renderActivitiesList();
+                updateLivePreview();
+                closeModal('bulk-delete-modal');
+
+                // Build detailed notification
+                if (data.protected_count > 0 && Array.isArray(data.protected_activities)) {
+                    var protectedDetails = data.protected_activities.map(function(p) {
+                        return '• Day ' + p.day_number + ' (' + (p.activity_date || '') + '): ' + p.activity_title + ' [' + p.reason + ']';
+                    }).join('\n');
+
+                    alert(data.deleted_count + ' activity(ies) deleted successfully.\n\n🔒 ' + data.protected_count + ' activity(ies) were protected because student activity exists:\n' + protectedDetails);
+                } else {
+                    alert(data.message || (data.deleted_count + ' activity(ies) deleted successfully.'));
+                }
+            } else if (data.error_code === 'EDIT_LOCK_HELD') {
+                closeModal('bulk-delete-modal');
+                enableReadOnlyMode();
+                openModal('modal-lock-lost');
+            } else if (data.error_code === 'STALE_STUDY_PLAN') {
+                closeModal('bulk-delete-modal');
+                openModal('stale-warning-modal');
+            } else {
+                alert(data.message || 'Bulk delete failed.');
+            }
+        })
+        .catch(err => {
+            if (confirmBtn) {
+                confirmBtn.disabled = false;
+                confirmBtn.innerHTML = '<i class="fas fa-trash"></i> Confirm Delete';
+            }
+            console.error(err);
+            alert('Connection error occurred during bulk deletion.');
         });
     }
 

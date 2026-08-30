@@ -1,5 +1,12 @@
 <?php
-session_start();
+if (session_status() === PHP_SESSION_NONE) {
+    if (!session_save_path()) {
+        $sessDir = sys_get_temp_dir() . '/php_sessions';
+        if (!is_dir($sessDir)) @mkdir($sessDir, 0777, true);
+        if (is_dir($sessDir)) session_save_path($sessDir);
+    }
+    session_start();
+}
 require_once 'includes/activity_logger.php';
 
 // Already logged in → redirect to first accessible page
@@ -8,13 +15,19 @@ if (isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true
     $redirect = 'dashboard.php';
     try {
         $has_admins = false;
-        try { $has_admins = (bool)$pdo->query("SHOW TABLES LIKE 'admins'")->fetchColumn(); } catch (Exception $e) {}
+        try {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            $has_admins = ($driver === 'sqlite')
+                ? (bool)$pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='admins'")->fetchColumn()
+                : (bool)$pdo->query("SHOW TABLES LIKE 'admins'")->fetchColumn();
+        } catch (Exception $e) {}
         if ($has_admins) {
             $stmt = $pdo->prepare("SELECT role, permissions FROM admins WHERE username = ? AND status = 'active' LIMIT 1");
             $stmt->execute([$_SESSION['admin_username']]);
             $row = $stmt->fetch();
             if ($row && $row['role'] !== 'super_admin' && !empty($row['permissions'])) {
-                $perms = array_map('trim', explode(',', $row['permissions']));
+                $raw_perms = $row['permissions'];
+                $perms = is_array($decoded = json_decode($raw_perms, true)) ? $decoded : array_map('trim', explode(',', $raw_perms));
                 if (!in_array('dashboard', $perms, true)) {
                     $page_urls = [
                         'dashboard'    => 'dashboard.php',
@@ -34,6 +47,7 @@ if (isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true
                         'whatsapp'     => 'whatsapp-notification.php',
                         'courses'      => 'course-management.php',
                         'faculties'    => 'faculties.php',
+                        'studyplans'   => 'studyplans.php',
                         'settings'     => 'settings.php',
                     ];
                     foreach ($page_urls as $k => $u) {
@@ -79,7 +93,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$locked) {
         require_once 'config/database.php';
 
         $has_admins = false;
-        try { $has_admins = (bool)$pdo->query("SHOW TABLES LIKE 'admins'")->fetchColumn(); } catch (Exception $e) {}
+        try {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            $has_admins = ($driver === 'sqlite')
+                ? (bool)$pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='admins'")->fetchColumn()
+                : (bool)$pdo->query("SHOW TABLES LIKE 'admins'")->fetchColumn();
+        } catch (Exception $e) {}
 
         if ($has_admins) {
             $stmt = $pdo->prepare("SELECT * FROM admins WHERE username = ? AND status = 'active' LIMIT 1");
@@ -147,7 +166,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$locked) {
 
         $redirect = 'dashboard.php';
         if ($role !== 'super_admin' && isset($row) && !empty($row['permissions'])) {
-            $perms = array_map('trim', explode(',', $row['permissions']));
+            $raw_perms = $row['permissions'];
+            $perms = is_array($decoded = json_decode($raw_perms, true)) ? $decoded : array_map('trim', explode(',', $raw_perms));
             if (!in_array('dashboard', $perms, true)) {
                 $page_urls = [
                     'dashboard'    => 'dashboard.php',
@@ -167,6 +187,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$locked) {
                     'whatsapp'     => 'whatsapp-notification.php',
                     'courses'      => 'course-management.php',
                     'faculties'    => 'faculties.php',
+                    'studyplans'   => 'studyplans.php',
                     'settings'     => 'settings.php',
                 ];
                 foreach ($page_urls as $k => $u) {
