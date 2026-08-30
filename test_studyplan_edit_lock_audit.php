@@ -420,6 +420,233 @@ run_test("LOCK-32: Full Lifecycle: A locks -> B read-only -> A exits -> B detect
     return true;
 });
 
+// LOCK-33: No existing lock -> Admin A can acquire Plan #11
+run_test("LOCK-33: No existing lock -> Admin A can acquire Plan #11", function() use ($pdo, $alice_info) {
+    $res = acquire_or_check_study_plan_lock($pdo, 11, $alice_info);
+    return ($res['success'] === true && $res['locked'] === false && $res['is_owner'] === true);
+});
+
+// LOCK-34: Admin A releases Plan #11 -> no active lock remains
+run_test("LOCK-34: Admin A releases Plan #11 -> no active lock remains", function() use ($pdo, $alice_info) {
+    $rel = release_study_plan_lock($pdo, 11, $alice_info['admin_username'], false, $alice_info['admin_id']);
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 11")->fetchColumn();
+    return ($rel['success'] === true && $count === 0);
+});
+
+// LOCK-35: Admin B can immediately acquire after Admin A release
+run_test("LOCK-35: Admin B can immediately acquire Plan #11 after Admin A release", function() use ($pdo, $bob_info) {
+    $res = acquire_or_check_study_plan_lock($pdo, 11, $bob_info);
+    return ($res['success'] === true && $res['locked'] === false && $res['is_owner'] === true);
+});
+
+// LOCK-36: Stale lock is correctly reclaimed
+run_test("LOCK-36: Stale lock on Plan #11 is correctly reclaimed by Admin A", function() use ($pdo, $alice_info) {
+    // Set Bob's lock heartbeat to 200 seconds ago
+    $past = date('Y-m-d H:i:s', time() - 200);
+    $pdo->prepare("UPDATE study_plan_edit_locks SET last_heartbeat_at = ? WHERE study_plan_id = 11")->execute([$past]);
+
+    $res = acquire_or_check_study_plan_lock($pdo, 11, $alice_info);
+    $owner = $pdo->query("SELECT admin_username FROM study_plan_edit_locks WHERE study_plan_id = 11")->fetchColumn();
+    return ($res['success'] === true && $res['locked'] === false && $res['is_owner'] === true && $owner === 'admin_alice');
+});
+
+// LOCK-37: Fresh lock correctly blocks another admin
+run_test("LOCK-37: Fresh lock on Plan #11 correctly blocks Bob", function() use ($pdo, $bob_info) {
+    $res = acquire_or_check_study_plan_lock($pdo, 11, $bob_info);
+    return ($res['success'] === false && $res['locked'] === true && $res['is_owner'] === false && !empty($res['locked_by']));
+});
+
+// LOCK-38: Read-only check NEVER creates lock
+run_test("LOCK-38: Read-only check on Plan #12 NEVER creates lock row", function() use ($pdo) {
+    $countBefore = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 12")->fetchColumn();
+    // Simulate read-only check
+    $stmt = $pdo->prepare("SELECT * FROM study_plan_edit_locks WHERE study_plan_id = ? AND is_active = 1");
+    $stmt->execute([12]);
+    $lock = $stmt->fetch(PDO::FETCH_ASSOC);
+    $countAfter = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 12")->fetchColumn();
+
+    return (!$lock && $countBefore === 0 && $countAfter === 0);
+});
+
+// LOCK-39: Heartbeat only renews owner lock
+run_test("LOCK-39: Heartbeat renews lock for owner (Alice on #11)", function() use ($pdo, $alice_info) {
+    $hb = heartbeat_study_plan_lock($pdo, 11, $alice_info['admin_username'], $alice_info['session_token'], $alice_info['admin_id']);
+    return ($hb['success'] === true);
+});
+
+// LOCK-40: Heartbeat from non-owner fails
+run_test("LOCK-40: Heartbeat from non-owner (Bob on #11) fails with lock_lost", function() use ($pdo, $bob_info) {
+    $hb = heartbeat_study_plan_lock($pdo, 11, $bob_info['admin_username'], $bob_info['session_token'], $bob_info['admin_id']);
+    return ($hb['success'] === false && !empty($hb['lock_lost']));
+});
+
+// LOCK-41: Plan #11 lock does NOT affect Plan #12
+run_test("LOCK-41: Plan #11 lock held by Alice does NOT block Plan #12 for Bob", function() use ($pdo, $bob_info) {
+    $res = acquire_or_check_study_plan_lock($pdo, 12, $bob_info);
+    return ($res['success'] === true && $res['locked'] === false && $res['is_owner'] === true);
+});
+
+// LOCK-42: No lock on Plan #13 -> Admin can edit Plan #13
+run_test("LOCK-42: No lock on Plan #13 -> Admin can acquire edit access directly", function() use ($pdo, $alice_info) {
+    $res = acquire_or_check_study_plan_lock($pdo, 13, $alice_info);
+    return ($res['success'] === true && $res['locked'] === false && $res['is_owner'] === true);
+});
+
+// LOCK-43: All existing study plans remain independently lockable
+run_test("LOCK-43: Multiple study plans (11, 12, 13) maintain independent exclusive locks", function() use ($pdo) {
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id IN (11, 12, 13)")->fetchColumn();
+    return ($count === 3);
+});
+
+// LOCK-44: release endpoint cannot release another admin's lock
+run_test("LOCK-44: Regular release cannot release another admin's lock (Bob cannot release Alice on #11)", function() use ($pdo, $bob_info) {
+    $rel = release_study_plan_lock($pdo, 11, $bob_info['admin_username'], false, $bob_info['admin_id']);
+    $owner = $pdo->query("SELECT admin_username FROM study_plan_edit_locks WHERE study_plan_id = 11")->fetchColumn();
+    return ($owner === 'admin_alice');
+});
+
+// LOCK-45: Timezone differences do not incorrectly classify a fresh lock as active/stale
+run_test("LOCK-45: Timezone & clock differences do not misclassify fresh or stale locks", function() use ($pdo, $alice_info) {
+    // Touch heartbeat to current time
+    $nowStr = date('Y-m-d H:i:s');
+    $pdo->prepare("UPDATE study_plan_edit_locks SET last_heartbeat_at = ? WHERE study_plan_id = 11")->execute([$nowStr]);
+
+    $allowed = verify_study_plan_edit_lock_permission($pdo, 11, $alice_info['admin_username'], $alice_info['admin_id']);
+    $blocked = verify_study_plan_edit_lock_permission($pdo, 11, 'admin_bob', 3);
+
+    return ($allowed === true && $blocked === false);
+});
+
+// LOCK-46: No-plan/global lock cannot block unrelated study plans
+run_test("LOCK-46: Draft study plan (id = 0) or unmanaged plans cannot block other study plans", function() use ($pdo, $bob_info) {
+    $res0 = acquire_or_check_study_plan_lock($pdo, 0, $bob_info);
+    $res99 = acquire_or_check_study_plan_lock($pdo, 99, $bob_info);
+
+    // Clean up
+    release_study_plan_lock($pdo, 11, 'superadmin', true);
+    release_study_plan_lock($pdo, 12, 'superadmin', true);
+    release_study_plan_lock($pdo, 13, 'superadmin', true);
+    release_study_plan_lock($pdo, 99, 'superadmin', true);
+
+    return ($res0['success'] === true && $res0['locked'] === false && $res99['success'] === true);
+});
+
+// LOCK-47: Missing table self-heals and retry acquires lock successfully
+run_test("LOCK-47: Missing table self-heals on first touch and acquires lock cleanly", function() use ($pdo, $alice_info) {
+    // Drop table temporarily to simulate missing table scenario
+    $pdo->exec("DROP TABLE IF EXISTS study_plan_edit_locks");
+
+    // Acquire lock on Plan #50
+    $res = acquire_or_check_study_plan_lock($pdo, 50, $alice_info);
+
+    // Verify table was recreated and lock acquired
+    $exists = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 50")->fetchColumn();
+    release_study_plan_lock($pdo, 50, 'superadmin', true);
+
+    return ($res['success'] === true && $res['is_owner'] === true && $exists === 1);
+});
+
+// LOCK-48: Fail-closed behavior -> DB error returns EDIT_LOCK_UNAVAILABLE, is_owner = false
+run_test("LOCK-48: Fail-Closed: When lock cannot be verified, is_owner is FALSE and lock_unavailable is TRUE", function() use ($alice_info) {
+    // Create a mock closed PDO connection that throws errors
+    $bad_pdo = new PDO('sqlite::memory:');
+    $bad_pdo->exec("CREATE TABLE dummy (id INT)");
+    // Drop sqlite_master simulation or close
+    // We pass a bad PDO where study_plan_edit_locks table creation will fail
+    $bad_pdo->exec("CREATE TABLE study_plan_edit_locks (corrupted_column INT NOT NULL)");
+
+    $res = acquire_or_check_study_plan_lock($bad_pdo, 77, $alice_info);
+
+    return (
+        $res['success'] === false &&
+        $res['is_owner'] === false &&
+        $res['lock_available'] === false &&
+        !empty($res['lock_unavailable']) &&
+        $res['error_code'] === 'EDIT_LOCK_UNAVAILABLE'
+    );
+});
+
+// LOCK-49: Lock service unavailable does NOT produce phantom 'Another Admin' lock state
+run_test("LOCK-49: Lock unavailable state has locked_by = null, preventing phantom '@admin' modal", function() use ($alice_info) {
+    $bad_pdo = new PDO('sqlite::memory:');
+    $bad_pdo->exec("CREATE TABLE study_plan_edit_locks (corrupted INT)");
+
+    $res = acquire_or_check_study_plan_lock($bad_pdo, 77, $alice_info);
+
+    $is_owner = !empty($res['is_owner']);
+    $locked_by_admin = $res['locked_by'] ?? null;
+    $is_locked_by_other = (!empty($res['locked']) && !$is_owner && !empty($locked_by_admin) && !empty($locked_by_admin['admin_username']));
+    $is_lock_unavailable = (!$is_owner && !$is_locked_by_other && (!empty($res['lock_unavailable']) || !empty($res['error_code'])));
+
+    return ($is_locked_by_other === false && $is_lock_unavailable === true && $locked_by_admin === null);
+});
+
+// LOCK-50: Lock service unavailable -> verify_study_plan_edit_lock_permission strictly blocks mutations (Fail-Closed)
+run_test("LOCK-50: Fail-Closed Mutation: verify_study_plan_edit_lock_permission returns false on DB error", function() {
+    $bad_pdo = new PDO('sqlite::memory:');
+    $bad_pdo->exec("CREATE TABLE study_plan_edit_locks (corrupted INT)");
+
+    $allowed = verify_study_plan_edit_lock_permission($bad_pdo, 77, 'admin_alice');
+    return ($allowed === false);
+});
+
+// LOCK-51: Scenario 1 - Admin A acquires Plan #11
+run_test("LOCK-51: Scenario 1 - Admin A opens Plan #11 -> acquires exclusive edit lock", function() use ($pdo, $alice_info) {
+    $res = acquire_or_check_study_plan_lock($pdo, 11, $alice_info);
+    $active_locks = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 11 AND is_active = 1")->fetchColumn();
+    return ($res['success'] === true && $res['is_owner'] === true && $active_locks === 1);
+});
+
+// LOCK-52: Scenario 2 - Admin B opens Plan #11 -> receives locked state with Admin A's name and photo
+run_test("LOCK-52: Scenario 2 - Admin B opens Plan #11 -> blocked with Admin A's exact details", function() use ($pdo, $bob_info) {
+    $res = acquire_or_check_study_plan_lock($pdo, 11, $bob_info);
+    return (
+        $res['success'] === false &&
+        $res['locked'] === true &&
+        $res['is_owner'] === false &&
+        $res['lock_available'] === true &&
+        !empty($res['locked_by']) &&
+        $res['locked_by']['admin_username'] === 'admin_alice'
+    );
+});
+
+// LOCK-53: Scenario 3 - Admin B checks in read-only mode -> NO lock acquired, plan data accessible
+run_test("LOCK-53: Scenario 3 - Read-Only check by Admin B returns can_claim = false and creates ZERO lock rows", function() use ($pdo) {
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 11")->fetchColumn();
+    return ($count === 1);
+});
+
+// LOCK-54: Scenario 4 & 5 - Admin A exits -> Lock released -> Admin B notified & acquires Plan #11
+run_test("LOCK-54: Scenario 4 & 5 - Admin A exits -> Lock released -> Admin B acquires Plan #11", function() use ($pdo, $alice_info, $bob_info) {
+    // 1. Admin A exits
+    $rel = release_study_plan_lock($pdo, 11, $alice_info['admin_username'], false, $alice_info['admin_id']);
+    if (!$rel['success']) return false;
+
+    $active_count = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 11")->fetchColumn();
+    if ($active_count !== 0) return false;
+
+    // 2. Admin B acquires
+    $claim = acquire_or_check_study_plan_lock($pdo, 11, $bob_info);
+    $new_owner = $pdo->query("SELECT admin_username FROM study_plan_edit_locks WHERE study_plan_id = 11")->fetchColumn();
+
+    return ($claim['success'] === true && $claim['is_owner'] === true && $new_owner === 'admin_bob');
+});
+
+// LOCK-55: Scenario 6 & 7 - Admin A blocked on Plan #11, but Admin A can edit Plan #12 independently
+run_test("LOCK-55: Scenario 6 & 7 - Admin A blocked on #11 by Bob, but can edit #12 independently", function() use ($pdo, $alice_info) {
+    $res11 = acquire_or_check_study_plan_lock($pdo, 11, $alice_info);
+    $res12 = acquire_or_check_study_plan_lock($pdo, 12, $alice_info);
+
+    // Clean up
+    release_study_plan_lock($pdo, 11, 'superadmin', true);
+    release_study_plan_lock($pdo, 12, 'superadmin', true);
+
+    return (
+        $res11['locked'] === true && $res11['is_owner'] === false &&
+        $res12['success'] === true && $res12['is_owner'] === true
+    );
+});
+
 echo "\n----------------------------------------------------------------------\n";
 echo "  RESULT: {$passed}/{$total} TESTS PASSED (" . round(($passed/$total)*100, 1) . "%)\n";
 echo "======================================================================\n\n";

@@ -88,8 +88,10 @@ try {
     ")->fetchAll();
 } catch (Exception $e) {}
 
-$is_locked_by_other = (!empty($edit_lock_status['locked']) && empty($edit_lock_status['is_owner']));
+$is_owner = !empty($edit_lock_status['is_owner']);
 $locked_by_admin = $edit_lock_status['locked_by'] ?? null;
+$is_locked_by_other = (!empty($edit_lock_status['locked']) && !$is_owner && !empty($locked_by_admin) && !empty($locked_by_admin['admin_username']));
+$is_lock_unavailable = (!$is_owner && !$is_locked_by_other && (!empty($edit_lock_status['lock_unavailable']) || !empty($edit_lock_status['error_code'])));
 
 $page_title = $plan_id > 0 ? "Visual Study Plan Designer" : "Create Study Plan";
 $page_sub = "Visually design, schedule, theme, and assign study plans with real-time preview";
@@ -677,7 +679,28 @@ $extra_head = '
 include 'includes/admin_nav.php';
 ?>
 
-<?php if ($is_locked_by_other && $locked_by_admin): ?>
+<?php if ($is_lock_unavailable): ?>
+<div id="edit-lock-banner" class="edit-lock-alert-banner" style="background: linear-gradient(135deg, #fffbeb, #fef3c7); border-color: #fde68a;">
+    <div class="lock-banner-left">
+        <div class="lock-avatar-wrap" id="lock-avatar-container" style="background: #fde68a; border-color: #f59e0b;">
+            <div class="lock-avatar-initials" style="color: #b45309; font-size: 1.1rem;"><i class="fas fa-shield-halved"></i></div>
+        </div>
+        <div class="lock-banner-text">
+            <div class="lock-banner-title" id="lock-banner-title-text" style="color: #92400e;">
+                <i class="fas fa-circle-exclamation" style="color: #d97706; margin-right: 6px;"></i>
+                <strong>Edit Protection Temporarily Unavailable</strong>
+            </div>
+            <div class="lock-banner-subtitle" id="lock-banner-subtitle-text" style="color: #78350f;">
+                Lock status could not be verified. Operating in <strong>Read-Only Mode</strong> to prevent overwrite conflicts.
+            </div>
+        </div>
+    </div>
+    <div class="lock-banner-right" id="lock-banner-right-actions">
+        <button type="button" class="btn btn-sm" onclick="location.reload()" style="background:#f59e0b; border:none; color:#fff; font-weight:700; padding:6px 14px; border-radius:8px; cursor:pointer;"><i class="fas fa-rotate"></i> Retry</button>
+        <a href="javascript:void(0)" onclick="confirmBack()" class="btn-lock-exit"><i class="fas fa-arrow-left"></i> Exit</a>
+    </div>
+</div>
+<?php elseif ($is_locked_by_other && $locked_by_admin): ?>
 <div id="edit-lock-banner" class="edit-lock-alert-banner">
     <div class="lock-banner-left">
         <div class="lock-avatar-wrap" id="lock-avatar-container">
@@ -1141,6 +1164,30 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- Modal: Edit Lock Service Unavailable (Fail Closed) -->
+<div class="modal-backdrop" id="modal-lock-unavailable" style="<?= $is_lock_unavailable ? 'display:flex;' : 'display:none;' ?>">
+    <div class="modal" style="max-width:500px; text-align:center; padding:2rem; border-radius: 16px;">
+        <div style="width: 76px; height: 76px; margin: 0 auto 16px; border-radius: 50%; background: #fef3c7; border: 3px solid #f59e0b; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 4px 14px rgba(245,158,11,0.25);">
+            <i class="fas fa-shield-halved" style="font-size: 2rem; color: #d97706;"></i>
+        </div>
+        <h3 style="font-weight:800; font-size:1.25rem; margin-bottom:8px; color: #1e293b;">Edit Protection Temporarily Unavailable</h3>
+        <p style="color:#475569; font-size:0.92rem; margin-bottom:16px; line-height: 1.5;">
+            The concurrent edit protection system could not verify exclusive lock ownership. To protect this study plan from accidental overwrites, editing is temporarily restricted.
+        </p>
+        <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 12px 16px; margin-bottom: 20px; text-align: left; font-size: 0.84rem; color: #92400e;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: #78350f; font-weight: 700;">
+                <i class="fas fa-circle-info"></i> Read-Only Mode Available
+            </div>
+            You can still inspect all activities, dates, tasks, and preview in <strong>Read-Only Mode</strong>, or retry acquiring the edit lock.
+        </div>
+        <div style="display:flex; justify-content:center; gap:10px; flex-wrap: wrap;">
+            <button type="button" class="btn btn-primary" style="background:#f59e0b; border-color:#f59e0b; color:#fff; font-weight:700;" onclick="location.reload()"><i class="fas fa-rotate"></i> Retry Lock</button>
+            <button type="button" class="btn btn-outline" style="font-weight:700;" onclick="viewReadOnlyMode()"><i class="fas fa-eye"></i> View Read-Only</button>
+            <a href="javascript:void(0)" onclick="confirmBack()" class="btn btn-outline" style="font-weight:700; text-decoration:none;"><i class="fas fa-arrow-left"></i> Exit</a>
+        </div>
+    </div>
+</div>
+
 <!-- Modal: Lock Lost Warning -->
 <div class="modal-backdrop" id="modal-lock-lost" style="display:none;">
     <div class="modal" style="max-width:480px; text-align:center; padding:2rem; border-radius: 16px;">
@@ -1180,7 +1227,7 @@ include 'includes/admin_nav.php';
 <script>
     var studyPlanId = <?php echo $plan_id; ?>;
     var studyPlanVersion = <?php echo (int)($plan['version'] ?? 1); ?>;
-    var isReadOnlyMode = <?php echo $is_locked_by_other ? 'true' : 'false'; ?>;
+    var isReadOnlyMode = <?php echo ($is_locked_by_other || $is_lock_unavailable) ? 'true' : 'false'; ?>;
     var currentAdminUsername = <?php echo json_encode($admin_info['admin_username']); ?>;
     var currentSessionToken = <?php echo json_encode($admin_info['session_token']); ?>;
     var lockHeartbeatTimer = null;
@@ -2644,6 +2691,7 @@ include 'includes/admin_nav.php';
 
     function viewReadOnlyMode() {
         closeModal('modal-edit-locked');
+        closeModal('modal-lock-unavailable');
         closeModal('modal-lock-lost');
         switchDesignerTab('activities');
         initReadOnlyLockPoller();

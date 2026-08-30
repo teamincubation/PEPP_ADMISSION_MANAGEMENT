@@ -13,6 +13,11 @@
  * Admin Management for the Super Admin to grant.
  */
 if (session_status() === PHP_SESSION_NONE) {
+    if (!session_save_path()) {
+        $sessDir = sys_get_temp_dir() . '/php_sessions';
+        if (!is_dir($sessDir)) @mkdir($sessDir, 0777, true);
+        if (is_dir($sessDir)) session_save_path($sessDir);
+    }
     // ── Session cookie hardening ─────────────────────────────────────
     // HttpOnly prevents JS access (XSS mitigation).
     // SameSite=Lax prevents CSRF on cross-origin navigations.

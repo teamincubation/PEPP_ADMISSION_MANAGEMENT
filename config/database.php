@@ -23,13 +23,27 @@ if (!defined('INVOICE_HMAC_SECRET')) {
     define('INVOICE_HMAC_SECRET', getenv('INVOICE_HMAC_SECRET') ?: 'CHANGE_ME');
 }
 
-if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true') || ($_SERVER['SERVER_NAME'] ?? '') === 'localhost' || ($_SERVER['HTTP_HOST'] ?? '') === 'localhost:8088') {
+$is_local_dev = in_array($_SERVER['SERVER_NAME'] ?? '', ['localhost', '127.0.0.1'], true) 
+    || str_starts_with($_SERVER['HTTP_HOST'] ?? '', 'localhost') 
+    || str_starts_with($_SERVER['HTTP_HOST'] ?? '', '127.0.0.1')
+    || (int)($_SERVER['SERVER_PORT'] ?? 0) === 8888
+    || ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true'));
+
+if ($is_local_dev) {
     try {
-        $pdo = new PDO("sqlite::memory:");
+        $test_db_default = dirname(__DIR__) . '/scratch_test_db.sqlite';
+        $sqlite_file = getenv('PEPP_SQLITE_PATH') ?: (file_exists($test_db_default) ? $test_db_default : ':memory:');
+        $pdo = new PDO("sqlite:" . $sqlite_file);
         $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
             $pdo->sqliteCreateFunction('NOW', function() {
                 return date('Y-m-d H:i:s');
+            });
+            $pdo->sqliteCreateFunction('TIMESTAMPDIFF', function($unit, $datetime1, $datetime2) {
+                $t1 = strtotime((string)$datetime1);
+                $t2 = strtotime((string)$datetime2);
+                if ($t1 === false || $t2 === false) return 0;
+                return $t2 - $t1;
             });
         }
 
@@ -253,6 +267,7 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 study_plan_id INTEGER,
                 activity_title TEXT,
+                activity_description TEXT,
                 activity_type TEXT,
                 activity_date TEXT,
                 chapter TEXT,
@@ -261,13 +276,45 @@ if ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] =
                 sort_order INTEGER,
                 activity_uid TEXT,
                 faculty TEXT,
+                estimated_duration INTEGER DEFAULT 60,
+                priority TEXT DEFAULT 'medium',
+                difficulty_level TEXT DEFAULT 'medium',
                 resource_links TEXT,
+                custom_activity_badge TEXT,
+                custom_activity_color TEXT,
+                custom_activity_icon TEXT,
                 start_time TEXT,
                 end_time TEXT,
                 is_deleted INTEGER DEFAULT 0,
                 deleted_at TEXT,
                 deleted_by TEXT,
                 deletion_reason TEXT
+            );
+            CREATE TABLE IF NOT EXISTS study_plan_audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                study_plan_id INTEGER NOT NULL,
+                admin_username TEXT NOT NULL,
+                action TEXT NOT NULL,
+                details TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS campaign_forms (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                status TEXT DEFAULT 'published'
+            );
+            CREATE TABLE IF NOT EXISTS study_plan_custom_types (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                icon TEXT DEFAULT 'fa-bookmark',
+                color TEXT DEFAULT '#3b82f6',
+                badge TEXT DEFAULT 'Custom'
+            );
+            CREATE TABLE IF NOT EXISTS study_plan_chapters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chapter_code TEXT,
+                chapter_name TEXT NOT NULL,
+                course_id TEXT
             );
             CREATE TABLE IF NOT EXISTS assessment_result_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1241,6 +1288,24 @@ try {
               `action` VARCHAR(100) NOT NULL,
               `details` TEXT NULL,
               `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `study_plan_edit_locks` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `study_plan_id` INT NOT NULL,
+                `admin_id` INT DEFAULT NULL,
+                `admin_username` VARCHAR(100) NOT NULL,
+                `admin_name` VARCHAR(150) NOT NULL,
+                `session_token` VARCHAR(100) NOT NULL,
+                `locked_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `last_heartbeat_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `released_at` DATETIME DEFAULT NULL,
+                `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+                UNIQUE KEY `uniq_active_plan_lock` (`study_plan_id`),
+                INDEX `idx_spel_admin` (`admin_id`, `admin_username`),
+                INDEX `idx_spel_heartbeat` (`last_heartbeat_at`, `is_active`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
 

@@ -1,5 +1,8 @@
 <?php
-session_start();
+require_once '../config/database.php';
+require_once '../includes/auth.php';
+require_once '../includes/study_plan_lock_helper.php';
+
 header('Content-Type: application/json');
 
 // Check authorization
@@ -7,10 +10,6 @@ if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== tru
     echo json_encode(['success' => false, 'message' => 'Unauthorized access']);
     exit();
 }
-
-require_once '../config/database.php';
-require_once '../includes/auth.php';
-require_once '../includes/study_plan_lock_helper.php';
 
 if (!can_access('studyplans')) {
     echo json_encode(['success' => false, 'message' => 'Forbidden access']);
@@ -64,7 +63,9 @@ function log_activity_version($pdo, $activity_id, $change_type, $admin_username)
 }
 
 $action = $_REQUEST['action'] ?? '';
-$admin_username = $_SESSION['admin_username'] ?? 'Admin';
+$admin_info = get_current_admin_identity($pdo);
+$admin_username = $admin_info['admin_username'] ?? 'Admin';
+$admin_id = $admin_info['admin_id'] ?? null;
 
 try {
     if ($action === 'check_edit_lock') {
@@ -74,7 +75,21 @@ try {
 
         if ($read_only_check) {
             // Read-only polling: do NOT acquire or update lock, just inspect status
-            $stmt = $pdo->prepare("SELECT * FROM study_plan_edit_locks WHERE study_plan_id = ? AND is_active = 1");
+            ensure_study_plan_edit_locks_table($pdo);
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'mysql') {
+                $stmt = $pdo->prepare("
+                    SELECT *, TIMESTAMPDIFF(SECOND, last_heartbeat_at, NOW()) AS heartbeat_age_seconds 
+                    FROM study_plan_edit_locks 
+                    WHERE study_plan_id = ? AND is_active = 1
+                ");
+            } else {
+                $stmt = $pdo->prepare("
+                    SELECT *, CAST((strftime('%s', 'now') - strftime('%s', last_heartbeat_at)) AS INTEGER) AS heartbeat_age_seconds 
+                    FROM study_plan_edit_locks 
+                    WHERE study_plan_id = ? AND is_active = 1
+                ");
+            }
             $stmt->execute([$plan_id]);
             $lock = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -83,15 +98,30 @@ try {
                 exit();
             }
 
-            $last_hb = strtotime($lock['last_heartbeat_at']);
-            $is_stale = ($last_hb === false || (time() - $last_hb) > STUDY_PLAN_LOCK_TIMEOUT_SECONDS);
+            $age = isset($lock['heartbeat_age_seconds']) && $lock['heartbeat_age_seconds'] !== null
+                ? (int)$lock['heartbeat_age_seconds']
+                : (time() - strtotime((string)$lock['last_heartbeat_at']));
+
+            $is_stale = ((int)$lock['is_active'] === 0 || $age > STUDY_PLAN_LOCK_TIMEOUT_SECONDS || $age < 0 || empty($lock['last_heartbeat_at']));
 
             if ($is_stale) {
                 echo json_encode(['success' => true, 'locked' => false, 'is_owner' => false, 'can_claim' => true]);
                 exit();
             }
 
-            if ($lock['admin_username'] === $admin_info['admin_username']) {
+            $is_owner = false;
+            if (!empty($admin_info['admin_username']) && !empty($lock['admin_username'])) {
+                if (strcasecmp((string)$lock['admin_username'], (string)$admin_info['admin_username']) === 0) {
+                    $is_owner = true;
+                }
+            }
+            if (!$is_owner && !empty($admin_info['admin_id']) && !empty($lock['admin_id'])) {
+                if ((int)$admin_info['admin_id'] === (int)$lock['admin_id']) {
+                    $is_owner = true;
+                }
+            }
+
+            if ($is_owner) {
                 echo json_encode(['success' => true, 'locked' => false, 'is_owner' => true, 'can_claim' => true]);
                 exit();
             }
@@ -123,7 +153,7 @@ try {
     if ($action === 'study_plan_edit_lock_heartbeat') {
         $plan_id = (int)($_REQUEST['study_plan_id'] ?? 0);
         $admin_info = get_current_admin_identity($pdo);
-        $hb_res = heartbeat_study_plan_lock($pdo, $plan_id, $admin_info['admin_username'], $admin_info['session_token']);
+        $hb_res = heartbeat_study_plan_lock($pdo, $plan_id, $admin_info['admin_username'], $admin_info['session_token'], $admin_info['admin_id']);
         echo json_encode($hb_res);
         exit();
     }
@@ -150,7 +180,7 @@ try {
         $id = (int)($data['id'] ?? 0);
 
         // Edit Lock Enforcement
-        if ($id > 0 && !verify_study_plan_edit_lock_permission($pdo, $id, $admin_username)) {
+        if ($id > 0 && !verify_study_plan_edit_lock_permission($pdo, $id, $admin_username, $admin_id)) {
             echo json_encode([
                 'success' => false,
                 'error_code' => 'EDIT_LOCK_HELD',
@@ -584,7 +614,7 @@ try {
         }
 
         // Edit Lock Enforcement
-        if ($plan_id > 0 && !verify_study_plan_edit_lock_permission($pdo, $plan_id, $admin_username)) {
+        if ($plan_id > 0 && !verify_study_plan_edit_lock_permission($pdo, $plan_id, $admin_username, $admin_id)) {
             echo json_encode([
                 'success' => false,
                 'error_code' => 'EDIT_LOCK_HELD',
@@ -866,7 +896,7 @@ try {
         }
 
         // Edit Lock Enforcement
-        if ($plan_id > 0 && !verify_study_plan_edit_lock_permission($pdo, $plan_id, $admin_username)) {
+        if ($plan_id > 0 && !verify_study_plan_edit_lock_permission($pdo, $plan_id, $admin_username, $admin_id)) {
             echo json_encode([
                 'success' => false,
                 'error_code' => 'EDIT_LOCK_HELD',
@@ -1155,7 +1185,7 @@ try {
         $plan_id = (int)$act['study_plan_id'];
 
         // Edit Lock Enforcement
-        if ($plan_id > 0 && !verify_study_plan_edit_lock_permission($pdo, $plan_id, $admin_username)) {
+        if ($plan_id > 0 && !verify_study_plan_edit_lock_permission($pdo, $plan_id, $admin_username, $admin_id)) {
             $pdo->rollBack();
             echo json_encode([
                 'success' => false,
