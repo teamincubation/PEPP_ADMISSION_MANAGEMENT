@@ -919,7 +919,10 @@ include 'includes/admin_nav.php';
                         <span><i class="fas fa-list-check" style="color:var(--accent);"></i> Schedules by Day / Date</span>
                         <button type="button" class="btn btn-sm btn-outline" style="padding:2px 8px; font-size:0.72rem;" onclick="toggleSelectAllTasks()" id="select-all-tasks-btn"><i class="fas fa-check-double"></i> Select All Tasks</button>
                     </div>
-                    <button class="btn btn-sm btn-secondary" onclick="addCustomActivityField()"><i class="fas fa-plus"></i> Add Activity</button>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <button type="button" id="duplicate-cleanup-btn" class="btn btn-sm btn-outline" style="padding:4px 10px; font-size:0.75rem; font-weight:700; color:#e11d48; border-color:#fca5a5; background:#fff1f2;" onclick="openDuplicateCleanupModal()" <?php if ($is_locked_by_other || $is_lock_unavailable): ?>disabled style="opacity:0.5; cursor:not-allowed;"<?php endif; ?>><i class="fas fa-clone"></i> Delete All Duplicate Activities</button>
+                        <button class="btn btn-sm btn-secondary" onclick="addCustomActivityField()"><i class="fas fa-plus"></i> Add Activity</button>
+                    </div>
                 </div>
                 <div id="activities-dates-wrapper">
                     <!-- Loaded dynamically via JS -->
@@ -1108,6 +1111,99 @@ include 'includes/admin_nav.php';
         <div style="display:flex; justify-content:flex-end; gap:10px;">
             <button type="button" class="btn btn-outline" onclick="closeModal('bulk-delete-modal')">Cancel</button>
             <button type="button" class="btn btn-danger" id="confirm-bulk-delete-btn" style="background:#ef4444; border-color:#ef4444; color:#fff; font-weight:700;" onclick="executeBulkDelete()"><i class="fas fa-trash"></i> Confirm Delete</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Duplicate Cleanup Confirmation & Review -->
+<div class="modal-backdrop" id="duplicate-cleanup-modal">
+    <div class="modal" style="max-width:760px; padding:1.75rem; border-radius: 16px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+            <div style="display:flex; align-items:center; gap:12px;">
+                <div style="width:44px; height:44px; border-radius:12px; background:#fff1f2; color:#e11d48; display:flex; align-items:center; justify-content:center; font-size:1.4rem;">
+                    <i class="fas fa-clone"></i>
+                </div>
+                <div>
+                    <h3 style="font-weight:800; font-size:1.25rem; margin:0; color:#1e293b;" id="duplicate-modal-title">Delete Duplicate Activities</h3>
+                    <div style="color:#64748b; font-size:0.82rem; margin-top:2px;">Scans for exact matches across Title, Type, Chapter, and Topic.</div>
+                </div>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline" style="border:none; padding:4px 8px; font-size:1.1rem; color:#94a3b8;" onclick="closeModal('duplicate-cleanup-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+
+        <div id="duplicate-modal-loading" style="padding:40px 20px; text-align:center; color:#64748b;">
+            <i class="fas fa-spinner fa-spin" style="font-size:2.2rem; color:#3b82f6; margin-bottom:12px;"></i>
+            <div style="font-size:0.92rem; font-weight:600;">Analyzing study plan for duplicate activities...</div>
+            <div style="font-size:0.8rem; color:#94a3b8; margin-top:4px;">Checking exact 4-field matches and verifying student completion history</div>
+        </div>
+
+        <div id="duplicate-modal-empty" style="display:none; padding:30px 20px; text-align:center;">
+            <div style="width:60px; height:60px; border-radius:50%; background:#ecfdf5; color:#10b981; display:flex; align-items:center; justify-content:center; font-size:1.8rem; margin:0 auto 14px;">
+                <i class="fas fa-check-circle"></i>
+            </div>
+            <h4 style="font-weight:800; font-size:1.15rem; color:#0f172a; margin-bottom:6px;">No Duplicate Activities Found</h4>
+            <p style="color:#64748b; font-size:0.88rem; max-width:460px; margin:0 auto 20px; line-height:1.5;">
+                All activities in this study plan are unique across Title, Type, Chapter, and Topic. No cleanup is required.
+            </p>
+            <button type="button" class="btn btn-outline" style="font-weight:700; padding:6px 18px;" onclick="closeModal('duplicate-cleanup-modal')">Close</button>
+        </div>
+
+        <div id="duplicate-modal-content" style="display:none;">
+            <!-- Summary Metric Cards -->
+            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; margin-bottom:14px;">
+                <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px; text-align:center;">
+                    <div style="font-size:0.75rem; font-weight:700; color:#64748b; text-transform:uppercase;">Duplicate Groups</div>
+                    <div style="font-size:1.4rem; font-weight:800; color:#1e293b;" id="dup-stat-groups">0</div>
+                </div>
+                <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px; text-align:center;">
+                    <div style="font-size:0.75rem; font-weight:700; color:#64748b; text-transform:uppercase;">Activities Found</div>
+                    <div style="font-size:1.4rem; font-weight:800; color:#1e293b;" id="dup-stat-found">0</div>
+                </div>
+                <div style="background:#fff1f2; border:1px solid #fecdd3; border-radius:10px; padding:10px; text-align:center;">
+                    <div style="font-size:0.75rem; font-weight:700; color:#be123c; text-transform:uppercase;">To Remove</div>
+                    <div style="font-size:1.4rem; font-weight:800; color:#e11d48;" id="dup-stat-remove">0</div>
+                </div>
+                <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:10px; text-align:center;">
+                    <div style="font-size:0.75rem; font-weight:700; color:#1e40af; text-transform:uppercase;">Protected</div>
+                    <div style="font-size:1.4rem; font-weight:800; color:#2563eb;" id="dup-stat-protected">0</div>
+                </div>
+            </div>
+
+            <!-- Rules & Student Safety Banner -->
+            <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:10px 14px; margin-bottom:14px; font-size:0.82rem; color:#92400e; line-height:1.4;">
+                <div style="display:flex; align-items:center; gap:6px; font-weight:700; margin-bottom:2px;">
+                    <i class="fas fa-shield-halved" style="color:#d97706;"></i> Student Data Protection &amp; Matching Rule:
+                </div>
+                Activities are duplicates only when <strong>Activity Title, Activity Type, Chapter, and Topic</strong> match exactly. Activities with recorded student completion or quiz attempts will <strong>never be deleted</strong> and are preserved automatically.
+            </div>
+
+            <!-- Duplicate Groups Preview Table -->
+            <div style="max-height:220px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:10px; margin-bottom:14px; background:#fff;">
+                <table style="width:100%; border-collapse:collapse; font-size:0.82rem; text-align:left;">
+                    <thead style="background:#f1f5f9; color:#475569; position:sticky; top:0; z-index:2;">
+                        <tr>
+                            <th style="padding:8px 10px; border-bottom:1px solid #e2e8f0; width:36px;">#</th>
+                            <th style="padding:8px 10px; border-bottom:1px solid #e2e8f0;">Activity Details</th>
+                            <th style="padding:8px 10px; border-bottom:1px solid #e2e8f0; width:110px;">Type</th>
+                            <th style="padding:8px 10px; border-bottom:1px solid #e2e8f0; width:160px;">Keep / Survivor</th>
+                            <th style="padding:8px 10px; border-bottom:1px solid #e2e8f0; width:160px;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dup-preview-tbody">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div style="margin-bottom:14px;">
+                <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:4px;">Reason for Cleanup (Optional):</label>
+                <input type="text" id="dup-cleanup-reason-input" class="form-control" style="width:100%; border:1px solid #cbd5e1; padding:7px 10px; border-radius:6px; font-size:0.85rem;" placeholder="e.g., Curriculum duplicate cleanup" value="Duplicate activity cleanup">
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:10px;">
+                <button type="button" class="btn btn-outline" onclick="closeModal('duplicate-cleanup-modal')">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirm-dup-cleanup-btn" style="background:#e11d48; border-color:#e11d48; color:#fff; font-weight:700;" onclick="executeDuplicateCleanup()"><i class="fas fa-trash"></i> Delete Duplicates (<span id="dup-btn-remove-count">0</span>)</button>
+            </div>
         </div>
     </div>
 </div>
@@ -2465,6 +2561,194 @@ include 'includes/admin_nav.php';
         });
     }
 
+    function openDuplicateCleanupModal() {
+        if (isReadOnlyMode) {
+            alert('This Study Plan is locked in Read-Only mode. Duplicate cleanup cannot be performed.');
+            return;
+        }
+
+        var loadingEl = document.getElementById('duplicate-modal-loading');
+        var emptyEl = document.getElementById('duplicate-modal-empty');
+        var contentEl = document.getElementById('duplicate-modal-content');
+
+        if (loadingEl) loadingEl.style.display = 'block';
+        if (emptyEl) emptyEl.style.display = 'none';
+        if (contentEl) contentEl.style.display = 'none';
+
+        openModal('duplicate-cleanup-modal');
+
+        fetch('api/studyplans-api.php?action=find_duplicate_activities&study_plan_id=' + studyPlanId)
+        .then(r => r.json())
+        .then(data => {
+            if (loadingEl) loadingEl.style.display = 'none';
+
+            if (!data.success) {
+                alert(data.message || 'Failed to scan duplicate activities.');
+                closeModal('duplicate-cleanup-modal');
+                return;
+            }
+
+            if (data.total_groups === 0) {
+                if (emptyEl) emptyEl.style.display = 'block';
+                return;
+            }
+
+            if (contentEl) contentEl.style.display = 'block';
+
+            var groupsEl = document.getElementById('dup-stat-groups');
+            var foundEl = document.getElementById('dup-stat-found');
+            var removeEl = document.getElementById('dup-stat-remove');
+            var protectedEl = document.getElementById('dup-stat-protected');
+            var btnRemoveCount = document.getElementById('dup-btn-remove-count');
+            var confirmBtn = document.getElementById('confirm-dup-cleanup-btn');
+
+            if (groupsEl) groupsEl.textContent = data.total_groups;
+            if (foundEl) foundEl.textContent = data.total_activities_found;
+            if (removeEl) removeEl.textContent = data.deletable_count;
+            if (protectedEl) protectedEl.textContent = data.protected_count;
+            if (btnRemoveCount) btnRemoveCount.textContent = data.deletable_count;
+
+            if (confirmBtn) {
+                confirmBtn.disabled = (data.deletable_count === 0);
+            }
+
+            var tbody = document.getElementById('dup-preview-tbody');
+            if (tbody) {
+                tbody.innerHTML = '';
+                data.groups.forEach(function(g, idx) {
+                    var tr = document.createElement('tr');
+                    tr.style.borderBottom = '1px solid #f1f5f9';
+
+                    var survivorsText = g.survivors.map(function(s) {
+                        var label = '#' + s.id + ' (Day ' + s.day_number + ')';
+                        if (s.student_count > 0) {
+                            return '<span class="badge" style="background:#eff6ff; color:#1d4ed8; font-size:0.72rem;"><i class="fas fa-user-check"></i> ' + escapeHtml(label) + ' [' + s.student_count + ' st.]</span>';
+                        }
+                        return '<span class="badge" style="background:#f1f5f9; color:#334155; font-size:0.72rem;">' + escapeHtml(label) + '</span>';
+                    }).join(' ');
+
+                    var actionText = '';
+                    if (g.to_delete && g.to_delete.length > 0) {
+                        var delLabels = g.to_delete.map(function(d) { return '#' + d.id + ' (Day ' + d.day_number + ')'; }).join(', ');
+                        actionText += '<div style="color:#e11d48; font-weight:700; font-size:0.78rem;"><i class="fas fa-trash-can"></i> Delete ' + escapeHtml(delLabels) + '</div>';
+                    }
+                    if (g.protected && g.protected.length > 0) {
+                        var protLabels = g.protected.map(function(p) { return '#' + p.id + ' (' + p.student_count + ' records)'; }).join(', ');
+                        actionText += '<div style="color:#2563eb; font-size:0.75rem; margin-top:2px;"><i class="fas fa-shield-halved"></i> Protected ' + escapeHtml(protLabels) + '</div>';
+                    }
+                    if (!actionText) {
+                        actionText = '<span style="color:#64748b; font-size:0.75rem;">All protected</span>';
+                    }
+
+                    tr.innerHTML = '<td style="padding:8px 10px; color:#94a3b8; font-weight:700;">' + (idx + 1) + '</td>' +
+                                   '<td style="padding:8px 10px;">' +
+                                       '<div style="font-weight:700; color:#1e293b;">' + escapeHtml(g.activity_title) + '</div>' +
+                                       '<div style="font-size:0.75rem; color:#64748b;">' + escapeHtml(g.chapter || 'No Chapter') + ' · ' + escapeHtml(g.topic || 'No Topic') + '</div>' +
+                                   '</td>' +
+                                   '<td style="padding:8px 10px;"><span class="badge" style="background:#f1f5f9; color:#475569; font-size:0.72rem;">' + escapeHtml(g.activity_type) + '</span></td>' +
+                                   '<td style="padding:8px 10px;">' + survivorsText + '</td>' +
+                                   '<td style="padding:8px 10px;">' + actionText + '</td>';
+                    tbody.appendChild(tr);
+                });
+            }
+        })
+        .catch(err => {
+            if (loadingEl) loadingEl.style.display = 'none';
+            console.error(err);
+            alert('Connection error while searching for duplicate activities.');
+            closeModal('duplicate-cleanup-modal');
+        });
+    }
+
+    function executeDuplicateCleanup() {
+        if (isReadOnlyMode) {
+            alert('This Study Plan is locked in Read-Only mode. Duplicate cleanup cannot be performed.');
+            return;
+        }
+
+        var confirmBtn = document.getElementById('confirm-dup-cleanup-btn');
+        var reasonInput = document.getElementById('dup-cleanup-reason-input');
+
+        if (confirmBtn) {
+            confirmBtn.disabled = true;
+            confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Cleaning Duplicates...';
+        }
+
+        var payload = {
+            study_plan_id: studyPlanId,
+            version: studyPlanVersion,
+            deletion_reason: reasonInput ? reasonInput.value : 'Duplicate activity cleanup'
+        };
+
+        fetch('api/studyplans-api.php?action=delete_duplicate_activities', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (confirmBtn) {
+                confirmBtn.disabled = false;
+                confirmBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Duplicates';
+            }
+
+            if (data.success) {
+                if (data.version) {
+                    studyPlanVersion = data.version;
+                }
+
+                // Remove deleted activities from JavaScript state
+                var deletedIdSet = new Set((data.deleted_ids || []).map(Number));
+                var deletedUidSet = new Set(data.deleted_uids || []);
+
+                activities = activities.filter(function(act, idx) {
+                    var isDel = (act.id && deletedIdSet.has(Number(act.id))) ||
+                                (act.activity_uid && deletedUidSet.has(act.activity_uid));
+                    if (isDel) {
+                        var taskKey = act.activity_uid || act.client_key || ('idx_' + idx);
+                        selectedTaskKeys.delete(taskKey);
+                        return false;
+                    }
+                    return true;
+                });
+
+                renderActivitiesList();
+                updateLivePreview();
+                closeModal('duplicate-cleanup-modal');
+
+                var summaryAlert = 'Duplicate cleanup completed successfully.\n\n' +
+                    '• Duplicate groups found: ' + data.total_groups + '\n' +
+                    '• Activities detected: ' + data.total_activities_found + '\n' +
+                    '• Activities deleted: ' + data.deleted_count + '\n' +
+                    '• Activities protected: ' + data.protected_count;
+
+                if (data.protected_count > 0) {
+                    summaryAlert += '\n\n🔒 ' + data.protected_count + ' activity(ies) were protected because student records exist.';
+                }
+
+                alert(summaryAlert);
+
+            } else if (data.error_code === 'EDIT_LOCK_HELD') {
+                closeModal('duplicate-cleanup-modal');
+                enableReadOnlyMode();
+                openModal('modal-lock-lost');
+            } else if (data.error_code === 'STALE_STUDY_PLAN') {
+                closeModal('duplicate-cleanup-modal');
+                openModal('stale-warning-modal');
+            } else {
+                alert(data.message || 'Duplicate cleanup failed.');
+            }
+        })
+        .catch(err => {
+            if (confirmBtn) {
+                confirmBtn.disabled = false;
+                confirmBtn.innerHTML = '<i class="fas fa-trash"></i> Delete Duplicates';
+            }
+            console.error(err);
+            alert('Connection error occurred during duplicate activity cleanup.');
+        });
+    }
+
     function cloneActivityRow(index) {
         var act = activities[index];
         if (!act) return;
@@ -2898,6 +3182,13 @@ include 'includes/admin_nav.php';
 
         var selectAllBtn = document.getElementById('select-all-tasks-btn');
         if (selectAllBtn) selectAllBtn.style.display = 'none';
+
+        var dupBtn = document.getElementById('duplicate-cleanup-btn');
+        if (dupBtn) {
+            dupBtn.disabled = true;
+            dupBtn.style.opacity = '0.5';
+            dupBtn.style.cursor = 'not-allowed';
+        }
 
         document.querySelectorAll('#tab-settings input, #tab-settings select, #tab-settings textarea').forEach(function(el) {
             el.disabled = true;

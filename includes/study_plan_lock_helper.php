@@ -455,10 +455,12 @@ function verify_study_plan_edit_lock_permission(PDO $pdo, int $plan_id, string $
             return true; // Stale lock -> permitted
         }
 
-        if (strcasecmp((string)$lock['admin_username'], (string)$admin_username) === 0) {
+        $lock_user = (string)($lock['locked_by_admin_username'] ?? $lock['admin_username'] ?? '');
+        if ($admin_username && strcasecmp($lock_user, (string)$admin_username) === 0) {
             return true;
         }
-        if ($admin_id && !empty($lock['admin_id']) && (int)$admin_id === (int)$lock['admin_id']) {
+        $lock_admin_id = $lock['locked_by_admin_id'] ?? $lock['admin_id'] ?? null;
+        if ($admin_id && !empty($lock_admin_id) && (int)$admin_id === (int)$lock_admin_id) {
             return true;
         }
 

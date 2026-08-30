@@ -62,6 +62,291 @@ function log_activity_version($pdo, $activity_id, $change_type, $admin_username)
     ]);
 }
 
+/**
+ * Authoritatively analyzes duplicate activities in a study plan.
+ * Exact 4-field match: activity_title, activity_type, chapter, topic.
+ * Retains oldest (MIN(id)) or student-data-bearing activities as survivors.
+ */
+function analyze_duplicate_activities_for_plan($pdo, int $plan_id): array {
+    $stmt = $pdo->prepare("
+        SELECT * 
+        FROM study_plan_activities 
+        WHERE study_plan_id = ? AND is_deleted = 0 
+        ORDER BY id ASC
+    ");
+    $stmt->execute([$plan_id]);
+    $all_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if (empty($all_activities)) {
+        return [
+            'total_groups' => 0,
+            'total_activities_found' => 0,
+            'deletable_count' => 0,
+            'protected_count' => 0,
+            'groups' => [],
+            'deletable_ids' => [],
+            'deletable_uids' => [],
+            'protected_ids' => [],
+            'protected_uids' => [],
+            'protected_activities' => []
+        ];
+    }
+
+    // Exact 4-field grouping
+    $grouped_map = [];
+    foreach ($all_activities as $act) {
+        $title = (string)($act['activity_title'] ?? '');
+        $type = (string)($act['activity_type'] ?? '');
+        $chapter = (string)($act['chapter'] ?? '');
+        $topic = (string)($act['topic'] ?? '');
+
+        $group_key = $title . "\x1F" . $type . "\x1F" . $chapter . "\x1F" . $topic;
+        if (!isset($grouped_map[$group_key])) {
+            $grouped_map[$group_key] = [
+                'activity_title' => $title,
+                'activity_type' => $type,
+                'chapter' => $chapter,
+                'topic' => $topic,
+                'activities' => []
+            ];
+        }
+        $grouped_map[$group_key]['activities'][] = $act;
+    }
+
+    $dup_groups = [];
+    $target_uids = [];
+    $target_ids = [];
+
+    foreach ($grouped_map as $g) {
+        if (count($g['activities']) > 1) {
+            $dup_groups[] = $g;
+            foreach ($g['activities'] as $act) {
+                if (!empty($act['activity_uid'])) {
+                    $target_uids[] = $act['activity_uid'];
+                }
+                if (!empty($act['id'])) {
+                    $target_ids[] = (int)$act['id'];
+                }
+            }
+        }
+    }
+
+    if (empty($dup_groups)) {
+        return [
+            'total_groups' => 0,
+            'total_activities_found' => 0,
+            'deletable_count' => 0,
+            'protected_count' => 0,
+            'groups' => [],
+            'deletable_ids' => [],
+            'deletable_uids' => [],
+            'protected_ids' => [],
+            'protected_uids' => [],
+            'protected_activities' => []
+        ];
+    }
+
+    // Batch query authoritative student activity data
+    $counts_by_uid = [];
+    $counts_by_id = [];
+
+    $analytics_conditions = [];
+    $an_params = [$plan_id];
+
+    if (!empty($target_uids)) {
+        $u_place = implode(',', array_fill(0, count($target_uids), '?'));
+        $analytics_conditions[] = "activity_uid IN ($u_place)";
+        foreach ($target_uids as $u) $an_params[] = $u;
+    }
+    if (!empty($target_ids)) {
+        $i_place = implode(',', array_fill(0, count($target_ids), '?'));
+        $analytics_conditions[] = "activity_id IN ($i_place)";
+        foreach ($target_ids as $i) $an_params[] = $i;
+    }
+
+    if (!empty($analytics_conditions)) {
+        try {
+            $sql_an = "
+                SELECT activity_uid, activity_id, COUNT(*) AS student_cnt
+                FROM study_plan_analytics
+                WHERE study_plan_id = ?
+                  AND (" . implode(' OR ', $analytics_conditions) . ")
+                GROUP BY activity_uid, activity_id
+            ";
+            $stmt_an = $pdo->prepare($sql_an);
+            $stmt_an->execute($an_params);
+            $an_rows = $stmt_an->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($an_rows as $row) {
+                $cnt = (int)$row['student_cnt'];
+                if (!empty($row['activity_uid'])) {
+                    $counts_by_uid[$row['activity_uid']] = ($counts_by_uid[$row['activity_uid']] ?? 0) + $cnt;
+                }
+                if (!empty($row['activity_id'])) {
+                    $counts_by_id[(int)$row['activity_id']] = ($counts_by_id[(int)$row['activity_id']] ?? 0) + $cnt;
+                }
+            }
+        } catch (Exception $e) {}
+    }
+
+    $assessment_counts_by_id = [];
+    if (!empty($target_ids)) {
+        try {
+            $id_place = implode(',', array_fill(0, count($target_ids), '?'));
+            $sql_ass = "
+                SELECT arb.activity_id, COUNT(*) AS assessment_cnt
+                FROM assessment_results ar
+                JOIN assessment_result_batches arb ON ar.batch_id = arb.id
+                WHERE arb.activity_id IN ($id_place) AND (arb.is_deleted IS NULL OR arb.is_deleted = 0)
+                GROUP BY arb.activity_id
+            ";
+            $stmt_ass = $pdo->prepare($sql_ass);
+            $stmt_ass->execute($target_ids);
+            $ass_rows = $stmt_ass->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($ass_rows as $arow) {
+                $assessment_counts_by_id[(int)$arow['activity_id']] = (int)$arow['assessment_cnt'];
+            }
+        } catch (Exception $e) {}
+    }
+
+    $processed_groups = [];
+    $all_deletable_ids = [];
+    $all_deletable_uids = [];
+    $all_protected_ids = [];
+    $all_protected_uids = [];
+    $all_protected_activities = [];
+    $total_activities_found = 0;
+
+    $group_index = 1;
+    foreach ($dup_groups as $g) {
+        $acts = $g['activities']; // Already sorted by id ASC
+        $total_activities_found += count($acts);
+
+        $with_student_data = [];
+        $without_student_data = [];
+
+        foreach ($acts as $act) {
+            $uid = $act['activity_uid'] ?? '';
+            $id = (int)$act['id'];
+
+            $cnt = 0;
+            if (!empty($uid) && isset($counts_by_uid[$uid])) {
+                $cnt += $counts_by_uid[$uid];
+            }
+            if (!empty($id) && isset($counts_by_id[$id])) {
+                $cnt += $counts_by_id[$id];
+            }
+            if (!empty($id) && isset($assessment_counts_by_id[$id])) {
+                $cnt += $assessment_counts_by_id[$id];
+            }
+
+            $act_entry = [
+                'id' => $id,
+                'activity_uid' => $uid,
+                'activity_title' => $act['activity_title'],
+                'activity_type' => $act['activity_type'],
+                'chapter' => $act['chapter'] ?? '',
+                'topic' => $act['topic'] ?? '',
+                'day_number' => (int)$act['day_number'],
+                'activity_date' => $act['activity_date'],
+                'sort_order' => (int)$act['sort_order'],
+                'student_count' => $cnt
+            ];
+
+            if ($cnt > 0) {
+                $act_entry['protection_reason'] = "Student activity recorded ({$cnt} record(s))";
+                $with_student_data[] = $act_entry;
+            } else {
+                $without_student_data[] = $act_entry;
+            }
+        }
+
+        $survivors = [];
+        $deletable_in_group = [];
+        $protected_in_group = [];
+
+        if (empty($with_student_data)) {
+            // Case 1: No student data anywhere in group -> Keep oldest (acts[0], MIN(id))
+            $survivor_entry = [
+                'id' => (int)$acts[0]['id'],
+                'activity_uid' => $acts[0]['activity_uid'],
+                'day_number' => (int)$acts[0]['day_number'],
+                'activity_date' => $acts[0]['activity_date'],
+                'student_count' => 0,
+                'reason' => 'Oldest activity kept as survivor'
+            ];
+            $survivors[] = $survivor_entry;
+
+            for ($i = 1; $i < count($acts); $i++) {
+                $del_act = $acts[$i];
+                $deletable_in_group[] = [
+                    'id' => (int)$del_act['id'],
+                    'activity_uid' => $del_act['activity_uid'],
+                    'day_number' => (int)$del_act['day_number'],
+                    'activity_date' => $del_act['activity_date'],
+                    'student_count' => 0
+                ];
+                $all_deletable_ids[] = (int)$del_act['id'];
+                $all_deletable_uids[] = $del_act['activity_uid'];
+            }
+        } else {
+            // Cases 2, 3, 4, 5: 1 or more activities contain student history -> NEVER delete those
+            foreach ($with_student_data as $prot_act) {
+                $survivors[] = [
+                    'id' => $prot_act['id'],
+                    'activity_uid' => $prot_act['activity_uid'],
+                    'day_number' => $prot_act['day_number'],
+                    'activity_date' => $prot_act['activity_date'],
+                    'student_count' => $prot_act['student_count'],
+                    'reason' => 'Protected — Student activity exists'
+                ];
+                $protected_in_group[] = $prot_act;
+                $all_protected_ids[] = $prot_act['id'];
+                $all_protected_uids[] = $prot_act['activity_uid'];
+                $all_protected_activities[] = $prot_act;
+            }
+
+            // Only activities with ZERO student data are deletable
+            foreach ($without_student_data as $del_act) {
+                $deletable_in_group[] = [
+                    'id' => $del_act['id'],
+                    'activity_uid' => $del_act['activity_uid'],
+                    'day_number' => $del_act['day_number'],
+                    'activity_date' => $del_act['activity_date'],
+                    'student_count' => 0
+                ];
+                $all_deletable_ids[] = $del_act['id'];
+                $all_deletable_uids[] = $del_act['activity_uid'];
+            }
+        }
+
+        $processed_groups[] = [
+            'group_id' => $group_index++,
+            'activity_title' => $g['activity_title'],
+            'activity_type' => $g['activity_type'],
+            'chapter' => $g['chapter'],
+            'topic' => $g['topic'],
+            'total_in_group' => count($acts),
+            'survivors' => $survivors,
+            'to_delete' => $deletable_in_group,
+            'protected' => $protected_in_group
+        ];
+    }
+
+    return [
+        'total_groups' => count($processed_groups),
+        'total_activities_found' => $total_activities_found,
+        'deletable_count' => count($all_deletable_ids),
+        'protected_count' => count($all_protected_ids),
+        'groups' => $processed_groups,
+        'deletable_ids' => $all_deletable_ids,
+        'deletable_uids' => $all_deletable_uids,
+        'protected_ids' => $all_protected_ids,
+        'protected_uids' => $all_protected_uids,
+        'protected_activities' => $all_protected_activities
+    ];
+}
+
 $action = $_REQUEST['action'] ?? '';
 $admin_info = get_current_admin_identity($pdo);
 $admin_username = $admin_info['admin_username'] ?? 'Admin';
@@ -1592,6 +1877,180 @@ try {
                 try { $pdo->rollBack(); } catch (Exception $rbEx) {}
             }
             echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+            exit();
+        }
+    }
+
+    if ($action === 'find_duplicate_activities') {
+        $plan_id = (int)($_GET['study_plan_id'] ?? ($_POST['study_plan_id'] ?? 0));
+        if ($plan_id <= 0) {
+            $raw = file_get_contents('php://input');
+            $data = json_decode($raw, true);
+            if ($data && isset($data['study_plan_id'])) {
+                $plan_id = (int)$data['study_plan_id'];
+            }
+        }
+
+        if ($plan_id <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Invalid Study Plan ID.']);
+            exit();
+        }
+
+        $stmt_p = $pdo->prepare("SELECT id, title, plan_type, total_days, version FROM study_plans WHERE id = ?");
+        $stmt_p->execute([$plan_id]);
+        $plan = $stmt_p->fetch(PDO::FETCH_ASSOC);
+
+        if (!$plan) {
+            echo json_encode(['success' => false, 'message' => 'Study Plan not found.']);
+            exit();
+        }
+
+        $analysis = analyze_duplicate_activities_for_plan($pdo, $plan_id);
+
+        echo json_encode([
+            'success' => true,
+            'study_plan_id' => $plan_id,
+            'version' => (int)$plan['version'],
+            'total_groups' => $analysis['total_groups'],
+            'total_activities_found' => $analysis['total_activities_found'],
+            'deletable_count' => $analysis['deletable_count'],
+            'protected_count' => $analysis['protected_count'],
+            'groups' => $analysis['groups'],
+            'deletable_ids' => $analysis['deletable_ids'],
+            'deletable_uids' => $analysis['deletable_uids'],
+            'protected_ids' => $analysis['protected_ids'],
+            'protected_uids' => $analysis['protected_uids'],
+            'protected_activities' => $analysis['protected_activities']
+        ]);
+        exit();
+    }
+
+    if ($action === 'delete_duplicate_activities') {
+        $raw = file_get_contents('php://input');
+        $data = json_decode($raw, true);
+        if (!$data) {
+            $data = $_POST;
+        }
+
+        $plan_id = (int)($data['study_plan_id'] ?? 0);
+        $client_version = (int)($data['version'] ?? 0);
+        $reason = trim($data['deletion_reason'] ?? 'Duplicate activity cleanup');
+
+        if ($plan_id <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Invalid Study Plan ID.']);
+            exit();
+        }
+
+        // 1. Edit Lock Enforcement — Checked BEFORE transaction
+        if (!verify_study_plan_edit_lock_permission($pdo, $plan_id, $admin_username, $admin_id)) {
+            echo json_encode([
+                'success' => false,
+                'error_code' => 'EDIT_LOCK_HELD',
+                'message' => 'This Study Plan is currently locked for editing by another administrator.'
+            ]);
+            exit();
+        }
+
+        // 2. Optimistic Concurrency Check
+        $stmt_ver = $pdo->prepare("SELECT version FROM study_plans WHERE id = ?");
+        $stmt_ver->execute([$plan_id]);
+        $db_version = $stmt_ver->fetchColumn();
+
+        if ($db_version === false) {
+            echo json_encode(['success' => false, 'message' => 'Study Plan not found.']);
+            exit();
+        }
+
+        $db_version = (int)$db_version;
+        if ($client_version > 0 && $client_version !== $db_version) {
+            echo json_encode([
+                'success' => false,
+                'error_code' => 'STALE_STUDY_PLAN',
+                'message' => 'This study plan was updated by another administrator. Please reload before modifying.'
+            ]);
+            exit();
+        }
+
+        // 3. Authoritative server-side duplicate analysis & student data protection check
+        $analysis = analyze_duplicate_activities_for_plan($pdo, $plan_id);
+
+        $deletable_ids = $analysis['deletable_ids'];
+        $deletable_uids = $analysis['deletable_uids'];
+        $protected_count = $analysis['protected_count'];
+        $protected_activities = $analysis['protected_activities'];
+        $total_groups = $analysis['total_groups'];
+        $total_found = $analysis['total_activities_found'];
+
+        // If 0 duplicates to delete: no mutation or transaction needed
+        if (empty($deletable_ids)) {
+            echo json_encode([
+                'success' => true,
+                'total_groups' => $total_groups,
+                'total_activities_found' => $total_found,
+                'deleted_count' => 0,
+                'protected_count' => $protected_count,
+                'deleted_ids' => [],
+                'deleted_uids' => [],
+                'protected_activities' => $protected_activities,
+                'version' => $db_version,
+                'message' => ($total_groups === 0) 
+                    ? 'No duplicate activities found in this study plan.' 
+                    : "0 activities deleted. All duplicate activities have recorded student data and are protected."
+            ]);
+            exit();
+        }
+
+        // 4. Execute atomic soft-delete of verified safe duplicate activities
+        try {
+            $pdo->beginTransaction();
+
+            // Log activity versions before deletion
+            foreach ($deletable_ids as $del_id) {
+                log_activity_version($pdo, $del_id, 'delete', $admin_username);
+            }
+
+            // Batch soft-delete strictly for this plan
+            $in_placeholders = implode(',', array_fill(0, count($deletable_ids), '?'));
+            $del_sql = "UPDATE study_plan_activities SET is_deleted = 1, deleted_at = NOW(), deleted_by = ?, deletion_reason = ? WHERE id IN ($in_placeholders) AND study_plan_id = ? AND is_deleted = 0";
+            $stmt_del = $pdo->prepare($del_sql);
+            $stmt_del->execute(array_merge([$admin_username, $reason], $deletable_ids, [$plan_id]));
+
+            // Bump study plan version
+            $pdo->prepare("UPDATE study_plans SET version = version + 1, updated_at = NOW() WHERE id = ?")->execute([$plan_id]);
+
+            // Single Consolidated Audit Log entry
+            $count_del = count($deletable_ids);
+            $audit_details = "Study Plan: #{$plan_id} | Duplicate Groups: {$total_groups} | Detected: {$total_found} | Deleted: {$count_del} | Protected: {$protected_count} | Reason: {$reason}";
+            $stmt_audit = $pdo->prepare("INSERT INTO study_plan_audit_logs (study_plan_id, admin_username, action, details) VALUES (?, ?, 'duplicate_activities_cleanup', ?)");
+            $stmt_audit->execute([$plan_id, $admin_username, $audit_details]);
+
+            $pdo->commit();
+
+            $new_version = $db_version + 1;
+            $msg = "Duplicate cleanup completed: {$count_del} duplicate activity(ies) deleted across {$total_groups} group(s).";
+            if ($protected_count > 0) {
+                $msg .= " {$protected_count} activity(ies) were protected because student records exist.";
+            }
+
+            echo json_encode([
+                'success' => true,
+                'total_groups' => $total_groups,
+                'total_activities_found' => $total_found,
+                'deleted_count' => $count_del,
+                'protected_count' => $protected_count,
+                'deleted_ids' => $deletable_ids,
+                'deleted_uids' => $deletable_uids,
+                'protected_activities' => $protected_activities,
+                'version' => $new_version,
+                'message' => $msg
+            ]);
+            exit();
+
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                try { $pdo->rollBack(); } catch (Exception $rbEx) {}
+            }
+            echo json_encode(['success' => false, 'message' => 'Error during duplicate cleanup: ' . $e->getMessage()]);
             exit();
         }
     }
