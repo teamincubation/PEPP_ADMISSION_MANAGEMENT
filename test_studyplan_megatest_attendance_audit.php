@@ -284,19 +284,17 @@ assertTest("Mega Test 1 (checkbox only) NOT credited as completed highlight", fa
 $email = 'rahul@pepp.com';
 $study_plan_id = 10;
 
-// 1. Fetch test activities
+// 1. Fetch only defined Mega Test activities for Mega Test Performance list & KPIs
 $stmt_all_tests = $pdo->prepare("
     SELECT id, activity_uid, activity_title, activity_type, activity_date, chapter, day_number
     FROM study_plan_activities
     WHERE study_plan_id = ? AND is_deleted = 0
       AND (
-        LOWER(activity_type) LIKE '%test%' OR 
-        LOWER(activity_type) LIKE '%exam%' OR 
-        LOWER(activity_type) LIKE '%assessment%' OR 
-        LOWER(activity_type) LIKE '%quiz%' OR
-        LOWER(activity_title) LIKE '%mega test%' OR
-        LOWER(activity_title) LIKE '%mock test%' OR
-        LOWER(activity_title) LIKE '%practice test%'
+        LOWER(activity_type) = 'attend mega test' OR
+        LOWER(activity_type) = 'mega test' OR
+        LOWER(activity_type) = 'mega tests' OR
+        LOWER(activity_type) LIKE '%mega test%' OR
+        LOWER(activity_title) LIKE '%mega test%'
       )
     ORDER BY day_number ASC, id ASC
 ");
@@ -321,24 +319,6 @@ $stmt_individual_assessments = $pdo->prepare("
 $stmt_individual_assessments->execute([$email, $study_plan_id]);
 $raw_assessment_rows = $stmt_individual_assessments->fetchAll(PDO::FETCH_ASSOC);
 
-// 3. Fetch completion logs
-$stmt_test_logs = $pdo->prepare("
-    SELECT activity_id, activity_uid, completion_status
-    FROM study_plan_analytics
-    WHERE LOWER(TRIM(student_email)) = LOWER(TRIM(?)) AND study_plan_id = ? AND action_type = 'complete_activity'
-    ORDER BY id ASC
-");
-$stmt_test_logs->execute([$email, $study_plan_id]);
-$test_logs = $stmt_test_logs->fetchAll(PDO::FETCH_ASSOC);
-$effective_test_completions = [];
-foreach ($test_logs as $tlog) {
-    $k = !empty($tlog['activity_uid']) ? $tlog['activity_uid'] : 'id_' . $tlog['activity_id'];
-    $effective_test_completions[$k] = $tlog['completion_status'];
-    if (!empty($tlog['activity_id'])) {
-        $effective_test_completions['id_' . $tlog['activity_id']] = $tlog['completion_status'];
-    }
-}
-
 $mega_results_by_act_id = [];
 $mega_results_by_batch_id = [];
 foreach ($raw_assessment_rows as $ass_row) {
@@ -357,50 +337,152 @@ $accounted_batch_ids = [];
 foreach ($plan_test_activities as $tact) {
     $total_tests++;
     $tact_id = (int)$tact['id'];
-    $tact_type_lower = strtolower(trim((string)$tact['activity_type']));
-    $tact_title_lower = strtolower(trim((string)$tact['activity_title']));
-    $key_uid = !empty($tact['activity_uid']) ? $tact['activity_uid'] : 'id_' . $tact_id;
-    $is_studyplan_completed = (
-        (isset($effective_test_completions[$key_uid]) && $effective_test_completions[$key_uid] === 'completed') ||
-        (isset($effective_test_completions['id_' . $tact_id]) && $effective_test_completions['id_' . $tact_id] === 'completed')
-    );
 
-    $is_mega = (
-        in_array($tact_type_lower, ['attend mega test', 'mega test', 'mega tests'], true) ||
-        stripos($tact_type_lower, 'mega test') !== false ||
-        stripos($tact_title_lower, 'mega test') !== false
-    );
+    $res = $mega_results_by_act_id[$tact_id] ?? null;
+    if ($res) {
+        $accounted_batch_ids[(int)$res['batch_id']] = true;
+        $att_status = $res['attendance_status'] ?? 'attended';
+        $score = $res['score'] !== null ? (float)$res['score'] : null;
+        $total_sc = $res['total_score'] !== null ? (float)$res['total_score'] : 100;
+        $title = $res['activity_title_snapshot'] ?: ($tact['activity_title'] ?: 'Mega Test');
+        $date_raw = $res['activity_date_snapshot'] ?: ($tact['activity_date'] ?: null);
+        $date_formatted = $date_raw ? date('d M Y', strtotime($date_raw)) : 'Scheduled';
 
-    if ($is_mega) {
-        $res = $mega_results_by_act_id[$tact_id] ?? null;
-        if ($res) {
-            $accounted_batch_ids[(int)$res['batch_id']] = true;
-            $att_status = $res['attendance_status'] ?? 'attended';
-            if ($att_status === 'attended') {
-                $tests_attended++;
-            }
-        }
-    } else {
-        if ($is_studyplan_completed) {
+        $score_pct = null;
+        $perf_badge = 'Pending';
+        $perf_color = '#64748b';
+
+        if ($att_status === 'attended') {
             $tests_attended++;
+            if ($score !== null && $total_sc > 0) {
+                $score_pct = round(($score / $total_sc) * 100);
+                $score_percentages[] = $score_pct;
+                if ($score_pct >= 90) { $perf_badge = 'Excellent'; $perf_color = '#10b981'; }
+                elseif ($score_pct >= 75) { $perf_badge = 'Good'; $perf_color = '#0284c7'; }
+                elseif ($score_pct >= 50) { $perf_badge = 'Average'; $perf_color = '#E8980C'; }
+                else { $perf_badge = 'Needs Improvement'; $perf_color = '#ef4444'; }
+            } else {
+                $perf_badge = 'Attended';
+                $perf_color = '#10b981';
+            }
+        } else {
+            $perf_badge = 'Missed';
+            $perf_color = '#ef4444';
         }
+
+        $assessment_scores_list[] = [
+            'title' => $title,
+            'date' => $date_formatted,
+            'attendance' => $att_status,
+            'score' => $score,
+            'total_score' => $total_sc,
+            'percentage' => $score_pct,
+            'badge' => $perf_badge,
+            'badge_color' => $perf_color
+        ];
+    } else {
+        $date_formatted = !empty($tact['activity_date']) ? date('d M Y', strtotime($tact['activity_date'])) : 'Scheduled';
+        $assessment_scores_list[] = [
+            'title' => $tact['activity_title'] ?: 'Mega Test',
+            'date' => $date_formatted,
+            'attendance' => 'pending',
+            'score' => null,
+            'total_score' => 100,
+            'percentage' => null,
+            'badge' => 'Pending',
+            'badge_color' => '#64748b'
+        ];
     }
 }
 
-// Total tests defined = 7 tests (Practice 1, Practice 2, Mock 1, Mock 2, Mega 1, Mega 2, Mega 3)
-assertTest("Report Total Tests count is 7", 7, $total_tests);
+// Add any standalone published Mega Test batches not directly mapped to a study_plan_activities id
+foreach ($raw_assessment_rows as $ass_row) {
+    $bid = (int)$ass_row['batch_id'];
+    if (!isset($accounted_batch_ids[$bid])) {
+        $total_tests++;
+        $att_status = $ass_row['attendance_status'] ?? 'attended';
+        $score = $ass_row['score'] !== null ? (float)$ass_row['score'] : null;
+        $total_sc = $ass_row['total_score'] !== null ? (float)$ass_row['total_score'] : 100;
+        $title = $ass_row['activity_title_snapshot'] ?: ($ass_row['activity_title'] ?: 'Mega Test');
+        $date_raw = $ass_row['activity_date_snapshot'] ?: ($ass_row['activity_date'] ?: null);
+        $date_formatted = $date_raw ? date('d M Y', strtotime($date_raw)) : 'Scheduled';
 
-// Attended tests:
-// Practice 1 (completed) -> 1
-// Practice 2 (incomplete) -> 0
-// Mock 1 (completed) -> 1
-// Mock 2 (incomplete) -> 0
-// Mega 1 (checkbox only, no result) -> 0 (PENDING!)
-// Mega 2 (result attended) -> 1
-// Mega 3 (checkbox + result attended) -> 1
-// Total Attended = 1 + 0 + 1 + 0 + 0 + 1 + 1 = 4
-assertTest("Report Tests Attended count is 4", 4, $tests_attended);
-assertTest("Report Tests Pending count is 3", 3, $total_tests - $tests_attended);
+        $score_pct = null;
+        $perf_badge = 'Pending';
+        $perf_color = '#64748b';
+
+        if ($att_status === 'attended') {
+            $tests_attended++;
+            if ($score !== null && $total_sc > 0) {
+                $score_pct = round(($score / $total_sc) * 100);
+                $score_percentages[] = $score_pct;
+                if ($score_pct >= 90) { $perf_badge = 'Excellent'; $perf_color = '#10b981'; }
+                elseif ($score_pct >= 75) { $perf_badge = 'Good'; $perf_color = '#0284c7'; }
+                elseif ($score_pct >= 50) { $perf_badge = 'Average'; $perf_color = '#E8980C'; }
+                else { $perf_badge = 'Needs Improvement'; $perf_color = '#ef4444'; }
+            } else {
+                $perf_badge = 'Attended';
+                $perf_color = '#10b981';
+            }
+        } else {
+            $perf_badge = 'Missed';
+            $perf_color = '#ef4444';
+        }
+
+        $assessment_scores_list[] = [
+            'title' => $title,
+            'date' => $date_formatted,
+            'attendance' => $att_status,
+            'score' => $score,
+            'total_score' => $total_sc,
+            'percentage' => $score_pct,
+            'badge' => $perf_badge,
+            'badge_color' => $perf_color
+        ];
+        $accounted_batch_ids[$bid] = true;
+    }
+}
+
+$tests_pending = max(0, $total_tests - $tests_attended);
+
+// Total Mega Tests defined in this plan = 3 (Mega Test 1, Mega Test 2, Mega Test 3)
+assertTest("Report Total Mega Tests count is 3", 3, $total_tests);
+assertTest("Report Mega Tests Attended count is 2 (Mega Test 2 & 3)", 2, $tests_attended);
+assertTest("Report Mega Tests Pending count is 1 (Mega Test 1)", 1, $tests_pending);
+assertTest("Mega Test Performance list contains exactly 3 items", 3, count($assessment_scores_list));
+
+// Check exclusion of Practice Tests and Mock Tests from Mega Test Performance list
+$list_titles = array_column($assessment_scores_list, 'title');
+$has_practice_1 = in_array('Practice Drill 1', $list_titles);
+$has_practice_2 = in_array('Practice Drill 2', $list_titles);
+$has_mock_1 = in_array('Unit Mock Exam', $list_titles);
+$has_mock_2 = in_array('Model Exam 2', $list_titles);
+
+assertTest("Practice Drill 1 is NOT in Mega Test Performance list", false, $has_practice_1);
+assertTest("Practice Drill 2 is NOT in Mega Test Performance list", false, $has_practice_2);
+assertTest("Unit Mock Exam is NOT in Mega Test Performance list", false, $has_mock_1);
+assertTest("Model Exam 2 is NOT in Mega Test Performance list", false, $has_mock_2);
+
+// Check inclusion of Mega Tests
+assertTest("Mega Test 1 is in Mega Test Performance list", true, in_array('Mega Test 1 - Accounting', $list_titles));
+assertTest("Mega Test 2 is in Mega Test Performance list", true, in_array('Mega Test 2 - Economics', $list_titles));
+assertTest("Mega Test 3 is in Mega Test Performance list", true, in_array('Mega Test 3 - Grand Finale', $list_titles));
+
+// Check statuses
+$mega1_item = null;
+$mega2_item = null;
+$mega3_item = null;
+foreach ($assessment_scores_list as $item) {
+    if ($item['title'] === 'Mega Test 1 - Accounting') $mega1_item = $item;
+    if ($item['title'] === 'Mega Test 2 - Economics') $mega2_item = $item;
+    if ($item['title'] === 'Mega Test 3 - Grand Finale') $mega3_item = $item;
+}
+
+assertTest("Mega Test 1 (no result uploaded) status is pending", 'pending', $mega1_item['attendance'] ?? '');
+assertTest("Mega Test 2 (result uploaded) status is attended", 'attended', $mega2_item['attendance'] ?? '');
+assertTest("Mega Test 2 percentage is 85%", 85, $mega2_item['percentage'] ?? 0);
+assertTest("Mega Test 3 (checkbox + result) status is attended", 'attended', $mega3_item['attendance'] ?? '');
+assertTest("Mega Test 3 percentage is 92%", 92, $mega3_item['percentage'] ?? 0);
 
 // Scenario 9: Duplicate result / batch
 $pdo->exec("
@@ -421,30 +503,12 @@ foreach ($raw_assessment_rows_dup as $ass_row) {
 $tests_attended_dup = 0;
 foreach ($plan_test_activities as $tact) {
     $tact_id = (int)$tact['id'];
-    $tact_type_lower = strtolower(trim((string)$tact['activity_type']));
-    $tact_title_lower = strtolower(trim((string)$tact['activity_title']));
-    $key_uid = !empty($tact['activity_uid']) ? $tact['activity_uid'] : 'id_' . $tact_id;
-    $is_studyplan_completed = (
-        (isset($effective_test_completions[$key_uid]) && $effective_test_completions[$key_uid] === 'completed') ||
-        (isset($effective_test_completions['id_' . $tact_id]) && $effective_test_completions['id_' . $tact_id] === 'completed')
-    );
-    $is_mega = (
-        in_array($tact_type_lower, ['attend mega test', 'mega test', 'mega tests'], true) ||
-        stripos($tact_type_lower, 'mega test') !== false ||
-        stripos($tact_title_lower, 'mega test') !== false
-    );
-    if ($is_mega) {
-        $res = $mega_results_by_act_id_dup[$tact_id] ?? null;
-        if ($res && ($res['attendance_status'] ?? '') === 'attended') {
-            $tests_attended_dup++;
-        }
-    } else {
-        if ($is_studyplan_completed) {
-            $tests_attended_dup++;
-        }
+    $res = $mega_results_by_act_id_dup[$tact_id] ?? null;
+    if ($res && ($res['attendance_status'] ?? '') === 'attended') {
+        $tests_attended_dup++;
     }
 }
-assertTest("Duplicate result record cannot double-count attendance", 4, $tests_attended_dup);
+assertTest("Duplicate result record cannot double-count Mega Test attendance", 2, $tests_attended_dup);
 
 // Scenario 10: Cohort Ranking Evaluation
 $cohort = StudentStudyPlanAnalytics::getCohortRanking($pdo, 10, '2026-27', 'STU001', 'rahul@pepp.com');
