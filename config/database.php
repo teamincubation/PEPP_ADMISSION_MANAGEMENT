@@ -23,18 +23,19 @@ if (!defined('INVOICE_HMAC_SECRET')) {
     define('INVOICE_HMAC_SECRET', getenv('INVOICE_HMAC_SECRET') ?: 'CHANGE_ME');
 }
 
+$sqlite_env_path = getenv('PEPP_SQLITE_PATH') ?: ($_ENV['PEPP_SQLITE_PATH'] ?? ($_SERVER['PEPP_SQLITE_PATH'] ?? ''));
 $is_local_dev = in_array($_SERVER['SERVER_NAME'] ?? '', ['localhost', '127.0.0.1'], true) 
     || str_starts_with($_SERVER['HTTP_HOST'] ?? '', 'localhost') 
     || str_starts_with($_SERVER['HTTP_HOST'] ?? '', '127.0.0.1')
     || (int)($_SERVER['SERVER_PORT'] ?? 0) === 8888
-    || (!empty(getenv('PEPP_SQLITE_PATH')))
-    || (php_sapi_name() === 'cli' && file_exists(dirname(__DIR__) . '/scratch_test_db.sqlite'))
+    || (!empty($sqlite_env_path))
+    || php_sapi_name() === 'cli'
     || ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true'));
 
 if ($is_local_dev) {
     try {
         $test_db_default = dirname(__DIR__) . '/scratch_test_db.sqlite';
-        $sqlite_file = getenv('PEPP_SQLITE_PATH') ?: (file_exists($test_db_default) ? $test_db_default : ':memory:');
+        $sqlite_file = $sqlite_env_path ?: (file_exists($test_db_default) ? $test_db_default : ':memory:');
         $pdo = new PDO("sqlite:" . $sqlite_file);
         $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
@@ -616,7 +617,27 @@ if ($is_local_dev) {
                 status TEXT DEFAULT 'completed',
                 revised_installment_schedule TEXT
             );
+        ");
 
+        $perf_indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_users_status_created ON users (status, student_status, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_instalment_user_status ON instalment_details (user_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_instalment_due_date ON instalment_details (status, due_date)",
+            "CREATE INDEX IF NOT EXISTS idx_student_remarks_user ON student_remarks (user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_admin_activity_created ON admin_activity_log (created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_mentor_student_admin ON mentor_student_assignments (admin_id, student_user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_mentor_calls_admin ON mentor_call_logs (admin_id, student_user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_mentor_remarks_admin ON mentor_remarks (admin_id, student_user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_study_plan_activities_plan ON study_plan_activities (study_plan_id, is_deleted, day_number, sort_order)",
+            "CREATE INDEX IF NOT EXISTS idx_study_plan_analytics_lookup ON study_plan_analytics (student_email, study_plan_id, action_type, completion_status)"
+        ];
+        foreach ($perf_indexes as $idx_sql) {
+            try {
+                $pdo->exec($idx_sql);
+            } catch (Throwable $e) {}
+        }
+
+        $pdo->exec("
             INSERT OR REPLACE INTO admin_settings (setting_name, setting_value) VALUES ('whatsapp_webhook_verify_token', 'test_verify_token');
             INSERT OR REPLACE INTO admin_settings (setting_name, setting_value) VALUES ('whatsapp_app_secret', 'test_app_secret');
 
@@ -691,7 +712,7 @@ if ($is_local_dev) {
             'system', DATETIME('now'));
         ");
         return;
-    } catch (Exception $e) {
+    } catch (Throwable $e) {
         // In testing mode, continue if test harness defined custom mock tables
         return;
     }
