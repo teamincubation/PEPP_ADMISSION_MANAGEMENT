@@ -10,6 +10,7 @@ if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== tru
 
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../includes/study_plan_lock_helper.php';
 
 if (!can_access('studyplans')) {
     echo json_encode(['success' => false, 'message' => 'Forbidden access']);
@@ -45,7 +46,7 @@ function log_activity_version($pdo, $activity_id, $change_type, $admin_username)
         (int)$act['day_number'],
         (int)$act['sort_order'],
         $act['chapter'] ?? null,
-        !empty($act['topic']) ? $act['topic'] : ($act['subject'] ?? null),
+        $act['topic'] ?? null,
         $act['activity_title'],
         $act['activity_description'] ?? null,
         $act['activity_type'],
@@ -66,10 +67,47 @@ $action = $_REQUEST['action'] ?? '';
 $admin_username = $_SESSION['admin_username'] ?? 'Admin';
 
 try {
+    if ($action === 'check_edit_lock') {
+        $plan_id = (int)($_REQUEST['study_plan_id'] ?? 0);
+        $admin_info = get_current_admin_identity($pdo);
+        $lock_res = acquire_or_check_study_plan_lock($pdo, $plan_id, $admin_info);
+        echo json_encode($lock_res);
+        exit();
+    }
+
+    if ($action === 'study_plan_edit_lock_heartbeat') {
+        $plan_id = (int)($_REQUEST['study_plan_id'] ?? 0);
+        $admin_info = get_current_admin_identity($pdo);
+        $hb_res = heartbeat_study_plan_lock($pdo, $plan_id, $admin_info['admin_username'], $admin_info['session_token']);
+        echo json_encode($hb_res);
+        exit();
+    }
+
+    if ($action === 'release_study_plan_edit_lock') {
+        $raw = file_get_contents('php://input');
+        $data = json_decode($raw, true) ?: $_POST;
+        $plan_id = (int)($data['study_plan_id'] ?? ($_REQUEST['study_plan_id'] ?? 0));
+        $admin_info = get_current_admin_identity($pdo);
+        $rel_res = release_study_plan_lock($pdo, $plan_id, $admin_info['admin_username'], is_super_admin());
+        echo json_encode($rel_res);
+        exit();
+    }
+
     if ($action === 'save_plan') {
         $data = json_decode(file_get_contents('php://input'), true) ?: $_POST;
 
         $id = (int)($data['id'] ?? 0);
+
+        // Edit Lock Enforcement
+        if ($id > 0 && !verify_study_plan_edit_lock_permission($pdo, $id, $admin_username)) {
+            echo json_encode([
+                'success' => false,
+                'error_code' => 'EDIT_LOCK_HELD',
+                'message' => 'This Study Plan is currently locked for editing by another administrator.'
+            ]);
+            exit();
+        }
+
         $title = trim($data['title'] ?? 'New Study Plan');
         $academic_year = trim($data['academic_year'] ?? '');
         $course_id = !empty($data['course_id']) ? (int)$data['course_id'] : null;
@@ -162,33 +200,6 @@ try {
             $stmt_audit->execute([$plan_id, $admin_username, "Created new study plan: '{$title}'"]);
         }
 
-        // Auto-generate missing daily dates between start_date and end_date
-        $curr = new DateTime($start_date);
-        $end = new DateTime($end_date);
-        $day_num = 1;
-
-        // Fetch existing activity dates for this plan to prevent duplicates
-        $stmt_exists = $pdo->prepare("SELECT DISTINCT activity_date FROM study_plan_activities WHERE study_plan_id = ?");
-        $stmt_exists->execute([$plan_id]);
-        $existing_dates = $stmt_exists->fetchAll(PDO::FETCH_COLUMN);
-
-        $stmt_insert_day = $pdo->prepare("
-            INSERT INTO study_plan_activities (study_plan_id, activity_date, day_number, sort_order, activity_title, activity_type, activity_uid)
-            VALUES (?, ?, ?, 0, 'Rest Day / Self Study', 'Revision', ?)
-        ");
-
-        while ($curr <= $end) {
-            $formatted_date = $curr->format('Y-m-d');
-            if (!in_array($formatted_date, $existing_dates)) {
-                $uid = 'SPA-' . bin2hex(random_bytes(10));
-                $stmt_insert_day->execute([$plan_id, $formatted_date, $day_num, $uid]);
-                $new_act_id = $pdo->lastInsertId();
-                log_activity_version($pdo, $new_act_id, 'create', $admin_username);
-            }
-            $curr->modify('+1 day');
-            $day_num++;
-        }
-
         // Save assignments (course, batch, students etc.)
         if (isset($data['assignments']) && is_array($data['assignments'])) {
             $pdo->prepare("DELETE FROM study_plan_assignments WHERE study_plan_id = ?")->execute([$plan_id]);
@@ -232,23 +243,26 @@ try {
             exit();
         }
 
-        // Copy plan
+        // Copy plan (strictly preserving plan_type and total_days)
         $title = $plan['title'] . ' (Copy)';
         $stmt_ins = $pdo->prepare("
             INSERT INTO study_plans (
                 title, academic_year, course_id, description,
                 cover_image, theme, layout, start_date, end_date,
-                status, is_template, custom_settings, created_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                status, is_template, custom_settings, plan_type, total_days, created_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
         ");
         $stmt_ins->execute([
             $title, $plan['academic_year'], $plan['course_id'], $plan['description'],
             $plan['cover_image'], $plan['theme'], $plan['layout'], $plan['start_date'], $plan['end_date'],
-            'draft', $plan['is_template'], $plan['custom_settings'], $admin_username
+            'draft', $plan['is_template'], $plan['custom_settings'],
+            $plan['plan_type'] ?? 'date_wise',
+            !empty($plan['total_days']) ? (int)$plan['total_days'] : null,
+            $admin_username
         ]);
         $new_id = $pdo->lastInsertId();
 
-        // Copy activities (exclude deleted ones)
+        // Copy activities (exclude deleted ones, assign new activity_uids, do not copy completion analytics)
         $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 ORDER BY activity_date ASC, sort_order ASC");
         $stmt_act->execute([$id]);
         $activities = $stmt_act->fetchAll();
@@ -518,6 +532,16 @@ try {
             exit();
         }
 
+        // Edit Lock Enforcement
+        if ($plan_id > 0 && !verify_study_plan_edit_lock_permission($pdo, $plan_id, $admin_username)) {
+            echo json_encode([
+                'success' => false,
+                'error_code' => 'EDIT_LOCK_HELD',
+                'message' => 'This Study Plan is currently locked for editing by another administrator.'
+            ]);
+            exit();
+        }
+
         $pdo->beginTransaction();
 
         // ── OPTIMISTIC CONCURRENCY PROTECTION ────────────────────────────
@@ -618,27 +642,43 @@ try {
                 topic = ?, activity_title = ?, activity_description = ?, activity_type = ?,
                 faculty = ?, estimated_duration = ?, priority = ?, difficulty_level = ?, resource_links = ?,
                 custom_activity_badge = ?, custom_activity_color = ?, custom_activity_icon = ?, is_deleted = 0
-            WHERE id = ?
+            WHERE id = ? AND study_plan_id = ?
         ");
 
-        $saved_ids = [];
+        $response_activities = [];
 
         foreach ($activities as $act) {
             $act_id = isset($act['id']) && $act['id'] !== '' ? (int)$act['id'] : 0;
             $act_uid = isset($act['activity_uid']) && $act['activity_uid'] !== '' ? trim($act['activity_uid']) : null;
+            $client_key = isset($act['client_key']) && $act['client_key'] !== '' ? trim($act['client_key']) : null;
 
+            // Security: If UID is provided, ensure it belongs to THIS study plan
             if ($act_id <= 0 && !empty($act_uid)) {
-                $stmt_get_id = $pdo->prepare("SELECT id FROM study_plan_activities WHERE activity_uid = ?");
-                $stmt_get_id->execute([$act_uid]);
+                $stmt_get_id = $pdo->prepare("SELECT id FROM study_plan_activities WHERE activity_uid = ? AND study_plan_id = ?");
+                $stmt_get_id->execute([$act_uid, $plan_id]);
                 $act_id = (int)$stmt_get_id->fetchColumn();
+            }
+
+            // Security: If ID is provided, verify it belongs to THIS study plan
+            if ($act_id > 0) {
+                $stmt_check_plan = $pdo->prepare("SELECT id, activity_uid FROM study_plan_activities WHERE id = ? AND study_plan_id = ?");
+                $stmt_check_plan->execute([$act_id, $plan_id]);
+                $verified_row = $stmt_check_plan->fetch(PDO::FETCH_ASSOC);
+                if (!$verified_row) {
+                    // ID does not belong to this plan - reject cross-plan mutation and insert as new
+                    $act_id = 0;
+                    $act_uid = null;
+                } else {
+                    $act_uid = $verified_row['activity_uid'];
+                }
             }
 
             $topic_val = trim(!empty($act['topic']) ? $act['topic'] : ($act['subject'] ?? ''));
 
             if ($act_id > 0) {
                 // Read current record to check for changes
-                $stmt_cur = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ?");
-                $stmt_cur->execute([$act_id]);
+                $stmt_cur = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ? AND study_plan_id = ?");
+                $stmt_cur->execute([$act_id, $plan_id]);
                 $cur = $stmt_cur->fetch(PDO::FETCH_ASSOC);
 
                 $changed = false;
@@ -688,9 +728,18 @@ try {
                     trim($act['custom_activity_badge'] ?? ''),
                     trim($act['custom_activity_color'] ?? ''),
                     trim($act['custom_activity_icon'] ?? ''),
-                    $act_id
+                    $act_id,
+                    $plan_id
                 ]);
-                $saved_ids[] = $act_id;
+
+                $response_activities[] = [
+                    'id' => $act_id,
+                    'activity_uid' => $act_uid,
+                    'client_key' => $client_key,
+                    'activity_date' => $act['activity_date'],
+                    'day_number' => (int)$act['day_number'],
+                    'sort_order' => (int)$act['sort_order']
+                ];
             } else {
                 // Insert brand-new activity
                 $new_uid = 'SPA-' . bin2hex(random_bytes(10));
@@ -714,9 +763,17 @@ try {
                     trim($act['custom_activity_icon'] ?? ''),
                     $new_uid
                 ]);
-                $new_act_id = $pdo->lastInsertId();
+                $new_act_id = (int)$pdo->lastInsertId();
                 log_activity_version($pdo, $new_act_id, 'create', $admin_username);
-                $saved_ids[] = $new_act_id;
+
+                $response_activities[] = [
+                    'id' => $new_act_id,
+                    'activity_uid' => $new_uid,
+                    'client_key' => $client_key,
+                    'activity_date' => $act['activity_date'],
+                    'day_number' => (int)$act['day_number'],
+                    'sort_order' => (int)$act['sort_order']
+                ];
             }
         }
 
@@ -728,18 +785,230 @@ try {
 
         $pdo->commit();
 
-        // Return updated listing with assigned database IDs/UIDs back to client
-        $stmt_active_acts = $pdo->prepare("SELECT id, activity_uid, activity_date, day_number, sort_order FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 ORDER BY activity_date ASC, sort_order ASC");
-        $stmt_active_acts->execute([$plan_id]);
-        $active_acts = $stmt_active_acts->fetchAll(PDO::FETCH_ASSOC);
-
         $new_version = ($db_version !== false) ? $db_version + 1 : 1;
         echo json_encode([
             'success' => true,
             'version' => $new_version,
-            'activities' => $active_acts
+            'activities' => $response_activities
         ]);
         exit();
+    }
+
+    if ($action === 'bulk_move_activities') {
+        $raw = file_get_contents('php://input');
+        $data = json_decode($raw, true);
+
+        if (!$data) {
+            $data = $_POST;
+        }
+
+        $plan_id = (int)($data['study_plan_id'] ?? 0);
+        $client_version = (int)($data['version'] ?? 0);
+        $target_date = trim($data['target_date'] ?? '');
+        $target_day = (int)($data['target_day'] ?? 1);
+        $activity_uids = $data['activity_uids'] ?? [];
+        $activity_ids = $data['activity_ids'] ?? [];
+
+        if ($plan_id <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Invalid Study Plan ID']);
+            exit();
+        }
+
+        // Edit Lock Enforcement
+        if ($plan_id > 0 && !verify_study_plan_edit_lock_permission($pdo, $plan_id, $admin_username)) {
+            echo json_encode([
+                'success' => false,
+                'error_code' => 'EDIT_LOCK_HELD',
+                'message' => 'This Study Plan is currently locked for editing by another administrator.'
+            ]);
+            exit();
+        }
+
+        if (empty($activity_uids) && empty($activity_ids)) {
+            echo json_encode(['success' => false, 'message' => 'No activities selected to move']);
+            exit();
+        }
+
+        // Fetch plan
+        $stmt_plan = $pdo->prepare("SELECT * FROM study_plans WHERE id = ? AND is_deleted = 0");
+        $stmt_plan->execute([$plan_id]);
+        $plan = $stmt_plan->fetch(PDO::FETCH_ASSOC);
+
+        if (!$plan) {
+            echo json_encode(['success' => false, 'message' => 'Study Plan not found']);
+            exit();
+        }
+
+        $is_day_wise = (($plan['plan_type'] ?? 'date_wise') === 'day_wise');
+
+        // Validate destination
+        if ($is_day_wise) {
+            if ($target_day < 1) $target_day = 1;
+            if (!empty($plan['total_days']) && $target_day > (int)$plan['total_days']) {
+                $target_day = (int)$plan['total_days'];
+            }
+            if (empty($target_date)) {
+                $target_date = date('Y-m-d', strtotime('2000-01-01 +' . ($target_day - 1) . ' days'));
+            }
+        } else {
+            if (empty($target_date)) {
+                echo json_encode(['success' => false, 'message' => 'Target date is required for date-wise study plans']);
+                exit();
+            }
+            if (!empty($plan['start_date'])) {
+                $start_ts = strtotime($plan['start_date']);
+                $target_ts = strtotime($target_date);
+                if ($start_ts && $target_ts) {
+                    $computed_day = (int)floor(($target_ts - $start_ts) / 86400) + 1;
+                    if ($computed_day >= 1) {
+                        $target_day = $computed_day;
+                    }
+                }
+            }
+        }
+
+        $pdo->beginTransaction();
+
+        try {
+            // Find all matching activities for THIS study plan
+            $selected_activities = [];
+
+            if (!empty($activity_uids) && is_array($activity_uids)) {
+                $in_placeholders = implode(',', array_fill(0, count($activity_uids), '?'));
+                $stmt_uids = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND activity_uid IN ($in_placeholders) AND is_deleted = 0 ORDER BY activity_date ASC, sort_order ASC, id ASC");
+                $stmt_uids->execute(array_merge([$plan_id], array_values($activity_uids)));
+                $selected_activities = $stmt_uids->fetchAll(PDO::FETCH_ASSOC);
+
+                if (count($selected_activities) !== count(array_unique($activity_uids))) {
+                    throw new Exception("One or more selected activities do not exist or do not belong to this study plan.");
+                }
+            } elseif (!empty($activity_ids) && is_array($activity_ids)) {
+                $in_placeholders = implode(',', array_fill(0, count($activity_ids), '?'));
+                $stmt_ids = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND id IN ($in_placeholders) AND is_deleted = 0 ORDER BY activity_date ASC, sort_order ASC, id ASC");
+                $stmt_ids->execute(array_merge([$plan_id], array_values($activity_ids)));
+                $selected_activities = $stmt_ids->fetchAll(PDO::FETCH_ASSOC);
+
+                if (count($selected_activities) !== count(array_unique($activity_ids))) {
+                    throw new Exception("One or more selected activities do not exist or do not belong to this study plan.");
+                }
+            }
+
+            if (empty($selected_activities)) {
+                throw new Exception("No valid activities found to move.");
+            }
+
+            $moved_ids = array_column($selected_activities, 'id');
+            $source_dates = [];
+            $source_days = [];
+            foreach ($selected_activities as $s_act) {
+                if (!empty($s_act['activity_date'])) $source_dates[$s_act['activity_date']] = true;
+                if (!empty($s_act['day_number'])) $source_days[$s_act['day_number']] = true;
+            }
+
+            // Determine existing tasks on target bucket (excluding moved tasks)
+            if ($is_day_wise) {
+                $stmt_target_exist = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND day_number = ? AND is_deleted = 0 AND id NOT IN (" . implode(',', $moved_ids) . ") ORDER BY sort_order ASC, id ASC");
+                $stmt_target_exist->execute([$plan_id, $target_day]);
+            } else {
+                $stmt_target_exist = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND activity_date = ? AND is_deleted = 0 AND id NOT IN (" . implode(',', $moved_ids) . ") ORDER BY sort_order ASC, id ASC");
+                $stmt_target_exist->execute([$plan_id, $target_date]);
+            }
+            $target_existing = $stmt_target_exist->fetchAll(PDO::FETCH_ASSOC);
+
+            // Re-normalize existing target tasks to clean sequential sort_orders
+            $stmt_update_order = $pdo->prepare("UPDATE study_plan_activities SET sort_order = ? WHERE id = ? AND study_plan_id = ?");
+            $curr_sort = 0;
+            foreach ($target_existing as $t_act) {
+                $stmt_update_order->execute([$curr_sort, $t_act['id'], $plan_id]);
+                $curr_sort++;
+            }
+
+            // Append moved tasks after existing target tasks
+            $stmt_move = $pdo->prepare("UPDATE study_plan_activities SET activity_date = ?, day_number = ?, sort_order = ? WHERE id = ? AND study_plan_id = ?");
+            $updated_moved_activities = [];
+            foreach ($selected_activities as $m_act) {
+                $stmt_move->execute([$target_date, $target_day, $curr_sort, $m_act['id'], $plan_id]);
+                log_activity_version($pdo, $m_act['id'], 'update', $admin_username);
+                $updated_moved_activities[] = [
+                    'id' => (int)$m_act['id'],
+                    'activity_uid' => $m_act['activity_uid'],
+                    'activity_date' => $target_date,
+                    'day_number' => $target_day,
+                    'sort_order' => $curr_sort
+                ];
+                $curr_sort++;
+            }
+
+            // Re-normalize remaining tasks on all source days/dates
+            foreach (array_keys($source_dates) as $s_date) {
+                if (!$is_day_wise && $s_date === $target_date) continue;
+                $stmt_source_rem = $pdo->prepare("SELECT id FROM study_plan_activities WHERE study_plan_id = ? AND activity_date = ? AND is_deleted = 0 AND id NOT IN (" . implode(',', $moved_ids) . ") ORDER BY sort_order ASC, id ASC");
+                $stmt_source_rem->execute([$plan_id, $s_date]);
+                $source_remaining = $stmt_source_rem->fetchAll(PDO::FETCH_COLUMN);
+
+                $s_sort = 0;
+                foreach ($source_remaining as $r_id) {
+                    $stmt_update_order->execute([$s_sort, $r_id, $plan_id]);
+                    $s_sort++;
+                }
+            }
+
+            if ($is_day_wise) {
+                foreach (array_keys($source_days) as $s_day) {
+                    if ($s_day === $target_day) continue;
+                    $stmt_source_rem_dw = $pdo->prepare("SELECT id FROM study_plan_activities WHERE study_plan_id = ? AND day_number = ? AND is_deleted = 0 AND id NOT IN (" . implode(',', $moved_ids) . ") ORDER BY sort_order ASC, id ASC");
+                    $stmt_source_rem_dw->execute([$plan_id, $s_day]);
+                    $source_remaining_dw = $stmt_source_rem_dw->fetchAll(PDO::FETCH_COLUMN);
+
+                    $s_sort = 0;
+                    foreach ($source_remaining_dw as $r_id) {
+                        $stmt_update_order->execute([$s_sort, $r_id, $plan_id]);
+                        $s_sort++;
+                    }
+                }
+            }
+
+            // Bump version
+            $pdo->prepare("UPDATE study_plans SET version = version + 1, updated_at = NOW() WHERE id = ?")->execute([$plan_id]);
+
+            // Single audit log for the bulk operation
+            $count_moved = count($selected_activities);
+            $source_desc = $is_day_wise ? ('Day(s) ' . implode(',', array_keys($source_days))) : ('Date(s) ' . implode(',', array_keys($source_dates)));
+            $dest_desc = $is_day_wise ? ("Day " . $target_day) : ("Date " . $target_date . " (Day " . $target_day . ")");
+            $stmt_audit = $pdo->prepare("INSERT INTO study_plan_audit_logs (study_plan_id, admin_username, action, details) VALUES (?, ?, 'bulk_move_activities', ?)");
+            $stmt_audit->execute([$plan_id, $admin_username, "Bulk moved {$count_moved} activities from [{$source_desc}] to {$dest_desc}"]);
+
+            $pdo->commit();
+
+            log_admin_activity($pdo, $admin_username, 'studyplan_bulk_move', "Moved {$count_moved} activities in study plan #{$plan_id} to {$dest_desc}");
+
+            // Fetch full updated activities for the plan
+            if ($is_day_wise) {
+                $stmt_all = $pdo->prepare("SELECT id, activity_uid, activity_date, day_number, sort_order FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 ORDER BY day_number ASC, sort_order ASC, id ASC");
+            } else {
+                $stmt_all = $pdo->prepare("SELECT id, activity_uid, activity_date, day_number, sort_order FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 ORDER BY activity_date ASC, sort_order ASC, id ASC");
+            }
+            $stmt_all->execute([$plan_id]);
+            $all_active = $stmt_all->fetchAll(PDO::FETCH_ASSOC);
+
+            echo json_encode([
+                'success' => true,
+                'count' => $count_moved,
+                'version' => (int)($plan['version'] + 1),
+                'moved' => $updated_moved_activities,
+                'activities' => $all_active,
+                'message' => "{$count_moved} task(s) moved successfully."
+            ]);
+            exit();
+
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            echo json_encode([
+                'success' => false,
+                'message' => $e->getMessage()
+            ]);
+            exit();
+        }
     }
 
     if ($action === 'check_activity_delete') {
@@ -833,6 +1102,17 @@ try {
         }
 
         $plan_id = (int)$act['study_plan_id'];
+
+        // Edit Lock Enforcement
+        if ($plan_id > 0 && !verify_study_plan_edit_lock_permission($pdo, $plan_id, $admin_username)) {
+            $pdo->rollBack();
+            echo json_encode([
+                'success' => false,
+                'error_code' => 'EDIT_LOCK_HELD',
+                'message' => 'This Study Plan is currently locked for editing by another administrator.'
+            ]);
+            exit();
+        }
 
         // ── OPTIMISTIC CONCURRENCY PROTECTION ────────────────────────────
         $client_version = isset($_POST['version']) ? (int)$_POST['version'] : 0;

@@ -2,13 +2,20 @@
 require_once 'includes/auth.php';
 require_permission('studyplans');
 require_once 'config/database.php';
+require_once 'includes/study_plan_lock_helper.php';
 
 $plan_id = (int)($_GET['id'] ?? 0);
 $plan = null;
 $assigned = [];
 $activities_json = '[]';
 
+$admin_info = get_current_admin_identity($pdo);
+$edit_lock_status = ['success' => true, 'locked' => false, 'is_owner' => true];
+
 if ($plan_id > 0) {
+    // Acquire or verify edit lock
+    $edit_lock_status = acquire_or_check_study_plan_lock($pdo, $plan_id, $admin_info);
+
     // Fetch existing plan
     $stmt = $pdo->prepare("SELECT * FROM study_plans WHERE id = ? AND is_deleted = 0");
     $stmt->execute([$plan_id]);
@@ -23,7 +30,11 @@ if ($plan_id > 0) {
     $assigned = $stmt_assign->fetchAll();
 
     // Fetch activities (non-deleted only)
-    $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 ORDER BY activity_date ASC, sort_order ASC");
+    if (($plan['plan_type'] ?? 'date_wise') === 'day_wise') {
+        $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 ORDER BY day_number ASC, sort_order ASC, id ASC");
+    } else {
+        $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 ORDER BY activity_date ASC, sort_order ASC, id ASC");
+    }
     $stmt_act->execute([$plan_id]);
     $activities = $stmt_act->fetchAll();
     $activities_json = json_encode($activities);
@@ -77,6 +88,9 @@ try {
     ")->fetchAll();
 } catch (Exception $e) {}
 
+$is_locked_by_other = (!empty($edit_lock_status['locked']) && empty($edit_lock_status['is_owner']));
+$locked_by_admin = $edit_lock_status['locked_by'] ?? null;
+
 $page_title = $plan_id > 0 ? "Visual Study Plan Designer" : "Create Study Plan";
 $page_sub = "Visually design, schedule, theme, and assign study plans with real-time preview";
 $active_page = 'studyplans';
@@ -84,6 +98,96 @@ $active_page = 'studyplans';
 $extra_head = '
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 <style>
+    /* Study Plan Edit Lock Banner & Badges */
+    .edit-lock-alert-banner {
+        background: linear-gradient(135deg, #fff1f2, #ffe4e6);
+        border: 1.5px solid #fecdd3;
+        border-radius: 14px;
+        padding: 12px 18px;
+        margin-top: 1rem;
+        margin-bottom: 0.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        box-shadow: 0 4px 14px rgba(225, 29, 72, 0.08);
+    }
+    .lock-banner-left {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+    }
+    .lock-avatar-wrap {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        overflow: hidden;
+        border: 2px solid #f43f5e;
+        flex-shrink: 0;
+        background: #fecdd3;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .lock-avatar-img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+    .lock-avatar-initials {
+        font-size: 1.15rem;
+        font-weight: 800;
+        color: #e11d48;
+    }
+    .lock-banner-title {
+        font-size: 0.95rem;
+        font-weight: 800;
+        color: #9f1239;
+        display: flex;
+        align-items: center;
+    }
+    .lock-banner-subtitle {
+        font-size: 0.8rem;
+        color: #be123c;
+        margin-top: 2px;
+    }
+    .lock-banner-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
+    }
+    .read-only-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: #fee2e2;
+        color: #991b1b;
+        border: 1px solid #fca5a5;
+        border-radius: 9999px;
+        padding: 4px 10px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .btn-lock-exit {
+        background: #be123c;
+        color: #ffffff !important;
+        padding: 6px 14px;
+        border-radius: 8px;
+        font-size: 0.82rem;
+        font-weight: 700;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: all 0.2s;
+    }
+    .btn-lock-exit:hover {
+        background: #9f1239;
+        transform: translateY(-1px);
+    }
     .designer-container {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -169,6 +273,11 @@ $extra_head = '
     .activity-card:hover {
         border-color: var(--accent);
         box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    }
+    .selected-activity-card {
+        border-color: #3b82f6 !important;
+        background: #f0f7ff !important;
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
     }
     /* Layout styling for Live Preview */
     .preview-phone-frame {
@@ -568,6 +677,35 @@ $extra_head = '
 include 'includes/admin_nav.php';
 ?>
 
+<?php if ($is_locked_by_other && $locked_by_admin): ?>
+<div id="edit-lock-banner" class="edit-lock-alert-banner">
+    <div class="lock-banner-left">
+        <div class="lock-avatar-wrap">
+            <?php if (!empty($locked_by_admin['photo_url'])): ?>
+                <img src="../<?= htmlspecialchars($locked_by_admin['photo_url'], ENT_QUOTES, 'UTF-8') ?>" class="lock-avatar-img" alt="Avatar">
+            <?php else: ?>
+                <div class="lock-avatar-initials"><?= htmlspecialchars($locked_by_admin['initials'] ?? 'A', ENT_QUOTES, 'UTF-8') ?></div>
+            <?php endif; ?>
+        </div>
+        <div class="lock-banner-text">
+            <div class="lock-banner-title">
+                <i class="fas fa-lock" style="color: #e11d48; margin-right: 6px;"></i>
+                <strong>Study Plan Locked for Editing</strong>
+            </div>
+            <div class="lock-banner-subtitle">
+                Currently being edited by <strong><?= htmlspecialchars($locked_by_admin['admin_name'] ?? $locked_by_admin['admin_username'], ENT_QUOTES, 'UTF-8') ?></strong>
+                <span style="opacity: 0.85;">(@<?= htmlspecialchars($locked_by_admin['admin_username'], ENT_QUOTES, 'UTF-8') ?>)</span>
+                • Opened at <?= date('h:i A, d M Y', strtotime($locked_by_admin['locked_at'] ?? 'now')) ?>
+            </div>
+        </div>
+    </div>
+    <div class="lock-banner-right">
+        <span class="read-only-pill"><i class="fas fa-eye"></i> Read-Only Mode</span>
+        <a href="studyplans.php" class="btn-lock-exit"><i class="fas fa-arrow-left"></i> Exit to Study Plans</a>
+    </div>
+</div>
+<?php endif; ?>
+
 <div class="designer-container">
     <!-- Left Configuration & Designer Tools Panel -->
     <div class="designer-panel">
@@ -737,8 +875,26 @@ include 'includes/admin_nav.php';
 
             <!-- Tab Content: Activities Builder -->
             <div id="tab-activities" class="designer-tab-content" style="display:none;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                    <div style="font-size:0.82rem; font-weight:700; color:var(--text-muted);">Schedules by Date</div>
+                <!-- Bulk Action Sticky Toolbar (Visible when >= 1 tasks selected) -->
+                <div id="bulk-action-toolbar" style="display:none; background:#1e293b; color:#fff; border-radius:12px; padding:10px 14px; margin-bottom:14px; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; box-shadow:0 4px 16px rgba(0,0,0,0.15);">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span class="badge blue" style="font-size:0.78rem; font-weight:700; background:#3b82f6; color:#fff; padding:4px 8px; border-radius:6px;" id="bulk-selected-badge"><i class="fas fa-check-circle"></i> <span id="bulk-selected-count">0</span> Selected</span>
+                        <button type="button" class="btn btn-sm btn-outline" style="color:#cbd5e1; border-color:#475569; padding:2px 8px; font-size:0.75rem;" onclick="clearBulkSelection()">Clear</button>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                        <label style="font-size:0.78rem; font-weight:600; color:#94a3b8; margin:0;">Move to:</label>
+                        <select id="bulk-target-destination" class="form-input" style="margin-bottom:0; width:180px; padding:4px 8px; height:32px; font-size:0.8rem; background:#0f172a; color:#fff; border:1px solid #334155; border-radius:6px;">
+                            <!-- Populated dynamically based on plan type (date_wise or day_wise) -->
+                        </select>
+                        <button type="button" id="bulk-move-btn" class="btn btn-sm btn-primary" style="padding:4px 12px; font-size:0.8rem; background:#2563eb; border-color:#2563eb;" onclick="executeBulkMove()"><i class="fas fa-arrows-turn-right"></i> Move Selected Tasks</button>
+                    </div>
+                </div>
+
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+                    <div style="font-size:0.82rem; font-weight:700; color:var(--text-muted); display:flex; align-items:center; gap:10px;">
+                        <span><i class="fas fa-list-check" style="color:var(--accent);"></i> Schedules by Day / Date</span>
+                        <button type="button" class="btn btn-sm btn-outline" style="padding:2px 8px; font-size:0.72rem;" onclick="toggleSelectAllTasks()" id="select-all-tasks-btn"><i class="fas fa-check-double"></i> Select All Tasks</button>
+                    </div>
                     <button class="btn btn-sm btn-secondary" onclick="addCustomActivityField()"><i class="fas fa-plus"></i> Add Activity</button>
                 </div>
                 <div id="activities-dates-wrapper">
@@ -956,23 +1112,48 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
-<!-- Modal: Delete Confirmation Warning -->
-<div class="modal-backdrop" id="delete-warning-modal">
-    <div class="modal" style="max-width:450px; padding:1.5rem; border-radius: 16px;">
-        <div style="text-align:center; font-size:3rem; color:#ef4444; margin-bottom:12px;" id="delete-warning-icon">
-            <i class="fas fa-triangle-exclamation"></i>
+<!-- Modal: Study Plan Locked Warning -->
+<div class="modal-backdrop" id="modal-edit-locked" style="<?= $is_locked_by_other ? 'display:flex;' : 'display:none;' ?>">
+    <div class="modal" style="max-width:500px; text-align:center; padding:2rem; border-radius: 16px;">
+        <div style="width: 76px; height: 76px; margin: 0 auto 16px; border-radius: 50%; background: #ffe4e6; border: 3px solid #f43f5e; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 4px 14px rgba(244,63,94,0.25);">
+            <?php if (!empty($locked_by_admin['photo_url'])): ?>
+                <img src="../<?= htmlspecialchars($locked_by_admin['photo_url'], ENT_QUOTES, 'UTF-8') ?>" style="width:100%; height:100%; object-fit:cover;" alt="Avatar">
+            <?php else: ?>
+                <span style="font-size: 1.8rem; font-weight: 800; color: #be123c;"><?= htmlspecialchars($locked_by_admin['initials'] ?? 'A', ENT_QUOTES, 'UTF-8') ?></span>
+            <?php endif; ?>
         </div>
-        <h3 style="font-weight:800; font-size:1.2rem; margin-bottom:8px; color: #1e293b; text-align:center;" id="delete-warning-title">Delete Activity</h3>
-        <div style="color:#64748b; font-size:0.9rem; margin-bottom:20px; text-align:center; line-height: 1.5;" id="delete-warning-message">
-            Are you sure you want to delete this activity?
+        <h3 style="font-weight:800; font-size:1.25rem; margin-bottom:8px; color: #1e293b;">Study Plan Currently Being Edited</h3>
+        <p style="color:#475569; font-size:0.92rem; margin-bottom:16px; line-height: 1.5;">
+            <strong><?= htmlspecialchars($locked_by_admin['admin_name'] ?? ($locked_by_admin['admin_username'] ?? 'Another Administrator'), ENT_QUOTES, 'UTF-8') ?></strong>
+            <span style="color:#64748b;">(@<?= htmlspecialchars($locked_by_admin['admin_username'] ?? 'admin', ENT_QUOTES, 'UTF-8') ?>)</span>
+            is currently modifying this study plan.
+        </p>
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 16px; margin-bottom: 20px; text-align: left; font-size: 0.84rem; color: #475569;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: #1e293b; font-weight: 700;">
+                <i class="fas fa-shield-halved" style="color: #6366f1;"></i> Concurrent Edit Protection Active
+            </div>
+            To prevent overwriting changes, this plan is open in <strong>Read-Only Mode</strong>. You can view all tasks and preview the schedule, but modifications are disabled until the current editor finishes.
         </div>
-        <div style="margin-bottom:15px; display:none;" id="delete-reason-container">
-            <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:4px;">Reason for Deletion:</label>
-            <input type="text" id="delete-reason-input" class="form-control" style="width:100%; border:1px solid #cbd5e1; padding:6px; border-radius:6px; font-size:0.85rem;" placeholder="e.g., Task no longer needed" value="Admin deleted">
+        <div style="display:flex; justify-content:center; gap:10px;">
+            <a href="studyplans.php" class="btn btn-primary" style="background:#be123c; border-color:#be123c; color:#fff; font-weight:700; text-decoration:none;"><i class="fas fa-arrow-left"></i> Exit to Study Plans</a>
+            <button type="button" class="btn btn-outline" style="font-weight:700;" onclick="closeModal('modal-edit-locked')"><i class="fas fa-eye"></i> View Read-Only</button>
         </div>
-        <div style="display:flex; justify-content:flex-end; gap:8px;">
-            <button type="button" class="btn btn-outline" onclick="closeModal('delete-warning-modal')">Cancel</button>
-            <button type="button" class="btn btn-danger" id="confirm-delete-btn" style="background:#ef4444; border-color:#ef4444; color:#fff;" onclick="executeDeleteActivity()"><i class="fas fa-trash"></i> Delete Activity</button>
+    </div>
+</div>
+
+<!-- Modal: Lock Lost Warning -->
+<div class="modal-backdrop" id="modal-lock-lost" style="display:none;">
+    <div class="modal" style="max-width:480px; text-align:center; padding:2rem; border-radius: 16px;">
+        <div style="text-align:center; font-size:3rem; color:#ef4444; margin-bottom:12px;">
+            <i class="fas fa-lock-open"></i>
+        </div>
+        <h3 style="font-weight:800; font-size:1.25rem; margin-bottom:8px; color: #1e293b;">Edit Session Expired</h3>
+        <p style="color:#475569; font-size:0.92rem; margin-bottom:16px; line-height: 1.5;">
+            Your edit lock for this study plan has expired or was reclaimed. The designer has been switched to <strong>Read-Only Mode</strong> to prevent conflicts.
+        </p>
+        <div style="display:flex; justify-content:center; gap:10px;">
+            <a href="studyplans.php" class="btn btn-primary" style="font-weight:700; text-decoration:none;"><i class="fas fa-arrow-left"></i> Back to Study Plans</a>
+            <button type="button" class="btn btn-outline" style="font-weight:700;" onclick="closeModal('modal-lock-lost')"><i class="fas fa-eye"></i> View Read-Only</button>
         </div>
     </div>
 </div>
@@ -999,6 +1180,11 @@ include 'includes/admin_nav.php';
 <script>
     var studyPlanId = <?php echo $plan_id; ?>;
     var studyPlanVersion = <?php echo (int)($plan['version'] ?? 1); ?>;
+    var isReadOnlyMode = <?php echo $is_locked_by_other ? 'true' : 'false'; ?>;
+    var currentAdminUsername = <?php echo json_encode($admin_info['admin_username']); ?>;
+    var currentSessionToken = <?php echo json_encode($admin_info['session_token']); ?>;
+    var lockHeartbeatTimer = null;
+    var isLockReleased = false;
     var activities = <?php echo $activities_json; ?>;
     var predefinedTypes = <?php echo json_encode($all_types); ?>;
     var allChapters = <?php echo json_encode($preset_chapters); ?>;
@@ -1151,75 +1337,63 @@ include 'includes/admin_nav.php';
         });
     });
 
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function generateClientKey() {
+        return 'CLIENT_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    }
+
+    // Ensure all initial activities have a client_key if id/activity_uid are empty
+    if (Array.isArray(activities)) {
+        activities.forEach(function(act) {
+            if (!act.activity_uid && !act.id && !act.client_key) {
+                act.client_key = generateClientKey();
+            }
+        });
+    }
+
+    function applyServerActivityMappings(serverActivities) {
+        if (!serverActivities || !Array.isArray(serverActivities)) return;
+
+        var keyMap = {};
+        var uidMap = {};
+        serverActivities.forEach(function(item) {
+            if (item.client_key) keyMap[item.client_key] = item;
+            if (item.activity_uid) uidMap[item.activity_uid] = item;
+        });
+
+        activities.forEach(function(act) {
+            if (act.client_key && keyMap[act.client_key]) {
+                var matched = keyMap[act.client_key];
+                act.id = matched.id;
+                act.activity_uid = matched.activity_uid;
+            } else if (act.activity_uid && uidMap[act.activity_uid]) {
+                var matched = uidMap[act.activity_uid];
+                act.id = matched.id;
+                act.activity_uid = matched.activity_uid;
+            }
+        });
+    }
+
     function togglePlanTypeView() {
         var isDateWise = document.getElementById('type-date-wise').checked;
-        var startInput = document.getElementById('plan-start').value;
-        var endInput = document.getElementById('plan-end').value;
 
         if (isDateWise) {
             document.getElementById('date-wise-start-wrap').style.display = 'block';
             document.getElementById('date-wise-end-wrap').style.display = 'block';
             document.getElementById('day-wise-days-wrap').style.display = 'none';
-
-            // Shifting from Day Wise back to Date Wise:
-            // Translate relative placeholder dates starting with 2000-01-01 back to calendar dates
-            if (startInput) {
-                var baseDate = new Date(startInput);
-                activities.forEach(function(act) {
-                    if (act.activity_date && act.activity_date.startsWith('2000-')) {
-                        var dummyD = new Date(act.activity_date);
-                        var offsetD = new Date('2000-01-01');
-                        var diffT = dummyD - offsetD;
-                        var diffDays = Math.floor(diffT / (1000 * 60 * 60 * 24));
-                        if (diffDays < 0) diffDays = 0;
-
-                        var newD = new Date(baseDate);
-                        newD.setDate(newD.getDate() + diffDays);
-                        var yyyy = newD.getFullYear();
-                        var mm = String(newD.getMonth() + 1).padStart(2, '0');
-                        var dd = String(newD.getDate()).padStart(2, '0');
-                        act.activity_date = yyyy + '-' + mm + '-' + dd;
-                        act.day_number = diffDays + 1;
-                    }
-                });
-            }
         } else {
             document.getElementById('date-wise-start-wrap').style.display = 'none';
             document.getElementById('date-wise-end-wrap').style.display = 'none';
             document.getElementById('day-wise-days-wrap').style.display = 'block';
-
-            // Shifting from Date Wise to Day Count Wise:
-            // 1. Auto-calculate total days and set total number of days input
-            if (startInput && endInput) {
-                var startD = new Date(startInput);
-                var endD = new Date(endInput);
-                var diffTime = Math.abs(endD - startD);
-                var totalDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-                if (totalDays > 0) {
-                    document.getElementById('plan-total-days').value = totalDays;
-                }
-            }
-
-            // 2. Translate current calendar dates to relative dates starting from 2000-01-01
-            if (startInput) {
-                var baseDate = new Date(startInput);
-                activities.forEach(function(act) {
-                    if (act.activity_date && !act.activity_date.startsWith('2000-')) {
-                        var actD = new Date(act.activity_date);
-                        var diffT = actD - baseDate;
-                        var diffDays = Math.floor(diffT / (1000 * 60 * 60 * 24));
-                        if (diffDays < 0) diffDays = 0;
-
-                        var newD = new Date('2000-01-01');
-                        newD.setDate(newD.getDate() + diffDays);
-                        var yyyy = newD.getFullYear();
-                        var mm = String(newD.getMonth() + 1).padStart(2, '0');
-                        var dd = String(newD.getDate()).padStart(2, '0');
-                        act.activity_date = yyyy + '-' + mm + '-' + dd;
-                        act.day_number = diffDays + 1;
-                    }
-                });
-            }
         }
         regenerateDatesPreview();
     }
@@ -1230,6 +1404,320 @@ include 'includes/admin_nav.php';
 
         event.target.classList.add('active');
         document.getElementById('tab-' + tab).style.display = 'block';
+    }
+
+    var selectedTaskKeys = new Set();
+    var isBulkMoveInProgress = false;
+
+    function toggleTaskSelection(key, index, checked) {
+        if (checked) {
+            selectedTaskKeys.add(key);
+        } else {
+            selectedTaskKeys.delete(key);
+        }
+        updateBulkToolbar();
+        updateCardSelectionVisuals();
+    }
+
+    function toggleSelectDayTasks(dateStr, dayNum, checked) {
+        var isDateWise = document.getElementById('type-date-wise').checked;
+        activities.forEach(function(act, index) {
+            var match = isDateWise ? (act.activity_date === dateStr) : ((parseInt(act.day_number) || 1) === dayNum);
+            if (match) {
+                var key = act.activity_uid || act.client_key || ('idx_' + index);
+                if (checked) {
+                    selectedTaskKeys.add(key);
+                } else {
+                    selectedTaskKeys.delete(key);
+                }
+            }
+        });
+        updateBulkToolbar();
+        renderActivitiesList();
+    }
+
+    function toggleSelectAllTasks() {
+        var allKeys = [];
+        activities.forEach(function(act, index) {
+            allKeys.push(act.activity_uid || act.client_key || ('idx_' + index));
+        });
+
+        if (selectedTaskKeys.size === activities.length && activities.length > 0) {
+            selectedTaskKeys.clear();
+        } else {
+            allKeys.forEach(k => selectedTaskKeys.add(k));
+        }
+        updateBulkToolbar();
+        renderActivitiesList();
+    }
+
+    function clearBulkSelection() {
+        selectedTaskKeys.clear();
+        updateBulkToolbar();
+        renderActivitiesList();
+    }
+
+    function updateCardSelectionVisuals() {
+        document.querySelectorAll('.activity-card').forEach(function(card) {
+            var uid = card.getAttribute('data-activity-uid');
+            var clientKey = card.getAttribute('data-client-key');
+            var index = card.getAttribute('data-index');
+            var key = uid || clientKey || ('idx_' + index);
+            var cb = card.querySelector('.activity-select-cb');
+            if (selectedTaskKeys.has(key)) {
+                card.classList.add('selected-activity-card');
+                if (cb) cb.checked = true;
+            } else {
+                card.classList.remove('selected-activity-card');
+                if (cb) cb.checked = false;
+            }
+        });
+    }
+
+    function updateBulkToolbar() {
+        var toolbar = document.getElementById('bulk-action-toolbar');
+        var badgeCount = document.getElementById('bulk-selected-count');
+        var selectAllBtn = document.getElementById('select-all-tasks-btn');
+
+        if (isReadOnlyMode) {
+            if (toolbar) toolbar.style.display = 'none';
+            if (selectAllBtn) selectAllBtn.style.display = 'none';
+            return;
+        }
+
+        var count = selectedTaskKeys.size;
+        if (badgeCount) badgeCount.textContent = count;
+
+        if (selectAllBtn) {
+            selectAllBtn.style.display = 'inline-flex';
+            if (count === activities.length && activities.length > 0) {
+                selectAllBtn.innerHTML = '<i class="fas fa-xmark"></i> Deselect All';
+            } else {
+                selectAllBtn.innerHTML = '<i class="fas fa-check-double"></i> Select All Tasks (' + activities.length + ')';
+            }
+        }
+
+        if (count > 0) {
+            if (toolbar) toolbar.style.display = 'flex';
+            populateBulkDestinations();
+        } else {
+            if (toolbar) toolbar.style.display = 'none';
+        }
+    }
+
+    function populateBulkDestinations() {
+        var destSelect = document.getElementById('bulk-target-destination');
+        if (!destSelect) return;
+
+        var currentVal = destSelect.value;
+        destSelect.innerHTML = '';
+
+        var isDateWise = document.getElementById('type-date-wise').checked;
+
+        if (isDateWise) {
+            var startInput = document.getElementById('plan-start').value;
+            var endInput = document.getElementById('plan-end').value;
+            if (!startInput || !endInput) return;
+
+            var startParts = startInput.split('-');
+            var endParts = endInput.split('-');
+            var start = new Date(parseInt(startParts[0]), parseInt(startParts[1]) - 1, parseInt(startParts[2]));
+            var end = new Date(parseInt(endParts[0]), parseInt(endParts[1]) - 1, parseInt(endParts[2]));
+
+            var curr = new Date(start);
+            var dayNum = 1;
+            while (curr <= end) {
+                var yyyy = curr.getFullYear();
+                var mm = String(curr.getMonth() + 1).padStart(2, '0');
+                var dd = String(curr.getDate()).padStart(2, '0');
+                var dateStr = yyyy + '-' + mm + '-' + dd;
+                var dayLabel = "Day " + String(dayNum).padStart(2, '0') + " (" + curr.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }) + ")";
+
+                var opt = document.createElement('option');
+                opt.value = JSON.stringify({ date: dateStr, day: dayNum });
+                opt.textContent = dayLabel;
+                destSelect.appendChild(opt);
+
+                curr.setDate(curr.getDate() + 1);
+                dayNum++;
+            }
+        } else {
+            var totalDays = parseInt(document.getElementById('plan-total-days').value) || 7;
+            for (var i = 1; i <= totalDays; i++) {
+                var endD = new Date(2000, 0, 1);
+                endD.setDate(endD.getDate() + i - 1);
+                var yyyy = endD.getFullYear();
+                var mm = String(endD.getMonth() + 1).padStart(2, '0');
+                var dd = String(endD.getDate()).padStart(2, '0');
+                var dateStr = yyyy + '-' + mm + '-' + dd;
+
+                var opt = document.createElement('option');
+                opt.value = JSON.stringify({ date: dateStr, day: i });
+                opt.textContent = "Day " + String(i).padStart(2, '0');
+                destSelect.appendChild(opt);
+            }
+        }
+
+        if (currentVal) {
+            destSelect.value = currentVal;
+        }
+    }
+
+    function executeBulkMove() {
+        if (isReadOnlyMode) {
+            alert('This Study Plan is locked in Read-Only mode by another administrator. Changes cannot be saved.');
+            return;
+        }
+
+        if (selectedTaskKeys.size === 0) {
+            alert('Please select one or more tasks to move.');
+            return;
+        }
+
+        var destSelect = document.getElementById('bulk-target-destination');
+        if (!destSelect || !destSelect.value) {
+            alert('Please choose a destination day/date.');
+            return;
+        }
+
+        var dest = JSON.parse(destSelect.value);
+        var targetDate = dest.date;
+        var targetDay = dest.day;
+
+        var count = selectedTaskKeys.size;
+        var isDateWise = document.getElementById('type-date-wise').checked;
+        var destLabel = isDateWise ? (targetDate + ' (Day ' + targetDay + ')') : ('Day ' + targetDay);
+
+        if (!confirm('Move ' + count + ' selected task(s) to ' + destLabel + '?')) {
+            return;
+        }
+
+        var selectedActivities = [];
+        var selectedUids = [];
+        var selectedIds = [];
+
+        activities.forEach(function(act, index) {
+            var key = act.activity_uid || act.client_key || ('idx_' + index);
+            if (selectedTaskKeys.has(key)) {
+                selectedActivities.push(act);
+                if (act.activity_uid) selectedUids.push(act.activity_uid);
+                if (act.id) selectedIds.push(act.id);
+            }
+        });
+
+        var hasUnsavedNew = selectedActivities.some(a => !a.id || a.id <= 0);
+
+        var moveBtn = document.getElementById('bulk-move-btn');
+        if (moveBtn) {
+            moveBtn.disabled = true;
+            moveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Moving ' + count + ' tasks...';
+        }
+        isBulkMoveInProgress = true;
+
+        function doServerBulkMove() {
+            var payload = {
+                study_plan_id: studyPlanId,
+                version: studyPlanVersion,
+                target_date: targetDate,
+                target_day: targetDay,
+                activity_uids: selectedUids,
+                activity_ids: selectedIds
+            };
+
+            fetch('api/studyplans-api.php?action=bulk_move_activities', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (moveBtn) {
+                    moveBtn.disabled = false;
+                    moveBtn.innerHTML = '<i class="fas fa-arrows-turn-right"></i> Move Selected Tasks';
+                }
+                isBulkMoveInProgress = false;
+
+                if (data.success) {
+                    if (data.version) {
+                        studyPlanVersion = data.version;
+                    }
+                    applyServerActivityMappings(data.activities);
+
+                    if (Array.isArray(data.activities)) {
+                        var fullMap = {};
+                        data.activities.forEach(function(item) {
+                            if (item.activity_uid) fullMap[item.activity_uid] = item;
+                        });
+                        activities.forEach(function(act) {
+                            if (act.activity_uid && fullMap[act.activity_uid]) {
+                                var sv = fullMap[act.activity_uid];
+                                act.activity_date = sv.activity_date;
+                                act.day_number = sv.day_number;
+                                act.sort_order = sv.sort_order;
+                            }
+                        });
+                    }
+
+                    clearBulkSelection();
+                    renderActivitiesList();
+                    updateLivePreview();
+                    alert(data.message || (count + ' task(s) moved successfully.'));
+                } else if (data.error_code === 'EDIT_LOCK_HELD') {
+                    enableReadOnlyMode();
+                    openModal('modal-lock-lost');
+                } else {
+                    alert('Bulk Move Failed: ' + (data.message || 'Unknown error occurred.'));
+                }
+            })
+            .catch(err => {
+                if (moveBtn) {
+                    moveBtn.disabled = false;
+                    moveBtn.innerHTML = '<i class="fas fa-arrows-turn-right"></i> Move Selected Tasks';
+                }
+                isBulkMoveInProgress = false;
+                console.error(err);
+                alert('Server connection error during bulk move.');
+            });
+        }
+
+        if (hasUnsavedNew || studyPlanId <= 0) {
+            fetch('api/studyplans-api.php?action=save_activities', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ study_plan_id: studyPlanId, version: studyPlanVersion, activities: activities })
+            })
+            .then(r => r.json())
+            .then(saveData => {
+                if (saveData.success) {
+                    if (saveData.version) studyPlanVersion = saveData.version;
+                    applyServerActivityMappings(saveData.activities);
+                    selectedUids = [];
+                    selectedIds = [];
+                    selectedActivities.forEach(function(act) {
+                        if (act.activity_uid) selectedUids.push(act.activity_uid);
+                        if (act.id) selectedIds.push(act.id);
+                    });
+                    doServerBulkMove();
+                } else {
+                    if (moveBtn) {
+                        moveBtn.disabled = false;
+                        moveBtn.innerHTML = '<i class="fas fa-arrows-turn-right"></i> Move Selected Tasks';
+                    }
+                    isBulkMoveInProgress = false;
+                    alert('Failed to save newly created tasks before moving: ' + saveData.message);
+                }
+            })
+            .catch(err => {
+                if (moveBtn) {
+                    moveBtn.disabled = false;
+                    moveBtn.innerHTML = '<i class="fas fa-arrows-turn-right"></i> Move Selected Tasks';
+                }
+                isBulkMoveInProgress = false;
+                alert('Connection error while saving tasks before move.');
+            });
+        } else {
+            doServerBulkMove();
+        }
     }
 
     function regenerateDatesPreview() {
@@ -1243,7 +1731,7 @@ include 'includes/admin_nav.php';
         } else {
             totalDays = parseInt(document.getElementById('plan-total-days').value) || 7;
             startInput = '2000-01-01';
-            var endD = new Date('2000-01-01');
+            var endD = new Date(2000, 0, 1);
             endD.setDate(endD.getDate() + totalDays - 1);
             var yyyy = endD.getFullYear();
             var mm = String(endD.getMonth() + 1).padStart(2, '0');
@@ -1251,8 +1739,11 @@ include 'includes/admin_nav.php';
             endInput = yyyy + '-' + mm + '-' + dd;
         }
 
-        var start = new Date(startInput);
-        var end = new Date(endInput);
+        var startParts = startInput.split('-');
+        var endParts = endInput.split('-');
+        var start = new Date(parseInt(startParts[0]), parseInt(startParts[1]) - 1, parseInt(startParts[2]));
+        var end = new Date(parseInt(endParts[0]), parseInt(endParts[1]) - 1, parseInt(endParts[2]));
+
         var wrapper = document.getElementById('activities-dates-wrapper');
         wrapper.innerHTML = '';
 
@@ -1276,8 +1767,19 @@ include 'includes/admin_nav.php';
 
             var dayHeader = document.createElement('div');
             dayHeader.className = 'day-header';
-            dayHeader.innerHTML = '<span><i class="fas fa-calendar-day" style="color:var(--accent);"></i> ' + dayLabel + '</span>' +
-                                  '<button class="btn btn-sm btn-secondary" style="padding:2px 8px; font-size:0.72rem;" onclick="addActivityToDate(\'' + dateStr + '\', ' + dayNum + ')"><i class="fas fa-plus"></i> Add Item</button>';
+            dayHeader.style = 'display:flex; justify-content:space-between; align-items:center;';
+            if (isReadOnlyMode) {
+                dayHeader.innerHTML = '<div style="display:flex; align-items:center; gap:8px;">' +
+                                          '<span><i class="fas fa-calendar-day" style="color:var(--accent);"></i> ' + dayLabel + '</span>' +
+                                      '</div>' +
+                                      '<span style="font-size:0.75rem; color:#94a3b8; font-style:italic;"><i class="fas fa-lock"></i> Read-only</span>';
+            } else {
+                dayHeader.innerHTML = '<div style="display:flex; align-items:center; gap:8px;">' +
+                                          '<input type="checkbox" class="day-select-all-cb" data-date="' + dateStr + '" data-day="' + dayNum + '" onchange="toggleSelectDayTasks(\'' + dateStr + '\', ' + dayNum + ', this.checked)" style="width:15px; height:15px; cursor:pointer; accent-color:#3b82f6;" title="Select all tasks on this day">' +
+                                          '<span><i class="fas fa-calendar-day" style="color:var(--accent);"></i> ' + dayLabel + '</span>' +
+                                      '</div>' +
+                                      '<button class="btn btn-sm btn-secondary" style="padding:2px 8px; font-size:0.72rem;" onclick="addActivityToDate(\'' + dateStr + '\', ' + dayNum + ')"><i class="fas fa-plus"></i> Add Item</button>';
+            }
 
             var activitiesList = document.createElement('div');
             activitiesList.className = 'activities-list';
@@ -1292,9 +1794,12 @@ include 'includes/admin_nav.php';
             // Initialize SortableJS drag and drop
             new Sortable(activitiesList, {
                 group: 'activities-shared',
+                disabled: isReadOnlyMode,
                 animation: 150,
                 onEnd: function (evt) {
-                    reindexSortOrder();
+                    if (!isReadOnlyMode) {
+                        reindexSortOrder();
+                    }
                 }
             });
 
@@ -1311,57 +1816,123 @@ include 'includes/admin_nav.php';
         // Clear all days
         document.querySelectorAll('.activities-list').forEach(l => l.innerHTML = '');
 
+        var isDateWise = document.getElementById('type-date-wise').checked;
+
+        // Group activities by target bucket without mutating activities array
+        var buckets = {};
         activities.forEach(function(act, index) {
-            var targetList = document.getElementById('list-' + act.activity_date);
-            if (targetList) {
-                var card = document.createElement('div');
-                card.className = 'activity-card';
-                card.setAttribute('data-index', index);
-                if (act.id) {
-                    card.setAttribute('data-activity-id', act.id);
-                }
-                if (act.activity_uid) {
-                    card.setAttribute('data-activity-uid', act.activity_uid);
-                }
-
-                var typeConf = predefinedTypes[act.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
-
-                card.innerHTML = '<div style="display:flex; align-items:center; gap:8px;">' +
-                                    '<i class="fas ' + typeConf.icon + '" style="color:' + typeConf.color + '; font-size:1.1rem; width:20px;"></i>' +
-                                    '<div>' +
-                                        '<div style="font-size:0.85rem; font-weight:700; color:var(--text-main);">' + (act.activity_title || 'Self Study') + '</div>' +
-                                        '<div style="font-size:0.75rem; color:var(--text-muted);">' + (act.topic || act.subject || 'Academics') + ' · ' + (act.chapter || 'Intro') + '</div>' +
-                                    '</div>' +
-                                 '</div>' +
-                                 '<div style="display:flex; gap:6px;">' +
-                                    '<button class="btn btn-sm btn-outline" style="padding:2px 6px;" title="Edit" onclick="editActivityRow(' + index + ')"><i class="fas fa-pencil"></i></button>' +
-                                    '<button class="btn btn-sm btn-outline" style="padding:2px 6px;" title="Clone / Duplicate" onclick="cloneActivityRow(' + index + ')"><i class="fas fa-copy"></i></button>' +
-                                    '<button class="btn btn-sm btn-soft-red" id="act-delete-btn-' + index + '" style="padding:2px 6px;" title="Delete" onclick="deleteActivityRow(' + index + ')"><i class="fas fa-trash"></i></button>' +
-                                 '</div>';
-                targetList.appendChild(card);
-            }
+            var bucketKey = isDateWise ? act.activity_date : (act.day_number ? 'day_' + act.day_number : (act.activity_date || 'day_1'));
+            if (!buckets[bucketKey]) buckets[bucketKey] = [];
+            buckets[bucketKey].push({ act: act, index: index });
         });
+
+        // Deterministically sort activities within each bucket by sort_order ASC
+        for (var key in buckets) {
+            buckets[key].sort(function(a, b) {
+                var orderA = (a.act.sort_order !== undefined && a.act.sort_order !== null) ? parseInt(a.act.sort_order) : 0;
+                var orderB = (b.act.sort_order !== undefined && b.act.sort_order !== null) ? parseInt(b.act.sort_order) : 0;
+                if (orderA !== orderB) return orderA - orderB;
+                return a.index - b.index;
+            });
+        }
+
+        // Render sorted cards into DOM
+        for (var key in buckets) {
+            buckets[key].forEach(function(item) {
+                var act = item.act;
+                var index = item.index;
+                var targetList = null;
+
+                if (isDateWise) {
+                    targetList = document.getElementById('list-' + act.activity_date);
+                } else {
+                    var dayNum = parseInt(act.day_number) || 1;
+                    targetList = document.querySelector('.activities-list[data-day="' + dayNum + '"]');
+                    if (!targetList && act.activity_date) {
+                        targetList = document.getElementById('list-' + act.activity_date);
+                    }
+                }
+
+                if (targetList) {
+                    var taskKey = act.activity_uid || act.client_key || ('idx_' + index);
+                    var isSelected = selectedTaskKeys.has(taskKey);
+
+                    var card = document.createElement('div');
+                    card.className = 'activity-card' + (isSelected ? ' selected-activity-card' : '');
+                    card.setAttribute('data-index', index);
+                    if (act.id) {
+                        card.setAttribute('data-activity-id', act.id);
+                    }
+                    if (act.activity_uid) {
+                        card.setAttribute('data-activity-uid', act.activity_uid);
+                    }
+                    if (act.client_key) {
+                        card.setAttribute('data-client-key', act.client_key);
+                    }
+
+                    var typeConf = predefinedTypes[act.activity_type] || {icon: 'fa-book-open', color: '#64748b'};
+
+                    if (isReadOnlyMode) {
+                        card.innerHTML = '<div style="display:flex; align-items:center; gap:10px; flex:1; min-width:0;">' +
+                                            '<i class="fas ' + typeConf.icon + '" style="color:' + typeConf.color + '; font-size:1.1rem; width:20px; flex-shrink:0;"></i>' +
+                                            '<div style="min-width:0; flex:1;">' +
+                                                '<div style="font-size:0.85rem; font-weight:700; color:var(--text-main); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' + escapeHtml(act.activity_title || 'Self Study') + '</div>' +
+                                                '<div style="font-size:0.75rem; color:var(--text-muted);">' + escapeHtml(act.topic || act.subject || 'Academics') + ' · ' + escapeHtml(act.chapter || 'Intro') + '</div>' +
+                                            '</div>' +
+                                         '</div>' +
+                                         '<div style="display:flex; gap:6px; flex-shrink:0; align-items:center; color:var(--text-muted); font-size:0.75rem;">' +
+                                            '<span class="badge" style="background:#f1f5f9; color:#64748b; font-size:0.72rem; padding:2px 6px;"><i class="fas fa-lock" style="font-size:0.65rem;"></i> Locked</span>' +
+                                         '</div>';
+                    } else {
+                        card.innerHTML = '<div style="display:flex; align-items:center; gap:10px; flex:1; min-width:0;">' +
+                                            '<input type="checkbox" class="activity-select-cb" data-key="' + taskKey + '" data-index="' + index + '" ' + (isSelected ? 'checked' : '') + ' onchange="toggleTaskSelection(\'' + taskKey + '\', ' + index + ', this.checked)" style="width:16px; height:16px; cursor:pointer; accent-color:#3b82f6; flex-shrink:0;">' +
+                                            '<i class="fas ' + typeConf.icon + '" style="color:' + typeConf.color + '; font-size:1.1rem; width:20px; flex-shrink:0;"></i>' +
+                                            '<div style="min-width:0; flex:1;">' +
+                                                '<div style="font-size:0.85rem; font-weight:700; color:var(--text-main); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' + escapeHtml(act.activity_title || 'Self Study') + '</div>' +
+                                                '<div style="font-size:0.75rem; color:var(--text-muted);">' + escapeHtml(act.topic || act.subject || 'Academics') + ' · ' + escapeHtml(act.chapter || 'Intro') + '</div>' +
+                                            '</div>' +
+                                         '</div>' +
+                                         '<div style="display:flex; gap:6px; flex-shrink:0;">' +
+                                            '<button class="btn btn-sm btn-outline" style="padding:2px 6px;" title="Edit" onclick="editActivityRow(' + index + ')"><i class="fas fa-pencil"></i></button>' +
+                                            '<button class="btn btn-sm btn-outline" style="padding:2px 6px;" title="Clone / Duplicate" onclick="cloneActivityRow(' + index + ')"><i class="fas fa-copy"></i></button>' +
+                                            '<button class="btn btn-sm btn-soft-red" id="act-delete-btn-' + index + '" style="padding:2px 6px;" title="Delete" onclick="deleteActivityRow(' + index + ')"><i class="fas fa-trash"></i></button>' +
+                                         '</div>';
+                    }
+                    targetList.appendChild(card);
+                }
+            });
+        }
+        updateBulkToolbar();
     }
 
     function reindexSortOrder() {
-        var updatedActivities = [];
         document.querySelectorAll('.activities-list').forEach(function(list) {
             var dateStr = list.getAttribute('data-date');
-            var dayNum = parseInt(list.getAttribute('data-day'));
+            var dayNum = parseInt(list.getAttribute('data-day')) || 1;
 
             var cards = list.querySelectorAll('.activity-card');
             cards.forEach(function(card, order) {
+                var actUid = card.getAttribute('data-activity-uid');
+                var clientKey = card.getAttribute('data-client-key');
                 var oldIndex = parseInt(card.getAttribute('data-index'));
-                var act = activities[oldIndex];
 
-                act.activity_date = dateStr;
-                act.day_number = dayNum;
-                act.sort_order = order;
-                updatedActivities.push(act);
+                var act = null;
+                if (actUid) {
+                    act = activities.find(a => a.activity_uid === actUid);
+                } else if (clientKey) {
+                    act = activities.find(a => a.client_key === clientKey);
+                } else if (!isNaN(oldIndex) && activities[oldIndex]) {
+                    act = activities[oldIndex];
+                }
+
+                if (act) {
+                    act.activity_date = dateStr;
+                    act.day_number = dayNum;
+                    act.sort_order = order;
+                }
             });
         });
 
-        activities = updatedActivities;
         renderActivitiesList();
         updateLivePreview();
         autoSaveActivities();
@@ -1384,8 +1955,10 @@ include 'includes/admin_nav.php';
 
     function editActivityRow(index) {
         var act = activities[index];
+        if (!act) return;
+
         document.getElementById('act-edit-index').value = index;
-        document.getElementById('act-edit-date').value = act.activity_date;
+        document.getElementById('act-edit-date').value = act.activity_date || '';
 
         document.getElementById('act-title').value = act.activity_title || '';
         document.getElementById('act-type').value = act.activity_type || 'Read Material';
@@ -1402,29 +1975,71 @@ include 'includes/admin_nav.php';
     function saveActivityRow() {
         var index = parseInt(document.getElementById('act-edit-index').value);
         var dateStr = document.getElementById('act-edit-date').value;
+        var isDateWise = document.getElementById('type-date-wise').checked;
 
-        var actObj = {
-            activity_date: dateStr,
-            day_number: 1,
-            sort_order: 0,
-            activity_title: document.getElementById('act-title').value,
-            activity_type: document.getElementById('act-type').value,
-            chapter: document.getElementById('act-chapter').value,
-            topic: document.getElementById('act-topic').value,
-            faculty: document.getElementById('act-faculty').value,
-            estimated_duration: parseInt(document.getElementById('act-duration').value) || 60,
-            difficulty_level: document.getElementById('act-difficulty').value,
-            resource_links: document.getElementById('act-resources').value,
-            priority: 'medium'
-        };
+        if (index >= 0 && activities[index]) {
+            // EDIT EXISTING: Strictly preserve database ID, permanent UID, client_key, day_number, and sort_order!
+            var existing = activities[index];
+            var oldDate = existing.activity_date;
 
-        if (index >= 0) {
-            // Keep permanent database ID and UID stable across edits
-            if (activities[index].id) actObj.id = activities[index].id;
-            if (activities[index].activity_uid) actObj.activity_uid = activities[index].activity_uid;
-            activities[index] = actObj;
+            existing.activity_title = document.getElementById('act-title').value;
+            existing.activity_type = document.getElementById('act-type').value;
+            existing.chapter = document.getElementById('act-chapter').value;
+            existing.topic = document.getElementById('act-topic').value;
+            existing.faculty = document.getElementById('act-faculty').value;
+            existing.estimated_duration = parseInt(document.getElementById('act-duration').value) || 60;
+            existing.difficulty_level = document.getElementById('act-difficulty').value;
+            existing.resource_links = document.getElementById('act-resources').value;
+
+            // If administrator intentionally changed the date in the edit modal:
+            if (dateStr && dateStr !== oldDate) {
+                existing.activity_date = dateStr;
+                if (isDateWise) {
+                    var listEl = document.getElementById('list-' + dateStr);
+                    if (listEl && listEl.getAttribute('data-day')) {
+                        existing.day_number = parseInt(listEl.getAttribute('data-day'));
+                    }
+                }
+                // Place at the end of the new day's sort order
+                var maxOrder = -1;
+                activities.forEach(function(a, i) {
+                    if (i !== index && a.activity_date === dateStr) {
+                        if (a.sort_order > maxOrder) maxOrder = a.sort_order;
+                    }
+                });
+                existing.sort_order = maxOrder + 1;
+            }
         } else {
-            activities.push(actObj);
+            // ADD BRAND NEW ACTIVITY: Assign client_key, correct day_number, and sort_order
+            var dayNum = 1;
+            var listEl = document.getElementById('list-' + dateStr);
+            if (listEl && listEl.getAttribute('data-day')) {
+                dayNum = parseInt(listEl.getAttribute('data-day'));
+            }
+
+            var maxOrder = -1;
+            activities.forEach(function(a) {
+                if (a.activity_date === dateStr || (!isDateWise && a.day_number === dayNum)) {
+                    if (a.sort_order > maxOrder) maxOrder = a.sort_order;
+                }
+            });
+
+            var newAct = {
+                client_key: generateClientKey(),
+                activity_date: dateStr,
+                day_number: dayNum,
+                sort_order: maxOrder + 1,
+                activity_title: document.getElementById('act-title').value,
+                activity_type: document.getElementById('act-type').value,
+                chapter: document.getElementById('act-chapter').value,
+                topic: document.getElementById('act-topic').value,
+                faculty: document.getElementById('act-faculty').value,
+                estimated_duration: parseInt(document.getElementById('act-duration').value) || 60,
+                difficulty_level: document.getElementById('act-difficulty').value,
+                resource_links: document.getElementById('act-resources').value,
+                priority: 'medium'
+            };
+            activities.push(newAct);
         }
 
         closeModal('activity-modal');
@@ -1575,14 +2190,27 @@ include 'includes/admin_nav.php';
 
     function cloneActivityRow(index) {
         var act = activities[index];
+        if (!act) return;
+
         var cloned = JSON.parse(JSON.stringify(act));
 
         // Strip out database ID and permanent UID so the clone represents a brand-new task
         delete cloned.id;
         delete cloned.activity_uid;
+        cloned.client_key = generateClientKey();
+        cloned.activity_title = (act.activity_title || 'Study Task') + ' (Copy)';
 
-        // Insert right after the original item
-        activities.splice(index + 1, 0, cloned);
+        // Position clone immediately following the original in sort order
+        cloned.sort_order = (parseInt(act.sort_order) || 0) + 1;
+
+        // Shift subsequent tasks on the same date/day by +1
+        activities.forEach(function(a) {
+            if (a !== act && a.activity_date === act.activity_date && a.sort_order >= cloned.sort_order) {
+                a.sort_order = parseInt(a.sort_order) + 1;
+            }
+        });
+
+        activities.push(cloned);
         renderActivitiesList();
         updateLivePreview();
         autoSaveActivities();
@@ -1611,8 +2239,15 @@ include 'includes/admin_nav.php';
         .then(r => r.json())
         .then(data => {
             if (data.success) {
-                // Populate parsed list
-                activities = activities.concat(data.parsed);
+                // Populate parsed list with client keys
+                if (Array.isArray(data.parsed)) {
+                    data.parsed.forEach(function(p) {
+                        if (!p.client_key && !p.activity_uid) {
+                            p.client_key = generateClientKey();
+                        }
+                    });
+                    activities = activities.concat(data.parsed);
+                }
                 closeModal('import-modal');
                 reindexSortOrder();
             } else {
@@ -1640,14 +2275,14 @@ include 'includes/admin_nav.php';
         var html = '<div style="padding:10px; border-bottom:1px solid var(--border); margin-bottom:16px; display:flex; align-items:center; gap:8px;">' +
                         '<div style="width:36px; height:36px; border-radius:50%; background:var(--accent-soft); display:flex; align-items:center; justify-content:center; color:var(--accent); font-weight:800;">P</div>' +
                         '<div>' +
-                            '<h4 style="margin:0; font-size:0.9rem; font-weight:800; color:var(--text-main);">' + title + '</h4>' +
+                            '<h4 style="margin:0; font-size:0.9rem; font-weight:800; color:var(--text-main);">' + escapeHtml(title) + '</h4>' +
                             '<small style="color:var(--text-muted); font-size:0.75rem;">PEPP Journey Plan</small>' +
                         '</div>' +
                    '</div>';
 
         if (quote) {
             html += '<div style="background:var(--accent-soft); border-left:4px solid var(--accent); padding:10px; border-radius:4px; font-style:italic; font-size:0.8rem; margin-bottom:16px; color:var(--text-main);">' +
-                        '"' + quote + '"' +
+                        '"' + escapeHtml(quote) + '"' +
                     '</div>';
         }
 
@@ -1666,13 +2301,21 @@ include 'includes/admin_nav.php';
             html += '<div class="timeline-wrapper">';
             Object.keys(grouped).forEach(function(date) {
                 var items = grouped[date];
+                // Sort items by sort_order
+                items.sort(function(a, b) {
+                    var ordA = parseInt(a.sort_order) || 0;
+                    var ordB = parseInt(b.sort_order) || 0;
+                    return ordA - ordB;
+                });
+
                 var dateLabel = date;
                 if (!isDateWise) {
                     var dayNum = (items && items[0] && items[0].day_number) ? items[0].day_number : 1;
                     dateLabel = "Day " + String(dayNum).padStart(2, '0');
                 } else {
                     try {
-                        var dObj = new Date(date);
+                        var dParts = date.split('-');
+                        var dObj = new Date(parseInt(dParts[0]), parseInt(dParts[1]) - 1, parseInt(dParts[2]));
                         dateLabel = dObj.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
                     } catch(e) {}
                 }
@@ -1691,8 +2334,8 @@ include 'includes/admin_nav.php';
                                         '<i class="fas ' + conf.icon + '" style="font-size:0.85rem;"></i>' +
                                     '</div>' +
                                     '<div>' +
-                                        '<div style="font-size:0.8rem; font-weight:700; color:var(--text-main);">' + it.activity_title + '</div>' +
-                                        '<div style="font-size:0.7rem; color:var(--text-muted);">' + (it.topic || it.subject || 'General') + ' · ' + (it.chapter || 'Academics') + '</div>' +
+                                        '<div style="font-size:0.8rem; font-weight:700; color:var(--text-main);">' + escapeHtml(it.activity_title || 'Study Task') + '</div>' +
+                                        '<div style="font-size:0.7rem; color:var(--text-muted);">' + escapeHtml(it.topic || it.subject || 'General') + ' · ' + escapeHtml(it.chapter || 'Academics') + '</div>' +
                                     '</div>' +
                                 '</div>' +
                                 '<span style="margin-left:auto; background:var(--accent-soft); border-radius:4px; font-size:0.65rem; font-weight:700; padding:2px 6px; color:var(--accent); flex-shrink:0;">' + (it.estimated_duration || 60) + 'm</span>' +
@@ -1708,6 +2351,11 @@ include 'includes/admin_nav.php';
     }
 
     function saveStudyPlan() {
+        if (isReadOnlyMode) {
+            alert('This Study Plan is locked in Read-Only mode by another administrator. Changes cannot be saved.');
+            return;
+        }
+
         var title = document.getElementById('plan-title').value;
         var year = document.getElementById('plan-year').value;
 
@@ -1732,7 +2380,7 @@ include 'includes/admin_nav.php';
         if (isDateWise) {
             endInput = document.getElementById('plan-end').value;
         } else {
-            var endD = new Date('2000-01-01');
+            var endD = new Date(2000, 0, 1);
             endD.setDate(endD.getDate() + totalDays - 1);
             var yyyy = endD.getFullYear();
             var mm = String(endD.getMonth() + 1).padStart(2, '0');
@@ -1787,9 +2435,14 @@ include 'includes/admin_nav.php';
                 .then(r2 => r2.json())
                 .then(data2 => {
                     if (data2.success) {
+                        applyServerActivityMappings(data2.activities);
                         hasUnsavedChanges = false;
                         alert('Study Plan & all schedules saved successfully!');
+                        releaseStudyPlanLock();
                         window.location.href = 'studyplans.php';
+                    } else if (data2.error_code === 'EDIT_LOCK_HELD') {
+                        enableReadOnlyMode();
+                        openModal('modal-lock-lost');
                     } else if (data2.error_code === 'STALE_STUDY_PLAN') {
                         openModal('stale-warning-modal');
                     } else if (data2.requires_assessment_confirm) {
@@ -1799,7 +2452,14 @@ include 'includes/admin_nav.php';
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ study_plan_id: newPlanId, version: studyPlanVersion, activities: activities, confirm_activity_replace: true })
                             }).then(r3 => r3.json()).then(data3 => {
-                                if (data3.success) { hasUnsavedChanges = false; alert('Study Plan & all schedules saved successfully!'); window.location.href = 'studyplans.php'; }
+                                if (data3.success) {
+                                    applyServerActivityMappings(data3.activities);
+                                    hasUnsavedChanges = false;
+                                    alert('Study Plan & all schedules saved successfully!');
+                                    releaseStudyPlanLock();
+                                    window.location.href = 'studyplans.php';
+                                }
+                                else if (data3.error_code === 'EDIT_LOCK_HELD') { enableReadOnlyMode(); openModal('modal-lock-lost'); }
                                 else if (data3.error_code === 'STALE_STUDY_PLAN') { openModal('stale-warning-modal'); }
                                 else { alert('Failed to save activities: ' + data3.message); }
                             });
@@ -1808,6 +2468,9 @@ include 'includes/admin_nav.php';
                         alert('Failed to save activities: ' + data2.message);
                     }
                 });
+            } else if (data.error_code === 'EDIT_LOCK_HELD') {
+                enableReadOnlyMode();
+                openModal('modal-lock-lost');
             } else if (data.error_code === 'STALE_STUDY_PLAN') {
                 openModal('stale-warning-modal');
             } else {
@@ -1824,11 +2487,13 @@ include 'includes/admin_nav.php';
     var hasUnsavedChanges = false;
 
     function markUnsavedChanges() {
-        hasUnsavedChanges = true;
+        if (!isReadOnlyMode) {
+            hasUnsavedChanges = true;
+        }
     }
 
     function autoSaveActivities() {
-        if (studyPlanId <= 0) {
+        if (isReadOnlyMode || isBulkMoveInProgress || studyPlanId <= 0) {
             hasUnsavedChanges = true;
             return;
         }
@@ -1857,14 +2522,10 @@ include 'includes/admin_nav.php';
                 if (data.version) {
                     studyPlanVersion = data.version;
                 }
-                // Map the newly assigned database IDs & UIDs back to the local array
-                if (data.activities && activities.length === data.activities.length) {
-                    for (var i = 0; i < activities.length; i++) {
-                        activities[i].id = data.activities[i].id;
-                        activities[i].activity_uid = data.activities[i].activity_uid;
-                    }
-                    renderActivitiesList();
-                }
+                // Safely map newly assigned database IDs & UIDs back to local activities by client_key / activity_uid (NEVER array index!)
+                applyServerActivityMappings(data.activities);
+                renderActivitiesList();
+
                 if (indicator) {
                     indicator.innerHTML = '<i class="fas fa-circle-check"></i> Changes saved';
                     indicator.style.color = '#10b981';
@@ -1874,6 +2535,14 @@ include 'includes/admin_nav.php';
                         }
                     }, 3000);
                 }
+                hasUnsavedChanges = false;
+            } else if (data.error_code === 'EDIT_LOCK_HELD') {
+                if (indicator) {
+                    indicator.innerHTML = '<i class="fas fa-lock"></i> Locked by another admin';
+                    indicator.style.color = '#ef4444';
+                }
+                enableReadOnlyMode();
+                openModal('modal-lock-lost');
                 hasUnsavedChanges = false;
             } else if (data.error_code === 'STALE_STUDY_PLAN') {
                 if (indicator) {
@@ -1893,15 +2562,13 @@ include 'includes/admin_nav.php';
                             if (d2.version) {
                                 studyPlanVersion = d2.version;
                             }
-                            if (d2.activities && activities.length === d2.activities.length) {
-                                for (var i = 0; i < activities.length; i++) {
-                                    activities[i].id = d2.activities[i].id;
-                                    activities[i].activity_uid = d2.activities[i].activity_uid;
-                                }
-                                renderActivitiesList();
-                            }
+                            applyServerActivityMappings(d2.activities);
+                            renderActivitiesList();
                             if (indicator) { indicator.innerHTML = '<i class="fas fa-circle-check"></i> Changes saved'; indicator.style.color = '#10b981'; }
                             hasUnsavedChanges = false;
+                        } else if (d2.error_code === 'EDIT_LOCK_HELD') {
+                            enableReadOnlyMode();
+                            openModal('modal-lock-lost');
                         } else if (d2.error_code === 'STALE_STUDY_PLAN') {
                             if (indicator) { indicator.innerHTML = '<i class="fas fa-triangle-exclamation"></i> Conflict: Stale Version'; indicator.style.color = '#f59e0b'; }
                             openModal('stale-warning-modal');
@@ -1928,10 +2595,90 @@ include 'includes/admin_nav.php';
         });
     }
 
+    /* ── SINGLE ADMIN EDIT LOCK LIFECYCLE ── */
+    function enableReadOnlyMode() {
+        isReadOnlyMode = true;
+
+        var saveBtn = document.querySelector('button[onclick="saveStudyPlan()"]');
+        if (saveBtn) {
+            saveBtn.disabled = true;
+            saveBtn.style.opacity = '0.5';
+            saveBtn.style.cursor = 'not-allowed';
+            saveBtn.title = 'Locked: Read-Only Mode';
+        }
+        var importBtn = document.querySelector('button[onclick="triggerImport()"]');
+        if (importBtn) {
+            importBtn.disabled = true;
+            importBtn.style.opacity = '0.5';
+            importBtn.style.cursor = 'not-allowed';
+        }
+        var bulkToolbar = document.getElementById('bulk-action-toolbar');
+        if (bulkToolbar) bulkToolbar.style.display = 'none';
+
+        var selectAllBtn = document.getElementById('select-all-tasks-btn');
+        if (selectAllBtn) selectAllBtn.style.display = 'none';
+
+        document.querySelectorAll('#tab-settings input, #tab-settings select, #tab-settings textarea').forEach(function(el) {
+            el.disabled = true;
+            el.style.opacity = '0.8';
+        });
+
+        regenerateDatesPreview();
+
+        if (lockHeartbeatTimer) {
+            clearInterval(lockHeartbeatTimer);
+            lockHeartbeatTimer = null;
+        }
+    }
+
+    function initLockHeartbeat() {
+        if (studyPlanId <= 0 || isReadOnlyMode) return;
+
+        lockHeartbeatTimer = setInterval(function() {
+            fetch('api/studyplans-api.php?action=study_plan_edit_lock_heartbeat&study_plan_id=' + encodeURIComponent(studyPlanId))
+            .then(r => r.json())
+            .then(data => {
+                if (data && data.lock_lost) {
+                    clearInterval(lockHeartbeatTimer);
+                    lockHeartbeatTimer = null;
+                    enableReadOnlyMode();
+                    openModal('modal-lock-lost');
+                }
+            })
+            .catch(err => {
+                console.warn('Edit lock heartbeat error:', err);
+            });
+        }, 30000);
+    }
+
+    function releaseStudyPlanLock() {
+        if (studyPlanId <= 0 || isReadOnlyMode || isLockReleased) return;
+        isLockReleased = true;
+
+        if (lockHeartbeatTimer) {
+            clearInterval(lockHeartbeatTimer);
+            lockHeartbeatTimer = null;
+        }
+
+        var payload = JSON.stringify({ study_plan_id: studyPlanId });
+        if (navigator.sendBeacon) {
+            var blob = new Blob([payload], { type: 'application/json' });
+            navigator.sendBeacon('api/studyplans-api.php?action=release_study_plan_edit_lock', blob);
+        } else {
+            fetch('api/studyplans-api.php?action=release_study_plan_edit_lock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: payload,
+                keepalive: true
+            });
+        }
+    }
+
     function confirmBack() {
-        if (hasUnsavedChanges) {
+        if (hasUnsavedChanges && !isReadOnlyMode) {
             openModal('exit-confirm-modal');
         } else {
+            releaseStudyPlanLock();
             window.location.href = 'studyplans.php';
         }
     }
@@ -1943,16 +2690,29 @@ include 'includes/admin_nav.php';
 
     function exitWithoutSaving() {
         hasUnsavedChanges = false;
+        releaseStudyPlanLock();
         window.location.href = 'studyplans.php';
     }
 
+    window.addEventListener('pagehide', function() {
+        releaseStudyPlanLock();
+    });
+
     window.addEventListener('beforeunload', function (e) {
-        if (hasUnsavedChanges) {
+        if (hasUnsavedChanges && !isReadOnlyMode) {
             e.preventDefault();
             e.returnValue = 'You have unsaved changes. Are you sure you want to leave without saving?';
             return e.returnValue;
         }
+        releaseStudyPlanLock();
     });
+
+    // Initialize lock handlers on page load
+    if (isReadOnlyMode) {
+        enableReadOnlyMode();
+    } else {
+        initLockHeartbeat();
+    }
 </script>
 
 <?php include 'includes/admin_footer.php'; ?>
