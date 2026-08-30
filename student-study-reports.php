@@ -3831,7 +3831,7 @@ include 'includes/admin_nav.php';
                         <span id="st-overdue-tasks-val" class="dossier-stat-val" style="color:#b91c1c;">0</span>
                     </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #3b82f6;">
-                        <span class="dossier-stat-label" style="color:#1d4ed8;">Assessment Attendance <i class="fas fa-info-circle" title="Attended assessments ÷ eligible assessments." style="cursor:help; font-size:0.75rem; opacity:0.8; margin-left:2px;"></i></span>
+                        <span class="dossier-stat-label" style="color:#1d4ed8;">Mega Test Attendance <i class="fas fa-info-circle" title="Attended mega tests ÷ eligible mega tests." style="cursor:help; font-size:0.75rem; opacity:0.8; margin-left:2px;"></i></span>
                         <span id="st-attendance-rate-val" class="dossier-stat-val" style="color:#1d4ed8;">No assessment data</span>
                     </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #8b5cf6;">
@@ -3843,7 +3843,7 @@ include 'includes/admin_nav.php';
                         <span id="st-streak-val" class="dossier-stat-val" style="color:#a16207;">🔥 0 Days</span>
                     </div>
                     <div class="dossier-stat-row" style="border-left: 3px solid #64748b;">
-                        <span class="dossier-stat-label" style="color:#475569;">Assessment Average <i class="fas fa-info-circle" title="Average score on completed assessments." style="cursor:help; font-size:0.75rem; opacity:0.8; margin-left:2px;"></i></span>
+                        <span class="dossier-stat-label" style="color:#475569;">Mega Test Average <i class="fas fa-info-circle" title="Average score on completed mega tests." style="cursor:help; font-size:0.75rem; opacity:0.8; margin-left:2px;"></i></span>
                         <span id="st-perf-score-val" class="dossier-stat-val" style="color:#475569;">No assessment data</span>
                     </div>
                 </div>
@@ -4327,12 +4327,12 @@ include 'includes/admin_nav.php';
                                     <div style="font-size:0.55rem; font-weight:800; text-transform:uppercase;">Streak</div>
                                     <strong style="font-size:0.95rem; display:block; margin-top:4px;">🔥 ${s.streak} Days</strong>
                                 </div>
-                                <div style="background:#d1fae5; border-radius:10px; padding:10px 4px; color:#047857; cursor:help;" title="Assessment Attendance (Course): Attended assessments ÷ eligible assessments across all plans in this course.">
-                                    <div style="font-size:0.55rem; font-weight:800; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Assessment Attendance</div>
+                                <div style="background:#d1fae5; border-radius:10px; padding:10px 4px; color:#047857; cursor:help;" title="Mega Test Attendance (Course): Attended mega tests ÷ eligible mega tests across all plans in this course.">
+                                    <div style="font-size:0.55rem; font-weight:800; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Mega Test Attendance</div>
                                     <strong style="font-size:0.85rem; display:block; margin-top:4px;">📊 ${s.total_sessions > 0 ? (s.attended_sessions + '/' + s.total_sessions + ' (' + s.attendance + '%)') : (s.attendance !== null ? s.attendance + '%' : 'No data')}</strong>
                                 </div>
-                                <div style="background:#e0f2fe; border-radius:10px; padding:10px 4px; color:#0369a1; cursor:help;" title="Assessment Average (Course): Average percentage score on attended assessments across all plans in this course.">
-                                    <div style="font-size:0.55rem; font-weight:800; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Assessment Average</div>
+                                <div style="background:#e0f2fe; border-radius:10px; padding:10px 4px; color:#0369a1; cursor:help;" title="Mega Test Average (Course): Average percentage score on attended mega tests across all plans in this course.">
+                                    <div style="font-size:0.55rem; font-weight:800; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Mega Test Average</div>
                                     <strong style="font-size:0.95rem; display:block; margin-top:4px;">📈 ${s.performance_pct !== null ? s.performance_pct + '%' : 'No data'}</strong>
                                 </div>
                             </div>
@@ -4377,15 +4377,15 @@ include 'includes/admin_nav.php';
                                 </div>
                             </div>
 
-                            <!-- Assessment Results Section (separate from study plan completion) -->
+                            <!-- Mega Test Results Section (separate from study plan completion) -->
                             <div class="chart-card" style="padding:1.5rem; margin-top:1.5rem;">
                                 <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.2rem; color:var(--text-main); margin-bottom:15px; border-bottom:1.5px solid var(--border); padding-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
-                                    <span><i class="fas fa-chart-column" style="color:var(--accent); margin-right:6px;"></i>Assessment Results</span>
-                                    <span style="font-size:0.75rem; color:var(--text-muted); font-weight:normal;">Published test/quiz scores</span>
+                                    <span><i class="fas fa-chart-column" style="color:var(--accent); margin-right:6px;"></i>Mega Test Results</span>
+                                    <span style="font-size:0.75rem; color:var(--text-muted); font-weight:normal;">Published mega test scores</span>
                                 </h4>
                                 <div id="std-assessment-results-container">
                                     <div style="text-align:center; padding:1rem; color:var(--text-muted); font-size:0.85rem;">
-                                        <i class="fas fa-spinner fa-spin"></i> Loading assessment results...
+                                        <i class="fas fa-spinner fa-spin"></i> Loading mega test results...
                                     </div>
                                 </div>
                             </div>
@@ -4550,7 +4550,7 @@ include 'includes/admin_nav.php';
             .then(r => r.json())
             .then(results => {
                 if (!results || results.length === 0) {
-                    container.innerHTML = `<div style="text-align:center; padding:2rem; border:2px dashed var(--border); border-radius:12px; color:var(--text-muted);"><i class="fas fa-chart-column" style="font-size:2rem; margin-bottom:8px;"></i><p style="margin:0; font-weight:700;">No Published Assessment Results</p><p style="font-size:0.75rem; margin:4px 0 0 0;">Assessment results will appear here when published by administrators.</p></div>`;
+                    container.innerHTML = `<div style="text-align:center; padding:2rem; border:2px dashed var(--border); border-radius:12px; color:var(--text-muted);"><i class="fas fa-chart-column" style="font-size:2rem; margin-bottom:8px;"></i><p style="margin:0; font-weight:700;">No Published Mega Test Results</p><p style="font-size:0.75rem; margin:4px 0 0 0;">Mega test results will appear here when published by administrators.</p></div>`;
                     return;
                 }
                 let h = '<div style="overflow-x:auto; border:1px solid var(--border); border-radius:10px;"><table style="width:100%; border-collapse:collapse; font-size:0.78rem;"><thead><tr style="background:var(--accent-soft);">';
@@ -4606,7 +4606,7 @@ include 'includes/admin_nav.php';
                 container.innerHTML = h;
             })
             .catch(err => {
-                container.innerHTML = `<div style="text-align:center; padding:1rem; color:#ef4444; font-size:0.85rem;"><i class="fas fa-circle-exclamation"></i> Failed to load assessment results.</div>`;
+                container.innerHTML = `<div style="text-align:center; padding:1rem; color:#ef4444; font-size:0.85rem;"><i class="fas fa-circle-exclamation"></i> Failed to load mega test results.</div>`;
             });
     }
 
@@ -5148,13 +5148,13 @@ include 'includes/admin_nav.php';
                     <td><span class="badge ${compPct >= 80 ? 'badge-green' : compPct >= 50 ? 'badge-blue' : 'badge-amber'}">${compPct >= 80 ? 'Strong Completion' : 'In Progress'}</span></td>
                 </tr>
                 <tr>
-                    <td><strong>Assessment Score Average</strong></td>
+                    <td><strong>Mega Test Score Average</strong></td>
                     <td>30%</td>
                     <td>${perfScore !== null ? perfScore + '%' : 'No published test (Normalized without penalty)'}</td>
                     <td><span class="badge ${perfScore !== null ? (perfScore >= 75 ? 'badge-green' : 'badge-amber') : 'badge-purple'}">${perfScore !== null ? (perfScore >= 75 ? 'Proficient' : 'Needs Review') : 'Normalized'}</span></td>
                 </tr>
                 <tr>
-                    <td><strong>Assessment Attendance Rate</strong></td>
+                    <td><strong>Mega Test Attendance Rate</strong></td>
                     <td>20%</td>
                     <td>${attRate !== null ? attRate + '%' : 'No published test (Normalized without penalty)'}</td>
                     <td><span class="badge ${attRate !== null ? (attRate >= 80 ? 'badge-green' : 'badge-amber') : 'badge-purple'}">${attRate !== null ? (attRate >= 80 ? 'Regular' : 'Irregular') : 'Normalized'}</span></td>
@@ -5208,12 +5208,12 @@ include 'includes/admin_nav.php';
         </div>
     ` : ''}
 
-    <!-- Section 5: Chapter-wise Assessment Performance -->
+    <!-- Section 5: Chapter-wise Mega Test Performance -->
     ${(a.chapter_assessments && a.chapter_assessments.length > 0) ? `
         <div class="section-card">
             <div class="section-title">
-                <span>📝 Chapter-wise Assessment Performance</span>
-                <span style="font-size:7pt; font-weight:normal; color:#64748b;">Published Tests &amp; Assessment Ranks</span>
+                <span>📝 Chapter-wise Mega Test Performance</span>
+                <span style="font-size:7pt; font-weight:normal; color:#64748b;">Published Tests &amp; Mega Test Ranks</span>
             </div>
             <table class="report-table">
                 <thead>
@@ -5223,7 +5223,7 @@ include 'includes/admin_nav.php';
                         <th style="width:14%;">Attended Tests</th>
                         <th style="width:14%;">Attendance %</th>
                         <th style="width:14%;">Average Score %</th>
-                        <th style="width:14%;">Assessment Rank</th>
+                        <th style="width:14%;">Mega Test Rank</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -5735,7 +5735,7 @@ include 'includes/admin_nav.php';
                             </div>
                             <div>
                                 <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:2px;">
-                                    <span><strong>Assessment Score Average</strong> (30% Weight)</span>
+                                    <span><strong>Mega Test Score Average</strong> (30% Weight)</span>
                                     <span>${perfScore !== null ? perfScore + '%' : 'No published test (Normalized)'}</span>
                                 </div>
                                 <div style="background:#e2e8f0; height:6px; border-radius:3px; overflow:hidden;">
@@ -5744,7 +5744,7 @@ include 'includes/admin_nav.php';
                             </div>
                             <div>
                                 <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:2px;">
-                                    <span><strong>Assessment Attendance Rate</strong> (20% Weight)</span>
+                                    <span><strong>Mega Test Attendance Rate</strong> (20% Weight)</span>
                                     <span>${attRate !== null ? attRate + '%' : 'No published test (Normalized)'}</span>
                                 </div>
                                 <div style="background:#e2e8f0; height:6px; border-radius:3px; overflow:hidden;">
@@ -5780,13 +5780,13 @@ include 'includes/admin_nav.php';
                                     <td><span class="badge ${compPct >= 80 ? 'green' : compPct >= 50 ? 'blue' : 'amber'}">${compPct >= 80 ? 'Strong' : 'In Progress'}</span></td>
                                 </tr>
                                 <tr>
-                                    <td>Assessment Score Average</td>
+                                    <td>Mega Test Score Average</td>
                                     <td>30%</td>
                                     <td>${perfScore !== null ? perfScore + '%' : 'N/A (Normalized)'}</td>
                                     <td><span class="badge ${perfScore !== null ? (perfScore >= 75 ? 'green' : 'amber') : 'gray'}">${perfScore !== null ? (perfScore >= 75 ? 'Good' : 'Needs Review') : 'Pending'}</span></td>
                                 </tr>
                                 <tr>
-                                    <td>Assessment Attendance</td>
+                                    <td>Mega Test Attendance</td>
                                     <td>20%</td>
                                     <td>${attRate !== null ? attRate + '%' : 'N/A (Normalized)'}</td>
                                     <td><span class="badge ${attRate !== null ? (attRate >= 80 ? 'green' : 'amber') : 'gray'}">${attRate !== null ? (attRate >= 80 ? 'Regular' : 'Irregular') : 'Pending'}</span></td>
@@ -5856,14 +5856,14 @@ include 'includes/admin_nav.php';
             </div>
         `;
 
-        // ── 6. CHAPTER-WISE ASSESSMENT PERFORMANCE ──
+        // ── 6. CHAPTER-WISE MEGA TEST PERFORMANCE ──
         const chapAssessments = a.chapter_assessments || [];
         if (chapAssessments.length > 0) {
             html += `
                 <div class="analytics-section-card">
                     <div class="analytics-section-header">
-                        <h5 class="analytics-section-title"><i class="fas fa-vial-circle-check" style="color:#8b5cf6;"></i> Chapter-wise Assessment Performance</h5>
-                        <span style="font-size:0.72rem; color:var(--text-muted);">Published tests &amp; competitive assessment rankings</span>
+                        <h5 class="analytics-section-title"><i class="fas fa-vial-circle-check" style="color:#8b5cf6;"></i> Chapter-wise Mega Test Performance</h5>
+                        <span style="font-size:0.72rem; color:var(--text-muted);">Published tests &amp; competitive mega test rankings</span>
                     </div>
                     <table class="analytics-accessible-table">
                         <thead>
@@ -5873,7 +5873,7 @@ include 'includes/admin_nav.php';
                                 <th>Attended Tests</th>
                                 <th>Attendance %</th>
                                 <th>Average Score %</th>
-                                <th>Assessment Rank</th>
+                                <th>Mega Test Rank</th>
                             </tr>
                         </thead>
                         <tbody>

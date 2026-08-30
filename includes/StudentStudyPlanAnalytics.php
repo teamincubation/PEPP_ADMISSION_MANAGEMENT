@@ -255,7 +255,7 @@ class StudentStudyPlanAnalytics {
         $study_plan_cohort_map = self::getStudyPlanCohortStudents($pdo, $study_plan_id, $academic_year);
         $study_plan_cohort_size = count($study_plan_cohort_map);
 
-        // Fetch real attendance and performance from assessment results linked to this plan
+        // Fetch real attendance and performance from assessment results linked to this plan (Strictly matching by registered email)
         $stmt_att = $pdo->prepare("
             SELECT ar.batch_id, ar.attendance_status, ar.score, ar.total_score,
                    arb.id as batch_table_id, arb.activity_id, arb.chapter_snapshot, act.chapter as act_chapter,
@@ -263,12 +263,12 @@ class StudentStudyPlanAnalytics {
             FROM assessment_results ar
             JOIN assessment_result_batches arb ON ar.batch_id = arb.id
             LEFT JOIN study_plan_activities act ON arb.activity_id = act.id
-            WHERE ((ar.user_id IS NOT NULL AND ar.user_id = ?) OR (ar.student_email IS NOT NULL AND LOWER(ar.student_email) = LOWER(?)))
+            WHERE LOWER(TRIM(ar.student_email)) = LOWER(TRIM(?))
               AND arb.study_plan_id = ? AND arb.status = 'published'
               AND LOWER(TRIM(arb.academic_year)) = LOWER(TRIM(?))
               AND (arb.activity_date_snapshot IS NULL OR arb.activity_date_snapshot <= ?)
         ");
-        $stmt_att->execute([$user_id, $email, $study_plan_id, $academic_year, $today]);
+        $stmt_att->execute([$email, $study_plan_id, $academic_year, $today]);
         $att_records = $stmt_att->fetchAll(PDO::FETCH_ASSOC);
 
         // Compute genuine competition ranks for all batches linked to this student and plan
@@ -304,9 +304,8 @@ class StudentStudyPlanAnalytics {
                         $cur_rank = $counter;
                         $prev_score = $res_item['score'];
                     }
-                    $match_user = (!empty($res_item['user_id']) && $res_item['user_id'] == $user_id);
-                    $match_email = (!empty($res_item['student_email']) && strcasecmp($res_item['student_email'], $email) === 0);
-                    if ($match_user || $match_email) {
+                    $match_email = (!empty($res_item['student_email']) && strcasecmp(trim($res_item['student_email']), $email) === 0);
+                    if ($match_email) {
                         $rank_display = ($denominator !== null) ? "#{$cur_rank} / {$denominator}" : "Not available";
                         $rank_badge = ($denominator !== null) ? "🏆 Rank #{$cur_rank} / {$denominator}" : "Rank: Not available";
 
@@ -587,10 +586,10 @@ class StudentStudyPlanAnalytics {
             $rank_display = null;
 
             if ($is_mega_test) {
-                if ($assess_info && $assess_info['percentage'] !== null) {
+                if ($assess_info && $assess_info['attendance_status'] === 'attended') {
                     $score_pct = $assess_info['percentage'];
                     $rank_display = $assess_info['rank_display'];
-                    $performance_display = $score_pct . '%';
+                    $performance_display = ($score_pct !== null ? $score_pct . '%' : 'Attended');
                     if ($rank_display) {
                         $performance_display .= ' (Rank ' . $rank_display . ')';
                     }
@@ -599,8 +598,8 @@ class StudentStudyPlanAnalytics {
                     $performance_display = 'Not Attempted';
                     $status_label = 'Not Attempted';
                 } else {
-                    $performance_display = 'No assessment data';
-                    $status_label = $is_completed ? 'Completed' : ($is_overdue ? 'Overdue' : 'Pending');
+                    $performance_display = 'Pending Mega Test Result';
+                    $status_label = $is_overdue ? 'Overdue' : 'Pending';
                 }
             } else {
                 // Live Session
@@ -1081,13 +1080,8 @@ class StudentStudyPlanAnalytics {
             $active_study_days = count(array_values(array_filter(array_unique(array_values($latest_dates)))));
             $consistency_pct = $total_plan_calendar_days > 0 ? min(100, round(($active_study_days / $total_plan_calendar_days) * 100, 1)) : 0.0;
 
-            // Evaluate assessments (Deduplicated by batch_id)
+            // Evaluate assessments (Deduplicated by batch_id, strictly matching registered email)
             $st_ass_map = [];
-            if ($st_uid !== '' && isset($assess_by_uid[$st_uid])) {
-                foreach ($assess_by_uid[$st_uid] as $bid => $ass_rec) {
-                    $st_ass_map[$bid] = $ass_rec;
-                }
-            }
             if (isset($assess_by_email[$st_email])) {
                 foreach ($assess_by_email[$st_email] as $bid => $ass_rec) {
                     $st_ass_map[$bid] = $ass_rec;
@@ -1626,13 +1620,13 @@ class StudentStudyPlanAnalytics {
         $active_study_days = count($completed_dates);
         $consistency_percentage = $total_plan_calendar_days > 0 ? min(100, round(($active_study_days / $total_plan_calendar_days) * 100)) : 0;
 
-        // Real attendance from assessment results
+        // Real attendance from assessment results (strictly matching registered email)
         $plan_id_placeholders = !empty($plan_ids) ? implode(',', array_map('intval', $plan_ids)) : '0';
         $stmt_att = $pdo->prepare("
             SELECT ar.batch_id, ar.attendance_status
             FROM assessment_results ar
             JOIN assessment_result_batches arb ON ar.batch_id = arb.id
-            WHERE ((ar.user_id IS NOT NULL AND ar.user_id = ?) OR (ar.student_email IS NOT NULL AND LOWER(ar.student_email) = LOWER(?)))
+            WHERE (ar.student_email IS NOT NULL AND LOWER(TRIM(ar.student_email)) = LOWER(TRIM(?)))
               AND arb.status = 'published'
               AND LOWER(TRIM(arb.academic_year)) = LOWER(TRIM(?))
               AND (
@@ -1649,7 +1643,7 @@ class StudentStudyPlanAnalytics {
               )
               AND (arb.activity_date_snapshot IS NULL OR arb.activity_date_snapshot <= ?)
         ");
-        $stmt_att->execute([$user_id, $email, $user['pepp_academic_year'], $course_name, $today]);
+        $stmt_att->execute([$email, $user['pepp_academic_year'], $course_name, $today]);
         $att_records = $stmt_att->fetchAll(PDO::FETCH_ASSOC);
 
         $unique_att = [];
@@ -1669,12 +1663,12 @@ class StudentStudyPlanAnalytics {
         }
         $attendance_rate = $total_sessions > 0 ? round(($attended_sessions / $total_sessions) * 100) : null;
 
-        // Real performance from assessment results
+        // Real performance from assessment results (strictly matching registered email)
         $stmt_perf = $pdo->prepare("
             SELECT ar.batch_id, ar.score, ar.total_score
             FROM assessment_results ar
             JOIN assessment_result_batches arb ON ar.batch_id = arb.id
-            WHERE ((ar.user_id IS NOT NULL AND ar.user_id = ?) OR (ar.student_email IS NOT NULL AND LOWER(ar.student_email) = LOWER(?)))
+            WHERE (ar.student_email IS NOT NULL AND LOWER(TRIM(ar.student_email)) = LOWER(TRIM(?)))
               AND arb.status = 'published'
               AND LOWER(TRIM(arb.academic_year)) = LOWER(TRIM(?))
               AND (
@@ -1692,7 +1686,7 @@ class StudentStudyPlanAnalytics {
               AND ar.attendance_status = 'attended' AND ar.score IS NOT NULL AND ar.total_score > 0
               AND (arb.activity_date_snapshot IS NULL OR arb.activity_date_snapshot <= ?)
         ");
-        $stmt_perf->execute([$user_id, $email, $user['pepp_academic_year'], $course_name, $today]);
+        $stmt_perf->execute([$email, $user['pepp_academic_year'], $course_name, $today]);
         $perf_records = $stmt_perf->fetchAll(PDO::FETCH_ASSOC);
 
         $unique_perf = [];
@@ -2018,9 +2012,8 @@ class StudentStudyPlanAnalytics {
             $logs_by_student[$semail][] = $log;
         }
 
-        // Fetch all assessment results in bulk for these students
-        $id_clause = !empty($student_ids) ? "ar.user_id IN (" . implode(',', array_fill(0, count($student_ids), '?')) . ")" : "1=0";
-        $email_clause = !empty($student_emails) ? "LOWER(ar.student_email) IN (" . implode(',', array_fill(0, count($student_emails), '?')) . ")" : "1=0";
+        // Fetch all assessment results in bulk for these students (strictly matching registered email)
+        $email_clause = !empty($student_emails) ? "LOWER(TRIM(ar.student_email)) IN (" . implode(',', array_fill(0, count($student_emails), '?')) . ")" : "1=0";
 
         $sql_assessments = "
             SELECT ar.batch_id, ar.student_email, ar.user_id, ar.attendance_status, ar.score, ar.total_score,
@@ -2041,22 +2034,15 @@ class StudentStudyPlanAnalytics {
                   )
               )
               AND (arb.activity_date_snapshot IS NULL OR arb.activity_date_snapshot <= ?)
-              AND (
-                  ($id_clause)
-                  OR ($email_clause)
-              )
+              AND ($email_clause)
         ";
-        $params_assessments = array_merge([$course_name, $today], $student_ids, $student_emails);
+        $params_assessments = array_merge([$course_name, $today], $student_emails);
         $stmt_assessments = $pdo->prepare($sql_assessments);
         $stmt_assessments->execute($params_assessments);
         $all_assessments = $stmt_assessments->fetchAll(PDO::FETCH_ASSOC);
 
-        $assessments_by_student_id = [];
         $assessments_by_student_email = [];
         foreach ($all_assessments as $ass) {
-            if (!empty($ass['user_id'])) {
-                $assessments_by_student_id[$ass['user_id']][] = $ass;
-            }
             if (!empty($ass['student_email'])) {
                 $assessments_by_student_email[strtolower(trim($ass['student_email']))][] = $ass;
             }
@@ -2162,11 +2148,6 @@ class StudentStudyPlanAnalytics {
             $consistency_percentage = $total_plan_calendar_days > 0 ? min(100, round(($active_study_days / $total_plan_calendar_days) * 100)) : 0;
 
             $matched_assessments = [];
-            if ($user_id !== '' && isset($assessments_by_student_id[$user_id])) {
-                foreach ($assessments_by_student_id[$user_id] as $ass) {
-                    $matched_assessments[$ass['batch_id']] = $ass;
-                }
-            }
             if (isset($assessments_by_student_email[$email])) {
                 foreach ($assessments_by_student_email[$email] as $ass) {
                     $matched_assessments[$ass['batch_id']] = $ass;

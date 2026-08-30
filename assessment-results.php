@@ -23,8 +23,8 @@ if ($is_cards_lookup) {
 }
 
 $active_page = 'assessment-results';
-$page_title  = 'Assessment Results';
-$page_sub    = 'Upload, validate, and publish student test/quiz results';
+$page_title  = 'Mega Test Results';
+$page_sub    = 'Upload, validate, and publish student mega test results';
 
 if (!function_exists('ar_esc')) {
     function ar_esc($v) { return htmlspecialchars((string)($v ?? ''), ENT_QUOTES, 'UTF-8'); }
@@ -1168,7 +1168,7 @@ include 'includes/admin_nav.php';
 
 <!-- Upload Wizard -->
 <div class="ar-wizard" id="ar-wizard">
-    <h3><i class="fas fa-cloud-arrow-up"></i> Upload Assessment Results</h3>
+    <h3><i class="fas fa-cloud-arrow-up"></i> Upload Mega Test Results</h3>
     <div class="ar-steps" id="ar-steps">
         <div class="ar-step active" data-step="1"><span class="num">1</span> Academic Year</div>
         <span class="ar-step-arrow"><i class="fas fa-chevron-right"></i></span>
@@ -1200,7 +1200,7 @@ include 'includes/admin_nav.php';
 
     <!-- Test Selection Grid -->
     <div id="ar-tests-container" style="display:none">
-        <label style="font-size:.82rem;font-weight:700;margin-bottom:8px;display:block">Select Test / Assessment Activity</label>
+        <label style="font-size:.82rem;font-weight:700;margin-bottom:8px;display:block">Select Mega Test Activity</label>
         <div class="ar-test-grid" id="ar-tests-grid"></div>
     </div>
 
@@ -1247,7 +1247,7 @@ include 'includes/admin_nav.php';
 <div class="ar-modal-backdrop" id="ar-detail-modal">
     <div class="ar-modal large">
         <div class="ar-modal-head">
-            <h3><i class="fas fa-chart-bar" style="color:var(--accent)"></i> <span id="ar-detail-title">Test Result Details</span></h3>
+            <h3><i class="fas fa-chart-bar" style="color:var(--accent)"></i> <span id="ar-detail-title">Mega Test Result Details</span></h3>
             <button class="ar-modal-close" onclick="arCloseModal('ar-detail-modal')"><i class="fas fa-xmark"></i></button>
         </div>
         <div class="ar-modal-body" id="ar-detail-body">
@@ -1284,7 +1284,7 @@ include 'includes/admin_nav.php';
 <div class="ar-mgmt-section">
     <div class="ar-mgmt-header">
         <h3 style="font-family:'Space Grotesk',sans-serif;font-weight:700;display:flex;align-items:center;gap:8px">
-            <i class="fas fa-table-list" style="color:var(--accent)"></i> Published Results
+            <i class="fas fa-table-list" style="color:var(--accent)"></i> Published Mega Test Results
         </h3>
         <div class="ar-filters">
             <select id="ar-mgmt-year" onchange="arLoadBatches()">
@@ -1299,7 +1299,7 @@ include 'includes/admin_nav.php';
         </div>
     </div>
     <div id="ar-mgmt-table-wrap">
-        <div class="ar-empty"><i class="fas fa-inbox"></i><p>Select filters or upload results to see published assessments here.</p></div>
+        <div class="ar-empty"><i class="fas fa-inbox"></i><p>Select filters or upload results to see published mega tests here.</p></div>
     </div>
 </div>
 

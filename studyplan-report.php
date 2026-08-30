@@ -230,94 +230,228 @@ if ($total_live_sessions > 0) {
 }
 $live_att_pct = $total_live_sessions > 0 ? round(($attended_live_sessions / $total_live_sessions) * 100) : 100;
 
-// Assessment Results for THIS Study Plan
-$stmt_individual_assessments = $pdo->prepare("
-    SELECT 
-        ar.id, ar.batch_id, ar.score, ar.total_score, ar.attendance_status,
-        arb.activity_title_snapshot, arb.activity_type_snapshot, arb.activity_date_snapshot, arb.chapter_snapshot,
-        act.activity_title, act.activity_type, act.activity_date, act.chapter
-    FROM assessment_results ar
-    JOIN assessment_result_batches arb ON ar.batch_id = arb.id
-    LEFT JOIN study_plan_activities act ON arb.activity_id = act.id
-    WHERE ((ar.user_id IS NOT NULL AND ar.user_id = ?) OR (ar.student_email IS NOT NULL AND LOWER(ar.student_email) = LOWER(?)))
-      AND arb.study_plan_id = ?
-      AND arb.status = 'published'
-    ORDER BY COALESCE(arb.activity_date_snapshot, act.activity_date, '1970-01-01') ASC, arb.id ASC
-");
-$stmt_individual_assessments->execute([$user_id, $email, $study_plan_id]);
-$raw_assessment_rows = $stmt_individual_assessments->fetchAll(PDO::FETCH_ASSOC);
-
-// Count total tests defined in study plan
-$stmt_plan_tests = $pdo->prepare("
-    SELECT COUNT(*)
+// ── TEST & MEGA TEST ATTENDANCE CALCULATION ──
+// 1. Fetch all defined test activities for this Study Plan
+$stmt_all_tests = $pdo->prepare("
+    SELECT id, activity_uid, activity_title, activity_type, activity_date, chapter, day_number
     FROM study_plan_activities
     WHERE study_plan_id = ? AND is_deleted = 0
       AND (
         LOWER(activity_type) LIKE '%test%' OR 
         LOWER(activity_type) LIKE '%exam%' OR 
-        LOWER(activity_type) LIKE '%assessment%'
+        LOWER(activity_type) LIKE '%assessment%' OR 
+        LOWER(activity_type) LIKE '%quiz%' OR
+        LOWER(activity_title) LIKE '%mega test%' OR
+        LOWER(activity_title) LIKE '%mock test%' OR
+        LOWER(activity_title) LIKE '%practice test%'
       )
+    ORDER BY day_number ASC, id ASC
 ");
-$stmt_plan_tests->execute([$study_plan_id]);
-$total_defined_tests = (int)$stmt_plan_tests->fetchColumn();
+$stmt_all_tests->execute([$study_plan_id]);
+$plan_test_activities = $stmt_all_tests->fetchAll(PDO::FETCH_ASSOC);
 
-$tests_published = count($raw_assessment_rows);
-$total_tests = max($total_defined_tests, $tests_published);
+// 2. Fetch published Mega Test result batches and results for this student (Strictly matching by registered email)
+$stmt_individual_assessments = $pdo->prepare("
+    SELECT 
+        ar.id, ar.batch_id, ar.score, ar.total_score, ar.attendance_status, ar.student_email,
+        arb.id as batch_table_id, arb.activity_id,
+        arb.activity_title_snapshot, arb.activity_type_snapshot, arb.activity_date_snapshot, arb.chapter_snapshot,
+        act.activity_title, act.activity_type, act.activity_date, act.chapter
+    FROM assessment_results ar
+    JOIN assessment_result_batches arb ON ar.batch_id = arb.id
+    LEFT JOIN study_plan_activities act ON arb.activity_id = act.id
+    WHERE LOWER(TRIM(ar.student_email)) = LOWER(TRIM(?))
+      AND arb.study_plan_id = ?
+      AND arb.status = 'published'
+    ORDER BY COALESCE(arb.activity_date_snapshot, act.activity_date, '1970-01-01') ASC, arb.id ASC
+");
+$stmt_individual_assessments->execute([$email, $study_plan_id]);
+$raw_assessment_rows = $stmt_individual_assessments->fetchAll(PDO::FETCH_ASSOC);
+
+// 3. Fetch completion logs from study_plan_analytics for this student
+$stmt_test_logs = $pdo->prepare("
+    SELECT activity_id, activity_uid, completion_status
+    FROM study_plan_analytics
+    WHERE LOWER(TRIM(student_email)) = LOWER(TRIM(?)) AND study_plan_id = ? AND action_type = 'complete_activity'
+    ORDER BY id ASC
+");
+$stmt_test_logs->execute([$email, $study_plan_id]);
+$test_logs = $stmt_test_logs->fetchAll(PDO::FETCH_ASSOC);
+$effective_test_completions = [];
+foreach ($test_logs as $tlog) {
+    $k = !empty($tlog['activity_uid']) ? $tlog['activity_uid'] : 'id_' . $tlog['activity_id'];
+    $effective_test_completions[$k] = $tlog['completion_status'];
+    if (!empty($tlog['activity_id'])) {
+        $effective_test_completions['id_' . $tlog['activity_id']] = $tlog['completion_status'];
+    }
+}
+
+$mega_results_by_act_id = [];
+$mega_results_by_batch_id = [];
+foreach ($raw_assessment_rows as $ass_row) {
+    if (!empty($ass_row['activity_id'])) {
+        $mega_results_by_act_id[(int)$ass_row['activity_id']] = $ass_row;
+    }
+    $mega_results_by_batch_id[(int)$ass_row['batch_id']] = $ass_row;
+}
+
+$total_tests = 0;
 $tests_attended = 0;
 $assessment_scores_list = [];
 $score_percentages = [];
+$accounted_batch_ids = [];
 
-foreach ($raw_assessment_rows as $ass_row) {
-    $att_status = $ass_row['attendance_status'] ?? 'attended';
-    $title = $ass_row['activity_title_snapshot'] ?: ($ass_row['activity_title'] ?: 'Assessment');
-    $date_raw = $ass_row['activity_date_snapshot'] ?: ($ass_row['activity_date'] ?: null);
-    $date_formatted = $date_raw ? date('d M Y', strtotime($date_raw)) : 'Scheduled';
-    
-    $score = $ass_row['score'] !== null ? (float)$ass_row['score'] : null;
-    $total_sc = $ass_row['total_score'] !== null ? (float)$ass_row['total_score'] : 100;
-    
-    $score_pct = null;
-    $perf_badge = 'Pending';
-    $perf_color = '#64748b';
-    
-    if ($att_status === 'attended') {
-        $tests_attended++;
-        if ($score !== null && $total_sc > 0) {
-            $score_pct = round(($score / $total_sc) * 100);
-            $score_percentages[] = $score_pct;
-            
-            if ($score_pct >= 90) {
-                $perf_badge = 'Excellent';
-                $perf_color = '#10b981';
-            } elseif ($score_pct >= 75) {
-                $perf_badge = 'Good';
-                $perf_color = '#0284c7';
-            } elseif ($score_pct >= 50) {
-                $perf_badge = 'Average';
-                $perf_color = '#E8980C';
+foreach ($plan_test_activities as $tact) {
+    $total_tests++;
+    $tact_id = (int)$tact['id'];
+    $tact_type_lower = strtolower(trim((string)$tact['activity_type']));
+    $tact_title_lower = strtolower(trim((string)$tact['activity_title']));
+    $key_uid = !empty($tact['activity_uid']) ? $tact['activity_uid'] : 'id_' . $tact_id;
+    $is_studyplan_completed = (
+        (isset($effective_test_completions[$key_uid]) && $effective_test_completions[$key_uid] === 'completed') ||
+        (isset($effective_test_completions['id_' . $tact_id]) && $effective_test_completions['id_' . $tact_id] === 'completed')
+    );
+
+    $is_mega = (
+        in_array($tact_type_lower, ['attend mega test', 'mega test', 'mega tests'], true) ||
+        stripos($tact_type_lower, 'mega test') !== false ||
+        stripos($tact_title_lower, 'mega test') !== false
+    );
+
+    if ($is_mega) {
+        // MEGA TEST: Attendance derived EXCLUSIVELY from matching assessment_results by student email
+        $res = $mega_results_by_act_id[$tact_id] ?? null;
+        if ($res) {
+            $accounted_batch_ids[(int)$res['batch_id']] = true;
+            $att_status = $res['attendance_status'] ?? 'attended';
+            $score = $res['score'] !== null ? (float)$res['score'] : null;
+            $total_sc = $res['total_score'] !== null ? (float)$res['total_score'] : 100;
+            $title = $res['activity_title_snapshot'] ?: ($tact['activity_title'] ?: 'Mega Test');
+            $date_raw = $res['activity_date_snapshot'] ?: ($tact['activity_date'] ?: null);
+            $date_formatted = $date_raw ? date('d M Y', strtotime($date_raw)) : 'Scheduled';
+
+            $score_pct = null;
+            $perf_badge = 'Pending';
+            $perf_color = '#64748b';
+
+            if ($att_status === 'attended') {
+                $tests_attended++;
+                if ($score !== null && $total_sc > 0) {
+                    $score_pct = round(($score / $total_sc) * 100);
+                    $score_percentages[] = $score_pct;
+                    if ($score_pct >= 90) { $perf_badge = 'Excellent'; $perf_color = '#10b981'; }
+                    elseif ($score_pct >= 75) { $perf_badge = 'Good'; $perf_color = '#0284c7'; }
+                    elseif ($score_pct >= 50) { $perf_badge = 'Average'; $perf_color = '#E8980C'; }
+                    else { $perf_badge = 'Needs Improvement'; $perf_color = '#ef4444'; }
+                } else {
+                    $perf_badge = 'Attended';
+                    $perf_color = '#10b981';
+                }
             } else {
-                $perf_badge = 'Needs Improvement';
+                $perf_badge = 'Missed';
                 $perf_color = '#ef4444';
             }
+
+            $assessment_scores_list[] = [
+                'title' => $title,
+                'date' => $date_formatted,
+                'attendance' => $att_status,
+                'score' => $score,
+                'total_score' => $total_sc,
+                'percentage' => $score_pct,
+                'badge' => $perf_badge,
+                'badge_color' => $perf_color
+            ];
         } else {
-            $perf_badge = 'Attended';
-            $perf_color = '#10b981';
+            // Mega test with NO matching assessment result
+            // Checkbox in studyplan.php alone does NOT grant attendance!
+            $date_formatted = !empty($tact['activity_date']) ? date('d M Y', strtotime($tact['activity_date'])) : 'Scheduled';
+            $assessment_scores_list[] = [
+                'title' => $tact['activity_title'] ?: 'Mega Test',
+                'date' => $date_formatted,
+                'attendance' => 'pending',
+                'score' => null,
+                'total_score' => 100,
+                'percentage' => null,
+                'badge' => 'Pending',
+                'badge_color' => '#64748b'
+            ];
         }
-    } elseif ($att_status === 'not_attended') {
-        $perf_badge = 'Missed';
-        $perf_color = '#ef4444';
+    } else {
+        // PRACTICE TEST / MOCK TEST: Attendance derived EXCLUSIVELY from study_plan_analytics completion
+        $date_formatted = !empty($tact['activity_date']) ? date('d M Y', strtotime($tact['activity_date'])) : 'Scheduled';
+        if ($is_studyplan_completed) {
+            $tests_attended++;
+            $assessment_scores_list[] = [
+                'title' => $tact['activity_title'] ?: ($tact['activity_type'] ?: 'Practice Test'),
+                'date' => $date_formatted,
+                'attendance' => 'attended',
+                'score' => null,
+                'total_score' => 100,
+                'percentage' => 100,
+                'badge' => 'Completed',
+                'badge_color' => '#10b981'
+            ];
+        } else {
+            $assessment_scores_list[] = [
+                'title' => $tact['activity_title'] ?: ($tact['activity_type'] ?: 'Practice Test'),
+                'date' => $date_formatted,
+                'attendance' => 'pending',
+                'score' => null,
+                'total_score' => 100,
+                'percentage' => null,
+                'badge' => 'Pending',
+                'badge_color' => '#64748b'
+            ];
+        }
     }
-    
-    $assessment_scores_list[] = [
-        'title' => $title,
-        'date' => $date_formatted,
-        'attendance' => $att_status,
-        'score' => $score,
-        'total_score' => $total_sc,
-        'percentage' => $score_pct,
-        'badge' => $perf_badge,
-        'badge_color' => $perf_color
-    ];
+}
+
+// Add any standalone published Mega Test batches not directly mapped to a study_plan_activities id
+foreach ($raw_assessment_rows as $ass_row) {
+    $bid = (int)$ass_row['batch_id'];
+    if (!isset($accounted_batch_ids[$bid])) {
+        $total_tests++;
+        $att_status = $ass_row['attendance_status'] ?? 'attended';
+        $score = $ass_row['score'] !== null ? (float)$ass_row['score'] : null;
+        $total_sc = $ass_row['total_score'] !== null ? (float)$ass_row['total_score'] : 100;
+        $title = $ass_row['activity_title_snapshot'] ?: ($ass_row['activity_title'] ?: 'Mega Test');
+        $date_raw = $ass_row['activity_date_snapshot'] ?: ($ass_row['activity_date'] ?: null);
+        $date_formatted = $date_raw ? date('d M Y', strtotime($date_raw)) : 'Scheduled';
+
+        $score_pct = null;
+        $perf_badge = 'Pending';
+        $perf_color = '#64748b';
+
+        if ($att_status === 'attended') {
+            $tests_attended++;
+            if ($score !== null && $total_sc > 0) {
+                $score_pct = round(($score / $total_sc) * 100);
+                $score_percentages[] = $score_pct;
+                if ($score_pct >= 90) { $perf_badge = 'Excellent'; $perf_color = '#10b981'; }
+                elseif ($score_pct >= 75) { $perf_badge = 'Good'; $perf_color = '#0284c7'; }
+                elseif ($score_pct >= 50) { $perf_badge = 'Average'; $perf_color = '#E8980C'; }
+                else { $perf_badge = 'Needs Improvement'; $perf_color = '#ef4444'; }
+            } else {
+                $perf_badge = 'Attended';
+                $perf_color = '#10b981';
+            }
+        } else {
+            $perf_badge = 'Missed';
+            $perf_color = '#ef4444';
+        }
+
+        $assessment_scores_list[] = [
+            'title' => $title,
+            'date' => $date_formatted,
+            'attendance' => $att_status,
+            'score' => $score,
+            'total_score' => $total_sc,
+            'percentage' => $score_pct,
+            'badge' => $perf_badge,
+            'badge_color' => $perf_color
+        ];
+    }
 }
 
 $tests_pending = max(0, $total_tests - $tests_attended);
@@ -1494,11 +1628,11 @@ $donut_offset = $donut_c - (($donut_pct / 100) * $donut_c);
                 </div>
             </div>
 
-            <!-- Assessment Attendance -->
+            <!-- Mega Test Attendance -->
             <div class="kpi-card">
                 <div class="kpi-top">
                     <span class="kpi-icon" style="color:#0284c7;"><i class="fas fa-pen-nib"></i></span>
-                    <span>Assessment Att.</span>
+                    <span>Mega Test Att.</span>
                 </div>
                 <div class="kpi-val">
                     <?php if ($total_tests > 0): ?>
@@ -1555,10 +1689,10 @@ $donut_offset = $donut_c - (($donut_pct / 100) * $donut_c);
             </section>
         <?php endif; ?>
 
-        <!-- 6. Assessment Summary Card -->
+        <!-- 6. Mega Test Summary Card -->
         <section class="assess-summary-card">
             <div class="section-header">
-                <div class="section-title">Assessment Summary</div>
+                <div class="section-title">Mega Test Summary</div>
                 <div class="section-counter"><?php echo $tests_attended; ?> of <?php echo $total_tests; ?> Tests</div>
             </div>
 
@@ -1597,11 +1731,11 @@ $donut_offset = $donut_c - (($donut_pct / 100) * $donut_c);
             </div>
         </section>
 
-        <!-- 7. Assessment Performance Breakdown -->
+        <!-- 7. Mega Test Performance Breakdown -->
         <?php if (!empty($assessment_scores_list)): ?>
             <section class="section-card">
                 <div class="section-header">
-                    <div class="section-title">Assessment Performance</div>
+                    <div class="section-title">Mega Test Performance</div>
                     <div class="section-counter"><?php echo count($assessment_scores_list); ?> Recorded</div>
                 </div>
 

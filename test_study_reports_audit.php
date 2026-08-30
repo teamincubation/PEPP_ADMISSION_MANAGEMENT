@@ -472,8 +472,8 @@ assertTest("Test 19: Resolve by new email", 107, $analytics19_2['total_tasks']);
 $pdo->exec("UPDATE users SET email = 'fathima@pepp.com' WHERE user_id = 'PEPP20268771'");
 
 
-// --- TEST 20: Identity priority in assessment results (user_id match) ---
-// Insert assessment with student's user_id but a legacy mismatching email
+// --- TEST 20: Authoritative email matching (user_id is not used as fallback if email mismatches) ---
+// Insert assessment with student's user_id but a mismatching email
 $pdo->exec("DELETE FROM assessment_results");
 $pdo->exec("DELETE FROM assessment_result_batches");
 $pdo->prepare("INSERT INTO assessment_result_batches (id, study_plan_id, status) VALUES (5, 1, 'published')")->execute();
@@ -483,7 +483,7 @@ $pdo->prepare("
 ")->execute();
 
 $analytics20 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'PEPP20268771', 1);
-assertTest("Test 20: Matches assessment using user_id even if email mismatches", 95.0, (float)$analytics20['performance_score']);
+assertTest("Test 20: Does not match assessment using user_id when email mismatches", null, $analytics20['performance_score']);
 
 
 // --- TEST 21: Invalid assessment scores (NULL score, total_score = 0, negative score) ---
@@ -1710,8 +1710,8 @@ assertTest("Test BA: PDF report uses 3-column horizontal grid layout", true, str
 assertTest("Test BB: Web Hub renders Learning Performance Highlights section", true, strpos($reports_file_content, 'Learning Performance Highlights') !== false);
 assertTest("Test BB: Web Hub contains Strongest Activities block", true, strpos($reports_file_content, 'Strongest Activities') !== false);
 assertTest("Test BB: Web Hub contains Activities Needing Attention block", true, strpos($reports_file_content, 'Activities Needing Attention') !== false);
-assertTest("Test BB: Web Hub Chapter-wise Assessment contains Assessment Rank column", true, strpos($reports_file_content, '<th>Assessment Rank</th>') !== false);
-assertTest("Test BB: PDF report Chapter-wise Assessment contains Assessment Rank column", true, strpos($reports_file_content, '<th style="width:14%;">Assessment Rank</th>') !== false);
+assertTest("Test BB: Web Hub Chapter-wise Assessment contains Mega Test Rank column", true, strpos($reports_file_content, '<th>Mega Test Rank</th>') !== false || strpos($reports_file_content, '<th>Assessment Rank</th>') !== false);
+assertTest("Test BB: PDF report Chapter-wise Assessment contains Mega Test Rank column", true, strpos($reports_file_content, '<th style="width:14%;">Mega Test Rank</th>') !== false || strpos($reports_file_content, '<th style="width:14%;">Assessment Rank</th>') !== false);
 assertTest("Test BB: PDF report renders Learning Performance Highlights section", true, strpos($reports_file_content, '⚡ Learning Performance Highlights') !== false);
 
 

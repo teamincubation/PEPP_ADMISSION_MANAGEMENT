@@ -80,7 +80,7 @@ $GLOBALS['ADMIN_PAGES'] = [
     'employee-management' => ['Employee Management', 'fa-id-badge'],
     'student-mentoring'   => ['Student Mentoring',   'fa-people-arrows'],
     'student-study-reports' => ['Student Reports',   'fa-chart-line'],
-    'assessment-results'  => ['Assessment Results',  'fa-chart-column'],
+    'assessment-results'  => ['Mega Test Results',  'fa-chart-column'],
     'settings'      => ['Settings',                'fa-gear'],
 ];
 
