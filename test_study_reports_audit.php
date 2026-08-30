@@ -63,6 +63,7 @@ $pdo->exec("
         status TEXT,
         created_at TEXT,
         student_status TEXT,
+        college_school TEXT,
         user_photo TEXT
     );
     CREATE TABLE study_plans (
@@ -902,6 +903,17 @@ assertTest("Test G: Bulk Shaziya performance score matches individual", $shaziya
 
 // --- TEST H: Study Activity Field Simplification & Subject -> Topic Migration with Strict Chapter Protection ---
 // 1. Verify study_plan_chapters table exists and operates independently
+$pdo->exec("
+    DROP TABLE IF EXISTS study_plan_chapters;
+    CREATE TABLE study_plan_chapters (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chapter_code TEXT,
+        chapter_name TEXT NOT NULL,
+        course_id TEXT,
+        sort_order INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+");
 $pdo->prepare("INSERT INTO study_plan_chapters (id, chapter_name, sort_order, created_at) VALUES (1, 'Introduction to Psychology', 1, '2026-08-01 00:00:00')")->execute();
 $stmt_ch = $pdo->query("SELECT * FROM study_plan_chapters WHERE id = 1");
 $chap_row = $stmt_ch->fetch(PDO::FETCH_ASSOC);

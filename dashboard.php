@@ -28,38 +28,65 @@ $monthly_report = [];
 $course_report = [];
 
 try {
-    $total_students    = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE status = 'approved'")->fetchColumn();
-    $pending_approvals = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE status = 'pending'")->fetchColumn();
-    $active_courses    = (int)$pdo->query("SELECT COUNT(*) FROM pepp_courses WHERE status = 'active'")->fetchColumn();
-    $pending_payments  = (int)$pdo->query("SELECT COUNT(*) FROM instalment_details WHERE status = 'pending' AND paid_date IS NOT NULL")->fetchColumn();
-    $pending_onboarding = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE status = 'approved' AND (onboarding_status IS NULL OR onboarding_status <> 'completed')")->fetchColumn();
+    $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+    $is_mysql = ($driver === 'mysql');
 
-    // ── Collections: this month + all time ──────────────────────
-    $month_reg = (float)$pdo->query("
-        SELECT COALESCE(SUM(paid_amount), 0) FROM users
-        WHERE status = 'approved'
-          AND MONTH(paid_date) = MONTH(CURRENT_DATE()) AND YEAR(paid_date) = YEAR(CURRENT_DATE())
-    ")->fetchColumn();
-    $month_inst = (float)$pdo->query("
-        SELECT COALESCE(SUM(COALESCE(paid_amount, amount)), 0) FROM instalment_details
-        WHERE status IN ('approved','paid')
-          AND MONTH(paid_date) = MONTH(CURRENT_DATE()) AND YEAR(paid_date) = YEAR(CURRENT_DATE())
-    ")->fetchColumn();
-    $total_reg = (float)$pdo->query("SELECT COALESCE(SUM(paid_amount), 0) FROM users WHERE status = 'approved'")->fetchColumn();
-    $total_inst = (float)$pdo->query("SELECT COALESCE(SUM(COALESCE(paid_amount, amount)), 0) FROM instalment_details WHERE status IN ('approved','paid')")->fetchColumn();
+    if ($is_mysql) {
+        $u_stats = $pdo->query("
+            SELECT
+                COUNT(CASE WHEN status = 'approved' THEN 1 END) AS total_students,
+                COUNT(CASE WHEN status = 'pending' THEN 1 END) AS pending_approvals,
+                COUNT(CASE WHEN status = 'approved' AND (onboarding_status IS NULL OR onboarding_status <> 'completed') THEN 1 END) AS pending_onboarding,
+                COALESCE(SUM(CASE WHEN status = 'approved' AND MONTH(paid_date) = MONTH(CURRENT_DATE()) AND YEAR(paid_date) = YEAR(CURRENT_DATE()) THEN paid_amount ELSE 0 END), 0) AS month_reg,
+                COALESCE(SUM(CASE WHEN status = 'approved' THEN paid_amount ELSE 0 END), 0) AS total_reg,
+                COALESCE(SUM(CASE WHEN status = 'approved' AND DATE(paid_date) = CURRENT_DATE() THEN paid_amount ELSE 0 END), 0) AS today_reg
+            FROM users
+        ")->fetch(PDO::FETCH_ASSOC);
 
-    // ── Collections: today ──────────────────────────────────────
-    $today_reg = (float)$pdo->query("
-        SELECT COALESCE(SUM(paid_amount), 0) FROM users
-        WHERE status = 'approved'
-          AND DATE(paid_date) = CURRENT_DATE()
-    ")->fetchColumn();
-    $today_inst = (float)$pdo->query("
-        SELECT COALESCE(SUM(COALESCE(paid_amount, amount)), 0) FROM instalment_details
-        WHERE status IN ('approved','paid')
-          AND DATE(paid_date) = CURRENT_DATE()
-    ")->fetchColumn();
-    $today_total = $today_reg + $today_inst;
+        $inst_stats = $pdo->query("
+            SELECT
+                COUNT(CASE WHEN status = 'pending' AND paid_date IS NOT NULL THEN 1 END) AS pending_payments,
+                COALESCE(SUM(CASE WHEN status IN ('approved','paid') AND MONTH(paid_date) = MONTH(CURRENT_DATE()) AND YEAR(paid_date) = YEAR(CURRENT_DATE()) THEN COALESCE(paid_amount, amount) ELSE 0 END), 0) AS month_inst,
+                COALESCE(SUM(CASE WHEN status IN ('approved','paid') THEN COALESCE(paid_amount, amount) ELSE 0 END), 0) AS total_inst,
+                COALESCE(SUM(CASE WHEN status IN ('approved','paid') AND DATE(paid_date) = CURRENT_DATE() THEN COALESCE(paid_amount, amount) ELSE 0 END), 0) AS today_inst
+            FROM instalment_details
+        ")->fetch(PDO::FETCH_ASSOC);
+    } else {
+        $u_stats = $pdo->query("
+            SELECT
+                COUNT(CASE WHEN status = 'approved' THEN 1 END) AS total_students,
+                COUNT(CASE WHEN status = 'pending' THEN 1 END) AS pending_approvals,
+                COUNT(CASE WHEN status = 'approved' AND (onboarding_status IS NULL OR onboarding_status <> 'completed') THEN 1 END) AS pending_onboarding,
+                COALESCE(SUM(CASE WHEN status = 'approved' AND strftime('%m', paid_date) = strftime('%m', 'now') AND strftime('%Y', paid_date) = strftime('%Y', 'now') THEN paid_amount ELSE 0 END), 0) AS month_reg,
+                COALESCE(SUM(CASE WHEN status = 'approved' THEN paid_amount ELSE 0 END), 0) AS total_reg,
+                COALESCE(SUM(CASE WHEN status = 'approved' AND DATE(paid_date) = DATE('now') THEN paid_amount ELSE 0 END), 0) AS today_reg
+            FROM users
+        ")->fetch(PDO::FETCH_ASSOC);
+
+        $inst_stats = $pdo->query("
+            SELECT
+                COUNT(CASE WHEN status = 'pending' AND paid_date IS NOT NULL THEN 1 END) AS pending_payments,
+                COALESCE(SUM(CASE WHEN status IN ('approved','paid') AND strftime('%m', paid_date) = strftime('%m', 'now') AND strftime('%Y', paid_date) = strftime('%Y', 'now') THEN COALESCE(paid_amount, amount) ELSE 0 END), 0) AS month_inst,
+                COALESCE(SUM(CASE WHEN status IN ('approved','paid') THEN COALESCE(paid_amount, amount) ELSE 0 END), 0) AS total_inst,
+                COALESCE(SUM(CASE WHEN status IN ('approved','paid') AND DATE(paid_date) = DATE('now') THEN COALESCE(paid_amount, amount) ELSE 0 END), 0) AS today_inst
+            FROM instalment_details
+        ")->fetch(PDO::FETCH_ASSOC);
+    }
+
+    $total_students     = (int)($u_stats['total_students'] ?? 0);
+    $pending_approvals  = (int)($u_stats['pending_approvals'] ?? 0);
+    $pending_onboarding = (int)($u_stats['pending_onboarding'] ?? 0);
+    $month_reg          = (float)($u_stats['month_reg'] ?? 0.0);
+    $total_reg          = (float)($u_stats['total_reg'] ?? 0.0);
+    $today_reg          = (float)($u_stats['today_reg'] ?? 0.0);
+
+    $pending_payments   = (int)($inst_stats['pending_payments'] ?? 0);
+    $month_inst         = (float)($inst_stats['month_inst'] ?? 0.0);
+    $total_inst         = (float)($inst_stats['total_inst'] ?? 0.0);
+    $today_inst         = (float)($inst_stats['today_inst'] ?? 0.0);
+    $today_total        = $today_reg + $today_inst;
+
+    $active_courses     = (int)$pdo->query("SELECT COUNT(*) FROM pepp_courses WHERE status = 'active'")->fetchColumn();
 
     // ── Outstanding across active students ──────────────────────
     $outstanding_total = (float)$pdo->query("

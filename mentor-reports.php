@@ -550,73 +550,119 @@ $total_cohort_active = count($all_mentors);
 $target_calls_per_student = max(0.5, ($total_days_in_window / 30.0) * 2.0); // e.g. 2 calls/month/student
 $target_remarks_per_student = max(0.5, ($total_days_in_window / 30.0) * 1.5); // e.g. 1.5 remarks/month/student
 
+// Pre-fetch all cohort metrics in 4 optimized batch queries (eliminates N x 5 query overhead)
+$batch_assigned_counts = [];
+try {
+    $stmt_all_ass = $pdo->query("
+        SELECT msa.admin_id, COUNT(DISTINCT msa.student_user_id) AS cnt
+        FROM mentor_student_assignments msa
+        JOIN users u ON msa.student_user_id = u.user_id
+        WHERE msa.status = 'active'
+          AND u.status = 'approved'
+          AND u.student_status = 'active'
+        GROUP BY msa.admin_id
+    ");
+    while ($row_ass = $stmt_all_ass->fetch(PDO::FETCH_ASSOC)) {
+        $batch_assigned_counts[(int)$row_ass['admin_id']] = (int)$row_ass['cnt'];
+    }
+} catch (Throwable $e) {}
+
+// Batch calls in range
+$batch_mentor_calls = [];
+try {
+    $stmt_all_calls = $pdo->prepare("
+        SELECT admin_id, student_user_id, DATE(call_timestamp) AS act_date
+        FROM mentor_call_logs
+        WHERE call_timestamp BETWEEN ? AND ?
+    ");
+    $stmt_all_calls->execute([$start_datetime, $end_datetime]);
+    while ($row_c = $stmt_all_calls->fetch(PDO::FETCH_ASSOC)) {
+        $mid_key = (int)$row_c['admin_id'];
+        $batch_mentor_calls[$mid_key][] = $row_c;
+    }
+} catch (Throwable $e) {}
+
+// Batch remarks in range
+$batch_mentor_remarks = [];
+try {
+    $stmt_all_rem = $pdo->prepare("
+        SELECT admin_id, student_user_id, DATE(created_at) AS act_date
+        FROM mentor_remarks
+        WHERE created_at BETWEEN ? AND ?
+    ");
+    $stmt_all_rem->execute([$start_datetime, $end_datetime]);
+    while ($row_r = $stmt_all_rem->fetch(PDO::FETCH_ASSOC)) {
+        $mid_key = (int)$row_r['admin_id'];
+        $batch_mentor_remarks[$mid_key][] = $row_r;
+    }
+} catch (Throwable $e) {}
+
+// Batch admin activity days in range
+$batch_admin_activity_days = [];
+try {
+    $stmt_all_act_days = $pdo->prepare("
+        SELECT admin_username, DATE(created_at) AS act_date
+        FROM admin_activity_log
+        WHERE created_at BETWEEN ? AND ?
+          AND action_type IN ('login', 'call_logged', 'remark_added', 'student_assigned', 'student_updated', 'studyplan_reviewed')
+    ");
+    $stmt_all_act_days->execute([$start_datetime, $end_datetime]);
+    while ($row_a = $stmt_all_act_days->fetch(PDO::FETCH_ASSOC)) {
+        $u_key = $row_a['admin_username'];
+        if ($u_key && !empty($row_a['act_date'])) {
+            $batch_admin_activity_days[$u_key][$row_a['act_date']] = true;
+        }
+    }
+} catch (Throwable $e) {}
+
 foreach ($all_mentors as $mentor_entry) {
     $mid = (int)$mentor_entry['id'];
     $muser = $mentor_entry['username'] ?? '';
-    $m_assigned_cnt = 0;
-    $m_calls = 0;
-    $m_remarks = 0;
-    $m_contacted = 0;
-    $m_active_days = 0;
 
-    // Assigned active students (Strict Canonical Invariant: status = 'approved' AND student_status = 'active')
-    try {
-        $stmt_c_ass = $pdo->prepare("
-            SELECT COUNT(DISTINCT msa.student_user_id)
-            FROM mentor_student_assignments msa
-            JOIN users u ON msa.student_user_id = u.user_id
-            WHERE msa.admin_id = ? AND msa.status = 'active'
-              AND u.status = 'approved'
-              AND u.student_status = 'active'
-        ");
-        $stmt_c_ass->execute([$mid]);
-        $m_assigned_cnt = (int)$stmt_c_ass->fetchColumn();
-    } catch (Throwable $e) {}
+    // Assigned active students
+    $m_assigned_cnt = $batch_assigned_counts[$mid] ?? 0;
 
     // Calls in range
-    try {
-        $stmt_m_calls = $pdo->prepare("SELECT COUNT(*) FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?");
-        $stmt_m_calls->execute([$mid, $start_datetime, $end_datetime]);
-        $m_calls = (int)$stmt_m_calls->fetchColumn();
-    } catch (Throwable $e) {}
+    $calls_list = $batch_mentor_calls[$mid] ?? [];
+    $m_calls = count($calls_list);
 
     // Remarks in range
-    try {
-        $stmt_m_rem = $pdo->prepare("SELECT COUNT(*) FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?");
-        $stmt_m_rem->execute([$mid, $start_datetime, $end_datetime]);
-        $m_remarks = (int)$stmt_m_rem->fetchColumn();
-    } catch (Throwable $e) {}
+    $remarks_list = $batch_mentor_remarks[$mid] ?? [];
+    $m_remarks = count($remarks_list);
 
     // Unique students contacted in range
-    try {
-        $stmt_m_cont = $pdo->prepare("
-            SELECT COUNT(DISTINCT student_user_id) FROM (
-                SELECT student_user_id FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?
-                UNION
-                SELECT student_user_id FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?
-            ) c
-        ");
-        $stmt_m_cont->execute([$mid, $start_datetime, $end_datetime, $mid, $start_datetime, $end_datetime]);
-        $m_contacted = (int)$stmt_m_cont->fetchColumn();
-    } catch (Throwable $e) {}
+    $contacted_set = [];
+    $active_days_set = [];
+
+    foreach ($calls_list as $cl) {
+        if (!empty($cl['student_user_id'])) {
+            $contacted_set[$cl['student_user_id']] = true;
+        }
+        if (!empty($cl['act_date'])) {
+            $active_days_set[$cl['act_date']] = true;
+        }
+    }
+
+    foreach ($remarks_list as $rl) {
+        if (!empty($rl['student_user_id'])) {
+            $contacted_set[$rl['student_user_id']] = true;
+        }
+        if (!empty($rl['act_date'])) {
+            $active_days_set[$rl['act_date']] = true;
+        }
+    }
+
+    if ($muser && !empty($batch_admin_activity_days[$muser])) {
+        foreach ($batch_admin_activity_days[$muser] as $ad_date => $_flag) {
+            $active_days_set[$ad_date] = true;
+        }
+    }
+
+    $m_contacted = count($contacted_set);
+    $m_active_days = count($active_days_set);
 
     // Normalized Contact Rate
     $m_contact_rate = $m_assigned_cnt > 0 ? min(100.0, round(($m_contacted / $m_assigned_cnt) * 100, 1)) : ($m_contacted > 0 ? 100.0 : 0.0);
-
-    // Active days in range
-    try {
-        $stmt_m_days = $pdo->prepare("
-            SELECT COUNT(DISTINCT act_date) FROM (
-                SELECT DATE(call_timestamp) as act_date FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?
-                UNION
-                SELECT DATE(created_at) as act_date FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?
-                UNION
-                SELECT DATE(created_at) as act_date FROM admin_activity_log WHERE admin_username = ? AND created_at BETWEEN ? AND ? AND action_type IN ('login', 'call_logged', 'remark_added', 'student_assigned', 'student_updated', 'studyplan_reviewed')
-            ) d WHERE act_date IS NOT NULL
-        ");
-        $stmt_m_days->execute([$mid, $start_datetime, $end_datetime, $mid, $start_datetime, $end_datetime, $muser, $start_datetime, $end_datetime]);
-        $m_active_days = (int)$stmt_m_days->fetchColumn();
-    } catch (Throwable $e) {}
 
     // Fair Normalized Scoring:
     // 1. Normalized Calls (20%): Evaluates calls per active student rather than raw volume
@@ -646,8 +692,8 @@ foreach ($all_mentors as $mentor_entry) {
 
     $cohort_rankings[] = [
         'id' => $mid,
-        'username' => $mentor_entry['username'],
-        'full_name' => $mentor_entry['full_name'] ?: $mentor_entry['username'],
+        'username' => $mentor_entry['username'] ?? '',
+        'full_name' => !empty($mentor_entry['full_name']) ? $mentor_entry['full_name'] : (!empty($mentor_entry['name']) ? $mentor_entry['name'] : ($mentor_entry['username'] ?? 'Mentor')),
         'staff_photo' => $mentor_entry['staff_photo'] ?? null,
         'assigned_students' => $m_assigned_cnt,
         'calls' => $m_calls,

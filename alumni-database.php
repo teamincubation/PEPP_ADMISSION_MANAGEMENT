@@ -10,6 +10,14 @@ require_once 'includes/file_helper.php';
 $success_message = ''; $error_message = '';
 
 function check_and_update_alumni_schema($pdo) {
+    static $alumni_schema_checked = false;
+    if ($alumni_schema_checked) return;
+    $alumni_schema_checked = true;
+
+    if (defined('PEPP_DB_SCHEMA_VERSION')) {
+        return;
+    }
+
     try {
         $stmt = $pdo->query("DESCRIBE alumni");
         $existing_cols = $stmt->fetchAll(PDO::FETCH_COLUMN);

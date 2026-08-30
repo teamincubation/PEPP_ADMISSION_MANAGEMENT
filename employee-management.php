@@ -75,7 +75,7 @@ function get_employee_custom_field_columns($pdo): array {
     return $cols;
 }
 
-if (emp_tables_exist($pdo)) {
+if (emp_tables_exist($pdo) && !defined('PEPP_DB_SCHEMA_VERSION')) {
     try {
         $pdo->exec("ALTER TABLE employees MODIFY COLUMN status VARCHAR(30) NOT NULL DEFAULT 'active'");
     } catch (Exception $e) {}

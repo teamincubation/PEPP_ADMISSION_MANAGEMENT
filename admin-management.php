@@ -386,9 +386,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $admins = [];
 try {
     // Ensure self-healing columns exist in employees
-    try {
-        $pdo->exec("ALTER TABLE employees ADD COLUMN linked_at DATETIME DEFAULT NULL, ADD COLUMN linked_by VARCHAR(100) DEFAULT NULL");
-    } catch (Exception $e) {}
+    if (!defined('PEPP_DB_SCHEMA_VERSION')) {
+        try {
+            $pdo->exec("ALTER TABLE employees ADD COLUMN linked_at DATETIME DEFAULT NULL, ADD COLUMN linked_by VARCHAR(100) DEFAULT NULL");
+        } catch (Exception $e) {}
+    }
 
     $admins = $pdo->query("
         SELECT a.*,

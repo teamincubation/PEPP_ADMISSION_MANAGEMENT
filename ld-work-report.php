@@ -710,52 +710,67 @@ if ($tab === 'payments') {
             ORDER BY full_name ASC
         ")->fetchAll();
 
-        foreach ($all_interns as $intern) {
-            $stmt = $pdo->prepare("
-                SELECT SUM(tp.calculated_charge)
+        // Pre-fetch expected charges, completed payments, and pending amounts in 3 batch queries
+        $batch_expected = [];
+        try {
+            $stmt_exp = $pdo->query("
+                SELECT t.admin_username, SUM(tp.calculated_charge) AS total_charge
                 FROM ld_tasks t
                 JOIN ld_task_topics tp ON tp.task_id = t.id
-                WHERE t.admin_username = ? AND t.status = 'active'
+                WHERE t.status = 'active'
+                GROUP BY t.admin_username
             ");
-            $stmt->execute([$intern['username']]);
-            $expected = (float)($stmt->fetchColumn() ?? 0.00);
+            while ($row_exp = $stmt_exp->fetch(PDO::FETCH_ASSOC)) {
+                $batch_expected[$row_exp['admin_username']] = (float)$row_exp['total_charge'];
+            }
+        } catch (Throwable $e) {}
 
-            $stmt = $pdo->prepare("
-                SELECT SUM(paid_amount)
+        $batch_paid = [];
+        try {
+            $stmt_paid = $pdo->query("
+                SELECT intern_id, SUM(paid_amount) AS total_paid
                 FROM ld_intern_payments
-                WHERE intern_id = ? AND status = 'Completed'
+                WHERE status = 'Completed'
+                GROUP BY intern_id
             ");
-            $stmt->execute([$intern['id']]);
-            $paid = (float)($stmt->fetchColumn() ?? 0.00);
+            while ($row_paid = $stmt_paid->fetch(PDO::FETCH_ASSOC)) {
+                $batch_paid[(int)$row_paid['intern_id']] = (float)$row_paid['total_paid'];
+            }
+        } catch (Throwable $e) {}
 
-            // Pending calculation based on unpaid tasks
-            $stmt = $pdo->prepare("
-                SELECT SUM(tp.calculated_charge)
+        $batch_pending = [];
+        try {
+            $stmt_pend = $pdo->query("
+                SELECT t.admin_username, SUM(tp.calculated_charge) AS total_pending
                 FROM ld_tasks t
                 JOIN ld_task_topics tp ON tp.task_id = t.id
-                WHERE t.admin_username = ?
-                  AND t.status = 'active'
+                JOIN admins a ON a.username = t.admin_username
+                WHERE t.status = 'active'
                   AND tp.quantity IS NOT NULL
                   AND tp.quantity > 0
                   AND NOT EXISTS (
                       SELECT 1 FROM ld_intern_payments p
-                      WHERE p.intern_id = ?
+                      WHERE p.intern_id = a.id
                         AND p.status = 'Completed'
                         AND DATE(t.created_at) BETWEEN p.period_start_date AND p.period_end_date
                   )
+                GROUP BY t.admin_username
             ");
-            $stmt->execute([$intern['username'], $intern['id']]);
-            $pending = (float)($stmt->fetchColumn() ?? 0.00);
+            while ($row_pend = $stmt_pend->fetch(PDO::FETCH_ASSOC)) {
+                $batch_pending[$row_pend['admin_username']] = (float)$row_pend['total_pending'];
+            }
+        } catch (Throwable $e) {}
 
+        foreach ($all_interns as $intern) {
             $intern_payouts[] = [
                 'id' => $intern['id'],
                 'username' => $intern['username'],
                 'full_name' => $intern['full_name'],
                 'status' => $intern['status'],
                 'joining_date' => $intern['joining_date'],
-                'expected' => $expected,
-                'paid' => $paid,
-                'pending' => $pending
+                'expected' => $batch_expected[$intern['username']] ?? 0.00,
+                'paid' => $batch_paid[(int)$intern['id']] ?? 0.00,
+                'pending' => $batch_pending[$intern['username']] ?? 0.00
             ];
         }
     } catch (Exception $e) {

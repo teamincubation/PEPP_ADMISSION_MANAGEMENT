@@ -78,6 +78,80 @@ function get_activity_type_where($f_type) {
 }
 
 /**
+ * Introspect track_records column names dynamically to avoid fatal errors on mixed/legacy schemas.
+ */
+function get_track_record_info($pdo) {
+    static $info = null;
+    if ($info !== null) return $info;
+    $cols = [];
+    try {
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($driver === 'sqlite') {
+            $stmt = $pdo->query("PRAGMA table_info(track_records)");
+            if ($stmt) {
+                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $cols[strtolower($row['name'])] = true;
+                }
+            }
+        } else {
+            $stmt = $pdo->query("SHOW COLUMNS FROM track_records");
+            if ($stmt) {
+                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $cols[strtolower($row['Field'])] = true;
+                }
+            }
+        }
+    } catch (Exception $e) {}
+    $time_col = isset($cols['performed_at']) ? 'performed_at' : (isset($cols['created_at']) ? 'created_at' : null);
+    $act_col = isset($cols['action_type']) ? 'action_type' : (isset($cols['action']) ? 'action' : 'action');
+    $det_col = isset($cols['action_details']) ? 'action_details' : (isset($cols['details']) ? 'details' : 'details');
+    $perf_col = isset($cols['performed_by']) ? 'performed_by' : (isset($cols['created_by']) ? 'created_by' : 'performed_by');
+    $info = [
+        'has_table' => !empty($cols) && $time_col !== null,
+        'time_col' => $time_col,
+        'act_col' => $act_col,
+        'det_col' => $det_col,
+        'perf_col' => $perf_col
+    ];
+    return $info;
+}
+
+/**
+ * Introspect whatsapp_notifications column names dynamically.
+ */
+function get_whatsapp_notif_info($pdo) {
+    static $info = null;
+    if ($info !== null) return $info;
+    $cols = [];
+    try {
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($driver === 'sqlite') {
+            $stmt = $pdo->query("PRAGMA table_info(whatsapp_notifications)");
+            if ($stmt) {
+                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $cols[strtolower($row['name'])] = true;
+                }
+            }
+        } else {
+            $stmt = $pdo->query("SHOW COLUMNS FROM whatsapp_notifications");
+            if ($stmt) {
+                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $cols[strtolower($row['Field'])] = true;
+                }
+            }
+        }
+    } catch (Exception $e) {}
+    $time_col = isset($cols['created_at']) ? 'created_at' : (isset($cols['sent_at']) ? 'sent_at' : (isset($cols['timestamp']) ? 'timestamp' : null));
+    $sender_col = isset($cols['sent_by']) ? 'sent_by' : (isset($cols['admin_username']) ? 'admin_username' : (isset($cols['created_by']) ? 'created_by' : 'sent_by'));
+    $info = [
+        'has_table' => !empty($cols) && $time_col !== null,
+        'time_col' => $time_col,
+        'sender_col' => $sender_col
+    ];
+    return $info;
+}
+
+/**
  * Collect activity rows from all three sources, merged & sorted in PHP.
  */
 function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_session, $f_module, $f_page, $f_idle, $limit = 5000) {
@@ -145,21 +219,27 @@ function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_sess
     }
 
     // 2. Query track_records (student actions)
+    $tr_info = get_track_record_info($pdo);
     $include_track = ($f_session === '' && $f_idle !== 1 && in_array($f_type, ['', 'all_meaningful', 'student_action', 'creates', 'updates', 'deletes', 'all_activities'], true) && ($f_module === '' || $f_module === 'Students'));
-    if ($include_track && table_exists($pdo, 'track_records')) {
+    if ($include_track && $tr_info['has_table']) {
         try {
+            $t_col = $tr_info['time_col'];
+            $a_col = $tr_info['act_col'];
+            $d_col = $tr_info['det_col'];
+            $p_col = $tr_info['perf_col'];
+
             $w = ['1=1']; $p = [];
-            if ($f_admin !== '') { $w[] = "performed_by = ?"; $p[] = $f_admin; }
-            if ($f_page !== '') { $w[] = "(user_id LIKE ? OR action_type LIKE ?)"; $p[] = '%' . $f_page . '%'; $p[] = '%' . $f_page . '%'; }
-            if ($f_from !== '') { $w[] = "performed_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
-            if ($f_to !== '') { $w[] = "performed_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+            if ($f_admin !== '') { $w[] = "{$p_col} = ?"; $p[] = $f_admin; }
+            if ($f_page !== '') { $w[] = "(user_id LIKE ? OR {$a_col} LIKE ?)"; $p[] = '%' . $f_page . '%'; $p[] = '%' . $f_page . '%'; }
+            if ($f_from !== '') { $w[] = "{$t_col} >= ?"; $p[] = $f_from . ' 00:00:00'; }
+            if ($f_to !== '') { $w[] = "{$t_col} <= ?"; $p[] = $f_to . ' 23:59:59'; }
             if ($like) {
-                $w[] = "(action_details LIKE ? OR action_type LIKE ? OR user_id LIKE ?)";
+                $w[] = "({$d_col} LIKE ? OR {$a_col} LIKE ? OR user_id LIKE ?)";
                 $p[] = $like; $p[] = $like; $p[] = $like;
             }
 
-            $stmt = $pdo->prepare("SELECT id, performed_at, performed_by, action_type, action_details, user_id, latitude, longitude, metadata
-                                   FROM track_records WHERE " . implode(' AND ', $w) . " ORDER BY performed_at DESC LIMIT $limit");
+            $stmt = $pdo->prepare("SELECT id, {$t_col} AS performed_at, {$p_col} AS performed_by, {$a_col} AS action_type, {$d_col} AS action_details, user_id
+                                   FROM track_records WHERE " . implode(' AND ', $w) . " ORDER BY {$t_col} DESC LIMIT $limit");
             $stmt->execute($p);
             foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 $all[] = [
@@ -183,9 +263,9 @@ function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_sess
                     'loc' => null,
                     'user_agent' => null,
                     'student' => $r['user_id'],
-                    'lat' => $r['latitude'] ?? null,
-                    'lng' => $r['longitude'] ?? null,
-                    'meta' => $r['metadata'] ?? null,
+                    'lat' => null,
+                    'lng' => null,
+                    'meta' => null,
                     'is_heartbeat' => 0,
                     'is_idle' => 0
                 ];
@@ -194,20 +274,24 @@ function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_sess
     }
 
     // 3. Query whatsapp_notifications
+    $wa_info = get_whatsapp_notif_info($pdo);
     $include_wa = ($f_session === '' && $f_idle !== 1 && in_array($f_type, ['', 'all_meaningful', 'whatsapp', 'all_activities'], true) && ($f_module === '' || $f_module === 'Communication'));
-    if ($include_wa && table_exists($pdo, 'whatsapp_notifications')) {
+    if ($include_wa && $wa_info['has_table']) {
         try {
+            $t_col = $wa_info['time_col'];
+            $s_col = $wa_info['sender_col'];
+
             $w = ['1=1']; $p = [];
-            if ($f_admin !== '') { $w[] = "sent_by = ?"; $p[] = $f_admin; }
-            if ($f_from !== '') { $w[] = "created_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
-            if ($f_to !== '') { $w[] = "created_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+            if ($f_admin !== '') { $w[] = "{$s_col} = ?"; $p[] = $f_admin; }
+            if ($f_from !== '') { $w[] = "{$t_col} >= ?"; $p[] = $f_from . ' 00:00:00'; }
+            if ($f_to !== '') { $w[] = "{$t_col} <= ?"; $p[] = $f_to . ' 23:59:59'; }
             if ($like) {
                 $w[] = "(message LIKE ? OR student_name LIKE ? OR phone LIKE ?)";
                 $p[] = $like; $p[] = $like; $p[] = $like;
             }
 
-            $stmt = $pdo->prepare("SELECT id, created_at, sent_by, student_name, phone, message, latitude, longitude, metadata
-                                   FROM whatsapp_notifications WHERE " . implode(' AND ', $w) . " ORDER BY created_at DESC LIMIT $limit");
+            $stmt = $pdo->prepare("SELECT id, {$t_col} AS created_at, {$s_col} AS sent_by, student_name, phone, message
+                                   FROM whatsapp_notifications WHERE " . implode(' AND ', $w) . " ORDER BY {$t_col} DESC LIMIT $limit");
             $stmt->execute($p);
             foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 $detail = 'To ' . ($r['student_name'] ?: $r['phone']) . ': ' . mb_substr((string)$r['message'], 0, 160);
@@ -232,9 +316,9 @@ function collect_activity($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_sess
                     'loc' => null,
                     'user_agent' => null,
                     'student' => null,
-                    'lat' => $r['latitude'] ?? null,
-                    'lng' => $r['longitude'] ?? null,
-                    'meta' => $r['metadata'] ?? null,
+                    'lat' => null,
+                    'lng' => null,
+                    'meta' => null,
                     'is_heartbeat' => 0,
                     'is_idle' => 0
                 ];
@@ -299,19 +383,25 @@ function get_session_headers($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_s
     }
 
     // 2. Query track_records
+    $tr_info = get_track_record_info($pdo);
     $include_track = ($f_session === '' && $f_idle !== 1 && in_array($f_type, ['', 'all_meaningful', 'student_action', 'creates', 'updates', 'deletes', 'all_activities'], true) && ($f_module === '' || $f_module === 'Students'));
-    if ($include_track && table_exists($pdo, 'track_records')) {
+    if ($include_track && $tr_info['has_table']) {
+        $t_col = $tr_info['time_col'];
+        $a_col = $tr_info['act_col'];
+        $d_col = $tr_info['det_col'];
+        $p_col = $tr_info['perf_col'];
+
         $w = ['1=1']; $p = [];
-        if ($f_admin !== '') { $w[] = "performed_by = ?"; $p[] = $f_admin; }
-        if ($f_page !== '') { $w[] = "(user_id LIKE ? OR action_type LIKE ?)"; $p[] = '%' . $f_page . '%'; $p[] = '%' . $f_page . '%'; }
-        if ($f_from !== '') { $w[] = "performed_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
-        if ($f_to !== '') { $w[] = "performed_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+        if ($f_admin !== '') { $w[] = "{$p_col} = ?"; $p[] = $f_admin; }
+        if ($f_page !== '') { $w[] = "(user_id LIKE ? OR {$a_col} LIKE ?)"; $p[] = '%' . $f_page . '%'; $p[] = '%' . $f_page . '%'; }
+        if ($f_from !== '') { $w[] = "{$t_col} >= ?"; $p[] = $f_from . ' 00:00:00'; }
+        if ($f_to !== '') { $w[] = "{$t_col} <= ?"; $p[] = $f_to . ' 23:59:59'; }
         if ($like) {
-            $w[] = "(action_details LIKE ? OR action_type LIKE ? OR user_id LIKE ?)";
+            $w[] = "({$d_col} LIKE ? OR {$a_col} LIKE ? OR user_id LIKE ?)";
             $p[] = $like; $p[] = $like; $p[] = $like;
         }
 
-        $sql = "SELECT MAX(performed_at) as max_time, performed_by, COUNT(*) as act_count
+        $sql = "SELECT MAX({$t_col}) as max_time, {$p_col} as performed_by, COUNT(*) as act_count
                 FROM track_records
                 WHERE " . implode(' AND ', $w);
         $stmt = $pdo->prepare($sql);
@@ -338,18 +428,22 @@ function get_session_headers($pdo, $f_admin, $f_type, $f_from, $f_to, $f_q, $f_s
     }
 
     // 3. Query whatsapp_notifications
+    $wa_info = get_whatsapp_notif_info($pdo);
     $include_wa = ($f_session === '' && $f_idle !== 1 && in_array($f_type, ['', 'all_meaningful', 'whatsapp', 'all_activities'], true) && ($f_module === '' || $f_module === 'Communication'));
-    if ($include_wa && table_exists($pdo, 'whatsapp_notifications')) {
+    if ($include_wa && $wa_info['has_table']) {
+        $t_col = $wa_info['time_col'];
+        $s_col = $wa_info['sender_col'];
+
         $w = ['1=1']; $p = [];
-        if ($f_admin !== '') { $w[] = "sent_by = ?"; $p[] = $f_admin; }
-        if ($f_from !== '') { $w[] = "created_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
-        if ($f_to !== '') { $w[] = "created_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+        if ($f_admin !== '') { $w[] = "{$s_col} = ?"; $p[] = $f_admin; }
+        if ($f_from !== '') { $w[] = "{$t_col} >= ?"; $p[] = $f_from . ' 00:00:00'; }
+        if ($f_to !== '') { $w[] = "{$t_col} <= ?"; $p[] = $f_to . ' 23:59:59'; }
         if ($like) {
             $w[] = "(message LIKE ? OR student_name LIKE ? OR phone LIKE ?)";
             $p[] = $like; $p[] = $like; $p[] = $like;
         }
 
-        $sql = "SELECT MAX(created_at) as max_time, sent_by, COUNT(*) as act_count
+        $sql = "SELECT MAX({$t_col}) as max_time, {$s_col} as sent_by, COUNT(*) as act_count
                 FROM whatsapp_notifications
                 WHERE " . implode(' AND ', $w);
         $stmt = $pdo->prepare($sql);
@@ -459,20 +553,26 @@ function fetch_session_activities($pdo, $sids, $f_admin, $f_type, $f_from, $f_to
 
     // 2. From track_records
     if ($has_legacy) {
+        $tr_info = get_track_record_info($pdo);
         $include_track = ($f_idle !== 1 && in_array($f_type, ['', 'all_meaningful', 'student_action', 'creates', 'updates', 'deletes', 'all_activities'], true) && ($f_module === '' || $f_module === 'Students'));
-        if ($include_track && table_exists($pdo, 'track_records')) {
+        if ($include_track && $tr_info['has_table']) {
+            $t_col = $tr_info['time_col'];
+            $a_col = $tr_info['act_col'];
+            $d_col = $tr_info['det_col'];
+            $p_col = $tr_info['perf_col'];
+
             $w = ['1=1']; $p = [];
-            if ($f_admin !== '') { $w[] = "performed_by = ?"; $p[] = $f_admin; }
-            if ($f_page !== '') { $w[] = "(user_id LIKE ? OR action_type LIKE ?)"; $p[] = '%' . $f_page . '%'; $p[] = '%' . $f_page . '%'; }
-            if ($f_from !== '') { $w[] = "performed_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
-            if ($f_to !== '') { $w[] = "performed_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+            if ($f_admin !== '') { $w[] = "{$p_col} = ?"; $p[] = $f_admin; }
+            if ($f_page !== '') { $w[] = "(user_id LIKE ? OR {$a_col} LIKE ?)"; $p[] = '%' . $f_page . '%'; $p[] = '%' . $f_page . '%'; }
+            if ($f_from !== '') { $w[] = "{$t_col} >= ?"; $p[] = $f_from . ' 00:00:00'; }
+            if ($f_to !== '') { $w[] = "{$t_col} <= ?"; $p[] = $f_to . ' 23:59:59'; }
             if ($like) {
-                $w[] = "(action_details LIKE ? OR action_type LIKE ? OR user_id LIKE ?)";
+                $w[] = "({$d_col} LIKE ? OR {$a_col} LIKE ? OR user_id LIKE ?)";
                 $p[] = $like; $p[] = $like; $p[] = $like;
             }
 
-            $stmt = $pdo->prepare("SELECT id, performed_at, performed_by, action_type, action_details, user_id, latitude, longitude, metadata
-                                   FROM track_records WHERE " . implode(' AND ', $w) . " ORDER BY performed_at DESC LIMIT 5000");
+            $stmt = $pdo->prepare("SELECT id, {$t_col} AS performed_at, {$p_col} AS performed_by, {$a_col} AS action_type, {$d_col} AS action_details, user_id
+                                   FROM track_records WHERE " . implode(' AND ', $w) . " ORDER BY {$t_col} DESC LIMIT 5000");
             $stmt->execute($p);
             foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 $activities['legacy_or_direct'][] = [
@@ -496,9 +596,9 @@ function fetch_session_activities($pdo, $sids, $f_admin, $f_type, $f_from, $f_to
                     'loc' => null,
                     'user_agent' => null,
                     'student' => $r['user_id'],
-                    'lat' => $r['latitude'] ?? null,
-                    'lng' => $r['longitude'] ?? null,
-                    'meta' => $r['metadata'] ?? null,
+                    'lat' => null,
+                    'lng' => null,
+                    'meta' => null,
                     'is_heartbeat' => 0,
                     'is_idle' => 0
                 ];
@@ -506,19 +606,23 @@ function fetch_session_activities($pdo, $sids, $f_admin, $f_type, $f_from, $f_to
         }
 
         // 3. From whatsapp_notifications
+        $wa_info = get_whatsapp_notif_info($pdo);
         $include_wa = ($f_idle !== 1 && in_array($f_type, ['', 'all_meaningful', 'whatsapp', 'all_activities'], true) && ($f_module === '' || $f_module === 'Communication'));
-        if ($include_wa && table_exists($pdo, 'whatsapp_notifications')) {
+        if ($include_wa && $wa_info['has_table']) {
+            $t_col = $wa_info['time_col'];
+            $s_col = $wa_info['sender_col'];
+
             $w = ['1=1']; $p = [];
-            if ($f_admin !== '') { $w[] = "sent_by = ?"; $p[] = $f_admin; }
-            if ($f_from !== '') { $w[] = "created_at >= ?"; $p[] = $f_from . ' 00:00:00'; }
-            if ($f_to !== '') { $w[] = "created_at <= ?"; $p[] = $f_to . ' 23:59:59'; }
+            if ($f_admin !== '') { $w[] = "{$s_col} = ?"; $p[] = $f_admin; }
+            if ($f_from !== '') { $w[] = "{$t_col} >= ?"; $p[] = $f_from . ' 00:00:00'; }
+            if ($f_to !== '') { $w[] = "{$t_col} <= ?"; $p[] = $f_to . ' 23:59:59'; }
             if ($like) {
                 $w[] = "(message LIKE ? OR student_name LIKE ? OR phone LIKE ?)";
                 $p[] = $like; $p[] = $like; $p[] = $like;
             }
 
-            $stmt = $pdo->prepare("SELECT id, created_at, sent_by, student_name, phone, message, latitude, longitude, metadata
-                                   FROM whatsapp_notifications WHERE " . implode(' AND ', $w) . " ORDER BY created_at DESC LIMIT 5000");
+            $stmt = $pdo->prepare("SELECT id, {$t_col} AS created_at, {$s_col} AS sent_by, student_name, phone, message
+                                   FROM whatsapp_notifications WHERE " . implode(' AND ', $w) . " ORDER BY {$t_col} DESC LIMIT 5000");
             $stmt->execute($p);
             foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 $detail = 'To ' . ($r['student_name'] ?: $r['phone']) . ': ' . mb_substr((string)$r['message'], 0, 160);
@@ -543,9 +647,9 @@ function fetch_session_activities($pdo, $sids, $f_admin, $f_type, $f_from, $f_to
                     'loc' => null,
                     'user_agent' => null,
                     'student' => null,
-                    'lat' => $r['latitude'] ?? null,
-                    'lng' => $r['longitude'] ?? null,
-                    'meta' => $r['metadata'] ?? null,
+                    'lat' => null,
+                    'lng' => null,
+                    'meta' => null,
                     'is_heartbeat' => 0,
                     'is_idle' => 0
                 ];
@@ -785,18 +889,12 @@ foreach ($paged_headers as $sid => $header) {
 
 $admin_list = [];
 try {
-    $set = [];
-    if (table_exists($pdo, 'admin_activity_log')) {
-        foreach ($pdo->query("SELECT DISTINCT admin_username FROM admin_activity_log WHERE admin_username IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $a) $set[$a] = true;
+    if (table_exists($pdo, 'admins')) {
+        $admin_list = $pdo->query("SELECT DISTINCT username FROM admins WHERE username IS NOT NULL AND username != '' ORDER BY username ASC")->fetchAll(PDO::FETCH_COLUMN);
     }
-    if (table_exists($pdo, 'track_records')) {
-        foreach ($pdo->query("SELECT DISTINCT performed_by FROM track_records WHERE performed_by IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $a) $set[$a] = true;
+    if (empty($admin_list) && table_exists($pdo, 'admin_activity_log')) {
+        $admin_list = $pdo->query("SELECT DISTINCT admin_username FROM admin_activity_log WHERE admin_username IS NOT NULL AND admin_username != '' ORDER BY admin_username ASC LIMIT 100")->fetchAll(PDO::FETCH_COLUMN);
     }
-    if (table_exists($pdo, 'whatsapp_notifications')) {
-        foreach ($pdo->query("SELECT DISTINCT sent_by FROM whatsapp_notifications WHERE sent_by IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $a) $set[$a] = true;
-    }
-    $admin_list = array_keys($set);
-    sort($admin_list);
 } catch (Exception $e) { error_log('activity admin list: ' . $e->getMessage()); }
 
 $has_filter = ($f_admin || ($f_type !== '' && $f_type !== 'all_meaningful') || $f_from || $f_to || $f_q || $f_session || $f_module || $f_page || $f_idle !== '');

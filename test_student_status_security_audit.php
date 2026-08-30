@@ -22,8 +22,7 @@ class StudentStatusSecurityTestSuite {
     private $failed = 0;
 
     public function __construct() {
-        global $pdo;
-        $this->pdo = $pdo ?: new PDO('sqlite::memory:');
+        $this->pdo = new PDO('sqlite::memory:');
         $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         if ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
             $this->pdo->sqliteCreateFunction('NOW', function() {
@@ -120,8 +119,16 @@ class StudentStatusSecurityTestSuite {
                 invoice_id INTEGER,
                 error_message TEXT,
                 retry_count INTEGER DEFAULT 0,
+                last_retry_at TEXT,
                 worker_started_at TEXT,
                 created_at TEXT,
+                updated_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                setting_name TEXT UNIQUE,
+                setting_value TEXT,
                 updated_at TEXT
             );
 

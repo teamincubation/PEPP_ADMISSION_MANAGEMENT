@@ -59,41 +59,11 @@ if (!function_exists('time_ago')) {
     }
 }
 
-// Nominatim reverse geocode helper
+// Reverse geocode helper - non-blocking to prevent page load freezing
 if (!function_exists('reverse_geocode_nominatim')) {
     function reverse_geocode_nominatim($lat, $lon) {
-        $lat = trim((string)$lat);
-        $lon = trim((string)$lon);
-        if (empty($lat) || empty($lon)) return '';
-
-        $url = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=" . urlencode($lat) . "&lon=" . urlencode($lon) . "&zoom=14";
-
-        $opts = [
-            'http' => [
-                'method' => "GET",
-                'header' => "User-Agent: PEPPLearningAnalyticsDashboard/1.0 (support@pepplearning.in)\r\n",
-                'timeout' => 3
-            ]
-        ];
-        $context = stream_context_create($opts);
-        $res = @file_get_contents($url, false, $context);
-        if ($res) {
-            $data = json_decode($res, true);
-            if (!empty($data['address'])) {
-                $addr = $data['address'];
-                $place = $addr['suburb'] ?? $addr['neighbourhood'] ?? $addr['village'] ?? $addr['town'] ?? $addr['city'] ?? $addr['county'] ?? $addr['state'] ?? '';
-                if (!empty($place)) {
-                    $region = $addr['state'] ?? $addr['country'] ?? '';
-                    if (!empty($region) && strcasecmp($place, $region) !== 0) {
-                        return $place . ', ' . $region;
-                    }
-                    return $place;
-                }
-            }
-            if (!empty($data['display_name'])) {
-                return $data['display_name'];
-            }
-        }
+        // Return empty during synchronous web requests so page rendering is instantaneous
+        // Geolocation display utilizes pre-stored resolved_place, last_visit_location or client-side resolution
         return '';
     }
 }
@@ -1970,20 +1940,13 @@ if (isset($_GET['action'])) {
                             $lat_val = $act['latitude'] ?? '';
                             $lng_val = $act['longitude'] ?? '';
                             if (!empty($lat_val) && !empty($lng_val)) {
-                                // Resolve place using OpenStreetMap Nominatim and cache it in the database column
+                                // Resolve place from database columns without blocking external calls
                                 $live_place = trim($act['resolved_place'] ?? '');
                                 if (empty($live_place)) {
-                                    $live_place = reverse_geocode_nominatim($lat_val, $lng_val);
-                                    if (!empty($live_place) && in_array('resolved_place', $anal_cols)) {
-                                        // Save resolved place back to study_plan_analytics table
-                                        try {
-                                            $stmt_upd = $pdo->prepare("UPDATE study_plan_analytics SET resolved_place = ? WHERE id = ?");
-                                            $stmt_upd->execute([$live_place, $act['id']]);
-                                        } catch (Exception $ex) {}
-                                    }
-                                }
-                                if (empty($live_place)) {
                                     $live_place = trim($r['last_visit_location'] ?? '');
+                                }
+                                if (empty($live_place) && !empty($reg_place)) {
+                                    $live_place = $reg_place;
                                 }
                                 if (empty($live_place)) {
                                     $live_place = 'Unknown Location';

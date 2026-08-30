@@ -44,37 +44,96 @@ if (isset($_GET['action']) && $_GET['action'] === 'toggle_completion') {
         $query = "
             SELECT id, created_at
             FROM study_plan_analytics
-            WHERE student_email = ? AND study_plan_id = ? AND activity_uid = ?
-              AND action_type = 'complete_activity' AND completion_status = 'completed'
+            WHERE student_email = ? AND study_plan_id = ? AND (
+                activity_uid = ? OR (activity_uid IS NULL AND activity_id = ?)
+            )
+            AND action_type = 'complete_activity' AND completion_status = 'completed'
             LIMIT 1
         ";
         $stmt_dup = $pdo->prepare($query);
-        $stmt_dup->execute([$email, $plan_id, $act['activity_uid']]);
+        $stmt_dup->execute([$email, $plan_id, $act['activity_uid'], $activity_id]);
         $existing = $stmt_dup->fetch(PDO::FETCH_ASSOC);
 
         if ($existing) {
             $pdo->rollBack();
-            echo json_encode(['success' => true, 'already_completed' => true, 'completed_at' => $existing['created_at']]);
+            $completed_ts = !empty($existing['created_at']) ? date('d M Y, h:i A', strtotime($existing['created_at'])) : date('d M Y, h:i A');
+            echo json_encode([
+                'success' => true,
+                'completed' => true,
+                'already_completed' => true,
+                'timestamp' => $completed_ts,
+                'completed_at' => $existing['created_at']
+            ]);
             exit();
         }
 
-        $stmt = $pdo->prepare("
-            INSERT INTO study_plan_analytics
-            (study_plan_id, student_email, activity_uid, action_type, completion_status, ip_address, user_agent, latitude, longitude, created_at)
-            VALUES (?, ?, ?, 'complete_activity', 'completed', ?, ?, ?, ?, NOW())
-        ");
-        $stmt->execute([
-            $plan_id,
-            $email,
-            $act['activity_uid'],
-            $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1',
-            $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown',
-            $latitude,
-            $longitude
-        ]);
+        // Discover available columns in study_plan_analytics to prevent any schema mismatch errors
+        $spa_cols = [];
+        try {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $cols_raw = $pdo->query("PRAGMA table_info(study_plan_analytics)")->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($cols_raw as $c) {
+                    $spa_cols[strtolower($c['name'])] = true;
+                }
+            } else {
+                $cols_raw = $pdo->query("SHOW COLUMNS FROM study_plan_analytics")->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($cols_raw as $c) {
+                    $spa_cols[strtolower($c['Field'])] = true;
+                }
+            }
+        } catch (Throwable $e) {
+            $spa_cols = [
+                'study_plan_id' => true,
+                'student_email' => true,
+                'activity_id' => true,
+                'activity_uid' => true,
+                'action_type' => true,
+                'completion_status' => true,
+                'created_at' => true
+            ];
+        }
+
+        $insert_data = [
+            'study_plan_id' => $plan_id,
+            'student_email' => $email,
+            'action_type' => 'complete_activity',
+            'completion_status' => 'completed'
+        ];
+        if (isset($spa_cols['activity_id'])) {
+            $insert_data['activity_id'] = $act['id'] ?? $activity_id;
+        }
+        if (isset($spa_cols['activity_uid'])) {
+            $insert_data['activity_uid'] = $act['activity_uid'];
+        }
+        if (isset($spa_cols['ip_address'])) {
+            $insert_data['ip_address'] = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+        }
+        if (isset($spa_cols['latitude']) && $latitude !== null) {
+            $insert_data['latitude'] = $latitude;
+        }
+        if (isset($spa_cols['longitude']) && $longitude !== null) {
+            $insert_data['longitude'] = $longitude;
+        }
+        if (isset($spa_cols['created_at'])) {
+            $insert_data['created_at'] = date('Y-m-d H:i:s');
+        }
+
+        $fields = array_keys($insert_data);
+        $placeholders = array_fill(0, count($fields), '?');
+        $sql_insert = "INSERT INTO study_plan_analytics (" . implode(', ', $fields) . ") VALUES (" . implode(', ', $placeholders) . ")";
+        $stmt = $pdo->prepare($sql_insert);
+        $stmt->execute(array_values($insert_data));
 
         $pdo->commit();
-        echo json_encode(['success' => true, 'completed_at' => date('Y-m-d H:i:s')]);
+        $now_ts = date('d M Y, h:i A');
+        echo json_encode([
+            'success' => true,
+            'completed' => true,
+            'already_completed' => false,
+            'timestamp' => $now_ts,
+            'completed_at' => date('Y-m-d H:i:s')
+        ]);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) {
             $pdo->rollBack();
@@ -102,8 +161,45 @@ if (isset($_GET['action']) && $_GET['action'] === 'log_location') {
 
     if ($plan_id > 0 && !empty($latitude) && !empty($longitude)) {
         try {
-            $stmt = $pdo->prepare("INSERT INTO study_plan_analytics (study_plan_id, student_email, action_type, ip_address, latitude, longitude, created_at) VALUES (?, ?, 'view', ?, ?, ?, NOW())");
-            $stmt->execute([$plan_id, $email, $_SERVER['REMOTE_ADDR'], $latitude, $longitude]);
+            $spa_cols = [];
+            try {
+                $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+                if ($driver === 'sqlite') {
+                    $cols_raw = $pdo->query("PRAGMA table_info(study_plan_analytics)")->fetchAll(PDO::FETCH_ASSOC);
+                    foreach ($cols_raw as $c) {
+                        $spa_cols[strtolower($c['name'])] = true;
+                    }
+                } else {
+                    $cols_raw = $pdo->query("SHOW COLUMNS FROM study_plan_analytics")->fetchAll(PDO::FETCH_ASSOC);
+                    foreach ($cols_raw as $c) {
+                        $spa_cols[strtolower($c['Field'])] = true;
+                    }
+                }
+            } catch (Throwable $e) {}
+
+            $loc_data = [
+                'study_plan_id' => $plan_id,
+                'student_email' => $email,
+                'action_type' => 'view'
+            ];
+            if (isset($spa_cols['ip_address'])) {
+                $loc_data['ip_address'] = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+            }
+            if (isset($spa_cols['latitude'])) {
+                $loc_data['latitude'] = $latitude;
+            }
+            if (isset($spa_cols['longitude'])) {
+                $loc_data['longitude'] = $longitude;
+            }
+            if (isset($spa_cols['created_at'])) {
+                $loc_data['created_at'] = date('Y-m-d H:i:s');
+            }
+
+            $fields = array_keys($loc_data);
+            $placeholders = array_fill(0, count($fields), '?');
+            $sql_loc = "INSERT INTO study_plan_analytics (" . implode(', ', $fields) . ") VALUES (" . implode(', ', $placeholders) . ")";
+            $stmt = $pdo->prepare($sql_loc);
+            $stmt->execute(array_values($loc_data));
             echo json_encode(['success' => true]);
         } catch (Exception $e) {
             echo json_encode(['success' => false]);

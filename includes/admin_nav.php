@@ -45,31 +45,10 @@ if (file_exists(__DIR__ . '/reminders_helper.php')) {
     } catch (Exception $e) { error_log('nav reminders: ' . $e->getMessage()); }
 }
 
-// Automatic session reminders (12h / 4h / 10m / start) - runs lazily on page loads.
-if (file_exists(__DIR__ . '/session_cron.php')) {
-    require_once __DIR__ . '/session_cron.php';
-    try {
-        if (function_exists('sessions_dispatch_due')) sessions_dispatch_due($pdo);
-        if (function_exists('installments_dispatch_reminders')) installments_dispatch_reminders($pdo);
-        if (function_exists('installments_dispatch_whatsapp_reminders')) installments_dispatch_whatsapp_reminders($pdo);
-    }
-    catch (Exception $e) { error_log('nav session/installment cron: ' . $e->getMessage()); }
-}
-
-// Email Campaigns: run due email campaigns and batch delivery queue.
-if (file_exists(__DIR__ . '/email_campaigns_helper.php')) {
-    require_once __DIR__ . '/email_campaigns_helper.php';
-    try {
-        email_campaigns_send_due($pdo);
-    } catch (Exception $e) {
-        error_log('nav email campaigns cron: ' . $e->getMessage());
-    }
-}
-
-// WhatsApp Campaigns: run a tiny batch of campaign queue generation and dispatch.
+// Background Reminders & Campaigns: runs lazily on page loads throttled with a 30s cooldown.
 try {
     $now = time();
-    $cooldown = 30; // 30 seconds cooldown between lazy triggers
+    $cooldown = 30; // 30 seconds cooldown between lazy background triggers
     
     // Fetch last check timestamp from admin_settings
     $stmtLazy = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_last_lazy_trigger' LIMIT 1");
@@ -77,11 +56,30 @@ try {
     $lastLazyTime = (int)$stmtLazy->fetchColumn();
     
     if (($now - $lastLazyTime) >= $cooldown) {
-        // Atomically lock and update check timestamp to prevent race conditions
-        $stmtUpdLazy = $pdo->prepare("UPDATE admin_settings SET setting_value = ? WHERE setting_name = 'whatsapp_last_lazy_trigger'");
-        $stmtUpdLazy->execute([$now]);
-        if ($stmtUpdLazy->rowCount() === 0) {
-            $pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('whatsapp_last_lazy_trigger', ?, NOW()) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()")->execute([$now]);
+        // Atomically update check timestamp
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($driver === 'mysql') {
+            $pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('whatsapp_last_lazy_trigger', ?, NOW()) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()")->execute([(string)$now]);
+        } else {
+            $pdo->prepare("INSERT OR REPLACE INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('whatsapp_last_lazy_trigger', ?, datetime('now'))")->execute([(string)$now]);
+        }
+
+        // Automatic session reminders (12h / 4h / 10m / start)
+        if (file_exists(__DIR__ . '/session_cron.php')) {
+            require_once __DIR__ . '/session_cron.php';
+            try {
+                if (function_exists('sessions_dispatch_due')) sessions_dispatch_due($pdo);
+                if (function_exists('installments_dispatch_reminders')) installments_dispatch_reminders($pdo);
+                if (function_exists('installments_dispatch_whatsapp_reminders')) installments_dispatch_whatsapp_reminders($pdo);
+            } catch (Exception $e) { error_log('nav session/installment cron: ' . $e->getMessage()); }
+        }
+
+        // Email Campaigns: run due email campaigns
+        if (file_exists(__DIR__ . '/email_campaigns_helper.php')) {
+            require_once __DIR__ . '/email_campaigns_helper.php';
+            try {
+                email_campaigns_send_due($pdo);
+            } catch (Exception $e) { error_log('nav email campaigns cron: ' . $e->getMessage()); }
         }
         
         // Trigger a tiny processing batch in the background (e.g., maximum 3 queue generation and 3 dispatches)

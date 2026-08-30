@@ -105,6 +105,13 @@ function ensure_credential_visibility_column($pdo) {
     if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') return;
     static $ensured = false;
     if ($ensured) return;
+    $ensured = true;
+
+    // Handled authoritatively by centralized schema migration (PEPP_DB_SCHEMA_VERSION in config/database.php)
+    if (defined('PEPP_DB_SCHEMA_VERSION')) {
+        return;
+    }
+
     try {
         $cols = $pdo->query("SHOW COLUMNS FROM admins LIKE 'credential_visibility'")->fetch();
         if (!$cols) {
