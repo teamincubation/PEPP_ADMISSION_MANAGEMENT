@@ -961,27 +961,6 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
-<!-- Modal: Delete Confirmation Warning -->
-<div class="modal-backdrop" id="delete-warning-modal">
-    <div class="modal" style="max-width:450px; padding:1.5rem; border-radius: 16px;">
-        <div style="text-align:center; font-size:3rem; color:#ef4444; margin-bottom:12px;" id="delete-warning-icon">
-            <i class="fas fa-triangle-exclamation"></i>
-        </div>
-        <h3 style="font-weight:800; font-size:1.2rem; margin-bottom:8px; color: #1e293b; text-align:center;" id="delete-warning-title">Delete Activity</h3>
-        <div style="color:#64748b; font-size:0.9rem; margin-bottom:20px; text-align:center; line-height: 1.5;" id="delete-warning-message">
-            Are you sure you want to delete this activity?
-        </div>
-        <div style="margin-bottom:15px; display:none;" id="delete-reason-container">
-            <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:4px;">Reason for Deletion:</label>
-            <input type="text" id="delete-reason-input" class="form-control" style="width:100%; border:1px solid #cbd5e1; padding:6px; border-radius:6px; font-size:0.85rem;" placeholder="e.g., Task no longer needed" value="Admin deleted">
-        </div>
-        <div style="display:flex; justify-content:flex-end; gap:8px;">
-            <button type="button" class="btn btn-outline" onclick="closeModal('delete-warning-modal')">Cancel</button>
-            <button type="button" class="btn btn-danger" id="confirm-delete-btn" style="background:#ef4444; border-color:#ef4444; color:#fff;" onclick="executeDeleteActivity()"><i class="fas fa-trash"></i> Delete Activity</button>
-        </div>
-    </div>
-</div>
-
 <!-- Modal: Excel/CSV Bulk Import -->
 <div class="modal-backdrop" id="import-modal">
     <div class="modal" style="max-width:540px;">
@@ -1001,27 +980,6 @@ include 'includes/admin_nav.php';
         <div class="modal-foot">
             <button type="button" class="btn btn-outline" onclick="closeModal('import-modal')">Cancel</button>
             <button type="button" class="btn btn-primary" onclick="processBulkImport()"><i class="fas fa-upload"></i> Process Import</button>
-        </div>
-    </div>
-</div>
-
-<!-- Modal: Delete Confirmation Warning -->
-<div class="modal-backdrop" id="delete-warning-modal">
-    <div class="modal" style="max-width:450px; padding:1.5rem; border-radius: 16px;">
-        <div style="text-align:center; font-size:3rem; color:#ef4444; margin-bottom:12px;" id="delete-warning-icon">
-            <i class="fas fa-triangle-exclamation"></i>
-        </div>
-        <h3 style="font-weight:800; font-size:1.2rem; margin-bottom:8px; color: #1e293b; text-align:center;" id="delete-warning-title">Delete Activity</h3>
-        <div style="color:#64748b; font-size:0.9rem; margin-bottom:20px; text-align:center; line-height: 1.5;" id="delete-warning-message">
-            Are you sure you want to delete this activity?
-        </div>
-        <div style="margin-bottom:15px; display:none;" id="delete-reason-container">
-            <label style="display:block; font-size:0.8rem; font-weight:700; color:#475569; margin-bottom:4px;">Reason for Deletion:</label>
-            <input type="text" id="delete-reason-input" class="form-control" style="width:100%; border:1px solid #cbd5e1; padding:6px; border-radius:6px; font-size:0.85rem;" placeholder="e.g., Task no longer needed" value="Admin deleted">
-        </div>
-        <div style="display:flex; justify-content:flex-end; gap:8px;">
-            <button type="button" class="btn btn-outline" onclick="closeModal('delete-warning-modal')">Cancel</button>
-            <button type="button" class="btn btn-danger" id="confirm-delete-btn" style="background:#ef4444; border-color:#ef4444; color:#fff;" onclick="executeDeleteActivity()"><i class="fas fa-trash"></i> Delete Activity</button>
         </div>
     </div>
 </div>
@@ -1123,7 +1081,7 @@ include 'includes/admin_nav.php';
 </div>
 
 <!-- Modal: Bulk Delete Confirmation -->
-<div class="modal-backdrop" id="bulk-delete-modal" style="display:none;">
+<div class="modal-backdrop" id="bulk-delete-modal">
     <div class="modal" style="max-width:540px; padding:1.75rem; border-radius: 16px;">
         <div style="text-align:center; font-size:2.8rem; color:#ef4444; margin-bottom:12px;">
             <i class="fas fa-trash-can"></i>
@@ -1222,7 +1180,7 @@ include 'includes/admin_nav.php';
 </div>
 
 <!-- Modal: Lock Lost Warning -->
-<div class="modal-backdrop" id="modal-lock-lost" style="display:none;">
+<div class="modal-backdrop" id="modal-lock-lost">
     <div class="modal" style="max-width:480px; text-align:center; padding:2rem; border-radius: 16px;">
         <div style="text-align:center; font-size:3rem; color:#ef4444; margin-bottom:12px;">
             <i class="fas fa-lock-open"></i>
@@ -1258,6 +1216,21 @@ include 'includes/admin_nav.php';
 </div>
 
 <script>
+    function openModal(id) {
+        var m = document.getElementById(id);
+        if (m) {
+            m.classList.add('open');
+            m.style.display = 'flex';
+        }
+    }
+    function closeModal(id) {
+        var m = document.getElementById(id);
+        if (m) {
+            m.classList.remove('open');
+            m.style.display = 'none';
+        }
+    }
+
     var studyPlanId = <?php echo $plan_id; ?>;
     var studyPlanVersion = <?php echo (int)($plan['version'] ?? 1); ?>;
     var isReadOnlyMode = <?php echo ($is_locked_by_other || $is_lock_unavailable) ? 'true' : 'false'; ?>;
