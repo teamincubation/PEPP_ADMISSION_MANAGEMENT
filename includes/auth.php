@@ -81,6 +81,7 @@ $GLOBALS['ADMIN_PAGES'] = [
     'student-mentoring'   => ['Student Mentoring',   'fa-people-arrows'],
     'student-study-reports' => ['Student Reports',   'fa-chart-line'],
     'assessment-results'  => ['Mega Test Results',  'fa-chart-column'],
+    'task-reminders'      => ['Task Reminders',      'fa-bell'],
     'settings'      => ['Settings',                'fa-gear'],
 ];
 
@@ -1444,7 +1445,7 @@ function has_form_access($pdo, $admin_username, $form_id) {
         if (!$admin_id) {
             return false;
         }
-        
+
         // If a form is not in the access restriction list at all, is it restricted by default?
         // Like card templates: if a template is created, until assigned, regular admins have no access.
         // Let's check if there is at least one restriction entry. If not, it could be restricted to super admin only.
@@ -1456,4 +1457,3 @@ function has_form_access($pdo, $admin_username, $form_id) {
         return false;
     }
 }
-

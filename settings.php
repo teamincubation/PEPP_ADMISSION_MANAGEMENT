@@ -1,6 +1,7 @@
 <?php
 require_once 'includes/auth.php';
 require_once 'config/database.php';
+require_once 'includes/reminders_helper.php';
 require_permission('settings');
 
 // Self-healing database check for payment_accounts new columns
@@ -162,6 +163,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $id = (int)($_POST['type_id'] ?? 0);
                     $pdo->prepare("DELETE FROM expense_types WHERE id = ?")->execute([$id]);
                     $success_message = 'Expense type deleted.';
+                }
+            } elseif ($action === 'add_task_type') {
+                $name = trim($_POST['name'] ?? '');
+                $desc = trim($_POST['description'] ?? '');
+                $active = isset($_POST['is_active']) ? 1 : 0;
+                $adminIdent = task_reminder_get_admin_identity($pdo, $admin_username);
+                $res = task_types_save($pdo, ['name' => $name, 'description' => $desc, 'is_active' => $active], $adminIdent['id'], $admin_username);
+                if ($res['success']) {
+                    $success_message = $res['message'];
+                } else {
+                    $error_message = $res['message'];
+                }
+            } elseif ($action === 'edit_task_type') {
+                $id = (int)($_POST['type_id'] ?? 0);
+                $name = trim($_POST['name'] ?? '');
+                $desc = trim($_POST['description'] ?? '');
+                $active = isset($_POST['is_active']) ? 1 : 0;
+                $adminIdent = task_reminder_get_admin_identity($pdo, $admin_username);
+                $res = task_types_save($pdo, ['id' => $id, 'name' => $name, 'description' => $desc, 'is_active' => $active], $adminIdent['id'], $admin_username);
+                if ($res['success']) {
+                    $success_message = $res['message'];
+                } else {
+                    $error_message = $res['message'];
+                }
+            } elseif ($action === 'toggle_task_type') {
+                $id = (int)($_POST['type_id'] ?? 0);
+                $curr = task_types_get_by_id($pdo, $id);
+                if ($curr) {
+                    task_types_toggle_active($pdo, $id, !(bool)$curr['is_active']);
+                    $success_message = 'Task Type status updated.';
                 }
             } elseif ($action === 'save_invoice_settings') {
                 $stmt = $pdo->prepare("
@@ -463,6 +494,8 @@ try {
     try { $ld_courses = $pdo->query("SELECT * FROM ld_work_courses ORDER BY sort_order ASC, course_name ASC")->fetchAll(); } catch (Exception $e) {}
     $ld_modes = [];
     try { $ld_modes = $pdo->query("SELECT * FROM ld_work_modes ORDER BY sort_order ASC, mode_name ASC")->fetchAll(); } catch (Exception $e) {}
+    $task_types = [];
+    try { $task_types = task_types_get_all($pdo, false); } catch (Exception $e) {}
 } catch (Exception $e) {
     error_log('Settings load: ' . $e->getMessage());
     $error_message = $error_message ?: 'Could not load settings.';
@@ -573,6 +606,9 @@ include 'includes/admin_nav.php';
     </button>
     <button type="button" class="settings-tab" onclick="switchSettingsTab('smtp-settings')">
         <i class="fas fa-envelope-open-text"></i> SMTP Mail
+    </button>
+    <button type="button" class="settings-tab" onclick="switchSettingsTab('task-reminder-settings')">
+        <i class="fas fa-bell"></i> Task Reminders
     </button>
     <button type="button" class="settings-tab" onclick="switchSettingsTab('sidebar-layout')">
         <i class="fas fa-bars"></i> Sidebar Layout
@@ -1461,6 +1497,131 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
 </div>
 
+<!-- ── TASK REMINDER SETTINGS TAB ── -->
+<div id="pane-task-reminder-settings" class="settings-tab-pane">
+    <div class="panel">
+        <div class="panel-head">
+            <span class="head-icon"><i class="fas fa-bell"></i></span>
+            <h2>Task Types &amp; Activity Categories</h2>
+        </div>
+        <div class="panel-body">
+            <p style="font-size:0.88rem; color:var(--text-sub, #64748b); margin-bottom:16px;">
+                Manage dynamic task categories used across PEPP ERP Task Reminders. Deactivated task types are excluded from new task creation but remain permanently visible on historical task records.
+            </p>
+
+            <form method="POST" class="filter-bar" style="margin-bottom:24px; align-items:flex-end;">
+                <?php echo csrf_field(); ?>
+                <input type="hidden" name="action" value="add_task_type">
+                <div class="field" style="flex:1; min-width:200px;">
+                    <label>Task Type Name *</label>
+                    <input type="text" name="name" placeholder="e.g. Student Mentoring" required>
+                </div>
+                <div class="field" style="flex:2; min-width:280px;">
+                    <label>Description / Usage Note</label>
+                    <input type="text" name="description" placeholder="Brief description of when this task type is used">
+                </div>
+                <div class="field" style="width:auto;">
+                    <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-top:28px;">
+                        <input type="checkbox" name="is_active" value="1" checked> Active
+                    </label>
+                </div>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Add Task Type</button>
+            </form>
+
+            <div class="table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Task Type Name</th>
+                            <th>Description</th>
+                            <th>Status</th>
+                            <th>Tasks Count</th>
+                            <th>Created By</th>
+                            <th style="text-align:right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php if (empty($task_types)): ?>
+                        <tr><td colspan="6" style="text-align:center; padding:24px; color:#94a3b8;">No task types configured yet.</td></tr>
+                    <?php else: ?>
+                        <?php foreach ($task_types as $tt):
+                            $usageCount = task_types_usage_count($pdo, (int)$tt['id']);
+                        ?>
+                            <tr>
+                                <td class="cell-main">
+                                    <strong><?php echo e($tt['name']); ?></strong>
+                                </td>
+                                <td class="cell-sub" style="max-width:320px;">
+                                    <?php echo e($tt['description'] ?: '—'); ?>
+                                </td>
+                                <td>
+                                    <span class="badge <?php echo $tt['is_active'] ? 'green' : 'gray'; ?>">
+                                        <?php echo $tt['is_active'] ? 'Active' : 'Inactive'; ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="badge blue"><?php echo $usageCount; ?> tasks</span>
+                                </td>
+                                <td class="cell-sub">
+                                    <?php echo e($tt['created_by_username'] ?: 'System'); ?>
+                                </td>
+                                <td style="text-align:right; white-space:nowrap;">
+                                    <button type="button" class="btn btn-sm btn-outline" onclick='openEditTaskType(<?php echo htmlspecialchars(json_encode($tt), ENT_QUOTES, 'UTF-8'); ?>)'>
+                                        <i class="fas fa-pen-to-square"></i> Edit
+                                    </button>
+                                    <form method="POST" style="display:inline; margin-left:4px;">
+                                        <?php echo csrf_field(); ?>
+                                        <input type="hidden" name="action" value="toggle_task_type">
+                                        <input type="hidden" name="type_id" value="<?php echo $tt['id']; ?>">
+                                        <button type="submit" class="btn btn-sm <?php echo $tt['is_active'] ? 'btn-danger' : 'btn-success'; ?>" title="<?php echo $tt['is_active'] ? 'Deactivate (preserve in history)' : 'Activate'; ?>">
+                                            <?php echo $tt['is_active'] ? '<i class="fas fa-pause"></i> Deactivate' : '<i class="fas fa-play"></i> Activate'; ?>
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Edit Task Type -->
+<div id="edit-task-type-modal" class="modal-backdrop" style="display:none;">
+    <div class="modal-box" style="max-width:480px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-pen-to-square"></i> Edit Task Type</h3>
+            <button type="button" class="modal-close" onclick="closeModal('edit-task-type-modal')">&times;</button>
+        </div>
+        <form method="POST">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="edit_task_type">
+            <input type="hidden" name="type_id" id="edit-task-type-id">
+            <div class="modal-body">
+                <div class="field" style="margin-bottom:14px;">
+                    <label>Task Type Name *</label>
+                    <input type="text" name="name" id="edit-task-type-name" required>
+                </div>
+                <div class="field" style="margin-bottom:14px;">
+                    <label>Description</label>
+                    <textarea name="description" id="edit-task-type-desc" rows="3"></textarea>
+                </div>
+                <div class="field">
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                        <input type="checkbox" name="is_active" id="edit-task-type-active" value="1"> Active (available in task creation dropdown)
+                    </label>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('edit-task-type-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <script>
 function openEditLdCourse(data) {
     document.getElementById('edit-ld-course-id').value = data.id;
@@ -1477,6 +1638,14 @@ function openEditLdMode(data) {
     document.getElementById('edit-ld-mode-order').value = data.sort_order;
     document.getElementById('edit-ld-mode-status').value = data.status;
     openModal('edit-ld-mode-modal');
+}
+
+function openEditTaskType(data) {
+    document.getElementById('edit-task-type-id').value = data.id;
+    document.getElementById('edit-task-type-name').value = data.name;
+    document.getElementById('edit-task-type-desc').value = data.description || '';
+    document.getElementById('edit-task-type-active').checked = !!parseInt(data.is_active);
+    openModal('edit-task-type-modal');
 }
 
 function switchSettingsTab(tabId) {
@@ -1529,7 +1698,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Validate tab ID or default to 'academic-years'
-    var validTabs = ['academic-years', 'whatsapp-templates', 'payment-accounts', 'expense-types', 'ld-settings', 'invoice-settings', 'smtp-settings', 'sidebar-layout', 'admin-account'];
+    var validTabs = ['academic-years', 'whatsapp-templates', 'payment-accounts', 'expense-types', 'ld-settings', 'invoice-settings', 'smtp-settings', 'task-reminder-settings', 'sidebar-layout', 'admin-account'];
     if (!tabId || !validTabs.includes(tabId)) {
         tabId = 'academic-years';
     }

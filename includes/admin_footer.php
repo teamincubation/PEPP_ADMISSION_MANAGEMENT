@@ -3,230 +3,626 @@
 </div><!-- /admin-shell -->
 
 <?php if (isset($pdo) && function_exists('reminders_table_exists') && reminders_table_exists($pdo)):
-    $rem_assignable = ['__ALL__' => 'All Admins'];
-    if (admins_table_exists($pdo)) {
-        try { foreach ($pdo->query("SELECT username FROM admins WHERE status='active' ORDER BY role='super_admin' DESC, username")->fetchAll(PDO::FETCH_COLUMN) as $u) $rem_assignable[$u] = $u; } catch (Exception $e) {}
-    }
+    $footer_task_types = [];
+    try { $footer_task_types = task_types_get_all($pdo, true); } catch (Exception $e) {}
+    $footer_admins = [];
+    try {
+        if (admins_table_exists($pdo)) {
+            $footer_admins = $pdo->query("SELECT username, full_name FROM admins WHERE status='active' ORDER BY full_name ASC, username ASC")->fetchAll(PDO::FETCH_ASSOC);
+        }
+    } catch (Exception $e) {}
 ?>
-<?php
-$__rem_msg = $_GET['msg'] ?? '';
-$__rem_msgs = [
-    'rem_added'     => ['ok',  'Reminder added.'],
-    'rem_done'      => ['ok',  'Reminder marked complete.'],
-    'rem_dismissed' => ['ok',  'Reminder dismissed.'],
-    'rem_postponed' => ['ok',  'Reminder postponed.'],
-    'rem_error'     => ['err', 'Could not add the reminder - please check the title and date/time.'],
-];
-if (isset($__rem_msgs[$__rem_msg])): [$__t, $__m] = $__rem_msgs[$__rem_msg]; ?>
-<div id="rem-toast" style="position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:5000;
-     background:<?php echo $__t === 'ok' ? '#16a34a' : '#dc2626'; ?>;color:#fff;font-weight:600;font-size:.85rem;
-     padding:11px 20px;border-radius:50px;box-shadow:0 8px 28px rgba(0,0,0,.25);">
-    <i class="fas fa-<?php echo $__t === 'ok' ? 'circle-check' : 'triangle-exclamation'; ?>"></i> <?php echo e($__m); ?>
-</div>
-<script>setTimeout(function(){var t=document.getElementById('rem-toast');if(t)t.style.display='none';}, 3500);</script>
-<?php endif; ?>
 
-<!-- ── REMINDERS MODAL ── -->
-<div class="modal-backdrop" id="reminders-modal">
-    <div class="modal" style="max-width:600px;">
-        <div class="modal-head"><h3><i class="fas fa-bell" style="color:var(--accent);"></i> Reminders</h3><button class="modal-close" onclick="closeModal('reminders-modal')"><i class="fas fa-xmark"></i></button></div>
-        <div class="modal-body">
-            <!-- Add reminder -->
-            <form method="POST" action="reminders-action.php" style="margin-bottom:18px;">
-                <?php echo csrf_field(); ?>
-                <input type="hidden" name="action" value="add">
-                <input type="hidden" name="return" value="<?php echo e($_SERVER['REQUEST_URI'] ?? 'dashboard.php'); ?>">
-                <div class="form-grid">
-                    <div class="field full"><label>Reminder / task <span class="req">*</span></label>
-                        <input type="text" name="title" required placeholder="e.g. Call pending-payment students"></div>
-                    <div class="field"><label>Date &amp; time <span class="req">*</span></label>
-                        <input type="datetime-local" name="remind_at" required value="<?php echo date('Y-m-d\TH:i', strtotime('+1 hour')); ?>"></div>
-                    <div class="field"><label>Assign to</label>
-                        <select name="assigned_to">
-                            <?php foreach ($rem_assignable as $val => $lbl): ?>
-                                <option value="<?php echo e($val); ?>" <?php echo $val === $admin_username ? 'selected' : ''; ?>><?php echo e($lbl); ?></option>
-                            <?php endforeach; ?>
-                        </select></div>
-                    <div class="field full"><label>Notes</label><textarea name="notes" rows="2" placeholder="Optional details"></textarea></div>
+<!-- ── CREATE TASK REMINDER MODAL ── -->
+<div class="modal-backdrop" id="create-task-modal" style="display:none;">
+    <div class="modal-box" style="max-width:540px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-bell" style="color:var(--primary,#7c3aed);"></i> New Task Reminder</h3>
+            <button type="button" class="modal-close" onclick="closeModal('create-task-modal')">&times;</button>
+        </div>
+        <form id="create-task-modal-form" onsubmit="submitCreateTask(event)">
+            <div class="modal-body">
+                <div class="field" style="margin-bottom:14px;">
+                    <label>Task Type <span style="color:#ef4444;">*</span></label>
+                    <select id="create-task-type" name="task_type_id" required>
+                        <option value="">-- Select Task Type --</option>
+                        <?php foreach ($footer_task_types as $tt): ?>
+                            <option value="<?php echo $tt['id']; ?>"><?php echo e($tt['name']); ?></option>
+                        <?php endforeach; ?>
+                    </select>
                 </div>
-                <div style="display:flex; justify-content:flex-end; margin-top:12px;"><button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> Add Reminder</button></div>
-            </form>
 
-            <!-- Pending list -->
-            <div style="border-top:1px solid var(--border); padding-top:14px;">
-                <div class="cell-sub" style="margin-bottom:10px; font-weight:700;">Your pending reminders (<?php echo count($nav_reminders_pending ?? []); ?>)</div>
-                <?php if (empty($nav_reminders_pending)): ?>
-                    <div class="empty-state" style="padding:20px;"><i class="fas fa-mug-hot"></i><p>No pending reminders.</p></div>
-                <?php else: foreach ($nav_reminders_pending as $rm):
-                    $due = strtotime($rm['remind_at']) <= time();
-                ?>
-                    <div class="reminder-row <?php echo $due ? 'due' : ''; ?>">
-                        <div style="flex:1;">
-                            <div class="cell-main"><?php echo e($rm['title']); ?> <?php echo $due ? '<span class="badge red">due</span>' : ''; ?></div>
-                            <div class="cell-sub"><i class="fas fa-clock"></i> <?php echo date('d M Y, h:i A', strtotime($rm['remind_at'])); ?>
-                                · <?php echo $rm['assigned_to'] === '__ALL__' ? 'All Admins' : e($rm['assigned_to']); ?>
-                                <?php if (!empty($rm['notes'])): ?><br><?php echo nl2br(e($rm['notes'])); ?><?php endif; ?>
-                            </div>
-                        </div>
-                        <div style="display:flex; gap:5px; flex-wrap:wrap; align-items:flex-start;">
-                            <?php if (!empty($rm['student_id'])): ?>
-                                <a href="student-details.php?user_id=<?php echo urlencode($rm['student_id']); ?>" class="btn btn-sm btn-soft-violet" title="Student Profile"><i class="fas fa-user"></i></a>
-                            <?php endif; ?>
-                            <form method="POST" action="reminders-action.php" style="display:inline;">
-                                <?php echo csrf_field(); ?><input type="hidden" name="action" value="complete"><input type="hidden" name="id" value="<?php echo (int)$rm['id']; ?>"><input type="hidden" name="return" value="<?php echo e($_SERVER['REQUEST_URI'] ?? ''); ?>">
-                                <button type="submit" class="btn btn-sm btn-soft-green" title="Mark completed"><i class="fas fa-check"></i></button>
-                            </form>
-                            <button type="button" class="btn btn-sm btn-soft-amber" title="Postpone" onclick="postponeReminder(<?php echo (int)$rm['id']; ?>)"><i class="fas fa-clock-rotate-left"></i></button>
-                            <form method="POST" action="reminders-action.php" style="display:inline;" onsubmit="return confirm('Dismiss this reminder?');">
-                                <?php echo csrf_field(); ?><input type="hidden" name="action" value="dismiss"><input type="hidden" name="id" value="<?php echo (int)$rm['id']; ?>"><input type="hidden" name="return" value="<?php echo e($_SERVER['REQUEST_URI'] ?? ''); ?>">
-                                <button type="submit" class="btn btn-sm btn-soft-red" title="Dismiss"><i class="fas fa-xmark"></i></button>
-                            </form>
-                        </div>
+                <div class="field" style="margin-bottom:14px;">
+                    <label>Task / Activity Title <span style="color:#ef4444;">*</span></label>
+                    <input type="text" id="create-task-title" name="title" required placeholder="e.g. Call Rahul regarding fee installment">
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px;">
+                    <div class="field">
+                        <label>Due Date &amp; Time <span style="color:#ef4444;">*</span></label>
+                        <input type="datetime-local" id="create-task-due" name="remind_at" required value="<?php echo date('Y-m-d\TH:i', strtotime('+1 hour')); ?>">
                     </div>
-                <?php endforeach; endif; ?>
+                    <div class="field">
+                        <label>Assign To <span style="color:#ef4444;">*</span></label>
+                        <select id="create-task-assignee" name="assigned_to" required>
+                            <?php foreach ($footer_admins as $fa): ?>
+                                <option value="<?php echo e($fa['username']); ?>" <?php echo $fa['username'] === $admin_username ? 'selected' : ''; ?>>
+                                    <?php echo e($fa['full_name'] ?: $fa['username']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="field">
+                    <label>Notes / Instructions</label>
+                    <textarea id="create-task-notes" name="notes" rows="2" placeholder="Optional details, contact info, or instructions..."></textarea>
+                </div>
             </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('create-task-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="create-task-submit-btn"><i class="fas fa-plus"></i> Create Task</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── EDIT TASK REMINDER MODAL ── -->
+<div class="modal-backdrop" id="edit-task-modal" style="display:none;">
+    <div class="modal-box" style="max-width:540px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-pen-to-square" style="color:var(--primary,#7c3aed);"></i> Edit Task Reminder</h3>
+            <button type="button" class="modal-close" onclick="closeModal('edit-task-modal')">&times;</button>
+        </div>
+        <form id="edit-task-modal-form" onsubmit="submitEditTask(event)">
+            <input type="hidden" id="edit-task-id" name="task_id">
+            <div class="modal-body">
+                <div class="field" style="margin-bottom:14px;">
+                    <label>Task Type <span style="color:#ef4444;">*</span></label>
+                    <select id="edit-task-type" name="task_type_id" required>
+                        <?php foreach ($footer_task_types as $tt): ?>
+                            <option value="<?php echo $tt['id']; ?>"><?php echo e($tt['name']); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div class="field" style="margin-bottom:14px;">
+                    <label>Task / Activity Title <span style="color:#ef4444;">*</span></label>
+                    <input type="text" id="edit-task-title" name="title" required>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px;">
+                    <div class="field">
+                        <label>Due Date &amp; Time <span style="color:#ef4444;">*</span></label>
+                        <input type="datetime-local" id="edit-task-due" name="remind_at" required>
+                    </div>
+                    <div class="field">
+                        <label>Assign To <span style="color:#ef4444;">*</span></label>
+                        <select id="edit-task-assignee" name="assigned_to" required>
+                            <?php foreach ($footer_admins as $fa): ?>
+                                <option value="<?php echo e($fa['username']); ?>">
+                                    <?php echo e($fa['full_name'] ?: $fa['username']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="field">
+                    <label>Notes / Instructions</label>
+                    <textarea id="edit-task-notes" name="notes" rows="2"></textarea>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('edit-task-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="edit-task-submit-btn">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── STRICT URGENT DUE TASK REMINDER POPUP (Server Revalidated) ── -->
+<div class="modal-backdrop" id="task-due-modal" style="display:none; z-index:9999;">
+    <div class="modal-box" style="max-width:500px; border-top:5px solid #d97706; box-shadow:0 12px 40px rgba(0,0,0,0.3);">
+        <div class="modal-head" style="background:#fef3c7; border-bottom:1px solid #fde68a;">
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span style="background:#d97706; color:#fff; width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:0.9rem;">
+                    <i class="fas fa-bell"></i>
+                </span>
+                <h3 style="color:#92400e; margin:0; font-size:1.1rem;">Task Reminder Due</h3>
+            </div>
+            <button type="button" class="modal-close" onclick="closeModal('task-due-modal')" title="Close (leaves task pending)">&times;</button>
+        </div>
+        <div class="modal-body" id="task-due-modal-body" style="padding:20px;">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                <span class="badge blue" id="due-modal-type">Task Type</span>
+                <span class="badge orange" id="due-modal-status">Due Now</span>
+            </div>
+            <h2 id="due-modal-title" style="font-size:1.25rem; font-weight:700; color:var(--foreground,#0f172a); margin:0 0 10px;"></h2>
+            <div id="due-modal-time" style="font-size:0.86rem; color:#64748b; margin-bottom:12px;">
+                <i class="fas fa-clock"></i> <span id="due-modal-time-val"></span>
+            </div>
+            <div id="due-modal-notes" style="background:var(--bg,#f8fafc); border:1px solid var(--border,#e2e8f0); border-radius:8px; padding:12px; font-size:0.88rem; line-height:1.5; color:#334155; margin-bottom:16px;"></div>
+            <div id="due-modal-assigned-by" style="font-size:0.82rem; color:#64748b;"></div>
+        </div>
+        <div class="modal-foot" style="background:var(--bg,#f8fafc); display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end;">
+            <button type="button" class="btn btn-outline" id="due-btn-postpone" onclick="openPostponeFromDue()"><i class="fas fa-clock-rotate-left"></i> Postpone</button>
+            <button type="button" class="btn btn-primary" id="due-btn-start" onclick="startTaskFromDue()"><i class="fas fa-play"></i> Start Task</button>
+            <button type="button" class="btn btn-success" id="due-btn-complete" onclick="completeTaskFromDue()"><i class="fas fa-check"></i> Complete</button>
         </div>
     </div>
 </div>
 
-<!-- Postpone helper form -->
-<form method="POST" action="reminders-action.php" id="postpone-form" style="display:none;">
-    <?php echo csrf_field(); ?>
-    <input type="hidden" name="action" value="postpone">
-    <input type="hidden" name="id" id="pp-id">
-    <input type="hidden" name="remind_at" id="pp-when">
-    <input type="hidden" name="return" value="<?php echo e($_SERVER['REQUEST_URI'] ?? ''); ?>">
-</form>
+<!-- ── POSTPONE MODAL WITH PRESETS & REASON ── -->
+<div class="modal-backdrop" id="postpone-task-modal" style="display:none; z-index:10000;">
+    <div class="modal-box" style="max-width:460px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-clock-rotate-left" style="color:#d97706;"></i> Postpone Task Reminder</h3>
+            <button type="button" class="modal-close" onclick="closeModal('postpone-task-modal')">&times;</button>
+        </div>
+        <form id="postpone-task-form" onsubmit="submitCustomPostpone(event)">
+            <input type="hidden" id="postpone-task-id">
+            <div class="modal-body">
+                <p id="postpone-task-title" style="font-size:0.95rem; font-weight:600; margin-bottom:14px;"></p>
 
-<!-- ── URGENT EMERGENCY POPUP (one-by-one queue + sound) ── -->
-<?php if (!empty($nav_reminders_due)): ?>
-<div class="urgent-reminder-overlay" id="urgent-reminder">
-    <div class="urgent-card" id="urgent-card">
-        <div class="urgent-siren"></div>
-        <div class="urgent-pulse"><i class="fas fa-triangle-exclamation"></i></div>
-        <div class="urgent-badge">URGENT TASK</div>
-        <div class="urgent-progress" id="urgent-progress"></div>
-        <div id="urgent-slot"><!-- one reminder injected here by JS --></div>
+                <label style="font-size:0.84rem; font-weight:700; color:var(--foreground,#0f172a); margin-bottom:8px; display:block;">Quick Postpone Presets:</label>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:16px;">
+                    <button type="button" class="btn btn-outline btn-sm" onclick="quickPostpone('+15m')"><i class="fas fa-plus"></i> 15 Minutes</button>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="quickPostpone('+30m')"><i class="fas fa-plus"></i> 30 Minutes</button>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="quickPostpone('+1h')"><i class="fas fa-plus"></i> 1 Hour</button>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="quickPostpone('tomorrow')"><i class="fas fa-sun"></i> Tomorrow 9 AM</button>
+                </div>
+
+                <div class="field" style="margin-bottom:14px;">
+                    <label>Or Choose Custom Date &amp; Time</label>
+                    <input type="datetime-local" id="postpone-custom-due">
+                </div>
+
+                <div class="field">
+                    <label>Postpone Reason (Audit Log)</label>
+                    <input type="text" id="postpone-reason" placeholder="e.g. Student requested callback at 4:30 PM">
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('postpone-task-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Postpone</button>
+            </div>
+        </form>
     </div>
 </div>
 
-<!-- Hidden action forms reused by the popup buttons -->
-<form method="POST" action="reminders-action.php" id="urgent-form" style="display:none;">
-    <?php echo csrf_field(); ?>
-    <input type="hidden" name="action" id="uf-action">
-    <input type="hidden" name="id" id="uf-id">
-    <input type="hidden" name="remind_at" id="uf-when">
-    <input type="hidden" name="return" value="<?php echo e($_SERVER['REQUEST_URI'] ?? ''); ?>">
-</form>
+<!-- ── CREATOR COMPLETION NOTIFICATION POPUP ── -->
+<div class="modal-backdrop" id="creator-completion-alert" style="display:none; z-index:9998;">
+    <div class="modal-box" style="max-width:440px; border-top:5px solid #16a34a;">
+        <div class="modal-head" style="background:#dcfce7;">
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span style="background:#16a34a; color:#fff; width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:0.9rem;">
+                    <i class="fas fa-circle-check"></i>
+                </span>
+                <h3 style="color:#14532d; margin:0;">Task Completed</h3>
+            </div>
+            <button type="button" class="modal-close" onclick="dismissCreatorNotification()">&times;</button>
+        </div>
+        <div class="modal-body" style="padding:20px;">
+            <div id="creator-notif-msg" style="font-size:0.95rem; font-weight:600; color:var(--foreground,#0f172a); margin-bottom:10px;"></div>
+            <div id="creator-notif-time" style="font-size:0.8rem; color:#64748b;"></div>
+        </div>
+        <div class="modal-foot" style="background:var(--bg,#f8fafc);">
+            <button type="button" class="btn btn-primary" style="width:100%;" onclick="dismissCreatorNotification()">Dismiss</button>
+        </div>
+    </div>
+</div>
 
+<!-- ── CLIENT ENGINE JAVASCRIPT FOR TASK REMINDERS ── -->
 <script>
-(function () {
-    var queue = <?php
-        $out = [];
-        foreach ($nav_reminders_due as $rm) {
-            $out[] = [
-                'id' => (int)$rm['id'],
-                'title' => $rm['title'],
-                'notes' => $rm['notes'] ?? '',
-                'when' => date('d M Y, h:i A', strtotime($rm['remind_at'])),
-                'all' => $rm['assigned_to'] === '__ALL__',
-                'student_id' => $rm['student_id'] ?: null,
-            ];
-        }
-        echo json_encode($out, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
-    ?>;
-    if (!queue.length) return;
-    var idx = 0;
-    var overlay = document.getElementById('urgent-reminder');
-    var slot = document.getElementById('urgent-slot');
-    var prog = document.getElementById('urgent-progress');
+var activeDueTask = null;
+var scheduledDueTimers = {};
+var activeCreatorNotifId = null;
 
-    function esc(s){var d=document.createElement('div');d.textContent=s||'';return d.innerHTML;}
+function toggleTaskRemindersDropdown(e) {
+    if (e) e.stopPropagation();
+    var dd = document.getElementById('task-reminders-dropdown');
+    if (!dd) return;
+    if (dd.style.display === 'none' || !dd.style.display) {
+        dd.style.display = 'block';
+        fetchTaskRemindersDropdownList();
+    } else {
+        dd.style.display = 'none';
+    }
+}
 
-    function submitAction(action, id, when) {
-        document.getElementById('uf-action').value = action;
-        document.getElementById('uf-id').value = id;
-        document.getElementById('uf-when').value = when || '';
-        document.getElementById('urgent-form').submit();
-    }
-    window.urgentAct = function (action) {
-        var r = queue[idx];
-        if (action === 'postpone') {
-            var def = new Date(Date.now() + 3600*1000), p=function(n){return(n<10?'0':'')+n;};
-            var d = p(def.getDate())+'-'+p(def.getMonth()+1)+'-'+def.getFullYear()+' '+p(def.getHours())+':'+p(def.getMinutes());
-            var v = prompt('Postpone until (DD-MM-YYYY HH:MM):', d);
-            if (!v) return;
-            var m = v.trim().match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{1,2}):(\d{2})$/);
-            if (!m) { alert('Use format DD-MM-YYYY HH:MM'); return; }
-            submitAction('postpone', r.id, m[3]+'-'+m[2]+'-'+m[1]+' '+m[4]+':'+m[5]);
-            return;
-        }
-        submitAction(action, r.id);
-    };
+function closeTaskRemindersDropdown() {
+    var dd = document.getElementById('task-reminders-dropdown');
+    if (dd) dd.style.display = 'none';
+}
 
-    function mkBtn(cls, icon, label, action) {
-        var b = document.createElement('button');
-        b.type = 'button'; b.className = 'btn ' + cls;
-        b.innerHTML = '<i class="fas ' + icon + '"></i> ' + label;
-        b.addEventListener('click', function () { window.urgentAct(action); });
-        return b;
+document.addEventListener('click', function(e) {
+    var container = document.querySelector('.task-dropdown-container');
+    if (container && !container.contains(e.target)) {
+        closeTaskRemindersDropdown();
     }
-    function mkLinkBtn(cls, icon, label, url) {
-        var a = document.createElement('a');
-        a.className = 'btn ' + cls;
-        a.href = url;
-        a.innerHTML = '<i class="fas ' + icon + '"></i> ' + label;
-        return a;
-    }
-    function render() {
-        var r = queue[idx];
-        prog.textContent = queue.length > 1 ? ('Task ' + (idx + 1) + ' of ' + queue.length) : '';
-        slot.innerHTML = '';
-        var t = document.createElement('div'); t.className = 'urgent-item-title'; t.textContent = r.title; slot.appendChild(t);
-        var w = document.createElement('div'); w.className = 'urgent-item-time';
-        w.innerHTML = '<i class="fas fa-clock"></i> ' + esc(r.when) + (r.all ? ' · All Admins' : ''); slot.appendChild(w);
-        if (r.notes) { var n = document.createElement('div'); n.className = 'urgent-item-notes'; n.innerHTML = esc(r.notes).replace(/\n/g, '<br>'); slot.appendChild(n); }
-        var acts = document.createElement('div'); acts.className = 'urgent-item-actions';
-        acts.appendChild(mkBtn('btn-success', 'fa-check', 'Completed', 'complete'));
-        if (r.student_id) {
-            acts.appendChild(mkLinkBtn('btn-soft-violet', 'fa-user', 'Student Profile', 'student-details.php?user_id=' + encodeURIComponent(r.student_id)));
-        }
-        acts.appendChild(mkBtn('btn-soft-amber', 'fa-clock-rotate-left', 'Skip 5 min', 'skip5'));
-        acts.appendChild(mkBtn('btn-soft-blue', 'fa-calendar', 'Postpone', 'postpone'));
-        acts.appendChild(mkBtn('btn-soft-red', 'fa-xmark', 'Dismiss', 'dismiss'));
-        slot.appendChild(acts);
-    }
-    // Make sure the overlay is actually visible (in case any CSS set display:none)
-    if (overlay) overlay.style.display = 'flex';
-    render();
+});
 
-    // ── Attention sound (WebAudio beep, repeated). Starts on first user
-    //    interaction if the browser blocks autoplay. ──
-    var actx = null, beepTimer = null;
-    function beep() {
-        try {
-            if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
-            var o = actx.createOscillator(), g = actx.createGain();
-            o.connect(g); g.connect(actx.destination);
-            o.type = 'sine'; o.frequency.value = 880;
-            g.gain.setValueAtTime(0.0001, actx.currentTime);
-            g.gain.exponentialRampToValueAtTime(0.25, actx.currentTime + 0.02);
-            g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + 0.4);
-            o.start(); o.stop(actx.currentTime + 0.42);
-        } catch (e) {}
+function fetchTaskRemindersDropdownList() {
+    var listEl = document.getElementById('task-dropdown-list');
+    var countsEl = document.getElementById('task-dropdown-counts');
+    if (!listEl) return;
+
+    fetch('api/task-reminders.php?action=list_my_tasks&status=active')
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (!data.success || !data.tasks || data.tasks.length === 0) {
+                listEl.innerHTML = '<div style="text-align:center; padding:20px; color:#94a3b8; font-size:0.85rem;"><i class="fas fa-check-circle" style="color:#10b981; font-size:1.4rem; display:block; margin-bottom:4px;"></i>All caught up! No active tasks.</div>';
+                if (countsEl) countsEl.innerHTML = '';
+                return;
+            }
+
+            var overdueCount = 0;
+            var html = '';
+            data.tasks.slice(0, 4).forEach(function(t) {
+                if (t.is_overdue) overdueCount++;
+                var badgeHtml = t.is_overdue ? '<span class="status-badge-overdue" style="font-size:0.7rem; padding:2px 6px;">Overdue</span>' : '<span class="status-badge-pending" style="font-size:0.7rem; padding:2px 6px;">Pending</span>';
+
+                html += '<div style="padding:10px 14px; border-bottom:1px solid var(--border,#f1f5f9); display:flex; justify-content:space-between; align-items:center; gap:8px;">' +
+                    '<div style="flex:1; min-width:0;">' +
+                        '<div style="font-size:0.75rem; font-weight:700; color:var(--primary,#7c3aed);">' + escapeHtml(t.task_type_name) + '</div>' +
+                        '<div style="font-size:0.86rem; font-weight:600; color:var(--foreground,#0f172a); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' + escapeHtml(t.title) + '</div>' +
+                        '<div style="font-size:0.75rem; color:#64748b;"><i class="fas fa-clock"></i> ' + t.formatted_due + '</div>' +
+                    '</div>' +
+                    '<div>' + badgeHtml + '</div>' +
+                '</div>';
+            });
+
+            if (countsEl) {
+                countsEl.innerHTML = '<span style="color:#d97706;">' + data.tasks.length + ' Pending</span>' + (overdueCount > 0 ? ' &bull; <span style="color:#dc2626;">' + overdueCount + ' Overdue</span>' : '');
+            }
+            listEl.innerHTML = html;
+        })
+        .catch(function() {
+            listEl.innerHTML = '<div style="padding:16px; color:#ef4444; font-size:0.8rem; text-align:center;">Failed to load.</div>';
+        });
+}
+
+function openCreateTaskModal() {
+    var modal = document.getElementById('create-task-modal');
+    if (modal) {
+        document.getElementById('create-task-title').value = '';
+        document.getElementById('create-task-notes').value = '';
+        openModal('create-task-modal');
     }
-    function startSound() { beep(); if (!beepTimer) beepTimer = setInterval(beep, 2200); }
-    startSound();
-    // Resume audio after a click if autoplay was blocked
-    document.addEventListener('click', function once() {
-        if (actx && actx.state === 'suspended') actx.resume();
-        else if (!actx) startSound();
-        document.removeEventListener('click', once);
-    }, { once: true });
-})();
+}
+
+function submitCreateTask(e) {
+    e.preventDefault();
+    var form = document.getElementById('create-task-modal-form');
+    var fd = new FormData(form);
+    fd.append('action', 'create_task');
+    fd.append('csrf_token', '<?php echo csrf_token(); ?>');
+
+    var btn = document.getElementById('create-task-submit-btn');
+    btn.disabled = true;
+
+    fetch('api/task-reminders.php', { method: 'POST', body: fd })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            if (data.success) {
+                closeModal('create-task-modal');
+                updateTaskRemindersSummary();
+                if (typeof loadMyTasks === 'function') loadMyTasks();
+                if (typeof loadAssignedByMe === 'function') loadAssignedByMe();
+            } else {
+                alert(data.message || 'Failed to create task.');
+            }
+        })
+        .catch(function(err) {
+            btn.disabled = false;
+            alert('Error creating task.');
+        });
+}
+
+function openEditTaskModal(taskId) {
+    fetch('api/task-reminders.php?action=get_details&task_id=' + taskId)
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (!data.success || !data.details) {
+                alert(data.message || 'Failed to load task for editing.');
+                return;
+            }
+            var t = data.details.task;
+            document.getElementById('edit-task-id').value = t.id;
+            document.getElementById('edit-task-type').value = t.task_type_id;
+            document.getElementById('edit-task-title').value = t.title;
+            document.getElementById('edit-task-notes').value = t.notes || '';
+            document.getElementById('edit-task-assignee').value = t.assigned_to_username || t.assigned_to;
+            if (t.remind_at) {
+                document.getElementById('edit-task-due').value = t.remind_at.substring(0, 16);
+            }
+            openModal('edit-task-modal');
+        });
+}
+
+function submitEditTask(e) {
+    e.preventDefault();
+    var form = document.getElementById('edit-task-modal-form');
+    var fd = new FormData(form);
+    fd.append('action', 'edit_task');
+    fd.append('csrf_token', '<?php echo csrf_token(); ?>');
+
+    var btn = document.getElementById('edit-task-submit-btn');
+    btn.disabled = true;
+
+    fetch('api/task-reminders.php', { method: 'POST', body: fd })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            if (data.success) {
+                closeModal('edit-task-modal');
+                updateTaskRemindersSummary();
+                if (typeof loadAssignedByMe === 'function') loadAssignedByMe();
+                if (typeof loadMyTasks === 'function') loadMyTasks();
+            } else {
+                alert(data.message || 'Failed to update task.');
+            }
+        })
+        .catch(function() {
+            btn.disabled = false;
+            alert('Error updating task.');
+        });
+}
+
+function openPostponeTaskModal(taskId, title, currentDue) {
+    document.getElementById('postpone-task-id').value = taskId;
+    document.getElementById('postpone-task-title').innerText = 'Postponing: ' + title;
+    document.getElementById('postpone-reason').value = '';
+    if (currentDue) {
+        document.getElementById('postpone-custom-due').value = currentDue.substring(0, 16);
+    }
+    openModal('postpone-task-modal');
+}
+
+function quickPostpone(preset) {
+    var taskId = document.getElementById('postpone-task-id').value;
+    var reason = document.getElementById('postpone-reason').value;
+
+    var fd = new FormData();
+    fd.append('action', 'postpone');
+    fd.append('task_id', taskId);
+    fd.append('preset', preset);
+    fd.append('reason', reason);
+    fd.append('csrf_token', '<?php echo csrf_token(); ?>');
+
+    fetch('api/task-reminders.php', { method: 'POST', body: fd })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (data.success) {
+                closeModal('postpone-task-modal');
+                closeModal('task-due-modal');
+                updateTaskRemindersSummary();
+                if (typeof loadMyTasks === 'function') loadMyTasks();
+                if (typeof loadAssignedByMe === 'function') loadAssignedByMe();
+            } else {
+                alert(data.message || 'Failed to postpone task.');
+            }
+        });
+}
+
+function submitCustomPostpone(e) {
+    e.preventDefault();
+    var taskId = document.getElementById('postpone-task-id').value;
+    var customDue = document.getElementById('postpone-custom-due').value;
+    var reason = document.getElementById('postpone-reason').value;
+
+    if (!customDue) {
+        alert('Please choose a new due date & time.');
+        return;
+    }
+
+    var fd = new FormData();
+    fd.append('action', 'postpone');
+    fd.append('task_id', taskId);
+    fd.append('remind_at', customDue);
+    fd.append('reason', reason);
+    fd.append('csrf_token', '<?php echo csrf_token(); ?>');
+
+    fetch('api/task-reminders.php', { method: 'POST', body: fd })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (data.success) {
+                closeModal('postpone-task-modal');
+                closeModal('task-due-modal');
+                updateTaskRemindersSummary();
+                if (typeof loadMyTasks === 'function') loadMyTasks();
+                if (typeof loadAssignedByMe === 'function') loadAssignedByMe();
+            } else {
+                alert(data.message || 'Failed to postpone task.');
+            }
+        });
+}
+
+function openPostponeFromDue() {
+    if (!activeDueTask) return;
+    openPostponeTaskModal(activeDueTask.id, activeDueTask.title, activeDueTask.remind_at);
+}
+
+function startTaskFromDue() {
+    if (!activeDueTask) return;
+    var taskId = activeDueTask.id;
+    var fd = new FormData();
+    fd.append('action', 'update_status');
+    fd.append('task_id', taskId);
+    fd.append('status', 'in_progress');
+    fd.append('remarks', 'Task started by assignee');
+    fd.append('csrf_token', '<?php echo csrf_token(); ?>');
+
+    fetch('api/task-reminders.php', { method: 'POST', body: fd })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (data.success) {
+                closeModal('task-due-modal');
+                updateTaskRemindersSummary();
+                if (typeof loadMyTasks === 'function') loadMyTasks();
+            } else {
+                alert(data.message || 'Failed to start task.');
+            }
+        });
+}
+
+function completeTaskFromDue() {
+    if (!activeDueTask) return;
+    var taskId = activeDueTask.id;
+    var title = activeDueTask.title;
+    closeModal('task-due-modal');
+    if (typeof openCompleteTaskModal === 'function') {
+        openCompleteTaskModal(taskId, title);
+    } else {
+        var remarks = prompt('Enter completion remarks (optional):');
+        if (remarks === null) return;
+        var fd = new FormData();
+        fd.append('action', 'update_status');
+        fd.append('task_id', taskId);
+        fd.append('status', 'completed');
+        fd.append('remarks', remarks);
+        fd.append('csrf_token', '<?php echo csrf_token(); ?>');
+
+        fetch('api/task-reminders.php', { method: 'POST', body: fd })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    updateTaskRemindersSummary();
+                } else {
+                    alert(data.message || 'Failed to complete task.');
+                }
+            });
+    }
+}
+
+function showDueTaskPopup(task) {
+    activeDueTask = task;
+    document.getElementById('due-modal-type').innerText = task.task_type_name || 'Task';
+    document.getElementById('due-modal-status').innerText = task.is_overdue ? 'Overdue' : 'Due Now';
+    document.getElementById('due-modal-title').innerText = task.title;
+    document.getElementById('due-modal-time-val').innerText = task.formatted_due;
+    document.getElementById('due-modal-notes').innerText = task.notes || 'No extra notes provided.';
+    document.getElementById('due-modal-assigned-by').innerText = 'Assigned by: ' + (task.created_by_username || task.created_by || 'Admin');
+
+    // Play attention sound
+    playAttentionBeep();
+    openModal('task-due-modal');
+}
+
+function verifyAndTriggerDuePopup(taskId) {
+    fetch('api/task-reminders.php?action=verify_due_alert&task_id=' + taskId)
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (data.success && data.valid && data.task) {
+                showDueTaskPopup(data.task);
+            }
+        });
+}
+
+function updateTaskRemindersSummary() {
+    fetch('api/task-reminders.php?action=get_summary')
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (!data.success || !data.summary) return;
+            var s = data.summary;
+            var badge = document.getElementById('task-reminders-badge');
+            var bellBtn = document.getElementById('task-reminders-bell-btn');
+
+            var totalPending = (s.pending_count || 0) + (s.in_progress_count || 0);
+            if (badge) {
+                badge.innerText = totalPending;
+                badge.style.display = totalPending > 0 ? 'block' : 'none';
+            }
+
+            if (bellBtn) {
+                if (s.due_count > 0 || s.overdue_count > 0) {
+                    bellBtn.classList.add('has-due');
+                } else {
+                    bellBtn.classList.remove('has-due');
+                }
+            }
+
+            // Update KPI cards if on task-reminders.php page
+            var kpiPend = document.getElementById('kpi-my-pending');
+            if (kpiPend) kpiPend.innerText = s.pending_count || 0;
+            var kpiOver = document.getElementById('kpi-my-overdue');
+            if (kpiOver) kpiOver.innerText = s.overdue_count || 0;
+            var kpiProg = document.getElementById('kpi-my-inprogress');
+            if (kpiProg) kpiProg.innerText = s.in_progress_count || 0;
+            var kpiAss = document.getElementById('kpi-assigned-by-me');
+            if (kpiAss) kpiAss.innerText = s.assigned_by_me_pending || 0;
+
+            // Trigger authoritative due popups if any due
+            if (s.due_task_ids && s.due_task_ids.length > 0) {
+                var firstDueId = s.due_task_ids[0];
+                var modal = document.getElementById('task-due-modal');
+                if (modal && !modal.classList.contains('open')) {
+                    verifyAndTriggerDuePopup(firstDueId);
+                }
+            }
+
+            // Check unread completion notifications
+            checkUnreadNotifications();
+        })
+        .catch(function(e) {});
+}
+
+function checkUnreadNotifications() {
+    fetch('api/task-reminders.php?action=get_unread_notifications')
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (data.success && data.notifications && data.notifications.length > 0) {
+                var n = data.notifications[0];
+                if (n.notification_type === 'TASK_COMPLETED') {
+                    activeCreatorNotifId = n.id;
+                    document.getElementById('creator-notif-msg').innerText = n.message || 'Your assigned task has been completed.';
+                    document.getElementById('creator-notif-time').innerText = n.formatted_time;
+                    var modal = document.getElementById('creator-completion-alert');
+                    if (modal && !modal.classList.contains('open')) {
+                        openModal('creator-completion-alert');
+                    }
+                }
+            }
+        });
+}
+
+function dismissCreatorNotification() {
+    if (activeCreatorNotifId) {
+        var fd = new FormData();
+        fd.append('action', 'dismiss_notification');
+        fd.append('notification_id', activeCreatorNotifId);
+        fd.append('csrf_token', '<?php echo csrf_token(); ?>');
+        fetch('api/task-reminders.php', { method: 'POST', body: fd });
+        activeCreatorNotifId = null;
+    }
+    closeModal('creator-completion-alert');
+}
+
+function playAttentionBeep() {
+    try {
+        var actx = new (window.AudioContext || window.webkitAudioContext)();
+        var o = actx.createOscillator();
+        var g = actx.createGain();
+        o.connect(g);
+        g.connect(actx.destination);
+        o.type = 'sine';
+        o.frequency.value = 880;
+        g.gain.setValueAtTime(0.001, actx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.2, actx.currentTime + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + 0.35);
+        o.start();
+        o.stop(actx.currentTime + 0.36);
+    } catch(e) {}
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    updateTaskRemindersSummary();
+    setInterval(updateTaskRemindersSummary, 50000); // 50s lightweight poll
+});
 </script>
-<?php endif; ?>
-<?php endif; /* reminders table exists */ ?>
+<?php endif; /* reminders_table_exists */ ?>
 
 <script>
 function toggleSidebar(force) {

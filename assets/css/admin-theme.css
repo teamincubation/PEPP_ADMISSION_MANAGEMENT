@@ -1080,4 +1080,62 @@ label .req,
     line-height: 1.5 !important;
 }
 
-
+/* Task Reminders Topbar Dropdown & Micro-animations */
+.task-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 320px;
+    background: var(--surface, #ffffff);
+    border: 1px solid var(--border, #e2e8f0);
+    border-radius: 12px;
+    box-shadow: 0 10px 25px -5px rgba(0,0,0,0.15), 0 8px 10px -6px rgba(0,0,0,0.1);
+    z-index: 1000;
+    overflow: hidden;
+    animation: taskDropdownFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes taskDropdownFadeIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+html.theme-dark .task-dropdown-menu {
+    background: #1e293b;
+    border-color: #334155;
+}
+.task-dropdown-head {
+    padding: 12px 16px;
+    background: var(--bg, #f8fafc);
+    border-bottom: 1px solid var(--border, #e2e8f0);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+html.theme-dark .task-dropdown-head {
+    background: #0f172a;
+    border-color: #334155;
+}
+.task-dropdown-list {
+    max-height: 280px;
+    overflow-y: auto;
+}
+.task-dropdown-foot {
+    padding: 10px 14px;
+    background: var(--bg, #f8fafc);
+    border-top: 1px solid var(--border, #e2e8f0);
+}
+html.theme-dark .task-dropdown-foot {
+    background: #0f172a;
+    border-color: #334155;
+}
+.reminder-bell.has-due {
+    background: #fef3c7 !important;
+    color: #d97706 !important;
+    border-color: #fde68a !important;
+    animation: reminderBellRing 2s infinite ease-in-out;
+}
+@keyframes reminderBellRing {
+    0%, 100% { transform: rotate(0); }
+    10%, 30% { transform: rotate(12deg); }
+    20%, 40% { transform: rotate(-12deg); }
+    50% { transform: rotate(0); }
+}

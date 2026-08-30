@@ -49,12 +49,12 @@ if (file_exists(__DIR__ . '/reminders_helper.php')) {
 try {
     $now = time();
     $cooldown = 30; // 30 seconds cooldown between lazy background triggers
-    
+
     // Fetch last check timestamp from admin_settings
     $stmtLazy = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_last_lazy_trigger' LIMIT 1");
     $stmtLazy->execute();
     $lastLazyTime = (int)$stmtLazy->fetchColumn();
-    
+
     if (($now - $lastLazyTime) >= $cooldown) {
         // Atomically update check timestamp
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
@@ -81,55 +81,55 @@ try {
                 email_campaigns_send_due($pdo);
             } catch (Exception $e) { error_log('nav email campaigns cron: ' . $e->getMessage()); }
         }
-        
+
         // Trigger a tiny processing batch in the background (e.g., maximum 3 queue generation and 3 dispatches)
         if (file_exists(dirname(__DIR__) . '/cron-queue.php')) {
             $schedStmt = $pdo->prepare("
-                SELECT * FROM communication_campaigns 
-                WHERE status IN ('scheduled', 'active') 
-                  AND (scheduled_at IS NULL OR scheduled_at <= NOW()) 
+                SELECT * FROM communication_campaigns
+                WHERE status IN ('scheduled', 'active')
+                  AND (scheduled_at IS NULL OR scheduled_at <= NOW())
                   LIMIT 1
             ");
             $schedStmt->execute();
             $dueCampaign = $schedStmt->fetch();
-            
+
             if ($dueCampaign) {
                 $campId = $dueCampaign['id'];
-                
+
                 $pdo->beginTransaction();
-                
+
                 $isMysql = (strpos($pdo->getAttribute(PDO::ATTR_DRIVER_NAME), 'mysql') !== false);
                 $forUpdate = $isMysql ? ' FOR UPDATE' : '';
-                
+
                 // Fetch at most 3 recipients snapshot to avoid delays in admin browsing
                 $stmtRec = $pdo->prepare("
-                    SELECT * FROM communication_campaign_recipients 
-                    WHERE campaign_id = ? AND status = 'pending' AND queue_id IS NULL 
+                    SELECT * FROM communication_campaign_recipients
+                    WHERE campaign_id = ? AND status = 'pending' AND queue_id IS NULL
                     LIMIT 3
                     " . $forUpdate
                 );
                 $stmtRec->execute([$campId]);
                 $recipients = $stmtRec->fetchAll();
-                
+
                 if (!empty($recipients)) {
                     if ($dueCampaign['status'] === 'scheduled') {
                         $pdo->prepare("UPDATE communication_campaigns SET status = 'active', updated_at = NOW() WHERE id = ?")->execute([$campId]);
                     }
-                    
+
                     $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
                     $stmtTpl->execute([$dueCampaign['template_name']]);
                     $template = $stmtTpl->fetch();
-                    
+
                     if ($template) {
                         $criteria = json_decode($dueCampaign['segment_criteria'], true) ?: [];
                         $varMappings = $criteria['var_mappings'] ?? [];
                         $staticVals = $criteria['static_vals'] ?? [];
                         $mediaUrl = $criteria['header_media'] ?? '';
                         $meta = json_decode($template['meta_data'], true) ?: [];
-                        
+
                         require_once dirname(__DIR__) . '/includes/communication/CommunicationEngine.php';
                         $engine = CommunicationEngine::getInstance($pdo);
-                        
+
                         foreach ($recipients as $rec) {
                             $resolvedParams = [];
                             if ($dueCampaign['target_audience'] === 'leads') {
@@ -141,7 +141,7 @@ try {
                                         $pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = 'Lead opted out before queueing' WHERE id = ?")->execute([$rec['id']]);
                                         continue;
                                     }
-                                    
+
                                     $skippedParam = '';
                                     foreach ($varMappings as $idx => $field) {
                                         $val = ($field === 'static') ? ($staticVals[$idx] ?? '') : ($lead[$field] ?? '');
@@ -176,13 +176,13 @@ try {
                                     }
                                 }
                             }
-                            
+
                             $templatePayload = [
                                 'name' => $dueCampaign['template_name'],
                                 'language' => $template['language'] ?: 'en',
                                 'parameters' => $resolvedParams
                             ];
-                            
+
                              $headerType = $meta['header_type'] ?? 'NONE';
                              if ($headerType === 'NONE' && !empty($meta['components'])) {
                                  foreach ($meta['components'] as $c) {
@@ -192,7 +192,7 @@ try {
                                      }
                                  }
                              }
-                             
+
                              $mediaUrl = $criteria['header_media'] ?? '';
                              if (empty($mediaUrl)) {
                                  $fallbackUrl = $meta['header_media_url'] ?? '';
@@ -205,7 +205,7 @@ try {
                                  $templatePayload['header_type'] = $headerType;
                                  $templatePayload['header_parameters'] = [$mediaUrl];
                              }
-                            
+
                             $body = "Campaign message: {$dueCampaign['name']}";
                             $queueId = $engine->queueMessage(
                                 'whatsapp',
@@ -220,7 +220,7 @@ try {
                                 date('Y-m-d H:i:s'),
                                 $rec['user_id']
                             );
-                            
+
                             $pdo->prepare("UPDATE communication_campaign_recipients SET queue_id = ?, status = 'pending' WHERE id = ?")->execute([$queueId, $rec['id']]);
                         }
                         $pdo->commit();
@@ -230,14 +230,14 @@ try {
                     }
                 } else {
                     $pdo->commit();
-                    
+
                     $pendingCount = (int)$pdo->query("SELECT COUNT(*) FROM communication_campaign_recipients WHERE campaign_id = {$campId} AND queue_id IS NULL")->fetchColumn();
                     if ($pendingCount === 0 && $dueCampaign['status'] === 'active') {
                         $pdo->prepare("UPDATE communication_campaigns SET status = 'completed', updated_at = NOW() WHERE id = ?")->execute([$campId]);
                     }
                 }
             }
-            
+
             // Process a tiny batch of 3 pending queue items
             require_once dirname(__DIR__) . '/includes/communication/QueueProcessor.php';
             $processor = new QueueProcessor($pdo, 3);
@@ -263,7 +263,7 @@ try {
     $nav_due_within_10_days = (int)$pdo->query("SELECT COUNT(*) FROM instalment_details WHERE status = 'pending' AND paid_date IS NULL AND rejected_at IS NULL AND due_date <= DATE_ADD(CURDATE(), INTERVAL 10 DAY)")->fetchColumn();
     $nav_active_forms_count = (int)$pdo->query("SELECT COUNT(*) FROM campaign_forms WHERE status = 'published'")->fetchColumn();
     $nav_unread_submissions_count = (int)$pdo->query("SELECT COUNT(*) FROM campaign_form_submissions WHERE is_read = 0 AND is_deleted = 0")->fetchColumn();
-    
+
     // Efficiently sum the unread count from conversations
     $nav_unread_inbox_count = (int)$pdo->query("SELECT IFNULL(SUM(unread_count), 0) FROM whatsapp_conversations")->fetchColumn();
 } catch (Exception $navEx) { /* sidebar still renders */ }
@@ -274,7 +274,7 @@ function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
 function render_nav_item($key, $active_page, $nav_data) {
     global $pdo, $admin_perms, $admin_role;
     if (!function_exists('can_access') || !can_access($key)) return;
-    
+
     // Extract variables from $nav_data
     $nav_pending_approvals = $nav_data['pending_approvals'] ?? 0;
     $nav_pending_onboarding = $nav_data['pending_onboarding'] ?? 0;
@@ -285,7 +285,7 @@ function render_nav_item($key, $active_page, $nav_data) {
     $nav_pending_payments = $nav_data['pending_payments'] ?? 0;
     $nav_due_within_10_days = $nav_data['due_within_10_days'] ?? 0;
     $nav_unread_inbox_count = $nav_data['unread_inbox_count'] ?? 0;
-    
+
     switch ($key) {
         case 'dashboard':
             echo '<a class="nav-item ' . nav_active('dashboard', $active_page) . '" href="dashboard.php"><i class="fas fa-gauge-high"></i> Dashboard</a>';
@@ -414,6 +414,9 @@ function render_nav_item($key, $active_page, $nav_data) {
         case 'assessment-results':
             echo '<a class="nav-item ' . nav_active('assessment-results', $active_page) . '" href="assessment-results.php"><i class="fas fa-chart-column"></i> Mega Test Results</a>';
             break;
+        case 'task-reminders':
+            echo '<a class="nav-item ' . nav_active('task-reminders', $active_page) . '" href="task-reminders.php"><i class="fas fa-bell"></i> Task Reminders</a>';
+            break;
         case 'task-tracker':
             echo '<a class="nav-item ' . nav_active('task-tracker', $active_page) . '" href="task-tracker.php"><i class="fas fa-list-check"></i> Intern Task Tracker</a>';
             break;
@@ -460,7 +463,7 @@ $default_sidebar = [
         'id' => 'overview',
         'title' => 'Overview',
         'icon' => 'fas fa-gauge-high',
-        'items' => ['dashboard']
+        'items' => ['dashboard', 'task-reminders']
     ],
     [
         'id' => 'registrations',
@@ -949,7 +952,7 @@ $nav_data = [
                     id.includes('delete') || id.includes('remove') || id.includes('reject') ||
                     cls.includes('delete') || cls.includes('remove') || cls.includes('reject') || cls.includes('danger') ||
                     name.includes('delete') || name.includes('remove') || name.includes('reject')) {
-                    
+
                     el.disabled = true;
                     el.style.pointerEvents = 'none';
                     el.style.opacity = '0.4';
@@ -979,7 +982,7 @@ $nav_data = [
                     id.includes('edit') || id.includes('update') || id.includes('save') || id.includes('create') || id.includes('add') || id.includes('convert') ||
                     cls.includes('edit') || cls.includes('update') || cls.includes('save') || cls.includes('create') || cls.includes('add') || cls.includes('convert') ||
                     name.includes('edit') || name.includes('update') || name.includes('save') || name.includes('create') || name.includes('add') || name.includes('convert')) {
-                    
+
                     el.disabled = true;
                     el.style.pointerEvents = 'none';
                     el.style.opacity = '0.4';
@@ -1011,7 +1014,7 @@ $nav_data = [
                     href.includes('export') || href.includes('download') || href.includes('csv') || href.includes('excel') || href.includes('report') ||
                     id.includes('export') || id.includes('download') ||
                     cls.includes('export') || cls.includes('download')) {
-                    
+
                     el.disabled = true;
                     el.style.pointerEvents = 'none';
                     el.style.opacity = '0.4';
@@ -1065,7 +1068,7 @@ $nav_data = [
                     </span>
                 </div>
                 <div class="nav-section-content">
-                    <?php 
+                    <?php
                     foreach ($section['items'] as $item) {
                         render_nav_item($item, $active_page, $nav_data);
                     }
@@ -1073,7 +1076,7 @@ $nav_data = [
                 </div>
             </div>
         <?php endforeach; ?>
-        
+
         <div class="nav-section collapsed">
             <div class="nav-section-label cat-public-links">
                 <span>
@@ -1089,7 +1092,7 @@ $nav_data = [
                         <i class="far fa-copy" style="font-size: 0.85rem; pointer-events: none;"></i>
                     </span>
                 </a>
-                
+
                 <a class="nav-item" href="studyplan.php" target="_blank" style="display: flex; align-items: center; width: 100%;">
                     <i class="fas fa-arrow-up-right-from-square"></i>
                     <span>Study Plan</span>
@@ -1097,7 +1100,7 @@ $nav_data = [
                         <i class="far fa-copy" style="font-size: 0.85rem; pointer-events: none;"></i>
                     </span>
                 </a>
-                
+
                 <a class="nav-item" href="installmentpayment.php" target="_blank" style="display: flex; align-items: center; width: 100%;">
                     <i class="fas fa-arrow-up-right-from-square"></i>
                     <span>Installment Payment</span>
@@ -1105,7 +1108,7 @@ $nav_data = [
                         <i class="far fa-copy" style="font-size: 0.85rem; pointer-events: none;"></i>
                     </span>
                 </a>
-                
+
                 <a class="nav-item" href="staff-registration.php" target="_blank" style="display: flex; align-items: center; width: 100%;">
                     <i class="fas fa-arrow-up-right-from-square"></i>
                     <span>Staff Registration</span>
@@ -1128,14 +1131,14 @@ $nav_data = [
         function copyFormLink(path, element, event) {
             event.preventDefault();
             event.stopPropagation();
-            
+
             var link = window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/')) + '/' + path;
-            
+
             navigator.clipboard.writeText(link).then(function() {
                 var icon = element.querySelector('i');
                 icon.className = 'fas fa-check';
                 icon.style.color = '#22c55e';
-                
+
                 setTimeout(function() {
                     icon.className = 'far fa-copy';
                     icon.style.color = '';
@@ -1211,7 +1214,7 @@ $nav_data = [
                     if (navigator.connection && navigator.connection.effectiveType) {
                         connectionType = navigator.connection.effectiveType;
                     }
-                    
+
                     var meta = {
                         user_agent: navigator.userAgent,
                         platform: navigator.platform,
@@ -1298,10 +1301,33 @@ $nav_data = [
                 <button type="button" class="reminder-bell" id="theme-toggle-btn" style="margin-right:4px;" title="Switch Theme" aria-label="Switch Theme">
                     <i class="fas fa-sun" id="theme-toggle-icon"></i>
                 </button>
-                <button type="button" class="reminder-bell <?php echo !empty($nav_reminders_due) ? 'has-due' : ''; ?>" onclick="openModal('reminders-modal')" title="Reminders" aria-label="Reminders">
-                    <i class="fas fa-bell"></i>
-                    <?php if (!empty($nav_reminders_pending)): ?><span class="reminder-count"><?php echo count($nav_reminders_pending); ?></span><?php endif; ?>
-                </button>
+                <div class="task-dropdown-container" style="position:relative; display:inline-block; margin-right:4px;">
+                    <button type="button" class="reminder-bell <?php echo !empty($nav_reminders_due) ? 'has-due' : ''; ?>" id="task-reminders-bell-btn" onclick="toggleTaskRemindersDropdown(event)" title="Task Reminders" aria-label="Task Reminders">
+                        <i class="fas fa-bell"></i>
+                        <span class="reminder-count" id="task-reminders-badge" style="<?php echo !empty($nav_reminders_pending) ? '' : 'display:none;'; ?>">
+                            <?php echo count($nav_reminders_pending ?? []); ?>
+                        </span>
+                    </button>
+                    <div id="task-reminders-dropdown" class="task-dropdown-menu" style="display:none;">
+                        <div class="task-dropdown-head">
+                            <div style="font-weight:700; font-size:0.92rem; color:var(--foreground,#0f172a); display:flex; align-items:center; gap:6px;">
+                                <i class="fas fa-bell" style="color:var(--primary,#7c3aed);"></i> Task Reminders
+                            </div>
+                            <div id="task-dropdown-counts" style="font-size:0.75rem; font-weight:700;"></div>
+                        </div>
+                        <div id="task-dropdown-list" class="task-dropdown-list">
+                            <div style="text-align:center; padding:16px; color:#94a3b8; font-size:0.85rem;"><i class="fas fa-spinner fa-spin"></i> Loading tasks...</div>
+                        </div>
+                        <div class="task-dropdown-foot" style="display:flex; gap:6px;">
+                            <button type="button" class="btn btn-sm btn-outline" style="flex:1;" onclick="openCreateTaskModal(); closeTaskRemindersDropdown();">
+                                <i class="fas fa-plus"></i> New Task
+                            </button>
+                            <a href="task-reminders.php" class="btn btn-sm btn-primary" style="flex:1; text-align:center; justify-content:center;">
+                                View All Tasks &rarr;
+                            </a>
+                        </div>
+                    </div>
+                </div>
                 <div class="admin-chip">
                     <span class="avatar"><?php echo strtoupper(substr($admin_username, 0, 1)); ?></span>
                     <span><?php echo e($admin_username); ?>
