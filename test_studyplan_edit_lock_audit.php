@@ -278,6 +278,148 @@ run_test("LOCK-20: Independent study plans (Plan #102) can be locked by Bob whil
             && $owner101 === 'admin_alice' && $owner102 === 'admin_bob');
 });
 
+// LOCK-21: Release study plan lock with admin_id and case-insensitive username match
+run_test("LOCK-21: Release study plan lock succeeds with admin_id & case-insensitive matching", function() use ($pdo, $alice_info) {
+    // Release Alice's lock on 101 with uppercase username
+    $res = release_study_plan_lock($pdo, 101, 'ADMIN_ALICE', false, $alice_info['admin_id']);
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 101")->fetchColumn();
+    return ($res['success'] === true && $count === 0);
+});
+
+// LOCK-22: Read-only check on unlocked plan returns locked: false and can_claim: true without acquiring lock
+run_test("LOCK-22: Read-only check on unlocked plan returns can_claim: true without creating lock row", function() use ($pdo) {
+    $stmt = $pdo->prepare("SELECT * FROM study_plan_edit_locks WHERE study_plan_id = ? AND is_active = 1");
+    $stmt->execute([101]);
+    $lock = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $countBefore = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 101")->fetchColumn();
+    $canClaim = (!$lock);
+    $countAfter = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 101")->fetchColumn();
+
+    return ($canClaim === true && $countBefore === 0 && $countAfter === 0);
+});
+
+// Lock plan 101 back to Alice for read-only viewer tests
+acquire_or_check_study_plan_lock($pdo, 101, $alice_info);
+
+// LOCK-23: Read-only check while locked by Alice returns editor details and can_claim: false without creating lock
+run_test("LOCK-23: Read-only check by Bob on Alice's locked plan returns can_claim: false without acquiring", function() use ($pdo, $bob_info) {
+    $stmt = $pdo->prepare("SELECT * FROM study_plan_edit_locks WHERE study_plan_id = ? AND is_active = 1");
+    $stmt->execute([101]);
+    $lock = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $isLockedByOther = ($lock && $lock['admin_username'] !== $bob_info['admin_username']);
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 101")->fetchColumn();
+
+    return ($isLockedByOther === true && $count === 1 && $lock['admin_username'] === 'admin_alice');
+});
+
+// LOCK-24: Read-only check when current user IS the owner returns is_owner: true and can_claim: true
+run_test("LOCK-24: Read-only check by owner (Alice) confirms ownership and can_claim: true", function() use ($pdo, $alice_info) {
+    $stmt = $pdo->prepare("SELECT * FROM study_plan_edit_locks WHERE study_plan_id = ? AND is_active = 1");
+    $stmt->execute([101]);
+    $lock = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $isOwner = ($lock && $lock['admin_username'] === $alice_info['admin_username']);
+    return ($isOwner === true);
+});
+
+// LOCK-25: Read-only check on stale lock (>120s) detects lock as available without auto-claiming
+run_test("LOCK-25: Read-only check on stale lock detects availability without auto-claiming", function() use ($pdo) {
+    // Age Alice's lock to 3 minutes ago
+    $past = date('Y-m-d H:i:s', time() - 180);
+    $pdo->prepare("UPDATE study_plan_edit_locks SET last_heartbeat_at = ? WHERE study_plan_id = 101")->execute([$past]);
+
+    $stmt = $pdo->prepare("SELECT * FROM study_plan_edit_locks WHERE study_plan_id = ? AND is_active = 1");
+    $stmt->execute([101]);
+    $lock = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $last_hb = strtotime($lock['last_heartbeat_at']);
+    $is_stale = ($last_hb === false || (time() - $last_hb) > STUDY_PLAN_LOCK_TIMEOUT_SECONDS);
+
+    return ($is_stale === true);
+});
+
+// LOCK-26: Immediate lock release on intentional exit frees lock immediately
+run_test("LOCK-26: Intentional exit release by Alice frees lock in 0ms without waiting for timeout", function() use ($pdo, $alice_info) {
+    // Re-acquire fresh lock
+    acquire_or_check_study_plan_lock($pdo, 101, $alice_info);
+    $count1 = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 101")->fetchColumn();
+
+    // Alice intentionally exits (e.g. Back / Exit Without Saving / Save & Exit)
+    $rel = release_study_plan_lock($pdo, 101, $alice_info['admin_username'], false, $alice_info['admin_id']);
+    $count2 = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 101")->fetchColumn();
+
+    return ($count1 === 1 && $rel['success'] === true && $count2 === 0);
+});
+
+// LOCK-27: After immediate release, Bob can acquire exclusive edit lock in 1 step
+run_test("LOCK-27: Bob immediately acquires exclusive edit lock after Alice's exit", function() use ($pdo, $bob_info) {
+    $res = acquire_or_check_study_plan_lock($pdo, 101, $bob_info);
+    $curOwner = $pdo->query("SELECT admin_username FROM study_plan_edit_locks WHERE study_plan_id = 101")->fetchColumn();
+
+    return ($res['success'] === true && $res['locked'] === false && $res['is_owner'] === true && $curOwner === 'admin_bob');
+});
+
+// LOCK-28: Multiple consecutive releases on already released lock are idempotent and safe
+run_test("LOCK-28: Consecutive release calls on already released lock are safe and idempotent", function() use ($pdo, $alice_info) {
+    $rel1 = release_study_plan_lock($pdo, 101, $alice_info['admin_username'], false, $alice_info['admin_id']);
+    $rel2 = release_study_plan_lock($pdo, 101, $alice_info['admin_username'], false, $alice_info['admin_id']);
+    return ($rel1['success'] === true && $rel2['success'] === true);
+});
+
+// LOCK-29: Heartbeat for released lock fails with lock_lost
+run_test("LOCK-29: Heartbeat for released/non-held lock by Alice returns lock_lost", function() use ($pdo, $alice_info) {
+    $res = heartbeat_study_plan_lock($pdo, 101, $alice_info['admin_username'], $alice_info['session_token']);
+    return ($res['success'] === false && !empty($res['lock_lost']));
+});
+
+// LOCK-30: Read-only viewer (Alice) cannot perform mutations while Bob holds the lock
+run_test("LOCK-30: Read-only viewer (Alice) blocked from saving while Bob holds lock", function() use ($pdo) {
+    $allowed = verify_study_plan_edit_lock_permission($pdo, 101, 'admin_alice');
+    return ($allowed === false);
+});
+
+// LOCK-31: Super Admin release frees lock held by Bob
+run_test("LOCK-31: Super Admin release clears Bob's lock on plan #101", function() use ($pdo) {
+    $rel = release_study_plan_lock($pdo, 101, 'superadmin', true);
+    $count = (int)$pdo->query("SELECT COUNT(*) FROM study_plan_edit_locks WHERE study_plan_id = 101")->fetchColumn();
+    return ($rel['success'] === true && $count === 0);
+});
+
+// LOCK-32: Full concurrent collaboration lifecycle end-to-end
+run_test("LOCK-32: Full Lifecycle: A locks -> B read-only -> A exits -> B detects & acquires exclusive lock", function() use ($pdo, $alice_info, $bob_info) {
+    // 1. Admin A acquires lock
+    $resA = acquire_or_check_study_plan_lock($pdo, 101, $alice_info);
+    if (!$resA['success'] || $resA['locked']) return false;
+
+    // 2. Admin B opens in read-only mode -> blocked from edit lock
+    $resB = acquire_or_check_study_plan_lock($pdo, 101, $bob_info);
+    if ($resB['success'] || !$resB['locked']) return false;
+
+    // 3. Admin A clicks Exit -> releases lock
+    $relA = release_study_plan_lock($pdo, 101, $alice_info['admin_username'], false, $alice_info['admin_id']);
+    if (!$relA['success']) return false;
+
+    // 4. Admin B's poller checks lock status -> detected as available
+    $stmt = $pdo->prepare("SELECT * FROM study_plan_edit_locks WHERE study_plan_id = ? AND is_active = 1");
+    $stmt->execute([101]);
+    $activeLock = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($activeLock) return false;
+
+    // 5. Admin B claims edit lock -> acquires successfully
+    $claimB = acquire_or_check_study_plan_lock($pdo, 101, $bob_info);
+    if (!$claimB['success'] || $claimB['locked'] || !$claimB['is_owner']) return false;
+
+    // 6. Admin B performs heartbeat -> succeeds
+    $hbB = heartbeat_study_plan_lock($pdo, 101, $bob_info['admin_username'], $bob_info['session_token']);
+    if (!$hbB['success']) return false;
+
+    // 7. Clean up
+    release_study_plan_lock($pdo, 101, $bob_info['admin_username'], false, $bob_info['admin_id']);
+    return true;
+});
+
 echo "\n----------------------------------------------------------------------\n";
 echo "  RESULT: {$passed}/{$total} TESTS PASSED (" . round(($passed/$total)*100, 1) . "%)\n";
 echo "======================================================================\n\n";

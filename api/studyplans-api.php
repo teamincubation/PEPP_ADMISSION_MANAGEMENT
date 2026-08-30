@@ -69,7 +69,52 @@ $admin_username = $_SESSION['admin_username'] ?? 'Admin';
 try {
     if ($action === 'check_edit_lock') {
         $plan_id = (int)($_REQUEST['study_plan_id'] ?? 0);
+        $read_only_check = !empty($_REQUEST['read_only_mode']);
         $admin_info = get_current_admin_identity($pdo);
+
+        if ($read_only_check) {
+            // Read-only polling: do NOT acquire or update lock, just inspect status
+            $stmt = $pdo->prepare("SELECT * FROM study_plan_edit_locks WHERE study_plan_id = ? AND is_active = 1");
+            $stmt->execute([$plan_id]);
+            $lock = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$lock) {
+                echo json_encode(['success' => true, 'locked' => false, 'is_owner' => false, 'can_claim' => true]);
+                exit();
+            }
+
+            $last_hb = strtotime($lock['last_heartbeat_at']);
+            $is_stale = ($last_hb === false || (time() - $last_hb) > STUDY_PLAN_LOCK_TIMEOUT_SECONDS);
+
+            if ($is_stale) {
+                echo json_encode(['success' => true, 'locked' => false, 'is_owner' => false, 'can_claim' => true]);
+                exit();
+            }
+
+            if ($lock['admin_username'] === $admin_info['admin_username']) {
+                echo json_encode(['success' => true, 'locked' => false, 'is_owner' => true, 'can_claim' => true]);
+                exit();
+            }
+
+            $avatar_info = resolve_admin_photo_and_initials($pdo, !empty($lock['admin_id']) ? (int)$lock['admin_id'] : 0, $lock['admin_username'], $lock['admin_name']);
+            echo json_encode([
+                'success' => false,
+                'locked' => true,
+                'is_owner' => false,
+                'can_claim' => false,
+                'locked_by' => [
+                    'admin_id' => $lock['admin_id'],
+                    'admin_name' => $lock['admin_name'],
+                    'admin_username' => $lock['admin_username'],
+                    'locked_at' => $lock['locked_at'],
+                    'last_heartbeat_at' => $lock['last_heartbeat_at'],
+                    'photo_url' => $avatar_info['photo_url'],
+                    'initials' => $avatar_info['initials']
+                ]
+            ]);
+            exit();
+        }
+
         $lock_res = acquire_or_check_study_plan_lock($pdo, $plan_id, $admin_info);
         echo json_encode($lock_res);
         exit();
@@ -86,9 +131,15 @@ try {
     if ($action === 'release_study_plan_edit_lock') {
         $raw = file_get_contents('php://input');
         $data = json_decode($raw, true) ?: $_POST;
-        $plan_id = (int)($data['study_plan_id'] ?? ($_REQUEST['study_plan_id'] ?? 0));
+        $plan_id = (int)($data['study_plan_id'] ?? ($_REQUEST['study_plan_id'] ?? ($_GET['study_plan_id'] ?? 0)));
         $admin_info = get_current_admin_identity($pdo);
-        $rel_res = release_study_plan_lock($pdo, $plan_id, $admin_info['admin_username'], is_super_admin());
+        $rel_res = release_study_plan_lock(
+            $pdo,
+            $plan_id,
+            $admin_info['admin_username'],
+            is_super_admin(),
+            $admin_info['admin_id']
+        );
         echo json_encode($rel_res);
         exit();
     }

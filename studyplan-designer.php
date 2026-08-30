@@ -680,7 +680,7 @@ include 'includes/admin_nav.php';
 <?php if ($is_locked_by_other && $locked_by_admin): ?>
 <div id="edit-lock-banner" class="edit-lock-alert-banner">
     <div class="lock-banner-left">
-        <div class="lock-avatar-wrap">
+        <div class="lock-avatar-wrap" id="lock-avatar-container">
             <?php if (!empty($locked_by_admin['photo_url'])): ?>
                 <img src="../<?= htmlspecialchars($locked_by_admin['photo_url'], ENT_QUOTES, 'UTF-8') ?>" class="lock-avatar-img" alt="Avatar">
             <?php else: ?>
@@ -688,20 +688,20 @@ include 'includes/admin_nav.php';
             <?php endif; ?>
         </div>
         <div class="lock-banner-text">
-            <div class="lock-banner-title">
+            <div class="lock-banner-title" id="lock-banner-title-text">
                 <i class="fas fa-lock" style="color: #e11d48; margin-right: 6px;"></i>
                 <strong>Study Plan Locked for Editing</strong>
             </div>
-            <div class="lock-banner-subtitle">
+            <div class="lock-banner-subtitle" id="lock-banner-subtitle-text">
                 Currently being edited by <strong><?= htmlspecialchars($locked_by_admin['admin_name'] ?? $locked_by_admin['admin_username'], ENT_QUOTES, 'UTF-8') ?></strong>
                 <span style="opacity: 0.85;">(@<?= htmlspecialchars($locked_by_admin['admin_username'], ENT_QUOTES, 'UTF-8') ?>)</span>
                 • Opened at <?= date('h:i A, d M Y', strtotime($locked_by_admin['locked_at'] ?? 'now')) ?>
             </div>
         </div>
     </div>
-    <div class="lock-banner-right">
-        <span class="read-only-pill"><i class="fas fa-eye"></i> Read-Only Mode</span>
-        <a href="studyplans.php" class="btn-lock-exit"><i class="fas fa-arrow-left"></i> Exit to Study Plans</a>
+    <div class="lock-banner-right" id="lock-banner-right-actions">
+        <span class="read-only-pill" id="lock-badge-pill"><i class="fas fa-eye"></i> Read-Only Mode</span>
+        <a href="javascript:void(0)" onclick="confirmBack()" class="btn-lock-exit"><i class="fas fa-arrow-left"></i> Exit to Study Plans</a>
     </div>
 </div>
 <?php endif; ?>
@@ -725,9 +725,9 @@ include 'includes/admin_nav.php';
 
         <div class="panel-body-scrollable">
             <div class="designer-tabs">
-                <div class="designer-tab active" onclick="switchDesignerTab('settings')">Branding &amp; Settings</div>
-                <div class="designer-tab" onclick="switchDesignerTab('activities')">Daily Activities</div>
-                <div class="designer-tab" onclick="switchDesignerTab('templates')">Save Template</div>
+                <div class="designer-tab active" data-tab="settings" onclick="switchDesignerTab('settings', this)">Branding &amp; Settings</div>
+                <div class="designer-tab" data-tab="activities" onclick="switchDesignerTab('activities', this)">Daily Activities</div>
+                <div class="designer-tab" data-tab="templates" onclick="switchDesignerTab('templates', this)">Save Template</div>
             </div>
 
             <!-- Tab Content: Settings -->
@@ -1135,8 +1135,8 @@ include 'includes/admin_nav.php';
             To prevent overwriting changes, this plan is open in <strong>Read-Only Mode</strong>. You can view all tasks and preview the schedule, but modifications are disabled until the current editor finishes.
         </div>
         <div style="display:flex; justify-content:center; gap:10px;">
-            <a href="studyplans.php" class="btn btn-primary" style="background:#be123c; border-color:#be123c; color:#fff; font-weight:700; text-decoration:none;"><i class="fas fa-arrow-left"></i> Exit to Study Plans</a>
-            <button type="button" class="btn btn-outline" style="font-weight:700;" onclick="closeModal('modal-edit-locked')"><i class="fas fa-eye"></i> View Read-Only</button>
+            <a href="javascript:void(0)" onclick="confirmBack()" class="btn btn-primary" style="background:#be123c; border-color:#be123c; color:#fff; font-weight:700; text-decoration:none;"><i class="fas fa-arrow-left"></i> Exit to Study Plans</a>
+            <button type="button" class="btn btn-outline" style="font-weight:700;" onclick="viewReadOnlyMode()"><i class="fas fa-eye"></i> View Read-Only</button>
         </div>
     </div>
 </div>
@@ -1152,8 +1152,8 @@ include 'includes/admin_nav.php';
             Your edit lock for this study plan has expired or was reclaimed. The designer has been switched to <strong>Read-Only Mode</strong> to prevent conflicts.
         </p>
         <div style="display:flex; justify-content:center; gap:10px;">
-            <a href="studyplans.php" class="btn btn-primary" style="font-weight:700; text-decoration:none;"><i class="fas fa-arrow-left"></i> Back to Study Plans</a>
-            <button type="button" class="btn btn-outline" style="font-weight:700;" onclick="closeModal('modal-lock-lost')"><i class="fas fa-eye"></i> View Read-Only</button>
+            <a href="javascript:void(0)" onclick="confirmBack()" class="btn btn-primary" style="font-weight:700; text-decoration:none;"><i class="fas fa-arrow-left"></i> Back to Study Plans</a>
+            <button type="button" class="btn btn-outline" style="font-weight:700;" onclick="viewReadOnlyMode()"><i class="fas fa-eye"></i> View Read-Only</button>
         </div>
     </div>
 </div>
@@ -1398,12 +1398,19 @@ include 'includes/admin_nav.php';
         regenerateDatesPreview();
     }
 
-    function switchDesignerTab(tab) {
+    function switchDesignerTab(tab, el) {
         document.querySelectorAll('.designer-tab').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.designer-tab-content').forEach(c => c.style.display = 'none');
 
-        event.target.classList.add('active');
-        document.getElementById('tab-' + tab).style.display = 'block';
+        var targetTabBtn = el || document.querySelector('.designer-tab[data-tab="' + tab + '"]');
+        if (targetTabBtn && targetTabBtn.classList) {
+            targetTabBtn.classList.add('active');
+        }
+
+        var targetContent = document.getElementById('tab-' + tab);
+        if (targetContent) {
+            targetContent.style.display = 'block';
+        }
     }
 
     var selectedTaskKeys = new Set();
@@ -2438,8 +2445,9 @@ include 'includes/admin_nav.php';
                         applyServerActivityMappings(data2.activities);
                         hasUnsavedChanges = false;
                         alert('Study Plan & all schedules saved successfully!');
-                        releaseStudyPlanLock();
-                        window.location.href = 'studyplans.php';
+                        releaseStudyPlanLock(function() {
+                            window.location.href = 'studyplans.php';
+                        });
                     } else if (data2.error_code === 'EDIT_LOCK_HELD') {
                         enableReadOnlyMode();
                         openModal('modal-lock-lost');
@@ -2456,8 +2464,9 @@ include 'includes/admin_nav.php';
                                     applyServerActivityMappings(data3.activities);
                                     hasUnsavedChanges = false;
                                     alert('Study Plan & all schedules saved successfully!');
-                                    releaseStudyPlanLock();
-                                    window.location.href = 'studyplans.php';
+                                    releaseStudyPlanLock(function() {
+                                        window.location.href = 'studyplans.php';
+                                    });
                                 }
                                 else if (data3.error_code === 'EDIT_LOCK_HELD') { enableReadOnlyMode(); openModal('modal-lock-lost'); }
                                 else if (data3.error_code === 'STALE_STUDY_PLAN') { openModal('stale-warning-modal'); }
@@ -2596,6 +2605,8 @@ include 'includes/admin_nav.php';
     }
 
     /* ── SINGLE ADMIN EDIT LOCK LIFECYCLE ── */
+    var readOnlyLockPollerTimer = null;
+
     function enableReadOnlyMode() {
         isReadOnlyMode = true;
 
@@ -2631,45 +2642,135 @@ include 'includes/admin_nav.php';
         }
     }
 
+    function viewReadOnlyMode() {
+        closeModal('modal-edit-locked');
+        closeModal('modal-lock-lost');
+        switchDesignerTab('activities');
+        initReadOnlyLockPoller();
+    }
+
+    function initReadOnlyLockPoller() {
+        if (studyPlanId <= 0 || !isReadOnlyMode) return;
+
+        if (readOnlyLockPollerTimer) {
+            clearInterval(readOnlyLockPollerTimer);
+        }
+
+        readOnlyLockPollerTimer = setInterval(function() {
+            fetch('api/studyplans-api.php?action=check_edit_lock&read_only_mode=1&study_plan_id=' + encodeURIComponent(studyPlanId))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data && (data.can_claim || data.locked === false)) {
+                    clearInterval(readOnlyLockPollerTimer);
+                    readOnlyLockPollerTimer = null;
+                    notifyLockAvailable();
+                }
+            })
+            .catch(function(err) {
+                console.warn('Read-only lock poll error:', err);
+            });
+        }, 8000);
+    }
+
+    function notifyLockAvailable() {
+        var banner = document.getElementById('edit-lock-banner');
+        if (banner) {
+            banner.style.background = 'linear-gradient(135deg, #ecfdf5, #d1fae5)';
+            banner.style.borderColor = '#6ee7b7';
+            banner.style.boxShadow = '0 4px 14px rgba(16, 185, 129, 0.15)';
+
+            var titleEl = document.getElementById('lock-banner-title-text');
+            if (titleEl) {
+                titleEl.style.color = '#065f46';
+                titleEl.innerHTML = '<i class="fas fa-lock-open" style="color: #059669; margin-right: 6px;"></i> <strong>Edit Lock Now Available!</strong>';
+            }
+
+            var subEl = document.getElementById('lock-banner-subtitle-text');
+            if (subEl) {
+                subEl.style.color = '#047857';
+                subEl.innerHTML = 'The previous administrator has exited. You can now claim edit access for this study plan.';
+            }
+
+            var actionsEl = document.getElementById('lock-banner-right-actions');
+            if (actionsEl) {
+                actionsEl.innerHTML = '<button type="button" class="btn btn-sm" onclick="claimEditLock()" style="background:#10b981; border:none; color:#fff; font-weight:700; padding:8px 16px; border-radius:8px; display:inline-flex; align-items:center; gap:6px; cursor:pointer; box-shadow: 0 2px 8px rgba(16,185,129,0.3);"><i class="fas fa-lock-open"></i> Enter Edit Mode</button>' +
+                                      '<a href="javascript:void(0)" onclick="confirmBack()" class="btn-lock-exit" style="background:#64748b; margin-left:6px;"><i class="fas fa-arrow-left"></i> Exit</a>';
+            }
+        }
+    }
+
+    function claimEditLock() {
+        window.location.reload();
+    }
+
     function initLockHeartbeat() {
         if (studyPlanId <= 0 || isReadOnlyMode) return;
 
         lockHeartbeatTimer = setInterval(function() {
             fetch('api/studyplans-api.php?action=study_plan_edit_lock_heartbeat&study_plan_id=' + encodeURIComponent(studyPlanId))
-            .then(r => r.json())
-            .then(data => {
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
                 if (data && data.lock_lost) {
                     clearInterval(lockHeartbeatTimer);
                     lockHeartbeatTimer = null;
                     enableReadOnlyMode();
                     openModal('modal-lock-lost');
+                    initReadOnlyLockPoller();
                 }
             })
-            .catch(err => {
+            .catch(function(err) {
                 console.warn('Edit lock heartbeat error:', err);
             });
         }, 30000);
     }
 
-    function releaseStudyPlanLock() {
-        if (studyPlanId <= 0 || isReadOnlyMode || isLockReleased) return;
-        isLockReleased = true;
+    function releaseStudyPlanLock(callback) {
+        if (studyPlanId <= 0 || isReadOnlyMode) {
+            if (typeof callback === 'function') callback();
+            return;
+        }
 
         if (lockHeartbeatTimer) {
             clearInterval(lockHeartbeatTimer);
             lockHeartbeatTimer = null;
         }
 
-        var payload = JSON.stringify({ study_plan_id: studyPlanId });
-        if (navigator.sendBeacon) {
-            var blob = new Blob([payload], { type: 'application/json' });
-            navigator.sendBeacon('api/studyplans-api.php?action=release_study_plan_edit_lock', blob);
-        } else {
-            fetch('api/studyplans-api.php?action=release_study_plan_edit_lock', {
+        isLockReleased = true;
+
+        var url = 'api/studyplans-api.php?action=release_study_plan_edit_lock&study_plan_id=' + encodeURIComponent(studyPlanId);
+        var formData = new FormData();
+        formData.append('study_plan_id', String(studyPlanId));
+
+        if (typeof callback === 'function') {
+            var completed = false;
+            var onDone = function() {
+                if (!completed) {
+                    completed = true;
+                    callback();
+                }
+            };
+            var timer = setTimeout(onDone, 350);
+
+            fetch(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: payload,
-                keepalive: true
+                body: formData,
+                keepalive: true,
+                credentials: 'same-origin'
+            })
+            .then(function() { clearTimeout(timer); onDone(); })
+            .catch(function() { clearTimeout(timer); onDone(); });
+            return;
+        }
+
+        // Unload / Beacon fallback
+        if (navigator.sendBeacon) {
+            navigator.sendBeacon(url, formData);
+        } else {
+            fetch(url, {
+                method: 'POST',
+                body: formData,
+                keepalive: true,
+                credentials: 'same-origin'
             });
         }
     }
@@ -2678,8 +2779,9 @@ include 'includes/admin_nav.php';
         if (hasUnsavedChanges && !isReadOnlyMode) {
             openModal('exit-confirm-modal');
         } else {
-            releaseStudyPlanLock();
-            window.location.href = 'studyplans.php';
+            releaseStudyPlanLock(function() {
+                window.location.href = 'studyplans.php';
+            });
         }
     }
 
@@ -2690,8 +2792,10 @@ include 'includes/admin_nav.php';
 
     function exitWithoutSaving() {
         hasUnsavedChanges = false;
-        releaseStudyPlanLock();
-        window.location.href = 'studyplans.php';
+        closeModal('exit-confirm-modal');
+        releaseStudyPlanLock(function() {
+            window.location.href = 'studyplans.php';
+        });
     }
 
     window.addEventListener('pagehide', function() {
@@ -2707,9 +2811,18 @@ include 'includes/admin_nav.php';
         releaseStudyPlanLock();
     });
 
+    window.addEventListener('pageshow', function(e) {
+        if (e.persisted && !isReadOnlyMode && studyPlanId > 0) {
+            // Restored from BFCache -> refresh lock status
+            isLockReleased = false;
+            initLockHeartbeat();
+        }
+    });
+
     // Initialize lock handlers on page load
     if (isReadOnlyMode) {
         enableReadOnlyMode();
+        initReadOnlyLockPoller();
     } else {
         initLockHeartbeat();
     }

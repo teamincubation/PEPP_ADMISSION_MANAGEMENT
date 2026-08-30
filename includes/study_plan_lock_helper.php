@@ -254,7 +254,7 @@ function heartbeat_study_plan_lock(PDO $pdo, int $plan_id, string $admin_usernam
 /**
  * Releases edit lock when editor leaves, cancels, or exits edit mode
  */
-function release_study_plan_lock(PDO $pdo, int $plan_id, string $admin_username, bool $is_super_admin = false): array {
+function release_study_plan_lock(PDO $pdo, int $plan_id, string $admin_username, bool $is_super_admin = false, ?int $admin_id = null): array {
     if ($plan_id <= 0) {
         return ['success' => true];
     }
@@ -265,8 +265,19 @@ function release_study_plan_lock(PDO $pdo, int $plan_id, string $admin_username,
         $stmt = $pdo->prepare("DELETE FROM study_plan_edit_locks WHERE study_plan_id = ?");
         $stmt->execute([$plan_id]);
     } else {
-        $stmt = $pdo->prepare("DELETE FROM study_plan_edit_locks WHERE study_plan_id = ? AND admin_username = ?");
-        $stmt->execute([$plan_id, $admin_username]);
+        if ($admin_id && $admin_id > 0) {
+            $stmt = $pdo->prepare("
+                DELETE FROM study_plan_edit_locks 
+                WHERE study_plan_id = ? AND (admin_username = ? OR admin_id = ? OR LOWER(admin_username) = LOWER(?))
+            ");
+            $stmt->execute([$plan_id, $admin_username, $admin_id, strtolower($admin_username)]);
+        } else {
+            $stmt = $pdo->prepare("
+                DELETE FROM study_plan_edit_locks 
+                WHERE study_plan_id = ? AND (admin_username = ? OR LOWER(admin_username) = LOWER(?))
+            ");
+            $stmt->execute([$plan_id, $admin_username, strtolower($admin_username)]);
+        }
     }
 
     if ($stmt->rowCount() > 0) {
