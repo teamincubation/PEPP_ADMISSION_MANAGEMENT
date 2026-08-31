@@ -280,6 +280,55 @@ try {
             echo json_encode(['success' => $ok]);
             exit;
 
+        // 14. Stop Recurring Series (POST, Creator / Super Admin)
+        case 'stop_series':
+            if ($method !== 'POST') {
+                http_response_code(405);
+                echo json_encode(['success' => false, 'message' => 'Method not allowed.']);
+                exit;
+            }
+            $series_id = (int)($_POST['series_id'] ?? 0);
+            if ($series_id <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'message' => 'Invalid series ID.']);
+                exit;
+            }
+            $res = task_reminders_stop_series($pdo, $series_id, $current_admin_id, $current_username, $is_super);
+            if ($res['success']) {
+                echo json_encode($res);
+            } else {
+                http_response_code(422);
+                echo json_encode($res);
+            }
+            exit;
+
+        // 15. Get Series Info + Occurrence History (for monitoring dashboard)
+        case 'get_series_info':
+            $series_id = (int)($_GET['series_id'] ?? 0);
+            if ($series_id <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'message' => 'Invalid series ID.']);
+                exit;
+            }
+            $info = task_reminders_get_series_info($pdo, $series_id, $current_admin_id, $current_username, $is_super);
+            if ($info) {
+                echo json_encode(['success' => true, 'data' => $info]);
+            } else {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'Series not found or access denied.']);
+            }
+            exit;
+
+        // 16. List Active Recurring Series (for Admin A monitoring)
+        case 'list_series':
+            $filters = [
+                'status' => $_GET['status'] ?? 'active', // active|stopped|all
+                'assigned_to_username' => $_GET['assigned_to_username'] ?? ''
+            ];
+            $series = task_reminders_list_series($pdo, $current_admin_id, $current_username, $filters, $is_super);
+            echo json_encode(['success' => true, 'series' => $series]);
+            exit;
+
         default:
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'Unknown action requested.']);

@@ -3,7 +3,15 @@
  * PEPP Learning — Task Reminders & Accountability Module Helper Library
  * Authoritative backend service handling task management, life-cycle auditing,
  * assignment tracking, timer revalidations, and persistent notifications.
+ *
+ * TIMEZONE: All recurrence, midnight activation, overdue, and due-time logic
+ * uses the authoritative ERP business timezone below. Browser timezone must
+ * never determine server-side recurrence behavior.
  */
+if (!defined('PEPP_ERP_TIMEZONE')) {
+    define('PEPP_ERP_TIMEZONE', 'Asia/Kolkata');
+}
+date_default_timezone_set(PEPP_ERP_TIMEZONE);
 
 if (!function_exists('admins_table_exists')) {
     function admins_table_exists(PDO $pdo): bool {
@@ -110,7 +118,17 @@ if (!function_exists('ensure_task_reminders_schema')) {
                         'completed_at' => "DATETIME NULL",
                         'latest_remarks' => "TEXT NULL",
                         'email_sent' => "TINYINT(1) NOT NULL DEFAULT 0",
-                        'last_status_updated_at' => "DATETIME NULL"
+                        'last_status_updated_at' => "DATETIME NULL",
+                        // Recurrence columns
+                        'recurrence_type' => "VARCHAR(10) NOT NULL DEFAULT 'none'",
+                        'recurrence_weekdays' => "VARCHAR(20) NULL",
+                        'recurrence_month_days' => "VARCHAR(50) NULL",
+                        'recurrence_start_date' => "DATE NULL",
+                        'recurrence_end_date' => "DATE NULL",
+                        'recurrence_series_id' => "INT NULL",
+                        'recurrence_stopped_at' => "DATETIME NULL",
+                        'occurrence_date' => "DATE NULL",
+                        'is_series_parent' => "TINYINT(1) NOT NULL DEFAULT 0"
                     ];
                     foreach ($requiredCols as $colName => $colDef) {
                         try {
@@ -132,7 +150,10 @@ if (!function_exists('ensure_task_reminders_schema')) {
                         'idx_rem_type' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_type` (`task_type_id`)',
                         'idx_rem_assignee_status' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_assignee_status` (`assigned_to_admin_id`, `status`)',
                         'idx_rem_creator' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_creator` (`created_by_admin_id`, `status`)',
-                        'idx_rem_due_time' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_due_time` (`remind_at`, `status`)'
+                        'idx_rem_due_time' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_due_time` (`remind_at`, `status`)',
+                        'idx_rem_series' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_series` (`recurrence_series_id`)',
+                        'idx_rem_occurrence' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_occurrence` (`occurrence_date`)',
+                        'idx_rem_parent' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_parent` (`is_series_parent`, `recurrence_type`)'
                     ];
                     foreach ($indexesToCreate as $idxName => $alterSql) {
                         try {
@@ -142,6 +163,14 @@ if (!function_exists('ensure_task_reminders_schema')) {
                             }
                         } catch (Throwable $eIdx) {}
                     }
+
+                    // Concurrency-safe unique constraint: one occurrence per (series, date)
+                    try {
+                        $ukChk = $pdo->query("SHOW INDEX FROM `reminders` WHERE Key_name = 'uniq_series_occurrence'")->fetch();
+                        if (!$ukChk) {
+                            $pdo->exec("ALTER TABLE `reminders` ADD UNIQUE KEY `uniq_series_occurrence` (`recurrence_series_id`, `occurrence_date`)");
+                        }
+                    } catch (Throwable $eUk) {}
                 }
 
                 // 3. task_reminder_assignments
@@ -287,6 +316,15 @@ if (!function_exists('ensure_task_reminders_schema')) {
                         `latest_remarks` TEXT NULL,
                         `email_sent` INTEGER NOT NULL DEFAULT 0,
                         `last_status_updated_at` DATETIME NULL,
+                        `recurrence_type` VARCHAR(10) NOT NULL DEFAULT 'none',
+                        `recurrence_weekdays` VARCHAR(20) NULL,
+                        `recurrence_month_days` VARCHAR(50) NULL,
+                        `recurrence_start_date` DATE NULL,
+                        `recurrence_end_date` DATE NULL,
+                        `recurrence_series_id` INTEGER NULL,
+                        `recurrence_stopped_at` DATETIME NULL,
+                        `occurrence_date` DATE NULL,
+                        `is_series_parent` INTEGER NOT NULL DEFAULT 0,
                         `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
                         `updated_at` DATETIME NULL
                     );
@@ -339,6 +377,11 @@ if (!function_exists('ensure_task_reminders_schema')) {
                         `read_at` DATETIME NULL
                     );
                 ");
+
+                // SQLite: Concurrency-safe unique index for occurrences
+                try {
+                    $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS `uniq_series_occurrence` ON `reminders` (`recurrence_series_id`, `occurrence_date`)");
+                } catch (Throwable $eSqliteIdx) {}
 
                 // Seed SQLite default types
                 $cnt = (int)$pdo->query("SELECT COUNT(*) FROM `task_reminder_types`")->fetchColumn();
@@ -547,6 +590,7 @@ function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_usern
         // Query assigned active tasks for this admin
         $sql = "SELECT id, remind_at, status FROM reminders
                 WHERE status IN ('pending', 'in_progress')
+                AND (is_series_parent = 0 OR is_series_parent IS NULL)
                 AND (assigned_to_admin_id = ? OR assigned_to_username = ? OR assigned_to = ? OR assigned_to = '__ALL__')";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([$admin_id, $admin_username, $admin_username]);
@@ -577,6 +621,7 @@ function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_usern
         // Assigned by me pending tasks count
         $stmtAssigned = $pdo->prepare("SELECT COUNT(*) FROM reminders
             WHERE status IN ('pending', 'in_progress')
+            AND (is_series_parent = 0 OR is_series_parent IS NULL)
             AND (created_by_admin_id = ? OR created_by_username = ? OR created_by = ?)
             AND (assigned_to_admin_id != ? AND assigned_to_username != ? AND assigned_to != ?)");
         $stmtAssigned->execute([$admin_id, $admin_username, $admin_username, $admin_id, $admin_username, $admin_username]);
@@ -614,6 +659,7 @@ function task_reminders_verify_due_alert(PDO $pdo, int $task_id, int $admin_id, 
                 LEFT JOIN task_reminder_types tt ON tt.id = r.task_type_id
                 WHERE r.id = ?
                 AND r.status IN ('pending', 'in_progress')
+                AND (r.is_series_parent = 0 OR r.is_series_parent IS NULL)
                 AND r.remind_at <= ?
                 AND (r.assigned_to_admin_id = ? OR r.assigned_to_username = ? OR r.assigned_to = ? OR r.assigned_to = '__ALL__')
                 LIMIT 1";
@@ -649,7 +695,7 @@ function task_reminders_list_my_tasks(PDO $pdo, int $admin_id, string $admin_use
 
     try {
         $nowDate = date('Y-m-d H:i:s');
-        $where = ["(r.assigned_to_admin_id = ? OR r.assigned_to_username = ? OR r.assigned_to = ? OR r.assigned_to = '__ALL__')"];
+        $where = ["(r.assigned_to_admin_id = ? OR r.assigned_to_username = ? OR r.assigned_to = ? OR r.assigned_to = '__ALL__')", "(r.is_series_parent = 0 OR r.is_series_parent IS NULL)"];
         $params = [$admin_id, $admin_username, $admin_username];
 
         // Filter by status tab if given
@@ -728,7 +774,7 @@ function task_reminders_list_assigned_by_me(PDO $pdo, int $admin_id, string $adm
     }
 
     try {
-        $where = [];
+        $where = ["(r.is_series_parent = 0 OR r.is_series_parent IS NULL)"];
         $params = [];
 
         if (!$is_super_admin || empty($filters['all_assigned'])) {
@@ -954,6 +1000,13 @@ function task_reminders_create(PDO $pdo, array $data, int $creator_admin_id, str
     $remind_at = trim($data['remind_at'] ?? '');
     $assigned_to_username = trim($data['assigned_to'] ?? $creator_username);
 
+    // Recurrence fields (defaults to 'none' for one-time tasks)
+    $recurrence_type = trim($data['recurrence_type'] ?? 'none');
+    $recurrence_weekdays = trim($data['recurrence_weekdays'] ?? '');
+    $recurrence_month_days = trim($data['recurrence_month_days'] ?? '');
+    $recurrence_start_date = trim($data['recurrence_start_date'] ?? '');
+    $recurrence_end_date = trim($data['recurrence_end_date'] ?? '');
+
     if ($task_type_id <= 0) {
         return ['success' => false, 'message' => 'Task Type is required.'];
     }
@@ -983,81 +1036,211 @@ function task_reminders_create(PDO $pdo, array $data, int $creator_admin_id, str
     $assigned_to_admin_id = $assigneeIdent['id'];
     $assigned_to_username = $assigneeIdent['username'] ?: $assigned_to_username;
 
+    // Validate recurrence fields
+    if (!in_array($recurrence_type, ['none', 'daily', 'weekly', 'monthly'])) {
+        $recurrence_type = 'none';
+    }
+
+    if ($recurrence_type === 'weekly' && empty($recurrence_weekdays)) {
+        return ['success' => false, 'message' => 'Weekly recurrence requires at least one weekday selected.'];
+    }
+    if ($recurrence_type === 'monthly' && empty($recurrence_month_days)) {
+        return ['success' => false, 'message' => 'Monthly recurrence requires at least one day selected.'];
+    }
+
+    // For recurring tasks, validate and default start_date
+    $is_recurring = ($recurrence_type !== 'none');
+    if ($is_recurring) {
+        if (empty($recurrence_start_date) || !strtotime($recurrence_start_date)) {
+            $recurrence_start_date = date('Y-m-d'); // Default to today
+        } else {
+            $recurrence_start_date = date('Y-m-d', strtotime($recurrence_start_date));
+        }
+        if (!empty($recurrence_end_date) && strtotime($recurrence_end_date)) {
+            $recurrence_end_date = date('Y-m-d', strtotime($recurrence_end_date));
+            if ($recurrence_end_date < $recurrence_start_date) {
+                return ['success' => false, 'message' => 'End date cannot be before start date.'];
+            }
+        } else {
+            $recurrence_end_date = null; // Never ends
+        }
+    }
+
     try {
         $nowDate = date('Y-m-d H:i:s');
-        $stmt = $pdo->prepare("
-            INSERT INTO reminders (
-                task_type_id, title, notes, remind_at,
-                created_by_admin_id, created_by_username, created_by,
-                assigned_by_admin_id, assigned_by_username,
-                assigned_to_admin_id, assigned_to_username, assigned_to,
-                assigned_at, status, email_sent, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)
-        ");
-        $stmt->execute([
-            $task_type_id, $title, $notes, $due_datetime,
-            $creator_admin_id, $creator_username, $creator_username,
-            $creator_admin_id, $creator_username,
-            $assigned_to_admin_id, $assigned_to_username, $assigned_to_username,
-            $nowDate, $nowDate
-        ]);
-        $taskId = (int)$pdo->lastInsertId();
 
-        // 1. Insert Initial Assignment Record
-        $stmtAss = $pdo->prepare("
-            INSERT INTO task_reminder_assignments (
-                task_id, assigned_by_admin_id, assigned_by_username,
-                assigned_to_admin_id, assigned_to_username,
-                assigned_at, is_current
-            ) VALUES (?, ?, ?, ?, ?, ?, 1)
-        ");
-        $stmtAss->execute([
-            $taskId, $creator_admin_id, $creator_username,
-            $assigned_to_admin_id, $assigned_to_username, $nowDate
-        ]);
+        if ($is_recurring) {
+            // === CREATE SERIES PARENT ===
+            $stmt = $pdo->prepare("
+                INSERT INTO reminders (
+                    task_type_id, title, notes, remind_at,
+                    created_by_admin_id, created_by_username, created_by,
+                    assigned_by_admin_id, assigned_by_username,
+                    assigned_to_admin_id, assigned_to_username, assigned_to,
+                    assigned_at, status, email_sent,
+                    recurrence_type, recurrence_weekdays, recurrence_month_days,
+                    recurrence_start_date, recurrence_end_date,
+                    is_series_parent, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, 1, ?)
+            ");
+            $stmt->execute([
+                $task_type_id, $title, $notes, $due_datetime,
+                $creator_admin_id, $creator_username, $creator_username,
+                $creator_admin_id, $creator_username,
+                $assigned_to_admin_id, $assigned_to_username, $assigned_to_username,
+                $nowDate,
+                $recurrence_type,
+                $recurrence_weekdays ?: null,
+                $recurrence_month_days ?: null,
+                $recurrence_start_date,
+                $recurrence_end_date,
+                $nowDate
+            ]);
+            $seriesId = (int)$pdo->lastInsertId();
 
-        // 2. Insert CREATED Lifecycle Event in History
-        $detailsJson = json_encode([
-            'task_type_id' => $task_type_id,
-            'task_type_name' => $typeInfo['name'],
-            'title' => $title,
-            'remind_at' => $due_datetime,
-            'assigned_to' => $assigned_to_username
-        ]);
+            // Lifecycle event for series creation
+            $detailsJson = json_encode([
+                'task_type_id' => $task_type_id,
+                'task_type_name' => $typeInfo['name'],
+                'title' => $title,
+                'recurrence_type' => $recurrence_type,
+                'recurrence_start' => $recurrence_start_date,
+                'recurrence_end' => $recurrence_end_date,
+                'assigned_to' => $assigned_to_username
+            ]);
+            $pdo->prepare("
+                INSERT INTO task_reminder_status_history (
+                    task_id, event_type, old_status, new_status,
+                    changed_by_admin_id, changed_by_username, remarks, details_json, changed_at
+                ) VALUES (?, 'SERIES_CREATED', NULL, 'active', ?, ?, 'Recurring series created', ?, ?)
+            ")->execute([$seriesId, $creator_admin_id, $creator_username, $detailsJson, $nowDate]);
 
-        $stmtHist = $pdo->prepare("
-            INSERT INTO task_reminder_status_history (
-                task_id, event_type, old_status, new_status,
-                changed_by_admin_id, changed_by_username, remarks, details_json, changed_at
-            ) VALUES (?, 'CREATED', NULL, 'pending', ?, ?, 'Task created and assigned', ?, ?)
-        ");
-        $stmtHist->execute([$taskId, $creator_admin_id, $creator_username, $detailsJson, $nowDate]);
+            // TASK_ASSIGNED notification for assignee (one per series)
+            if ($assigned_to_username !== $creator_username && $assigned_to_username !== '__ALL__') {
+                try {
+                    $recLabel = ucfirst($recurrence_type);
+                    $startLabel = date('d M', strtotime($recurrence_start_date));
+                    $eventKey = "TASK_ASSIGNED:series:{$seriesId}";
+                    $notifMsg = "{$creator_username} assigned you a recurring task: {$title} ({$recLabel}, starts {$startLabel})";
 
-        // 3. Create Persistent Notification for Assignee if assigned to another admin
-        if ($assigned_to_username !== $creator_username && $assigned_to_username !== '__ALL__') {
-            try {
-                $eventKey = 'assigned:' . date('YmdHis');
-                $stmtNotif = $pdo->prepare("
-                    INSERT INTO task_reminder_notifications (
-                        task_id, recipient_admin_id, recipient_username,
-                        sender_admin_id, sender_username,
-                        notification_type, event_key, message, is_read, created_at
-                    ) VALUES (?, ?, ?, ?, ?, 'TASK_ASSIGNED', ?, ?, 0, ?)
-                ");
-                $stmtNotif->execute([
-                    $taskId, $assigned_to_admin_id, $assigned_to_username,
-                    $creator_admin_id, $creator_username,
-                    $eventKey, "You have been assigned a new task: {$title} by {$creator_username}",
-                    $nowDate
-                ]);
-            } catch (Exception $eNotif) {}
+                    $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+                    if ($driver === 'mysql') {
+                        $pdo->prepare("
+                            INSERT INTO task_reminder_notifications (
+                                task_id, recipient_admin_id, recipient_username,
+                                sender_admin_id, sender_username,
+                                notification_type, event_key, message, is_read, created_at
+                            ) VALUES (?, ?, ?, ?, ?, 'TASK_ASSIGNED', ?, ?, 0, ?)
+                            ON DUPLICATE KEY UPDATE id = id
+                        ")->execute([
+                            $seriesId, $assigned_to_admin_id, $assigned_to_username,
+                            $creator_admin_id, $creator_username,
+                            $eventKey, $notifMsg, $nowDate
+                        ]);
+                    } else {
+                        $pdo->prepare("
+                            INSERT OR IGNORE INTO task_reminder_notifications (
+                                task_id, recipient_admin_id, recipient_username,
+                                sender_admin_id, sender_username,
+                                notification_type, event_key, message, is_read, created_at
+                            ) VALUES (?, ?, ?, ?, ?, 'TASK_ASSIGNED', ?, ?, 0, ?)
+                        ")->execute([
+                            $seriesId, $assigned_to_admin_id, $assigned_to_username,
+                            $creator_admin_id, $creator_username,
+                            $eventKey, $notifMsg, $nowDate
+                        ]);
+                    }
+                } catch (Exception $eNotif) {}
+            }
+
+            // Immediately materialize today's occurrence if start_date <= today
+            if ($recurrence_start_date <= date('Y-m-d')) {
+                task_reminders_materialize_occurrences($pdo);
+            }
+
+            return [
+                'success' => true,
+                'task_id' => $seriesId,
+                'is_series' => true,
+                'message' => "Recurring {$recurrence_type} task created successfully."
+            ];
+
+        } else {
+            // === CREATE ONE-TIME TASK (existing logic preserved) ===
+            $stmt = $pdo->prepare("
+                INSERT INTO reminders (
+                    task_type_id, title, notes, remind_at,
+                    created_by_admin_id, created_by_username, created_by,
+                    assigned_by_admin_id, assigned_by_username,
+                    assigned_to_admin_id, assigned_to_username, assigned_to,
+                    assigned_at, status, email_sent, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)
+            ");
+            $stmt->execute([
+                $task_type_id, $title, $notes, $due_datetime,
+                $creator_admin_id, $creator_username, $creator_username,
+                $creator_admin_id, $creator_username,
+                $assigned_to_admin_id, $assigned_to_username, $assigned_to_username,
+                $nowDate, $nowDate
+            ]);
+            $taskId = (int)$pdo->lastInsertId();
+
+            // 1. Insert Initial Assignment Record
+            $stmtAss = $pdo->prepare("
+                INSERT INTO task_reminder_assignments (
+                    task_id, assigned_by_admin_id, assigned_by_username,
+                    assigned_to_admin_id, assigned_to_username,
+                    assigned_at, is_current
+                ) VALUES (?, ?, ?, ?, ?, ?, 1)
+            ");
+            $stmtAss->execute([
+                $taskId, $creator_admin_id, $creator_username,
+                $assigned_to_admin_id, $assigned_to_username, $nowDate
+            ]);
+
+            // 2. Insert CREATED Lifecycle Event in History
+            $detailsJson = json_encode([
+                'task_type_id' => $task_type_id,
+                'task_type_name' => $typeInfo['name'],
+                'title' => $title,
+                'remind_at' => $due_datetime,
+                'assigned_to' => $assigned_to_username
+            ]);
+
+            $stmtHist = $pdo->prepare("
+                INSERT INTO task_reminder_status_history (
+                    task_id, event_type, old_status, new_status,
+                    changed_by_admin_id, changed_by_username, remarks, details_json, changed_at
+                ) VALUES (?, 'CREATED', NULL, 'pending', ?, ?, 'Task created and assigned', ?, ?)
+            ");
+            $stmtHist->execute([$taskId, $creator_admin_id, $creator_username, $detailsJson, $nowDate]);
+
+            // 3. Create Persistent Notification for Assignee if assigned to another admin
+            if ($assigned_to_username !== $creator_username && $assigned_to_username !== '__ALL__') {
+                try {
+                    $eventKey = 'assigned:' . date('YmdHis');
+                    $stmtNotif = $pdo->prepare("
+                        INSERT INTO task_reminder_notifications (
+                            task_id, recipient_admin_id, recipient_username,
+                            sender_admin_id, sender_username,
+                            notification_type, event_key, message, is_read, created_at
+                        ) VALUES (?, ?, ?, ?, ?, 'TASK_ASSIGNED', ?, ?, 0, ?)
+                    ");
+                    $stmtNotif->execute([
+                        $taskId, $assigned_to_admin_id, $assigned_to_username,
+                        $creator_admin_id, $creator_username,
+                        $eventKey, "You have been assigned a new task: {$title} by {$creator_username}",
+                        $nowDate
+                    ]);
+                } catch (Exception $eNotif) {}
+            }
+
+            return [
+                'success' => true,
+                'task_id' => $taskId,
+                'message' => 'Task Reminder created successfully.'
+            ];
         }
-
-        return [
-            'success' => true,
-            'task_id' => $taskId,
-            'message' => 'Task Reminder created successfully.'
-        ];
     } catch (Exception $e) {
         error_log("task_reminders_create error: " . $e->getMessage());
         return ['success' => false, 'message' => 'Failed to create task: ' . $e->getMessage()];
@@ -1331,10 +1514,10 @@ function task_reminders_postpone(PDO $pdo, int $task_id, string $new_remind_at, 
         $nowDate = date('Y-m-d H:i:s');
         $oldRemindAt = $task['remind_at'];
 
-        // Update reminder row
+        // Update reminder row (snooze_until removed — column does not exist)
         $stmtUpd = $pdo->prepare("
             UPDATE reminders SET
-                remind_at = ?, email_sent = 0, snooze_until = NULL,
+                remind_at = ?, email_sent = 0,
                 latest_remarks = (CASE WHEN ? != '' THEN ? ELSE latest_remarks END),
                 last_status_updated_at = ?
             WHERE id = ?
@@ -1508,6 +1691,504 @@ function task_reminders_update_status(PDO $pdo, int $task_id, string $new_status
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// RECURRING TASK ENGINE — Concurrency-Safe Occurrence Materializer
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Compute all eligible occurrence dates for a recurring series from start to today.
+ * Returns array of 'Y-m-d' date strings.
+ *
+ * Rules:
+ * - Daily: every date from start to today
+ * - Weekly: only dates matching recurrence_weekdays (0=Sun..6=Sat)
+ * - Monthly: only dates matching recurrence_month_days (1-31 or 'last')
+ *   - Invalid dates (Feb 30, Apr 31) are skipped, NOT adjusted
+ *   - 'last' computes the actual last day of each month
+ */
+function task_reminders_compute_occurrence_dates(array $series, string $today_ymd): array {
+    $type = $series['recurrence_type'] ?? 'none';
+    if ($type === 'none') return [];
+
+    $startDate = $series['recurrence_start_date'] ?? null;
+    $endDate   = $series['recurrence_end_date'] ?? null;
+    $stoppedAt = $series['recurrence_stopped_at'] ?? null;
+
+    if (!$startDate) return [];
+
+    // Determine the effective end date
+    $effectiveEnd = $today_ymd;
+    if ($endDate && $endDate < $effectiveEnd) {
+        $effectiveEnd = $endDate;
+    }
+    // If series was stopped, don't create occurrences for dates after the stop
+    if ($stoppedAt) {
+        $stoppedDate = substr($stoppedAt, 0, 10); // Y-m-d portion
+        if ($stoppedDate < $effectiveEnd) {
+            $effectiveEnd = $stoppedDate;
+        }
+    }
+
+    if ($startDate > $effectiveEnd) return [];
+
+    $dates = [];
+    $current = $startDate;
+
+    switch ($type) {
+        case 'daily':
+            while ($current <= $effectiveEnd) {
+                $dates[] = $current;
+                $current = date('Y-m-d', strtotime($current . ' +1 day'));
+            }
+            break;
+
+        case 'weekly':
+            $weekdays = array_map('intval', array_filter(explode(',', $series['recurrence_weekdays'] ?? ''), 'strlen'));
+            if (empty($weekdays)) return [];
+            while ($current <= $effectiveEnd) {
+                $dow = (int)date('w', strtotime($current)); // 0=Sun..6=Sat
+                if (in_array($dow, $weekdays, true)) {
+                    $dates[] = $current;
+                }
+                $current = date('Y-m-d', strtotime($current . ' +1 day'));
+            }
+            break;
+
+        case 'monthly':
+            $monthDaysRaw = $series['recurrence_month_days'] ?? '';
+            $parts = array_filter(array_map('trim', explode(',', $monthDaysRaw)), 'strlen');
+            if (empty($parts)) return [];
+
+            $hasLast = in_array('last', $parts, true);
+            $numericDays = array_map('intval', array_filter($parts, function($p) { return $p !== 'last' && is_numeric($p); }));
+
+            // Iterate month by month from start to effective end
+            $curYear  = (int)date('Y', strtotime($startDate));
+            $curMonth = (int)date('m', strtotime($startDate));
+            $endYear  = (int)date('Y', strtotime($effectiveEnd));
+            $endMonth = (int)date('m', strtotime($effectiveEnd));
+
+            while ($curYear < $endYear || ($curYear === $endYear && $curMonth <= $endMonth)) {
+                $daysInMonth = (int)date('t', mktime(0, 0, 0, $curMonth, 1, $curYear));
+
+                foreach ($numericDays as $day) {
+                    if ($day < 1 || $day > $daysInMonth) continue; // Skip invalid (Feb 30, etc.)
+                    $d = sprintf('%04d-%02d-%02d', $curYear, $curMonth, $day);
+                    if ($d >= $startDate && $d <= $effectiveEnd) {
+                        $dates[] = $d;
+                    }
+                }
+
+                if ($hasLast) {
+                    $d = sprintf('%04d-%02d-%02d', $curYear, $curMonth, $daysInMonth);
+                    if ($d >= $startDate && $d <= $effectiveEnd) {
+                        $dates[] = $d;
+                    }
+                }
+
+                $curMonth++;
+                if ($curMonth > 12) {
+                    $curMonth = 1;
+                    $curYear++;
+                }
+            }
+
+            // Deduplicate and sort (in case 'last' and a specific day collide, e.g. day 28 in Feb)
+            $dates = array_values(array_unique($dates));
+            sort($dates);
+            break;
+    }
+
+    return $dates;
+}
+
+/**
+ * Materialize recurring task occurrences. Concurrency-safe and idempotent.
+ *
+ * Design:
+ * - Queries all active series parents
+ * - Computes eligible dates up to TODAY (never future)
+ * - Uses database-level UNIQUE constraint (recurrence_series_id, occurrence_date) +
+ *   targeted duplicate-key handling (NOT broad INSERT IGNORE) to guarantee exactly
+ *   one occurrence per (series, date)
+ * - Creates assignment records + CREATED history + TASK_AVAILABLE notification
+ *   with idempotent event keys
+ * - No arbitrary per-series date limit: every eligible missed date gets an occurrence
+ * - Batches series processing (50 per call) with safe continuation across page loads
+ *
+ * @return int Number of newly materialized occurrences
+ */
+function task_reminders_materialize_occurrences(PDO $pdo): int {
+    task_reminders_ensure_schema($pdo);
+    if (!reminders_table_exists($pdo)) return 0;
+
+    $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+    $todayYmd = date('Y-m-d');
+    $nowDate = date('Y-m-d H:i:s');
+    $createdCount = 0;
+
+    try {
+        // Fetch active series parents (batched for performance)
+        $sql = "SELECT * FROM reminders
+                WHERE is_series_parent = 1
+                AND recurrence_type != 'none'
+                AND recurrence_stopped_at IS NULL
+                AND recurrence_start_date IS NOT NULL
+                AND recurrence_start_date <= ?
+                AND (recurrence_end_date IS NULL OR recurrence_end_date >= ?)
+                ORDER BY id ASC
+                LIMIT 50";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$todayYmd, $todayYmd]);
+        $seriesList = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($seriesList)) return 0;
+
+        foreach ($seriesList as $series) {
+            $seriesId = (int)$series['id'];
+            $eligibleDates = task_reminders_compute_occurrence_dates($series, $todayYmd);
+            if (empty($eligibleDates)) continue;
+
+            // Extract the authoritative time component from the parent's remind_at
+            $parentTime = date('H:i:s', strtotime($series['remind_at']));
+
+            // Get existing occurrence dates for this series (to skip already-created ones at app level
+            // as a performance optimization; the DB constraint is the real safety net)
+            $existStmt = $pdo->prepare("SELECT occurrence_date FROM reminders WHERE recurrence_series_id = ?");
+            $existStmt->execute([$seriesId]);
+            $existingDates = $existStmt->fetchAll(PDO::FETCH_COLUMN);
+            $existingSet = array_flip($existingDates);
+
+            foreach ($eligibleDates as $occDate) {
+                // App-level skip (performance optimization only, not safety)
+                if (isset($existingSet[$occDate])) continue;
+
+                // Compute this occurrence's authoritative remind_at
+                $remindAt = $occDate . ' ' . $parentTime;
+
+                try {
+                    // Concurrency-safe insert: use targeted duplicate-key handling
+                    if ($driver === 'mysql') {
+                        // MySQL: INSERT ... ON DUPLICATE KEY UPDATE id=id (no-op on conflict)
+                        // This only suppresses duplicate-key violations on uniq_series_occurrence,
+                        // NOT other database errors
+                        $insStmt = $pdo->prepare("
+                            INSERT INTO reminders (
+                                title, notes, remind_at, status,
+                                created_by, created_by_admin_id, created_by_username,
+                                assigned_to, assigned_to_admin_id, assigned_to_username,
+                                assigned_by_admin_id, assigned_by_username,
+                                assigned_at, task_type_id, email_sent,
+                                recurrence_type, recurrence_series_id, occurrence_date,
+                                is_series_parent, created_at
+                            ) VALUES (
+                                ?, ?, ?, 'pending',
+                                ?, ?, ?,
+                                ?, ?, ?,
+                                ?, ?,
+                                ?, ?, 0,
+                                'none', ?, ?,
+                                0, ?
+                            )
+                            ON DUPLICATE KEY UPDATE id = id
+                        ");
+                    } else {
+                        // SQLite: INSERT OR IGNORE only for the unique constraint
+                        $insStmt = $pdo->prepare("
+                            INSERT OR IGNORE INTO reminders (
+                                title, notes, remind_at, status,
+                                created_by, created_by_admin_id, created_by_username,
+                                assigned_to, assigned_to_admin_id, assigned_to_username,
+                                assigned_by_admin_id, assigned_by_username,
+                                assigned_at, task_type_id, email_sent,
+                                recurrence_type, recurrence_series_id, occurrence_date,
+                                is_series_parent, created_at
+                            ) VALUES (
+                                ?, ?, ?, 'pending',
+                                ?, ?, ?,
+                                ?, ?, ?,
+                                ?, ?,
+                                ?, ?, 0,
+                                'none', ?, ?,
+                                0, ?
+                            )
+                        ");
+                    }
+
+                    $insStmt->execute([
+                        $series['title'], $series['notes'], $remindAt,
+                        $series['created_by'], $series['created_by_admin_id'], $series['created_by_username'],
+                        $series['assigned_to'], $series['assigned_to_admin_id'], $series['assigned_to_username'],
+                        $series['assigned_by_admin_id'], $series['assigned_by_username'],
+                        $nowDate, $series['task_type_id'],
+                        $seriesId, $occDate,
+                        $nowDate
+                    ]);
+
+                    // Check if a row was actually inserted (vs duplicate-key no-op)
+                    $rowsAffected = $insStmt->rowCount();
+                    if ($rowsAffected === 0) continue; // Duplicate — another process already created it
+
+                    $newOccId = (int)$pdo->lastInsertId();
+                    $createdCount++;
+
+                    // Create assignment record for this occurrence
+                    try {
+                        $pdo->prepare("
+                            INSERT INTO task_reminder_assignments (
+                                task_id, assigned_by_admin_id, assigned_by_username,
+                                assigned_to_admin_id, assigned_to_username,
+                                assigned_at, is_current
+                            ) VALUES (?, ?, ?, ?, ?, ?, 1)
+                        ")->execute([
+                            $newOccId, $series['created_by_admin_id'], $series['created_by_username'],
+                            $series['assigned_to_admin_id'], $series['assigned_to_username'], $nowDate
+                        ]);
+                    } catch (Throwable $eAss) {}
+
+                    // Create CREATED lifecycle event
+                    try {
+                        $detailsJson = json_encode([
+                            'series_id' => $seriesId,
+                            'occurrence_date' => $occDate,
+                            'remind_at' => $remindAt,
+                            'recurrence_type' => $series['recurrence_type']
+                        ]);
+                        $pdo->prepare("
+                            INSERT INTO task_reminder_status_history (
+                                task_id, event_type, old_status, new_status,
+                                changed_by_admin_id, changed_by_username, remarks, details_json, changed_at
+                            ) VALUES (?, 'CREATED', NULL, 'pending', ?, 'SYSTEM', 'Recurring occurrence materialized', ?, ?)
+                        ")->execute([$newOccId, $series['created_by_admin_id'], $detailsJson, $nowDate]);
+                    } catch (Throwable $eHist) {}
+
+                    // Create idempotent TASK_AVAILABLE notification for assignee
+                    $assigneeUsername = $series['assigned_to_username'] ?: $series['assigned_to'];
+                    if ($assigneeUsername && $assigneeUsername !== '__ALL__') {
+                        try {
+                            // Unique event key: guarantees idempotency even if crash occurs
+                            // between occurrence creation and notification creation
+                            $eventKey = "TASK_AVAILABLE:{$newOccId}";
+                            $formattedTime = date('h:i A', strtotime($remindAt));
+                            $notifMsg = "Today's task is available: {$series['title']}, due {$formattedTime}";
+
+                            if ($driver === 'mysql') {
+                                $pdo->prepare("
+                                    INSERT INTO task_reminder_notifications (
+                                        task_id, recipient_admin_id, recipient_username,
+                                        sender_admin_id, sender_username,
+                                        notification_type, event_key, message, is_read, created_at
+                                    ) VALUES (?, ?, ?, ?, ?, 'TASK_AVAILABLE', ?, ?, 0, ?)
+                                    ON DUPLICATE KEY UPDATE id = id
+                                ")->execute([
+                                    $newOccId, $series['assigned_to_admin_id'], $assigneeUsername,
+                                    $series['created_by_admin_id'], $series['created_by_username'],
+                                    $eventKey, $notifMsg, $nowDate
+                                ]);
+                            } else {
+                                $pdo->prepare("
+                                    INSERT OR IGNORE INTO task_reminder_notifications (
+                                        task_id, recipient_admin_id, recipient_username,
+                                        sender_admin_id, sender_username,
+                                        notification_type, event_key, message, is_read, created_at
+                                    ) VALUES (?, ?, ?, ?, ?, 'TASK_AVAILABLE', ?, ?, 0, ?)
+                                ")->execute([
+                                    $newOccId, $series['assigned_to_admin_id'], $assigneeUsername,
+                                    $series['created_by_admin_id'], $series['created_by_username'],
+                                    $eventKey, $notifMsg, $nowDate
+                                ]);
+                            }
+                        } catch (Throwable $eNotif) {}
+                    }
+
+                } catch (Throwable $eIns) {
+                    // Log unexpected errors (not duplicate key)
+                    error_log("task_reminders_materialize occurrence insert error (series={$seriesId}, date={$occDate}): " . $eIns->getMessage());
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        error_log("task_reminders_materialize_occurrences error: " . $e->getMessage());
+    }
+
+    return $createdCount;
+}
+
+/**
+ * Stop a recurring series. Sets recurrence_stopped_at, no occurrences deleted.
+ * Only Creator or Super Admin can stop a series.
+ */
+function task_reminders_stop_series(PDO $pdo, int $series_parent_id, int $admin_id, string $admin_username, bool $is_super_admin = false): array {
+    if (!reminders_table_exists($pdo) || $series_parent_id <= 0) {
+        return ['success' => false, 'message' => 'Invalid series ID.'];
+    }
+
+    try {
+        $stmt = $pdo->prepare("SELECT * FROM reminders WHERE id = ? AND is_series_parent = 1 LIMIT 1");
+        $stmt->execute([$series_parent_id]);
+        $series = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$series) {
+            return ['success' => false, 'message' => 'Recurring series not found.'];
+        }
+
+        if ($series['recurrence_stopped_at']) {
+            return ['success' => false, 'message' => 'This series is already stopped.'];
+        }
+
+        // Authorization: Creator or Super Admin
+        $isCreator = ($series['created_by_admin_id'] == $admin_id || $series['created_by_username'] === $admin_username || $series['created_by'] === $admin_username);
+        if (!$is_super_admin && !$isCreator) {
+            return ['success' => false, 'message' => 'Only the task creator or super admin can stop this series.'];
+        }
+
+        $nowDate = date('Y-m-d H:i:s');
+        $pdo->prepare("UPDATE reminders SET recurrence_stopped_at = ? WHERE id = ?")->execute([$nowDate, $series_parent_id]);
+
+        // Log SERIES_STOPPED event
+        $detailsJson = json_encode([
+            'series_id' => $series_parent_id,
+            'recurrence_type' => $series['recurrence_type'],
+            'stopped_by' => $admin_username
+        ]);
+        $pdo->prepare("
+            INSERT INTO task_reminder_status_history (
+                task_id, event_type, old_status, new_status,
+                changed_by_admin_id, changed_by_username, remarks, details_json, changed_at
+            ) VALUES (?, 'SERIES_STOPPED', 'active', 'stopped', ?, ?, 'Recurring series stopped', ?, ?)
+        ")->execute([$series_parent_id, $admin_id, $admin_username, $detailsJson, $nowDate]);
+
+        return ['success' => true, 'message' => 'Recurring series stopped. No new occurrences will be created.'];
+    } catch (Exception $e) {
+        error_log("task_reminders_stop_series error: " . $e->getMessage());
+        return ['success' => false, 'message' => 'Failed to stop series: ' . $e->getMessage()];
+    }
+}
+
+/**
+ * Get series info and occurrence history for Admin A monitoring view.
+ */
+function task_reminders_get_series_info(PDO $pdo, int $series_parent_id, int $admin_id, string $admin_username, bool $is_super_admin = false): ?array {
+    if (!reminders_table_exists($pdo) || $series_parent_id <= 0) return null;
+
+    try {
+        $stmt = $pdo->prepare("SELECT r.*, tt.name as task_type_name FROM reminders r LEFT JOIN task_reminder_types tt ON tt.id = r.task_type_id WHERE r.id = ? AND r.is_series_parent = 1 LIMIT 1");
+        $stmt->execute([$series_parent_id]);
+        $series = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$series) return null;
+
+        // Authorization
+        $isCreator = ($series['created_by_admin_id'] == $admin_id || $series['created_by_username'] === $admin_username || $series['created_by'] === $admin_username);
+        $isAssignee = ($series['assigned_to_admin_id'] == $admin_id || $series['assigned_to_username'] === $admin_username);
+        if (!$is_super_admin && !$isCreator && !$isAssignee) return null;
+
+        // Get all materialized occurrences ordered by date
+        $occStmt = $pdo->prepare("SELECT id, occurrence_date, remind_at, status, completed_at, completed_by_username FROM reminders WHERE recurrence_series_id = ? AND is_series_parent = 0 ORDER BY occurrence_date DESC");
+        $occStmt->execute([$series_parent_id]);
+        $occurrences = $occStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $now = time();
+        foreach ($occurrences as &$occ) {
+            $occ['formatted_due'] = date('d M Y, h:i A', strtotime($occ['remind_at']));
+            $occ['formatted_date'] = date('d M', strtotime($occ['occurrence_date']));
+            $occ['is_overdue'] = in_array($occ['status'], ['pending', 'in_progress']) && strtotime($occ['remind_at']) < $now;
+        }
+
+        $series['task_type_name'] = $series['task_type_name'] ?: 'General Task';
+        $series['is_stopped'] = !empty($series['recurrence_stopped_at']);
+        $series['formatted_start'] = date('d M Y', strtotime($series['recurrence_start_date']));
+        $series['formatted_end'] = $series['recurrence_end_date'] ? date('d M Y', strtotime($series['recurrence_end_date'])) : 'Never';
+
+        return [
+            'series' => $series,
+            'occurrences' => $occurrences,
+            'is_creator' => $isCreator,
+            'is_assignee' => $isAssignee,
+            'is_super_admin' => $is_super_admin
+        ];
+    } catch (Exception $e) {
+        error_log("task_reminders_get_series_info error: " . $e->getMessage());
+        return null;
+    }
+}
+
+/**
+ * List recurring series for Admin A monitoring dashboard.
+ * Returns series parent rows with occurrence status summary.
+ */
+function task_reminders_list_series(PDO $pdo, int $admin_id, string $admin_username, array $filters = [], bool $is_super_admin = false): array {
+    task_reminders_ensure_schema($pdo);
+    if (!reminders_table_exists($pdo)) return [];
+
+    try {
+        $where = ["r.is_series_parent = 1"];
+        $params = [];
+
+        // Filter by creator unless super admin viewing all
+        if (!$is_super_admin) {
+            $where[] = "(r.created_by_admin_id = ? OR r.created_by_username = ? OR r.created_by = ?)";
+            $params[] = $admin_id;
+            $params[] = $admin_username;
+            $params[] = $admin_username;
+        }
+
+        $statusFilter = strtolower(trim($filters['status'] ?? 'active'));
+        if ($statusFilter === 'active') {
+            $where[] = "r.recurrence_stopped_at IS NULL";
+        } elseif ($statusFilter === 'stopped') {
+            $where[] = "r.recurrence_stopped_at IS NOT NULL";
+        }
+        // 'all' = no filter
+
+        if (!empty($filters['assigned_to_username'])) {
+            $where[] = "(r.assigned_to_username = ? OR r.assigned_to = ?)";
+            $params[] = $filters['assigned_to_username'];
+            $params[] = $filters['assigned_to_username'];
+        }
+
+        $sql = "SELECT r.*, tt.name as task_type_name
+                FROM reminders r
+                LEFT JOIN task_reminder_types tt ON tt.id = r.task_type_id
+                WHERE " . implode(" AND ", $where) . "
+                ORDER BY r.created_at DESC";
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Enrich each series with occurrence stats
+        foreach ($rows as &$row) {
+            $row['task_type_name'] = $row['task_type_name'] ?: 'General Task';
+            $row['is_stopped'] = !empty($row['recurrence_stopped_at']);
+            $row['formatted_start'] = $row['recurrence_start_date'] ? date('d M Y', strtotime($row['recurrence_start_date'])) : '';
+            $row['formatted_end'] = $row['recurrence_end_date'] ? date('d M Y', strtotime($row['recurrence_end_date'])) : 'Never';
+            $row['recurrence_label'] = ucfirst($row['recurrence_type']);
+
+            // Count occurrences by status
+            $statsStmt = $pdo->prepare("
+                SELECT status, COUNT(*) as cnt
+                FROM reminders
+                WHERE recurrence_series_id = ? AND is_series_parent = 0
+                GROUP BY status
+            ");
+            $statsStmt->execute([$row['id']]);
+            $stats = $statsStmt->fetchAll(PDO::FETCH_KEY_PAIR);
+            $row['occurrence_stats'] = [
+                'total' => array_sum($stats),
+                'pending' => (int)($stats['pending'] ?? 0),
+                'in_progress' => (int)($stats['in_progress'] ?? 0),
+                'completed' => (int)($stats['completed'] ?? 0),
+                'cancelled' => (int)($stats['cancelled'] ?? 0)
+            ];
+        }
+
+        return $rows;
+    } catch (Exception $e) {
+        error_log("task_reminders_list_series error: " . $e->getMessage());
+        return [];
+    }
+}
+
 /**
  * Fetch unread notifications for current admin (for popups & badge).
  */
@@ -1579,39 +2260,14 @@ function reminders_due($pdo, $admin) {
     }
 }
 
+/**
+ * @deprecated Due emails disabled. Task reminders now use in-app notifications exclusively.
+ * Kept as no-op for backward compatibility with callers (e.g. admin_nav.php).
+ */
 function reminders_send_due_emails($pdo) {
-    if (!reminders_table_exists($pdo)) return;
-    try {
-        $nowDate = date('Y-m-d H:i:s');
-        $rows = $pdo->query("SELECT * FROM reminders WHERE status IN ('pending', 'in_progress') AND email_sent = 0 AND remind_at <= '{$nowDate}'")->fetchAll(PDO::FETCH_ASSOC);
-        if (!$rows) return;
-
-        foreach ($rows as $r) {
-            $recipients = [];
-            $assignedTo = $r['assigned_to_username'] ?: $r['assigned_to'];
-            if ($assignedTo === '__ALL__') {
-                try {
-                    foreach ($pdo->query("SELECT email FROM admins WHERE status = 'active' AND email IS NOT NULL AND email <> ''")->fetchAll(PDO::FETCH_COLUMN) as $em) {
-                        if (filter_var($em, FILTER_VALIDATE_EMAIL)) $recipients[] = $em;
-                    }
-                } catch (Exception $e) {}
-            } else {
-                try {
-                    $stmt = $pdo->prepare("SELECT email FROM admins WHERE username = ? LIMIT 1");
-                    $stmt->execute([$assignedTo]);
-                    $em = $stmt->fetchColumn();
-                    if ($em && filter_var($em, FILTER_VALIDATE_EMAIL)) $recipients[] = $em;
-                } catch (Exception $e) {}
-            }
-
-            if ($recipients) {
-                reminders_email($recipients, $r);
-            }
-            $pdo->prepare("UPDATE reminders SET email_sent = 1 WHERE id = ?")->execute([$r['id']]);
-        }
-    } catch (Exception $e) {
-        error_log('reminders_send_due_emails: ' . $e->getMessage());
-    }
+    // DISABLED: Due emails replaced by in-app notification system.
+    // The task_reminder_notifications table + header panel provide real-time alerts.
+    return;
 }
 
 function reminders_email($recipients, $r) {

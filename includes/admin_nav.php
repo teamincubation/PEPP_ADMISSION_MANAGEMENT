@@ -33,13 +33,14 @@ if (function_exists('can_access') && can_access('marketing') && file_exists(__DI
     try { $nav_mkt = marketing_unread_counts($pdo); } catch (Exception $e) {}
 }
 
-// Reminders: load helper, send any due emails (once), and collect due/pending for the bell.
+// Reminders: load helper, materialize recurring occurrences, and collect due/pending for the bell.
 $nav_reminders_due = [];
 $nav_reminders_pending = [];
 if (file_exists(__DIR__ . '/reminders_helper.php')) {
     require_once __DIR__ . '/reminders_helper.php';
     try {
-        reminders_send_due_emails($pdo);
+        // Due emails disabled — in-app notifications used exclusively.
+        // reminders_send_due_emails($pdo); // DEPRECATED
         $nav_reminders_due     = reminders_due($pdo, $admin_username);
         $nav_reminders_pending = reminders_for($pdo, $admin_username, ['pending']);
     } catch (Exception $e) { error_log('nav reminders: ' . $e->getMessage()); }
@@ -74,6 +75,12 @@ try {
             } catch (Exception $e) { error_log('nav session/installment cron: ' . $e->getMessage()); }
         }
 
+        // Recurring Task Occurrence Materializer (idempotent, concurrency-safe)
+        if (function_exists('task_reminders_materialize_occurrences')) {
+            try {
+                task_reminders_materialize_occurrences($pdo);
+            } catch (Exception $e) { error_log('nav materializer: ' . $e->getMessage()); }
+        }
         // Email Campaigns: run due email campaigns
         if (file_exists(__DIR__ . '/email_campaigns_helper.php')) {
             require_once __DIR__ . '/email_campaigns_helper.php';
