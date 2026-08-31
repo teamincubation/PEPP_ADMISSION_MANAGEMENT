@@ -748,7 +748,7 @@ $conn = $pdo;
 
     // Centralized Version-Aware Schema Migration Architecture
     if (!defined('PEPP_DB_SCHEMA_VERSION')) {
-        define('PEPP_DB_SCHEMA_VERSION', '2026.08.31.1');
+        define('PEPP_DB_SCHEMA_VERSION', '2026.08.31.2');
     }
 
     if (!function_exists('ensure_task_reminders_schema')) {
@@ -792,7 +792,18 @@ $conn = $pdo;
                             'completed_by_username' => "VARCHAR(100) NULL",
                             'completed_at' => "DATETIME NULL",
                             'latest_remarks' => "TEXT NULL",
-                            'last_status_updated_at' => "DATETIME NULL"
+                            'email_sent' => "TINYINT(1) NOT NULL DEFAULT 0",
+                            'last_status_updated_at' => "DATETIME NULL",
+                            // Recurrence engine columns
+                            'recurrence_type' => "VARCHAR(20) NOT NULL DEFAULT 'none'",
+                            'recurrence_weekdays' => "VARCHAR(50) NULL",
+                            'recurrence_month_days' => "VARCHAR(100) NULL",
+                            'recurrence_start_date' => "DATE NULL",
+                            'recurrence_end_date' => "DATE NULL",
+                            'recurrence_series_id' => "INT NULL",
+                            'recurrence_stopped_at' => "DATETIME NULL",
+                            'occurrence_date' => "DATE NULL",
+                            'is_series_parent' => "TINYINT(1) NOT NULL DEFAULT 0"
                         ];
                         foreach ($requiredCols as $colName => $colDef) {
                             try {
@@ -816,7 +827,10 @@ $conn = $pdo;
                             'idx_rem_type' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_type` (`task_type_id`)',
                             'idx_rem_assignee_status' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_assignee_status` (`assigned_to_admin_id`, `status`)',
                             'idx_rem_creator' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_creator` (`created_by_admin_id`, `status`)',
-                            'idx_rem_due_time' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_due_time` (`remind_at`, `status`)'
+                            'idx_rem_due_time' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_due_time` (`remind_at`, `status`)',
+                            'idx_rem_series' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_series` (`recurrence_series_id`)',
+                            'idx_rem_occurrence' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_occurrence` (`occurrence_date`)',
+                            'idx_rem_parent' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_parent` (`is_series_parent`, `recurrence_type`)'
                         ];
                         foreach ($indexesToCreate as $idxName => $alterSql) {
                             try {
@@ -826,6 +840,14 @@ $conn = $pdo;
                                 }
                             } catch (Throwable $eIdx) {}
                         }
+
+                        // Concurrency-safe unique constraint: one occurrence per (series, date)
+                        try {
+                            $ukChk = $pdo->query("SHOW INDEX FROM `reminders` WHERE Key_name = 'uniq_series_occurrence'")->fetch();
+                            if (!$ukChk) {
+                                $pdo->exec("ALTER TABLE `reminders` ADD UNIQUE KEY `uniq_series_occurrence` (`recurrence_series_id`, `occurrence_date`)");
+                            }
+                        } catch (Throwable $eUk) {}
                     }
 
                     // 3. task_reminder_assignments
@@ -1009,8 +1031,20 @@ $conn = $pdo;
                         'assigned_at' => "DATETIME NULL",
                         'completed_by_admin_id' => "INTEGER NULL",
                         'completed_by_username' => "VARCHAR(100) NULL",
+                        'completed_at' => "DATETIME NULL",
                         'latest_remarks' => "TEXT NULL",
-                        'last_status_updated_at' => "DATETIME NULL"
+                        'email_sent' => "INTEGER NOT NULL DEFAULT 0",
+                        'last_status_updated_at' => "DATETIME NULL",
+                        // Recurrence columns
+                        'recurrence_type' => "VARCHAR(20) NOT NULL DEFAULT 'none'",
+                        'recurrence_weekdays' => "VARCHAR(50) NULL",
+                        'recurrence_month_days' => "VARCHAR(100) NULL",
+                        'recurrence_start_date' => "DATE NULL",
+                        'recurrence_end_date' => "DATE NULL",
+                        'recurrence_series_id' => "INTEGER NULL",
+                        'recurrence_stopped_at' => "DATETIME NULL",
+                        'occurrence_date' => "DATE NULL",
+                        'is_series_parent' => "INTEGER NOT NULL DEFAULT 0"
                     ];
                     foreach ($sqliteCols as $colName => $colDef) {
                         try {
@@ -1021,6 +1055,10 @@ $conn = $pdo;
                             } catch (Exception $eAdd) {}
                         }
                     }
+
+                    try {
+                        $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS `uniq_series_occurrence` ON `reminders` (`recurrence_series_id`, `occurrence_date`)");
+                    } catch (Throwable $eSqliteIdx) {}
 
                     $cntTypes = (int)$pdo->query("SELECT COUNT(*) FROM `task_reminder_types`")->fetchColumn();
                     if ($cntTypes === 0) {

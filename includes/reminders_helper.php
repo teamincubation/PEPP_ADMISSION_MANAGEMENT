@@ -120,9 +120,9 @@ if (!function_exists('ensure_task_reminders_schema')) {
                         'email_sent' => "TINYINT(1) NOT NULL DEFAULT 0",
                         'last_status_updated_at' => "DATETIME NULL",
                         // Recurrence columns
-                        'recurrence_type' => "VARCHAR(10) NOT NULL DEFAULT 'none'",
-                        'recurrence_weekdays' => "VARCHAR(20) NULL",
-                        'recurrence_month_days' => "VARCHAR(50) NULL",
+                        'recurrence_type' => "VARCHAR(20) NOT NULL DEFAULT 'none'",
+                        'recurrence_weekdays' => "VARCHAR(50) NULL",
+                        'recurrence_month_days' => "VARCHAR(100) NULL",
                         'recurrence_start_date' => "DATE NULL",
                         'recurrence_end_date' => "DATE NULL",
                         'recurrence_series_id' => "INT NULL",
@@ -377,6 +377,43 @@ if (!function_exists('ensure_task_reminders_schema')) {
                         `read_at` DATETIME NULL
                     );
                 ");
+
+                // SQLite: Upgrade existing reminders table with missing columns
+                $sqliteCols = [
+                    'task_type_id' => "INTEGER NULL",
+                    'created_by_admin_id' => "INTEGER NULL",
+                    'created_by_username' => "VARCHAR(100) NULL",
+                    'assigned_by_admin_id' => "INTEGER NULL",
+                    'assigned_by_username' => "VARCHAR(100) NULL",
+                    'assigned_to_admin_id' => "INTEGER NULL",
+                    'assigned_to_username' => "VARCHAR(100) NULL",
+                    'assigned_at' => "DATETIME NULL",
+                    'completed_by_admin_id' => "INTEGER NULL",
+                    'completed_by_username' => "VARCHAR(100) NULL",
+                    'completed_at' => "DATETIME NULL",
+                    'latest_remarks' => "TEXT NULL",
+                    'email_sent' => "INTEGER NOT NULL DEFAULT 0",
+                    'last_status_updated_at' => "DATETIME NULL",
+                    // Recurrence columns
+                    'recurrence_type' => "VARCHAR(20) NOT NULL DEFAULT 'none'",
+                    'recurrence_weekdays' => "VARCHAR(50) NULL",
+                    'recurrence_month_days' => "VARCHAR(100) NULL",
+                    'recurrence_start_date' => "DATE NULL",
+                    'recurrence_end_date' => "DATE NULL",
+                    'recurrence_series_id' => "INTEGER NULL",
+                    'recurrence_stopped_at' => "DATETIME NULL",
+                    'occurrence_date' => "DATE NULL",
+                    'is_series_parent' => "INTEGER NOT NULL DEFAULT 0"
+                ];
+                foreach ($sqliteCols as $colName => $colDef) {
+                    try {
+                        $pdo->query("SELECT `{$colName}` FROM `reminders` LIMIT 1");
+                    } catch (Exception $eSqliteCol) {
+                        try {
+                            $pdo->exec("ALTER TABLE `reminders` ADD COLUMN `{$colName}` {$colDef}");
+                        } catch (Exception $eAdd) {}
+                    }
+                }
 
                 // SQLite: Concurrency-safe unique index for occurrences
                 try {
@@ -1006,6 +1043,7 @@ function task_reminders_create(PDO $pdo, array $data, int $creator_admin_id, str
     $recurrence_month_days = trim($data['recurrence_month_days'] ?? '');
     $recurrence_start_date = trim($data['recurrence_start_date'] ?? '');
     $recurrence_end_date = trim($data['recurrence_end_date'] ?? '');
+    $recurrence_due_time = trim($data['recurrence_due_time'] ?? '10:00');
 
     if ($task_type_id <= 0) {
         return ['success' => false, 'message' => 'Task Type is required.'];
@@ -1025,7 +1063,13 @@ function task_reminders_create(PDO $pdo, array $data, int $creator_admin_id, str
     }
 
     if ($remind_at === '' || !strtotime($remind_at)) {
-        return ['success' => false, 'message' => 'Valid Due Date & Time is required.'];
+        if ($recurrence_type !== 'none') {
+            $startDate = (!empty($recurrence_start_date) && strtotime($recurrence_start_date)) ? date('Y-m-d', strtotime($recurrence_start_date)) : date('Y-m-d');
+            $dueTime = $recurrence_due_time ?: '10:00';
+            $remind_at = $startDate . ' ' . (strlen($dueTime) === 5 ? $dueTime . ':00' : $dueTime);
+        } else {
+            return ['success' => false, 'message' => 'Valid Due Date & Time is required.'];
+        }
     }
 
     // Standardize datetime
