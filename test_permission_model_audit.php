@@ -254,11 +254,11 @@ assertTest("20. Super Admin can stop any recurring series", $superStopS2['succes
 
 echo "\n--- 7. HEADER SUMMARY & RECURRING SCOPING ---\n";
 
-// Test 21: Header summary is scoped correctly
+// Test 21: Header summary is scoped correctly (Super Admin global monitoring >= 3, Normal Admin scoped)
 $sumSuper = task_reminders_get_summary($pdo, 1, 'superadmin', true);
 $sumAdminA = task_reminders_get_summary($pdo, 2, 'admin_a', false);
 $sumAdminB = task_reminders_get_summary($pdo, 3, 'admin_b', false);
-assertTest("21. Header summary is strictly scoped (Super Admin global >= 4, Normal Admin scoped)", $sumSuper['pending_count'] >= 3 && $sumAdminA['is_super_admin'] === false && $sumSuper['is_super_admin'] === true);
+assertTest("21. Header summary is strictly scoped (Super Admin global monitoring >= 3, Normal Admin scoped)", $sumSuper['assigned_by_me_pending'] >= 3 && $sumAdminA['is_super_admin'] === false && $sumSuper['is_super_admin'] === true);
 
 // Test 22: Recurring series permissions are correct
 $seriesSuper = task_reminders_list_series($pdo, 1, 'superadmin', ['status' => 'all'], true);

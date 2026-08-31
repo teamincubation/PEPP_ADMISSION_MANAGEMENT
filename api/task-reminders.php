@@ -28,13 +28,6 @@ try {
     $action = trim($_GET['action'] ?? $_POST['action'] ?? '');
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
-    // Explicit Protection: Zero Delete API
-    if ($method === 'DELETE' || in_array(strtolower($action), ['delete', 'delete_task', 'delete_reminder', 'remove_task', 'remove_reminder'], true)) {
-        http_response_code(405);
-        echo json_encode(['success' => false, 'message' => 'Task Reminders cannot be deleted. All records and history are permanent.']);
-        exit;
-    }
-
     // CSRF validation for modifying requests
     if ($method === 'POST') {
         $csrf_token = $_POST['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
@@ -337,6 +330,46 @@ try {
             ];
             $series = task_reminders_list_series($pdo, $current_admin_id, $current_username, $filters, $is_super);
             echo json_encode(['success' => true, 'series' => $series]);
+            exit;
+
+        // 17. Delete Task (POST, Super Admin Only, Safe Soft-Delete)
+        case 'delete_task':
+            if ($method !== 'POST') {
+                http_response_code(405);
+                echo json_encode(['success' => false, 'message' => 'Method not allowed.']);
+                exit;
+            }
+            if (!$is_super) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'Unauthorized: Only Super Admin can delete tasks.']);
+                exit;
+            }
+            $task_id = (int)($_POST['task_id'] ?? 0);
+            if ($task_id <= 0) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'message' => 'Invalid task ID.']);
+                exit;
+            }
+            $reason = trim($_POST['reason'] ?? '');
+            $res = task_reminders_delete($pdo, $task_id, $reason, $current_admin_id, $current_username, $is_super);
+            if ($res['success']) {
+                echo json_encode($res);
+            } else {
+                http_response_code(422);
+                echo json_encode($res);
+            }
+            exit;
+
+        // 18. Mark Notifications Read (POST)
+        case 'mark_notifications_read':
+            if ($method !== 'POST') {
+                http_response_code(405);
+                echo json_encode(['success' => false, 'message' => 'Method not allowed.']);
+                exit;
+            }
+            $type = isset($_POST['type']) && $_POST['type'] !== '' ? trim($_POST['type']) : null;
+            $ok = task_reminders_mark_notifications_read($pdo, $current_admin_id, $current_username, $type);
+            echo json_encode(['success' => $ok]);
             exit;
 
         default:

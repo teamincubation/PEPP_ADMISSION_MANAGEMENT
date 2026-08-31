@@ -33,16 +33,34 @@ if (function_exists('can_access') && can_access('marketing') && file_exists(__DI
     try { $nav_mkt = marketing_unread_counts($pdo); } catch (Exception $e) {}
 }
 
-// Reminders: load helper, materialize recurring occurrences, and collect due/pending for the bell.
+// Reminders: load helper, materialize recurring occurrences, and collect counts for sidebar badges and bell.
 $nav_reminders_due = [];
 $nav_reminders_pending = [];
+$nav_task_actionable = 0;
+$nav_task_completed_unread = 0;
 if (file_exists(__DIR__ . '/reminders_helper.php')) {
     require_once __DIR__ . '/reminders_helper.php';
     try {
-        // Due emails disabled — in-app notifications used exclusively.
-        // reminders_send_due_emails($pdo); // DEPRECATED
-        $nav_reminders_due     = reminders_due($pdo, $admin_username);
-        $nav_reminders_pending = reminders_for($pdo, $admin_username, ['pending']);
+        $nav_rem_admin_id = (int)($_SESSION['admin_id'] ?? 0);
+        $nav_rem_username = (string)($admin_username ?? $_SESSION['admin_username'] ?? '');
+        $nav_reminders_due     = reminders_due($pdo, $nav_rem_username);
+        $nav_reminders_pending = reminders_for($pdo, $nav_rem_username, ['pending']);
+
+        // 1. Actionable Tasks (Assigned to logged-in admin: pending + in_progress, not deleted, not series parent)
+        $stmtAct = $pdo->prepare("SELECT COUNT(*) FROM reminders
+            WHERE status IN ('pending', 'in_progress')
+            AND (is_series_parent = 0 OR is_series_parent IS NULL)
+            AND (assigned_to_admin_id = ? OR (assigned_to_admin_id IS NULL AND (assigned_to_username = ? OR assigned_to = ? OR assigned_to = '__ALL__')))");
+        $stmtAct->execute([$nav_rem_admin_id, $nav_rem_username, $nav_rem_username]);
+        $nav_task_actionable = (int)$stmtAct->fetchColumn();
+
+        // 2. Unread Completion Notifications (Green badge for assigner when assignee completed their task)
+        $stmtComp = $pdo->prepare("SELECT COUNT(*) FROM task_reminder_notifications
+            WHERE (recipient_admin_id = ? OR (recipient_admin_id IS NULL AND recipient_username = ?))
+            AND notification_type = 'TASK_COMPLETED'
+            AND is_read = 0");
+        $stmtComp->execute([$nav_rem_admin_id, $nav_rem_username]);
+        $nav_task_completed_unread = (int)$stmtComp->fetchColumn();
     } catch (Exception $e) { error_log('nav reminders: ' . $e->getMessage()); }
 }
 
@@ -422,7 +440,19 @@ function render_nav_item($key, $active_page, $nav_data) {
             echo '<a class="nav-item ' . nav_active('assessment-results', $active_page) . '" href="assessment-results.php"><i class="fas fa-chart-column"></i> Mega Test Results</a>';
             break;
         case 'task-reminders':
-            echo '<a class="nav-item ' . nav_active('task-reminders', $active_page) . '" href="task-reminders.php"><i class="fas fa-bell"></i> Task Reminders</a>';
+            echo '<a class="nav-item ' . nav_active('task-reminders', $active_page) . '" href="task-reminders.php"><i class="fas fa-bell"></i> Task Reminders';
+            echo '<span style="margin-left:auto; display:inline-flex; gap:4px; align-items:center;">';
+            if ($nav_task_actionable > 0) {
+                echo '<span class="nav-badge" id="sidebar-task-actionable-badge" style="background:#ef4444; color:#fff;" title="' . $nav_task_actionable . ' actionable tasks">' . $nav_task_actionable . '</span>';
+            } else {
+                echo '<span class="nav-badge" id="sidebar-task-actionable-badge" style="background:#ef4444; color:#fff; display:none;">0</span>';
+            }
+            if ($nav_task_completed_unread > 0) {
+                echo '<span class="nav-badge" id="sidebar-task-completed-badge" style="background:#16a34a; color:#fff;" title="' . $nav_task_completed_unread . ' completed task notifications">' . $nav_task_completed_unread . '</span>';
+            } else {
+                echo '<span class="nav-badge" id="sidebar-task-completed-badge" style="background:#16a34a; color:#fff; display:none;">0</span>';
+            }
+            echo '</span></a>';
             break;
         case 'task-tracker':
             echo '<a class="nav-item ' . nav_active('task-tracker', $active_page) . '" href="task-tracker.php"><i class="fas fa-list-check"></i> Intern Task Tracker</a>';

@@ -128,7 +128,11 @@ if (!function_exists('ensure_task_reminders_schema')) {
                         'recurrence_series_id' => "INT NULL",
                         'recurrence_stopped_at' => "DATETIME NULL",
                         'occurrence_date' => "DATE NULL",
-                        'is_series_parent' => "TINYINT(1) NOT NULL DEFAULT 0"
+                        'is_series_parent' => "TINYINT(1) NOT NULL DEFAULT 0",
+                        // Soft delete columns
+                        'deleted_at' => "DATETIME NULL",
+                        'deleted_by_admin_id' => "INT NULL",
+                        'deleted_by_username' => "VARCHAR(100) NULL"
                     ];
                     foreach ($requiredCols as $colName => $colDef) {
                         try {
@@ -325,6 +329,9 @@ if (!function_exists('ensure_task_reminders_schema')) {
                         `recurrence_stopped_at` DATETIME NULL,
                         `occurrence_date` DATE NULL,
                         `is_series_parent` INTEGER NOT NULL DEFAULT 0,
+                        `deleted_at` DATETIME NULL,
+                        `deleted_by_admin_id` INTEGER NULL,
+                        `deleted_by_username` VARCHAR(100) NULL,
                         `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
                         `updated_at` DATETIME NULL
                     );
@@ -403,7 +410,11 @@ if (!function_exists('ensure_task_reminders_schema')) {
                     'recurrence_series_id' => "INTEGER NULL",
                     'recurrence_stopped_at' => "DATETIME NULL",
                     'occurrence_date' => "DATE NULL",
-                    'is_series_parent' => "INTEGER NOT NULL DEFAULT 0"
+                    'is_series_parent' => "INTEGER NOT NULL DEFAULT 0",
+                    // Soft delete columns
+                    'deleted_at' => "DATETIME NULL",
+                    'deleted_by_admin_id' => "INTEGER NULL",
+                    'deleted_by_username' => "VARCHAR(100) NULL"
                 ];
                 foreach ($sqliteCols as $colName => $colDef) {
                     try {
@@ -613,9 +624,11 @@ function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_usern
         'pending_count' => 0,
         'overdue_count' => 0,
         'in_progress_count' => 0,
+        'actionable_count' => 0,
         'due_count' => 0,
         'assigned_by_me_pending' => 0,
         'new_notifications' => 0,
+        'unread_completions_count' => 0,
         'due_task_ids' => [],
         'server_time' => date('Y-m-d H:i:s'),
         'is_super_admin' => $is_super_admin
@@ -632,7 +645,7 @@ function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_usern
         $sql = "SELECT id, remind_at, status FROM reminders
                 WHERE status IN ('pending', 'in_progress')
                 AND (is_series_parent = 0 OR is_series_parent IS NULL)
-                AND (assigned_to_admin_id = ? OR (assigned_to_admin_id IS NULL AND (assigned_to_username = ? OR assigned_to = ? OR assigned_to = '__ALL__')))";
+                AND (assigned_to_admin_id = ? OR ((assigned_to_admin_id IS NULL OR assigned_to_admin_id = 0) AND (assigned_to_username = ? OR assigned_to = ? OR assigned_to = '__ALL__')))";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([$admin_id, $admin_username, $admin_username]);
         $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -656,6 +669,7 @@ function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_usern
                 $res['due_task_ids'][] = (int)$t['id'];
             }
         }
+        $res['actionable_count'] = $res['pending_count'] + $res['in_progress_count'];
 
         // 2. Monitoring delegation count
         if ($is_super_admin) {
@@ -669,8 +683,8 @@ function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_usern
             $stmtAssigned = $pdo->prepare("SELECT COUNT(*) FROM reminders
                 WHERE status IN ('pending', 'in_progress')
                 AND (is_series_parent = 0 OR is_series_parent IS NULL)
-                AND (assigned_by_admin_id = ? OR (assigned_by_admin_id IS NULL AND (assigned_by_username = ? OR (assigned_by_username IS NULL AND (created_by_admin_id = ? OR created_by_username = ?)))))
-                AND (assigned_to_admin_id != ? OR (assigned_to_admin_id IS NULL AND assigned_to_username != ? AND assigned_to != ?))");
+                AND (assigned_by_admin_id = ? OR ((assigned_by_admin_id IS NULL OR assigned_by_admin_id = 0) AND (assigned_by_username = ? OR ((assigned_by_username IS NULL OR assigned_by_username = '') AND (created_by_admin_id = ? OR created_by_username = ?)))))
+                AND (assigned_to_admin_id != ? OR ((assigned_to_admin_id IS NULL OR assigned_to_admin_id = 0) AND assigned_to_username != ? AND assigned_to != ?))");
             $stmtAssigned->execute([
                 $admin_id, $admin_username, $admin_id, $admin_username,
                 $admin_id, $admin_username, $admin_username
@@ -678,12 +692,20 @@ function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_usern
             $res['assigned_by_me_pending'] = (int)$stmtAssigned->fetchColumn();
         }
 
-        // 3. Unread completion notifications for this admin
+        // 3. Unread notifications for this admin
         try {
             $stmtNotif = $pdo->prepare("SELECT COUNT(*) FROM task_reminder_notifications
                 WHERE (recipient_admin_id = ? OR (recipient_admin_id IS NULL AND recipient_username = ?)) AND is_read = 0");
             $stmtNotif->execute([$admin_id, $admin_username]);
             $res['new_notifications'] = (int)$stmtNotif->fetchColumn();
+
+            // Unread completion notifications specifically
+            $stmtCompNotif = $pdo->prepare("SELECT COUNT(*) FROM task_reminder_notifications
+                WHERE (recipient_admin_id = ? OR (recipient_admin_id IS NULL AND recipient_username = ?))
+                AND notification_type = 'TASK_COMPLETED'
+                AND is_read = 0");
+            $stmtCompNotif->execute([$admin_id, $admin_username]);
+            $res['unread_completions_count'] = (int)$stmtCompNotif->fetchColumn();
         } catch (Exception $eN) {}
 
     } catch (Exception $e) {
@@ -752,14 +774,14 @@ function task_reminders_list_my_tasks(PDO $pdo, int $admin_id, string $admin_use
         $mondayThisWeek = date('Y-m-d', strtotime('monday this week'));
         $sundayThisWeek = date('Y-m-d', strtotime('sunday this week'));
 
-        $where = ["(r.is_series_parent = 0 OR r.is_series_parent IS NULL)"];
+        $where = ["(r.is_series_parent = 0 OR r.is_series_parent IS NULL)", "r.status != 'deleted'"];
         $params = [];
 
         if ($is_super_admin && !empty($filters['all_tasks'])) {
             // Global tasks for Super Admin if explicitly requested
         } else {
             // Strictly assigned to current admin
-            $where[] = "(r.assigned_to_admin_id = ? OR (r.assigned_to_admin_id IS NULL AND (r.assigned_to_username = ? OR r.assigned_to = ? OR r.assigned_to = '__ALL__')))";
+            $where[] = "(r.assigned_to_admin_id = ? OR ((r.assigned_to_admin_id IS NULL OR r.assigned_to_admin_id = 0) AND (r.assigned_to_username = ? OR r.assigned_to = ? OR r.assigned_to = '__ALL__')))";
             $params[] = $admin_id;
             $params[] = $admin_username;
             $params[] = $admin_username;
@@ -868,12 +890,12 @@ function task_reminders_list_assigned_by_me(PDO $pdo, int $admin_id, string $adm
         $mondayThisWeek = date('Y-m-d', strtotime('monday this week'));
         $sundayThisWeek = date('Y-m-d', strtotime('sunday this week'));
 
-        $where = ["(r.is_series_parent = 0 OR r.is_series_parent IS NULL)"];
+        $where = ["(r.is_series_parent = 0 OR r.is_series_parent IS NULL)", "r.status != 'deleted'"];
         $params = [];
 
         if (!$is_super_admin) {
             // Normal Admin: Strictly tasks where they are the actual assigner
-            $where[] = "(r.assigned_by_admin_id = ? OR (r.assigned_by_admin_id IS NULL AND (r.assigned_by_username = ? OR (r.assigned_by_username IS NULL AND (r.created_by_admin_id = ? OR r.created_by_username = ?)))))";
+            $where[] = "(r.assigned_by_admin_id = ? OR ((r.assigned_by_admin_id IS NULL OR r.assigned_by_admin_id = 0) AND (r.assigned_by_username = ? OR ((r.assigned_by_username IS NULL OR r.assigned_by_username = '') AND (r.created_by_admin_id = ? OR r.created_by_username = ?)))))";
             $params[] = $admin_id;
             $params[] = $admin_username;
             $params[] = $admin_id;
@@ -1038,7 +1060,9 @@ function task_reminders_get_details(PDO $pdo, int $task_id, int $admin_id, strin
             'is_creator' => $isCreator,
             'is_assigner' => $isAssigner,
             'is_assignee' => $isAssignee,
-            'is_super_admin' => $is_super_admin
+            'is_super_admin' => $is_super_admin,
+            'can_delete' => $is_super_admin,
+            'is_deleted' => ($task['status'] === 'deleted')
         ];
     } catch (Exception $e) {
         error_log("task_reminders_get_details error: " . $e->getMessage());
@@ -2001,6 +2025,7 @@ function task_reminders_materialize_occurrences(PDO $pdo): int {
         // Fetch active series parents (batched for performance)
         $sql = "SELECT * FROM reminders
                 WHERE is_series_parent = 1
+                AND status != 'deleted'
                 AND recurrence_type != 'none'
                 AND recurrence_stopped_at IS NULL
                 AND recurrence_start_date IS NOT NULL
@@ -2294,7 +2319,7 @@ function task_reminders_list_series(PDO $pdo, int $admin_id, string $admin_usern
     if (!reminders_table_exists($pdo)) return [];
 
     try {
-        $where = ["r.is_series_parent = 1"];
+        $where = ["r.is_series_parent = 1", "r.status != 'deleted'"];
         $params = [];
 
         // Scoping: Normal admin can see series where they are Creator, Assigner, or Assignee
@@ -2421,6 +2446,109 @@ function task_reminders_dismiss_notification(PDO $pdo, int $notification_id, int
         return $stmt->execute([$nowDate, $notification_id, $admin_id, $admin_username]);
     } catch (Exception $e) {
         return false;
+    }
+}
+
+/**
+ * Mark notifications as read for current admin (e.g. on visiting task-reminders.php).
+ */
+function task_reminders_mark_notifications_read(PDO $pdo, int $admin_id, string $admin_username, ?string $type = null): bool {
+    if (!reminders_table_exists($pdo)) return false;
+    try {
+        $nowDate = date('Y-m-d H:i:s');
+        if ($type !== null) {
+            $stmt = $pdo->prepare("UPDATE task_reminder_notifications
+                                   SET is_read = 1, is_dismissed = 1, read_at = ?
+                                   WHERE (recipient_admin_id = ? OR (recipient_admin_id IS NULL AND recipient_username = ?))
+                                   AND notification_type = ?
+                                   AND is_read = 0");
+            return $stmt->execute([$nowDate, $admin_id, $admin_username, $type]);
+        } else {
+            $stmt = $pdo->prepare("UPDATE task_reminder_notifications
+                                   SET is_read = 1, is_dismissed = 1, read_at = ?
+                                   WHERE (recipient_admin_id = ? OR (recipient_admin_id IS NULL AND recipient_username = ?))
+                                   AND is_read = 0");
+            return $stmt->execute([$nowDate, $admin_id, $admin_username]);
+        }
+    } catch (Exception $e) {
+        error_log("task_reminders_mark_notifications_read error: " . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * Super Admin Soft-Delete Task (Immutable Audit Trail Preserved).
+ * Excludes task from all operational views without physically deleting rows.
+ */
+function task_reminders_delete(PDO $pdo, int $task_id, string $reason, int $admin_id, string $admin_username, bool $is_super_admin): array {
+    if (!$is_super_admin) {
+        return ['success' => false, 'message' => 'Unauthorized: Only Super Admin can delete tasks.'];
+    }
+    task_reminders_ensure_schema($pdo);
+    if (!reminders_table_exists($pdo) || $task_id <= 0) {
+        return ['success' => false, 'message' => 'Invalid task ID.'];
+    }
+
+    try {
+        $stmt = $pdo->prepare("SELECT * FROM reminders WHERE id = ? LIMIT 1");
+        $stmt->execute([$task_id]);
+        $task = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$task) {
+            return ['success' => false, 'message' => 'Task not found.'];
+        }
+
+        if ($task['status'] === 'deleted') {
+            return ['success' => true, 'message' => 'Task is already deleted.'];
+        }
+
+        $old_status = $task['status'];
+        $nowDate = date('Y-m-d H:i:s');
+
+        // Safe soft-delete on reminders row
+        $stmtUpd = $pdo->prepare("
+            UPDATE reminders SET
+                status = 'deleted',
+                deleted_at = ?,
+                deleted_by_admin_id = ?,
+                deleted_by_username = ?,
+                last_status_updated_at = ?
+            WHERE id = ?
+        ");
+        $stmtUpd->execute([$nowDate, $admin_id, $admin_username, $nowDate, $task_id]);
+
+        // If recurring series parent, also stop the series
+        if (!empty($task['is_series_parent'])) {
+            $stmtStop = $pdo->prepare("UPDATE reminders SET recurrence_stopped_at = COALESCE(recurrence_stopped_at, ?) WHERE id = ?");
+            $stmtStop->execute([$nowDate, $task_id]);
+        }
+
+        // Record immutable DELETED event in status history
+        $stmtHist = $pdo->prepare("
+            INSERT INTO task_reminder_status_history (
+                task_id, event_type, old_status, new_status,
+                changed_by_admin_id, changed_by_username, remarks, changed_at
+            ) VALUES (?, 'DELETED', ?, 'deleted', ?, ?, ?, ?)
+        ");
+        $stmtHist->execute([
+            $task_id, $old_status, $admin_id, $admin_username,
+            $reason ? "Deleted by Super Admin: {$reason}" : "Deleted by Super Admin ({$admin_username})",
+            $nowDate
+        ]);
+
+        // Dismiss any active unread notifications for this task
+        try {
+            $stmtNotif = $pdo->prepare("UPDATE task_reminder_notifications SET is_read = 1, is_dismissed = 1, read_at = ? WHERE task_id = ? AND is_read = 0");
+            $stmtNotif->execute([$nowDate, $task_id]);
+        } catch (Exception $eN) {}
+
+        return [
+            'success' => true,
+            'message' => 'Task deleted successfully.'
+        ];
+    } catch (Exception $e) {
+        error_log("task_reminders_delete error: " . $e->getMessage());
+        return ['success' => false, 'message' => 'Failed to delete task: ' . $e->getMessage()];
     }
 }
 

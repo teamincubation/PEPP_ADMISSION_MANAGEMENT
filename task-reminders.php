@@ -33,6 +33,11 @@ try {
     }
 } catch (Exception $e) {}
 
+// Mark unread completion notifications as read when visiting this page
+if (function_exists('task_reminders_mark_notifications_read')) {
+    task_reminders_mark_notifications_read($pdo, $current_admin_id, $current_username, 'TASK_COMPLETED');
+}
+
 // Load summary metrics for current admin
 $summary = task_reminders_get_summary($pdo, $current_admin_id, $current_username, $is_super);
 
@@ -463,8 +468,8 @@ include 'includes/admin_nav.php';
                 <h2>My Tasks</h2>
             </div>
             <div class="task-subfilters">
-                <span class="subfilter-pill active" onclick="filterMyTasks('all', this)">All</span>
-                <span class="subfilter-pill" onclick="filterMyTasks('pending', this)">Pending</span>
+                <span class="subfilter-pill" onclick="filterMyTasks('all', this)">All</span>
+                <span class="subfilter-pill active" onclick="filterMyTasks('pending', this)">Pending</span>
                 <span class="subfilter-pill" onclick="filterMyTasks('in_progress', this)">In Progress</span>
                 <span class="subfilter-pill" onclick="filterMyTasks('overdue', this)">Overdue</span>
                 <span class="subfilter-pill" onclick="filterMyTasks('completed', this)">Completed</span>
@@ -675,28 +680,7 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
-<!-- ══════════════════════════════════════════════════════════════════════ -->
-<!-- TASK DETAILS & TIMELINE MODAL                                          -->
-<!-- ══════════════════════════════════════════════════════════════════════ -->
-<div id="task-details-modal" class="modal-backdrop">
-    <div class="modal-box" style="max-width:640px;">
-        <div class="modal-head">
-            <div style="display:flex; align-items:center; gap:8px;">
-                <span style="width:30px; height:30px; border-radius:8px; background:var(--accent-soft, #ede9fe); color:var(--primary, #7c3aed); display:flex; align-items:center; justify-content:center; font-size:0.95rem;">
-                    <i class="fas fa-circle-info"></i>
-                </span>
-                <h3 style="margin:0; font-size:1.1rem; font-weight:700;">Task Details &amp; History</h3>
-            </div>
-            <button type="button" class="modal-close" onclick="closeModal('task-details-modal')">&times;</button>
-        </div>
-        <div class="modal-body" id="task-details-modal-body" style="padding:18px 20px;">
-            <div style="text-align:center; padding:30px;"><i class="fas fa-spinner fa-spin"></i> Loading details...</div>
-        </div>
-        <div class="modal-foot" style="padding:12px 20px; background:var(--background,#f8fafc); border-top:1px solid var(--border,#e2e8f0); display:flex; justify-content:flex-end;">
-            <button type="button" class="btn btn-outline" onclick="closeModal('task-details-modal')">Close</button>
-        </div>
-    </div>
-</div>
+
 
 <!-- ══════════════════════════════════════════════════════════════════════ -->
 <!-- COMPLETE TASK MODAL WITH REMARKS                                       -->
@@ -768,7 +752,7 @@ include 'includes/admin_nav.php';
 <!-- TASK REMINDERS CLIENT JAVASCRIPT                                       -->
 <!-- ══════════════════════════════════════════════════════════════════════ -->
 <script>
-var currentMyTasksStatusFilter = 'all';
+var currentMyTasksStatusFilter = 'pending';
 var currentAssignedStatusFilter = 'all';
 var searchTimeout = null;
 
@@ -1137,55 +1121,7 @@ function submitReassignTask(e) {
         });
 }
 
-function openTaskDetailsModal(taskId) {
-    var body = document.getElementById('task-details-modal-body');
-    body.innerHTML = '<div style="text-align:center; padding:30px;"><i class="fas fa-spinner fa-spin"></i> Loading details...</div>';
-    openModal('task-details-modal');
 
-    fetch('api/task-reminders.php?action=get_details&task_id=' + taskId)
-        .then(function(res) { return res.json(); })
-        .then(function(data) {
-            if (!data.success || !data.details) {
-                body.innerHTML = '<div class="alert alert-error">Failed to load task details.</div>';
-                return;
-            }
-
-            var t = data.details.task;
-            var history = data.details.history || [];
-
-            var timelineHtml = '';
-            history.forEach(function(h) {
-                timelineHtml += '<div class="timeline-item">' +
-                    '<div class="timeline-dot"></div>' +
-                    '<div class="timeline-content">' +
-                        '<div class="timeline-time">' + h.formatted_time + ' &bull; by ' + escapeHtml(h.changed_by_username || 'System') + '</div>' +
-                        '<div class="timeline-event">' + h.event_type + '</div>' +
-                        (h.remarks ? ('<div class="timeline-remarks">"' + escapeHtml(h.remarks) + '"</div>') : '') +
-                    '</div>' +
-                '</div>';
-            });
-
-            var html = '<div style="margin-bottom:16px;">' +
-                '<div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">' +
-                    '<span class="badge blue">' + escapeHtml(t.task_type_name) + '</span> ' +
-                    renderStatusBadge(t.status, t.is_overdue) +
-                '</div>' +
-                '<h2 style="font-size:1.2rem; font-weight:700; margin:0 0 8px; color:var(--foreground,#0f172a);">' + escapeHtml(t.title) + '</h2>' +
-                (t.notes ? ('<div style="background:var(--background,#f8fafc); border:1px solid var(--border,#e2e8f0); border-radius:8px; padding:10px 12px; font-size:0.88rem; margin-bottom:12px; color:#334155;">' + escapeHtml(t.notes) + '</div>') : '') +
-                '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:0.84rem; color:var(--secondary,#64748b); background:var(--background,#f8fafc); padding:12px; border-radius:8px; border:1px solid var(--border,#e2e8f0);">' +
-                    '<div><strong>Assigned To:</strong> ' + escapeHtml(t.assigned_to_username || t.assigned_to) + '</div>' +
-                    '<div><strong>Assigned By:</strong> ' + escapeHtml(t.created_by_username || t.created_by) + '</div>' +
-                    '<div><strong>Created At:</strong> ' + t.formatted_created + '</div>' +
-                    '<div><strong>Scheduled Due:</strong> ' + t.formatted_due + '</div>' +
-                    (t.formatted_completed ? ('<div style="grid-column:span 2; color:#15803d;"><strong>Completed:</strong> ' + t.formatted_completed + ' by ' + escapeHtml(t.completed_by_username || t.completed_by) + '</div>') : '') +
-                '</div>' +
-            '</div>' +
-            '<h4 style="font-size:0.92rem; font-weight:700; border-top:1px solid var(--border,#e2e8f0); padding-top:14px; margin-top:14px;">Activity &amp; Lifecycle Timeline</h4>' +
-            '<div class="task-timeline">' + (timelineHtml || '<div style="color:#94a3b8; font-size:0.85rem;">No history recorded yet.</div>') + '</div>';
-
-            body.innerHTML = html;
-        });
-}
 
 function escapeHtml(str) {
     if (!str) return '';

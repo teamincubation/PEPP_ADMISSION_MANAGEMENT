@@ -303,6 +303,40 @@
     </div>
 </div>
 
+<!-- ── GLOBAL TASK DETAILS & TIMELINE MODAL ── -->
+<div id="task-details-modal" class="modal-backdrop" style="z-index:9997;">
+    <div class="modal-box" style="max-width:640px;">
+        <div class="modal-head">
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span style="width:30px; height:30px; border-radius:8px; background:var(--accent-soft, #ede9fe); color:var(--primary, #7c3aed); display:flex; align-items:center; justify-content:center; font-size:0.95rem;">
+                    <i class="fas fa-circle-info"></i>
+                </span>
+                <h3 style="margin:0; font-size:1.1rem; font-weight:700;">Task Details &amp; History</h3>
+            </div>
+            <button type="button" class="modal-close" onclick="closeModal('task-details-modal')">&times;</button>
+        </div>
+        <div class="modal-body" id="task-details-modal-body" style="padding:18px 20px;">
+            <div style="text-align:center; padding:30px;"><i class="fas fa-spinner fa-spin"></i> Loading details...</div>
+        </div>
+        <div class="modal-foot" id="task-details-modal-foot" style="padding:12px 20px; background:var(--background,#f8fafc); border-top:1px solid var(--border,#e2e8f0); display:flex; justify-content:flex-end; gap:8px;">
+            <button type="button" class="btn btn-outline" onclick="closeModal('task-details-modal')">Close</button>
+        </div>
+    </div>
+</div>
+
+<style>
+.task-timeline { position: relative; padding-left: 20px; margin-top: 12px; }
+.task-timeline::before { content: ''; position: absolute; left: 6px; top: 4px; bottom: 4px; width: 2px; background: var(--border, #e2e8f0); }
+.timeline-item { position: relative; margin-bottom: 14px; }
+.timeline-item:last-child { margin-bottom: 0; }
+.timeline-dot { position: absolute; left: -20px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 2px solid var(--primary, #7c3aed); }
+.timeline-content { background: var(--background, #f8fafc); border: 1px solid var(--border, #e2e8f0); border-radius: 8px; padding: 8px 12px; font-size: 0.84rem; }
+html.theme-dark .timeline-content { background: #0f172a; border-color: #334155; }
+.timeline-time { font-size: 0.74rem; color: var(--secondary, #64748b); font-weight: 600; margin-bottom: 2px; }
+.timeline-event { font-weight: 700; color: var(--foreground, #0f172a); display: inline-block; }
+.timeline-remarks { font-style: italic; color: var(--secondary, #475569); margin-top: 4px; font-size: 0.82rem; }
+</style>
+
 <!-- ── CLIENT ENGINE JAVASCRIPT FOR TASK REMINDERS ── -->
 <script>
 var activeDueTask = null;
@@ -344,6 +378,27 @@ function escapeHtml(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 
+function escapeJs(str) {
+    if (!str) return '';
+    return String(str).replace(/'/g, "\\'").replace(/"/g, '\\"');
+}
+
+function renderStatusBadge(status, isOverdue) {
+    if (status === 'completed') {
+        return '<span class="status-badge-completed" style="font-size:0.75rem; padding:2px 8px; border-radius:4px; font-weight:700; background:#dcfce7; color:#16a34a;"><i class="fas fa-check"></i> Completed</span>';
+    } else if (status === 'cancelled') {
+        return '<span class="status-badge-cancelled" style="font-size:0.75rem; padding:2px 8px; border-radius:4px; font-weight:700; background:#f1f5f9; color:#64748b;"><i class="fas fa-ban"></i> Cancelled</span>';
+    } else if (status === 'deleted') {
+        return '<span class="status-badge-deleted" style="font-size:0.75rem; padding:2px 8px; border-radius:4px; font-weight:700; background:#fee2e2; color:#b91c1c;"><i class="fas fa-trash-can"></i> Deleted</span>';
+    } else if (status === 'in_progress') {
+        return '<span class="status-badge-inprogress" style="font-size:0.75rem; padding:2px 8px; border-radius:4px; font-weight:700; background:#e0f2fe; color:#0284c7;"><i class="fas fa-spinner fa-spin"></i> In Progress</span>';
+    } else if (isOverdue) {
+        return '<span class="status-badge-overdue" style="font-size:0.75rem; padding:2px 8px; border-radius:4px; font-weight:700; background:#fee2e2; color:#dc2626;"><i class="fas fa-circle-exclamation"></i> Overdue</span>';
+    } else {
+        return '<span class="status-badge-pending" style="font-size:0.75rem; padding:2px 8px; border-radius:4px; font-weight:700; background:#fef3c7; color:#d97706;"><i class="fas fa-clock"></i> Pending</span>';
+    }
+}
+
 function fetchTaskRemindersDropdownList() {
     var listEl = document.getElementById('task-dropdown-list');
     var countsEl = document.getElementById('task-dropdown-counts');
@@ -382,7 +437,7 @@ function fetchTaskRemindersDropdownList() {
             if (overdueTasks.length > 0) {
                 html += '<div class="task-dropdown-section-title" style="color:#dc2626;"><i class="fas fa-circle-exclamation"></i> Overdue</div>';
                 overdueTasks.slice(0, 4).forEach(function(t) {
-                    html += '<a href="task-reminders.php#my-tasks" class="task-dropdown-item">' +
+                    html += '<a href="javascript:void(0)" onclick="openTaskDetailsModalFromHeader(' + t.id + ')" class="task-dropdown-item">' +
                         '<div style="flex:1; min-width:0;">' +
                             '<div style="font-size:0.85rem; font-weight:700; color:var(--foreground,#0f172a); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' +
                                 '<span style="color:#dc2626; margin-right:4px;">🔴</span>' + escapeHtml(t.title) +
@@ -399,7 +454,7 @@ function fetchTaskRemindersDropdownList() {
             if (pendingTasks.length > 0) {
                 html += '<div class="task-dropdown-section-title" style="color:#d97706;"><i class="fas fa-clock"></i> Pending</div>';
                 pendingTasks.slice(0, 4).forEach(function(t) {
-                    html += '<a href="task-reminders.php#my-tasks" class="task-dropdown-item">' +
+                    html += '<a href="javascript:void(0)" onclick="openTaskDetailsModalFromHeader(' + t.id + ')" class="task-dropdown-item">' +
                         '<div style="flex:1; min-width:0;">' +
                             '<div style="font-size:0.85rem; font-weight:700; color:var(--foreground,#0f172a); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' +
                                 '<span style="color:#d97706; margin-right:4px;">🟡</span>' + escapeHtml(t.title) +
@@ -818,6 +873,20 @@ function updateTaskRemindersSummary() {
             var kpiAss = document.getElementById('kpi-assigned-by-me');
             if (kpiAss) kpiAss.innerText = s.assigned_by_me_pending || 0;
 
+            // Update Sidebar Badges dynamically
+            var sideActionableBadge = document.getElementById('sidebar-task-actionable-badge');
+            if (sideActionableBadge) {
+                var actCount = s.actionable_count !== undefined ? s.actionable_count : totalPending;
+                sideActionableBadge.innerText = actCount;
+                sideActionableBadge.style.display = actCount > 0 ? 'inline-block' : 'none';
+            }
+            var sideCompletedBadge = document.getElementById('sidebar-task-completed-badge');
+            if (sideCompletedBadge) {
+                var compCount = s.unread_completions_count !== undefined ? s.unread_completions_count : 0;
+                sideCompletedBadge.innerText = compCount;
+                sideCompletedBadge.style.display = compCount > 0 ? 'inline-block' : 'none';
+            }
+
             // Trigger authoritative due popups for unacknowledged due tasks
             if (s.due_task_ids && s.due_task_ids.length > 0) {
                 var modal = document.getElementById('task-due-modal');
@@ -836,6 +905,105 @@ function updateTaskRemindersSummary() {
             checkUnreadNotifications();
         })
         .catch(function(e) {});
+}
+
+function openTaskDetailsModal(taskId) {
+    var body = document.getElementById('task-details-modal-body');
+    var foot = document.getElementById('task-details-modal-foot');
+    if (body) body.innerHTML = '<div style="text-align:center; padding:30px;"><i class="fas fa-spinner fa-spin"></i> Loading details...</div>';
+    if (foot) foot.innerHTML = '<button type="button" class="btn btn-outline" onclick="closeModal(\'task-details-modal\')">Close</button>';
+    openModal('task-details-modal');
+
+    fetch('api/task-reminders.php?action=get_details&task_id=' + taskId)
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (!data.success || !data.details) {
+                if (body) body.innerHTML = '<div class="alert alert-error" style="padding:12px; border-radius:8px; background:#fee2e2; color:#b91c1c;">Failed to load task details.</div>';
+                return;
+            }
+
+            var t = data.details.task;
+            var history = data.details.history || [];
+            var canDelete = data.details.can_delete === true;
+
+            var timelineHtml = '';
+            history.forEach(function(h) {
+                timelineHtml += '<div class="timeline-item">' +
+                    '<div class="timeline-dot"></div>' +
+                    '<div class="timeline-content">' +
+                        '<div class="timeline-time">' + h.formatted_time + ' &bull; by ' + escapeHtml(h.changed_by_username || 'System') + '</div>' +
+                        '<div class="timeline-event">' + escapeHtml(h.event_type) + '</div>' +
+                        (h.remarks ? ('<div class="timeline-remarks">"' + escapeHtml(h.remarks) + '"</div>') : '') +
+                    '</div>' +
+                '</div>';
+            });
+
+            var html = '<div style="margin-bottom:16px;">' +
+                '<div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">' +
+                    '<span class="badge blue" style="font-size:0.75rem; padding:2px 8px; border-radius:4px; font-weight:700; background:#ede9fe; color:#7c3aed;">' + escapeHtml(t.task_type_name) + '</span> ' +
+                    renderStatusBadge(t.status, t.is_overdue) +
+                '</div>' +
+                '<h2 style="font-size:1.15rem; font-weight:700; margin:0 0 8px; color:var(--foreground,#0f172a);">' + escapeHtml(t.title) + '</h2>' +
+                (t.notes ? ('<div style="background:var(--background,#f8fafc); border:1px solid var(--border,#e2e8f0); border-radius:8px; padding:10px 12px; font-size:0.88rem; margin-bottom:12px; color:#334155;">' + escapeHtml(t.notes) + '</div>') : '') +
+                '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:0.84rem; color:var(--secondary,#64748b); background:var(--background,#f8fafc); padding:12px; border-radius:8px; border:1px solid var(--border,#e2e8f0);">' +
+                    '<div><strong>Assigned To:</strong> ' + escapeHtml(t.assigned_to_username || t.assigned_to) + '</div>' +
+                    '<div><strong>Assigned By:</strong> ' + escapeHtml(t.created_by_username || t.created_by) + '</div>' +
+                    '<div><strong>Created At:</strong> ' + t.formatted_created + '</div>' +
+                    '<div><strong>Scheduled Due:</strong> ' + t.formatted_due + '</div>' +
+                    (t.formatted_completed ? ('<div style="grid-column:span 2; color:#15803d;"><strong>Completed:</strong> ' + t.formatted_completed + ' by ' + escapeHtml(t.completed_by_username || t.completed_by) + '</div>') : '') +
+                '</div>' +
+            '</div>' +
+            '<h4 style="font-size:0.92rem; font-weight:700; border-top:1px solid var(--border,#e2e8f0); padding-top:14px; margin-top:14px;">Activity &amp; Lifecycle Timeline</h4>' +
+            '<div class="task-timeline">' + (timelineHtml || '<div style="color:#94a3b8; font-size:0.85rem;">No history recorded yet.</div>') + '</div>';
+
+            if (body) body.innerHTML = html;
+
+            if (foot) {
+                var footHtml = '';
+                if (canDelete && t.status !== 'deleted') {
+                    footHtml += '<button type="button" class="btn btn-outline" style="color:#dc2626; border-color:#dc2626; margin-right:auto;" onclick="deleteTask(' + t.id + ', \'' + escapeJs(t.title) + '\')"><i class="fas fa-trash-can"></i> Delete Task</button>';
+                }
+                footHtml += '<button type="button" class="btn btn-outline" onclick="closeModal(\'task-details-modal\')">Close</button>';
+                foot.innerHTML = footHtml;
+            }
+        })
+        .catch(function() {
+            if (body) body.innerHTML = '<div class="alert alert-error">Error loading task details.</div>';
+        });
+}
+
+function openTaskDetailsModalFromHeader(taskId) {
+    closeTaskRemindersDropdown();
+    openTaskDetailsModal(taskId);
+}
+
+function deleteTask(taskId, taskTitle) {
+    var reason = prompt('Are you sure you want to delete this task reminder?\n"' + taskTitle + '"\n\nEnter reason for deletion (Audit trail):', 'Admin request');
+    if (reason === null) return; // User cancelled prompt
+
+    var fd = new FormData();
+    fd.append('action', 'delete_task');
+    fd.append('task_id', taskId);
+    fd.append('reason', reason);
+    fd.append('csrf_token', '<?php echo csrf_token(); ?>');
+
+    fetch('api/task-reminders.php', { method: 'POST', body: fd })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (data.success) {
+                closeModal('task-details-modal');
+                updateTaskRemindersSummary();
+                if (typeof loadMyTasks === 'function') loadMyTasks();
+                if (typeof loadAssignedByMe === 'function') loadAssignedByMe();
+                if (typeof loadHistory === 'function') loadHistory();
+                if (typeof loadRecurringSeries === 'function') loadRecurringSeries();
+            } else {
+                alert(data.message || 'Failed to delete task.');
+            }
+        })
+        .catch(function() {
+            alert('Error deleting task.');
+        });
 }
 
 function checkUnreadNotifications() {
