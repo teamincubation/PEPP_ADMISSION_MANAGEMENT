@@ -996,9 +996,9 @@ function task_reminders_get_details(PDO $pdo, int $task_id, int $admin_id, strin
         }
 
         // Authorization check: Is current user Creator, Actual Assigner, Current Assignee, or Super Admin?
-        $isCreator = ($task['created_by_admin_id'] == $admin_id || ($task['created_by_admin_id'] === null && ($task['created_by_username'] === $admin_username || $task['created_by'] === $admin_username)));
-        $isAssigner = ($task['assigned_by_admin_id'] == $admin_id || ($task['assigned_by_admin_id'] === null && $task['assigned_by_username'] === $admin_username));
-        $isAssignee = ($task['assigned_to_admin_id'] == $admin_id || ($task['assigned_to_admin_id'] === null && ($task['assigned_to_username'] === $admin_username || $task['assigned_to'] === $admin_username || $task['assigned_to'] === '__ALL__')));
+        $isCreator = (($admin_id > 0 && !empty($task['created_by_admin_id']) && (int)$task['created_by_admin_id'] === $admin_id) || (empty($task['created_by_admin_id']) && ($task['created_by_username'] === $admin_username || $task['created_by'] === $admin_username)));
+        $isAssigner = (($admin_id > 0 && !empty($task['assigned_by_admin_id']) && (int)$task['assigned_by_admin_id'] === $admin_id) || (empty($task['assigned_by_admin_id']) && $task['assigned_by_username'] === $admin_username));
+        $isAssignee = (($admin_id > 0 && !empty($task['assigned_to_admin_id']) && (int)$task['assigned_to_admin_id'] === $admin_id) || (empty($task['assigned_to_admin_id']) && ($task['assigned_to_username'] === $admin_username || $task['assigned_to'] === $admin_username || $task['assigned_to'] === '__ALL__')));
 
         if (!$is_super_admin && !$isCreator && !$isAssigner && !$isAssignee) {
             return null; // IDOR protected
@@ -1556,8 +1556,8 @@ function task_reminders_reassign(PDO $pdo, int $task_id, string $new_assignee_us
             return ['success' => false, 'message' => "Cannot reassign a {$task['status']} task."];
         }
 
-        $isCreator = ($task['created_by_admin_id'] == $assigner_admin_id || ($task['created_by_admin_id'] === null && ($task['created_by_username'] === $assigner_username || $task['created_by'] === $assigner_username)));
-        $isAssigner = ($task['assigned_by_admin_id'] == $assigner_admin_id || ($task['assigned_by_admin_id'] === null && $task['assigned_by_username'] === $assigner_username));
+        $isCreator = (($assigner_admin_id > 0 && !empty($task['created_by_admin_id']) && (int)$task['created_by_admin_id'] === $assigner_admin_id) || (empty($task['created_by_admin_id']) && ($task['created_by_username'] === $assigner_username || $task['created_by'] === $assigner_username)));
+        $isAssigner = (($assigner_admin_id > 0 && !empty($task['assigned_by_admin_id']) && (int)$task['assigned_by_admin_id'] === $assigner_admin_id) || (empty($task['assigned_by_admin_id']) && $task['assigned_by_username'] === $assigner_username));
         if (!$is_super_admin && !$isCreator && !$isAssigner) {
             return ['success' => false, 'message' => 'Only the task creator, assigner, or super admin can reassign this task.'];
         }
@@ -1672,9 +1672,9 @@ function task_reminders_postpone(PDO $pdo, int $task_id, string $new_remind_at, 
         }
 
         // Authorization: Assignee, Assigner, Creator, or Super Admin
-        $isCreator = ($task['created_by_admin_id'] == $admin_id || ($task['created_by_admin_id'] === null && ($task['created_by_username'] === $admin_username || $task['created_by'] === $admin_username)));
-        $isAssigner = ($task['assigned_by_admin_id'] == $admin_id || ($task['assigned_by_admin_id'] === null && $task['assigned_by_username'] === $admin_username));
-        $isAssignee = ($task['assigned_to_admin_id'] == $admin_id || ($task['assigned_to_admin_id'] === null && ($task['assigned_to_username'] === $admin_username || $task['assigned_to'] === $admin_username || $task['assigned_to'] === '__ALL__')));
+        $isCreator = (($admin_id > 0 && !empty($task['created_by_admin_id']) && (int)$task['created_by_admin_id'] === $admin_id) || (empty($task['created_by_admin_id']) && ($task['created_by_username'] === $admin_username || $task['created_by'] === $admin_username)));
+        $isAssigner = (($admin_id > 0 && !empty($task['assigned_by_admin_id']) && (int)$task['assigned_by_admin_id'] === $admin_id) || (empty($task['assigned_by_admin_id']) && $task['assigned_by_username'] === $admin_username));
+        $isAssignee = (($admin_id > 0 && !empty($task['assigned_to_admin_id']) && (int)$task['assigned_to_admin_id'] === $admin_id) || (empty($task['assigned_to_admin_id']) && ($task['assigned_to_username'] === $admin_username || $task['assigned_to'] === $admin_username || $task['assigned_to'] === '__ALL__')));
 
         if (!$is_super_admin && !$isCreator && !$isAssigner && !$isAssignee) {
             return ['success' => false, 'message' => 'You are not authorized to postpone this task.'];
@@ -1772,9 +1772,9 @@ function task_reminders_update_status(PDO $pdo, int $task_id, string $new_status
         }
 
         // Authorization: Assignee, Assigner, Creator, or Super Admin
-        $isCreator = ($task['created_by_admin_id'] == $admin_id || ($task['created_by_admin_id'] === null && ($task['created_by_username'] === $admin_username || $task['created_by'] === $admin_username)));
-        $isAssigner = ($task['assigned_by_admin_id'] == $admin_id || ($task['assigned_by_admin_id'] === null && $task['assigned_by_username'] === $admin_username));
-        $isAssignee = ($task['assigned_to_admin_id'] == $admin_id || ($task['assigned_to_admin_id'] === null && ($task['assigned_to_username'] === $admin_username || $task['assigned_to'] === $admin_username || $task['assigned_to'] === '__ALL__')));
+        $isCreator = (($admin_id > 0 && !empty($task['created_by_admin_id']) && (int)$task['created_by_admin_id'] === $admin_id) || (empty($task['created_by_admin_id']) && ($task['created_by_username'] === $admin_username || $task['created_by'] === $admin_username)));
+        $isAssigner = (($admin_id > 0 && !empty($task['assigned_by_admin_id']) && (int)$task['assigned_by_admin_id'] === $admin_id) || (empty($task['assigned_by_admin_id']) && $task['assigned_by_username'] === $admin_username));
+        $isAssignee = (($admin_id > 0 && !empty($task['assigned_to_admin_id']) && (int)$task['assigned_to_admin_id'] === $admin_id) || (empty($task['assigned_to_admin_id']) && ($task['assigned_to_username'] === $admin_username || $task['assigned_to'] === $admin_username || $task['assigned_to'] === '__ALL__')));
 
         if (!$is_super_admin && !$isCreator && !$isAssigner && !$isAssignee) {
             return ['success' => false, 'message' => 'You are not authorized to update this task.'];
@@ -2207,8 +2207,8 @@ function task_reminders_stop_series(PDO $pdo, int $series_parent_id, int $admin_
         }
 
         // Authorization: Creator, Assigner, or Super Admin
-        $isCreator = ($series['created_by_admin_id'] == $admin_id || ($series['created_by_admin_id'] === null && ($series['created_by_username'] === $admin_username || $series['created_by'] === $admin_username)));
-        $isAssigner = ($series['assigned_by_admin_id'] == $admin_id || ($series['assigned_by_admin_id'] === null && $series['assigned_by_username'] === $admin_username));
+        $isCreator = (($admin_id > 0 && !empty($series['created_by_admin_id']) && (int)$series['created_by_admin_id'] === $admin_id) || (empty($series['created_by_admin_id']) && ($series['created_by_username'] === $admin_username || $series['created_by'] === $admin_username)));
+        $isAssigner = (($admin_id > 0 && !empty($series['assigned_by_admin_id']) && (int)$series['assigned_by_admin_id'] === $admin_id) || (empty($series['assigned_by_admin_id']) && $series['assigned_by_username'] === $admin_username));
         if (!$is_super_admin && !$isCreator && !$isAssigner) {
             return ['success' => false, 'message' => 'Only the task creator, assigner, or super admin can stop this series.'];
         }
@@ -2249,9 +2249,9 @@ function task_reminders_get_series_info(PDO $pdo, int $series_parent_id, int $ad
         if (!$series) return null;
 
         // Authorization: Creator, Assigner, Assignee, or Super Admin
-        $isCreator = ($series['created_by_admin_id'] == $admin_id || ($series['created_by_admin_id'] === null && ($series['created_by_username'] === $admin_username || $series['created_by'] === $admin_username)));
-        $isAssigner = ($series['assigned_by_admin_id'] == $admin_id || ($series['assigned_by_admin_id'] === null && $series['assigned_by_username'] === $admin_username));
-        $isAssignee = ($series['assigned_to_admin_id'] == $admin_id || ($series['assigned_to_admin_id'] === null && ($series['assigned_to_username'] === $admin_username || $series['assigned_to'] === $admin_username)));
+        $isCreator = (($admin_id > 0 && !empty($series['created_by_admin_id']) && (int)$series['created_by_admin_id'] === $admin_id) || (empty($series['created_by_admin_id']) && ($series['created_by_username'] === $admin_username || $series['created_by'] === $admin_username)));
+        $isAssigner = (($admin_id > 0 && !empty($series['assigned_by_admin_id']) && (int)$series['assigned_by_admin_id'] === $admin_id) || (empty($series['assigned_by_admin_id']) && $series['assigned_by_username'] === $admin_username));
+        $isAssignee = (($admin_id > 0 && !empty($series['assigned_to_admin_id']) && (int)$series['assigned_to_admin_id'] === $admin_id) || (empty($series['assigned_to_admin_id']) && ($series['assigned_to_username'] === $admin_username || $series['assigned_to'] === $admin_username)));
         if (!$is_super_admin && !$isCreator && !$isAssigner && !$isAssignee) return null;
 
         // Get all materialized occurrences ordered by date

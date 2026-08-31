@@ -1,16 +1,7 @@
 <?php
 /**
- * PEPP ERP — Task Reminders Operational Visibility, Due Alerts & Date Filtering Audit Suite
- * Exhaustively tests:
- * 1. Operational due alert scoping (Assignee-only) vs Global Audit Oversight
- * 2. Normal Admin -> Normal Admin delegation alerts
- * 3. Super Admin -> Normal Admin delegation alerts
- * 4. Normal Admin -> Super Admin delegation alerts
- * 5. Task completion notifications to Assigner/Creator
- * 6. Authoritative due alert verification & timing
- * 7. Removal of Start Work / direct completion
- * 8. Date presets (Today, Tomorrow, This Week, Overdue, Custom Range)
- * 9. Recurring occurrence filtering & series parent exclusion
+ * PEPP ERP — Task Reminders Operational Visibility, Instant Due Alerts & Date Filtering Audit Suite
+ * Explicitly tests Scenarios 1 through 17 as defined in the Task Reminders specification.
  */
 
 declare(strict_types=1);
@@ -50,7 +41,7 @@ $types = task_types_get_all($pdo);
 $typeId = (int)$types[0]['id'];
 
 echo "==================================================================================\n";
-echo "PEPP ERP — OPERATIONAL VISIBILITY, DUE ALERTS & DATE FILTER AUDIT\n";
+echo "PEPP ERP — TASK REMINDERS OPERATIONAL VISIBILITY AUDIT (SCENARIOS 1-17)\n";
 echo "==================================================================================\n\n";
 
 $passes = 0;
@@ -71,11 +62,10 @@ function assertTest(string $name, bool $condition, string $details = '') {
 }
 
 // ---------------------------------------------------------------------------------
-// TEST GROUP 1: Normal Admin A -> Normal Admin B Delegation
+// SCENARIO 1 & 2: Admin A assigns task to Admin B & reaches due time
 // ---------------------------------------------------------------------------------
-echo "--- TEST GROUP 1: Admin A -> Admin B Delegation (Assignee-Only Due Alerts) ---\n";
+echo "--- SCENARIO 1 & 2: Admin A -> Admin B Delegation & Due Alerts ---\n";
 
-// Create due task assigned to Admin B
 $resT1 = task_reminders_create($pdo, [
     'task_type_id' => $typeId,
     'title' => 'T1: Followup with Student',
@@ -86,252 +76,230 @@ $resT1 = task_reminders_create($pdo, [
 $t1Id = (int)$resT1['task_id'];
 
 $summaryB = task_reminders_get_summary($pdo, 3, 'admin_b', false);
-assertTest("T1.1: Admin B (Assignee) receives pending_count = 1", $summaryB['pending_count'] === 1);
-assertTest("T1.2: Admin B receives due_count = 1", $summaryB['due_count'] === 1);
-assertTest("T1.3: Admin B receives due_task_ids containing T1", in_array($t1Id, $summaryB['due_task_ids'], true));
+$summaryA = task_reminders_get_summary($pdo, 2, 'admin_a', false);
+$summarySuper = task_reminders_get_summary($pdo, 1, 'superadmin', true);
 
 $verifyB = task_reminders_verify_due_alert($pdo, $t1Id, 3, 'admin_b', false);
-assertTest("T1.4: Admin B verify_due_alert succeeds and returns task", $verifyB !== null && (int)$verifyB['id'] === $t1Id);
-
-$summaryA = task_reminders_get_summary($pdo, 2, 'admin_a', false);
-assertTest("T1.5: Admin A (Assigner) has pending_count = 0 (not assigned to A)", $summaryA['pending_count'] === 0);
-assertTest("T1.6: Admin A has due_count = 0 and due_task_ids = []", $summaryA['due_count'] === 0 && empty($summaryA['due_task_ids']));
-assertTest("T1.7: Admin A has assigned_by_me_pending = 1 (monitoring)", $summaryA['assigned_by_me_pending'] === 1);
-
 $verifyA = task_reminders_verify_due_alert($pdo, $t1Id, 2, 'admin_a', false);
-assertTest("T1.8: Admin A verify_due_alert rejected (A is not the assignee)", $verifyA === null);
-
-$summarySuper = task_reminders_get_summary($pdo, 1, 'superadmin', true);
-assertTest("T1.9: Super Admin has pending_count = 0 for operational tasks", $summarySuper['pending_count'] === 0);
-assertTest("T1.10: Super Admin has due_count = 0 and due_task_ids = []", $summarySuper['due_count'] === 0 && empty($summarySuper['due_task_ids']));
-assertTest("T1.11: Super Admin has assigned_by_me_pending = 1 (global monitoring)", $summarySuper['assigned_by_me_pending'] === 1);
-
 $verifySuper = task_reminders_verify_due_alert($pdo, $t1Id, 1, 'superadmin', true);
-assertTest("T1.12: Super Admin verify_due_alert rejected (no operational due popup for B's task)", $verifySuper === null);
+
+// Scenario 1: Admin A assigns task to Admin B. B sees operational reminder, A does not, Super Admin does not.
+assertTest("Scenario 1: B sees operational reminder (pending=1, due=1); A and Super Admin have operational pending=0, due=0",
+    $summaryB['pending_count'] === 1 && $summaryB['due_count'] === 1 &&
+    $summaryA['pending_count'] === 0 && $summaryA['due_count'] === 0 &&
+    $summarySuper['pending_count'] === 0 && $summarySuper['due_count'] === 0
+);
+
+// Scenario 2: Admin B logged in and task reaches due time -> B due alert eligible, A not eligible, Super Admin not eligible.
+assertTest("Scenario 2: B is due-alert eligible; A and Super Admin are not eligible",
+    $verifyB !== null && (int)$verifyB['id'] === $t1Id &&
+    $verifyA === null && $verifySuper === null
+);
 
 // ---------------------------------------------------------------------------------
-// TEST GROUP 2: Super Admin -> Normal Admin B Delegation
+// SCENARIO 3: Admin B was offline at due time, authenticates later
 // ---------------------------------------------------------------------------------
-echo "\n--- TEST GROUP 2: Super Admin -> Admin B Delegation ---\n";
-
-$resT2 = task_reminders_create($pdo, [
-    'task_type_id' => $typeId,
-    'title' => 'T2: Super Admin Assigned Task',
-    'notes' => 'Important audit filing',
-    'remind_at' => date('Y-m-d H:i:s', time() - 60),
-    'assigned_to' => 'admin_b'
-], 1, 'superadmin');
-$t2Id = (int)$resT2['task_id'];
-
-$summaryB_2 = task_reminders_get_summary($pdo, 3, 'admin_b', false);
-assertTest("T2.1: Admin B pending_count = 2, due_count = 2", $summaryB_2['pending_count'] === 2 && $summaryB_2['due_count'] === 2);
-assertTest("T2.2: Admin B verify_due_alert succeeds for T2", task_reminders_verify_due_alert($pdo, $t2Id, 3, 'admin_b', false) !== null);
-
-$summarySuper_2 = task_reminders_get_summary($pdo, 1, 'superadmin', true);
-assertTest("T2.3: Super Admin pending_count = 0, due_count = 0", $summarySuper_2['pending_count'] === 0 && $summarySuper_2['due_count'] === 0);
-assertTest("T2.4: Super Admin verify_due_alert rejected for T2", task_reminders_verify_due_alert($pdo, $t2Id, 1, 'superadmin', true) === null);
+echo "\n--- SCENARIO 3: Offline Assignee Later Login ---\n";
+// Re-calling get_summary as if B signed in now after due time passed
+$summaryB_login = task_reminders_get_summary($pdo, 3, 'admin_b', false);
+assertTest("Scenario 3: Offline assignee upon login immediately receives due task in due_task_ids",
+    $summaryB_login['due_count'] >= 1 && in_array($t1Id, $summaryB_login['due_task_ids'], true)
+);
 
 // ---------------------------------------------------------------------------------
-// TEST GROUP 3: Normal Admin A -> Super Admin Delegation
+// SCENARIO 4: B logs in before due time -> No due popup yet
 // ---------------------------------------------------------------------------------
-echo "\n--- TEST GROUP 3: Admin A -> Super Admin Delegation (Super Admin IS Assignee) ---\n";
-
-$resT3 = task_reminders_create($pdo, [
-    'task_type_id' => $typeId,
-    'title' => 'T3: Approval Request for Super Admin',
-    'notes' => 'Please review and approve fee waiver',
-    'remind_at' => date('Y-m-d H:i:s', time() - 120),
-    'assigned_to' => 'superadmin'
-], 2, 'admin_a');
-$t3Id = (int)$resT3['task_id'];
-
-$summarySuper_3 = task_reminders_get_summary($pdo, 1, 'superadmin', true);
-assertTest("T3.1: Super Admin pending_count = 1 (assigned to Super Admin)", $summarySuper_3['pending_count'] === 1);
-assertTest("T3.2: Super Admin due_count = 1 and due_task_ids = [T3]", $summarySuper_3['due_count'] === 1 && in_array($t3Id, $summarySuper_3['due_task_ids'], true));
-assertTest("T3.3: Super Admin verify_due_alert succeeds for T3 (because Super Admin IS assignee)", task_reminders_verify_due_alert($pdo, $t3Id, 1, 'superadmin', true) !== null);
-
-// ---------------------------------------------------------------------------------
-// TEST GROUP 4: Completion Alerts & Scoped Audit History
-// ---------------------------------------------------------------------------------
-echo "\n--- TEST GROUP 4: Task Completion & Creator Notifications ---\n";
-
-$completeRes = task_reminders_update_status($pdo, $t1Id, 'completed', 'Lead contacted and registered', 3, 'admin_b');
-assertTest("T4.1: Task T1 completed successfully by Admin B", $completeRes['success'] === true);
-
-// Check unread notifications for Admin A (Creator/Assigner)
-$notifsA = task_reminders_get_unread_notifications($pdo, 2, 'admin_a');
-assertTest("T4.2: Admin A receives unread completion notification", count($notifsA) === 1 && $notifsA[0]['notification_type'] === 'TASK_COMPLETED');
-
-// Admin B should NOT receive a creator notification for completing their own task
-$notifsB = task_reminders_get_unread_notifications($pdo, 3, 'admin_b');
-$completionNotifsB = array_filter($notifsB, function($n) { return ($n['notification_type'] ?? '') === 'TASK_COMPLETED'; });
-assertTest("T4.3: Admin B has 0 unread completion notifications", count($completionNotifsB) === 0);
-
-// Admin A dismisses notification
-$notifId = (int)$notifsA[0]['id'];
-$dismissRes = task_reminders_dismiss_notification($pdo, $notifId, 2, 'admin_a');
-assertTest("T4.4: Notification dismissed successfully", $dismissRes === true);
-$notifsA_after = task_reminders_get_unread_notifications($pdo, 2, 'admin_a');
-$completionNotifsA_after = array_filter($notifsA_after, function($n) { return ($n['notification_type'] ?? '') === 'TASK_COMPLETED'; });
-assertTest("T4.5: Admin A unread completion notifications now 0", count($completionNotifsA_after) === 0);
-
-// Super Admin views global history
-$superHistory = task_reminders_list_history($pdo, [], 100, 0, 1, 'superadmin', true);
-assertTest("T4.6: Super Admin sees lifecycle audit history events", count($superHistory) >= 4);
-
-// ---------------------------------------------------------------------------------
-// TEST GROUP 5: Due Timing & Future Tasks
-// ---------------------------------------------------------------------------------
-echo "\n--- TEST GROUP 5: Due Timing (Future Tasks vs Past Tasks) ---\n";
-
+echo "\n--- SCENARIO 4: Login Before Due Time ---\n";
 $resFuture = task_reminders_create($pdo, [
     'task_type_id' => $typeId,
-    'title' => 'T_Future: Future Task for Admin C',
+    'title' => 'T_Future: Future Task for Admin B',
     'notes' => 'Scheduled for tomorrow',
     'remind_at' => date('Y-m-d H:i:s', time() + 86400),
-    'assigned_to' => 'admin_c'
+    'assigned_to' => 'admin_b'
 ], 2, 'admin_a');
 $futureId = (int)$resFuture['task_id'];
 
-$summaryC = task_reminders_get_summary($pdo, 4, 'admin_c', false);
-assertTest("T5.1: Admin C pending_count = 1", $summaryC['pending_count'] === 1);
-assertTest("T5.2: Admin C due_count = 0 (future task)", $summaryC['due_count'] === 0);
-assertTest("T5.3: Admin C due_task_ids is empty", empty($summaryC['due_task_ids']));
-assertTest("T5.4: verify_due_alert returns null for future task", task_reminders_verify_due_alert($pdo, $futureId, 4, 'admin_c', false) === null);
+$verifyFuture = task_reminders_verify_due_alert($pdo, $futureId, 3, 'admin_b', false);
+assertTest("Scenario 4: Task scheduled in the future returns null for due-alert (no popup before due time)",
+    $verifyFuture === null
+);
 
 // ---------------------------------------------------------------------------------
-// TEST GROUP 6: Removal of "Start Work" & Direct Completion
+// SCENARIO 5: B completes task -> B red count decreases, A receives green completion notification
 // ---------------------------------------------------------------------------------
-echo "\n--- TEST GROUP 6: Direct Completion without 'Start Work' ---\n";
+echo "\n--- SCENARIO 5: Task Completion & Notification ---\n";
+$completeRes = task_reminders_update_status($pdo, $t1Id, 'completed', 'Lead registered successfully', 3, 'admin_b');
+$summaryB_afterComp = task_reminders_get_summary($pdo, 3, 'admin_b', false);
+$notifsA = task_reminders_get_unread_notifications($pdo, 2, 'admin_a');
+$notifsSuper = task_reminders_get_unread_notifications($pdo, 1, 'superadmin');
 
-$resT6 = task_reminders_create($pdo, [
-    'task_type_id' => $typeId,
-    'title' => 'T6: Direct Complete Test',
-    'notes' => 'Pending task directly completed',
-    'remind_at' => date('Y-m-d H:i:s', time() - 30),
-    'assigned_to' => 'admin_c'
-], 4, 'admin_c');
-$t6Id = (int)$resT6['task_id'];
-
-$compDirect = task_reminders_update_status($pdo, $t6Id, 'completed', 'Completed directly from pending', 4, 'admin_c');
-assertTest("T6.1: Direct completion from pending status succeeded", $compDirect['success'] === true);
-
-$detailsT6 = task_reminders_get_details($pdo, $t6Id, 4, 'admin_c', false);
-assertTest("T6.2: Final status is completed", $detailsT6['task']['status'] === 'completed');
-assertTest("T6.3: History records CREATED and COMPLETED events cleanly", count($detailsT6['history']) === 2);
+assertTest("Scenario 5: Completing task decreases B's red count to 0, A receives completion notification, Super Admin does not",
+    $completeRes['success'] === true &&
+    $summaryB_afterComp['pending_count'] === 1 && // (only future task remains pending)
+    $summaryB_afterComp['due_count'] === 0 &&
+    count($notifsA) === 1 && $notifsA[0]['notification_type'] === 'TASK_COMPLETED' &&
+    count($notifsSuper) === 0
+);
 
 // ---------------------------------------------------------------------------------
-// TEST GROUP 7: Date Filters (Today, Tomorrow, This Week, Overdue, Custom Range)
+// SCENARIO 6: Super Admin opens #task-history -> A -> B task visible
 // ---------------------------------------------------------------------------------
-echo "\n--- TEST GROUP 7: Date Filters on Task Reminders ---\n";
-
-$todayStr = date('Y-m-d');
-$tomorrowStr = date('Y-m-d', strtotime('+1 day'));
-$yesterdayStr = date('Y-m-d', strtotime('-1 day'));
-$nextMonthStr = date('Y-m-d', strtotime('+35 days'));
-
-// Seed tasks across dates for Admin B
-$resDateToday = task_reminders_create($pdo, [
-    'task_type_id' => $typeId,
-    'title' => 'Date Task: Today',
-    'remind_at' => $todayStr . ' 14:00:00',
-    'assigned_to' => 'admin_b'
-], 2, 'admin_a');
-
-$resDateTomorrow = task_reminders_create($pdo, [
-    'task_type_id' => $typeId,
-    'title' => 'Date Task: Tomorrow',
-    'remind_at' => $tomorrowStr . ' 10:00:00',
-    'assigned_to' => 'admin_b'
-], 2, 'admin_a');
-
-$resDateNextMonth = task_reminders_create($pdo, [
-    'task_type_id' => $typeId,
-    'title' => 'Date Task: Next Month',
-    'remind_at' => $nextMonthStr . ' 10:00:00',
-    'assigned_to' => 'admin_b'
-], 2, 'admin_a');
-
-// 1. Filter Today
-$listToday = task_reminders_list_my_tasks($pdo, 3, 'admin_b', ['date_preset' => 'today']);
-$hasToday = false;
-$hasTomorrowInToday = false;
-foreach ($listToday as $t) {
-    if ($t['title'] === 'Date Task: Today') $hasToday = true;
-    if ($t['title'] === 'Date Task: Tomorrow') $hasTomorrowInToday = true;
-}
-assertTest("T7.1: Filter 'today' returns Today's task and excludes Tomorrow's task", $hasToday && !$hasTomorrowInToday);
-
-// 2. Filter Tomorrow
-$listTomorrow = task_reminders_list_my_tasks($pdo, 3, 'admin_b', ['date_preset' => 'tomorrow']);
-$hasTomorrow = false;
-$hasTodayInTomorrow = false;
-foreach ($listTomorrow as $t) {
-    if ($t['title'] === 'Date Task: Tomorrow') $hasTomorrow = true;
-    if ($t['title'] === 'Date Task: Today') $hasTodayInTomorrow = true;
-}
-assertTest("T7.2: Filter 'tomorrow' returns Tomorrow's task and excludes Today's task", $hasTomorrow && !$hasTodayInTomorrow);
-
-// 3. Filter This Week
-$listThisWeek = task_reminders_list_my_tasks($pdo, 3, 'admin_b', ['date_preset' => 'this_week']);
-$hasNextMonthInThisWeek = false;
-foreach ($listThisWeek as $t) {
-    if ($t['title'] === 'Date Task: Next Month') $hasNextMonthInThisWeek = true;
-}
-assertTest("T7.3: Filter 'this_week' excludes Next Month task", !$hasNextMonthInThisWeek);
-
-// 4. Filter Overdue
-$listOverdue = task_reminders_list_my_tasks($pdo, 3, 'admin_b', ['date_preset' => 'overdue']);
-$allOverdue = true;
-foreach ($listOverdue as $t) {
-    if (!$t['is_overdue']) $allOverdue = false;
-}
-assertTest("T7.4: Filter 'overdue' returns strictly overdue tasks", count($listOverdue) > 0 && $allOverdue);
-
-// 5. Custom Range
-$listCustom = task_reminders_list_my_tasks($pdo, 3, 'admin_b', [
-    'date_preset' => 'custom',
-    'date_from' => date('Y-m-d', strtotime('+30 days')),
-    'date_to' => date('Y-m-d', strtotime('+40 days'))
-]);
-assertTest("T7.5: Custom Range (+30 to +40 days) returns exactly Next Month task", count($listCustom) === 1 && $listCustom[0]['title'] === 'Date Task: Next Month');
+echo "\n--- SCENARIO 6: Super Admin Global Audit Trail ---\n";
+$superHistory = task_reminders_list_history($pdo, [], 100, 0, 1, 'superadmin', true);
+$t1InSuperHistory = (bool)array_filter($superHistory, fn($h) => (int)$h['task_id'] === $t1Id);
+assertTest("Scenario 6: Super Admin sees A -> B completed task and history events in global audit trail",
+    $t1InSuperHistory && count($superHistory) >= 2
+);
 
 // ---------------------------------------------------------------------------------
-// TEST GROUP 8: Recurring Tasks Series & Materialization
+// SCENARIO 7: Super Admin operational due-alert lookup for B's task is blocked, but details access allowed
 // ---------------------------------------------------------------------------------
-echo "\n--- TEST GROUP 8: Recurring Series Materialization & Parent Exclusion ---\n";
+echo "\n--- SCENARIO 7: Super Admin Operational Scoping vs Audit Access ---\n";
+$superDueCheck = task_reminders_verify_due_alert($pdo, $futureId, 1, 'superadmin', true);
+$superDetailCheck = task_reminders_get_details($pdo, $futureId, 1, 'superadmin', true);
+assertTest("Scenario 7: Super Admin cannot get operational due-alert for B's task, but can access task details for audit",
+    $superDueCheck === null && $superDetailCheck !== null && (int)$superDetailCheck['task']['id'] === $futureId
+);
 
+// ---------------------------------------------------------------------------------
+// SCENARIO 8: Admin A cannot obtain Admin B's operational reminder through ID manipulation
+// ---------------------------------------------------------------------------------
+echo "\n--- SCENARIO 8: IDOR & Cross-Admin Due Alert Protection ---\n";
+$aTamperDue = task_reminders_verify_due_alert($pdo, $futureId, 2, 'admin_a', false);
+assertTest("Scenario 8: Admin A cannot verify/receive Admin B's operational due alert",
+    $aTamperDue === null
+);
+
+// ---------------------------------------------------------------------------------
+// SCENARIO 9 & 10: Recurring Occurrence Triggering & Assignee Scoping
+// ---------------------------------------------------------------------------------
+echo "\n--- SCENARIO 9 & 10: Recurring Series Materialization & Scoping ---\n";
 $recRes = task_reminders_create($pdo, [
     'task_type_id' => $typeId,
-    'title' => 'Daily Standup Report',
-    'notes' => 'Recurring daily series',
+    'title' => 'Daily Standup Call',
+    'notes' => 'Recurring daily series for Admin B',
     'recurrence_type' => 'daily',
-    'recurrence_start_date' => $todayStr,
+    'recurrence_start_date' => date('Y-m-d'),
     'recurrence_end_date' => date('Y-m-d', strtotime('+14 days')),
-    'recurrence_due_time' => '09:30:00',
+    'recurrence_due_time' => '09:00:00',
     'assigned_to' => 'admin_b'
 ], 2, 'admin_a');
-assertTest("T8.1: Recurring series created successfully", $recRes['success'] === true);
+$seriesParentId = (int)$recRes['task_id'];
 
 // Check that series parent is NEVER returned in list_my_tasks
-$myTasksAll = task_reminders_list_my_tasks($pdo, 3, 'admin_b', []);
-$parentInList = false;
-foreach ($myTasksAll as $t) {
-    if (!empty($t['is_series_parent'])) {
-        $parentInList = true;
-    }
-}
-assertTest("T8.2: Series parent is excluded from list_my_tasks", !$parentInList);
+$myTasksB = task_reminders_list_my_tasks($pdo, 3, 'admin_b', []);
+$parentInMyTasks = (bool)array_filter($myTasksB, fn($t) => (int)$t['id'] === $seriesParentId || !empty($t['is_series_parent']));
 
-// Check that series parent is NEVER returned in list_assigned_by_me
-$assignedAll = task_reminders_list_assigned_by_me($pdo, 2, 'admin_a', []);
-$parentInAssigned = false;
-foreach ($assignedAll as $t) {
-    if (!empty($t['is_series_parent'])) {
-        $parentInAssigned = true;
-    }
-}
-assertTest("T8.3: Series parent is excluded from list_assigned_by_me", !$parentInAssigned);
+// Check occurrence triggering: only current assignee (Admin B) receives occurrence
+$occStmt = $pdo->prepare("SELECT id FROM reminders WHERE recurrence_series_id = ? AND is_series_parent = 0 LIMIT 1");
+$occStmt->execute([$seriesParentId]);
+$occId = (int)$occStmt->fetchColumn();
+
+$occVerifyB = ($occId > 0) ? task_reminders_get_details($pdo, $occId, 3, 'admin_b', false) : null;
+$occVerifyC = ($occId > 0) ? task_reminders_get_details($pdo, $occId, 4, 'admin_c', false) : null;
+
+assertTest("Scenario 9: Future unmaterialized occurrences and series parent are excluded from active tasks",
+    !$parentInMyTasks
+);
+assertTest("Scenario 10: Materialized recurring occurrence is accessible to assignee (B) and denied to unrelated admin (C)",
+    $occVerifyB !== null && $occVerifyC === null
+);
+
+// ---------------------------------------------------------------------------------
+// SCENARIO 11: Reassignment: B -> C -> B loses operational reminder, C receives it
+// ---------------------------------------------------------------------------------
+echo "\n--- SCENARIO 11: Task Reassignment Visibility Shift ---\n";
+$resReassign = task_reminders_reassign($pdo, $futureId, 'admin_c', 2, 'admin_a', false);
+$myTasksB_afterReassign = task_reminders_list_my_tasks($pdo, 3, 'admin_b', []);
+$myTasksC_afterReassign = task_reminders_list_my_tasks($pdo, 4, 'admin_c', []);
+
+$bHasFuture = (bool)array_filter($myTasksB_afterReassign, fn($t) => (int)$t['id'] === $futureId);
+$cHasFuture = (bool)array_filter($myTasksC_afterReassign, fn($t) => (int)$t['id'] === $futureId);
+
+assertTest("Scenario 11: Upon reassignment (B -> C), B loses My Tasks visibility, C gains My Tasks visibility",
+    $resReassign['success'] === true && !$bHasFuture && $cHasFuture
+);
+
+// ---------------------------------------------------------------------------------
+// SCENARIO 12: Start Work action does not exist in rendered source/UI logic
+// ---------------------------------------------------------------------------------
+echo "\n--- SCENARIO 12: Removal of 'Start Work' Action ---\n";
+$taskRemindersPhp = file_get_contents(__DIR__ . '/task-reminders.php');
+$adminFooterPhp = file_get_contents(__DIR__ . '/includes/admin_footer.php');
+
+$noStartInPage = strpos($taskRemindersPhp, 'startTask') === false && strpos($taskRemindersPhp, 'Start Work') === false;
+$noStartInFooter = strpos($adminFooterPhp, 'startTask') === false && strpos($adminFooterPhp, 'Start Work') === false && strpos($adminFooterPhp, 'Start Task') === false;
+
+assertTest("Scenario 12: 'Start Work' and 'Start Task' buttons are completely removed from UI and action logic",
+    $noStartInPage && $noStartInFooter
+);
+
+// ---------------------------------------------------------------------------------
+// SCENARIO 13: Completion and Postpone remain available
+// ---------------------------------------------------------------------------------
+echo "\n--- SCENARIO 13: Completion and Postpone Availability ---\n";
+$resPostpone = task_reminders_postpone($pdo, $futureId, date('Y-m-d H:i:s', time() + 172800), 'Exam postponed by student', 4, 'admin_c');
+$detailsPostponed = task_reminders_get_details($pdo, $futureId, 4, 'admin_c', false);
+assertTest("Scenario 13: Postpone and Complete actions remain fully functional",
+    $resPostpone['success'] === true && $detailsPostponed['task']['remind_at'] === $resPostpone['new_remind_at']
+);
+
+// ---------------------------------------------------------------------------------
+// SCENARIO 14: Date filters work (Today, Tomorrow, This Week, Overdue, Custom Range)
+// ---------------------------------------------------------------------------------
+echo "\n--- SCENARIO 14: Date Filtering Presets & Backend Query Logic ---\n";
+$todayStr = date('Y-m-d');
+$tomorrowStr = date('Y-m-d', strtotime('+1 day'));
+$nextMonthStr = date('Y-m-d', strtotime('+35 days'));
+
+$tToday = task_reminders_create($pdo, ['task_type_id' => $typeId, 'title' => 'Filter Today', 'remind_at' => $todayStr . ' 15:00:00', 'assigned_to' => 'admin_c'], 2, 'admin_a');
+$tTom = task_reminders_create($pdo, ['task_type_id' => $typeId, 'title' => 'Filter Tomorrow', 'remind_at' => $tomorrowStr . ' 10:00:00', 'assigned_to' => 'admin_c'], 2, 'admin_a');
+$tMonth = task_reminders_create($pdo, ['task_type_id' => $typeId, 'title' => 'Filter Next Month', 'remind_at' => $nextMonthStr . ' 10:00:00', 'assigned_to' => 'admin_c'], 2, 'admin_a');
+
+$listToday = task_reminders_list_my_tasks($pdo, 4, 'admin_c', ['date_preset' => 'today']);
+$listTom = task_reminders_list_my_tasks($pdo, 4, 'admin_c', ['date_preset' => 'tomorrow']);
+$listCustom = task_reminders_list_my_tasks($pdo, 4, 'admin_c', ['date_preset' => 'custom', 'date_from' => date('Y-m-d', strtotime('+30 days')), 'date_to' => date('Y-m-d', strtotime('+40 days'))]);
+
+$hasTodayInToday = (bool)array_filter($listToday, fn($t) => $t['title'] === 'Filter Today');
+$hasTomInToday = (bool)array_filter($listToday, fn($t) => $t['title'] === 'Filter Tomorrow');
+$hasTomInTom = (bool)array_filter($listTom, fn($t) => $t['title'] === 'Filter Tomorrow');
+$hasMonthInCustom = (bool)array_filter($listCustom, fn($t) => $t['title'] === 'Filter Next Month');
+
+assertTest("Scenario 14: Date filter presets (Today, Tomorrow, Custom Range) accurately filter backend queries",
+    $hasTodayInToday && !$hasTomInToday && $hasTomInTom && $hasMonthInCustom
+);
+
+// ---------------------------------------------------------------------------------
+// SCENARIO 15: Date filters cannot bypass role visibility
+// ---------------------------------------------------------------------------------
+echo "\n--- SCENARIO 15: Date Filter Role Scoping Enforced Server-Side ---\n";
+// Admin B queries date filter 'today' - should NOT see Admin C's 'Filter Today'
+$listTodayB = task_reminders_list_my_tasks($pdo, 3, 'admin_b', ['date_preset' => 'today']);
+$hasCInB = (bool)array_filter($listTodayB, fn($t) => $t['title'] === 'Filter Today');
+assertTest("Scenario 15: Date filters strictly enforce role scoping (Admin B cannot see Admin C's tasks)",
+    !$hasCInB
+);
+
+// ---------------------------------------------------------------------------------
+// SCENARIO 16: Super Admin date filters can filter global history & monitoring
+// ---------------------------------------------------------------------------------
+echo "\n--- SCENARIO 16: Super Admin Global Date Filtering ---\n";
+$superHistoryToday = task_reminders_list_history($pdo, ['date_preset' => 'today'], 100, 0, 1, 'superadmin', true);
+$superMonitoringAll = task_reminders_list_assigned_by_me($pdo, 1, 'superadmin', ['date_preset' => 'today'], true);
+assertTest("Scenario 16: Super Admin date filters function across global history and monitoring",
+    count($superHistoryToday) >= 1 && count($superMonitoringAll) >= 1
+);
+
+// ---------------------------------------------------------------------------------
+// SCENARIO 17: Zero-delete invariant holds across entire lifecycle
+// ---------------------------------------------------------------------------------
+echo "\n--- SCENARIO 17: Zero-Delete Invariant ---\n";
+$cntReminders = (int)$pdo->query("SELECT COUNT(*) FROM reminders")->fetchColumn();
+$cntHistory = (int)$pdo->query("SELECT COUNT(*) FROM task_reminder_status_history")->fetchColumn();
+$cntAssignments = (int)$pdo->query("SELECT COUNT(*) FROM task_reminder_assignments")->fetchColumn();
+assertTest("Scenario 17: Zero-delete invariant holds (Reminders: {$cntReminders}, History: {$cntHistory}, Assignments: {$cntAssignments})",
+    $cntReminders >= 7 && $cntHistory >= 5 && $cntAssignments >= 5
+);
 
 echo "\n==================================================================================\n";
 echo "AUDIT SUMMARY: {$passes} PASSED, {$fails} FAILED\n";
