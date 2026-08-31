@@ -24,9 +24,10 @@ class QueueProcessor {
 
         // ── Stale-job recovery ──────────────────────────────────────────
         // If PHP crashed during processQueueItem(), jobs stay stuck in
-        // 'processing' forever. Reset items older than 10 minutes back to
+        // 'processing' forever. Reset items older than INTERVAL 10 MINUTE back to
         // 'pending' so the next cron run can retry them.
         try {
+            $cutoff = date('Y-m-d H:i:s', time() - 600); // INTERVAL 10 MINUTE threshold
             $isSqlite = ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
             if ($isSqlite) {
                 $staleStmt = $this->pdo->prepare("
@@ -34,9 +35,9 @@ class QueueProcessor {
                     SET status = 'pending',
                         retry_count = retry_count + 1,
                         error_message = COALESCE(error_message,'') || ' [stale-recovery]',
-                        updated_at = datetime(NOW())
+                        updated_at = datetime('now')
                     WHERE status = 'processing'
-                      AND worker_started_at < datetime(NOW(), '-10 minute')
+                      AND worker_started_at < ?
                 ");
             } else {
                 $staleStmt = $this->pdo->prepare("
@@ -46,10 +47,10 @@ class QueueProcessor {
                         error_message = CONCAT(COALESCE(error_message,''), ' [stale-recovery]'),
                         updated_at = NOW()
                     WHERE status = 'processing'
-                      AND worker_started_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE)
+                      AND worker_started_at < ?
                 ");
             }
-            $staleStmt->execute();
+            $staleStmt->execute([$cutoff]);
             $recovered = $staleStmt->rowCount();
             if ($recovered > 0) {
                 error_log("QueueProcessor: Recovered {$recovered} stale job(s) stuck in 'processing'.");
@@ -59,10 +60,11 @@ class QueueProcessor {
         }
 
         // Query pending, failed, or retrying items that are ready for attempt
+        $nowCutoff = date('Y-m-d H:i:s');
         $stmt = $this->pdo->prepare("
             SELECT id FROM communication_queue
             WHERE status IN ('pending', 'failed', 'retrying')
-              AND next_attempt_at <= NOW()
+              AND next_attempt_at <= ?
               AND (
                 (channel = 'whatsapp' AND retry_count < 3) OR
                 (channel = 'email' AND retry_count < 5) OR
@@ -71,7 +73,8 @@ class QueueProcessor {
             ORDER BY priority DESC, created_at ASC
             LIMIT ?
         ");
-        $stmt->bindValue(1, $this->batchSize, PDO::PARAM_INT);
+        $stmt->bindValue(1, $nowCutoff, PDO::PARAM_STR);
+        $stmt->bindValue(2, $this->batchSize, PDO::PARAM_INT);
         $stmt->execute();
 
         $itemIds = $stmt->fetchAll(PDO::FETCH_COLUMN);

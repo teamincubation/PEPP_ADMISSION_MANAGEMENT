@@ -384,16 +384,28 @@ class CommunicationEngine {
             }
 
             // Fail-closed student status validation:
-            // Transactional communications (invoices, installments, receipts, security alerts) are explicitly whitelisted and proceed for all students.
-            // All academic, session, study plan, AND unknown/future unclassified communications FAIL CLOSED for non-active students.
+            // Transactional communications (invoices, installments, receipts, registration, onboarding, security alerts) are explicitly whitelisted and proceed for all students.
+            // All non-transactional academic/study plan communications fail closed for non-active students (dropouts, suspended, inactive).
             $transactional_events = [
                 'invoice_email',
                 'installment_reminder',
                 'installment_email',
+                'installment_overdue',
                 'payment_receipt',
                 'payment_confirmation',
                 'payment_reminder',
+                'payment_rejection',
                 'fee_update',
+                'student_registration',
+                'student_approval',
+                'student_rejection',
+                'student_welcome',
+                'student_onboarding',
+                'onboarding_app_access',
+                'course_migration_completed',
+                'course_migration',
+                'session_scheduled',
+                'session_reminder',
                 'activity_log_export',
                 'email_reports_export',
                 'monthly_backup',
@@ -407,7 +419,14 @@ class CommunicationEngine {
                 || strpos($eventName, 'installment_') === 0
                 || strpos($eventName, 'payment_') === 0
                 || strpos($eventName, 'invoice_') === 0
-                || strpos($eventName, 'fee_') === 0;
+                || strpos($eventName, 'fee_') === 0
+                || strpos($eventName, 'registration') !== false
+                || strpos($eventName, 'student_') === 0
+                || strpos($eventName, 'onboarding') !== false
+                || strpos($eventName, 'admission') !== false
+                || strpos($eventName, 'migration') !== false
+                || strpos($eventName, 'auth_') === 0
+                || strpos($eventName, 'lead_') === 0;
 
             if (!$isTransactional) {
                 $recipientIdent = !empty($item['student_uid']) ? $item['student_uid'] : $item['recipient'];

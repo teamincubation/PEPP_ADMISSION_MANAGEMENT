@@ -763,7 +763,23 @@ if (mentor_tables_exist($pdo)) {
             });
 
             $students = $students_with_metrics;
+
+            // Calculate Mentor Assigned and Unassigned counts for course
+            $mentor_assigned_count = 0;
+            $mentor_unassigned_count = 0;
+            foreach ($students as $st_item) {
+                if (!empty($st_item['active_mentor_id'])) {
+                    $mentor_assigned_count++;
+                } else {
+                    $mentor_unassigned_count++;
+                }
+            }
         } catch (Exception $e) {}
+
+        $mentor_status_filter = strtolower(trim((string)($_GET['mentor_status'] ?? 'all')));
+        if (!in_array($mentor_status_filter, ['assigned', 'unassigned', 'all'], true)) {
+            $mentor_status_filter = 'all';
+        }
 
         // Load call logs for selected course (Mentors see calls for currently assigned students, excluding dropout/completed)
         try {
@@ -995,9 +1011,23 @@ include 'includes/admin_nav.php';
 <?php else: ?>
     <!-- STATE C: Course Selected and Students Exist -->
     <div class="panel">
-        <div class="panel-head">
-            <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-users"></i></span>
-            <h2><?= is_super_admin() ? 'Students' : 'My Students' ?> (<?= e($selected_course_name) ?>)</h2>
+        <div class="panel-head" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div style="display:flex; align-items:center; gap:10px;">
+                <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-users"></i></span>
+                <h2><?= is_super_admin() ? 'Students' : 'My Students' ?> (<?= e($selected_course_name) ?>)</h2>
+            </div>
+            <?php if (is_super_admin()): ?>
+            <div class="mentor-summary-indicators" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                <button type="button" class="btn btn-sm mentor-filter-pill <?= $mentor_status_filter === 'unassigned' ? 'active' : '' ?>" onclick="toggleMentorFilter('unassigned')" id="pill-mentor-unassigned" title="Click to filter students without a mentor" style="background:<?= $mentor_status_filter === 'unassigned' ? '#dc2626' : '#fef2f2' ?>; color:<?= $mentor_status_filter === 'unassigned' ? '#ffffff' : '#dc2626' ?>; border:1.5px solid #ef4444; border-radius:20px; font-weight:700; font-size:0.8rem; padding:4px 14px; display:inline-flex; align-items:center; gap:6px; cursor:pointer; transition:all 0.15s ease;">
+                    <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:<?= $mentor_status_filter === 'unassigned' ? '#ffffff' : '#dc2626' ?>;"></span>
+                    🔴 Mentor Not Assigned: <span style="font-weight:800; font-size:0.88rem; margin-left:2px;"><?= $mentor_unassigned_count ?></span>
+                </button>
+                <button type="button" class="btn btn-sm mentor-filter-pill <?= $mentor_status_filter === 'assigned' ? 'active' : '' ?>" onclick="toggleMentorFilter('assigned')" id="pill-mentor-assigned" title="Click to filter students with a mentor" style="background:<?= $mentor_status_filter === 'assigned' ? '#16a34a' : '#f0fdf4' ?>; color:<?= $mentor_status_filter === 'assigned' ? '#ffffff' : '#16a34a' ?>; border:1.5px solid #22c55e; border-radius:20px; font-weight:700; font-size:0.8rem; padding:4px 14px; display:inline-flex; align-items:center; gap:6px; cursor:pointer; transition:all 0.15s ease;">
+                    <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:<?= $mentor_status_filter === 'assigned' ? '#ffffff' : '#16a34a' ?>;"></span>
+                    🟢 Mentor Assigned: <span style="font-weight:800; font-size:0.88rem; margin-left:2px;"><?= $mentor_assigned_count ?></span>
+                </button>
+            </div>
+            <?php endif; ?>
         </div>
 
         <!-- Filters Toolbar for Student Search and Attributes -->
@@ -1065,12 +1095,14 @@ include 'includes/admin_nav.php';
                 foreach ($students as $s):
                     $m = $s['metrics'];
                     $wa_phone = preg_replace('/\D/', '', ($s['whatsapp_country_code'] ?: '+91') . $s['whatsapp_number']);
+                    $has_mentor_flag = !empty($s['active_mentor_id']) ? '1' : '0';
                 ?>
                 <tr class="student-row"
                     data-name="<?= e(strtolower($s['full_name'])) ?>"
                     data-email="<?= e(is_credential_restricted('students') ? format_credential_text($s['email'], 'email', 'students') : strtolower($s['email'])) ?>"
                     data-mobile="<?= e(is_credential_restricted('students') ? format_credential_text($s['whatsapp_number'], 'phone', 'students') : $s['whatsapp_number']) ?>"
                     data-user-id="<?= e(strtolower($s['user_id'])) ?>"
+                    data-has-mentor="<?= $has_mentor_flag ?>"
                     data-progress="<?= (int)$m['progress'] ?>"
                     data-streak="<?= (int)$m['streak'] ?>"
                     data-completed="<?= (int)$m['completed_tasks'] ?>"
@@ -1916,6 +1948,58 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
+let currentMentorFilter = '<?= strtoupper($mentor_status_filter) ?>';
+
+function toggleMentorFilter(type) {
+    type = type.toUpperCase();
+    if (currentMentorFilter === type) {
+        currentMentorFilter = 'ALL';
+    } else {
+        currentMentorFilter = type;
+    }
+    updateMentorPillStyles();
+    applyStudentFilters();
+
+    // Update URL query string without reloading page
+    try {
+        const url = new URL(window.location.href);
+        if (currentMentorFilter === 'ALL') {
+            url.searchParams.delete('mentor_status');
+        } else {
+            url.searchParams.set('mentor_status', currentMentorFilter.toLowerCase());
+        }
+        window.history.replaceState({}, '', url.toString());
+    } catch(e) {}
+}
+
+function updateMentorPillStyles() {
+    const pillUnassigned = document.getElementById('pill-mentor-unassigned');
+    const pillAssigned = document.getElementById('pill-mentor-assigned');
+
+    if (pillUnassigned) {
+        if (currentMentorFilter === 'UNASSIGNED') {
+            pillUnassigned.style.background = '#dc2626';
+            pillUnassigned.style.color = '#ffffff';
+            pillUnassigned.classList.add('active');
+        } else {
+            pillUnassigned.style.background = '#fef2f2';
+            pillUnassigned.style.color = '#dc2626';
+            pillUnassigned.classList.remove('active');
+        }
+    }
+    if (pillAssigned) {
+        if (currentMentorFilter === 'ASSIGNED') {
+            pillAssigned.style.background = '#16a34a';
+            pillAssigned.style.color = '#ffffff';
+            pillAssigned.classList.add('active');
+        } else {
+            pillAssigned.style.background = '#f0fdf4';
+            pillAssigned.style.color = '#16a34a';
+            pillAssigned.classList.remove('active');
+        }
+    }
+}
+
 function applyStudentFilters() {
     const q = document.getElementById('student-search-input') ? document.getElementById('student-search-input').value.toLowerCase().trim() : '';
     const perf = document.getElementById('filter-performance') ? document.getElementById('filter-performance').value : 'ALL';
@@ -1939,6 +2023,13 @@ function applyStudentFilters() {
         const attendanceVal = parseInt(row.dataset.attendance) || 0;
 
         let show = true;
+
+        // Mentor Assignment filter
+        if (show && currentMentorFilter !== 'ALL') {
+            const hasMentor = row.dataset.hasMentor === '1';
+            if (currentMentorFilter === 'ASSIGNED' && !hasMentor) show = false;
+            else if (currentMentorFilter === 'UNASSIGNED' && hasMentor) show = false;
+        }
 
         // Search filter
         if (q && !name.includes(q) && !email.includes(q) && !mobile.includes(q) && !userId.includes(q)) {
@@ -1990,6 +2081,13 @@ function applyStudentFilters() {
 }
 
 function resetStudentFilters() {
+    currentMentorFilter = 'ALL';
+    updateMentorPillStyles();
+    try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('mentor_status');
+        window.history.replaceState({}, '', url.toString());
+    } catch(e) {}
     if (document.getElementById('student-search-input')) document.getElementById('student-search-input').value = '';
     if (document.getElementById('filter-performance')) document.getElementById('filter-performance').value = 'ALL';
     if (document.getElementById('filter-streak')) document.getElementById('filter-streak').value = 'ALL';
@@ -1999,6 +2097,13 @@ function resetStudentFilters() {
     if (document.getElementById('filter-attendance')) document.getElementById('filter-attendance').value = 'ALL';
     applyStudentFilters();
 }
+
+document.addEventListener('DOMContentLoaded', function() {
+    if (currentMentorFilter !== 'ALL') {
+        updateMentorPillStyles();
+        applyStudentFilters();
+    }
+});
 
 function escapeHtmlJS(text) {
     if (!text) return '';
