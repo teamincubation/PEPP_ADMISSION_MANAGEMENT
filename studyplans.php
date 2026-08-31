@@ -93,30 +93,33 @@ include 'includes/admin_nav.php';
 </div>
 
 <div class="action-bar" style="background:var(--card-bg); border:1px solid var(--border); padding:1rem 1.2rem; border-radius:16px; margin-bottom:1.5rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-    <form method="GET" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0;">
-        <input type="text" name="search" class="form-input" style="margin-bottom:0; width:220px;" placeholder="Search study plan name..." value="<?php echo htmlspecialchars($search); ?>">
+    <form method="GET" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; flex:1; min-width:280px; margin:0;">
+        <div style="flex:1.5; min-width:180px; position:relative;">
+            <i class="fas fa-search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:0.85rem; pointer-events:none;"></i>
+            <input type="text" name="search" class="form-input" style="margin-bottom:0; width:100% !important; padding-left:34px !important; height:42px !important; border-radius:10px;" placeholder="Search study plan name..." value="<?php echo htmlspecialchars($search); ?>">
+        </div>
         
-        <select name="status" class="form-input" style="margin-bottom:0; width:130px;">
+        <select name="status" class="form-input" style="margin-bottom:0; flex:1; min-width:125px; width:auto !important; height:42px !important; border-radius:10px;">
             <option value="">All Statuses</option>
             <option value="draft" <?php echo $status_filter === 'draft' ? 'selected' : ''; ?>>Draft</option>
             <option value="published" <?php echo $status_filter === 'published' ? 'selected' : ''; ?>>Published</option>
             <option value="archived" <?php echo $status_filter === 'archived' ? 'selected' : ''; ?>>Archived</option>
         </select>
         
-        <select name="course_id" class="form-input" style="margin-bottom:0; width:180px;">
+        <select name="course_id" class="form-input" style="margin-bottom:0; flex:1; min-width:150px; width:auto !important; height:42px !important; border-radius:10px;">
             <option value="">All Courses</option>
             <?php foreach ($courses as $c): ?>
                 <option value="<?php echo $c['id']; ?>" <?php echo $course_filter == $c['id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($c['course_name']); ?></option>
             <?php endforeach; ?>
         </select>
         
-        <button type="submit" class="btn btn-secondary"><i class="fas fa-filter"></i> Apply Filters</button>
-        <a href="studyplans.php" class="btn btn-outline">Reset</a>
+        <button type="submit" class="btn btn-primary" style="flex-shrink:0; height:42px; padding:0 16px; border-radius:10px; white-space:nowrap; display:inline-flex; align-items:center; gap:6px;"><i class="fas fa-filter"></i> Apply Filters</button>
+        <a href="studyplans.php" class="btn btn-outline" style="flex-shrink:0; height:42px; padding:0 16px; border-radius:10px; white-space:nowrap; display:inline-flex; align-items:center; justify-content:center; gap:6px;"><i class="fas fa-rotate-left"></i> Reset</a>
     </form>
     
-    <div style="display:flex; gap:10px; align-items:center;">
-        <a href="studyplan-chapters.php" class="btn btn-outline" style="border-color:#8b5cf6; color:#8b5cf6; background:#f5f3ff;"><i class="fas fa-book-bookmark"></i> Add Chapters</a>
-        <a href="studyplan-designer.php" class="btn btn-primary"><i class="fas fa-plus"></i> Create Study Plan</a>
+    <div style="display:flex; gap:10px; align-items:center; flex-shrink:0;">
+        <a href="studyplan-chapters.php" class="btn btn-outline" style="border-color:#8b5cf6; color:#8b5cf6; background:#f5f3ff; height:42px; border-radius:10px; display:inline-flex; align-items:center; gap:6px;"><i class="fas fa-book-bookmark"></i> Add Chapters</a>
+        <a href="studyplan-designer.php" class="btn btn-primary" style="height:42px; border-radius:10px; display:inline-flex; align-items:center; gap:6px;"><i class="fas fa-plus"></i> Create Study Plan</a>
     </div>
 </div>
 

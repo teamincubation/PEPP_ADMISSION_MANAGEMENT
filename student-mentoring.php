@@ -1001,49 +1001,49 @@ include 'includes/admin_nav.php';
         </div>
 
         <!-- Filters Toolbar for Student Search and Attributes -->
-        <div class="panel-body" style="padding:15px; border-bottom:1px solid var(--border); background:#f8fafc;">
-            <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+        <div class="panel-body filter-toolbar" style="padding:15px; border-bottom:1px solid var(--border); background:#f8fafc;">
+            <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; width:100%;">
                 <!-- Search Box -->
-                <div style="flex-grow:1; min-width:200px; position:relative;">
-                    <i class="fas fa-search" style="position:absolute; left:12px; top:12px; color:var(--text-muted); font-size:0.85rem;"></i>
-                    <input type="text" id="student-search-input" onkeyup="applyStudentFilters()" placeholder="Search name, email, mobile, ID..." style="width:100%; padding:8px 12px 8px 34px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text);">
+                <div style="flex:1.5; min-width:180px; position:relative;">
+                    <i class="fas fa-search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:0.85rem; pointer-events:none;"></i>
+                    <input type="text" id="student-search-input" onkeyup="applyStudentFilters()" placeholder="Search name, email, mobile, ID..." style="width:100% !important; padding:8px 12px 8px 34px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.82rem; background:#fff; color:var(--text); height:40px !important; line-height:38px !important;">
                 </div>
                 <!-- Filters -->
-                <select id="filter-performance" onchange="applyStudentFilters()" style="padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+                <select id="filter-performance" onchange="applyStudentFilters()" style="flex:1; min-width:125px; width:auto !important; height:40px !important; padding:0 28px 0 10px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.82rem; background:#fff; color:var(--text); cursor:pointer;">
                     <option value="ALL">All Performance Statuses</option>
                     <option value="EXCELLENT">Excellent (85%+)</option>
                     <option value="GOOD">Good (70%-84%)</option>
                     <option value="AVERAGE">Average (50%-69%)</option>
                     <option value="NEEDS_IMPROVEMENT">Needs Improvement (<50%)</option>
                 </select>
-                <select id="filter-streak" onchange="applyStudentFilters()" style="padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+                <select id="filter-streak" onchange="applyStudentFilters()" style="flex:1; min-width:115px; width:auto !important; height:40px !important; padding:0 28px 0 10px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.82rem; background:#fff; color:var(--text); cursor:pointer;">
                     <option value="ALL">All Streak Counts</option>
                     <option value="ACTIVE">Has Streak (>0 Days)</option>
                     <option value="HIGH">High Streak (5+ Days)</option>
                     <option value="NONE">No Streak (0 Days)</option>
                 </select>
-                <select id="filter-completed" onchange="applyStudentFilters()" style="padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+                <select id="filter-completed" onchange="applyStudentFilters()" style="flex:1; min-width:120px; width:auto !important; height:40px !important; padding:0 28px 0 10px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.82rem; background:#fff; color:var(--text); cursor:pointer;">
                     <option value="ALL">All Completed Tasks</option>
                     <option value="HIGH">High (10+ completed)</option>
                     <option value="SOME">Some (1-9 completed)</option>
                     <option value="NONE">Zero completed</option>
                 </select>
-                <select id="filter-pending" onchange="applyStudentFilters()" style="padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+                <select id="filter-pending" onchange="applyStudentFilters()" style="flex:1; min-width:115px; width:auto !important; height:40px !important; padding:0 28px 0 10px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.82rem; background:#fff; color:var(--text); cursor:pointer;">
                     <option value="ALL">All Pending Tasks</option>
                     <option value="YES">Has Pending Tasks (>0)</option>
                     <option value="NONE">No Pending Tasks (0)</option>
                 </select>
-                <select id="filter-overdue" onchange="applyStudentFilters()" style="padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+                <select id="filter-overdue" onchange="applyStudentFilters()" style="flex:1; min-width:115px; width:auto !important; height:40px !important; padding:0 28px 0 10px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.82rem; background:#fff; color:var(--text); cursor:pointer;">
                     <option value="ALL">All Overdue Tasks</option>
                     <option value="YES">Has Overdue Tasks (>0)</option>
                     <option value="NONE">No Overdue Tasks (0)</option>
                 </select>
-                <select id="filter-attendance" onchange="applyStudentFilters()" style="padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+                <select id="filter-attendance" onchange="applyStudentFilters()" style="flex:1; min-width:125px; width:auto !important; height:40px !important; padding:0 28px 0 10px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.82rem; background:#fff; color:var(--text); cursor:pointer;">
                     <option value="ALL">All Attendance Rates</option>
                     <option value="HIGH">High Attendance (75%+)</option>
                     <option value="LOW">Low Attendance (<75%)</option>
                 </select>
-                <button type="button" class="btn btn-sm btn-outline" onclick="resetStudentFilters()" style="height:36px; padding:0 12px; border-radius:10px;"><i class="fas fa-arrows-rotate"></i> Reset</button>
+                <button type="button" class="btn btn-sm btn-outline" onclick="resetStudentFilters()" style="flex-shrink:0; height:40px; padding:0 14px; border-radius:10px; white-space:nowrap; display:inline-flex; align-items:center; gap:6px;"><i class="fas fa-arrows-rotate"></i> Reset</button>
             </div>
         </div>
 
@@ -1340,15 +1340,15 @@ include 'includes/admin_nav.php';
     </div>
 
     <!-- Filters Toolbar for Assignments -->
-    <div class="panel-body" style="padding:15px; border-bottom:1px solid var(--border); background:#f8fafc;">
-        <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+    <div class="panel-body filter-toolbar" style="padding:15px; border-bottom:1px solid var(--border); background:#f8fafc;">
+        <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; width:100%;">
             <!-- Search Box -->
-            <div style="flex-grow:1; min-width:200px; position:relative;">
-                <i class="fas fa-search" style="position:absolute; left:12px; top:12px; color:var(--text-muted); font-size:0.85rem;"></i>
-                <input type="text" id="assignment-search-input" onkeyup="applyAssignmentFilters()" placeholder="Search student name, ID, mentor, course..." style="width:100%; padding:8px 12px 8px 34px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text);">
+            <div style="flex:1.5; min-width:200px; position:relative;">
+                <i class="fas fa-search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:0.85rem; pointer-events:none;"></i>
+                <input type="text" id="assignment-search-input" onkeyup="applyAssignmentFilters()" placeholder="Search student name, ID, mentor, course..." style="width:100% !important; padding:8px 12px 8px 34px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); height:40px !important;">
             </div>
             <!-- Status Filter -->
-            <select id="filter-assignment-status" onchange="applyAssignmentFilters()" style="padding:8px 12px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+            <select id="filter-assignment-status" onchange="applyAssignmentFilters()" style="flex:1; min-width:180px; width:auto !important; height:40px !important; padding:0 30px 0 10px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
                 <option value="ALL">All Statuses (Active &amp; Inactive)</option>
                 <option value="ACTIVE" selected>Active Only</option>
                 <option value="INACTIVE">Inactive / Past Only</option>

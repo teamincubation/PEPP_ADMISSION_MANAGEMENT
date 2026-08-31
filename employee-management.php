@@ -954,39 +954,39 @@ include 'includes/admin_nav.php';
 </div>
 
 <div class="panel">
-    <div class="panel-head" style="flex-wrap:wrap; gap:12px;">
-        <div style="display:flex; align-items:center; gap:10px;">
-            <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-id-badge"></i></span>
-            <h2>Approved Staff Directory (<?= count($employees) ?>)</h2>
-        </div>
+    <div class="panel-head">
+        <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-id-badge"></i></span>
+        <h2>Approved Staff Directory (<?= count($employees) ?>)</h2>
+    </div>
 
-        <!-- Real Server-Side Filters -->
-        <form method="GET" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:0;">
+    <!-- Filters Toolbar -->
+    <div class="panel-body filter-toolbar" style="padding:15px; border-bottom:1px solid var(--border); background:#f8fafc;">
+        <form method="GET" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:0; width:100%;">
             <input type="hidden" name="tab" value="employees">
-            <div style="position:relative;">
-                <input type="text" name="search" value="<?= e($search) ?>" placeholder="Search name, ID, email, mobile…" style="padding:6px 10px 6px 28px; border:1px solid var(--border); border-radius:8px; font-size:0.82rem; width:220px;">
-                <i class="fas fa-search" style="position:absolute; left:9px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:0.75rem;"></i>
+            <div style="flex:1.5; min-width:180px; position:relative;">
+                <i class="fas fa-search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:0.85rem; pointer-events:none;"></i>
+                <input type="text" name="search" value="<?= e($search) ?>" placeholder="Search name, ID, email, mobile…" style="width:100% !important; padding:8px 12px 8px 34px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); height:42px !important;">
             </div>
-            <select name="status" onchange="this.form.submit()" style="padding:6px 10px; border:1px solid var(--border); border-radius:8px; font-size:0.82rem; background:var(--card);">
+            <select name="status" onchange="this.form.submit()" style="flex:1; min-width:125px; width:auto !important; height:42px !important; padding:0 36px 0 12px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
                 <option value="">All Statuses</option>
                 <?php foreach ($CANONICAL_STAFF_STATUSES as $st_k => $st_v): ?>
                     <option value="<?= $st_k ?>" <?= $status_filter === $st_k ? 'selected' : '' ?>><?= $st_v['label'] ?></option>
                 <?php endforeach; ?>
             </select>
-            <select name="type" onchange="this.form.submit()" style="padding:6px 10px; border:1px solid var(--border); border-radius:8px; font-size:0.82rem; background:var(--card);">
+            <select name="type" onchange="this.form.submit()" style="flex:1; min-width:110px; width:auto !important; height:42px !important; padding:0 36px 0 12px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
                 <option value="">All Types</option>
                 <option value="employee" <?= $type_filter === 'employee' ? 'selected' : '' ?>>Employee</option>
                 <option value="faculty" <?= $type_filter === 'faculty' ? 'selected' : '' ?>>Faculty</option>
                 <option value="intern" <?= $type_filter === 'intern' ? 'selected' : '' ?>>Intern</option>
             </select>
-            <select name="link" onchange="this.form.submit()" style="padding:6px 10px; border:1px solid var(--border); border-radius:8px; font-size:0.82rem; background:var(--card);">
+            <select name="link" onchange="this.form.submit()" style="flex:1; min-width:125px; width:auto !important; height:42px !important; padding:0 36px 0 12px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
                 <option value="">All Admin Links</option>
                 <option value="linked" <?= $link_filter === 'linked' ? 'selected' : '' ?>>Linked to Admin</option>
                 <option value="unlinked" <?= $link_filter === 'unlinked' ? 'selected' : '' ?>>Unlinked</option>
             </select>
-            <button type="submit" class="btn btn-sm btn-primary"><i class="fas fa-filter"></i> Filter</button>
+            <button type="submit" class="btn btn-primary" style="flex-shrink:0; height:42px; padding:0 16px; border-radius:10px; white-space:nowrap; display:inline-flex; align-items:center; gap:6px;"><i class="fas fa-filter"></i> Filter</button>
             <?php if ($search || $status_filter || $type_filter || $link_filter): ?>
-                <a href="?tab=employees" class="btn btn-sm btn-outline" title="Reset Filters"><i class="fas fa-rotate-left"></i></a>
+                <a href="?tab=employees" class="btn btn-outline" title="Reset Filters" style="flex-shrink:0; height:42px; padding:0 14px; border-radius:10px; white-space:nowrap; display:inline-flex; align-items:center; justify-content:center; gap:6px;"><i class="fas fa-rotate-left"></i> Reset</a>
             <?php endif; ?>
         </form>
     </div>
