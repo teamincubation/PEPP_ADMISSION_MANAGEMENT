@@ -1322,8 +1322,8 @@ $nav_data = [
                             </div>
                             <div id="task-dropdown-counts" style="font-size:0.75rem; font-weight:700;"></div>
                         </div>
-                        <div id="task-dropdown-list" class="task-dropdown-list">
-                            <div style="text-align:center; padding:16px; color:#94a3b8; font-size:0.85rem;"><i class="fas fa-spinner fa-spin"></i> Loading tasks...</div>
+                        <div id="task-dropdown-list" class="task-dropdown-list" style="max-height:240px; overflow-y:auto;">
+                            <div style="text-align:center; padding:16px; color:#94a3b8; font-size:0.85rem;"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
                         </div>
                         <div class="task-dropdown-foot" style="display:flex; gap:8px;">
                             <button type="button" class="btn btn-sm btn-outline" style="flex:1;" onclick="openCreateTaskModal(); closeTaskRemindersDropdown();">

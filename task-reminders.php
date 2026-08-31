@@ -395,6 +395,9 @@ include 'includes/admin_nav.php';
         <button type="button" class="task-tab-btn" onclick="switchTaskTab('task-history')">
             <i class="fas fa-clock-rotate-left"></i> History / All Events
         </button>
+        <button type="button" class="task-tab-btn" onclick="switchTaskTab('recurring-series')">
+            <i class="fas fa-repeat"></i> Recurring Series
+        </button>
     </div>
     <div>
         <button type="button" class="btn btn-primary" onclick="openCreateTaskModal()">
@@ -589,6 +592,30 @@ include 'includes/admin_nav.php';
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════════ -->
+<!-- TAB 4: RECURRING SERIES MONITORING                                    -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="pane-recurring-series" class="task-tab-pane">
+    <div class="panel">
+        <div class="panel-header">
+            <div>
+                <h2><i class="fas fa-repeat" style="color:var(--primary,#7c3aed);"></i> Recurring Task Series</h2>
+                <p style="font-size:0.8rem; color:#94a3b8; margin-top:2px;">Monitor active/stopped recurring series and their occurrence history</p>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+                <select id="series-status-filter" onchange="loadRecurringSeries()" style="font-size:0.82rem; padding:4px 8px; border-radius:6px; border:1px solid var(--border,#e2e8f0);">
+                    <option value="active">Active Series</option>
+                    <option value="stopped">Stopped Series</option>
+                    <option value="all">All Series</option>
+                </select>
+            </div>
+        </div>
+        <div id="recurring-series-list" style="padding:16px;">
+            <div style="text-align:center; padding:32px; color:#94a3b8;"><i class="fas fa-spinner fa-spin"></i> Loading series...</div>
+        </div>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
 <!-- TASK DETAILS & TIMELINE MODAL                                          -->
 <!-- ══════════════════════════════════════════════════════════════════════ -->
 <div id="task-details-modal" class="modal-backdrop">
@@ -680,6 +707,7 @@ function switchTaskTab(tabId) {
     if (tabId === 'my-tasks') loadMyTasks();
     else if (tabId === 'assigned-by-me') loadAssignedByMe();
     else if (tabId === 'task-history') loadHistory();
+    else if (tabId === 'recurring-series') loadRecurringSeries();
 
     if (history.replaceState) {
         history.replaceState(null, null, '#' + tabId);
@@ -1035,9 +1063,145 @@ function escapeJs(str) {
     return String(str).replace(/'/g, "\\'").replace(/"/g, '\\"');
 }
 
+// ═══ Recurring Series Tab (Tab 4) ═══
+function loadRecurringSeries() {
+    var listEl = document.getElementById('recurring-series-list');
+    if (!listEl) return;
+
+    var statusFilter = document.getElementById('series-status-filter');
+    var status = statusFilter ? statusFilter.value : 'active';
+
+    listEl.innerHTML = '<div style="text-align:center; padding:32px; color:#94a3b8;"><i class="fas fa-spinner fa-spin"></i> Loading series...</div>';
+
+    fetch('api/task-reminders.php?action=list_series&status=' + encodeURIComponent(status))
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (!data.success || !data.series || data.series.length === 0) {
+                listEl.innerHTML = '<div style="text-align:center; padding:40px; color:#94a3b8; font-size:0.9rem;"><i class="fas fa-repeat" style="font-size:2rem; display:block; margin-bottom:8px; opacity:0.4;"></i>No recurring series found.</div>';
+                return;
+            }
+
+            var html = '';
+            data.series.forEach(function(s) {
+                var stats = s.occurrence_stats || {};
+                var statusBadge = s.is_stopped
+                    ? '<span style="font-size:0.72rem; padding:2px 8px; border-radius:4px; font-weight:700; background:#fef2f2; color:#dc2626; border:1px solid #fecaca;">Stopped</span>'
+                    : '<span style="font-size:0.72rem; padding:2px 8px; border-radius:4px; font-weight:700; background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0;">Active</span>';
+
+                var recLabel = s.recurrence_label || 'N/A';
+                var weekdayText = '';
+                if (s.recurrence_type === 'weekly' && s.recurrence_weekdays) {
+                    var dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+                    weekdayText = s.recurrence_weekdays.split(',').map(function(d) { return dayNames[parseInt(d)] || ''; }).join(', ');
+                }
+                if (s.recurrence_type === 'monthly' && s.recurrence_month_days) {
+                    weekdayText = 'Days: ' + s.recurrence_month_days;
+                }
+
+                html += '<div class="series-card" style="border:1px solid var(--border,#e2e8f0); border-radius:10px; padding:16px; margin-bottom:12px; background:var(--card,#fff); transition:box-shadow 0.2s;">' +
+                    '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">' +
+                        '<div style="flex:1; min-width:200px;">' +
+                            '<div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">' +
+                                '<span style="font-size:0.72rem; font-weight:700; color:var(--primary,#7c3aed); text-transform:uppercase;">' + escapeHtml(s.task_type_name) + '</span>' +
+                                statusBadge +
+                                '<span style="font-size:0.72rem; padding:2px 8px; border-radius:4px; font-weight:600; background:#ede9fe; color:#7c3aed; border:1px solid #ddd6fe;">' + recLabel + '</span>' +
+                            '</div>' +
+                            '<div style="font-weight:700; font-size:0.95rem; color:var(--foreground,#0f172a);">' + escapeHtml(s.title) + '</div>' +
+                            '<div style="font-size:0.78rem; color:#64748b; margin-top:4px;">' +
+                                '<i class="fas fa-user-tag"></i> Assigned to: <strong>' + escapeHtml(s.assigned_to_username || s.assigned_to) + '</strong>' +
+                                ' &bull; <i class="fas fa-calendar-day"></i> ' + s.formatted_start + ' – ' + s.formatted_end +
+                                (weekdayText ? ' &bull; <i class="fas fa-calendar-week"></i> ' + weekdayText : '') +
+                            '</div>' +
+                        '</div>' +
+                        '<div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">' +
+                            '<span style="font-size:0.72rem; padding:3px 8px; border-radius:4px; background:#dbeafe; color:#1e40af; font-weight:700;" title="Total Occurrences">' + (stats.total || 0) + ' total</span>' +
+                            '<span style="font-size:0.72rem; padding:3px 8px; border-radius:4px; background:#fef3c7; color:#92400e; font-weight:700;" title="Pending">' + (stats.pending || 0) + ' pending</span>' +
+                            '<span style="font-size:0.72rem; padding:3px 8px; border-radius:4px; background:#dcfce7; color:#166534; font-weight:700;" title="Completed">' + (stats.completed || 0) + ' done</span>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div style="display:flex; gap:8px; margin-top:12px; border-top:1px solid var(--border,#f1f5f9); padding-top:10px;">' +
+                        '<button type="button" class="btn btn-sm btn-outline" onclick="toggleSeriesOccurrences(' + s.id + ', this)"><i class="fas fa-list"></i> Occurrence History</button>' +
+                        (!s.is_stopped ? '<button type="button" class="btn btn-sm btn-outline" style="color:#dc2626; border-color:#fecaca;" onclick="stopSeries(' + s.id + ', \'' + escapeJs(s.title) + '\')"><i class="fas fa-stop"></i> Stop Series</button>' : '') +
+                    '</div>' +
+                    '<div id="series-occurrences-' + s.id + '" style="display:none; margin-top:10px;"></div>' +
+                '</div>';
+            });
+
+            listEl.innerHTML = html;
+        })
+        .catch(function(err) {
+            listEl.innerHTML = '<div style="text-align:center; padding:32px; color:#ef4444;"><i class="fas fa-exclamation-triangle"></i> Failed to load series.</div>';
+        });
+}
+
+function toggleSeriesOccurrences(seriesId, btn) {
+    var container = document.getElementById('series-occurrences-' + seriesId);
+    if (!container) return;
+
+    if (container.style.display === 'block') {
+        container.style.display = 'none';
+        return;
+    }
+
+    container.innerHTML = '<div style="text-align:center; padding:12px; color:#94a3b8; font-size:0.82rem;"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+    container.style.display = 'block';
+
+    fetch('api/task-reminders.php?action=get_series_info&series_id=' + seriesId)
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (!data.success || !data.data || !data.data.occurrences || data.data.occurrences.length === 0) {
+                container.innerHTML = '<div style="text-align:center; padding:12px; color:#94a3b8; font-size:0.82rem;">No occurrences yet.</div>';
+                return;
+            }
+
+            var html = '<table class="data-table" style="font-size:0.82rem;">' +
+                '<thead><tr><th>Date</th><th>Due Time</th><th>Status</th><th>Completed By</th><th>Actions</th></tr></thead><tbody>';
+
+            data.data.occurrences.forEach(function(occ) {
+                var statusCls = occ.is_overdue ? 'status-badge-overdue' : 'status-badge-' + occ.status.replace('_', '-');
+                var statusLabel = occ.is_overdue ? 'Overdue' : occ.status.replace('_', ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
+
+                html += '<tr>' +
+                    '<td>' + occ.formatted_date + '</td>' +
+                    '<td>' + occ.formatted_due + '</td>' +
+                    '<td><span class="' + statusCls + '" style="font-size:0.72rem; padding:2px 8px; border-radius:4px; font-weight:700;">' + statusLabel + '</span></td>' +
+                    '<td>' + (occ.completed_by_username ? escapeHtml(occ.completed_by_username) : '—') + '</td>' +
+                    '<td><button type="button" class="btn btn-sm btn-outline" onclick="openTaskDetailsModal(' + occ.id + ')"><i class="fas fa-circle-info"></i></button></td>' +
+                '</tr>';
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        })
+        .catch(function() {
+            container.innerHTML = '<div style="padding:12px; color:#ef4444; font-size:0.82rem;">Failed to load occurrences.</div>';
+        });
+}
+
+function stopSeries(seriesId, title) {
+    if (!confirm('Stop recurring series "' + title + '"?\n\nNo new occurrences will be created. Existing occurrences remain unchanged.')) return;
+
+    var fd = new FormData();
+    fd.append('action', 'stop_series');
+    fd.append('series_id', seriesId);
+    fd.append('csrf_token', '<?php echo csrf_token(); ?>');
+
+    fetch('api/task-reminders.php', { method: 'POST', body: fd })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (data.success) {
+                loadRecurringSeries();
+                if (typeof updateTaskRemindersSummary === 'function') updateTaskRemindersSummary();
+            } else {
+                alert(data.message || 'Failed to stop series.');
+            }
+        })
+        .catch(function() { alert('Error stopping series.'); });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     var hash = window.location.hash.substring(1);
-    if (hash && (hash === 'my-tasks' || hash === 'assigned-by-me' || hash === 'task-history')) {
+    if (hash && (hash === 'my-tasks' || hash === 'assigned-by-me' || hash === 'task-history' || hash === 'recurring-series')) {
         switchTaskTab(hash);
     } else {
         loadMyTasks();
