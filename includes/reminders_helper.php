@@ -157,7 +157,9 @@ if (!function_exists('ensure_task_reminders_schema')) {
                         'idx_rem_due_time' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_due_time` (`remind_at`, `status`)',
                         'idx_rem_series' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_series` (`recurrence_series_id`)',
                         'idx_rem_occurrence' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_occurrence` (`occurrence_date`)',
-                        'idx_rem_parent' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_parent` (`is_series_parent`, `recurrence_type`)'
+                        'idx_rem_parent' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_parent` (`is_series_parent`, `recurrence_type`)',
+                        'idx_rem_status' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_status` (`status`)',
+                        'idx_rem_deleted' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_deleted` (`deleted_at`)'
                     ];
                     foreach ($indexesToCreate as $idxName => $alterSql) {
                         try {

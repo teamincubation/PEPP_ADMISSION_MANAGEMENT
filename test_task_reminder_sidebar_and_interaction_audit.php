@@ -143,9 +143,37 @@ $sumA_after = task_reminders_get_summary($pdo, 2, 'admin_a', false);
 assert_equals($sumA_after['unread_completions_count'], 0, "Admin A unread_completions_count cleared to 0 after visiting page");
 
 // -------------------------------------------------------------------------
-// Requirement 2: Super Admin Soft Delete
+// Requirement 2: Super Admin Soft Delete & Schema Verification
 // -------------------------------------------------------------------------
-echo "\n--- [TEST GROUP 2] Super Admin Soft Delete ---\n";
+echo "\n--- [TEST GROUP 2] Super Admin Soft Delete & Schema Verification ---\n";
+
+// Explicit Schema Verification
+$colDeletedAt = false;
+$colDeletedByAdminId = false;
+$colDeletedByUsername = false;
+
+try {
+    $pdo->query("SELECT deleted_at FROM reminders LIMIT 1");
+    $colDeletedAt = true;
+} catch (Exception $e) {}
+
+try {
+    $pdo->query("SELECT deleted_by_admin_id FROM reminders LIMIT 1");
+    $colDeletedByAdminId = true;
+} catch (Exception $e) {}
+
+try {
+    $pdo->query("SELECT deleted_by_username FROM reminders LIMIT 1");
+    $colDeletedByUsername = true;
+} catch (Exception $e) {}
+
+assert_true($colDeletedAt, "Schema Verification: Column 'deleted_at' exists in 'reminders' table");
+assert_true($colDeletedByAdminId, "Schema Verification: Column 'deleted_by_admin_id' exists in 'reminders' table");
+assert_true($colDeletedByUsername, "Schema Verification: Column 'deleted_by_username' exists in 'reminders' table");
+
+// Total rows before deletion
+$stmtTotalBefore = $pdo->query("SELECT COUNT(*) FROM reminders");
+$totalRowsBefore = (int)$stmtTotalBefore->fetchColumn();
 
 // Create Task 2
 $resCreate2 = task_reminders_create($pdo, [
@@ -178,6 +206,10 @@ assert_equals($row2['status'], 'deleted', "Task 2 status is updated to 'deleted'
 assert_true(!empty($row2['deleted_at']), "Task 2 deleted_at timestamp is populated");
 assert_equals((int)$row2['deleted_by_admin_id'], 1, "Task 2 deleted_by_admin_id is 1");
 assert_equals($row2['deleted_by_username'], 'superadmin', "Task 2 deleted_by_username is 'superadmin'");
+
+$stmtTotalAfter = $pdo->query("SELECT COUNT(*) FROM reminders");
+$totalRowsAfter = (int)$stmtTotalAfter->fetchColumn();
+assert_equals($totalRowsAfter, $totalRowsBefore + 1, "Zero-Delete Invariant: Total reminders table count strictly preserved (no row deleted)");
 
 // Verify permanent audit trail history record
 $stmtHist = $pdo->prepare("SELECT * FROM task_reminder_status_history WHERE task_id = ? AND event_type = 'DELETED'");

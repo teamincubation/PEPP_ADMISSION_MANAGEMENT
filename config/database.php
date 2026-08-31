@@ -748,7 +748,7 @@ $conn = $pdo;
 
     // Centralized Version-Aware Schema Migration Architecture
     if (!defined('PEPP_DB_SCHEMA_VERSION')) {
-        define('PEPP_DB_SCHEMA_VERSION', '2026.08.31.2');
+        define('PEPP_DB_SCHEMA_VERSION', '2026.08.31.3');
     }
 
     if (!function_exists('ensure_task_reminders_schema')) {
@@ -803,7 +803,11 @@ $conn = $pdo;
                             'recurrence_series_id' => "INT NULL",
                             'recurrence_stopped_at' => "DATETIME NULL",
                             'occurrence_date' => "DATE NULL",
-                            'is_series_parent' => "TINYINT(1) NOT NULL DEFAULT 0"
+                            'is_series_parent' => "TINYINT(1) NOT NULL DEFAULT 0",
+                            // Soft delete columns
+                            'deleted_at' => "DATETIME NULL",
+                            'deleted_by_admin_id' => "INT NULL",
+                            'deleted_by_username' => "VARCHAR(100) NULL"
                         ];
                         foreach ($requiredCols as $colName => $colDef) {
                             try {
@@ -830,7 +834,9 @@ $conn = $pdo;
                             'idx_rem_due_time' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_due_time` (`remind_at`, `status`)',
                             'idx_rem_series' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_series` (`recurrence_series_id`)',
                             'idx_rem_occurrence' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_occurrence` (`occurrence_date`)',
-                            'idx_rem_parent' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_parent` (`is_series_parent`, `recurrence_type`)'
+                            'idx_rem_parent' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_parent` (`is_series_parent`, `recurrence_type`)',
+                            'idx_rem_status' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_status` (`status`)',
+                            'idx_rem_deleted' => 'ALTER TABLE `reminders` ADD INDEX `idx_rem_deleted` (`deleted_at`)'
                         ];
                         foreach ($indexesToCreate as $idxName => $alterSql) {
                             try {
@@ -1044,7 +1050,11 @@ $conn = $pdo;
                         'recurrence_series_id' => "INTEGER NULL",
                         'recurrence_stopped_at' => "DATETIME NULL",
                         'occurrence_date' => "DATE NULL",
-                        'is_series_parent' => "INTEGER NOT NULL DEFAULT 0"
+                        'is_series_parent' => "INTEGER NOT NULL DEFAULT 0",
+                        // Soft delete columns
+                        'deleted_at' => "DATETIME NULL",
+                        'deleted_by_admin_id' => "INTEGER NULL",
+                        'deleted_by_username' => "VARCHAR(100) NULL"
                     ];
                     foreach ($sqliteCols as $colName => $colDef) {
                         try {
