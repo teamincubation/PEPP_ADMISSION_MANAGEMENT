@@ -1301,7 +1301,7 @@ $nav_data = [
                 <button type="button" class="reminder-bell" id="theme-toggle-btn" style="margin-right:4px;" title="Switch Theme" aria-label="Switch Theme">
                     <i class="fas fa-sun" id="theme-toggle-icon"></i>
                 </button>
-                <div class="task-dropdown-container" style="position:relative; display:inline-block; margin-right:4px;">
+                <div class="task-dropdown-container" id="task-dropdown-container">
                     <button type="button" class="reminder-bell <?php echo !empty($nav_reminders_due) ? 'has-due' : ''; ?>" id="task-reminders-bell-btn" onclick="toggleTaskRemindersDropdown(event)" title="Task Reminders" aria-label="Task Reminders">
                         <i class="fas fa-bell"></i>
                         <span class="reminder-count" id="task-reminders-badge" style="<?php echo !empty($nav_reminders_pending) ? '' : 'display:none;'; ?>">
@@ -1318,7 +1318,7 @@ $nav_data = [
                         <div id="task-dropdown-list" class="task-dropdown-list">
                             <div style="text-align:center; padding:16px; color:#94a3b8; font-size:0.85rem;"><i class="fas fa-spinner fa-spin"></i> Loading tasks...</div>
                         </div>
-                        <div class="task-dropdown-foot" style="display:flex; gap:6px;">
+                        <div class="task-dropdown-foot" style="display:flex; gap:8px;">
                             <button type="button" class="btn btn-sm btn-outline" style="flex:1;" onclick="openCreateTaskModal(); closeTaskRemindersDropdown();">
                                 <i class="fas fa-plus"></i> New Task
                             </button>

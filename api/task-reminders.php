@@ -46,6 +46,40 @@ try {
     }
 
     switch ($action) {
+        // 0. Task Types Management
+        case 'list_task_types':
+            $active_only = !isset($_GET['active_only']) || $_GET['active_only'] === '1' || $_GET['active_only'] === 'true';
+            $types = task_types_get_all($pdo, $active_only);
+            echo json_encode(['success' => true, 'task_types' => $types]);
+            exit;
+
+        case 'save_task_type':
+            if ($method !== 'POST') {
+                http_response_code(405);
+                echo json_encode(['success' => false, 'message' => 'Method not allowed.']);
+                exit;
+            }
+            $res = task_types_save($pdo, $_POST, $current_admin_id, $current_username);
+            if ($res['success']) {
+                echo json_encode($res);
+            } else {
+                http_response_code(422);
+                echo json_encode($res);
+            }
+            exit;
+
+        case 'toggle_task_type':
+            if ($method !== 'POST') {
+                http_response_code(405);
+                echo json_encode(['success' => false, 'message' => 'Method not allowed.']);
+                exit;
+            }
+            $type_id = (int)($_POST['id'] ?? 0);
+            $is_active = (bool)($_POST['is_active'] ?? 1);
+            $ok = task_types_toggle_active($pdo, $type_id, $is_active);
+            echo json_encode(['success' => $ok]);
+            exit;
+
         // 1. Lightweight Polling Summary (<2ms)
         case 'get_summary':
             $summary = task_reminders_get_summary($pdo, $current_admin_id, $current_username);

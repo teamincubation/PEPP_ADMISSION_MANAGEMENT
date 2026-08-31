@@ -14,7 +14,7 @@
 ?>
 
 <!-- ── CREATE TASK REMINDER MODAL ── -->
-<div class="modal-backdrop" id="create-task-modal" style="display:none;">
+<div class="modal-backdrop" id="create-task-modal">
     <div class="modal-box" style="max-width:540px;">
         <div class="modal-head">
             <h3><i class="fas fa-bell" style="color:var(--primary,#7c3aed);"></i> New Task Reminder</h3>
@@ -68,7 +68,7 @@
 </div>
 
 <!-- ── EDIT TASK REMINDER MODAL ── -->
-<div class="modal-backdrop" id="edit-task-modal" style="display:none;">
+<div class="modal-backdrop" id="edit-task-modal">
     <div class="modal-box" style="max-width:540px;">
         <div class="modal-head">
             <h3><i class="fas fa-pen-to-square" style="color:var(--primary,#7c3aed);"></i> Edit Task Reminder</h3>
@@ -122,7 +122,7 @@
 </div>
 
 <!-- ── STRICT URGENT DUE TASK REMINDER POPUP (Server Revalidated) ── -->
-<div class="modal-backdrop" id="task-due-modal" style="display:none; z-index:9999;">
+<div class="modal-backdrop" id="task-due-modal" style="z-index:9999;">
     <div class="modal-box" style="max-width:500px; border-top:5px solid #d97706; box-shadow:0 12px 40px rgba(0,0,0,0.3);">
         <div class="modal-head" style="background:#fef3c7; border-bottom:1px solid #fde68a;">
             <div style="display:flex; align-items:center; gap:8px;">
@@ -154,7 +154,7 @@
 </div>
 
 <!-- ── POSTPONE MODAL WITH PRESETS & REASON ── -->
-<div class="modal-backdrop" id="postpone-task-modal" style="display:none; z-index:10000;">
+<div class="modal-backdrop" id="postpone-task-modal" style="z-index:10000;">
     <div class="modal-box" style="max-width:460px;">
         <div class="modal-head">
             <h3><i class="fas fa-clock-rotate-left" style="color:#d97706;"></i> Postpone Task Reminder</h3>
@@ -192,7 +192,7 @@
 </div>
 
 <!-- ── CREATOR COMPLETION NOTIFICATION POPUP ── -->
-<div class="modal-backdrop" id="creator-completion-alert" style="display:none; z-index:9998;">
+<div class="modal-backdrop" id="creator-completion-alert" style="z-index:9998;">
     <div class="modal-box" style="max-width:440px; border-top:5px solid #16a34a;">
         <div class="modal-head" style="background:#dcfce7;">
             <div style="display:flex; align-items:center; gap:8px;">
@@ -243,6 +243,11 @@ document.addEventListener('click', function(e) {
     }
 });
 
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
 function fetchTaskRemindersDropdownList() {
     var listEl = document.getElementById('task-dropdown-list');
     var countsEl = document.getElementById('task-dropdown-counts');
@@ -252,29 +257,31 @@ function fetchTaskRemindersDropdownList() {
         .then(function(res) { return res.json(); })
         .then(function(data) {
             if (!data.success || !data.tasks || data.tasks.length === 0) {
-                listEl.innerHTML = '<div style="text-align:center; padding:20px; color:#94a3b8; font-size:0.85rem;"><i class="fas fa-check-circle" style="color:#10b981; font-size:1.4rem; display:block; margin-bottom:4px;"></i>All caught up! No active tasks.</div>';
+                listEl.innerHTML = '<div style="text-align:center; padding:24px 16px; color:#94a3b8; font-size:0.85rem;"><i class="fas fa-check-circle" style="color:#10b981; font-size:1.6rem; display:block; margin-bottom:6px;"></i>All caught up! No active tasks.</div>';
                 if (countsEl) countsEl.innerHTML = '';
                 return;
             }
 
             var overdueCount = 0;
             var html = '';
-            data.tasks.slice(0, 4).forEach(function(t) {
+            data.tasks.slice(0, 5).forEach(function(t) {
                 if (t.is_overdue) overdueCount++;
-                var badgeHtml = t.is_overdue ? '<span class="status-badge-overdue" style="font-size:0.7rem; padding:2px 6px;">Overdue</span>' : '<span class="status-badge-pending" style="font-size:0.7rem; padding:2px 6px;">Pending</span>';
+                var badgeHtml = t.is_overdue 
+                    ? '<span class="status-badge-overdue" style="font-size:0.7rem; padding:2px 6px; border-radius:4px; font-weight:700;">Overdue</span>' 
+                    : '<span class="status-badge-pending" style="font-size:0.7rem; padding:2px 6px; border-radius:4px; font-weight:700;">Pending</span>';
 
-                html += '<div style="padding:10px 14px; border-bottom:1px solid var(--border,#f1f5f9); display:flex; justify-content:space-between; align-items:center; gap:8px;">' +
+                html += '<a href="task-reminders.php#my-tasks" class="task-dropdown-item" style="text-decoration:none; display:flex; justify-content:space-between; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--border,#f1f5f9);">' +
                     '<div style="flex:1; min-width:0;">' +
-                        '<div style="font-size:0.75rem; font-weight:700; color:var(--primary,#7c3aed);">' + escapeHtml(t.task_type_name) + '</div>' +
-                        '<div style="font-size:0.86rem; font-weight:600; color:var(--foreground,#0f172a); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' + escapeHtml(t.title) + '</div>' +
+                        '<div style="font-size:0.72rem; font-weight:700; color:var(--primary,#7c3aed); text-transform:uppercase;">' + escapeHtml(t.task_type_name) + '</div>' +
+                        '<div style="font-size:0.85rem; font-weight:600; color:var(--foreground,#0f172a); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' + escapeHtml(t.title) + '</div>' +
                         '<div style="font-size:0.75rem; color:#64748b;"><i class="fas fa-clock"></i> ' + t.formatted_due + '</div>' +
                     '</div>' +
                     '<div>' + badgeHtml + '</div>' +
-                '</div>';
+                '</a>';
             });
 
             if (countsEl) {
-                countsEl.innerHTML = '<span style="color:#d97706;">' + data.tasks.length + ' Pending</span>' + (overdueCount > 0 ? ' &bull; <span style="color:#dc2626;">' + overdueCount + ' Overdue</span>' : '');
+                countsEl.innerHTML = '<span style="color:#d97706;">' + data.tasks.length + ' Active</span>' + (overdueCount > 0 ? ' &bull; <span style="color:#dc2626;">' + overdueCount + ' Overdue</span>' : '');
             }
             listEl.innerHTML = html;
         })
@@ -286,8 +293,25 @@ function fetchTaskRemindersDropdownList() {
 function openCreateTaskModal() {
     var modal = document.getElementById('create-task-modal');
     if (modal) {
-        document.getElementById('create-task-title').value = '';
-        document.getElementById('create-task-notes').value = '';
+        var titleEl = document.getElementById('create-task-title');
+        if (titleEl) titleEl.value = '';
+        var notesEl = document.getElementById('create-task-notes');
+        if (notesEl) notesEl.value = '';
+
+        // Dynamic fallback: populate task types if empty
+        var typeSelect = document.getElementById('create-task-type');
+        if (typeSelect && typeSelect.options.length <= 1) {
+            fetch('api/task-reminders.php?action=list_task_types')
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                    if (data.success && data.task_types && data.task_types.length > 0) {
+                        typeSelect.innerHTML = '<option value="">-- Select Task Type --</option>';
+                        data.task_types.forEach(function(tt) {
+                            typeSelect.innerHTML += '<option value="' + tt.id + '">' + escapeHtml(tt.name) + '</option>';
+                        });
+                    }
+                }).catch(function() {});
+        }
         openModal('create-task-modal');
     }
 }
@@ -633,10 +657,24 @@ function toggleSidebar(force) {
     ov.classList.toggle('show', open);
 }
 // Generic modal helpers used across admin pages
-function openModal(id)  { const m = document.getElementById(id); if (m) m.classList.add('open'); }
-function closeModal(id) { const m = document.getElementById(id); if (m) m.classList.remove('open'); }
-document.querySelectorAll('.modal-backdrop').forEach(function (bd) {
-    bd.addEventListener('click', function (e) { if (e.target === bd) bd.classList.remove('open'); });
+function openModal(id) {
+    const m = document.getElementById(id);
+    if (m) {
+        m.classList.add('open');
+        m.style.display = 'flex';
+    }
+}
+function closeModal(id) {
+    const m = document.getElementById(id);
+    if (m) {
+        m.classList.remove('open');
+        m.style.display = 'none';
+    }
+}
+document.addEventListener('click', function (e) {
+    if (e.target && e.target.classList && e.target.classList.contains('modal-backdrop')) {
+        closeModal(e.target.id);
+    }
 });
 // Reminder postpone: ask for new date/time (default +1 hour) and submit
 function postponeReminder(id) {

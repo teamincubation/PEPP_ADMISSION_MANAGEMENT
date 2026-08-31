@@ -591,7 +591,7 @@ include 'includes/admin_nav.php';
 <!-- ══════════════════════════════════════════════════════════════════════ -->
 <!-- TASK DETAILS & TIMELINE MODAL                                          -->
 <!-- ══════════════════════════════════════════════════════════════════════ -->
-<div id="task-details-modal" class="modal-backdrop" style="display:none;">
+<div id="task-details-modal" class="modal-backdrop">
     <div class="modal-box" style="max-width:640px;">
         <div class="modal-head">
             <h3><i class="fas fa-circle-info"></i> Task Details &amp; History</h3>
@@ -609,7 +609,7 @@ include 'includes/admin_nav.php';
 <!-- ══════════════════════════════════════════════════════════════════════ -->
 <!-- COMPLETE TASK MODAL WITH REMARKS                                       -->
 <!-- ══════════════════════════════════════════════════════════════════════ -->
-<div id="complete-task-modal" class="modal-backdrop" style="display:none;">
+<div id="complete-task-modal" class="modal-backdrop">
     <div class="modal-box" style="max-width:480px;">
         <div class="modal-head">
             <h3><i class="fas fa-circle-check" style="color:#16a34a;"></i> Complete Task</h3>
@@ -635,7 +635,7 @@ include 'includes/admin_nav.php';
 <!-- ══════════════════════════════════════════════════════════════════════ -->
 <!-- REASSIGN TASK MODAL                                                    -->
 <!-- ══════════════════════════════════════════════════════════════════════ -->
-<div id="reassign-task-modal" class="modal-backdrop" style="display:none;">
+<div id="reassign-task-modal" class="modal-backdrop">
     <div class="modal-box" style="max-width:440px;">
         <div class="modal-head">
             <h3><i class="fas fa-user-gear"></i> Reassign Task</h3>
@@ -725,9 +725,12 @@ function renderStatusBadge(status, isOverdue) {
 }
 
 function loadMyTasks() {
-    var search = document.getElementById('my-task-search').value;
-    var typeId = document.getElementById('my-task-type-filter').value;
+    var searchEl = document.getElementById('my-task-search');
+    var search = searchEl ? searchEl.value : '';
+    var typeEl = document.getElementById('my-task-type-filter');
+    var typeId = typeEl ? typeEl.value : '';
     var tbody = document.getElementById('my-tasks-tbody');
+    if (!tbody) return;
 
     var url = 'api/task-reminders.php?action=list_my_tasks&status=' + encodeURIComponent(currentMyTasksStatusFilter) +
               '&task_type_id=' + encodeURIComponent(typeId) +
@@ -773,10 +776,14 @@ function loadMyTasks() {
 }
 
 function loadAssignedByMe() {
-    var search = document.getElementById('assigned-search').value;
-    var assignee = document.getElementById('assigned-to-filter').value;
-    var typeId = document.getElementById('assigned-type-filter').value;
+    var searchEl = document.getElementById('assigned-search');
+    var search = searchEl ? searchEl.value : '';
+    var assigneeEl = document.getElementById('assigned-to-filter');
+    var assignee = assigneeEl ? assigneeEl.value : '';
+    var typeEl = document.getElementById('assigned-type-filter');
+    var typeId = typeEl ? typeEl.value : '';
     var tbody = document.getElementById('assigned-by-me-tbody');
+    if (!tbody) return;
 
     var url = 'api/task-reminders.php?action=list_assigned_by_me&status=' + encodeURIComponent(currentAssignedStatusFilter) +
               '&assigned_to_username=' + encodeURIComponent(assignee) +
@@ -821,11 +828,16 @@ function loadAssignedByMe() {
 }
 
 function loadHistory() {
-    var eventType = document.getElementById('history-event-filter').value;
-    var admin = document.getElementById('history-admin-filter').value;
-    var dateFrom = document.getElementById('history-date-from').value;
-    var dateTo = document.getElementById('history-date-to').value;
+    var eventTypeEl = document.getElementById('history-event-filter');
+    var eventType = eventTypeEl ? eventTypeEl.value : '';
+    var adminEl = document.getElementById('history-admin-filter');
+    var admin = adminEl ? adminEl.value : '';
+    var dateFromEl = document.getElementById('history-date-from');
+    var dateFrom = dateFromEl ? dateFromEl.value : '';
+    var dateToEl = document.getElementById('history-date-to');
+    var dateTo = dateToEl ? dateToEl.value : '';
     var tbody = document.getElementById('task-history-tbody');
+    if (!tbody) return;
 
     var url = 'api/task-reminders.php?action=list_history&event_type=' + encodeURIComponent(eventType) +
               '&admin=' + encodeURIComponent(admin) +
