@@ -293,6 +293,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             $user_id = 'PEPP' . date('Y') . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
             
+            $pdo->beginTransaction();
+
             $stmt = $pdo->prepare("
                 INSERT INTO users (
                     name, gender, date_of_birth, whatsapp_country_code, whatsapp_number, 
@@ -334,6 +336,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 record_code_use($pdo, $applied_code_info, $user_id, $form_data['name'], $form_data['email'], $form_data['whatsapp_number'], (float)$form_data['paid_amount']);
             }
 
+            $pdo->commit();
+
+            // Store registration identifiers in session as reliable fallback
+            $_SESSION['last_registered_id'] = $inserted_id;
+            $_SESSION['last_registered_user_id'] = $user_id;
+
             // Clear temp upload paths from session on successful registration
             unset($_SESSION['temp_payment_screenshot_path']);
             unset($_SESSION['temp_photo_upload_path']);
@@ -363,10 +371,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             // Redirect to success page with the record ID
-            header("Location: success.php?id=" . $inserted_id);
+            header("Location: success.php?id=" . urlencode((string)$inserted_id));
             exit;
             
         } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             error_log("Registration error: " . $e->getMessage());
             $validation_errors['general'] = 'Registration failed. Please try again.';
         }

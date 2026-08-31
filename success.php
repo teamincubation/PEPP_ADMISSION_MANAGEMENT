@@ -1,17 +1,20 @@
 <?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 date_default_timezone_set('Asia/Kolkata');
 require_once 'config/database.php';
 
-if (!isset($_GET['id'])) {
+$registration_id = $_GET['id'] ?? $_SESSION['last_registered_id'] ?? $_SESSION['last_registered_user_id'] ?? null;
+
+if (!$registration_id) {
     header('Location: register.php');
     exit;
 }
 
-$registration_id = $_GET['id'];
-
 try {
-    $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
-    $stmt->execute([$registration_id]);
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? OR user_id = ? LIMIT 1");
+    $stmt->execute([$registration_id, $registration_id]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$user) {
@@ -23,7 +26,7 @@ try {
     exit;
 }
 
-$registration_time = date('d M Y, h:i A', strtotime($user['submit_datetime']));
+$registration_time = !empty($user['submit_datetime']) ? date('d M Y, h:i A', strtotime($user['submit_datetime'])) : date('d M Y, h:i A');
 ?>
 <!DOCTYPE html>
 <html lang="en">
