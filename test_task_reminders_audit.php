@@ -67,6 +67,15 @@ $pdo->exec("
         `last_status_updated_at` DATETIME NULL,
         `snooze_until` DATETIME NULL,
         `student_id` VARCHAR(50) NULL,
+        `recurrence_type` VARCHAR(20) DEFAULT 'none',
+        `recurrence_weekdays` TEXT NULL,
+        `recurrence_month_days` TEXT NULL,
+        `recurrence_start_date` DATE NULL,
+        `recurrence_end_date` DATE NULL,
+        `recurrence_series_id` INTEGER NULL,
+        `recurrence_stopped_at` DATETIME NULL,
+        `occurrence_date` DATE NULL,
+        `is_series_parent` INTEGER DEFAULT 0,
         `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
         `updated_at` DATETIME NULL
     )

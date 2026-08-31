@@ -670,7 +670,7 @@ $nav_data = [
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link href="assets/css/admin-theme.css" rel="stylesheet">
+    <link href="assets/css/admin-theme.css?v=<?php echo file_exists(__DIR__ . '/../assets/css/admin-theme.css') ? filemtime(__DIR__ . '/../assets/css/admin-theme.css') : '1'; ?>" rel="stylesheet">
     <style>
         /* Style for copy link button inside menu links */
         .copy-link-btn {
