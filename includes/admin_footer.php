@@ -58,6 +58,68 @@
                     <label>Notes / Instructions</label>
                     <textarea id="create-task-notes" name="notes" rows="2" placeholder="Optional details, contact info, or instructions..."></textarea>
                 </div>
+
+                <!-- ═══ Recurrence Section ═══ -->
+                <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border,#e2e8f0);">
+                    <div class="field" style="margin-bottom:14px;">
+                        <label><i class="fas fa-repeat" style="color:var(--primary,#7c3aed); margin-right:4px;"></i> Recurrence</label>
+                        <select id="create-recurrence-type" name="recurrence_type" onchange="toggleRecurrenceFields()">
+                            <option value="none">One-time (no recurrence)</option>
+                            <option value="daily">Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="monthly">Monthly</option>
+                        </select>
+                    </div>
+
+                    <!-- Weekly: Weekday Checkboxes -->
+                    <div id="recurrence-weekly-fields" style="display:none; margin-bottom:14px;">
+                        <label style="margin-bottom:6px; display:block; font-weight:600; font-size:0.82rem;">Select Weekdays <span style="color:#ef4444;">*</span></label>
+                        <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                            <?php
+                            $weekdayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+                            foreach ($weekdayNames as $idx => $wd): ?>
+                                <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer; padding:5px 10px; border-radius:6px; border:1px solid var(--border,#e2e8f0); font-size:0.82rem; font-weight:500; background:var(--muted,#f8fafc); transition:all 0.15s;">
+                                    <input type="checkbox" class="recurrence-weekday-cb" value="<?php echo $idx; ?>" style="accent-color:var(--primary,#7c3aed);">
+                                    <?php echo $wd; ?>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                        <input type="hidden" id="create-recurrence-weekdays" name="recurrence_weekdays" value="">
+                    </div>
+
+                    <!-- Monthly: Day Picker -->
+                    <div id="recurrence-monthly-fields" style="display:none; margin-bottom:14px;">
+                        <label style="margin-bottom:6px; display:block; font-weight:600; font-size:0.82rem;">Select Day(s) of Month <span style="color:#ef4444;">*</span></label>
+                        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px;">
+                            <?php for ($d = 1; $d <= 31; $d++): ?>
+                                <label style="display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; cursor:pointer; border-radius:6px; border:1px solid var(--border,#e2e8f0); font-size:0.8rem; font-weight:600; background:var(--muted,#f8fafc); transition:all 0.15s;">
+                                    <input type="checkbox" class="recurrence-monthday-cb" value="<?php echo $d; ?>" style="display:none;">
+                                    <?php echo $d; ?>
+                                </label>
+                            <?php endfor; ?>
+                        </div>
+                        <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; padding:5px 12px; border-radius:6px; border:1px solid var(--primary,#7c3aed); font-size:0.82rem; font-weight:600; color:var(--primary,#7c3aed); background:var(--muted,#f8fafc); transition:all 0.15s;">
+                            <input type="checkbox" id="recurrence-lastday-cb" style="accent-color:var(--primary,#7c3aed);">
+                            Last Day of Month
+                        </label>
+                        <input type="hidden" id="create-recurrence-month-days" name="recurrence_month_days" value="">
+                    </div>
+
+                    <!-- Start/End Dates (shown for recurring) -->
+                    <div id="recurrence-date-fields" style="display:none;">
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                            <div class="field">
+                                <label>Start Date <span style="color:#ef4444;">*</span></label>
+                                <input type="date" id="create-recurrence-start" name="recurrence_start_date" value="<?php echo date('Y-m-d'); ?>">
+                            </div>
+                            <div class="field">
+                                <label>End Date <span style="font-size:0.75rem; color:#94a3b8;">(optional)</span></label>
+                                <input type="date" id="create-recurrence-end" name="recurrence_end_date" value="">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
             <div class="modal-foot">
                 <button type="button" class="btn btn-outline" onclick="closeModal('create-task-modal')">Cancel</button>
@@ -298,6 +360,26 @@ function openCreateTaskModal() {
         var notesEl = document.getElementById('create-task-notes');
         if (notesEl) notesEl.value = '';
 
+        // Reset recurrence fields
+        var recTypeEl = document.getElementById('create-recurrence-type');
+        if (recTypeEl) recTypeEl.value = 'none';
+        document.querySelectorAll('.recurrence-weekday-cb, .recurrence-monthday-cb').forEach(function(cb) {
+            cb.checked = false;
+            var lbl = cb.closest('label');
+            if (lbl && cb.classList.contains('recurrence-monthday-cb')) {
+                lbl.style.background = 'var(--muted,#f8fafc)';
+                lbl.style.color = 'inherit';
+                lbl.style.borderColor = 'var(--border,#e2e8f0)';
+            }
+        });
+        var lastDayCb = document.getElementById('recurrence-lastday-cb');
+        if (lastDayCb) lastDayCb.checked = false;
+        var recStartEl = document.getElementById('create-recurrence-start');
+        if (recStartEl) recStartEl.value = new Date().toISOString().split('T')[0];
+        var recEndEl = document.getElementById('create-recurrence-end');
+        if (recEndEl) recEndEl.value = '';
+        toggleRecurrenceFields();
+
         // Dynamic fallback: populate task types if empty
         var typeSelect = document.getElementById('create-task-type');
         if (typeSelect && typeSelect.options.length <= 1) {
@@ -318,6 +400,9 @@ function openCreateTaskModal() {
 
 function submitCreateTask(e) {
     e.preventDefault();
+    // Sync recurrence checkboxes to hidden inputs before submit
+    syncRecurrenceFields();
+
     var form = document.getElementById('create-task-modal-form');
     var fd = new FormData(form);
     fd.append('action', 'create_task');
@@ -344,6 +429,65 @@ function submitCreateTask(e) {
             alert('Error creating task.');
         });
 }
+
+// ═══ Recurrence UI Toggle & Sync ═══
+function toggleRecurrenceFields() {
+    var type = document.getElementById('create-recurrence-type').value;
+    var weeklyEl = document.getElementById('recurrence-weekly-fields');
+    var monthlyEl = document.getElementById('recurrence-monthly-fields');
+    var dateEl = document.getElementById('recurrence-date-fields');
+    var dueLabel = document.querySelector('label[for="create-task-due"]') || document.getElementById('create-task-due').parentElement.querySelector('label');
+
+    // Show/hide conditional fields
+    weeklyEl.style.display = (type === 'weekly') ? 'block' : 'none';
+    monthlyEl.style.display = (type === 'monthly') ? 'block' : 'none';
+    dateEl.style.display = (type !== 'none') ? 'block' : 'none';
+
+    // Update Due Date label for recurring tasks
+    if (dueLabel) {
+        if (type !== 'none') {
+            dueLabel.innerHTML = 'Due Time <span style="color:#ef4444;">*</span> <span style="font-size:0.72rem; color:#94a3b8;">(time used for all occurrences)</span>';
+        } else {
+            dueLabel.innerHTML = 'Due Date &amp; Time <span style="color:#ef4444;">*</span>';
+        }
+    }
+}
+
+function syncRecurrenceFields() {
+    // Sync weekday checkboxes
+    var weekdayCbs = document.querySelectorAll('.recurrence-weekday-cb');
+    var weekdays = [];
+    weekdayCbs.forEach(function(cb) { if (cb.checked) weekdays.push(cb.value); });
+    var wdInput = document.getElementById('create-recurrence-weekdays');
+    if (wdInput) wdInput.value = weekdays.join(',');
+
+    // Sync month day checkboxes
+    var mdCbs = document.querySelectorAll('.recurrence-monthday-cb');
+    var monthDays = [];
+    mdCbs.forEach(function(cb) { if (cb.checked) monthDays.push(cb.value); });
+    var lastDayCb = document.getElementById('recurrence-lastday-cb');
+    if (lastDayCb && lastDayCb.checked) monthDays.push('last');
+    var mdInput = document.getElementById('create-recurrence-month-days');
+    if (mdInput) mdInput.value = monthDays.join(',');
+}
+
+// Month day label toggle styling
+document.addEventListener('click', function(e) {
+    if (e.target.classList && e.target.classList.contains('recurrence-monthday-cb')) {
+        var label = e.target.closest('label');
+        if (label) {
+            if (e.target.checked) {
+                label.style.background = 'var(--primary,#7c3aed)';
+                label.style.color = '#fff';
+                label.style.borderColor = 'var(--primary,#7c3aed)';
+            } else {
+                label.style.background = 'var(--muted,#f8fafc)';
+                label.style.color = 'inherit';
+                label.style.borderColor = 'var(--border,#e2e8f0)';
+            }
+        }
+    }
+});
 
 function openEditTaskModal(taskId) {
     fetch('api/task-reminders.php?action=get_details&task_id=' + taskId)
