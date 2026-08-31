@@ -216,7 +216,7 @@
                 </span>
                 <h3 style="color:#92400e; margin:0; font-size:1.05rem; font-weight:700;">Task Reminder Due</h3>
             </div>
-            <button type="button" class="modal-close" onclick="closeModal('task-due-modal')" title="Close (leaves task pending)">&times;</button>
+            <button type="button" class="modal-close" onclick="closeTaskDueModal()" title="Close (leaves task pending)">&times;</button>
         </div>
         <div class="modal-body" id="task-due-modal-body" style="padding:18px 20px;">
             <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
@@ -231,8 +231,8 @@
             <div id="due-modal-assigned-by" style="font-size:0.8rem; color:#64748b;"></div>
         </div>
         <div class="modal-foot" style="background:var(--background,#f8fafc); border-top:1px solid var(--border,#e2e8f0); padding:12px 20px; display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end;">
+            <button type="button" class="btn btn-outline" onclick="closeTaskDueModal()"><i class="fas fa-xmark"></i> Dismiss</button>
             <button type="button" class="btn btn-outline" id="due-btn-postpone" onclick="openPostponeFromDue()"><i class="fas fa-clock-rotate-left"></i> Postpone</button>
-            <button type="button" class="btn btn-primary" id="due-btn-start" onclick="startTaskFromDue()"><i class="fas fa-play"></i> Start Task</button>
             <button type="button" class="btn btn-success" id="due-btn-complete" onclick="completeTaskFromDue()"><i class="fas fa-check"></i> Complete</button>
         </div>
     </div>
@@ -709,40 +709,30 @@ function submitCustomPostpone(e) {
                 alert(data.message || 'Failed to postpone task.');
             }
         });
+var shownDueTaskPopups = {};
+
+function closeTaskDueModal() {
+    if (activeDueTask && activeDueTask.id) {
+        shownDueTaskPopups[activeDueTask.id] = true;
+    }
+    closeModal('task-due-modal');
 }
 
 function openPostponeFromDue() {
     if (!activeDueTask) return;
-    openPostponeTaskModal(activeDueTask.id, activeDueTask.title, activeDueTask.remind_at);
-}
-
-function startTaskFromDue() {
-    if (!activeDueTask) return;
     var taskId = activeDueTask.id;
-    var fd = new FormData();
-    fd.append('action', 'update_status');
-    fd.append('task_id', taskId);
-    fd.append('status', 'in_progress');
-    fd.append('remarks', 'Task started by assignee');
-    fd.append('csrf_token', '<?php echo csrf_token(); ?>');
-
-    fetch('api/task-reminders.php', { method: 'POST', body: fd })
-        .then(function(res) { return res.json(); })
-        .then(function(data) {
-            if (data.success) {
-                closeModal('task-due-modal');
-                updateTaskRemindersSummary();
-                if (typeof loadMyTasks === 'function') loadMyTasks();
-            } else {
-                alert(data.message || 'Failed to start task.');
-            }
-        });
+    var title = activeDueTask.title;
+    var remindAt = activeDueTask.remind_at;
+    delete shownDueTaskPopups[taskId];
+    closeModal('task-due-modal');
+    openPostponeTaskModal(taskId, title, remindAt);
 }
 
 function completeTaskFromDue() {
     if (!activeDueTask) return;
     var taskId = activeDueTask.id;
     var title = activeDueTask.title;
+    delete shownDueTaskPopups[taskId];
     closeModal('task-due-modal');
     if (typeof openCompleteTaskModal === 'function') {
         openCompleteTaskModal(taskId, title);
@@ -770,6 +760,7 @@ function completeTaskFromDue() {
 
 function showDueTaskPopup(task) {
     activeDueTask = task;
+    shownDueTaskPopups[task.id] = true;
     document.getElementById('due-modal-type').innerText = task.task_type_name || 'Task';
     document.getElementById('due-modal-status').innerText = task.is_overdue ? 'Overdue' : 'Due Now';
     document.getElementById('due-modal-title').innerText = task.title;
@@ -825,12 +816,17 @@ function updateTaskRemindersSummary() {
             var kpiAss = document.getElementById('kpi-assigned-by-me');
             if (kpiAss) kpiAss.innerText = s.assigned_by_me_pending || 0;
 
-            // Trigger authoritative due popups if any due
+            // Trigger authoritative due popups for unacknowledged due tasks
             if (s.due_task_ids && s.due_task_ids.length > 0) {
-                var firstDueId = s.due_task_ids[0];
                 var modal = document.getElementById('task-due-modal');
                 if (modal && !modal.classList.contains('open')) {
-                    verifyAndTriggerDuePopup(firstDueId);
+                    for (var i = 0; i < s.due_task_ids.length; i++) {
+                        var dueId = s.due_task_ids[i];
+                        if (!shownDueTaskPopups[dueId]) {
+                            verifyAndTriggerDuePopup(dueId);
+                            break;
+                        }
+                    }
                 }
             }
 

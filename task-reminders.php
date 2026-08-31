@@ -471,8 +471,8 @@ include 'includes/admin_nav.php';
             </div>
         </div>
         <div class="panel-body">
-            <div class="filter-bar" style="margin-bottom:18px;">
-                <div class="field" style="flex:1;">
+            <div class="filter-bar" style="margin-bottom:18px; display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+                <div class="field" style="flex:1; min-width:200px;">
                     <input type="text" id="my-task-search" placeholder="Search tasks by title or notes..." onkeyup="debounceLoadMyTasks()">
                 </div>
                 <div class="field">
@@ -482,6 +482,21 @@ include 'includes/admin_nav.php';
                             <option value="<?php echo $tt['id']; ?>"><?php echo e($tt['name']); ?></option>
                         <?php endforeach; ?>
                     </select>
+                </div>
+                <div class="field">
+                    <select id="my-task-date-filter" onchange="onMyTaskDateFilterChange()">
+                        <option value="">All Dates</option>
+                        <option value="today">Today</option>
+                        <option value="tomorrow">Tomorrow</option>
+                        <option value="this_week">This Week</option>
+                        <option value="overdue">Overdue</option>
+                        <option value="custom">Custom Range</option>
+                    </select>
+                </div>
+                <div id="my-task-custom-dates" style="display:none; align-items:center; gap:6px;">
+                    <input type="date" id="my-task-date-from" style="padding:6px 10px; font-size:0.84rem; border:1px solid var(--border,#cbd5e1); border-radius:6px;" onchange="loadMyTasks()" title="From Date">
+                    <span style="font-size:0.8rem; color:#94a3b8;">to</span>
+                    <input type="date" id="my-task-date-to" style="padding:6px 10px; font-size:0.84rem; border:1px solid var(--border,#cbd5e1); border-radius:6px;" onchange="loadMyTasks()" title="To Date">
                 </div>
             </div>
 
@@ -512,7 +527,7 @@ include 'includes/admin_nav.php';
             </div>
         </div>
         <div class="panel-body">
-            <div class="filter-bar" style="margin-bottom:18px;">
+            <div class="filter-bar" style="margin-bottom:18px; display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
                 <div class="field" style="flex:1; min-width:200px;">
                     <input type="text" id="assigned-search" placeholder="Search delegated tasks by title..." onkeyup="debounceLoadAssigned()">
                 </div>
@@ -542,6 +557,21 @@ include 'includes/admin_nav.php';
                         <?php endforeach; ?>
                     </select>
                 </div>
+                <div class="field">
+                    <select id="assigned-date-filter" onchange="onAssignedDateFilterChange()">
+                        <option value="">All Dates</option>
+                        <option value="today">Today</option>
+                        <option value="tomorrow">Tomorrow</option>
+                        <option value="this_week">This Week</option>
+                        <option value="overdue">Overdue</option>
+                        <option value="custom">Custom Range</option>
+                    </select>
+                </div>
+                <div id="assigned-custom-dates" style="display:none; align-items:center; gap:6px;">
+                    <input type="date" id="assigned-date-from" style="padding:6px 10px; font-size:0.84rem; border:1px solid var(--border,#cbd5e1); border-radius:6px;" onchange="loadAssignedByMe()" title="From Date">
+                    <span style="font-size:0.8rem; color:#94a3b8;">to</span>
+                    <input type="date" id="assigned-date-to" style="padding:6px 10px; font-size:0.84rem; border:1px solid var(--border,#cbd5e1); border-radius:6px;" onchange="loadAssignedByMe()" title="To Date">
+                </div>
             </div>
 
             <!-- Delegated Tasks List Container -->
@@ -562,7 +592,7 @@ include 'includes/admin_nav.php';
             <h2>Task Reminders Audit History</h2>
         </div>
         <div class="panel-body">
-            <div class="filter-bar" style="margin-bottom:18px;">
+            <div class="filter-bar" style="margin-bottom:18px; display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
                 <div class="field">
                     <select id="history-event-filter" onchange="loadHistory()">
                         <option value="">All Events</option>
@@ -584,12 +614,20 @@ include 'includes/admin_nav.php';
                     </select>
                 </div>
                 <div class="field">
-                    <input type="date" id="history-date-from" onchange="loadHistory()" placeholder="From Date">
+                    <select id="history-date-filter" onchange="onHistoryDateFilterChange()">
+                        <option value="">All Dates</option>
+                        <option value="today">Today</option>
+                        <option value="tomorrow">Tomorrow</option>
+                        <option value="this_week">This Week</option>
+                        <option value="custom">Custom Range</option>
+                    </select>
                 </div>
-                <div class="field">
-                    <input type="date" id="history-date-to" onchange="loadHistory()" placeholder="To Date">
+                <div id="history-custom-dates" style="display:flex; align-items:center; gap:6px;">
+                    <input type="date" id="history-date-from" style="padding:6px 10px; font-size:0.84rem; border:1px solid var(--border,#cbd5e1); border-radius:6px;" onchange="loadHistory()" title="From Date">
+                    <span style="font-size:0.8rem; color:#94a3b8;">to</span>
+                    <input type="date" id="history-date-to" style="padding:6px 10px; font-size:0.84rem; border:1px solid var(--border,#cbd5e1); border-radius:6px;" onchange="loadHistory()" title="To Date">
                 </div>
-                <button type="button" class="btn btn-outline" onclick="resetHistoryFilters()"><i class="fas fa-rotate-left"></i> Reset</button>
+                <button type="button" class="btn btn-sm btn-outline" onclick="resetHistoryFilters()"><i class="fas fa-rotate-left"></i> Reset</button>
             </div>
 
             <div class="table-wrap">
@@ -792,16 +830,46 @@ function renderStatusBadge(status, isOverdue) {
     }
 }
 
+function onMyTaskDateFilterChange() {
+    var datePreset = document.getElementById('my-task-date-filter').value;
+    var customDates = document.getElementById('my-task-custom-dates');
+    if (customDates) customDates.style.display = (datePreset === 'custom') ? 'inline-flex' : 'none';
+    loadMyTasks();
+}
+
+function onAssignedDateFilterChange() {
+    var datePreset = document.getElementById('assigned-date-filter').value;
+    var customDates = document.getElementById('assigned-custom-dates');
+    if (customDates) customDates.style.display = (datePreset === 'custom') ? 'inline-flex' : 'none';
+    loadAssignedByMe();
+}
+
+function onHistoryDateFilterChange() {
+    var datePreset = document.getElementById('history-date-filter').value;
+    var customDates = document.getElementById('history-custom-dates');
+    if (customDates) customDates.style.display = (datePreset === 'custom' || !datePreset) ? 'inline-flex' : 'none';
+    loadHistory();
+}
+
 function loadMyTasks() {
     var searchEl = document.getElementById('my-task-search');
     var search = searchEl ? searchEl.value : '';
     var typeEl = document.getElementById('my-task-type-filter');
     var typeId = typeEl ? typeEl.value : '';
+    var datePresetEl = document.getElementById('my-task-date-filter');
+    var datePreset = datePresetEl ? datePresetEl.value : '';
+    var dateFromEl = document.getElementById('my-task-date-from');
+    var dateFrom = (datePreset === 'custom' && dateFromEl) ? dateFromEl.value : '';
+    var dateToEl = document.getElementById('my-task-date-to');
+    var dateTo = (datePreset === 'custom' && dateToEl) ? dateToEl.value : '';
     var container = document.getElementById('my-tasks-list-container');
     if (!container) return;
 
     var url = 'api/task-reminders.php?action=list_my_tasks&status=' + encodeURIComponent(currentMyTasksStatusFilter) +
               '&task_type_id=' + encodeURIComponent(typeId) +
+              '&date_preset=' + encodeURIComponent(datePreset) +
+              '&date_from=' + encodeURIComponent(dateFrom) +
+              '&date_to=' + encodeURIComponent(dateTo) +
               '&search=' + encodeURIComponent(search);
 
     fetch(url)
@@ -830,9 +898,6 @@ function loadMyTasks() {
                 var actionsHtml = '<button type="button" class="btn btn-sm btn-outline" onclick="openTaskDetailsModal(' + t.id + ')" title="View Details & History"><i class="fas fa-circle-info"></i> Details</button> ';
 
                 if (!isTerminal) {
-                    if (t.status === 'pending') {
-                        actionsHtml += '<button type="button" class="btn btn-sm btn-primary" onclick="startTask(' + t.id + ')" title="Start Working on Task"><i class="fas fa-play"></i> Start</button> ';
-                    }
                     actionsHtml += '<button type="button" class="btn btn-sm btn-success" onclick="openCompleteTaskModal(' + t.id + ', \'' + escapeJs(t.title) + '\')" title="Complete Task"><i class="fas fa-check"></i> Complete</button> ';
                     actionsHtml += '<button type="button" class="btn btn-sm btn-outline" onclick="openPostponeTaskModal(' + t.id + ', \'' + escapeJs(t.title) + '\', \'' + t.remind_at + '\')" title="Postpone Task"><i class="fas fa-clock"></i> Postpone</button>';
                 }
@@ -874,6 +939,12 @@ function loadAssignedByMe() {
     var assignee = assigneeEl ? assigneeEl.value : '';
     var typeEl = document.getElementById('assigned-type-filter');
     var typeId = typeEl ? typeEl.value : '';
+    var datePresetEl = document.getElementById('assigned-date-filter');
+    var datePreset = datePresetEl ? datePresetEl.value : '';
+    var dateFromEl = document.getElementById('assigned-date-from');
+    var dateFrom = (datePreset === 'custom' && dateFromEl) ? dateFromEl.value : '';
+    var dateToEl = document.getElementById('assigned-date-to');
+    var dateTo = (datePreset === 'custom' && dateToEl) ? dateToEl.value : '';
     var container = document.getElementById('assigned-by-me-list-container');
     if (!container) return;
 
@@ -881,6 +952,9 @@ function loadAssignedByMe() {
               '&assigned_by_username=' + encodeURIComponent(assigner) +
               '&assigned_to_username=' + encodeURIComponent(assignee) +
               '&task_type_id=' + encodeURIComponent(typeId) +
+              '&date_preset=' + encodeURIComponent(datePreset) +
+              '&date_from=' + encodeURIComponent(dateFrom) +
+              '&date_to=' + encodeURIComponent(dateTo) +
               '&search=' + encodeURIComponent(search);
 
     fetch(url)
@@ -935,6 +1009,8 @@ function loadHistory() {
     var eventType = eventTypeEl ? eventTypeEl.value : '';
     var adminEl = document.getElementById('history-admin-filter');
     var admin = adminEl ? adminEl.value : '';
+    var datePresetEl = document.getElementById('history-date-filter');
+    var datePreset = datePresetEl ? datePresetEl.value : '';
     var dateFromEl = document.getElementById('history-date-from');
     var dateFrom = dateFromEl ? dateFromEl.value : '';
     var dateToEl = document.getElementById('history-date-to');
@@ -944,6 +1020,7 @@ function loadHistory() {
 
     var url = 'api/task-reminders.php?action=list_history&event_type=' + encodeURIComponent(eventType) +
               '&admin=' + encodeURIComponent(admin) +
+              '&date_preset=' + encodeURIComponent(datePreset) +
               '&date_from=' + encodeURIComponent(dateFrom) +
               '&date_to=' + encodeURIComponent(dateTo);
 
@@ -984,29 +1061,10 @@ function loadHistory() {
 function resetHistoryFilters() {
     document.getElementById('history-event-filter').value = '';
     document.getElementById('history-admin-filter').value = '';
+    if (document.getElementById('history-date-filter')) document.getElementById('history-date-filter').value = '';
     document.getElementById('history-date-from').value = '';
     document.getElementById('history-date-to').value = '';
     loadHistory();
-}
-
-function startTask(taskId) {
-    var fd = new FormData();
-    fd.append('action', 'update_status');
-    fd.append('task_id', taskId);
-    fd.append('status', 'in_progress');
-    fd.append('remarks', 'Task started by assignee');
-    fd.append('csrf_token', '<?php echo csrf_token(); ?>');
-
-    fetch('api/task-reminders.php', { method: 'POST', body: fd })
-        .then(function(res) { return res.json(); })
-        .then(function(data) {
-            if (data.success) {
-                loadMyTasks();
-                if (typeof updateTaskRemindersSummary === 'function') updateTaskRemindersSummary();
-            } else {
-                alert(data.message || 'Failed to start task.');
-            }
-        });
 }
 
 function openCompleteTaskModal(taskId, title) {

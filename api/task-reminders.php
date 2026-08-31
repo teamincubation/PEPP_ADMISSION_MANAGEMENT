@@ -114,6 +114,9 @@ try {
                 'status' => $_GET['status'] ?? '',
                 'task_type_id' => $_GET['task_type_id'] ?? '',
                 'search' => $_GET['search'] ?? '',
+                'date_preset' => $_GET['date_preset'] ?? '',
+                'date_from' => $_GET['date_from'] ?? '',
+                'date_to' => $_GET['date_to'] ?? '',
                 'all_tasks' => !empty($_GET['all_tasks'])
             ];
             $tasks = task_reminders_list_my_tasks($pdo, $current_admin_id, $current_username, $filters, $is_super);
@@ -128,6 +131,7 @@ try {
                 'assigned_to_username' => $_GET['assigned_to_username'] ?? '',
                 'task_type_id' => $_GET['task_type_id'] ?? '',
                 'search' => $_GET['search'] ?? '',
+                'date_preset' => $_GET['date_preset'] ?? '',
                 'date_from' => $_GET['date_from'] ?? '',
                 'date_to' => $_GET['date_to'] ?? '',
                 'all_assigned' => !empty($_GET['all_assigned'])
@@ -142,6 +146,7 @@ try {
                 'event_type' => $_GET['event_type'] ?? '',
                 'task_id' => $_GET['task_id'] ?? '',
                 'admin' => $_GET['admin'] ?? '',
+                'date_preset' => $_GET['date_preset'] ?? '',
                 'date_from' => $_GET['date_from'] ?? '',
                 'date_to' => $_GET['date_to'] ?? ''
             ];
