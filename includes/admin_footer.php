@@ -17,14 +17,20 @@
 <div class="modal-backdrop" id="create-task-modal">
     <div class="modal-box" style="max-width:540px;">
         <div class="modal-head">
-            <h3><i class="fas fa-bell" style="color:var(--primary,#7c3aed);"></i> New Task Reminder</h3>
-            <button type="button" class="modal-close" onclick="closeModal('create-task-modal')">&times;</button>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span style="width:30px; height:30px; border-radius:8px; background:var(--accent-soft, #ede9fe); color:var(--primary, #7c3aed); display:flex; align-items:center; justify-content:center; font-size:0.95rem;">
+                    <i class="fas fa-bell"></i>
+                </span>
+                <h3 style="margin:0; font-size:1.1rem; font-weight:700;">New Task Reminder</h3>
+            </div>
+            <button type="button" class="modal-close" onclick="closeModal('create-task-modal')" aria-label="Close modal">&times;</button>
         </div>
         <form id="create-task-modal-form" onsubmit="submitCreateTask(event)">
-            <div class="modal-body">
+            <input type="hidden" id="create-task-remind-at-hidden" name="remind_at">
+            <div class="modal-body" style="padding:18px 20px;">
                 <div class="field" style="margin-bottom:14px;">
-                    <label>Task Type <span style="color:#ef4444;">*</span></label>
-                    <select id="create-task-type" name="task_type_id" required>
+                    <label style="font-weight:600; font-size:0.84rem;">Task Type <span style="color:#ef4444;">*</span></label>
+                    <select id="create-task-type" name="task_type_id" required style="width:100%; font-size:0.9rem;">
                         <option value="">-- Select Task Type --</option>
                         <?php foreach ($footer_task_types as $tt): ?>
                             <option value="<?php echo $tt['id']; ?>"><?php echo e($tt['name']); ?></option>
@@ -33,37 +39,45 @@
                 </div>
 
                 <div class="field" style="margin-bottom:14px;">
-                    <label>Task / Activity Title <span style="color:#ef4444;">*</span></label>
-                    <input type="text" id="create-task-title" name="title" required placeholder="e.g. Call Rahul regarding fee installment">
+                    <label style="font-weight:600; font-size:0.84rem;">Task / Activity Title <span style="color:#ef4444;">*</span></label>
+                    <input type="text" id="create-task-title" name="title" required placeholder="e.g. Call Rahul regarding fee installment" style="width:100%; font-size:0.9rem;">
                 </div>
 
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px;">
+                <div class="field" style="margin-bottom:14px;">
+                    <label style="font-weight:600; font-size:0.84rem;">Assign To <span style="color:#ef4444;">*</span></label>
+                    <select id="create-task-assignee" name="assigned_to" required style="width:100%; font-size:0.9rem;">
+                        <?php foreach ($footer_admins as $fa): ?>
+                            <option value="<?php echo e($fa['username']); ?>" <?php echo $fa['username'] === $admin_username ? 'selected' : ''; ?>>
+                                <?php echo e($fa['full_name'] ? ($fa['full_name'] . ' (' . $fa['username'] . ')') : $fa['username']); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <!-- One-Time Due Date & Time (Shown when One-Time) -->
+                <div id="create-onetime-datetime-wrap" style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px;">
                     <div class="field">
-                        <label>Due Date &amp; Time <span style="color:#ef4444;">*</span></label>
-                        <input type="datetime-local" id="create-task-due" name="remind_at" required value="<?php echo date('Y-m-d\TH:i', strtotime('+1 hour')); ?>">
+                        <label style="font-weight:600; font-size:0.84rem;">Due Date <span style="color:#ef4444;">*</span></label>
+                        <input type="date" id="create-task-due-date" value="<?php echo date('Y-m-d'); ?>" style="width:100%;">
                     </div>
                     <div class="field">
-                        <label>Assign To <span style="color:#ef4444;">*</span></label>
-                        <select id="create-task-assignee" name="assigned_to" required>
-                            <?php foreach ($footer_admins as $fa): ?>
-                                <option value="<?php echo e($fa['username']); ?>" <?php echo $fa['username'] === $admin_username ? 'selected' : ''; ?>>
-                                    <?php echo e($fa['full_name'] ?: $fa['username']); ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
+                        <label style="font-weight:600; font-size:0.84rem;">Due Time <span style="color:#ef4444;">*</span></label>
+                        <input type="time" id="create-task-due-time" value="<?php echo date('H:i', strtotime('+1 hour')); ?>" style="width:100%;">
                     </div>
                 </div>
 
-                <div class="field">
-                    <label>Notes / Instructions</label>
-                    <textarea id="create-task-notes" name="notes" rows="2" placeholder="Optional details, contact info, or instructions..."></textarea>
+                <div class="field" style="margin-bottom:14px;">
+                    <label style="font-weight:600; font-size:0.84rem;">Notes / Instructions</label>
+                    <textarea id="create-task-notes" name="notes" rows="2" placeholder="Optional details, contact info, or instructions..." style="width:100%; font-size:0.88rem;"></textarea>
                 </div>
 
                 <!-- ═══ Recurrence Section ═══ -->
-                <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border,#e2e8f0);">
+                <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border,#e2e8f0);">
                     <div class="field" style="margin-bottom:14px;">
-                        <label><i class="fas fa-repeat" style="color:var(--primary,#7c3aed); margin-right:4px;"></i> Recurrence</label>
-                        <select id="create-recurrence-type" name="recurrence_type" onchange="toggleRecurrenceFields()">
+                        <label style="font-weight:700; font-size:0.85rem; color:var(--foreground,#0f172a); display:flex; align-items:center; gap:6px;">
+                            <i class="fas fa-repeat" style="color:var(--primary,#7c3aed);"></i> Repeat
+                        </label>
+                        <select id="create-recurrence-type" name="recurrence_type" onchange="toggleRecurrenceFields()" style="width:100%; font-weight:600;">
                             <option value="none">One-time (no recurrence)</option>
                             <option value="daily">Daily</option>
                             <option value="weekly">Weekly</option>
@@ -73,14 +87,14 @@
 
                     <!-- Weekly: Weekday Checkboxes -->
                     <div id="recurrence-weekly-fields" style="display:none; margin-bottom:14px;">
-                        <label style="margin-bottom:6px; display:block; font-weight:600; font-size:0.82rem;">Select Weekdays <span style="color:#ef4444;">*</span></label>
+                        <label style="margin-bottom:8px; display:block; font-weight:600; font-size:0.82rem;">Repeat On <span style="color:#ef4444;">*</span></label>
                         <div style="display:flex; flex-wrap:wrap; gap:6px;">
                             <?php
-                            $weekdayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-                            foreach ($weekdayNames as $idx => $wd): ?>
-                                <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer; padding:5px 10px; border-radius:6px; border:1px solid var(--border,#e2e8f0); font-size:0.82rem; font-weight:500; background:var(--muted,#f8fafc); transition:all 0.15s;">
-                                    <input type="checkbox" class="recurrence-weekday-cb" value="<?php echo $idx; ?>" style="accent-color:var(--primary,#7c3aed);">
-                                    <?php echo $wd; ?>
+                            $weekdayNames = ['Mon'=>1, 'Tue'=>2, 'Wed'=>3, 'Thu'=>4, 'Fri'=>5, 'Sat'=>6, 'Sun'=>0];
+                            foreach ($weekdayNames as $wd => $idx): ?>
+                                <label style="display:inline-flex; align-items:center; justify-content:center; padding:6px 12px; border-radius:6px; border:1px solid var(--border,#cbd5e1); font-size:0.82rem; font-weight:600; background:var(--card,#ffffff); cursor:pointer; user-select:none; transition:all 0.15s ease;">
+                                    <input type="checkbox" class="recurrence-weekday-cb" value="<?php echo $idx; ?>" style="display:none;" onchange="updateWeekdayChip(this)">
+                                    <span><?php echo $wd; ?></span>
                                 </label>
                             <?php endforeach; ?>
                         </div>
@@ -89,39 +103,43 @@
 
                     <!-- Monthly: Day Picker -->
                     <div id="recurrence-monthly-fields" style="display:none; margin-bottom:14px;">
-                        <label style="margin-bottom:6px; display:block; font-weight:600; font-size:0.82rem;">Select Day(s) of Month <span style="color:#ef4444;">*</span></label>
-                        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px;">
+                        <label style="margin-bottom:8px; display:block; font-weight:600; font-size:0.82rem;">Repeat On <span style="color:#ef4444;">*</span></label>
+                        <div style="display:grid; grid-template-columns:repeat(7, 1fr); gap:5px; margin-bottom:10px; max-width:320px;">
                             <?php for ($d = 1; $d <= 31; $d++): ?>
-                                <label style="display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; cursor:pointer; border-radius:6px; border:1px solid var(--border,#e2e8f0); font-size:0.8rem; font-weight:600; background:var(--muted,#f8fafc); transition:all 0.15s;">
-                                    <input type="checkbox" class="recurrence-monthday-cb" value="<?php echo $d; ?>" style="display:none;">
-                                    <?php echo $d; ?>
+                                <label style="display:inline-flex; align-items:center; justify-content:center; height:32px; cursor:pointer; border-radius:6px; border:1px solid var(--border,#cbd5e1); font-size:0.8rem; font-weight:600; background:var(--card,#ffffff); user-select:none; transition:all 0.15s ease;">
+                                    <input type="checkbox" class="recurrence-monthday-cb" value="<?php echo $d; ?>" style="display:none;" onchange="updateMonthDayChip(this)">
+                                    <span><?php echo $d; ?></span>
                                 </label>
                             <?php endfor; ?>
                         </div>
-                        <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; padding:5px 12px; border-radius:6px; border:1px solid var(--primary,#7c3aed); font-size:0.82rem; font-weight:600; color:var(--primary,#7c3aed); background:var(--muted,#f8fafc); transition:all 0.15s;">
-                            <input type="checkbox" id="recurrence-lastday-cb" style="accent-color:var(--primary,#7c3aed);">
-                            Last Day of Month
+                        <label style="display:inline-flex; align-items:center; gap:8px; cursor:pointer; padding:6px 14px; border-radius:6px; border:1px solid var(--primary,#7c3aed); font-size:0.82rem; font-weight:600; color:var(--primary,#7c3aed); background:var(--accent-soft,#ede9fe); transition:all 0.15s;">
+                            <input type="checkbox" id="recurrence-lastday-cb" style="accent-color:var(--primary,#7c3aed);" onchange="syncRecurrenceFields()">
+                            Last day of month
                         </label>
                         <input type="hidden" id="create-recurrence-month-days" name="recurrence_month_days" value="">
                     </div>
 
-                    <!-- Start/End Dates (shown for recurring) -->
+                    <!-- Start Date, Due Time, End Date for Recurring -->
                     <div id="recurrence-date-fields" style="display:none;">
-                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
                             <div class="field">
-                                <label>Start Date <span style="color:#ef4444;">*</span></label>
-                                <input type="date" id="create-recurrence-start" name="recurrence_start_date" value="<?php echo date('Y-m-d'); ?>">
+                                <label style="font-weight:600; font-size:0.84rem;">Start Date <span style="color:#ef4444;">*</span></label>
+                                <input type="date" id="create-recurrence-start" name="recurrence_start_date" value="<?php echo date('Y-m-d'); ?>" style="width:100%;">
                             </div>
                             <div class="field">
-                                <label>End Date <span style="font-size:0.75rem; color:#94a3b8;">(optional)</span></label>
-                                <input type="date" id="create-recurrence-end" name="recurrence_end_date" value="">
+                                <label style="font-weight:600; font-size:0.84rem;">Due Time <span style="color:#ef4444;">*</span></label>
+                                <input type="time" id="create-recurrence-due-time" value="10:00" style="width:100%;">
                             </div>
+                        </div>
+                        <div class="field">
+                            <label style="font-weight:600; font-size:0.84rem;">End Date <span style="font-size:0.75rem; color:#94a3b8; font-weight:normal;">(Optional - leave empty to repeat indefinitely)</span></label>
+                            <input type="date" id="create-recurrence-end" name="recurrence_end_date" value="" style="width:100%;">
                         </div>
                     </div>
                 </div>
 
             </div>
-            <div class="modal-foot">
+            <div class="modal-foot" style="padding:12px 20px; background:var(--background,#f8fafc); border-top:1px solid var(--border,#e2e8f0); display:flex; justify-content:flex-end; gap:8px;">
                 <button type="button" class="btn btn-outline" onclick="closeModal('create-task-modal')">Cancel</button>
                 <button type="submit" class="btn btn-primary" id="create-task-submit-btn"><i class="fas fa-plus"></i> Create Task</button>
             </div>
@@ -133,15 +151,20 @@
 <div class="modal-backdrop" id="edit-task-modal">
     <div class="modal-box" style="max-width:540px;">
         <div class="modal-head">
-            <h3><i class="fas fa-pen-to-square" style="color:var(--primary,#7c3aed);"></i> Edit Task Reminder</h3>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span style="width:30px; height:30px; border-radius:8px; background:var(--accent-soft, #ede9fe); color:var(--primary, #7c3aed); display:flex; align-items:center; justify-content:center; font-size:0.95rem;">
+                    <i class="fas fa-pen-to-square"></i>
+                </span>
+                <h3 style="margin:0; font-size:1.1rem; font-weight:700;">Edit Task Reminder</h3>
+            </div>
             <button type="button" class="modal-close" onclick="closeModal('edit-task-modal')">&times;</button>
         </div>
         <form id="edit-task-modal-form" onsubmit="submitEditTask(event)">
             <input type="hidden" id="edit-task-id" name="task_id">
-            <div class="modal-body">
+            <div class="modal-body" style="padding:18px 20px;">
                 <div class="field" style="margin-bottom:14px;">
-                    <label>Task Type <span style="color:#ef4444;">*</span></label>
-                    <select id="edit-task-type" name="task_type_id" required>
+                    <label style="font-weight:600; font-size:0.84rem;">Task Type <span style="color:#ef4444;">*</span></label>
+                    <select id="edit-task-type" name="task_type_id" required style="width:100%;">
                         <?php foreach ($footer_task_types as $tt): ?>
                             <option value="<?php echo $tt['id']; ?>"><?php echo e($tt['name']); ?></option>
                         <?php endforeach; ?>
@@ -149,21 +172,21 @@
                 </div>
 
                 <div class="field" style="margin-bottom:14px;">
-                    <label>Task / Activity Title <span style="color:#ef4444;">*</span></label>
-                    <input type="text" id="edit-task-title" name="title" required>
+                    <label style="font-weight:600; font-size:0.84rem;">Task / Activity Title <span style="color:#ef4444;">*</span></label>
+                    <input type="text" id="edit-task-title" name="title" required style="width:100%;">
                 </div>
 
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px;">
                     <div class="field">
-                        <label>Due Date &amp; Time <span style="color:#ef4444;">*</span></label>
-                        <input type="datetime-local" id="edit-task-due" name="remind_at" required>
+                        <label style="font-weight:600; font-size:0.84rem;">Due Date &amp; Time <span style="color:#ef4444;">*</span></label>
+                        <input type="datetime-local" id="edit-task-due" name="remind_at" required style="width:100%;">
                     </div>
                     <div class="field">
-                        <label>Assign To <span style="color:#ef4444;">*</span></label>
-                        <select id="edit-task-assignee" name="assigned_to" required>
+                        <label style="font-weight:600; font-size:0.84rem;">Assign To <span style="color:#ef4444;">*</span></label>
+                        <select id="edit-task-assignee" name="assigned_to" required style="width:100%;">
                             <?php foreach ($footer_admins as $fa): ?>
                                 <option value="<?php echo e($fa['username']); ?>">
-                                    <?php echo e($fa['full_name'] ?: $fa['username']); ?>
+                                    <?php echo e($fa['full_name'] ? ($fa['full_name'] . ' (' . $fa['username'] . ')') : $fa['username']); ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -171,11 +194,11 @@
                 </div>
 
                 <div class="field">
-                    <label>Notes / Instructions</label>
-                    <textarea id="edit-task-notes" name="notes" rows="2"></textarea>
+                    <label style="font-weight:600; font-size:0.84rem;">Notes / Instructions</label>
+                    <textarea id="edit-task-notes" name="notes" rows="2" style="width:100%; font-size:0.88rem;"></textarea>
                 </div>
             </div>
-            <div class="modal-foot">
+            <div class="modal-foot" style="padding:12px 20px; background:var(--background,#f8fafc); border-top:1px solid var(--border,#e2e8f0); display:flex; justify-content:flex-end; gap:8px;">
                 <button type="button" class="btn btn-outline" onclick="closeModal('edit-task-modal')">Cancel</button>
                 <button type="submit" class="btn btn-primary" id="edit-task-submit-btn">Save Changes</button>
             </div>
@@ -185,29 +208,29 @@
 
 <!-- ── STRICT URGENT DUE TASK REMINDER POPUP (Server Revalidated) ── -->
 <div class="modal-backdrop" id="task-due-modal" style="z-index:9999;">
-    <div class="modal-box" style="max-width:500px; border-top:5px solid #d97706; box-shadow:0 12px 40px rgba(0,0,0,0.3);">
-        <div class="modal-head" style="background:#fef3c7; border-bottom:1px solid #fde68a;">
+    <div class="modal-box" style="max-width:480px; border-top:4px solid #d97706; box-shadow:0 16px 40px rgba(0,0,0,0.25);">
+        <div class="modal-head" style="background:#fef3c7; border-bottom:1px solid #fde68a; padding:12px 18px;">
             <div style="display:flex; align-items:center; gap:8px;">
-                <span style="background:#d97706; color:#fff; width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:0.9rem;">
+                <span style="background:#d97706; color:#fff; width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:0.85rem;">
                     <i class="fas fa-bell"></i>
                 </span>
-                <h3 style="color:#92400e; margin:0; font-size:1.1rem;">Task Reminder Due</h3>
+                <h3 style="color:#92400e; margin:0; font-size:1.05rem; font-weight:700;">Task Reminder Due</h3>
             </div>
             <button type="button" class="modal-close" onclick="closeModal('task-due-modal')" title="Close (leaves task pending)">&times;</button>
         </div>
-        <div class="modal-body" id="task-due-modal-body" style="padding:20px;">
-            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <div class="modal-body" id="task-due-modal-body" style="padding:18px 20px;">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
                 <span class="badge blue" id="due-modal-type">Task Type</span>
                 <span class="badge orange" id="due-modal-status">Due Now</span>
             </div>
-            <h2 id="due-modal-title" style="font-size:1.25rem; font-weight:700; color:var(--foreground,#0f172a); margin:0 0 10px;"></h2>
-            <div id="due-modal-time" style="font-size:0.86rem; color:#64748b; margin-bottom:12px;">
+            <h2 id="due-modal-title" style="font-size:1.15rem; font-weight:700; color:var(--foreground,#0f172a); margin:0 0 8px; line-height:1.35;"></h2>
+            <div id="due-modal-time" style="font-size:0.84rem; color:#64748b; margin-bottom:12px;">
                 <i class="fas fa-clock"></i> <span id="due-modal-time-val"></span>
             </div>
-            <div id="due-modal-notes" style="background:var(--bg,#f8fafc); border:1px solid var(--border,#e2e8f0); border-radius:8px; padding:12px; font-size:0.88rem; line-height:1.5; color:#334155; margin-bottom:16px;"></div>
-            <div id="due-modal-assigned-by" style="font-size:0.82rem; color:#64748b;"></div>
+            <div id="due-modal-notes" style="background:var(--background,#f8fafc); border:1px solid var(--border,#e2e8f0); border-radius:8px; padding:10px 12px; font-size:0.85rem; line-height:1.45; color:#334155; margin-bottom:14px;"></div>
+            <div id="due-modal-assigned-by" style="font-size:0.8rem; color:#64748b;"></div>
         </div>
-        <div class="modal-foot" style="background:var(--bg,#f8fafc); display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end;">
+        <div class="modal-foot" style="background:var(--background,#f8fafc); border-top:1px solid var(--border,#e2e8f0); padding:12px 20px; display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end;">
             <button type="button" class="btn btn-outline" id="due-btn-postpone" onclick="openPostponeFromDue()"><i class="fas fa-clock-rotate-left"></i> Postpone</button>
             <button type="button" class="btn btn-primary" id="due-btn-start" onclick="startTaskFromDue()"><i class="fas fa-play"></i> Start Task</button>
             <button type="button" class="btn btn-success" id="due-btn-complete" onclick="completeTaskFromDue()"><i class="fas fa-check"></i> Complete</button>
@@ -219,15 +242,20 @@
 <div class="modal-backdrop" id="postpone-task-modal" style="z-index:10000;">
     <div class="modal-box" style="max-width:460px;">
         <div class="modal-head">
-            <h3><i class="fas fa-clock-rotate-left" style="color:#d97706;"></i> Postpone Task Reminder</h3>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span style="width:28px; height:28px; border-radius:6px; background:#fef3c7; color:#d97706; display:flex; align-items:center; justify-content:center; font-size:0.85rem;">
+                    <i class="fas fa-clock-rotate-left"></i>
+                </span>
+                <h3 style="margin:0; font-size:1.05rem; font-weight:700;">Postpone Task Reminder</h3>
+            </div>
             <button type="button" class="modal-close" onclick="closeModal('postpone-task-modal')">&times;</button>
         </div>
         <form id="postpone-task-form" onsubmit="submitCustomPostpone(event)">
             <input type="hidden" id="postpone-task-id">
-            <div class="modal-body">
-                <p id="postpone-task-title" style="font-size:0.95rem; font-weight:600; margin-bottom:14px;"></p>
+            <div class="modal-body" style="padding:18px 20px;">
+                <p id="postpone-task-title" style="font-size:0.92rem; font-weight:700; color:var(--foreground,#0f172a); margin-bottom:12px;"></p>
 
-                <label style="font-size:0.84rem; font-weight:700; color:var(--foreground,#0f172a); margin-bottom:8px; display:block;">Quick Postpone Presets:</label>
+                <label style="font-size:0.82rem; font-weight:700; color:var(--foreground,#0f172a); margin-bottom:8px; display:block;">Quick Postpone Presets:</label>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:16px;">
                     <button type="button" class="btn btn-outline btn-sm" onclick="quickPostpone('+15m')"><i class="fas fa-plus"></i> 15 Minutes</button>
                     <button type="button" class="btn btn-outline btn-sm" onclick="quickPostpone('+30m')"><i class="fas fa-plus"></i> 30 Minutes</button>
@@ -236,16 +264,16 @@
                 </div>
 
                 <div class="field" style="margin-bottom:14px;">
-                    <label>Or Choose Custom Date &amp; Time</label>
-                    <input type="datetime-local" id="postpone-custom-due">
+                    <label style="font-weight:600; font-size:0.84rem;">Or Choose Custom Date &amp; Time</label>
+                    <input type="datetime-local" id="postpone-custom-due" style="width:100%;">
                 </div>
 
                 <div class="field">
-                    <label>Postpone Reason (Audit Log)</label>
-                    <input type="text" id="postpone-reason" placeholder="e.g. Student requested callback at 4:30 PM">
+                    <label style="font-weight:600; font-size:0.84rem;">Postpone Reason (Audit Log)</label>
+                    <input type="text" id="postpone-reason" placeholder="e.g. Student requested callback at 4:30 PM" style="width:100%;">
                 </div>
             </div>
-            <div class="modal-foot">
+            <div class="modal-foot" style="padding:12px 20px; background:var(--background,#f8fafc); border-top:1px solid var(--border,#e2e8f0); display:flex; justify-content:flex-end; gap:8px;">
                 <button type="button" class="btn btn-outline" onclick="closeModal('postpone-task-modal')">Cancel</button>
                 <button type="submit" class="btn btn-primary">Save Postpone</button>
             </div>
@@ -255,21 +283,21 @@
 
 <!-- ── CREATOR COMPLETION NOTIFICATION POPUP ── -->
 <div class="modal-backdrop" id="creator-completion-alert" style="z-index:9998;">
-    <div class="modal-box" style="max-width:440px; border-top:5px solid #16a34a;">
-        <div class="modal-head" style="background:#dcfce7;">
+    <div class="modal-box" style="max-width:440px; border-top:4px solid #16a34a;">
+        <div class="modal-head" style="background:#dcfce7; padding:12px 18px;">
             <div style="display:flex; align-items:center; gap:8px;">
-                <span style="background:#16a34a; color:#fff; width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:0.9rem;">
+                <span style="background:#16a34a; color:#fff; width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:0.85rem;">
                     <i class="fas fa-circle-check"></i>
                 </span>
-                <h3 style="color:#14532d; margin:0;">Task Completed</h3>
+                <h3 style="color:#14532d; margin:0; font-size:1rem; font-weight:700;">Task Completed</h3>
             </div>
             <button type="button" class="modal-close" onclick="dismissCreatorNotification()">&times;</button>
         </div>
-        <div class="modal-body" style="padding:20px;">
-            <div id="creator-notif-msg" style="font-size:0.95rem; font-weight:600; color:var(--foreground,#0f172a); margin-bottom:10px;"></div>
-            <div id="creator-notif-time" style="font-size:0.8rem; color:#64748b;"></div>
+        <div class="modal-body" style="padding:18px 20px;">
+            <div id="creator-notif-msg" style="font-size:0.92rem; font-weight:600; color:var(--foreground,#0f172a); margin-bottom:8px;"></div>
+            <div id="creator-notif-time" style="font-size:0.78rem; color:#64748b;"></div>
         </div>
-        <div class="modal-foot" style="background:var(--bg,#f8fafc);">
+        <div class="modal-foot" style="background:var(--background,#f8fafc); border-top:1px solid var(--border,#e2e8f0); padding:10px 18px;">
             <button type="button" class="btn btn-primary" style="width:100%;" onclick="dismissCreatorNotification()">Dismiss</button>
         </div>
     </div>
@@ -305,6 +333,12 @@ document.addEventListener('click', function(e) {
     }
 });
 
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closeTaskRemindersDropdown();
+    }
+});
+
 function escapeHtml(str) {
     if (!str) return '';
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
@@ -319,32 +353,65 @@ function fetchTaskRemindersDropdownList() {
         .then(function(res) { return res.json(); })
         .then(function(data) {
             if (!data.success || !data.tasks || data.tasks.length === 0) {
-                listEl.innerHTML = '<div style="text-align:center; padding:24px 16px; color:#94a3b8; font-size:0.85rem;"><i class="fas fa-check-circle" style="color:#10b981; font-size:1.6rem; display:block; margin-bottom:6px;"></i>All caught up! No active tasks.</div>';
+                listEl.innerHTML = '<div style="text-align:center; padding:28px 16px; color:#64748b;">' +
+                    '<div style="width:38px; height:38px; border-radius:50%; background:#dcfce7; color:#16a34a; display:inline-flex; align-items:center; justify-content:center; font-size:1.15rem; margin-bottom:8px;"><i class="fas fa-check"></i></div>' +
+                    '<div style="font-weight:700; color:var(--foreground,#0f172a); font-size:0.9rem;">All caught up!</div>' +
+                    '<div style="font-size:0.78rem; color:#94a3b8; margin-top:2px;">No pending or overdue tasks.</div>' +
+                '</div>';
                 if (countsEl) countsEl.innerHTML = '';
                 return;
             }
 
-            var overdueCount = 0;
-            var html = '';
-            data.tasks.slice(0, 5).forEach(function(t) {
-                if (t.is_overdue) overdueCount++;
-                var badgeHtml = t.is_overdue 
-                    ? '<span class="status-badge-overdue" style="font-size:0.7rem; padding:2px 6px; border-radius:4px; font-weight:700;">Overdue</span>' 
-                    : '<span class="status-badge-pending" style="font-size:0.7rem; padding:2px 6px; border-radius:4px; font-weight:700;">Pending</span>';
-
-                html += '<a href="task-reminders.php#my-tasks" class="task-dropdown-item" style="text-decoration:none; display:flex; justify-content:space-between; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--border,#f1f5f9);">' +
-                    '<div style="flex:1; min-width:0;">' +
-                        '<div style="font-size:0.72rem; font-weight:700; color:var(--primary,#7c3aed); text-transform:uppercase;">' + escapeHtml(t.task_type_name) + '</div>' +
-                        '<div style="font-size:0.85rem; font-weight:600; color:var(--foreground,#0f172a); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' + escapeHtml(t.title) + '</div>' +
-                        '<div style="font-size:0.75rem; color:#64748b;"><i class="fas fa-clock"></i> ' + t.formatted_due + '</div>' +
-                    '</div>' +
-                    '<div>' + badgeHtml + '</div>' +
-                '</a>';
+            var overdueTasks = [];
+            var pendingTasks = [];
+            data.tasks.forEach(function(t) {
+                if (t.is_overdue) overdueTasks.push(t);
+                else pendingTasks.push(t);
             });
 
             if (countsEl) {
-                countsEl.innerHTML = '<span style="color:#d97706;">' + data.tasks.length + ' Active</span>' + (overdueCount > 0 ? ' &bull; <span style="color:#dc2626;">' + overdueCount + ' Overdue</span>' : '');
+                var countParts = [];
+                if (pendingTasks.length > 0) countParts.push('<span style="color:#d97706;">' + pendingTasks.length + ' Pending</span>');
+                if (overdueTasks.length > 0) countParts.push('<span style="color:#dc2626;">' + overdueTasks.length + ' Overdue</span>');
+                countsEl.innerHTML = countParts.join(' &bull; ');
             }
+
+            var html = '';
+
+            // Overdue section
+            if (overdueTasks.length > 0) {
+                html += '<div class="task-dropdown-section-title" style="color:#dc2626;"><i class="fas fa-circle-exclamation"></i> Overdue</div>';
+                overdueTasks.slice(0, 4).forEach(function(t) {
+                    html += '<a href="task-reminders.php#my-tasks" class="task-dropdown-item">' +
+                        '<div style="flex:1; min-width:0;">' +
+                            '<div style="font-size:0.85rem; font-weight:700; color:var(--foreground,#0f172a); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' +
+                                '<span style="color:#dc2626; margin-right:4px;">🔴</span>' + escapeHtml(t.title) +
+                            '</div>' +
+                            '<div style="font-size:0.75rem; color:#64748b; margin-top:2px;">' +
+                                escapeHtml(t.task_type_name) + ' &bull; <i class="fas fa-clock"></i> ' + t.formatted_due +
+                            '</div>' +
+                        '</div>' +
+                    '</a>';
+                });
+            }
+
+            // Pending section
+            if (pendingTasks.length > 0) {
+                html += '<div class="task-dropdown-section-title" style="color:#d97706;"><i class="fas fa-clock"></i> Pending</div>';
+                pendingTasks.slice(0, 4).forEach(function(t) {
+                    html += '<a href="task-reminders.php#my-tasks" class="task-dropdown-item">' +
+                        '<div style="flex:1; min-width:0;">' +
+                            '<div style="font-size:0.85rem; font-weight:700; color:var(--foreground,#0f172a); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' +
+                                '<span style="color:#d97706; margin-right:4px;">🟡</span>' + escapeHtml(t.title) +
+                            '</div>' +
+                            '<div style="font-size:0.75rem; color:#64748b; margin-top:2px;">' +
+                                escapeHtml(t.task_type_name) + ' &bull; <i class="fas fa-clock"></i> ' + t.formatted_due +
+                            '</div>' +
+                        '</div>' +
+                    '</a>';
+                });
+            }
+
             listEl.innerHTML = html;
         })
         .catch(function() {
@@ -360,22 +427,34 @@ function openCreateTaskModal() {
         var notesEl = document.getElementById('create-task-notes');
         if (notesEl) notesEl.value = '';
 
+        // Reset Due Date / Time
+        var dateEl = document.getElementById('create-task-due-date');
+        if (dateEl) dateEl.value = new Date().toISOString().split('T')[0];
+        var timeEl = document.getElementById('create-task-due-time');
+        if (timeEl) {
+            var now = new Date();
+            now.setHours(now.getHours() + 1);
+            timeEl.value = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+        }
+
         // Reset recurrence fields
         var recTypeEl = document.getElementById('create-recurrence-type');
         if (recTypeEl) recTypeEl.value = 'none';
         document.querySelectorAll('.recurrence-weekday-cb, .recurrence-monthday-cb').forEach(function(cb) {
             cb.checked = false;
             var lbl = cb.closest('label');
-            if (lbl && cb.classList.contains('recurrence-monthday-cb')) {
-                lbl.style.background = 'var(--muted,#f8fafc)';
+            if (lbl) {
+                lbl.style.background = 'var(--card,#ffffff)';
                 lbl.style.color = 'inherit';
-                lbl.style.borderColor = 'var(--border,#e2e8f0)';
+                lbl.style.borderColor = 'var(--border,#cbd5e1)';
             }
         });
         var lastDayCb = document.getElementById('recurrence-lastday-cb');
         if (lastDayCb) lastDayCb.checked = false;
         var recStartEl = document.getElementById('create-recurrence-start');
         if (recStartEl) recStartEl.value = new Date().toISOString().split('T')[0];
+        var recDueTimeEl = document.getElementById('create-recurrence-due-time');
+        if (recDueTimeEl) recDueTimeEl.value = '10:00';
         var recEndEl = document.getElementById('create-recurrence-end');
         if (recEndEl) recEndEl.value = '';
         toggleRecurrenceFields();
@@ -398,9 +477,91 @@ function openCreateTaskModal() {
     }
 }
 
+function updateWeekdayChip(cb) {
+    var lbl = cb.closest('label');
+    if (!lbl) return;
+    if (cb.checked) {
+        lbl.style.background = 'var(--primary,#7c3aed)';
+        lbl.style.color = '#ffffff';
+        lbl.style.borderColor = 'var(--primary,#7c3aed)';
+    } else {
+        lbl.style.background = 'var(--card,#ffffff)';
+        lbl.style.color = 'inherit';
+        lbl.style.borderColor = 'var(--border,#cbd5e1)';
+    }
+    syncRecurrenceFields();
+}
+
+function updateMonthDayChip(cb) {
+    var lbl = cb.closest('label');
+    if (!lbl) return;
+    if (cb.checked) {
+        lbl.style.background = 'var(--primary,#7c3aed)';
+        lbl.style.color = '#ffffff';
+        lbl.style.borderColor = 'var(--primary,#7c3aed)';
+    } else {
+        lbl.style.background = 'var(--card,#ffffff)';
+        lbl.style.color = 'inherit';
+        lbl.style.borderColor = 'var(--border,#cbd5e1)';
+    }
+    syncRecurrenceFields();
+}
+
+function toggleRecurrenceFields() {
+    var type = document.getElementById('create-recurrence-type').value;
+    var weeklyEl = document.getElementById('recurrence-weekly-fields');
+    var monthlyEl = document.getElementById('recurrence-monthly-fields');
+    var dateEl = document.getElementById('recurrence-date-fields');
+    var onetimeWrap = document.getElementById('create-onetime-datetime-wrap');
+
+    // Progressive disclosure
+    if (type === 'none') {
+        if (onetimeWrap) onetimeWrap.style.display = 'grid';
+        if (weeklyEl) weeklyEl.style.display = 'none';
+        if (monthlyEl) monthlyEl.style.display = 'none';
+        if (dateEl) dateEl.style.display = 'none';
+    } else {
+        if (onetimeWrap) onetimeWrap.style.display = 'none';
+        if (weeklyEl) weeklyEl.style.display = (type === 'weekly') ? 'block' : 'none';
+        if (monthlyEl) monthlyEl.style.display = (type === 'monthly') ? 'block' : 'none';
+        if (dateEl) dateEl.style.display = 'block';
+    }
+}
+
+function syncRecurrenceFields() {
+    var type = document.getElementById('create-recurrence-type').value;
+    var hiddenRemindAt = document.getElementById('create-task-remind-at-hidden');
+
+    if (type === 'none') {
+        var d = document.getElementById('create-task-due-date').value;
+        var t = document.getElementById('create-task-due-time').value || '10:00';
+        if (hiddenRemindAt) hiddenRemindAt.value = d + ' ' + (t.length === 5 ? t + ':00' : t);
+    } else {
+        var sd = document.getElementById('create-recurrence-start').value;
+        var st = document.getElementById('create-recurrence-due-time').value || '10:00';
+        if (hiddenRemindAt) hiddenRemindAt.value = sd + ' ' + (st.length === 5 ? st + ':00' : st);
+    }
+
+    // Sync weekday checkboxes
+    var weekdayCbs = document.querySelectorAll('.recurrence-weekday-cb');
+    var weekdays = [];
+    weekdayCbs.forEach(function(cb) { if (cb.checked) weekdays.push(cb.value); });
+    var wdInput = document.getElementById('create-recurrence-weekdays');
+    if (wdInput) wdInput.value = weekdays.join(',');
+
+    // Sync month day checkboxes
+    var mdCbs = document.querySelectorAll('.recurrence-monthday-cb');
+    var monthDays = [];
+    mdCbs.forEach(function(cb) { if (cb.checked) monthDays.push(cb.value); });
+    var lastDayCb = document.getElementById('recurrence-lastday-cb');
+    if (lastDayCb && lastDayCb.checked) monthDays.push('last');
+    var mdInput = document.getElementById('create-recurrence-month-days');
+    if (mdInput) mdInput.value = monthDays.join(',');
+}
+
 function submitCreateTask(e) {
     e.preventDefault();
-    // Sync recurrence checkboxes to hidden inputs before submit
+    // Synchronize recurrence and date/time fields before submit
     syncRecurrenceFields();
 
     var form = document.getElementById('create-task-modal-form');
@@ -420,6 +581,7 @@ function submitCreateTask(e) {
                 updateTaskRemindersSummary();
                 if (typeof loadMyTasks === 'function') loadMyTasks();
                 if (typeof loadAssignedByMe === 'function') loadAssignedByMe();
+                if (typeof loadRecurringSeries === 'function') loadRecurringSeries();
             } else {
                 alert(data.message || 'Failed to create task.');
             }
@@ -429,65 +591,6 @@ function submitCreateTask(e) {
             alert('Error creating task.');
         });
 }
-
-// ═══ Recurrence UI Toggle & Sync ═══
-function toggleRecurrenceFields() {
-    var type = document.getElementById('create-recurrence-type').value;
-    var weeklyEl = document.getElementById('recurrence-weekly-fields');
-    var monthlyEl = document.getElementById('recurrence-monthly-fields');
-    var dateEl = document.getElementById('recurrence-date-fields');
-    var dueLabel = document.querySelector('label[for="create-task-due"]') || document.getElementById('create-task-due').parentElement.querySelector('label');
-
-    // Show/hide conditional fields
-    weeklyEl.style.display = (type === 'weekly') ? 'block' : 'none';
-    monthlyEl.style.display = (type === 'monthly') ? 'block' : 'none';
-    dateEl.style.display = (type !== 'none') ? 'block' : 'none';
-
-    // Update Due Date label for recurring tasks
-    if (dueLabel) {
-        if (type !== 'none') {
-            dueLabel.innerHTML = 'Due Time <span style="color:#ef4444;">*</span> <span style="font-size:0.72rem; color:#94a3b8;">(time used for all occurrences)</span>';
-        } else {
-            dueLabel.innerHTML = 'Due Date &amp; Time <span style="color:#ef4444;">*</span>';
-        }
-    }
-}
-
-function syncRecurrenceFields() {
-    // Sync weekday checkboxes
-    var weekdayCbs = document.querySelectorAll('.recurrence-weekday-cb');
-    var weekdays = [];
-    weekdayCbs.forEach(function(cb) { if (cb.checked) weekdays.push(cb.value); });
-    var wdInput = document.getElementById('create-recurrence-weekdays');
-    if (wdInput) wdInput.value = weekdays.join(',');
-
-    // Sync month day checkboxes
-    var mdCbs = document.querySelectorAll('.recurrence-monthday-cb');
-    var monthDays = [];
-    mdCbs.forEach(function(cb) { if (cb.checked) monthDays.push(cb.value); });
-    var lastDayCb = document.getElementById('recurrence-lastday-cb');
-    if (lastDayCb && lastDayCb.checked) monthDays.push('last');
-    var mdInput = document.getElementById('create-recurrence-month-days');
-    if (mdInput) mdInput.value = monthDays.join(',');
-}
-
-// Month day label toggle styling
-document.addEventListener('click', function(e) {
-    if (e.target.classList && e.target.classList.contains('recurrence-monthday-cb')) {
-        var label = e.target.closest('label');
-        if (label) {
-            if (e.target.checked) {
-                label.style.background = 'var(--primary,#7c3aed)';
-                label.style.color = '#fff';
-                label.style.borderColor = 'var(--primary,#7c3aed)';
-            } else {
-                label.style.background = 'var(--muted,#f8fafc)';
-                label.style.color = 'inherit';
-                label.style.borderColor = 'var(--border,#e2e8f0)';
-            }
-        }
-    }
-});
 
 function openEditTaskModal(taskId) {
     fetch('api/task-reminders.php?action=get_details&task_id=' + taskId)

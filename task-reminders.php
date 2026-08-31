@@ -59,59 +59,61 @@ foreach ($my_tasks_all as $t) {
 }
 
 $assigned_by_me_all = task_reminders_list_assigned_by_me($pdo, $current_admin_id, $current_username, [], $is_super);
-$assigned_by_me_total = count($assigned_by_me_all);
-
-$extra_head = '
+$assigned_by_me_total = count($assigned_by_me_all);$extra_head = '
 <style>
-/* Task Reminders Module Styles */
+/* ── Task Reminders Module Modernized Styles ── */
 .task-kpi-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 16px;
-    margin-bottom: 24px;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 14px;
+    margin-bottom: 22px;
 }
 .task-kpi-card {
-    background: var(--card, #ffffff);
+    background: var(--surface, #ffffff);
     border: 1px solid var(--border, #e2e8f0);
     border-radius: 12px;
-    padding: 16px 20px;
+    padding: 14px 18px;
     display: flex;
     align-items: center;
-    gap: 16px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    gap: 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
     transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 .task-kpi-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+}
+html.theme-dark .task-kpi-card {
+    background: #1e293b;
+    border-color: #334155;
 }
 .task-kpi-icon {
-    width: 48px;
-    height: 48px;
+    width: 44px;
+    height: 44px;
     border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.35rem;
+    font-size: 1.25rem;
     flex-shrink: 0;
 }
 .task-kpi-val {
-    font-size: 1.6rem;
+    font-size: 1.55rem;
     font-weight: 700;
     line-height: 1.1;
     font-family: "Space Grotesk", sans-serif;
     color: var(--foreground, #0f172a);
 }
 .task-kpi-lbl {
-    font-size: 0.82rem;
-    font-weight: 600;
-    color: var(--text-sub, #64748b);
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--secondary, #64748b);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-top: 2px;
 }
 
-/* Tab Navigation */
+/* ── Tab Navigation ── */
 .task-tabs-nav {
     display: flex;
     flex-wrap: wrap;
@@ -124,25 +126,26 @@ $extra_head = '
 }
 .task-tabs-group {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
 }
 .task-tab-btn {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    padding: 10px 20px;
+    padding: 9px 18px;
     font-family: "Space Grotesk", sans-serif;
     font-weight: 600;
-    font-size: 0.92rem;
-    color: var(--text, #334155);
-    background: var(--card, #ffffff);
+    font-size: 0.88rem;
+    color: var(--foreground, #334155);
+    background: var(--surface, #ffffff);
     border: 1px solid var(--border, #cbd5e1);
     border-radius: 8px;
     cursor: pointer;
     transition: all 0.15s ease;
 }
 .task-tab-btn:hover {
-    background: var(--bg-hover, #f8fafc);
+    background: var(--background, #f8fafc);
     border-color: #94a3b8;
 }
 .task-tab-btn.active {
@@ -151,6 +154,16 @@ $extra_head = '
     border-color: var(--primary, #7c3aed) !important;
     box-shadow: 0 2px 6px rgba(124, 58, 237, 0.25);
 }
+html.theme-dark .task-tab-btn {
+    background: #1e293b;
+    border-color: #334155;
+    color: #cbd5e1;
+}
+html.theme-dark .task-tab-btn.active {
+    background: var(--primary, #7c3aed) !important;
+    border-color: var(--primary, #7c3aed) !important;
+    color: #fff !important;
+}
 .task-tab-pane {
     display: none;
 }
@@ -158,21 +171,20 @@ $extra_head = '
     display: block;
 }
 
-/* Sub-filter pills */
+/* ── Sub-filter pills ── */
 .task-subfilters {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    margin-bottom: 16px;
 }
 .subfilter-pill {
-    padding: 6px 14px;
-    border-radius: 20px;
-    font-size: 0.82rem;
+    padding: 5px 12px;
+    border-radius: 16px;
+    font-size: 0.8rem;
     font-weight: 600;
-    background: var(--bg, #f1f5f9);
+    background: var(--background, #f1f5f9);
     border: 1px solid var(--border, #e2e8f0);
-    color: var(--text-sub, #475569);
+    color: var(--secondary, #475569);
     cursor: pointer;
     transition: all 0.15s ease;
 }
@@ -181,9 +193,9 @@ $extra_head = '
     color: #1e293b;
 }
 .subfilter-pill.active {
-    background: #0f172a;
+    background: var(--foreground, #0f172a);
     color: #ffffff;
-    border-color: #0f172a;
+    border-color: var(--foreground, #0f172a);
 }
 html.theme-dark .subfilter-pill {
     background: #1e293b;
@@ -196,15 +208,15 @@ html.theme-dark .subfilter-pill.active {
     color: #fff;
 }
 
-/* Status Badges */
+/* ── Modern Status Badges ── */
 .status-badge-pending {
     background: #fef3c7;
     color: #b45309;
     border: 1px solid #fde68a;
-    padding: 4px 10px;
+    padding: 3px 8px;
     border-radius: 6px;
     font-weight: 700;
-    font-size: 0.78rem;
+    font-size: 0.76rem;
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -213,10 +225,10 @@ html.theme-dark .subfilter-pill.active {
     background: #e0f2fe;
     color: #0369a1;
     border: 1px solid #bae6fd;
-    padding: 4px 10px;
+    padding: 3px 8px;
     border-radius: 6px;
     font-weight: 700;
-    font-size: 0.78rem;
+    font-size: 0.76rem;
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -225,23 +237,22 @@ html.theme-dark .subfilter-pill.active {
     background: #fee2e2;
     color: #b91c1c;
     border: 1px solid #fecaca;
-    padding: 4px 10px;
+    padding: 3px 8px;
     border-radius: 6px;
     font-weight: 700;
-    font-size: 0.78rem;
+    font-size: 0.76rem;
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    animation: overduePulse 2s infinite ease-in-out;
 }
 .status-badge-completed {
     background: #dcfce7;
     color: #15803d;
     border: 1px solid #bbf7d0;
-    padding: 4px 10px;
+    padding: 3px 8px;
     border-radius: 6px;
     font-weight: 700;
-    font-size: 0.78rem;
+    font-size: 0.76rem;
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -249,92 +260,126 @@ html.theme-dark .subfilter-pill.active {
 .status-badge-cancelled {
     background: #f1f5f9;
     color: #64748b;
-    border: 1px solid #cbd5e1;
-    padding: 4px 10px;
+    border: 1px solid #e2e8f0;
+    padding: 3px 8px;
     border-radius: 6px;
     font-weight: 700;
-    font-size: 0.78rem;
+    font-size: 0.76rem;
     display: inline-flex;
     align-items: center;
     gap: 5px;
 }
 
-@keyframes overduePulse {
-    0% { transform: scale(1); }
-    50% { transform: scale(1.03); }
-    100% { transform: scale(1); }
+/* ── Modern Task Action Card ── */
+.task-action-card {
+    background: var(--surface, #ffffff);
+    border: 1px solid var(--border, #e2e8f0);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    transition: box-shadow 0.15s ease, border-color 0.15s ease;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+.task-action-card:hover {
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
+    border-color: #cbd5e1;
+}
+html.theme-dark .task-action-card {
+    background: #1e293b;
+    border-color: #334155;
+}
+.task-action-card.card-overdue {
+    border-left: 4px solid #dc2626;
+    background: #fffafa;
+}
+html.theme-dark .task-action-card.card-overdue {
+    background: #2a1b1b;
+}
+.task-action-card.card-pending {
+    border-left: 4px solid #f59e0b;
+}
+.task-action-card.card-inprogress {
+    border-left: 4px solid #0284c7;
+}
+.task-action-card.card-completed {
+    border-left: 4px solid #16a34a;
+    opacity: 0.92;
 }
 
-/* Timeline in Task Details */
+/* ── Timeline Styles ── */
 .task-timeline {
     position: relative;
-    padding-left: 28px;
-    margin-top: 16px;
+    padding-left: 24px;
+    margin-top: 12px;
 }
 .task-timeline::before {
     content: "";
     position: absolute;
-    left: 10px;
+    left: 8px;
     top: 4px;
     bottom: 4px;
     width: 2px;
-    background: var(--border, #cbd5e1);
+    background: var(--border, #e2e8f0);
 }
 .timeline-item {
     position: relative;
-    margin-bottom: 20px;
+    margin-bottom: 16px;
 }
 .timeline-dot {
     position: absolute;
-    left: -28px;
-    top: 2px;
-    width: 20px;
-    height: 20px;
+    left: -24px;
+    top: 3px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
-    background: var(--card, #fff);
-    border: 3px solid var(--primary, #7c3aed);
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    background: var(--primary, #7c3aed);
+    border: 2px solid var(--surface, #ffffff);
+    box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.2);
 }
 .timeline-content {
-    background: var(--bg, #f8fafc);
+    background: var(--background, #f8fafc);
     border: 1px solid var(--border, #e2e8f0);
     border-radius: 8px;
-    padding: 10px 14px;
+    padding: 10px 12px;
+    font-size: 0.85rem;
 }
 html.theme-dark .timeline-content {
-    background: #1e293b;
+    background: #0f172a;
     border-color: #334155;
 }
 .timeline-time {
-    font-size: 0.75rem;
-    color: var(--text-sub, #64748b);
+    font-size: 0.74rem;
+    color: var(--secondary, #64748b);
     font-weight: 600;
+    margin-bottom: 2px;
 }
 .timeline-event {
-    font-size: 0.85rem;
     font-weight: 700;
     color: var(--foreground, #0f172a);
-    margin: 2px 0;
+    display: inline-block;
 }
 .timeline-remarks {
-    font-size: 0.85rem;
-    color: var(--text, #334155);
-    margin-top: 4px;
     font-style: italic;
+    color: var(--secondary, #475569);
+    margin-top: 4px;
+    font-size: 0.82rem;
 }
 </style>
 ';
 
+include 'includes/header.php';
 include 'includes/admin_nav.php';
 ?>
 
-<!-- ── KPI METRICS CARDS ── -->
+<!-- ── TOP KPI METRICS BAR ── -->
 <div class="task-kpi-grid">
     <div class="task-kpi-card">
-        <div class="task-kpi-icon" style="background:#fef3c7; color:#d97706;">
-            <i class="fas fa-hourglass-half"></i>
+        <div class="task-kpi-icon" style="background:#fef3c7; color:#b45309;">
+            <i class="fas fa-clock"></i>
         </div>
         <div>
             <div class="task-kpi-val" id="kpi-my-pending"><?php echo $my_pending_count; ?></div>
@@ -390,10 +435,10 @@ include 'includes/admin_nav.php';
             <i class="fas fa-list-check"></i> My Tasks
         </button>
         <button type="button" class="task-tab-btn" onclick="switchTaskTab('assigned-by-me')">
-            <i class="fas fa-binoculars"></i> Assigned by Me (Monitoring)
+            <i class="fas fa-binoculars"></i> Assigned by Me
         </button>
         <button type="button" class="task-tab-btn" onclick="switchTaskTab('task-history')">
-            <i class="fas fa-clock-rotate-left"></i> History / All Events
+            <i class="fas fa-clock-rotate-left"></i> History
         </button>
         <button type="button" class="task-tab-btn" onclick="switchTaskTab('recurring-series')">
             <i class="fas fa-repeat"></i> Recurring Series
@@ -401,7 +446,7 @@ include 'includes/admin_nav.php';
     </div>
     <div>
         <button type="button" class="btn btn-primary" onclick="openCreateTaskModal()">
-            <i class="fas fa-plus"></i> + New Task Reminder
+            <i class="fas fa-plus"></i> New Task Reminder
         </button>
     </div>
 </div>
@@ -411,12 +456,12 @@ include 'includes/admin_nav.php';
 <!-- ══════════════════════════════════════════════════════════════════════ -->
 <div id="pane-my-tasks" class="task-tab-pane active">
     <div class="panel">
-        <div class="panel-head" style="justify-content:space-between;">
+        <div class="panel-head" style="justify-content:space-between; flex-wrap:wrap; gap:10px;">
             <div style="display:flex; align-items:center; gap:10px;">
-                <span class="head-icon"><i class="fas fa-list-check"></i></span>
-                <h2>My Assigned Tasks</h2>
+                <span class="head-icon" style="background:var(--accent-soft,#ede9fe); color:var(--primary,#7c3aed);"><i class="fas fa-list-check"></i></span>
+                <h2>My Tasks</h2>
             </div>
-            <div class="task-subfilters" style="margin-bottom:0;">
+            <div class="task-subfilters">
                 <span class="subfilter-pill active" onclick="filterMyTasks('all', this)">All</span>
                 <span class="subfilter-pill" onclick="filterMyTasks('pending', this)">Pending</span>
                 <span class="subfilter-pill" onclick="filterMyTasks('in_progress', this)">In Progress</span>
@@ -439,50 +484,36 @@ include 'includes/admin_nav.php';
                 </div>
             </div>
 
-            <div class="table-wrap">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Task Type</th>
-                            <th>Task / Activity</th>
-                            <th>Due Date &amp; Time</th>
-                            <th>Status</th>
-                            <th>Assigned By</th>
-                            <th style="text-align:right;">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="my-tasks-tbody">
-                        <tr><td colspan="6" style="text-align:center; padding:32px;"><i class="fas fa-spinner fa-spin"></i> Loading tasks...</td></tr>
-                    </tbody>
-                </table>
+            <!-- Modern Task Card List Container -->
+            <div id="my-tasks-list-container">
+                <div style="text-align:center; padding:32px; color:#94a3b8;"><i class="fas fa-spinner fa-spin"></i> Loading tasks...</div>
             </div>
         </div>
     </div>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════════ -->
-<!-- TAB 2: ASSIGNED BY ME (MONITORING)                                     -->
+<!-- TAB 2: ASSIGNED BY ME (DELEGATION & MONITORING)                        -->
 <!-- ══════════════════════════════════════════════════════════════════════ -->
 <div id="pane-assigned-by-me" class="task-tab-pane">
     <div class="panel">
-        <div class="panel-head" style="justify-content:space-between;">
+        <div class="panel-head" style="justify-content:space-between; flex-wrap:wrap; gap:10px;">
             <div style="display:flex; align-items:center; gap:10px;">
-                <span class="head-icon"><i class="fas fa-binoculars"></i></span>
-                <h2>Task Delegation &amp; Monitoring</h2>
+                <span class="head-icon" style="background:#ede9fe; color:#7c3aed;"><i class="fas fa-binoculars"></i></span>
+                <h2>Tasks Assigned by Me (Monitoring)</h2>
             </div>
-            <div class="task-subfilters" style="margin-bottom:0;">
+            <div class="task-subfilters">
                 <span class="subfilter-pill active" onclick="filterAssignedByMe('all', this)">All</span>
                 <span class="subfilter-pill" onclick="filterAssignedByMe('pending', this)">Pending</span>
                 <span class="subfilter-pill" onclick="filterAssignedByMe('in_progress', this)">In Progress</span>
                 <span class="subfilter-pill" onclick="filterAssignedByMe('overdue', this)">Overdue</span>
                 <span class="subfilter-pill" onclick="filterAssignedByMe('completed', this)">Completed</span>
-                <span class="subfilter-pill" onclick="filterAssignedByMe('cancelled', this)">Cancelled</span>
             </div>
         </div>
         <div class="panel-body">
             <div class="filter-bar" style="margin-bottom:18px;">
                 <div class="field" style="flex:1;">
-                    <input type="text" id="assigned-search" placeholder="Search delegated tasks..." onkeyup="debounceLoadAssigned()">
+                    <input type="text" id="assigned-search" placeholder="Search delegated tasks by title..." onkeyup="debounceLoadAssigned()">
                 </div>
                 <div class="field">
                     <select id="assigned-to-filter" onchange="loadAssignedByMe()">
@@ -492,80 +523,52 @@ include 'includes/admin_nav.php';
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="field">
-                    <select id="assigned-type-filter" onchange="loadAssignedByMe()">
-                        <option value="">All Task Types</option>
-                        <?php foreach ($active_task_types as $tt): ?>
-                            <option value="<?php echo $tt['id']; ?>"><?php echo e($tt['name']); ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
             </div>
 
-            <div class="table-wrap">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Task Type</th>
-                            <th>Task Title</th>
-                            <th>Assigned To</th>
-                            <th>Scheduled Due</th>
-                            <th>Status</th>
-                            <th>Latest Remarks</th>
-                            <th style="text-align:right;">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="assigned-by-me-tbody">
-                        <tr><td colspan="7" style="text-align:center; padding:32px;"><i class="fas fa-spinner fa-spin"></i> Loading delegated tasks...</td></tr>
-                    </tbody>
-                </table>
+            <!-- Delegated Tasks List Container -->
+            <div id="assigned-by-me-list-container">
+                <div style="text-align:center; padding:32px; color:#94a3b8;"><i class="fas fa-spinner fa-spin"></i> Loading delegated tasks...</div>
             </div>
         </div>
     </div>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════════ -->
-<!-- TAB 3: HISTORY / ALL LIFECYCLE EVENTS                                 -->
+<!-- TAB 3: AUDIT HISTORY / ALL LIFECYCLE EVENTS                            -->
 <!-- ══════════════════════════════════════════════════════════════════════ -->
 <div id="pane-task-history" class="task-tab-pane">
     <div class="panel">
         <div class="panel-head">
-            <span class="head-icon"><i class="fas fa-clock-rotate-left"></i></span>
-            <h2>Permanent Task Lifecycle History</h2>
+            <span class="head-icon" style="background:#f1f5f9; color:#475569;"><i class="fas fa-clock-rotate-left"></i></span>
+            <h2>Task Reminders Audit History</h2>
         </div>
         <div class="panel-body">
-            <div class="filter-bar" style="margin-bottom:20px; align-items:flex-end;">
+            <div class="filter-bar" style="margin-bottom:18px;">
                 <div class="field">
-                    <label>Event Type</label>
                     <select id="history-event-filter" onchange="loadHistory()">
                         <option value="">All Events</option>
-                        <option value="CREATED">CREATED</option>
-                        <option value="ASSIGNED">ASSIGNED</option>
-                        <option value="REASSIGNED">REASSIGNED</option>
-                        <option value="EDITED">EDITED</option>
-                        <option value="STARTED">STARTED</option>
-                        <option value="POSTPONED">POSTPONED</option>
-                        <option value="COMPLETED">COMPLETED</option>
-                        <option value="CANCELLED">CANCELLED</option>
-                        <option value="REMARK_ADDED">REMARK ADDED</option>
+                        <option value="CREATED">Created</option>
+                        <option value="ASSIGNED">Assigned</option>
+                        <option value="REASSIGNED">Reassigned</option>
+                        <option value="STARTED">Started</option>
+                        <option value="POSTPONED">Postponed</option>
+                        <option value="COMPLETED">Completed</option>
+                        <option value="CANCELLED">Cancelled</option>
                     </select>
                 </div>
                 <div class="field">
-                    <label>Staff Admin</label>
                     <select id="history-admin-filter" onchange="loadHistory()">
-                        <option value="">All Staff</option>
+                        <option value="">All Admins</option>
                         <?php foreach ($all_admins as $adm): ?>
                             <option value="<?php echo e($adm['username']); ?>"><?php echo e($adm['full_name'] ?: $adm['username']); ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
                 <div class="field">
-                    <label>Date From</label>
-                    <input type="date" id="history-date-from" onchange="loadHistory()">
+                    <input type="date" id="history-date-from" onchange="loadHistory()" placeholder="From Date">
                 </div>
                 <div class="field">
-                    <label>Date To</label>
-                    <input type="date" id="history-date-to" onchange="loadHistory()">
+                    <input type="date" id="history-date-to" onchange="loadHistory()" placeholder="To Date">
                 </div>
                 <button type="button" class="btn btn-outline" onclick="resetHistoryFilters()"><i class="fas fa-rotate-left"></i> Reset</button>
             </div>
@@ -574,16 +577,16 @@ include 'includes/admin_nav.php';
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>Time</th>
+                            <th>Date &amp; Time</th>
                             <th>Event</th>
                             <th>Task Title</th>
-                            <th>Actor / Changed By</th>
-                            <th>Details &amp; Remarks</th>
+                            <th>Changed By</th>
+                            <th>Remarks</th>
                             <th style="text-align:right;">Actions</th>
                         </tr>
                     </thead>
                     <tbody id="task-history-tbody">
-                        <tr><td colspan="6" style="text-align:center; padding:32px;"><i class="fas fa-spinner fa-spin"></i> Loading history...</td></tr>
+                        <tr><td colspan="6" style="text-align:center; padding:32px; color:#94a3b8;"><i class="fas fa-spinner fa-spin"></i> Loading history...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -596,13 +599,13 @@ include 'includes/admin_nav.php';
 <!-- ══════════════════════════════════════════════════════════════════════ -->
 <div id="pane-recurring-series" class="task-tab-pane">
     <div class="panel">
-        <div class="panel-header">
+        <div class="panel-head" style="justify-content:space-between; flex-wrap:wrap; gap:10px;">
             <div>
                 <h2><i class="fas fa-repeat" style="color:var(--primary,#7c3aed);"></i> Recurring Task Series</h2>
-                <p style="font-size:0.8rem; color:#94a3b8; margin-top:2px;">Monitor active/stopped recurring series and their occurrence history</p>
+                <p style="font-size:0.8rem; color:#94a3b8; margin-top:2px;">Monitor active and stopped recurring series with occurrence stats</p>
             </div>
             <div style="display:flex; gap:8px; align-items:center;">
-                <select id="series-status-filter" onchange="loadRecurringSeries()" style="font-size:0.82rem; padding:4px 8px; border-radius:6px; border:1px solid var(--border,#e2e8f0);">
+                <select id="series-status-filter" onchange="loadRecurringSeries()" style="font-size:0.84rem; padding:6px 12px; border-radius:6px; border:1px solid var(--border,#cbd5e1); font-weight:600;">
                     <option value="active">Active Series</option>
                     <option value="stopped">Stopped Series</option>
                     <option value="all">All Series</option>
@@ -621,13 +624,18 @@ include 'includes/admin_nav.php';
 <div id="task-details-modal" class="modal-backdrop">
     <div class="modal-box" style="max-width:640px;">
         <div class="modal-head">
-            <h3><i class="fas fa-circle-info"></i> Task Details &amp; History</h3>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span style="width:30px; height:30px; border-radius:8px; background:var(--accent-soft, #ede9fe); color:var(--primary, #7c3aed); display:flex; align-items:center; justify-content:center; font-size:0.95rem;">
+                    <i class="fas fa-circle-info"></i>
+                </span>
+                <h3 style="margin:0; font-size:1.1rem; font-weight:700;">Task Details &amp; History</h3>
+            </div>
             <button type="button" class="modal-close" onclick="closeModal('task-details-modal')">&times;</button>
         </div>
-        <div class="modal-body" id="task-details-modal-body">
+        <div class="modal-body" id="task-details-modal-body" style="padding:18px 20px;">
             <div style="text-align:center; padding:30px;"><i class="fas fa-spinner fa-spin"></i> Loading details...</div>
         </div>
-        <div class="modal-foot">
+        <div class="modal-foot" style="padding:12px 20px; background:var(--background,#f8fafc); border-top:1px solid var(--border,#e2e8f0); display:flex; justify-content:flex-end;">
             <button type="button" class="btn btn-outline" onclick="closeModal('task-details-modal')">Close</button>
         </div>
     </div>
@@ -639,19 +647,24 @@ include 'includes/admin_nav.php';
 <div id="complete-task-modal" class="modal-backdrop">
     <div class="modal-box" style="max-width:480px;">
         <div class="modal-head">
-            <h3><i class="fas fa-circle-check" style="color:#16a34a;"></i> Complete Task</h3>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span style="width:28px; height:28px; border-radius:6px; background:#dcfce7; color:#16a34a; display:flex; align-items:center; justify-content:center; font-size:0.9rem;">
+                    <i class="fas fa-circle-check"></i>
+                </span>
+                <h3 style="margin:0; font-size:1.05rem; font-weight:700;">Complete Task</h3>
+            </div>
             <button type="button" class="modal-close" onclick="closeModal('complete-task-modal')">&times;</button>
         </div>
         <form id="complete-task-form" onsubmit="submitCompleteTask(event)">
             <input type="hidden" id="complete-task-id" name="task_id">
-            <div class="modal-body">
-                <p id="complete-task-prompt" style="font-size:0.95rem; font-weight:600; margin-bottom:14px; color:var(--foreground,#0f172a);"></p>
+            <div class="modal-body" style="padding:18px 20px;">
+                <p id="complete-task-prompt" style="font-size:0.92rem; font-weight:700; margin-bottom:14px; color:var(--foreground,#0f172a);"></p>
                 <div class="field">
-                    <label>Completion Remarks / Outcome</label>
-                    <textarea id="complete-task-remarks" name="remarks" rows="3" placeholder="e.g. Student confirmed installment payment schedule..."></textarea>
+                    <label style="font-weight:600; font-size:0.84rem;">Completion Remarks / Outcome</label>
+                    <textarea id="complete-task-remarks" name="remarks" rows="3" placeholder="e.g. Student confirmed installment payment schedule..." style="width:100%; font-size:0.88rem;"></textarea>
                 </div>
             </div>
-            <div class="modal-foot">
+            <div class="modal-foot" style="padding:12px 20px; background:var(--background,#f8fafc); border-top:1px solid var(--border,#e2e8f0); display:flex; justify-content:flex-end; gap:8px;">
                 <button type="button" class="btn btn-outline" onclick="closeModal('complete-task-modal')">Cancel</button>
                 <button type="submit" class="btn btn-success" id="complete-task-submit-btn"><i class="fas fa-check"></i> Mark Complete</button>
             </div>
@@ -665,30 +678,38 @@ include 'includes/admin_nav.php';
 <div id="reassign-task-modal" class="modal-backdrop">
     <div class="modal-box" style="max-width:440px;">
         <div class="modal-head">
-            <h3><i class="fas fa-user-gear"></i> Reassign Task</h3>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span style="width:28px; height:28px; border-radius:6px; background:#ede9fe; color:#7c3aed; display:flex; align-items:center; justify-content:center; font-size:0.85rem;">
+                    <i class="fas fa-user-gear"></i>
+                </span>
+                <h3 style="margin:0; font-size:1.05rem; font-weight:700;">Reassign Task</h3>
+            </div>
             <button type="button" class="modal-close" onclick="closeModal('reassign-task-modal')">&times;</button>
         </div>
         <form id="reassign-task-form" onsubmit="submitReassignTask(event)">
             <input type="hidden" id="reassign-task-id" name="task_id">
-            <div class="modal-body">
-                <p id="reassign-task-title" style="font-size:0.95rem; font-weight:600; margin-bottom:14px;"></p>
+            <div class="modal-body" style="padding:18px 20px;">
+                <p id="reassign-task-title" style="font-size:0.92rem; font-weight:700; margin-bottom:14px; color:var(--foreground,#0f172a);"></p>
                 <div class="field">
-                    <label>Assign To *</label>
-                    <select id="reassign-new-assignee" name="assigned_to" required>
+                    <label style="font-weight:600; font-size:0.84rem;">Assign To *</label>
+                    <select id="reassign-new-assignee" name="assigned_to" required style="width:100%;">
                         <?php foreach ($all_admins as $adm): ?>
-                            <option value="<?php echo e($adm['username']); ?>"><?php echo e($adm['full_name'] ?: $adm['username']); ?></option>
+                            <option value="<?php echo e($adm['username']); ?>"><?php echo e($adm['full_name'] ? ($adm['full_name'] . ' (' . $adm['username'] . ')') : $adm['username']); ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
             </div>
-            <div class="modal-foot">
+            <div class="modal-foot" style="padding:12px 20px; background:var(--background,#f8fafc); border-top:1px solid var(--border,#e2e8f0); display:flex; justify-content:flex-end; gap:8px;">
                 <button type="button" class="btn btn-outline" onclick="closeModal('reassign-task-modal')">Cancel</button>
-                <button type="submit" class="btn btn-primary">Reassign Task</button>
+                <button type="submit" class="btn btn-primary">Reassign</button>
             </div>
         </form>
     </div>
 </div>
 
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!-- TASK REMINDERS CLIENT JAVASCRIPT                                       -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
 <script>
 var currentMyTasksStatusFilter = 'all';
 var currentAssignedStatusFilter = 'all';
@@ -757,8 +778,8 @@ function loadMyTasks() {
     var search = searchEl ? searchEl.value : '';
     var typeEl = document.getElementById('my-task-type-filter');
     var typeId = typeEl ? typeEl.value : '';
-    var tbody = document.getElementById('my-tasks-tbody');
-    if (!tbody) return;
+    var container = document.getElementById('my-tasks-list-container');
+    if (!container) return;
 
     var url = 'api/task-reminders.php?action=list_my_tasks&status=' + encodeURIComponent(currentMyTasksStatusFilter) +
               '&task_type_id=' + encodeURIComponent(typeId) +
@@ -768,38 +789,60 @@ function loadMyTasks() {
         .then(function(res) { return res.json(); })
         .then(function(data) {
             if (!data.success || !data.tasks || data.tasks.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:32px; color:#94a3b8;"><i class="fas fa-check-circle" style="font-size:2rem; margin-bottom:8px; display:block; color:#cbd5e1;"></i>No matching tasks found.</td></tr>';
+                container.innerHTML = '<div style="text-align:center; padding:48px 16px; color:#64748b;">' +
+                    '<div style="width:48px; height:48px; border-radius:50%; background:#dcfce7; color:#16a34a; display:inline-flex; align-items:center; justify-content:center; font-size:1.4rem; margin-bottom:10px;"><i class="fas fa-check"></i></div>' +
+                    '<div style="font-weight:700; color:var(--foreground,#0f172a); font-size:1rem;">All caught up!</div>' +
+                    '<div style="font-size:0.84rem; color:#94a3b8; margin-top:2px;">You have no tasks matching this filter.</div>' +
+                '</div>';
                 return;
             }
 
             var html = '';
             data.tasks.forEach(function(t) {
-                var notesPreview = t.notes ? ('<div style="font-size:0.8rem; color:#64748b; margin-top:2px;">' + escapeHtml(t.notes.substring(0, 75)) + (t.notes.length > 75 ? '...' : '') + '</div>') : '';
                 var isTerminal = (t.status === 'completed' || t.status === 'cancelled');
+                var cardCls = 'task-action-card';
+                if (t.status === 'completed') cardCls += ' card-completed';
+                else if (t.status === 'in_progress') cardCls += ' card-inprogress';
+                else if (t.is_overdue) cardCls += ' card-overdue';
+                else cardCls += ' card-pending';
 
-                var actionsHtml = '<button type="button" class="btn btn-sm btn-outline" onclick="openTaskDetailsModal(' + t.id + ')" title="View Timeline & Details"><i class="fas fa-circle-info"></i></button> ';
+                var notesPreview = t.notes ? ('<div style="font-size:0.84rem; color:var(--secondary,#64748b); margin-top:4px; line-height:1.4;">' + escapeHtml(t.notes) + '</div>') : '';
+
+                var actionsHtml = '<button type="button" class="btn btn-sm btn-outline" onclick="openTaskDetailsModal(' + t.id + ')" title="View Details & History"><i class="fas fa-circle-info"></i> Details</button> ';
 
                 if (!isTerminal) {
                     if (t.status === 'pending') {
-                        actionsHtml += '<button type="button" class="btn btn-sm btn-primary" onclick="startTask(' + t.id + ')" title="Start Task"><i class="fas fa-play"></i> Start</button> ';
+                        actionsHtml += '<button type="button" class="btn btn-sm btn-primary" onclick="startTask(' + t.id + ')" title="Start Working on Task"><i class="fas fa-play"></i> Start</button> ';
                     }
-                    actionsHtml += '<button type="button" class="btn btn-sm btn-success" onclick="openCompleteTaskModal(' + t.id + ', \'' + escapeJs(t.title) + '\')" title="Complete Task"><i class="fas fa-check"></i></button> ';
-                    actionsHtml += '<button type="button" class="btn btn-sm btn-outline" onclick="openPostponeTaskModal(' + t.id + ', \'' + escapeJs(t.title) + '\', \'' + t.remind_at + '\')" title="Postpone"><i class="fas fa-clock"></i></button>';
+                    actionsHtml += '<button type="button" class="btn btn-sm btn-success" onclick="openCompleteTaskModal(' + t.id + ', \'' + escapeJs(t.title) + '\')" title="Complete Task"><i class="fas fa-check"></i> Complete</button> ';
+                    actionsHtml += '<button type="button" class="btn btn-sm btn-outline" onclick="openPostponeTaskModal(' + t.id + ', \'' + escapeJs(t.title) + '\', \'' + t.remind_at + '\')" title="Postpone Task"><i class="fas fa-clock"></i> Postpone</button>';
                 }
 
-                html += '<tr>' +
-                    '<td><span class="badge blue">' + escapeHtml(t.task_type_name) + '</span></td>' +
-                    '<td class="cell-main"><strong>' + escapeHtml(t.title) + '</strong>' + notesPreview + '</td>' +
-                    '<td><span style="font-size:0.86rem; font-weight:600;">' + t.formatted_due + '</span></td>' +
-                    '<td>' + renderStatusBadge(t.status, t.is_overdue) + '</td>' +
-                    '<td class="cell-sub">' + escapeHtml(t.created_by_username || t.created_by) + '</td>' +
-                    '<td style="text-align:right; white-space:nowrap;">' + actionsHtml + '</td>' +
-                '</tr>';
+                var dueIndicator = t.is_overdue 
+                    ? '<span style="color:#dc2626; font-weight:700;"><i class="fas fa-circle-exclamation"></i> Overdue &bull; Due ' + t.formatted_due + '</span>'
+                    : '<span style="color:var(--secondary,#64748b); font-weight:600;"><i class="fas fa-clock"></i> Due ' + t.formatted_due + '</span>';
+
+                html += '<div class="' + cardCls + '">' +
+                    '<div style="flex:1; min-width:260px;">' +
+                        '<div style="display:flex; align-items:center; gap:8px; margin-bottom:4px; flex-wrap:wrap;">' +
+                            '<span class="badge blue" style="font-size:0.72rem;">' + escapeHtml(t.task_type_name) + '</span>' +
+                            renderStatusBadge(t.status, t.is_overdue) +
+                            '<span style="font-size:0.75rem; color:#94a3b8;">&bull; Assigned by <strong>' + escapeHtml(t.created_by_username || t.created_by) + '</strong></span>' +
+                        '</div>' +
+                        '<div style="font-size:0.98rem; font-weight:700; color:var(--foreground,#0f172a);">' + escapeHtml(t.title) + '</div>' +
+                        notesPreview +
+                        '<div style="font-size:0.8rem; margin-top:6px;">' + dueIndicator + '</div>' +
+                    '</div>' +
+                    '<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">' +
+                        actionsHtml +
+                    '</div>' +
+                '</div>';
             });
-            tbody.innerHTML = html;
+
+            container.innerHTML = html;
         })
-        .catch(function(err) {
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:24px; color:#ef4444;">Failed to load tasks.</td></tr>';
+        .catch(function() {
+            container.innerHTML = '<div style="text-align:center; padding:24px; color:#ef4444;">Failed to load tasks.</div>';
         });
 }
 
@@ -810,8 +853,8 @@ function loadAssignedByMe() {
     var assignee = assigneeEl ? assigneeEl.value : '';
     var typeEl = document.getElementById('assigned-type-filter');
     var typeId = typeEl ? typeEl.value : '';
-    var tbody = document.getElementById('assigned-by-me-tbody');
-    if (!tbody) return;
+    var container = document.getElementById('assigned-by-me-list-container');
+    if (!container) return;
 
     var url = 'api/task-reminders.php?action=list_assigned_by_me&status=' + encodeURIComponent(currentAssignedStatusFilter) +
               '&assigned_to_username=' + encodeURIComponent(assignee) +
@@ -822,36 +865,46 @@ function loadAssignedByMe() {
         .then(function(res) { return res.json(); })
         .then(function(data) {
             if (!data.success || !data.tasks || data.tasks.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:32px; color:#94a3b8;">No delegated tasks found.</td></tr>';
+                container.innerHTML = '<div style="text-align:center; padding:48px 16px; color:#94a3b8;"><i class="fas fa-binoculars" style="font-size:2rem; display:block; margin-bottom:8px; opacity:0.4;"></i>No delegated tasks found.</div>';
                 return;
             }
 
             var html = '';
             data.tasks.forEach(function(t) {
                 var isTerminal = (t.status === 'completed' || t.status === 'cancelled');
-                var remarksHtml = t.latest_remarks ? ('<span style="font-size:0.82rem; font-style:italic; color:#475569;">' + escapeHtml(t.latest_remarks) + '</span>') : '<span style="color:#cbd5e1;">—</span>';
+                var remarksHtml = t.latest_remarks ? ('<div style="font-size:0.82rem; font-style:italic; color:#475569; margin-top:4px; background:var(--background,#f8fafc); border-radius:6px; padding:4px 8px; display:inline-block;"><i class="fas fa-comment-dots"></i> "' + escapeHtml(t.latest_remarks) + '"</div>') : '';
 
-                var actionsHtml = '<button type="button" class="btn btn-sm btn-outline" onclick="openTaskDetailsModal(' + t.id + ')" title="View Timeline"><i class="fas fa-circle-info"></i></button> ';
+                var actionsHtml = '<button type="button" class="btn btn-sm btn-outline" onclick="openTaskDetailsModal(' + t.id + ')" title="View Timeline"><i class="fas fa-circle-info"></i> Details</button> ';
                 if (!isTerminal) {
                     actionsHtml += '<button type="button" class="btn btn-sm btn-outline" onclick="openEditTaskModal(' + t.id + ')" title="Edit Task"><i class="fas fa-pen-to-square"></i></button> ';
                     actionsHtml += '<button type="button" class="btn btn-sm btn-outline" onclick="openReassignModal(' + t.id + ', \'' + escapeJs(t.title) + '\', \'' + escapeJs(t.assigned_to_username || t.assigned_to) + '\')" title="Reassign"><i class="fas fa-user-gear"></i></button> ';
                     actionsHtml += '<button type="button" class="btn btn-sm btn-outline" onclick="openPostponeTaskModal(' + t.id + ', \'' + escapeJs(t.title) + '\', \'' + t.remind_at + '\')" title="Postpone"><i class="fas fa-clock"></i></button>';
                 }
 
-                html += '<tr>' +
-                    '<td><span class="badge blue">' + escapeHtml(t.task_type_name) + '</span></td>' +
-                    '<td class="cell-main"><strong>' + escapeHtml(t.title) + '</strong></td>' +
-                    '<td class="cell-sub"><span style="font-weight:600; color:#1e293b;">' + escapeHtml(t.assigned_to_username || t.assigned_to) + '</span></td>' +
-                    '<td><span style="font-size:0.86rem; font-weight:600;">' + t.formatted_due + '</span></td>' +
-                    '<td>' + renderStatusBadge(t.status, t.is_overdue) + '</td>' +
-                    '<td style="max-width:220px;">' + remarksHtml + '</td>' +
-                    '<td style="text-align:right; white-space:nowrap;">' + actionsHtml + '</td>' +
-                '</tr>';
+                html += '<div class="task-action-card">' +
+                    '<div style="flex:1; min-width:240px;">' +
+                        '<div style="display:flex; align-items:center; gap:8px; margin-bottom:4px; flex-wrap:wrap;">' +
+                            '<span class="badge blue" style="font-size:0.72rem;">' + escapeHtml(t.task_type_name) + '</span>' +
+                            renderStatusBadge(t.status, t.is_overdue) +
+                        '</div>' +
+                        '<div style="font-size:0.95rem; font-weight:700; color:var(--foreground,#0f172a);">' + escapeHtml(t.title) + '</div>' +
+                        '<div style="font-size:0.8rem; color:#64748b; margin-top:3px;">' +
+                            '<i class="fas fa-user-check"></i> Assignee: <strong>' + escapeHtml(t.assigned_to_username || t.assigned_to) + '</strong>' +
+                            ' &bull; <i class="fas fa-clock"></i> Due: <strong>' + t.formatted_due + '</strong>' +
+                            (t.formatted_completed ? (' &bull; <span style="color:#15803d;"><i class="fas fa-circle-check"></i> Completed ' + t.formatted_completed + '</span>') : '') +
+                        '</div>' +
+                        remarksHtml +
+                    '</div>' +
+                    '<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">' +
+                        actionsHtml +
+                    '</div>' +
+                '</div>';
             });
-            tbody.innerHTML = html;
+
+            container.innerHTML = html;
         })
-        .catch(function(err) {
-            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:24px; color:#ef4444;">Failed to load delegated tasks.</td></tr>';
+        .catch(function() {
+            container.innerHTML = '<div style="text-align:center; padding:24px; color:#ef4444;">Failed to load delegated tasks.</div>';
         });
 }
 
@@ -1019,7 +1072,6 @@ function openTaskDetailsModal(taskId) {
 
             var t = data.details.task;
             var history = data.details.history || [];
-            var assignments = data.details.assignments || [];
 
             var timelineHtml = '';
             history.forEach(function(h) {
@@ -1034,20 +1086,22 @@ function openTaskDetailsModal(taskId) {
             });
 
             var html = '<div style="margin-bottom:16px;">' +
-                '<span class="badge blue">' + escapeHtml(t.task_type_name) + '</span> ' +
-                renderStatusBadge(t.status, t.is_overdue) +
-                '<h2 style="font-size:1.25rem; font-weight:700; margin:10px 0 6px;">' + escapeHtml(t.title) + '</h2>' +
-                (t.notes ? ('<div style="background:var(--bg,#f8fafc); border:1px solid var(--border,#e2e8f0); border-radius:8px; padding:12px; font-size:0.9rem; margin-bottom:12px;">' + escapeHtml(t.notes) + '</div>') : '') +
-                '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:0.86rem; color:#475569; margin-top:8px;">' +
-                    '<div><strong>Created By:</strong> ' + escapeHtml(t.created_by_username || t.created_by) + '</div>' +
-                    '<div><strong>Currently Assigned:</strong> ' + escapeHtml(t.assigned_to_username || t.assigned_to) + '</div>' +
-                    '<div><strong>Created Date:</strong> ' + t.formatted_created + '</div>' +
+                '<div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">' +
+                    '<span class="badge blue">' + escapeHtml(t.task_type_name) + '</span> ' +
+                    renderStatusBadge(t.status, t.is_overdue) +
+                '</div>' +
+                '<h2 style="font-size:1.2rem; font-weight:700; margin:0 0 8px; color:var(--foreground,#0f172a);">' + escapeHtml(t.title) + '</h2>' +
+                (t.notes ? ('<div style="background:var(--background,#f8fafc); border:1px solid var(--border,#e2e8f0); border-radius:8px; padding:10px 12px; font-size:0.88rem; margin-bottom:12px; color:#334155;">' + escapeHtml(t.notes) + '</div>') : '') +
+                '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:0.84rem; color:var(--secondary,#64748b); background:var(--background,#f8fafc); padding:12px; border-radius:8px; border:1px solid var(--border,#e2e8f0);">' +
+                    '<div><strong>Assigned To:</strong> ' + escapeHtml(t.assigned_to_username || t.assigned_to) + '</div>' +
+                    '<div><strong>Assigned By:</strong> ' + escapeHtml(t.created_by_username || t.created_by) + '</div>' +
+                    '<div><strong>Created At:</strong> ' + t.formatted_created + '</div>' +
                     '<div><strong>Scheduled Due:</strong> ' + t.formatted_due + '</div>' +
                     (t.formatted_completed ? ('<div style="grid-column:span 2; color:#15803d;"><strong>Completed:</strong> ' + t.formatted_completed + ' by ' + escapeHtml(t.completed_by_username || t.completed_by) + '</div>') : '') +
                 '</div>' +
             '</div>' +
-            '<h4 style="font-size:0.95rem; font-weight:700; border-top:1px solid var(--border,#e2e8f0); padding-top:14px; margin-top:14px;">Audit &amp; Lifecycle Timeline</h4>' +
-            '<div class="task-timeline">' + (timelineHtml || '<div style="color:#94a3b8;">No history recorded yet.</div>') + '</div>';
+            '<h4 style="font-size:0.92rem; font-weight:700; border-top:1px solid var(--border,#e2e8f0); padding-top:14px; margin-top:14px;">Activity &amp; Lifecycle Timeline</h4>' +
+            '<div class="task-timeline">' + (timelineHtml || '<div style="color:#94a3b8; font-size:0.85rem;">No history recorded yet.</div>') + '</div>';
 
             body.innerHTML = html;
         });
@@ -1092,35 +1146,37 @@ function loadRecurringSeries() {
                 var weekdayText = '';
                 if (s.recurrence_type === 'weekly' && s.recurrence_weekdays) {
                     var dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-                    weekdayText = s.recurrence_weekdays.split(',').map(function(d) { return dayNames[parseInt(d)] || ''; }).join(', ');
-                }
-                if (s.recurrence_type === 'monthly' && s.recurrence_month_days) {
-                    weekdayText = 'Days: ' + s.recurrence_month_days;
+                    weekdayText = 'Every ' + s.recurrence_weekdays.split(',').map(function(d) { return dayNames[parseInt(d)] || ''; }).join(' &bull; ');
+                } else if (s.recurrence_type === 'monthly' && s.recurrence_month_days) {
+                    weekdayText = 'Every ' + s.recurrence_month_days.replace('last', 'Last day of month');
+                } else if (s.recurrence_type === 'daily') {
+                    weekdayText = 'Every day';
                 }
 
-                html += '<div class="series-card" style="border:1px solid var(--border,#e2e8f0); border-radius:10px; padding:16px; margin-bottom:12px; background:var(--card,#fff); transition:box-shadow 0.2s;">' +
+                html += '<div class="series-card" style="border:1px solid var(--border,#e2e8f0); border-radius:10px; padding:16px; margin-bottom:12px; background:var(--surface,#fff);">' +
                     '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">' +
-                        '<div style="flex:1; min-width:200px;">' +
-                            '<div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">' +
-                                '<span style="font-size:0.72rem; font-weight:700; color:var(--primary,#7c3aed); text-transform:uppercase;">' + escapeHtml(s.task_type_name) + '</span>' +
+                        '<div style="flex:1; min-width:220px;">' +
+                            '<div style="display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;">' +
+                                '<span class="badge blue" style="font-size:0.72rem;">' + escapeHtml(s.task_type_name) + '</span>' +
                                 statusBadge +
-                                '<span style="font-size:0.72rem; padding:2px 8px; border-radius:4px; font-weight:600; background:#ede9fe; color:#7c3aed; border:1px solid #ddd6fe;">' + recLabel + '</span>' +
+                                '<span style="font-size:0.72rem; padding:2px 8px; border-radius:4px; font-weight:700; background:#ede9fe; color:#7c3aed; border:1px solid #ddd6fe;">' + recLabel + '</span>' +
                             '</div>' +
-                            '<div style="font-weight:700; font-size:0.95rem; color:var(--foreground,#0f172a);">' + escapeHtml(s.title) + '</div>' +
-                            '<div style="font-size:0.78rem; color:#64748b; margin-top:4px;">' +
-                                '<i class="fas fa-user-tag"></i> Assigned to: <strong>' + escapeHtml(s.assigned_to_username || s.assigned_to) + '</strong>' +
+                            '<div style="font-weight:700; font-size:0.98rem; color:var(--foreground,#0f172a);">' + escapeHtml(s.title) + '</div>' +
+                            '<div style="font-size:0.8rem; color:#64748b; margin-top:4px;">' +
+                                '<i class="fas fa-repeat"></i> ' + (weekdayText || recLabel) +
+                                ' &bull; <i class="fas fa-user-tag"></i> Assigned to: <strong>' + escapeHtml(s.assigned_to_username || s.assigned_to) + '</strong>' +
                                 ' &bull; <i class="fas fa-calendar-day"></i> ' + s.formatted_start + ' – ' + s.formatted_end +
-                                (weekdayText ? ' &bull; <i class="fas fa-calendar-week"></i> ' + weekdayText : '') +
                             '</div>' +
                         '</div>' +
                         '<div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">' +
-                            '<span style="font-size:0.72rem; padding:3px 8px; border-radius:4px; background:#dbeafe; color:#1e40af; font-weight:700;" title="Total Occurrences">' + (stats.total || 0) + ' total</span>' +
-                            '<span style="font-size:0.72rem; padding:3px 8px; border-radius:4px; background:#fef3c7; color:#92400e; font-weight:700;" title="Pending">' + (stats.pending || 0) + ' pending</span>' +
-                            '<span style="font-size:0.72rem; padding:3px 8px; border-radius:4px; background:#dcfce7; color:#166534; font-weight:700;" title="Completed">' + (stats.completed || 0) + ' done</span>' +
+                            '<span style="font-size:0.75rem; padding:3px 8px; border-radius:4px; background:#dbeafe; color:#1e40af; font-weight:700;" title="Total Occurrences">' + (stats.total || 0) + ' total</span>' +
+                            '<span style="font-size:0.75rem; padding:3px 8px; border-radius:4px; background:#fef3c7; color:#92400e; font-weight:700;" title="Pending">' + (stats.pending || 0) + ' pending</span>' +
+                            '<span style="font-size:0.75rem; padding:3px 8px; border-radius:4px; background:#fee2e2; color:#b91c1c; font-weight:700;" title="Overdue">' + (stats.overdue || 0) + ' overdue</span>' +
+                            '<span style="font-size:0.75rem; padding:3px 8px; border-radius:4px; background:#dcfce7; color:#166534; font-weight:700;" title="Completed">' + (stats.completed || 0) + ' done</span>' +
                         '</div>' +
                     '</div>' +
                     '<div style="display:flex; gap:8px; margin-top:12px; border-top:1px solid var(--border,#f1f5f9); padding-top:10px;">' +
-                        '<button type="button" class="btn btn-sm btn-outline" onclick="toggleSeriesOccurrences(' + s.id + ', this)"><i class="fas fa-list"></i> Occurrence History</button>' +
+                        '<button type="button" class="btn btn-sm btn-outline" onclick="toggleSeriesOccurrences(' + s.id + ', this)"><i class="fas fa-list"></i> View Occurrence History</button>' +
                         (!s.is_stopped ? '<button type="button" class="btn btn-sm btn-outline" style="color:#dc2626; border-color:#fecaca;" onclick="stopSeries(' + s.id + ', \'' + escapeJs(s.title) + '\')"><i class="fas fa-stop"></i> Stop Series</button>' : '') +
                     '</div>' +
                     '<div id="series-occurrences-' + s.id + '" style="display:none; margin-top:10px;"></div>' +
@@ -1154,15 +1210,15 @@ function toggleSeriesOccurrences(seriesId, btn) {
                 return;
             }
 
-            var html = '<table class="data-table" style="font-size:0.82rem;">' +
-                '<thead><tr><th>Date</th><th>Due Time</th><th>Status</th><th>Completed By</th><th>Actions</th></tr></thead><tbody>';
+            var html = '<table class="data-table" style="font-size:0.82rem; margin-top:8px;">' +
+                '<thead><tr><th>Date</th><th>Due Time</th><th>Status</th><th>Completed By</th><th style="text-align:right;">Actions</th></tr></thead><tbody>';
 
             data.data.occurrences.forEach(function(occ) {
                 var statusCls = occ.is_overdue ? 'status-badge-overdue' : 'status-badge-' + occ.status.replace('_', '-');
                 var statusLabel = occ.is_overdue ? 'Overdue' : occ.status.replace('_', ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
 
                 html += '<tr>' +
-                    '<td>' + occ.formatted_date + '</td>' +
+                    '<td><strong>' + occ.formatted_date + '</strong></td>' +
                     '<td>' + occ.formatted_due + '</td>' +
                     '<td><span class="' + statusCls + '" style="font-size:0.72rem; padding:2px 8px; border-radius:4px; font-weight:700;">' + statusLabel + '</span></td>' +
                     '<td>' + (occ.completed_by_username ? escapeHtml(occ.completed_by_username) : '—') + '</td>' +

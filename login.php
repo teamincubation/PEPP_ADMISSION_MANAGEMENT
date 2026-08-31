@@ -117,7 +117,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$locked) {
                 }
                 if ($valid) {
                     $role = $row['role'];
-                    $pdo->prepare("UPDATE admins SET last_login_at = NOW() WHERE id = ?")->execute([$row['id']]);
+                    $pdo->prepare("UPDATE admins SET last_login_at = ? WHERE id = ?")->execute([date('Y-m-d H:i:s'), $row['id']]);
                 }
             }
         } else {
