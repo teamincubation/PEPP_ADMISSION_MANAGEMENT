@@ -611,6 +611,12 @@ try {
 
         // Copy plan (strictly preserving plan_type and total_days)
         $title = $plan['title'] . ' (Copy)';
+        $new_start_date = trim($_POST['new_start_date'] ?? $_POST['start_date'] ?? '');
+        $new_end_date = trim($_POST['new_end_date'] ?? $_POST['end_date'] ?? '');
+
+        $target_start = !empty($new_start_date) ? $new_start_date : $plan['start_date'];
+        $target_end = !empty($new_end_date) ? $new_end_date : $plan['end_date'];
+
         $stmt_ins = $pdo->prepare("
             INSERT INTO study_plans (
                 title, academic_year, course_id, description,
@@ -620,7 +626,7 @@ try {
         ");
         $stmt_ins->execute([
             $title, $plan['academic_year'], $plan['course_id'], $plan['description'],
-            $plan['cover_image'], $plan['theme'], $plan['layout'], $plan['start_date'], $plan['end_date'],
+            $plan['cover_image'], $plan['theme'], $plan['layout'], $target_start, $target_end,
             'draft', $plan['is_template'], $plan['custom_settings'],
             $plan['plan_type'] ?? 'date_wise',
             !empty($plan['total_days']) ? (int)$plan['total_days'] : null,
@@ -628,8 +634,8 @@ try {
         ]);
         $new_id = $pdo->lastInsertId();
 
-        // Copy activities (exclude deleted ones, assign new activity_uids, do not copy completion analytics)
-        $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 ORDER BY activity_date ASC, sort_order ASC");
+        // Copy activities (exclude deleted ones, assign new activity_uids, map date by day offset if start_date changed, do not copy completion analytics)
+        $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 ORDER BY activity_date ASC, sort_order ASC, id ASC");
         $stmt_act->execute([$id]);
         $activities = $stmt_act->fetchAll();
 
@@ -642,10 +648,29 @@ try {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
 
+        $is_date_wise = ($plan['plan_type'] ?? 'date_wise') === 'date_wise';
+        $should_remap_dates = $is_date_wise && !empty($target_start) && ($target_start !== $plan['start_date']);
+
         foreach ($activities as $act) {
             $new_uid = 'SPA-' . bin2hex(random_bytes(10));
+            $act_date = $act['activity_date'];
+
+            // Resolve relative day number
+            if (!empty($act['day_number']) && (int)$act['day_number'] > 0) {
+                $day_num = (int)$act['day_number'];
+            } elseif (!empty($act['activity_date']) && !empty($plan['start_date'])) {
+                $diff_days = (int)round((strtotime($act['activity_date']) - strtotime($plan['start_date'])) / 86400);
+                $day_num = max(1, $diff_days + 1);
+            } else {
+                $day_num = 1;
+            }
+
+            if ($should_remap_dates) {
+                $act_date = date('Y-m-d', strtotime($target_start . ' +' . ($day_num - 1) . ' days'));
+            }
+
             $stmt_act_ins->execute([
-                $new_id, $act['activity_date'], $act['day_number'], $act['sort_order'], $act['chapter'],
+                $new_id, $act_date, $day_num, $act['sort_order'], $act['chapter'],
                 !empty($act['topic']) ? $act['topic'] : ($act['subject'] ?? null), $act['activity_title'], $act['activity_description'], $act['activity_type'],
                 $act['faculty'], $act['estimated_duration'], $act['priority'], $act['difficulty_level'], $act['resource_links'],
                 $act['custom_activity_badge'], $act['custom_activity_color'], $act['custom_activity_icon'], $new_uid
@@ -934,9 +959,31 @@ try {
             }
         }
 
+        // Fetch plan info to enforce strict plan boundary validations
+        $stmt_p_info = $pdo->prepare("SELECT id, plan_type, start_date, end_date, total_days FROM study_plans WHERE id = ?");
+        $stmt_p_info->execute([$plan_id]);
+        $plan_info = $stmt_p_info->fetch(PDO::FETCH_ASSOC);
+        $is_p_date_wise = ($plan_info['plan_type'] ?? 'date_wise') === 'date_wise';
+        $p_start = $plan_info['start_date'] ?? null;
+        $p_end = $plan_info['end_date'] ?? null;
+
         // ── CORE DATA-INTEGRITY VALIDATIONS ──────────────────────────────
-        // Prevent cross-plan manipulation and ID/UID mismatch forgery.
+        // Prevent cross-plan manipulation, boundary leaks, and ID/UID mismatch forgery.
         foreach ($activities as $act) {
+            // Strict date boundary validation: Never silently move or clamp an activity date!
+            if ($is_p_date_wise && !empty($p_start) && !empty($p_end)) {
+                $act_date = trim($act['activity_date'] ?? '');
+                if (empty($act_date) || $act_date < $p_start || $act_date > $p_end) {
+                    $pdo->rollBack();
+                    $act_title = !empty($act['activity_title']) ? $act['activity_title'] : 'Untitled Activity';
+                    echo json_encode([
+                        'success' => false,
+                        'message' => "Validation Error: Activity '{$act_title}' has date '{$act_date}' which is outside the Study Plan date range ({$p_start} to {$p_end}). Activities must never be silently reassigned."
+                    ]);
+                    exit();
+                }
+            }
+
             $act_id = isset($act['id']) && $act['id'] !== '' ? (int)$act['id'] : 0;
             $act_uid = isset($act['activity_uid']) && $act['activity_uid'] !== '' ? trim($act['activity_uid']) : null;
 

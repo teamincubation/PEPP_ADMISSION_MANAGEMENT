@@ -167,14 +167,25 @@ class StudentStudyPlanAnalytics {
         $plan_title = $plan_info['title'] ?? ('Study Plan #' . $study_plan_id);
         $total_plan_calendar_days = self::calculatePlanCalendarDays($plan_info['start_date'] ?? null, $plan_info['end_date'] ?? null);
 
-        // Fetch all active study plan activities
-        $stmt_act = $pdo->prepare("
-            SELECT act.*
-            FROM study_plan_activities act
-            WHERE act.study_plan_id = ? AND act.is_deleted = 0
-            ORDER BY " . ($plan_type === 'date_wise' ? 'act.activity_date ASC, act.sort_order ASC, act.id ASC' : 'act.day_number ASC, act.sort_order ASC, act.id ASC')
-        );
-        $stmt_act->execute([$study_plan_id]);
+        // Fetch all active study plan activities strictly scoped to this study plan
+        if ($plan_type === 'date_wise' && !empty($plan_info['start_date']) && !empty($plan_info['end_date'])) {
+            $stmt_act = $pdo->prepare("
+                SELECT act.*
+                FROM study_plan_activities act
+                WHERE act.study_plan_id = ? AND act.is_deleted = 0
+                  AND act.activity_date >= ? AND act.activity_date <= ?
+                ORDER BY act.activity_date ASC, act.sort_order ASC, act.id ASC
+            ");
+            $stmt_act->execute([$study_plan_id, $plan_info['start_date'], $plan_info['end_date']]);
+        } else {
+            $stmt_act = $pdo->prepare("
+                SELECT act.*
+                FROM study_plan_activities act
+                WHERE act.study_plan_id = ? AND act.is_deleted = 0
+                ORDER BY " . ($plan_type === 'date_wise' ? 'act.activity_date ASC, act.sort_order ASC, act.id ASC' : 'CAST(act.day_number AS UNSIGNED) ASC, act.sort_order ASC, act.id ASC')
+            );
+            $stmt_act->execute([$study_plan_id]);
+        }
         $activities = $stmt_act->fetchAll(PDO::FETCH_ASSOC);
 
         $total_tasks = count($activities);
@@ -195,10 +206,10 @@ class StudentStudyPlanAnalytics {
                 (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
                 OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
             )
-            WHERE LOWER(an.student_email) = LOWER(?) AND an.study_plan_id = ? AND an.action_type = 'complete_activity' AND act.is_deleted = 0
+            WHERE LOWER(an.student_email) = LOWER(?) AND an.study_plan_id = ? AND act.study_plan_id = ? AND an.action_type = 'complete_activity' AND act.is_deleted = 0
             ORDER BY an.id ASC
         ");
-        $stmt_all_logs->execute([$email, $study_plan_id]);
+        $stmt_all_logs->execute([$email, $study_plan_id, $study_plan_id]);
         $all_logs = $stmt_all_logs->fetchAll(PDO::FETCH_ASSOC);
 
         $effective_completions = [];

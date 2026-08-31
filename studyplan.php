@@ -353,7 +353,7 @@ if ($is_logged_in) {
                 FROM study_plans sp
                 JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
                 WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND sa.assignment_type = 'course' AND sa.assigned_value = ?
-                ORDER BY sp.start_date ASC
+                ORDER BY sp.start_date DESC, sp.id DESC
             ");
             $stmt->execute([$_GET['course_name']]);
             $plans = $stmt->fetchAll();
@@ -363,7 +363,7 @@ if ($is_logged_in) {
                 FROM study_plans sp
                 JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
                 WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND sa.assignment_type = 'form' AND sa.assigned_value = ?
-                ORDER BY sp.start_date ASC
+                ORDER BY sp.start_date DESC, sp.id DESC
             ");
             $stmt->execute([$_GET['form_id']]);
             $plans = $stmt->fetchAll();
@@ -405,11 +405,28 @@ if ($is_logged_in && $selected_plan_id > 0) {
         $selected_plan = $stmt_validate->fetch();
 
         if ($selected_plan) {
-            $stmt = $pdo->prepare("SELECT * FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0 ORDER BY activity_date ASC, sort_order ASC");
-            $stmt->execute([$selected_plan_id]);
+            $is_date_wise = ($selected_plan['plan_type'] ?? 'date_wise') === 'date_wise';
+            if ($is_date_wise && !empty($selected_plan['start_date']) && !empty($selected_plan['end_date'])) {
+                $stmt = $pdo->prepare("
+                    SELECT *
+                    FROM study_plan_activities
+                    WHERE study_plan_id = ? AND is_deleted = 0
+                      AND activity_date >= ? AND activity_date <= ?
+                    ORDER BY activity_date ASC, sort_order ASC, id ASC
+                ");
+                $stmt->execute([$selected_plan_id, $selected_plan['start_date'], $selected_plan['end_date']]);
+            } else {
+                $stmt = $pdo->prepare("
+                    SELECT *
+                    FROM study_plan_activities
+                    WHERE study_plan_id = ? AND is_deleted = 0
+                    ORDER BY CAST(day_number AS UNSIGNED) ASC, activity_date ASC, sort_order ASC, id ASC
+                ");
+                $stmt->execute([$selected_plan_id]);
+            }
             $activities = $stmt->fetchAll();
 
-            // Fetch completions using activity_uid mapping, falling back to activity_id for legacy records
+            // Fetch completions using activity_uid mapping, strictly scoped to this study plan
             $stmt_comp = $pdo->prepare("
                 SELECT act.id, MIN(an.created_at) as created_at
                 FROM study_plan_analytics an
@@ -417,13 +434,13 @@ if ($is_logged_in && $selected_plan_id > 0) {
                     (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
                     OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
                 )
-                WHERE an.student_email = ? AND an.study_plan_id = ?
+                WHERE an.student_email = ? AND an.study_plan_id = ? AND act.study_plan_id = ?
                   AND an.action_type = 'complete_activity'
                   AND an.completion_status = 'completed'
                   AND act.is_deleted = 0
                 GROUP BY act.id
             ");
-            $stmt_comp->execute([$email, $selected_plan_id]);
+            $stmt_comp->execute([$email, $selected_plan_id, $selected_plan_id]);
             $completions = $stmt_comp->fetchAll(PDO::FETCH_KEY_PAIR);
         }
     } catch (Exception $e) {

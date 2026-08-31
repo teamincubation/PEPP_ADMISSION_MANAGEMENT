@@ -914,7 +914,7 @@ if (isset($_GET['action'])) {
                     (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
                     OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
                 )
-                WHERE u.pepp_course = ? AND u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0
+                WHERE u.pepp_course = ? AND u.status = 'approved' AND an.study_plan_id = act.study_plan_id AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0
             ", [$course_name]);
 
             $avg_comp = $total_tasks > 0 ? round(($completed_tasks / $total_tasks) * 100) : 0;
@@ -2428,7 +2428,7 @@ if ($source === 'courses' || $source === 'mentoring') {
             (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
             OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
         )
-        WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0 AND $assigned_plans_subquery
+        WHERE u.status = 'approved' AND an.study_plan_id = act.study_plan_id AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0 AND $assigned_plans_subquery
     ");
 
     $kpis['attendance_pct'] = $total_available_tasks > 0 ? round(($total_completed_tasks / $total_available_tasks) * 100) : 0;

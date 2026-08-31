@@ -221,11 +221,11 @@ if ($total_live_sessions > 0) {
             (an.activity_uid = spa.activity_uid AND spa.activity_uid IS NOT NULL AND spa.activity_uid != '')
             OR (an.activity_id = spa.id AND (spa.activity_uid IS NULL OR spa.activity_uid = ''))
         )
-        WHERE spa.study_plan_id = ? AND spa.is_deleted = 0
+        WHERE spa.study_plan_id = ? AND an.study_plan_id = ? AND spa.is_deleted = 0
           AND LOWER(spa.activity_type) IN ('live session', 'live sessions', 'watch live session', 'watch live sessions')
           AND LOWER(an.student_email) = LOWER(?) AND an.action_type = 'complete_activity' AND an.completion_status = 'completed'
     ");
-    $stmt_live_att->execute([$study_plan_id, $email]);
+    $stmt_live_att->execute([$study_plan_id, $study_plan_id, $email]);
     $attended_live_sessions = (int)$stmt_live_att->fetchColumn();
 }
 $live_att_pct = $total_live_sessions > 0 ? round(($attended_live_sessions / $total_live_sessions) * 100) : 100;

@@ -2940,6 +2940,14 @@ include 'includes/admin_nav.php';
 
         if (isDateWise) {
             endInput = document.getElementById('plan-end').value;
+            // Strict date range validation: Block save if any activity date falls outside the active plan range
+            for (var i = 0; i < activities.length; i++) {
+                var a = activities[i];
+                if (a.activity_date && (a.activity_date < startInput || a.activity_date > endInput)) {
+                    alert('Validation Error: Activity "' + (a.activity_title || 'Untitled') + '" has date ' + a.activity_date + ' which is outside the Study Plan date range (' + startInput + ' to ' + endInput + '). Please correct the date before saving.');
+                    return;
+                }
+            }
         } else {
             var endD = new Date(2000, 0, 1);
             endD.setDate(endD.getDate() + totalDays - 1);
@@ -3059,6 +3067,20 @@ include 'includes/admin_nav.php';
         if (isReadOnlyMode || isBulkMoveInProgress || studyPlanId <= 0) {
             hasUnsavedChanges = true;
             return;
+        }
+
+        var isDateWise = document.getElementById('type-date-wise').checked;
+        if (isDateWise) {
+            var startVal = document.getElementById('plan-start').value;
+            var endVal = document.getElementById('plan-end').value;
+            if (startVal && endVal) {
+                for (var i = 0; i < activities.length; i++) {
+                    var a = activities[i];
+                    if (a.activity_date && (a.activity_date < startVal || a.activity_date > endVal)) {
+                        return; // Block auto-save if an activity date is outside valid plan range
+                    }
+                }
+            }
         }
 
         var indicator = document.getElementById('autosave-indicator');
