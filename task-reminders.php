@@ -34,10 +34,10 @@ try {
 } catch (Exception $e) {}
 
 // Load summary metrics for current admin
-$summary = task_reminders_get_summary($pdo, $current_admin_id, $current_username);
+$summary = task_reminders_get_summary($pdo, $current_admin_id, $current_username, $is_super);
 
 // KPI Stats
-$my_tasks_all = task_reminders_list_my_tasks($pdo, $current_admin_id, $current_username);
+$my_tasks_all = task_reminders_list_my_tasks($pdo, $current_admin_id, $current_username, [], $is_super);
 $my_completed_count = 0;
 $my_overdue_count = 0;
 $my_pending_count = 0;
@@ -59,7 +59,8 @@ foreach ($my_tasks_all as $t) {
 }
 
 $assigned_by_me_all = task_reminders_list_assigned_by_me($pdo, $current_admin_id, $current_username, [], $is_super);
-$assigned_by_me_total = count($assigned_by_me_all);$extra_head = '
+$assigned_by_me_total = count($assigned_by_me_all);
+$extra_head = '
 <style>
 /* ── Task Reminders Module Modernized Styles ── */
 .task-kpi-grid {
@@ -383,7 +384,7 @@ include 'includes/admin_nav.php';
         </div>
         <div>
             <div class="task-kpi-val" id="kpi-my-pending"><?php echo $my_pending_count; ?></div>
-            <div class="task-kpi-lbl">My Pending</div>
+            <div class="task-kpi-lbl"><?php echo $is_super ? 'Global Pending' : 'My Pending'; ?></div>
         </div>
     </div>
 
@@ -393,7 +394,7 @@ include 'includes/admin_nav.php';
         </div>
         <div>
             <div class="task-kpi-val" id="kpi-my-overdue"><?php echo $my_overdue_count; ?></div>
-            <div class="task-kpi-lbl">My Overdue</div>
+            <div class="task-kpi-lbl"><?php echo $is_super ? 'Global Overdue' : 'My Overdue'; ?></div>
         </div>
     </div>
 
@@ -413,7 +414,7 @@ include 'includes/admin_nav.php';
         </div>
         <div>
             <div class="task-kpi-val" id="kpi-assigned-by-me"><?php echo $assigned_by_me_total; ?></div>
-            <div class="task-kpi-lbl">Assigned by Me</div>
+            <div class="task-kpi-lbl"><?php echo $is_super ? 'Delegated &amp; Team' : 'Assigned by Me'; ?></div>
         </div>
     </div>
 
@@ -423,7 +424,7 @@ include 'includes/admin_nav.php';
         </div>
         <div>
             <div class="task-kpi-val" id="kpi-my-completed"><?php echo $my_completed_count; ?></div>
-            <div class="task-kpi-lbl">My Completed</div>
+            <div class="task-kpi-lbl"><?php echo $is_super ? 'Completed Tasks' : 'My Completed'; ?></div>
         </div>
     </div>
 </div>
@@ -493,14 +494,14 @@ include 'includes/admin_nav.php';
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════════ -->
-<!-- TAB 2: ASSIGNED BY ME (DELEGATION & MONITORING)                        -->
+<!-- TAB 2: ASSIGNED BY ME / GLOBAL TASK OVERSIGHT                          -->
 <!-- ══════════════════════════════════════════════════════════════════════ -->
 <div id="pane-assigned-by-me" class="task-tab-pane">
     <div class="panel">
         <div class="panel-head" style="justify-content:space-between; flex-wrap:wrap; gap:10px;">
             <div style="display:flex; align-items:center; gap:10px;">
                 <span class="head-icon" style="background:#ede9fe; color:#7c3aed;"><i class="fas fa-binoculars"></i></span>
-                <h2>Tasks Assigned by Me (Monitoring)</h2>
+                <h2><?php echo $is_super ? 'Global Task Oversight' : 'Tasks Assigned by Me (Monitoring)'; ?></h2>
             </div>
             <div class="task-subfilters">
                 <span class="subfilter-pill active" onclick="filterAssignedByMe('all', this)">All</span>
@@ -512,14 +513,32 @@ include 'includes/admin_nav.php';
         </div>
         <div class="panel-body">
             <div class="filter-bar" style="margin-bottom:18px;">
-                <div class="field" style="flex:1;">
+                <div class="field" style="flex:1; min-width:200px;">
                     <input type="text" id="assigned-search" placeholder="Search delegated tasks by title..." onkeyup="debounceLoadAssigned()">
                 </div>
+                <?php if ($is_super): ?>
+                <div class="field">
+                    <select id="assigned-by-filter" onchange="loadAssignedByMe()">
+                        <option value="">All Assigners</option>
+                        <?php foreach ($all_admins as $adm): ?>
+                            <option value="<?php echo e($adm['username']); ?>"><?php echo e($adm['full_name'] ?: $adm['username']); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <?php endif; ?>
                 <div class="field">
                     <select id="assigned-to-filter" onchange="loadAssignedByMe()">
                         <option value="">All Assignees</option>
                         <?php foreach ($all_admins as $adm): ?>
                             <option value="<?php echo e($adm['username']); ?>"><?php echo e($adm['full_name'] ?: $adm['username']); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="field">
+                    <select id="assigned-type-filter" onchange="loadAssignedByMe()">
+                        <option value="">All Task Types</option>
+                        <?php foreach ($active_task_types as $tt): ?>
+                            <option value="<?php echo $tt['id']; ?>"><?php echo e($tt['name']); ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
@@ -849,6 +868,8 @@ function loadMyTasks() {
 function loadAssignedByMe() {
     var searchEl = document.getElementById('assigned-search');
     var search = searchEl ? searchEl.value : '';
+    var assignerEl = document.getElementById('assigned-by-filter');
+    var assigner = assignerEl ? assignerEl.value : '';
     var assigneeEl = document.getElementById('assigned-to-filter');
     var assignee = assigneeEl ? assigneeEl.value : '';
     var typeEl = document.getElementById('assigned-type-filter');
@@ -857,6 +878,7 @@ function loadAssignedByMe() {
     if (!container) return;
 
     var url = 'api/task-reminders.php?action=list_assigned_by_me&status=' + encodeURIComponent(currentAssignedStatusFilter) +
+              '&assigned_by_username=' + encodeURIComponent(assigner) +
               '&assigned_to_username=' + encodeURIComponent(assignee) +
               '&task_type_id=' + encodeURIComponent(typeId) +
               '&search=' + encodeURIComponent(search);

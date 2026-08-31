@@ -82,7 +82,7 @@ try {
 
         // 1. Lightweight Polling Summary (<2ms)
         case 'get_summary':
-            $summary = task_reminders_get_summary($pdo, $current_admin_id, $current_username);
+            $summary = task_reminders_get_summary($pdo, $current_admin_id, $current_username, $is_super);
             echo json_encode(['success' => true, 'summary' => $summary]);
             exit;
 
@@ -94,7 +94,7 @@ try {
                 echo json_encode(['success' => false, 'message' => 'Invalid task ID.']);
                 exit;
             }
-            $task = task_reminders_verify_due_alert($pdo, $task_id, $current_admin_id, $current_username);
+            $task = task_reminders_verify_due_alert($pdo, $task_id, $current_admin_id, $current_username, $is_super);
             if ($task) {
                 echo json_encode(['success' => true, 'valid' => true, 'task' => $task]);
             } else {
@@ -113,26 +113,30 @@ try {
             $filters = [
                 'status' => $_GET['status'] ?? '',
                 'task_type_id' => $_GET['task_type_id'] ?? '',
-                'search' => $_GET['search'] ?? ''
+                'search' => $_GET['search'] ?? '',
+                'all_tasks' => !empty($_GET['all_tasks'])
             ];
-            $tasks = task_reminders_list_my_tasks($pdo, $current_admin_id, $current_username, $filters);
+            $tasks = task_reminders_list_my_tasks($pdo, $current_admin_id, $current_username, $filters, $is_super);
             echo json_encode(['success' => true, 'tasks' => $tasks]);
             exit;
 
-        // 5. List Assigned by Me (Tab 2 — Admin A monitoring Admin B)
+        // 5. List Assigned by Me (Tab 2 — Admin A monitoring Admin B / Super Admin Global Oversight)
         case 'list_assigned_by_me':
             $filters = [
                 'status' => $_GET['status'] ?? '',
+                'assigned_by_username' => $_GET['assigned_by_username'] ?? '',
                 'assigned_to_username' => $_GET['assigned_to_username'] ?? '',
                 'task_type_id' => $_GET['task_type_id'] ?? '',
                 'search' => $_GET['search'] ?? '',
+                'date_from' => $_GET['date_from'] ?? '',
+                'date_to' => $_GET['date_to'] ?? '',
                 'all_assigned' => !empty($_GET['all_assigned'])
             ];
             $tasks = task_reminders_list_assigned_by_me($pdo, $current_admin_id, $current_username, $filters, $is_super);
             echo json_encode(['success' => true, 'tasks' => $tasks]);
             exit;
 
-        // 6. List History (Tab 3 — Comprehensive lifecycle timeline)
+        // 6. List History (Tab 3 — Scoped lifecycle timeline)
         case 'list_history':
             $filters = [
                 'event_type' => $_GET['event_type'] ?? '',
@@ -143,7 +147,7 @@ try {
             ];
             $limit = min(200, max(10, (int)($_GET['limit'] ?? 100)));
             $offset = max(0, (int)($_GET['offset'] ?? 0));
-            $history = task_reminders_list_history($pdo, $filters, $limit, $offset);
+            $history = task_reminders_list_history($pdo, $filters, $limit, $offset, $current_admin_id, $current_username, $is_super);
             echo json_encode(['success' => true, 'history' => $history]);
             exit;
 
@@ -319,10 +323,11 @@ try {
             }
             exit;
 
-        // 16. List Active Recurring Series (for Admin A monitoring)
+        // 16. List Active Recurring Series (for monitoring)
         case 'list_series':
             $filters = [
                 'status' => $_GET['status'] ?? 'active', // active|stopped|all
+                'assigned_by_username' => $_GET['assigned_by_username'] ?? '',
                 'assigned_to_username' => $_GET['assigned_to_username'] ?? ''
             ];
             $series = task_reminders_list_series($pdo, $current_admin_id, $current_username, $filters, $is_super);

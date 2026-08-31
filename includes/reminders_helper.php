@@ -606,7 +606,7 @@ function task_types_usage_count(PDO $pdo, int $id): int {
  * Task Reminders — Lightweight Header Summary
  * Returns counts and due task IDs to keep response payload minimal (<2ms).
  */
-function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_username): array {
+function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_username, bool $is_super_admin = false): array {
     task_reminders_ensure_schema($pdo);
     $res = [
         'pending_count' => 0,
@@ -616,7 +616,8 @@ function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_usern
         'assigned_by_me_pending' => 0,
         'new_notifications' => 0,
         'due_task_ids' => [],
-        'server_time' => date('Y-m-d H:i:s')
+        'server_time' => date('Y-m-d H:i:s'),
+        'is_super_admin' => $is_super_admin
     ];
 
     if (!reminders_table_exists($pdo)) {
@@ -624,53 +625,100 @@ function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_usern
     }
 
     try {
-        // Query assigned active tasks for this admin
-        $sql = "SELECT id, remind_at, status FROM reminders
+        if ($is_super_admin) {
+            // Super Admin: Global overview counts
+            $sql = "SELECT id, remind_at, status FROM reminders
+                    WHERE status IN ('pending', 'in_progress')
+                    AND (is_series_parent = 0 OR is_series_parent IS NULL)";
+            $stmt = $pdo->query($sql);
+            $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $now = time();
+            foreach ($tasks as $t) {
+                $remindTime = strtotime($t['remind_at']);
+                $isOverdue = ($remindTime < $now);
+
+                if ($t['status'] === 'in_progress') {
+                    $res['in_progress_count']++;
+                } else {
+                    $res['pending_count']++;
+                }
+
+                if ($isOverdue) {
+                    $res['overdue_count']++;
+                }
+
+                if ($remindTime <= $now) {
+                    $res['due_count']++;
+                    $res['due_task_ids'][] = (int)$t['id'];
+                }
+            }
+
+            // Total global active delegated tasks
+            $stmtAssigned = $pdo->query("SELECT COUNT(*) FROM reminders
+                WHERE status IN ('pending', 'in_progress')
+                AND (is_series_parent = 0 OR is_series_parent IS NULL)");
+            $res['assigned_by_me_pending'] = (int)$stmtAssigned->fetchColumn();
+
+            // Unread notifications for super admin
+            try {
+                $stmtNotif = $pdo->prepare("SELECT COUNT(*) FROM task_reminder_notifications
+                    WHERE (recipient_admin_id = ? OR (recipient_admin_id IS NULL AND recipient_username = ?)) AND is_read = 0");
+                $stmtNotif->execute([$admin_id, $admin_username]);
+                $res['new_notifications'] = (int)$stmtNotif->fetchColumn();
+            } catch (Exception $eN) {}
+
+        } else {
+            // Normal Admin: Strictly assigned to this admin
+            $sql = "SELECT id, remind_at, status FROM reminders
+                    WHERE status IN ('pending', 'in_progress')
+                    AND (is_series_parent = 0 OR is_series_parent IS NULL)
+                    AND (assigned_to_admin_id = ? OR (assigned_to_admin_id IS NULL AND (assigned_to_username = ? OR assigned_to = ? OR assigned_to = '__ALL__')))";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$admin_id, $admin_username, $admin_username]);
+            $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $now = time();
+            foreach ($tasks as $t) {
+                $remindTime = strtotime($t['remind_at']);
+                $isOverdue = ($remindTime < $now);
+
+                if ($t['status'] === 'in_progress') {
+                    $res['in_progress_count']++;
+                } else {
+                    $res['pending_count']++;
+                }
+
+                if ($isOverdue) {
+                    $res['overdue_count']++;
+                }
+
+                if ($remindTime <= $now) {
+                    $res['due_count']++;
+                    $res['due_task_ids'][] = (int)$t['id'];
+                }
+            }
+
+            // Assigned by me pending tasks count (delegated by this admin as actual assigner)
+            $stmtAssigned = $pdo->prepare("SELECT COUNT(*) FROM reminders
                 WHERE status IN ('pending', 'in_progress')
                 AND (is_series_parent = 0 OR is_series_parent IS NULL)
-                AND (assigned_to_admin_id = ? OR assigned_to_username = ? OR assigned_to = ? OR assigned_to = '__ALL__')";
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([$admin_id, $admin_username, $admin_username]);
-        $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                AND (assigned_by_admin_id = ? OR (assigned_by_admin_id IS NULL AND (assigned_by_username = ? OR (assigned_by_username IS NULL AND (created_by_admin_id = ? OR created_by_username = ?)))))
+                AND (assigned_to_admin_id != ? OR (assigned_to_admin_id IS NULL AND assigned_to_username != ? AND assigned_to != ?))");
+            $stmtAssigned->execute([
+                $admin_id, $admin_username, $admin_id, $admin_username,
+                $admin_id, $admin_username, $admin_username
+            ]);
+            $res['assigned_by_me_pending'] = (int)$stmtAssigned->fetchColumn();
 
-        $now = time();
-        foreach ($tasks as $t) {
-            $remindTime = strtotime($t['remind_at']);
-            $isOverdue = ($remindTime < $now);
-
-            if ($t['status'] === 'in_progress') {
-                $res['in_progress_count']++;
-            } else {
-                $res['pending_count']++;
-            }
-
-            if ($isOverdue) {
-                $res['overdue_count']++;
-            }
-
-            // Is it due right now or past due?
-            if ($remindTime <= $now) {
-                $res['due_count']++;
-                $res['due_task_ids'][] = (int)$t['id'];
-            }
+            // Unread notifications for this admin
+            try {
+                $stmtNotif = $pdo->prepare("SELECT COUNT(*) FROM task_reminder_notifications
+                    WHERE (recipient_admin_id = ? OR (recipient_admin_id IS NULL AND recipient_username = ?)) AND is_read = 0");
+                $stmtNotif->execute([$admin_id, $admin_username]);
+                $res['new_notifications'] = (int)$stmtNotif->fetchColumn();
+            } catch (Exception $eN) {}
         }
-
-        // Assigned by me pending tasks count
-        $stmtAssigned = $pdo->prepare("SELECT COUNT(*) FROM reminders
-            WHERE status IN ('pending', 'in_progress')
-            AND (is_series_parent = 0 OR is_series_parent IS NULL)
-            AND (created_by_admin_id = ? OR created_by_username = ? OR created_by = ?)
-            AND (assigned_to_admin_id != ? AND assigned_to_username != ? AND assigned_to != ?)");
-        $stmtAssigned->execute([$admin_id, $admin_username, $admin_username, $admin_id, $admin_username, $admin_username]);
-        $res['assigned_by_me_pending'] = (int)$stmtAssigned->fetchColumn();
-
-        // Unread notifications count
-        try {
-            $stmtNotif = $pdo->prepare("SELECT COUNT(*) FROM task_reminder_notifications
-                WHERE (recipient_admin_id = ? OR recipient_username = ?) AND is_read = 0");
-            $stmtNotif->execute([$admin_id, $admin_username]);
-            $res['new_notifications'] = (int)$stmtNotif->fetchColumn();
-        } catch (Exception $eN) {}
 
     } catch (Exception $e) {
         error_log("task_reminders_get_summary error: " . $e->getMessage());
@@ -683,7 +731,7 @@ function task_reminders_get_summary(PDO $pdo, int $admin_id, string $admin_usern
  * Authoritative Server Due Verification
  * Checks if a specific task is genuinely due, pending/in_progress, and authorized for the current admin.
  */
-function task_reminders_verify_due_alert(PDO $pdo, int $task_id, int $admin_id, string $admin_username): ?array {
+function task_reminders_verify_due_alert(PDO $pdo, int $task_id, int $admin_id, string $admin_username, bool $is_super_admin = false): ?array {
     task_reminders_ensure_schema($pdo);
     if (!reminders_table_exists($pdo) || $task_id <= 0) {
         return null;
@@ -691,17 +739,30 @@ function task_reminders_verify_due_alert(PDO $pdo, int $task_id, int $admin_id, 
 
     try {
         $nowDate = date('Y-m-d H:i:s');
-        $sql = "SELECT r.*, tt.name as task_type_name
-                FROM reminders r
-                LEFT JOIN task_reminder_types tt ON tt.id = r.task_type_id
-                WHERE r.id = ?
-                AND r.status IN ('pending', 'in_progress')
-                AND (r.is_series_parent = 0 OR r.is_series_parent IS NULL)
-                AND r.remind_at <= ?
-                AND (r.assigned_to_admin_id = ? OR r.assigned_to_username = ? OR r.assigned_to = ? OR r.assigned_to = '__ALL__')
-                LIMIT 1";
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([$task_id, $nowDate, $admin_id, $admin_username, $admin_username]);
+        if ($is_super_admin) {
+            $sql = "SELECT r.*, tt.name as task_type_name
+                    FROM reminders r
+                    LEFT JOIN task_reminder_types tt ON tt.id = r.task_type_id
+                    WHERE r.id = ?
+                    AND r.status IN ('pending', 'in_progress')
+                    AND (r.is_series_parent = 0 OR r.is_series_parent IS NULL)
+                    AND r.remind_at <= ?
+                    LIMIT 1";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$task_id, $nowDate]);
+        } else {
+            $sql = "SELECT r.*, tt.name as task_type_name
+                    FROM reminders r
+                    LEFT JOIN task_reminder_types tt ON tt.id = r.task_type_id
+                    WHERE r.id = ?
+                    AND r.status IN ('pending', 'in_progress')
+                    AND (r.is_series_parent = 0 OR r.is_series_parent IS NULL)
+                    AND r.remind_at <= ?
+                    AND (r.assigned_to_admin_id = ? OR (r.assigned_to_admin_id IS NULL AND (r.assigned_to_username = ? OR r.assigned_to = ? OR r.assigned_to = '__ALL__')))
+                    LIMIT 1";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$task_id, $nowDate, $admin_id, $admin_username, $admin_username]);
+        }
         $task = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$task) {
@@ -724,7 +785,7 @@ function task_reminders_verify_due_alert(PDO $pdo, int $task_id, int $admin_id, 
 /**
  * List "My Tasks" for current logged-in admin with derived overdue state.
  */
-function task_reminders_list_my_tasks(PDO $pdo, int $admin_id, string $admin_username, array $filters = []): array {
+function task_reminders_list_my_tasks(PDO $pdo, int $admin_id, string $admin_username, array $filters = [], bool $is_super_admin = false): array {
     task_reminders_ensure_schema($pdo);
     if (!reminders_table_exists($pdo)) {
         return [];
@@ -732,8 +793,18 @@ function task_reminders_list_my_tasks(PDO $pdo, int $admin_id, string $admin_use
 
     try {
         $nowDate = date('Y-m-d H:i:s');
-        $where = ["(r.assigned_to_admin_id = ? OR r.assigned_to_username = ? OR r.assigned_to = ? OR r.assigned_to = '__ALL__')", "(r.is_series_parent = 0 OR r.is_series_parent IS NULL)"];
-        $params = [$admin_id, $admin_username, $admin_username];
+        $where = ["(r.is_series_parent = 0 OR r.is_series_parent IS NULL)"];
+        $params = [];
+
+        if ($is_super_admin && !empty($filters['all_tasks'])) {
+            // Global tasks for Super Admin if explicitly requested
+        } else {
+            // Normal Admin (or Super Admin personal my tasks): strictly assigned to current admin
+            $where[] = "(r.assigned_to_admin_id = ? OR (r.assigned_to_admin_id IS NULL AND (r.assigned_to_username = ? OR r.assigned_to = ? OR r.assigned_to = '__ALL__')))";
+            $params[] = $admin_id;
+            $params[] = $admin_username;
+            $params[] = $admin_username;
+        }
 
         // Filter by status tab if given
         $status_filter = strtolower(trim($filters['status'] ?? ''));
@@ -802,7 +873,7 @@ function task_reminders_list_my_tasks(PDO $pdo, int $admin_id, string $admin_use
 
 /**
  * List "Assigned by Me" Tasks (Admin A monitoring tasks assigned to Admin B).
- * Super Admins can optionally view all assigned tasks.
+ * Super Admins have global visibility with multi-filtering.
  */
 function task_reminders_list_assigned_by_me(PDO $pdo, int $admin_id, string $admin_username, array $filters = [], bool $is_super_admin = false): array {
     task_reminders_ensure_schema($pdo);
@@ -814,11 +885,21 @@ function task_reminders_list_assigned_by_me(PDO $pdo, int $admin_id, string $adm
         $where = ["(r.is_series_parent = 0 OR r.is_series_parent IS NULL)"];
         $params = [];
 
-        if (!$is_super_admin || empty($filters['all_assigned'])) {
-            $where[] = "(r.created_by_admin_id = ? OR r.created_by_username = ? OR r.created_by = ?)";
+        if (!$is_super_admin) {
+            // Normal Admin: Strictly tasks where they are the actual assigner
+            $where[] = "(r.assigned_by_admin_id = ? OR (r.assigned_by_admin_id IS NULL AND (r.assigned_by_username = ? OR (r.assigned_by_username IS NULL AND (r.created_by_admin_id = ? OR r.created_by_username = ?)))))";
             $params[] = $admin_id;
             $params[] = $admin_username;
+            $params[] = $admin_id;
             $params[] = $admin_username;
+        } else {
+            // Super Admin: Global oversight by default. If a specific assigner is selected in filter, apply it.
+            if (!empty($filters['assigned_by_username'])) {
+                $where[] = "(r.assigned_by_username = ? OR (r.assigned_by_username IS NULL AND (r.created_by_username = ? OR r.created_by = ?)))";
+                $params[] = $filters['assigned_by_username'];
+                $params[] = $filters['assigned_by_username'];
+                $params[] = $filters['assigned_by_username'];
+            }
         }
 
         $nowDate = date('Y-m-d H:i:s');
@@ -848,6 +929,16 @@ function task_reminders_list_assigned_by_me(PDO $pdo, int $admin_id, string $adm
         if (!empty($filters['task_type_id'])) {
             $where[] = "r.task_type_id = ?";
             $params[] = (int)$filters['task_type_id'];
+        }
+
+        if (!empty($filters['date_from'])) {
+            $where[] = "DATE(r.remind_at) >= ?";
+            $params[] = $filters['date_from'];
+        }
+
+        if (!empty($filters['date_to'])) {
+            $where[] = "DATE(r.remind_at) <= ?";
+            $params[] = $filters['date_to'];
         }
 
         if (!empty($filters['search'])) {
@@ -908,11 +999,12 @@ function task_reminders_get_details(PDO $pdo, int $task_id, int $admin_id, strin
             return null;
         }
 
-        // Authorization check: Is current user Creator, Assignee, or Super Admin?
-        $isCreator = ($task['created_by_admin_id'] == $admin_id || $task['created_by_username'] === $admin_username || $task['created_by'] === $admin_username);
-        $isAssignee = ($task['assigned_to_admin_id'] == $admin_id || $task['assigned_to_username'] === $admin_username || $task['assigned_to'] === $admin_username || $task['assigned_to'] === '__ALL__');
+        // Authorization check: Is current user Creator, Actual Assigner, Current Assignee, or Super Admin?
+        $isCreator = ($task['created_by_admin_id'] == $admin_id || ($task['created_by_admin_id'] === null && ($task['created_by_username'] === $admin_username || $task['created_by'] === $admin_username)));
+        $isAssigner = ($task['assigned_by_admin_id'] == $admin_id || ($task['assigned_by_admin_id'] === null && $task['assigned_by_username'] === $admin_username));
+        $isAssignee = ($task['assigned_to_admin_id'] == $admin_id || ($task['assigned_to_admin_id'] === null && ($task['assigned_to_username'] === $admin_username || $task['assigned_to'] === $admin_username || $task['assigned_to'] === '__ALL__')));
 
-        if (!$is_super_admin && !$isCreator && !$isAssignee) {
+        if (!$is_super_admin && !$isCreator && !$isAssigner && !$isAssignee) {
             return null; // IDOR protected
         }
 
@@ -927,7 +1019,7 @@ function task_reminders_get_details(PDO $pdo, int $task_id, int $admin_id, strin
         $task['task_type_name'] = $task['task_type_name'] ?: 'General Task';
 
         // Load immutable assignment history
-        $stmtAss = $pdo->prepare("SELECT * FROM task_reminder_assignments WHERE task_id = ? ORDER BY assigned_at ASC");
+        $stmtAss = $pdo->prepare("SELECT * FROM task_reminder_assignments WHERE task_id = ? ORDER BY assigned_at ASC, id ASC");
         $stmtAss->execute([$task_id]);
         $assignments = $stmtAss->fetchAll(PDO::FETCH_ASSOC) ?: [];
         foreach ($assignments as &$a) {
@@ -948,6 +1040,7 @@ function task_reminders_get_details(PDO $pdo, int $task_id, int $admin_id, strin
             'assignments' => $assignments,
             'history' => $history,
             'is_creator' => $isCreator,
+            'is_assigner' => $isAssigner,
             'is_assignee' => $isAssignee,
             'is_super_admin' => $is_super_admin
         ];
@@ -958,9 +1051,9 @@ function task_reminders_get_details(PDO $pdo, int $task_id, int $admin_id, strin
 }
 
 /**
- * Task Reminders — Comprehensive Global History (Tab 3)
+ * Task Reminders — Scoped Lifecycle History (Tab 3)
  */
-function task_reminders_list_history(PDO $pdo, array $filters = [], int $limit = 100, int $offset = 0): array {
+function task_reminders_list_history(PDO $pdo, array $filters = [], int $limit = 100, int $offset = 0, ?int $admin_id = null, ?string $admin_username = null, bool $is_super_admin = false): array {
     task_reminders_ensure_schema($pdo);
     if (!reminders_table_exists($pdo)) {
         return [];
@@ -969,6 +1062,23 @@ function task_reminders_list_history(PDO $pdo, array $filters = [], int $limit =
     try {
         $where = [];
         $params = [];
+
+        // Scoping for normal admin: Creator, Actual Assigner, or Current Assignee
+        if (!$is_super_admin && $admin_id !== null && $admin_username !== null) {
+            $where[] = "(
+                r.assigned_to_admin_id = ? OR (r.assigned_to_admin_id IS NULL AND (r.assigned_to_username = ? OR r.assigned_to = ?))
+                OR r.assigned_by_admin_id = ? OR (r.assigned_by_admin_id IS NULL AND r.assigned_by_username = ?)
+                OR r.created_by_admin_id = ? OR (r.created_by_admin_id IS NULL AND (r.created_by_username = ? OR r.created_by = ?))
+            )";
+            $params[] = $admin_id;
+            $params[] = $admin_username;
+            $params[] = $admin_username;
+            $params[] = $admin_id;
+            $params[] = $admin_username;
+            $params[] = $admin_id;
+            $params[] = $admin_username;
+            $params[] = $admin_username;
+        }
 
         if (!empty($filters['event_type'])) {
             $where[] = "trsh.event_type = ?";
@@ -981,7 +1091,8 @@ function task_reminders_list_history(PDO $pdo, array $filters = [], int $limit =
         }
 
         if (!empty($filters['admin'])) {
-            $where[] = "(trsh.changed_by_username = ? OR r.created_by_username = ? OR r.assigned_to_username = ?)";
+            $where[] = "(trsh.changed_by_username = ? OR r.created_by_username = ? OR r.assigned_to_username = ? OR r.assigned_by_username = ?)";
+            $params[] = $filters['admin'];
             $params[] = $filters['admin'];
             $params[] = $filters['admin'];
             $params[] = $filters['admin'];
@@ -1001,6 +1112,7 @@ function task_reminders_list_history(PDO $pdo, array $filters = [], int $limit =
 
         $sql = "SELECT trsh.*, r.title as task_title, r.remind_at, r.status as task_status,
                        r.created_by_username as creator, r.assigned_to_username as assignee,
+                       r.assigned_by_username as assigner,
                        tt.name as task_type_name
                 FROM task_reminder_status_history trsh
                 JOIN reminders r ON r.id = trsh.task_id
@@ -1314,9 +1426,10 @@ function task_reminders_edit(PDO $pdo, int $task_id, array $data, int $editor_ad
             return ['success' => false, 'message' => "Cannot edit a {$oldTask['status']} task."];
         }
 
-        // Authorization check: Only Task Creator or Super Admin can edit
-        $isCreator = ($oldTask['created_by_admin_id'] == $editor_admin_id || $oldTask['created_by_username'] === $editor_username || $oldTask['created_by'] === $editor_username);
-        if (!$is_super_admin && !$isCreator) {
+        // Authorization check: Only Task Creator, Actual Assigner, or Super Admin can edit
+        $isCreator = ($oldTask['created_by_admin_id'] == $editor_admin_id || ($oldTask['created_by_admin_id'] === null && ($oldTask['created_by_username'] === $editor_username || $oldTask['created_by'] === $editor_username)));
+        $isAssigner = ($oldTask['assigned_by_admin_id'] == $editor_admin_id || ($oldTask['assigned_by_admin_id'] === null && $oldTask['assigned_by_username'] === $editor_username));
+        if (!$is_super_admin && !$isCreator && !$isAssigner) {
             return ['success' => false, 'message' => 'You are not authorized to edit this task.'];
         }
 
@@ -1433,9 +1546,10 @@ function task_reminders_reassign(PDO $pdo, int $task_id, string $new_assignee_us
             return ['success' => false, 'message' => "Cannot reassign a {$task['status']} task."];
         }
 
-        $isCreator = ($task['created_by_admin_id'] == $assigner_admin_id || $task['created_by_username'] === $assigner_username || $task['created_by'] === $assigner_username);
-        if (!$is_super_admin && !$isCreator) {
-            return ['success' => false, 'message' => 'Only the task creator or super admin can reassign this task.'];
+        $isCreator = ($task['created_by_admin_id'] == $assigner_admin_id || ($task['created_by_admin_id'] === null && ($task['created_by_username'] === $assigner_username || $task['created_by'] === $assigner_username)));
+        $isAssigner = ($task['assigned_by_admin_id'] == $assigner_admin_id || ($task['assigned_by_admin_id'] === null && $task['assigned_by_username'] === $assigner_username));
+        if (!$is_super_admin && !$isCreator && !$isAssigner) {
+            return ['success' => false, 'message' => 'Only the task creator, assigner, or super admin can reassign this task.'];
         }
 
         $newAssigneeIdent = task_reminder_get_admin_identity($pdo, $new_assignee_username);
@@ -1547,11 +1661,12 @@ function task_reminders_postpone(PDO $pdo, int $task_id, string $new_remind_at, 
             return ['success' => false, 'message' => "Cannot postpone a {$task['status']} task."];
         }
 
-        // Authorization: Assignee, Creator, or Super Admin
-        $isCreator = ($task['created_by_admin_id'] == $admin_id || $task['created_by_username'] === $admin_username || $task['created_by'] === $admin_username);
-        $isAssignee = ($task['assigned_to_admin_id'] == $admin_id || $task['assigned_to_username'] === $admin_username || $task['assigned_to'] === $admin_username || $task['assigned_to'] === '__ALL__');
+        // Authorization: Assignee, Assigner, Creator, or Super Admin
+        $isCreator = ($task['created_by_admin_id'] == $admin_id || ($task['created_by_admin_id'] === null && ($task['created_by_username'] === $admin_username || $task['created_by'] === $admin_username)));
+        $isAssigner = ($task['assigned_by_admin_id'] == $admin_id || ($task['assigned_by_admin_id'] === null && $task['assigned_by_username'] === $admin_username));
+        $isAssignee = ($task['assigned_to_admin_id'] == $admin_id || ($task['assigned_to_admin_id'] === null && ($task['assigned_to_username'] === $admin_username || $task['assigned_to'] === $admin_username || $task['assigned_to'] === '__ALL__')));
 
-        if (!$is_super_admin && !$isCreator && !$isAssignee) {
+        if (!$is_super_admin && !$isCreator && !$isAssigner && !$isAssignee) {
             return ['success' => false, 'message' => 'You are not authorized to postpone this task.'];
         }
 
@@ -1646,11 +1761,12 @@ function task_reminders_update_status(PDO $pdo, int $task_id, string $new_status
             return ['success' => true, 'message' => 'Status unchanged.'];
         }
 
-        // Authorization: Assignee, Creator, or Super Admin
-        $isCreator = ($task['created_by_admin_id'] == $admin_id || $task['created_by_username'] === $admin_username || $task['created_by'] === $admin_username);
-        $isAssignee = ($task['assigned_to_admin_id'] == $admin_id || $task['assigned_to_username'] === $admin_username || $task['assigned_to'] === $admin_username || $task['assigned_to'] === '__ALL__');
+        // Authorization: Assignee, Assigner, Creator, or Super Admin
+        $isCreator = ($task['created_by_admin_id'] == $admin_id || ($task['created_by_admin_id'] === null && ($task['created_by_username'] === $admin_username || $task['created_by'] === $admin_username)));
+        $isAssigner = ($task['assigned_by_admin_id'] == $admin_id || ($task['assigned_by_admin_id'] === null && $task['assigned_by_username'] === $admin_username));
+        $isAssignee = ($task['assigned_to_admin_id'] == $admin_id || ($task['assigned_to_admin_id'] === null && ($task['assigned_to_username'] === $admin_username || $task['assigned_to'] === $admin_username || $task['assigned_to'] === '__ALL__')));
 
-        if (!$is_super_admin && !$isCreator && !$isAssignee) {
+        if (!$is_super_admin && !$isCreator && !$isAssigner && !$isAssignee) {
             return ['success' => false, 'message' => 'You are not authorized to update this task.'];
         }
 
@@ -2060,7 +2176,7 @@ function task_reminders_materialize_occurrences(PDO $pdo): int {
 
 /**
  * Stop a recurring series. Sets recurrence_stopped_at, no occurrences deleted.
- * Only Creator or Super Admin can stop a series.
+ * Only Creator, Assigner, or Super Admin can stop a series.
  */
 function task_reminders_stop_series(PDO $pdo, int $series_parent_id, int $admin_id, string $admin_username, bool $is_super_admin = false): array {
     if (!reminders_table_exists($pdo) || $series_parent_id <= 0) {
@@ -2080,10 +2196,11 @@ function task_reminders_stop_series(PDO $pdo, int $series_parent_id, int $admin_
             return ['success' => false, 'message' => 'This series is already stopped.'];
         }
 
-        // Authorization: Creator or Super Admin
-        $isCreator = ($series['created_by_admin_id'] == $admin_id || $series['created_by_username'] === $admin_username || $series['created_by'] === $admin_username);
-        if (!$is_super_admin && !$isCreator) {
-            return ['success' => false, 'message' => 'Only the task creator or super admin can stop this series.'];
+        // Authorization: Creator, Assigner, or Super Admin
+        $isCreator = ($series['created_by_admin_id'] == $admin_id || ($series['created_by_admin_id'] === null && ($series['created_by_username'] === $admin_username || $series['created_by'] === $admin_username)));
+        $isAssigner = ($series['assigned_by_admin_id'] == $admin_id || ($series['assigned_by_admin_id'] === null && $series['assigned_by_username'] === $admin_username));
+        if (!$is_super_admin && !$isCreator && !$isAssigner) {
+            return ['success' => false, 'message' => 'Only the task creator, assigner, or super admin can stop this series.'];
         }
 
         $nowDate = date('Y-m-d H:i:s');
@@ -2110,7 +2227,7 @@ function task_reminders_stop_series(PDO $pdo, int $series_parent_id, int $admin_
 }
 
 /**
- * Get series info and occurrence history for Admin A monitoring view.
+ * Get series info and occurrence history for monitoring view.
  */
 function task_reminders_get_series_info(PDO $pdo, int $series_parent_id, int $admin_id, string $admin_username, bool $is_super_admin = false): ?array {
     if (!reminders_table_exists($pdo) || $series_parent_id <= 0) return null;
@@ -2121,10 +2238,11 @@ function task_reminders_get_series_info(PDO $pdo, int $series_parent_id, int $ad
         $series = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$series) return null;
 
-        // Authorization
-        $isCreator = ($series['created_by_admin_id'] == $admin_id || $series['created_by_username'] === $admin_username || $series['created_by'] === $admin_username);
-        $isAssignee = ($series['assigned_to_admin_id'] == $admin_id || $series['assigned_to_username'] === $admin_username);
-        if (!$is_super_admin && !$isCreator && !$isAssignee) return null;
+        // Authorization: Creator, Assigner, Assignee, or Super Admin
+        $isCreator = ($series['created_by_admin_id'] == $admin_id || ($series['created_by_admin_id'] === null && ($series['created_by_username'] === $admin_username || $series['created_by'] === $admin_username)));
+        $isAssigner = ($series['assigned_by_admin_id'] == $admin_id || ($series['assigned_by_admin_id'] === null && $series['assigned_by_username'] === $admin_username));
+        $isAssignee = ($series['assigned_to_admin_id'] == $admin_id || ($series['assigned_to_admin_id'] === null && ($series['assigned_to_username'] === $admin_username || $series['assigned_to'] === $admin_username)));
+        if (!$is_super_admin && !$isCreator && !$isAssigner && !$isAssignee) return null;
 
         // Get all materialized occurrences ordered by date
         $occStmt = $pdo->prepare("SELECT id, occurrence_date, remind_at, status, completed_at, completed_by_username FROM reminders WHERE recurrence_series_id = ? AND is_series_parent = 0 ORDER BY occurrence_date DESC");
@@ -2147,6 +2265,7 @@ function task_reminders_get_series_info(PDO $pdo, int $series_parent_id, int $ad
             'series' => $series,
             'occurrences' => $occurrences,
             'is_creator' => $isCreator,
+            'is_assigner' => $isAssigner,
             'is_assignee' => $isAssignee,
             'is_super_admin' => $is_super_admin
         ];
@@ -2157,7 +2276,7 @@ function task_reminders_get_series_info(PDO $pdo, int $series_parent_id, int $ad
 }
 
 /**
- * List recurring series for Admin A monitoring dashboard.
+ * List recurring series for monitoring dashboard.
  * Returns series parent rows with occurrence status summary.
  */
 function task_reminders_list_series(PDO $pdo, int $admin_id, string $admin_username, array $filters = [], bool $is_super_admin = false): array {
@@ -2168,12 +2287,29 @@ function task_reminders_list_series(PDO $pdo, int $admin_id, string $admin_usern
         $where = ["r.is_series_parent = 1"];
         $params = [];
 
-        // Filter by creator unless super admin viewing all
+        // Scoping: Normal admin can see series where they are Creator, Assigner, or Assignee
         if (!$is_super_admin) {
-            $where[] = "(r.created_by_admin_id = ? OR r.created_by_username = ? OR r.created_by = ?)";
+            $where[] = "(
+                r.assigned_by_admin_id = ? OR (r.assigned_by_admin_id IS NULL AND r.assigned_by_username = ?)
+                OR r.created_by_admin_id = ? OR (r.created_by_admin_id IS NULL AND (r.created_by_username = ? OR r.created_by = ?))
+                OR r.assigned_to_admin_id = ? OR (r.assigned_to_admin_id IS NULL AND (r.assigned_to_username = ? OR r.assigned_to = ?))
+            )";
+            $params[] = $admin_id;
+            $params[] = $admin_username;
             $params[] = $admin_id;
             $params[] = $admin_username;
             $params[] = $admin_username;
+            $params[] = $admin_id;
+            $params[] = $admin_username;
+            $params[] = $admin_username;
+        } else {
+            // Super Admin: Global overview; optional filter by specific assigner/creator
+            if (!empty($filters['assigned_by_username'])) {
+                $where[] = "(r.assigned_by_username = ? OR (r.assigned_by_username IS NULL AND (r.created_by_username = ? OR r.created_by = ?)))";
+                $params[] = $filters['assigned_by_username'];
+                $params[] = $filters['assigned_by_username'];
+                $params[] = $filters['assigned_by_username'];
+            }
         }
 
         $statusFilter = strtolower(trim($filters['status'] ?? 'active'));
@@ -2182,7 +2318,6 @@ function task_reminders_list_series(PDO $pdo, int $admin_id, string $admin_usern
         } elseif ($statusFilter === 'stopped') {
             $where[] = "r.recurrence_stopped_at IS NOT NULL";
         }
-        // 'all' = no filter
 
         if (!empty($filters['assigned_to_username'])) {
             $where[] = "(r.assigned_to_username = ? OR r.assigned_to = ?)";

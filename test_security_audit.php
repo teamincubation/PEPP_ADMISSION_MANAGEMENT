@@ -331,13 +331,16 @@ try {
     $_SESSION['admin_role'] = 'admin';
     $admin_role = 'admin';
     $admin_perms = 'campaigns';
+
+    // Ensure clean state for mock admin 99
+    $pdo->exec("DELETE FROM campaign_form_admin_access WHERE admin_user_id = 99 OR form_id = 101");
+    $pdo->exec("DELETE FROM admins WHERE id = 99 OR username = 'restricted_admin'");
+    $pdo->exec("INSERT INTO admins (id, username, password_hash, full_name, role, permissions, status) VALUES (99, 'restricted_admin', 'hash', 'Restricted Admin', 'admin', 'campaigns', 'active')");
+
     assert_false(has_form_access($pdo, 'restricted_admin', 101), "SEC-21: Regular admin without assignment has no access");
     
-    // 3. Grant access by inserting a record
+    // 3. Grant access by inserting an access assignment record
     $pdo->exec("INSERT INTO campaign_form_admin_access (form_id, admin_user_id) VALUES (101, 99)");
-    
-    // Mock restricted_admin id as 99
-    $pdo->exec("INSERT INTO admins (id, username, password_hash, full_name, role, permissions, status) VALUES (99, 'restricted_admin', 'hash', 'Restricted Admin', 'admin', 'campaigns', 'active')");
     
     assert_true(has_form_access($pdo, 'restricted_admin', 101), "SEC-21: Regular admin has access to form when assigned");
     assert_false(has_form_access($pdo, 'restricted_admin', 202), "SEC-21: Regular admin still restricted from unassigned form");
