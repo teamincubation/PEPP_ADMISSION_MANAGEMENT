@@ -709,6 +709,8 @@ function submitCustomPostpone(e) {
                 alert(data.message || 'Failed to postpone task.');
             }
         });
+}
+
 var shownDueTaskPopups = {};
 
 function closeTaskDueModal() {
