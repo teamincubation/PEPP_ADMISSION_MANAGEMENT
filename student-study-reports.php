@@ -376,7 +376,7 @@ if (isset($_GET['action'])) {
             // Get Course level analytics using the canonical helper
             $course_analytics = StudentStudyPlanAnalytics::getCourseAnalytics($pdo, $email, $student['pepp_course']);
 
-            // Fetch assigned published plans for the student, strictly isolated by academic year
+            // Fetch assigned published plans for the student, strictly isolated by academic year, latest first
             $stmt_as = $pdo->prepare("
                 SELECT sp.*, sa.assignment_type, sa.assigned_value
                 FROM study_plans sp
@@ -393,12 +393,14 @@ if (isset($_GET['action'])) {
                         WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
                     ))
                 )
+                ORDER BY sp.start_date DESC, sp.end_date DESC, sp.id DESC
             ");
             $stmt_as->execute([$student['academic_year'], $student['pepp_course'], $student['academic_year'], $student['user_id'], $student['email']]);
             $assigned_plans = $stmt_as->fetchAll(PDO::FETCH_ASSOC);
 
             $plans_data = [];
             $processed_plan_ids = [];
+            $today = date('Y-m-d');
 
             foreach ($assigned_plans as $p) {
                 if (in_array($p['id'], $processed_plan_ids)) continue;
@@ -407,9 +409,14 @@ if (isset($_GET['action'])) {
                 // Calculate plan analytics using the canonical helper
                 $plan_analytics = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, $email, $p['id']);
 
+                // Calculate whether this study plan is currently active based strictly on date range
+                $is_plan_active = (!empty($p['start_date']) && !empty($p['end_date']) && $p['start_date'] !== '0000-00-00' && $p['end_date'] !== '0000-00-00' && $today >= $p['start_date'] && $today <= $p['end_date']);
+
                 $plans_data[] = [
                     'id' => $p['id'],
                     'title' => $p['title'],
+                    'status' => $p['status'],
+                    'is_active' => (bool)$is_plan_active,
                     'total_tasks' => $plan_analytics['total_tasks'],
                     'completed' => $plan_analytics['completed_tasks'],
                     'pending' => $plan_analytics['pending_tasks'],
@@ -419,6 +426,8 @@ if (isset($_GET['action'])) {
                     'last_updated' => $plan_analytics['last_activity'] ? date('d M Y h:i A', strtotime($plan_analytics['last_activity'])) : 'Never',
                     'start_date' => $p['start_date'] ? date('d M Y', strtotime($p['start_date'])) : 'TBD',
                     'end_date' => $p['end_date'] ? date('d M Y', strtotime($p['end_date'])) : 'TBD',
+                    'raw_start_date' => $p['start_date'] ?? '',
+                    'raw_end_date' => $p['end_date'] ?? '',
                     'assignment_type' => $p['assignment_type'] ?? null,
                     'assigned_value' => $p['assigned_value'] ?? null
                 ];
@@ -947,7 +956,8 @@ if (isset($_GET['action'])) {
                 FROM study_plans sp
                 JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
                 WHERE sa.assignment_type = 'course' AND sa.assigned_value = ?
-                ORDER BY sp.created_at DESC
+                  AND sp.is_deleted = 0 AND sa.is_deleted = 0
+                ORDER BY sp.start_date DESC, sp.end_date DESC, sp.id DESC
             ");
             $stmt->execute([$course_name]);
             $plans = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -955,7 +965,7 @@ if (isset($_GET['action'])) {
             $data = [];
             $today = date('Y-m-d');
             foreach ($plans as $p) {
-                $is_active = ($today >= $p['start_date'] && $today <= $p['end_date'] && $p['status'] === 'published');
+                $is_active = (!empty($p['start_date']) && !empty($p['end_date']) && $p['start_date'] !== '0000-00-00' && $p['end_date'] !== '0000-00-00' && $today >= $p['start_date'] && $today <= $p['end_date']);
 
                 $tasks_cnt = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0", [$p['id']]);
 
@@ -1382,7 +1392,7 @@ if (isset($_GET['action'])) {
                         WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved' AND u.pepp_course IS NOT NULL AND u.pepp_course != ''
                     ))
                 )
-                ORDER BY sp.title ASC
+                ORDER BY sp.start_date DESC, sp.end_date DESC, sp.id DESC
             ");
             $stmt_plans->execute([(string)$form_id, $form_id]);
             $plans = $stmt_plans->fetchAll(PDO::FETCH_ASSOC);
@@ -1404,7 +1414,9 @@ if (isset($_GET['action'])) {
             $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
 
             $data = [];
+            $today = date('Y-m-d');
             foreach ($plans as $p) {
+                $is_active = (!empty($p['start_date']) && !empty($p['end_date']) && $p['start_date'] !== '0000-00-00' && $p['end_date'] !== '0000-00-00' && $today >= $p['start_date'] && $today <= $p['end_date']);
                 $tasks_count = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0", [$p['id']]);
 
                 // Find which students are assigned to this study plan
@@ -1444,6 +1456,7 @@ if (isset($_GET['action'])) {
                     'id' => $p['id'],
                     'title' => r_esc($p['title']),
                     'status' => ucfirst($p['status']),
+                    'is_active' => $is_active,
                     'start_date' => $p['start_date'] ? date('d M Y', strtotime($p['start_date'])) : 'N/A',
                     'end_date' => $p['end_date'] ? date('d M Y', strtotime($p['end_date'])) : 'N/A',
                     'duration' => $p['start_date'] && $p['end_date'] ? (int)round((strtotime($p['end_date']) - strtotime($p['start_date'])) / 86400) . ' days' : 'N/A',
@@ -2042,7 +2055,7 @@ if (isset($_GET['action'])) {
                          FROM study_plans sp
                          LEFT JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
                          WHERE sp.status = 'published' AND sp.is_deleted = 0 AND (sa.is_deleted = 0 OR sa.is_deleted IS NULL) AND (sa.assignment_type IS NULL OR sa.assignment_type != 'form')
-                         ORDER BY sp.created_at DESC
+                         ORDER BY sp.start_date DESC, sp.end_date DESC, sp.id DESC
                     ");
                     $rows = $stmt->fetchAll();
                     foreach ($rows as $r) {
@@ -2387,6 +2400,7 @@ if ($source === 'courses' || $source === 'mentoring') {
             FROM study_plans sp
             LEFT JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
             WHERE sp.status = 'published' AND sp.is_deleted = 0 AND (sa.is_deleted = 0 OR sa.is_deleted IS NULL) AND (sa.assignment_type IS NULL OR sa.assignment_type != 'form')
+              AND sp.start_date <= CURDATE() AND sp.end_date >= CURDATE()
         "),
         'total_custom_forms' => db_count($pdo, "SELECT COUNT(*) FROM campaign_forms WHERE status = 'published'"),
         'total_submissions' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions s JOIN users u ON s.respondent_identifier = u.email WHERE s.is_deleted = 0 AND u.status = 'approved' AND $assigned_plans_subquery"),
@@ -4488,14 +4502,15 @@ include 'includes/admin_nav.php';
                         plansContainer.innerHTML = `<div style="font-size:0.8rem; color:var(--text-muted); padding:10px 0; text-align:center;">No study plans mapped to this program.</div>`;
                     } else {
                         c.plans.forEach(p => {
-                            const isPlanActive = p.pct > 0 && p.pct < 100;
-                            const pulseIndicator = isPlanActive ? `<span class="pulse-dot" style="margin:0; width:8px; height:8px; background:#10b981;" title="Active Study Plan"></span>` : '';
+                            const isPlanActive = Boolean(p.is_active);
+                            const pulseIndicator = isPlanActive ? `<span class="pulse-dot" style="margin:0; width:8px; height:8px; background:#10b981;" title="Currently Active Study Plan"></span>` : '';
+                            const activeBadge = isPlanActive ? `<span class="badge green" style="font-size:0.6rem; padding: 2px 6px; text-transform:uppercase; font-weight:700; display:inline-flex; align-items:center; gap:4px;">ACTIVE</span>` : '';
 
                             const pCard = document.createElement('div');
                             pCard.className = 'widget-card';
                             pCard.style.padding = '15px 20px';
-                            pCard.style.background = '#f8fafc';
-                            pCard.style.border = '1px solid #e2e8f0';
+                            pCard.style.background = isPlanActive ? '#f0fdf4' : '#f8fafc';
+                            pCard.style.border = isPlanActive ? '1.5px solid #86efac' : '1px solid #e2e8f0';
                             pCard.style.borderRadius = '12px';
                             pCard.style.marginBottom = '6px';
                             pCard.style.display = 'flex';
@@ -4507,6 +4522,7 @@ include 'includes/admin_nav.php';
                                     <div style="display:flex; align-items:center; gap:8px;">
                                         ${pulseIndicator}
                                         <strong style="font-size:0.95rem; color:var(--text-main);">${p.title}</strong>
+                                        ${activeBadge}
                                     </div>
                                     <button class="btn btn-sm btn-soft-violet" style="padding: 4px 10px; font-size:0.75rem;" onclick="openStudentTimeline('${s.email}', ${p.id}, '${p.title.replace(/'/g, "\\'")}', '${s.streak}', '${s.performance_label}', '${s.user_id}')"><i class="fas fa-list-check"></i> View Timeline Checklist</button>
                                 </div>
@@ -6684,11 +6700,16 @@ include 'includes/admin_nav.php';
 
                 data.forEach(p => {
                     const dot = p.is_active ? '<span class="pulse-dot" title="Currently Active Plan"></span>' : '';
+                    const badge = p.is_active ? '<span class="badge green" style="font-size:0.6rem; padding:2px 6px; margin-left:6px;">ACTIVE</span>' : '';
                     tbody.innerHTML += `
-                        <tr style="border-bottom:1px solid #f1f5f9;">
+                        <tr style="border-bottom:1px solid #f1f5f9; ${p.is_active ? 'background:#f0fdf4;' : ''}">
                             <td style="padding:12px 10px;">
-                                ${dot} <strong style="font-size:0.88rem; color:var(--text-main);">${p.title}</strong>
-                                <small style="display:block; color:var(--text-muted);">Status: ${p.status}</small>
+                                <div style="display:inline-flex; align-items:center; gap:6px;">
+                                    ${dot}
+                                    <strong style="font-size:0.88rem; color:var(--text-main);">${p.title}</strong>
+                                    ${badge}
+                                </div>
+                                <small style="display:block; color:var(--text-muted); margin-top:2px;">Status: ${p.status}</small>
                             </td>
                             <td style="padding:12px 10px; font-size:0.78rem;">${p.start_date} to ${p.end_date}</td>
                             <td style="padding:12px 10px; text-align:center; font-weight:700;">${p.duration}</td>
@@ -7256,9 +7277,18 @@ include 'includes/admin_nav.php';
                     return;
                 }
                 data.forEach(p => {
+                    const dot = p.is_active ? '<span class="pulse-dot" title="Currently Active Plan"></span>' : '';
+                    const badge = p.is_active ? '<span class="badge green" style="font-size:0.6rem; padding:2px 6px; margin-left:6px;">ACTIVE</span>' : '';
                     tbody.innerHTML += `
-                        <tr style="border-bottom:1px solid #f1f5f9;">
-                            <td style="padding:12px 10px;"><strong style="font-size:0.85rem; color:var(--text-main);">${p.title}</strong><br><small style="color:var(--text-muted); font-size:0.72rem;">Status: ${p.status}</small></td>
+                        <tr style="border-bottom:1px solid #f1f5f9; ${p.is_active ? 'background:#f0fdf4;' : ''}">
+                            <td style="padding:12px 10px;">
+                                <div style="display:inline-flex; align-items:center; gap:6px;">
+                                    ${dot}
+                                    <strong style="font-size:0.85rem; color:var(--text-main);">${p.title}</strong>
+                                    ${badge}
+                                </div>
+                                <br><small style="color:var(--text-muted); font-size:0.72rem;">Status: ${p.status}</small>
+                            </td>
                             <td style="padding:12px 10px; font-size:0.78rem;">${p.start_date} to ${p.end_date}</td>
                             <td style="padding:12px 10px; text-align:center; font-weight:700;">${p.duration}</td>
                             <td style="padding:12px 10px; text-align:center; font-weight:700;">${p.tasks}</td>
