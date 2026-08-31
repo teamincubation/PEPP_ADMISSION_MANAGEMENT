@@ -121,11 +121,11 @@ UPDATE `reminders` SET `assigned_to_username` = `assigned_to` WHERE `assigned_to
 UPDATE `reminders` SET `assigned_by_username` = `created_by` WHERE `assigned_by_username` IS NULL AND `created_by` IS NOT NULL;
 UPDATE `reminders` SET `completed_by_username` = `completed_by` WHERE `completed_by_username` IS NULL AND `completed_by` IS NOT NULL;
 
--- Backfill admin_ids by joining admins table
-UPDATE `reminders` r JOIN `admins` a ON a.`username` = r.`created_by_username` SET r.`created_by_admin_id` = a.`id` WHERE r.`created_by_admin_id` IS NULL;
-UPDATE `reminders` r JOIN `admins` a ON a.`username` = r.`assigned_by_username` SET r.`assigned_by_admin_id` = a.`id` WHERE r.`assigned_by_admin_id` IS NULL;
-UPDATE `reminders` r JOIN `admins` a ON a.`username` = r.`assigned_to_username` SET r.`assigned_to_admin_id` = a.`id` WHERE r.`assigned_to_admin_id` IS NULL;
-UPDATE `reminders` r JOIN `admins` a ON a.`username` = r.`completed_by_username` SET r.`completed_by_admin_id` = a.`id` WHERE r.`completed_by_admin_id` IS NULL;
+-- Backfill admin_ids by joining admins table (collation-safe comparison)
+UPDATE `reminders` r JOIN `admins` a ON (a.`username` COLLATE utf8mb4_unicode_ci = r.`created_by_username` COLLATE utf8mb4_unicode_ci) SET r.`created_by_admin_id` = a.`id` WHERE r.`created_by_admin_id` IS NULL;
+UPDATE `reminders` r JOIN `admins` a ON (a.`username` COLLATE utf8mb4_unicode_ci = r.`assigned_by_username` COLLATE utf8mb4_unicode_ci) SET r.`assigned_by_admin_id` = a.`id` WHERE r.`assigned_by_admin_id` IS NULL;
+UPDATE `reminders` r JOIN `admins` a ON (a.`username` COLLATE utf8mb4_unicode_ci = r.`assigned_to_username` COLLATE utf8mb4_unicode_ci) SET r.`assigned_to_admin_id` = a.`id` WHERE r.`assigned_to_admin_id` IS NULL;
+UPDATE `reminders` r JOIN `admins` a ON (a.`username` COLLATE utf8mb4_unicode_ci = r.`completed_by_username` COLLATE utf8mb4_unicode_ci) SET r.`completed_by_admin_id` = a.`id` WHERE r.`completed_by_admin_id` IS NULL;
 
 -- Backfill initial assignment history for existing reminders that don't have one
 INSERT INTO `task_reminder_assignments` (`task_id`, `assigned_by_admin_id`, `assigned_by_username`, `assigned_to_admin_id`, `assigned_to_username`, `assigned_at`, `is_current`)

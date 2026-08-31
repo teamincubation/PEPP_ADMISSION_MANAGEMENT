@@ -300,7 +300,7 @@ if (!defined('PEPP_STUDENT_PORTAL')) {
                 echo json_encode(['success' => false, 'message' => 'Unauthorized access']);
                 exit();
             }
-            header('Location: /login.php');
+            header('Location: login.php');
             exit();
         }
     }
@@ -480,6 +480,12 @@ if (isset($_GET['action'])) {
 }
 
 /* ── Role / permission helpers ──────────────────────────────────────────── */
+function is_admin_logged_in(): bool {
+    return isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true;
+}
+function get_admin_user(): string {
+    return (string)($_SESSION['admin_username'] ?? 'Admin');
+}
 function is_super_admin() {
     return ($_SESSION['admin_role'] ?? '') === 'super_admin';
 }
@@ -822,6 +828,12 @@ function csrf_field()  { return '<input type="hidden" name="csrf_token" value="'
 function csrf_verify() {
     $t = $_POST['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
     return hash_equals($_SESSION['csrf_token'] ?? '', $t);
+}
+function verify_csrf_token(?string $token = null): bool {
+    if ($token === null || $token === '') {
+        return csrf_verify();
+    }
+    return hash_equals($_SESSION['csrf_token'] ?? '', (string)$token);
 }
 
 /* ── Output helper ──────────────────────────────────────────────────────── */

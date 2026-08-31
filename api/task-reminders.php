@@ -12,39 +12,39 @@ require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/reminders_helper.php';
 
-// Authentication Check
-if (!is_admin_logged_in()) {
-    http_response_code(401);
-    echo json_encode(['success' => false, 'message' => 'Unauthorized: Please log in to access task reminders.']);
-    exit;
-}
-
-$current_username = get_admin_user();
-$admin_identity = task_reminder_get_admin_identity($pdo, $current_username);
-$current_admin_id = $admin_identity['id'];
-$is_super = is_super_admin();
-
-$action = trim($_GET['action'] ?? $_POST['action'] ?? '');
-$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-
-// Explicit Protection: Zero Delete API
-if ($method === 'DELETE' || in_array(strtolower($action), ['delete', 'delete_task', 'delete_reminder', 'remove_task', 'remove_reminder'], true)) {
-    http_response_code(405);
-    echo json_encode(['success' => false, 'message' => 'Task Reminders cannot be deleted. All records and history are permanent.']);
-    exit;
-}
-
-// CSRF validation for modifying requests
-if ($method === 'POST') {
-    $csrf_token = $_POST['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
-    if (!verify_csrf_token($csrf_token)) {
-        http_response_code(403);
-        echo json_encode(['success' => false, 'message' => 'CSRF verification failed. Please refresh the page.']);
+try {
+    // Authentication Check
+    if (!is_admin_logged_in()) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'message' => 'Unauthorized: Please log in to access task reminders.']);
         exit;
     }
-}
 
-try {
+    $current_username = get_admin_user();
+    $admin_identity = task_reminder_get_admin_identity($pdo, $current_username);
+    $current_admin_id = $admin_identity['id'];
+    $is_super = is_super_admin();
+
+    $action = trim($_GET['action'] ?? $_POST['action'] ?? '');
+    $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+
+    // Explicit Protection: Zero Delete API
+    if ($method === 'DELETE' || in_array(strtolower($action), ['delete', 'delete_task', 'delete_reminder', 'remove_task', 'remove_reminder'], true)) {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'message' => 'Task Reminders cannot be deleted. All records and history are permanent.']);
+        exit;
+    }
+
+    // CSRF validation for modifying requests
+    if ($method === 'POST') {
+        $csrf_token = $_POST['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+        if (!verify_csrf_token($csrf_token)) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => 'CSRF verification failed. Please refresh the page.']);
+            exit;
+        }
+    }
+
     switch ($action) {
         // 1. Lightweight Polling Summary (<2ms)
         case 'get_summary':
@@ -251,9 +251,9 @@ try {
             echo json_encode(['success' => false, 'message' => 'Unknown action requested.']);
             exit;
     }
-} catch (Exception $e) {
-    error_log("api/task-reminders.php exception: " . $e->getMessage());
+} catch (Throwable $e) {
+    error_log("api/task-reminders.php error: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Internal Server Error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'An error occurred while processing task reminders.']);
     exit;
 }
