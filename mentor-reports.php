@@ -10,7 +10,7 @@
  * - Fair, normalized per-student cohort ranking and deterministic performance badges
  * - Activity trend charts, student engagement distribution, and timeline
  * - Zero unnecessary PII exposure (no WhatsApp/DOB/tokens)
- * - Safe CSV export with formula-injection neutralization
+ * - Safe CSV and professional multi-page vector PDF report exports
  */
 
 declare(strict_types=1);
@@ -19,6 +19,7 @@ require_once __DIR__ . '/includes/auth.php';
 require_super_admin(); // Strict Superadmin Authorization Guard
 
 require_once __DIR__ . '/includes/StudentStudyPlanAnalytics.php';
+require_once __DIR__ . '/includes/mentor_report_pdf.php';
 
 $active_page = 'mentor-reports';
 $page_title  = 'Mentors Report';
@@ -112,10 +113,10 @@ $has_email = false;
 try { $has_email = (bool)$pdo->query("SELECT email FROM admins LIMIT 1"); } catch (Throwable $e) {}
 
 $admin_type_col = $has_admin_type ? "a.admin_type" : "a.role AS admin_type";
-$full_name_col = $has_full_name ? "a.full_name" : "a.username AS full_name";
-$email_col = $has_email ? "a.email" : "'' AS email";
-$staff_joins = $has_employees ? "LEFT JOIN employees e ON a.id = e.admin_id" : "";
-$staff_cols = $has_employees ? "e.photo AS staff_photo, e.employee_id AS staff_code" : "NULL AS staff_photo, NULL AS staff_code";
+$full_name_col  = $has_full_name ? "a.full_name" : "a.username AS full_name";
+$email_col      = $has_email ? "a.email" : "'' AS email";
+$staff_joins    = $has_employees ? "LEFT JOIN employees e ON a.id = e.admin_id" : "";
+$staff_cols     = $has_employees ? "e.photo AS staff_photo, e.employee_id AS staff_code" : "NULL AS staff_photo, NULL AS staff_code";
 
 $mentor_where_clauses = ["a.permissions LIKE '%student-mentoring%'"];
 try {
@@ -183,30 +184,15 @@ if (!$selected_mentor && !empty($all_mentors)) {
     $selected_mentor_id = (int)$selected_mentor['id'];
 }
 
-// ── 2. Date Range Resolution ──────────────────────────────────────────
-$range_param = trim($_GET['range'] ?? 'last_30_days');
+// ── 2. Global Date Range Resolution (Default: Daily / Today) ─────────
+$range_param = trim($_GET['range'] ?? 'today');
 $custom_start = trim($_GET['start_date'] ?? '');
 $custom_end   = trim($_GET['end_date'] ?? '');
 
 $today = date('Y-m-d');
-$range_title = 'Last 30 Days';
+$range_title = 'Daily (Today)';
 
 switch ($range_param) {
-    case 'today':
-        $start_date = $today;
-        $end_date   = $today;
-        $range_title = 'Today (' . date('d M Y') . ')';
-        break;
-    case 'yesterday':
-        $start_date = date('Y-m-d', strtotime('-1 day'));
-        $end_date   = $start_date;
-        $range_title = 'Yesterday (' . date('d M Y', strtotime('-1 day')) . ')';
-        break;
-    case 'last_7_days':
-        $start_date = date('Y-m-d', strtotime('-6 days'));
-        $end_date   = $today;
-        $range_title = 'Last 7 Days';
-        break;
     case 'this_week':
         $start_date = date('Y-m-d', strtotime('monday this week'));
         $end_date   = $today;
@@ -216,6 +202,16 @@ switch ($range_param) {
         $start_date = date('Y-m-01');
         $end_date   = $today;
         $range_title = 'This Month (' . date('F Y') . ')';
+        break;
+    case 'last_30_days':
+        $start_date = date('Y-m-d', strtotime('-29 days'));
+        $end_date   = $today;
+        $range_title = 'Last 30 Days';
+        break;
+    case 'yesterday':
+        $start_date = date('Y-m-d', strtotime('-1 day'));
+        $end_date   = $start_date;
+        $range_title = 'Yesterday (' . date('d M Y', strtotime('-1 day')) . ')';
         break;
     case 'prev_month':
         $start_date = date('Y-m-01', strtotime('first day of last month'));
@@ -233,18 +229,18 @@ switch ($range_param) {
             $end_date   = $custom_end;
             $range_title = date('d M Y', strtotime($start_date)) . ' – ' . date('d M Y', strtotime($end_date));
         } else {
-            $start_date = date('Y-m-d', strtotime('-29 days'));
+            $start_date = $today;
             $end_date   = $today;
-            $range_param = 'last_30_days';
-            $range_title = 'Last 30 Days';
+            $range_param = 'today';
+            $range_title = 'Daily (Today: ' . date('d M Y') . ')';
         }
         break;
-    case 'last_30_days':
+    case 'today':
     default:
-        $start_date = date('Y-m-d', strtotime('-29 days'));
+        $start_date = $today;
         $end_date   = $today;
-        $range_param = 'last_30_days';
-        $range_title = 'Last 30 Days';
+        $range_param = 'today';
+        $range_title = 'Daily (Today: ' . date('d M Y') . ')';
         break;
 }
 
@@ -252,7 +248,135 @@ $start_datetime = $start_date . ' 00:00:00';
 $end_datetime   = $end_date . ' 23:59:59';
 $total_days_in_window = max(1, (int)round((strtotime($end_date) - strtotime($start_date)) / 86400) + 1);
 
-// ── 3. CSV Export Handler ─────────────────────────────────────────────
+// ── 3. Recent Interaction History Filter Resolution (Default: Last 1 Day) ─
+$int_period = trim($_GET['int_period'] ?? 'last_1_day');
+$int_type   = trim($_GET['int_type'] ?? 'all'); // 'all', 'call', 'remark'
+$int_search = trim($_GET['int_search'] ?? '');
+
+$int_start = null;
+$int_end   = null;
+$int_period_title = 'Last 1 Day';
+
+switch ($int_period) {
+    case 'today':
+        $int_start = date('Y-m-d 00:00:00');
+        $int_end   = date('Y-m-d 23:59:59');
+        $int_period_title = 'Today';
+        break;
+    case 'last_7_days':
+        $int_start = date('Y-m-d H:i:s', strtotime('-7 days'));
+        $int_end   = date('Y-m-d H:i:s');
+        $int_period_title = 'Last 7 Days';
+        break;
+    case 'last_30_days':
+        $int_start = date('Y-m-d H:i:s', strtotime('-30 days'));
+        $int_end   = date('Y-m-d H:i:s');
+        $int_period_title = 'Last 30 Days';
+        break;
+    case 'all':
+        $int_start = null;
+        $int_end   = null;
+        $int_period_title = 'All Interactions';
+        break;
+    case 'last_1_day':
+    default:
+        $int_period = 'last_1_day';
+        $int_start = date('Y-m-d H:i:s', strtotime('-24 hours'));
+        $int_end   = date('Y-m-d H:i:s');
+        $int_period_title = 'Last 1 Day';
+        break;
+}
+
+if (!in_array($int_type, ['all', 'call', 'remark'], true)) {
+    $int_type = 'all';
+}
+
+// ── 4. Query Recent Interaction History (Server-Side Filtered) ─────────
+$recent_interactions = [];
+if ($selected_mentor_id > 0) {
+    $int_where_calls = ["cl.admin_id = ?"];
+    $int_params_calls = [$selected_mentor_id];
+
+    $int_where_remarks = ["rm.admin_id = ?"];
+    $int_params_remarks = [$selected_mentor_id];
+
+    if ($int_start !== null && $int_end !== null) {
+        $int_where_calls[] = "cl.call_timestamp BETWEEN ? AND ?";
+        $int_params_calls[] = $int_start;
+        $int_params_calls[] = $int_end;
+
+        $int_where_remarks[] = "rm.created_at BETWEEN ? AND ?";
+        $int_params_remarks[] = $int_start;
+        $int_params_remarks[] = $int_end;
+    }
+
+    if ($int_search !== '') {
+        $search_like = '%' . $int_search . '%';
+        $int_where_calls[] = "(u.name LIKE ? OR cl.student_user_id LIKE ? OR cl.notes LIKE ? OR u.pepp_course LIKE ?)";
+        $int_params_calls[] = $search_like;
+        $int_params_calls[] = $search_like;
+        $int_params_calls[] = $search_like;
+        $int_params_calls[] = $search_like;
+
+        $int_where_remarks[] = "(u.name LIKE ? OR rm.student_user_id LIKE ? OR rm.remark LIKE ? OR u.pepp_course LIKE ?)";
+        $int_params_remarks[] = $search_like;
+        $int_params_remarks[] = $search_like;
+        $int_params_remarks[] = $search_like;
+        $int_params_remarks[] = $search_like;
+    }
+
+    try {
+        if ($int_type === 'call') {
+            $sql_int = "
+                SELECT 'call' as type, cl.call_timestamp as event_time, cl.student_user_id, cl.notes as note, u.name as student_name, u.pepp_course
+                FROM mentor_call_logs cl
+                LEFT JOIN users u ON cl.student_user_id = u.user_id
+                WHERE " . implode(' AND ', $int_where_calls) . "
+                ORDER BY event_time DESC
+                LIMIT 200
+            ";
+            $stmt_int = $pdo->prepare($sql_int);
+            $stmt_int->execute($int_params_calls);
+            $recent_interactions = $stmt_int->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        } elseif ($int_type === 'remark') {
+            $sql_int = "
+                SELECT 'remark' as type, rm.created_at as event_time, rm.student_user_id, rm.remark as note, u.name as student_name, u.pepp_course
+                FROM mentor_remarks rm
+                LEFT JOIN users u ON rm.student_user_id = u.user_id
+                WHERE " . implode(' AND ', $int_where_remarks) . "
+                ORDER BY event_time DESC
+                LIMIT 200
+            ";
+            $stmt_int = $pdo->prepare($sql_int);
+            $stmt_int->execute($int_params_remarks);
+            $recent_interactions = $stmt_int->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        } else {
+            $sql_int = "
+                SELECT * FROM (
+                    SELECT 'call' as type, cl.call_timestamp as event_time, cl.student_user_id, cl.notes as note, u.name as student_name, u.pepp_course
+                    FROM mentor_call_logs cl
+                    LEFT JOIN users u ON cl.student_user_id = u.user_id
+                    WHERE " . implode(' AND ', $int_where_calls) . "
+                    UNION ALL
+                    SELECT 'remark' as type, rm.created_at as event_time, rm.student_user_id, rm.remark as note, u.name as student_name, u.pepp_course
+                    FROM mentor_remarks rm
+                    LEFT JOIN users u ON rm.student_user_id = u.user_id
+                    WHERE " . implode(' AND ', $int_where_remarks) . "
+                ) combined_int
+                ORDER BY event_time DESC
+                LIMIT 200
+            ";
+            $stmt_int = $pdo->prepare($sql_int);
+            $stmt_int->execute(array_merge($int_params_calls, $int_params_remarks));
+            $recent_interactions = $stmt_int->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        }
+    } catch (Throwable $e) {
+        error_log("Recent interaction query error: " . $e->getMessage());
+        $recent_interactions = [];
+    }
+}
+
+// ── 5. CSV Export Handler ─────────────────────────────────────────────
 if (isset($_GET['export']) && $_GET['export'] === 'csv' && $selected_mentor) {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename=mentor_report_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $selected_mentor['username']) . '_' . date('Ymd_His') . '.csv');
@@ -262,11 +386,12 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $selected_mentor) {
     fputcsv($out, ['Username', csv_safe($selected_mentor['username'])]);
     fputcsv($out, ['Role / Type', csv_safe(ucfirst(str_replace('_', ' ', $selected_mentor['admin_type'] ?? $selected_mentor['role'])))]);
     fputcsv($out, ['Reporting Period', csv_safe($range_title . " ($start_date to $end_date)")]);
+    fputcsv($out, ['Interaction Filter', csv_safe("Period: {$int_period_title}, Type: {$int_type}, Search: " . ($int_search !== '' ? $int_search : 'None'))]);
     fputcsv($out, ['Generated At', date('Y-m-d H:i:s')]);
     fputcsv($out, []);
 
     // Summary Section
-    fputcsv($out, ['--- METRIC SUMMARY ---']);
+    fputcsv($out, ['--- METRIC SUMMARY (PERIOD) ---']);
     fputcsv($out, ['Metric', 'Value']);
 
     $calls_exp = 0;
@@ -275,7 +400,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $selected_mentor) {
         $stmt_c_exp->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
         $calls_exp = (int)$stmt_c_exp->fetchColumn();
     } catch (Throwable $e) {}
-    fputcsv($out, ['Total Calls Logged', $calls_exp]);
+    fputcsv($out, ['Total Calls Logged in Period', $calls_exp]);
 
     $remarks_exp = 0;
     try {
@@ -283,7 +408,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $selected_mentor) {
         $stmt_r_exp->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
         $remarks_exp = (int)$stmt_r_exp->fetchColumn();
     } catch (Throwable $e) {}
-    fputcsv($out, ['Total Remarks Added', $remarks_exp]);
+    fputcsv($out, ['Total Remarks Added in Period', $remarks_exp]);
 
     $assigned_exp = 0;
     try {
@@ -301,42 +426,24 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && $selected_mentor) {
     fputcsv($out, ['Assigned Active Students', $assigned_exp]);
 
     fputcsv($out, []);
-    fputcsv($out, ['--- RECENT CALL LOGS IN PERIOD ---']);
-    fputcsv($out, ['Date & Time', 'Student ID', 'Call Notes']);
-    try {
-        $stmt_cl_rows = $pdo->prepare("
-            SELECT call_timestamp, student_user_id, notes
-            FROM mentor_call_logs
-            WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?
-            ORDER BY call_timestamp DESC LIMIT 500
-        ");
-        $stmt_cl_rows->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-        while ($cr = $stmt_cl_rows->fetch(PDO::FETCH_ASSOC)) {
-            fputcsv($out, [csv_safe($cr['call_timestamp']), csv_safe($cr['student_user_id']), csv_safe($cr['notes'] ?? '')]);
-        }
-    } catch (Throwable $e) {}
-
-    fputcsv($out, []);
-    fputcsv($out, ['--- RECENT REMARKS IN PERIOD ---']);
-    fputcsv($out, ['Date & Time', 'Student ID', 'Remark']);
-    try {
-        $stmt_rm_rows = $pdo->prepare("
-            SELECT created_at, student_user_id, remark
-            FROM mentor_remarks
-            WHERE admin_id = ? AND created_at BETWEEN ? AND ?
-            ORDER BY created_at DESC LIMIT 500
-        ");
-        $stmt_rm_rows->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-        while ($rr = $stmt_rm_rows->fetch(PDO::FETCH_ASSOC)) {
-            fputcsv($out, [csv_safe($rr['created_at']), csv_safe($rr['student_user_id']), csv_safe($rr['remark'])]);
-        }
-    } catch (Throwable $e) {}
+    fputcsv($out, ['--- INTERACTION HISTORY (FILTERED) ---']);
+    fputcsv($out, ['Type', 'Date & Time', 'Student Name', 'Student ID', 'Course', 'Notes / Remarks']);
+    foreach ($recent_interactions as $ri) {
+        fputcsv($out, [
+            csv_safe(strtoupper($ri['type'] ?? 'CALL')),
+            csv_safe($ri['event_time'] ?? ''),
+            csv_safe($ri['student_name'] ?? ''),
+            csv_safe($ri['student_user_id'] ?? ''),
+            csv_safe($ri['pepp_course'] ?? ''),
+            csv_safe($ri['note'] ?? '')
+        ]);
+    }
 
     fclose($out);
     exit();
 }
 
-// ── 4. Calculations for Selected Mentor ────────────────────────────────
+// ── 6. Calculations for Selected Mentor ────────────────────────────────
 $mentor_stats = [
     'assigned_students_count' => 0,
     'assigned_students' => [],
@@ -542,7 +649,7 @@ if ($selected_mentor) {
     }
 }
 
-// ── 5. Active Mentors Cohort Leaderboard & Normalized Ranking ─────────
+// ── 7. Active Mentors Cohort Leaderboard & Normalized Ranking ─────────
 $cohort_rankings = [];
 $total_cohort_active = count($all_mentors);
 
@@ -550,7 +657,7 @@ $total_cohort_active = count($all_mentors);
 $target_calls_per_student = max(0.5, ($total_days_in_window / 30.0) * 2.0); // e.g. 2 calls/month/student
 $target_remarks_per_student = max(0.5, ($total_days_in_window / 30.0) * 1.5); // e.g. 1.5 remarks/month/student
 
-// Pre-fetch all cohort metrics in 4 optimized batch queries (eliminates N x 5 query overhead)
+// Pre-fetch all cohort metrics in optimized batch queries
 $batch_assigned_counts = [];
 try {
     $stmt_all_ass = $pdo->query("
@@ -665,22 +772,15 @@ foreach ($all_mentors as $mentor_entry) {
     $m_contact_rate = $m_assigned_cnt > 0 ? min(100.0, round(($m_contacted / $m_assigned_cnt) * 100, 1)) : ($m_contacted > 0 ? 100.0 : 0.0);
 
     // Fair Normalized Scoring:
-    // 1. Normalized Calls (20%): Evaluates calls per active student rather than raw volume
     $per_student_calls = $m_assigned_cnt > 0 ? ($m_calls / $m_assigned_cnt) : ($m_calls > 0 ? 1.0 : 0.0);
     $calls_norm = min(100.0, ($per_student_calls / $target_calls_per_student) * 100);
 
-    // 2. Normalized Remarks (15%): Evaluates remarks per active student
     $per_student_remarks = $m_assigned_cnt > 0 ? ($m_remarks / $m_assigned_cnt) : ($m_remarks > 0 ? 1.0 : 0.0);
     $remarks_norm = min(100.0, ($per_student_remarks / $target_remarks_per_student) * 100);
 
-    // 3. Consistency (10%): Active days relative to window length
     $consistency_norm = min(100.0, ($m_active_days / max(1, $total_days_in_window)) * 100);
-
-    // 4. Progress Baseline (20%)
     $progress_norm = 75.0;
 
-    // Composite Formula:
-    // Score = Contact Rate (35%) + Normalized Calls (20%) + Normalized Remarks (15%) + Progress (20%) + Consistency (10%)
     $score = round(
         ($m_contact_rate * 0.35) +
         ($calls_norm * 0.20) +
@@ -729,13 +829,12 @@ foreach ($cohort_rankings as $idx => $r) {
     }
 }
 
-// Performance Badge Determination (Deterministic, Explainable, Cohort-Aware)
+// Performance Badge Determination
 if ($mentor_stats['calls_count'] === 0 && $mentor_stats['remarks_count'] === 0 && $mentor_stats['active_days_count'] === 0) {
     $badge_title = 'Pending Activity';
     $badge_icon  = 'fa-circle-info';
     $badge_class = 'badge-pending';
 } elseif ($total_ranked >= 3) {
-    // Relative Cohort Percentile Bracket
     $percentile = ($selected_mentor_rank / $total_ranked) * 100;
     if ($percentile <= 15.0) {
         $badge_title = 'Elite Performer';
@@ -755,7 +854,6 @@ if ($mentor_stats['calls_count'] === 0 && $mentor_stats['remarks_count'] === 0 &
         $badge_class = 'badge-attention';
     }
 } else {
-    // Score Bracket for small cohorts (< 3 mentors)
     if ($selected_mentor_score >= 80.0) {
         $badge_title = 'Elite Performer';
         $badge_icon  = 'fa-trophy';
@@ -775,38 +873,100 @@ if ($mentor_stats['calls_count'] === 0 && $mentor_stats['remarks_count'] === 0 &
     }
 }
 
-// ── 6. Activity Over Time Graph Data (Dynamic Multi-Scale Aggregation) ──
+// ── 8. Activity Over Time Graph Data (Dynamic Dynamic Aggregation) ─────
 $daily_trend = [];
 $chart_categories = [];
 $chart_calls = [];
 $chart_remarks = [];
 $chart_totals = [];
 
-if ($range_param === 'today') {
-    // Hourly breakdown for Daily reporting view
-    $hours = ['08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00'];
-    $hourly_calls = array_fill_keys($hours, 0);
-    $hourly_remarks = array_fill_keys($hours, 0);
+if ($range_param === 'today' || $start_date === $end_date) {
+    // Hourly breakdown for Daily reporting view with dynamic bucket expansion
+    $raw_today_calls = [];
+    $raw_today_remarks = [];
 
     try {
         $stmt_today_c = $pdo->prepare("SELECT call_timestamp FROM mentor_call_logs WHERE admin_id = ? AND call_timestamp BETWEEN ? AND ?");
         $stmt_today_c->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-        while ($crow = $stmt_today_c->fetch(PDO::FETCH_ASSOC)) {
-            $h_num = (int)date('H', strtotime($crow['call_timestamp']));
-            $slot = sprintf('%02d:00', min(22, max(8, floor($h_num / 2) * 2)));
-            $hourly_calls[$slot] = ($hourly_calls[$slot] ?? 0) + 1;
-        }
+        $raw_today_calls = $stmt_today_c->fetchAll(PDO::FETCH_COLUMN) ?: [];
     } catch (Throwable $e) {}
 
     try {
         $stmt_today_r = $pdo->prepare("SELECT created_at FROM mentor_remarks WHERE admin_id = ? AND created_at BETWEEN ? AND ?");
         $stmt_today_r->execute([$selected_mentor_id, $start_datetime, $end_datetime]);
-        while ($rrow = $stmt_today_r->fetch(PDO::FETCH_ASSOC)) {
-            $h_num = (int)date('H', strtotime($rrow['created_at']));
-            $slot = sprintf('%02d:00', min(22, max(8, floor($h_num / 2) * 2)));
-            $hourly_remarks[$slot] = ($hourly_remarks[$slot] ?? 0) + 1;
-        }
+        $raw_today_remarks = $stmt_today_r->fetchAll(PDO::FETCH_COLUMN) ?: [];
     } catch (Throwable $e) {}
+
+    // Default span 08:00 to 22:00, expanding dynamically if early morning or late night activity exists
+    $min_h = 8;
+    $has_23 = false;
+
+    foreach ($raw_today_calls as $ts) {
+        if ($ts) {
+            $h = (int)date('H', strtotime((string)$ts));
+            if ($h < $min_h) $min_h = (int)(floor($h / 2) * 2);
+            if ($h >= 23) $has_23 = true;
+        }
+    }
+    foreach ($raw_today_remarks as $ts) {
+        if ($ts) {
+            $h = (int)date('H', strtotime((string)$ts));
+            if ($h < $min_h) $min_h = (int)(floor($h / 2) * 2);
+            if ($h >= 23) $has_23 = true;
+        }
+    }
+
+    $min_h = max(0, min(8, $min_h));
+
+    $hours = [];
+    for ($h = $min_h; $h <= 22; $h += 2) {
+        $hours[] = sprintf('%02d:00', $h);
+    }
+    if ($has_23) {
+        $hours[] = '23:00';
+    }
+    if (empty($hours)) {
+        $hours = ['08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00'];
+    }
+
+    $hourly_calls = array_fill_keys($hours, 0);
+    $hourly_remarks = array_fill_keys($hours, 0);
+
+    foreach ($raw_today_calls as $ts) {
+        if ($ts) {
+            $h_num = (int)date('H', strtotime((string)$ts));
+            if ($h_num >= 23) {
+                $slot = '23:00';
+            } else {
+                $bucket_h = max($min_h, floor($h_num / 2) * 2);
+                if ($bucket_h > 22) $bucket_h = 22;
+                $slot = sprintf('%02d:00', $bucket_h);
+            }
+            if (isset($hourly_calls[$slot])) {
+                $hourly_calls[$slot]++;
+            } else {
+                $hourly_calls[$slot] = 1;
+            }
+        }
+    }
+
+    foreach ($raw_today_remarks as $ts) {
+        if ($ts) {
+            $h_num = (int)date('H', strtotime((string)$ts));
+            if ($h_num >= 23) {
+                $slot = '23:00';
+            } else {
+                $bucket_h = max($min_h, floor($h_num / 2) * 2);
+                if ($bucket_h > 22) $bucket_h = 22;
+                $slot = sprintf('%02d:00', $bucket_h);
+            }
+            if (isset($hourly_remarks[$slot])) {
+                $hourly_remarks[$slot]++;
+            } else {
+                $hourly_remarks[$slot] = 1;
+            }
+        }
+    }
 
     foreach ($hours as $h) {
         $c_val = $hourly_calls[$h] ?? 0;
@@ -913,29 +1073,49 @@ if ($range_param === 'today') {
 
 $max_daily_val = max(1, (!empty($chart_totals) ? max($chart_totals) : 1));
 
-// ── 7. Recent Interaction History (Calls + Remarks Union) ─────────────
-$recent_interactions = [];
-try {
-    $stmt_interactions = $pdo->prepare("
-        SELECT 'call' as type, cl.call_timestamp as event_time, cl.student_user_id, cl.notes as note, u.name as student_name, u.pepp_course
-        FROM mentor_call_logs cl
-        LEFT JOIN users u ON cl.student_user_id = u.user_id
-        WHERE cl.admin_id = ? AND cl.call_timestamp BETWEEN ? AND ?
-        UNION ALL
-        SELECT 'remark' as type, rm.created_at as event_time, rm.student_user_id, rm.remark as note, u.name as student_name, u.pepp_course
-        FROM mentor_remarks rm
-        LEFT JOIN users u ON rm.student_user_id = u.user_id
-        WHERE rm.admin_id = ? AND rm.created_at BETWEEN ? AND ?
-        ORDER BY event_time DESC
-        LIMIT 50
-    ");
-    $stmt_interactions->execute([$selected_mentor_id, $start_datetime, $end_datetime, $selected_mentor_id, $start_datetime, $end_datetime]);
-    $recent_interactions = $stmt_interactions->fetchAll(PDO::FETCH_ASSOC) ?: [];
-} catch (Throwable $e) {
-    $recent_interactions = [];
+// ── 9. Professional PDF Report Export Handler ─────────────────────────
+if (isset($_GET['export']) && $_GET['export'] === 'pdf' && $selected_mentor) {
+    $pdf_data = [
+        'mentor' => $selected_mentor,
+        'stats' => $mentor_stats,
+        'badge' => [
+            'title' => $badge_title,
+            'rank' => $selected_mentor_rank,
+            'total_ranked' => $total_ranked,
+            'score' => $selected_mentor_score
+        ],
+        'filters' => [
+            'global_range' => [
+                'param' => $range_param,
+                'title' => $range_title,
+                'start_date' => $start_date,
+                'end_date' => $end_date
+            ],
+            'int_period' => [
+                'param' => $int_period,
+                'title' => $int_period_title
+            ],
+            'int_type' => $int_type,
+            'int_search' => $int_search,
+            'generated_at' => date('d M Y, h:i A')
+        ],
+        'daily_trend' => $daily_trend,
+        'interactions' => $recent_interactions
+    ];
+
+    $pdf_bytes = render_mentor_performance_report_pdf($pdf_data);
+    $filename = 'mentor_performance_report_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $selected_mentor['username']) . '_' . date('Ymd_His') . '.pdf';
+
+    header('Content-Type: application/pdf');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('Content-Length: ' . strlen($pdf_bytes));
+    header('Cache-Control: private, must-revalidate, max-age=0');
+    header('Pragma: public');
+    echo $pdf_bytes;
+    exit();
 }
 
-// ── 8. Superadmin Login & Location History (Strict Superadmin View) ────
+// ── 10. Superadmin Login & Location History (Strict Superadmin View) ───
 $login_history_rows = [];
 try {
     $stmt_login_hist = $pdo->prepare("
@@ -957,7 +1137,7 @@ include __DIR__ . '/includes/admin_nav.php';
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
 <style>
-/* ── Premium ERP Analytics Styles ─────────────────────────────────── */
+/* ── Premium Responsive ERP Analytics Styles ──────────────────────── */
 :root {
     --pepp-orange: #ff6b00;
     --pepp-orange-dark: #e05e00;
@@ -976,11 +1156,14 @@ include __DIR__ . '/includes/admin_nav.php';
 }
 
 .report-container {
+    width: 100%;
     max-width: 1400px;
     margin: 0 auto;
-    padding: 10px 0 40px 0;
+    padding: 10px 16px 40px 16px;
+    box-sizing: border-box;
     font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
     color: var(--text-dark);
+    min-width: 0;
 }
 
 /* Header & Controls */
@@ -991,10 +1174,17 @@ include __DIR__ . '/includes/admin_nav.php';
     align-items: center;
     gap: 16px;
     margin-bottom: 24px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.report-heading {
+    flex: 1 1 280px;
+    min-width: 0;
 }
 
 .report-heading h1 {
-    font-size: 1.6rem;
+    font-size: clamp(1.25rem, 2vw, 1.6rem);
     font-weight: 800;
     color: var(--text-dark);
     margin: 0 0 4px 0;
@@ -1002,11 +1192,12 @@ include __DIR__ . '/includes/admin_nav.php';
     display: flex;
     align-items: center;
     gap: 10px;
+    word-break: break-word;
 }
 
 .report-heading p {
     margin: 0;
-    font-size: 0.9rem;
+    font-size: 0.88rem;
     color: var(--text-muted);
 }
 
@@ -1014,19 +1205,21 @@ include __DIR__ . '/includes/admin_nav.php';
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
+    max-width: 100%;
 }
 
 .mentor-select-box {
     position: relative;
-    min-width: 260px;
+    min-width: 220px;
+    flex: 1 1 auto;
 }
 
 .mentor-select-box select {
     width: 100%;
-    padding: 10px 14px;
+    padding: 9px 14px;
     padding-right: 36px;
-    font-size: 0.9rem;
+    font-size: 0.88rem;
     font-weight: 700;
     color: var(--text-dark);
     background: #fff;
@@ -1037,6 +1230,7 @@ include __DIR__ . '/includes/admin_nav.php';
     transition: all 0.2s ease;
     appearance: none;
     -webkit-appearance: none;
+    box-sizing: border-box;
 }
 
 .mentor-select-box select:focus {
@@ -1059,15 +1253,16 @@ include __DIR__ . '/includes/admin_nav.php';
 .date-pill-group {
     display: flex;
     background: #e2e8f0;
-    padding: 4px;
+    padding: 3px;
     border-radius: 10px;
     gap: 2px;
-    overflow-x: auto;
+    flex-wrap: wrap;
+    max-width: 100%;
 }
 
 .date-pill {
-    padding: 6px 12px;
-    font-size: 0.8rem;
+    padding: 6px 11px;
+    font-size: 0.78rem;
     font-weight: 700;
     color: var(--text-sub);
     text-decoration: none;
@@ -1099,6 +1294,7 @@ include __DIR__ . '/includes/admin_nav.php';
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
+    box-sizing: border-box;
 }
 
 .custom-range-drawer.open {
@@ -1113,6 +1309,7 @@ include __DIR__ . '/includes/admin_nav.php';
     border-radius: 6px;
     background: #fff;
     color: var(--text-dark);
+    box-sizing: border-box;
 }
 
 .btn-apply-range {
@@ -1131,26 +1328,58 @@ include __DIR__ . '/includes/admin_nav.php';
     background: var(--pepp-orange-dark);
 }
 
-.btn-export-report {
+.export-btn-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.btn-export-pdf {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    padding: 10px 16px;
+    padding: 9px 15px;
     background: var(--pepp-orange);
     color: #fff;
     font-weight: 700;
-    font-size: 0.85rem;
+    font-size: 0.84rem;
     border-radius: 10px;
     text-decoration: none;
-    box-shadow: 0 4px 10px rgba(255, 107, 0, 0.25);
+    box-shadow: 0 4px 10px rgba(255, 107, 0, 0.22);
     transition: all 0.2s ease;
+    white-space: nowrap;
 }
 
-.btn-export-report:hover {
+.btn-export-pdf:hover {
     background: var(--pepp-orange-dark);
     transform: translateY(-1px);
-    box-shadow: 0 6px 14px rgba(255, 107, 0, 0.35);
+    box-shadow: 0 6px 14px rgba(255, 107, 0, 0.32);
     color: #fff;
+}
+
+.btn-export-csv {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px;
+    background: #fff;
+    color: var(--text-dark);
+    border: 1.5px solid var(--card-border);
+    font-weight: 700;
+    font-size: 0.84rem;
+    border-radius: 10px;
+    text-decoration: none;
+    box-shadow: var(--card-shadow);
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.btn-export-csv:hover {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+    transform: translateY(-1px);
+    color: var(--text-dark);
 }
 
 /* ── Profile Hero Header Card ────────────────────────────────────── */
@@ -1158,29 +1387,33 @@ include __DIR__ . '/includes/admin_nav.php';
     background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
     color: #fff;
     border-radius: var(--card-radius);
-    padding: 24px;
+    padding: 22px;
     margin-bottom: 24px;
     box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.2);
     display: grid;
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    gap: 24px;
+    gap: 20px;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
 }
 
 .mentor-avatar-badge {
     position: relative;
+    flex-shrink: 0;
 }
 
 .mentor-avatar {
-    width: 76px;
-    height: 76px;
-    border-radius: 20px;
+    width: 72px;
+    height: 72px;
+    border-radius: 18px;
     background: linear-gradient(135deg, var(--pepp-orange) 0%, #f97316 100%);
     color: #fff;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.8rem;
+    font-size: 1.7rem;
     font-weight: 800;
     border: 3px solid rgba(255,255,255,0.2);
     box-shadow: 0 4px 12px rgba(0,0,0,0.2);
@@ -1205,22 +1438,28 @@ include __DIR__ . '/includes/admin_nav.php';
     background: #94a3b8;
 }
 
+.mentor-hero-info {
+    min-width: 0;
+}
+
 .mentor-hero-info h2 {
-    font-size: 1.35rem;
+    font-size: clamp(1.15rem, 2vw, 1.4rem);
     font-weight: 800;
-    margin: 0 0 4px 0;
+    margin: 0 0 6px 0;
     color: #fff;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
+    word-break: break-word;
 }
 
 .mentor-meta-row {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 14px;
-    font-size: 0.82rem;
+    gap: 10px;
+    font-size: 0.8rem;
     color: #94a3b8;
 }
 
@@ -1231,6 +1470,7 @@ include __DIR__ . '/includes/admin_nav.php';
     background: rgba(255,255,255,0.08);
     padding: 3px 10px;
     border-radius: 6px;
+    white-space: nowrap;
 }
 
 .mentor-badge-container {
@@ -1238,14 +1478,15 @@ include __DIR__ . '/includes/admin_nav.php';
     flex-direction: column;
     align-items: flex-end;
     gap: 8px;
+    flex-shrink: 0;
 }
 
 .badge-pill-elite {
     background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
     color: #fff;
-    padding: 8px 16px;
-    border-radius: 12px;
-    font-size: 0.85rem;
+    padding: 7px 14px;
+    border-radius: 10px;
+    font-size: 0.82rem;
     font-weight: 800;
     display: inline-flex;
     align-items: center;
@@ -1256,9 +1497,9 @@ include __DIR__ . '/includes/admin_nav.php';
 .badge-pill-high {
     background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
     color: #fff;
-    padding: 8px 16px;
-    border-radius: 12px;
-    font-size: 0.85rem;
+    padding: 7px 14px;
+    border-radius: 10px;
+    font-size: 0.82rem;
     font-weight: 800;
     display: inline-flex;
     align-items: center;
@@ -1269,9 +1510,9 @@ include __DIR__ . '/includes/admin_nav.php';
 .badge-pill-consistent {
     background: linear-gradient(135deg, #10b981 0%, #059669 100%);
     color: #fff;
-    padding: 8px 16px;
-    border-radius: 12px;
-    font-size: 0.85rem;
+    padding: 7px 14px;
+    border-radius: 10px;
+    font-size: 0.82rem;
     font-weight: 800;
     display: inline-flex;
     align-items: center;
@@ -1281,9 +1522,9 @@ include __DIR__ . '/includes/admin_nav.php';
 .badge-pill-attention {
     background: linear-gradient(135deg, #64748b 0%, #475569 100%);
     color: #fff;
-    padding: 8px 16px;
-    border-radius: 12px;
-    font-size: 0.85rem;
+    padding: 7px 14px;
+    border-radius: 10px;
+    font-size: 0.82rem;
     font-weight: 800;
     display: inline-flex;
     align-items: center;
@@ -1293,9 +1534,9 @@ include __DIR__ . '/includes/admin_nav.php';
 .badge-pending {
     background: #334155;
     color: #cbd5e1;
-    padding: 8px 16px;
-    border-radius: 12px;
-    font-size: 0.85rem;
+    padding: 7px 14px;
+    border-radius: 10px;
+    font-size: 0.82rem;
     font-weight: 700;
     display: inline-flex;
     align-items: center;
@@ -1303,7 +1544,7 @@ include __DIR__ . '/includes/admin_nav.php';
 }
 
 .cohort-rank-tag {
-    font-size: 0.78rem;
+    font-size: 0.76rem;
     color: #cbd5e1;
     font-weight: 700;
 }
@@ -1311,21 +1552,25 @@ include __DIR__ . '/includes/admin_nav.php';
 /* ── KPI Grid ─────────────────────────────────────────────────────── */
 .kpi-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
     gap: 16px;
     margin-bottom: 24px;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .kpi-card {
     background: var(--card-bg);
     border: 1px solid var(--card-border);
     border-radius: var(--card-radius);
-    padding: 18px;
+    padding: 16px 18px;
     box-shadow: var(--card-shadow);
     display: flex;
     flex-direction: column;
     justify-content: space-between;
     transition: transform 0.15s ease, border-color 0.15s ease;
+    box-sizing: border-box;
+    min-width: 0;
 }
 
 .kpi-card:hover {
@@ -1337,11 +1582,11 @@ include __DIR__ . '/includes/admin_nav.php';
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
 }
 
 .kpi-title {
-    font-size: 0.8rem;
+    font-size: 0.76rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1349,25 +1594,27 @@ include __DIR__ . '/includes/admin_nav.php';
 }
 
 .kpi-icon-wrap {
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1rem;
+    font-size: 0.95rem;
+    flex-shrink: 0;
 }
 
 .kpi-num {
-    font-size: 1.7rem;
+    font-size: clamp(1.4rem, 2.2vw, 1.7rem);
     font-weight: 800;
     color: var(--text-dark);
     line-height: 1.1;
     margin-bottom: 4px;
+    word-break: break-word;
 }
 
 .kpi-sub {
-    font-size: 0.75rem;
+    font-size: 0.74rem;
     color: var(--text-muted);
     font-weight: 600;
 }
@@ -1382,14 +1629,16 @@ include __DIR__ . '/includes/admin_nav.php';
 /* ── Main Layout: Analytics & Charts ─────────────────────────────── */
 .dashboard-row {
     display: grid;
-    grid-template-columns: 2fr 1fr;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
     gap: 24px;
     margin-bottom: 24px;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 @media (max-width: 1024px) {
     .dashboard-row {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
     }
 }
 
@@ -1397,21 +1646,26 @@ include __DIR__ . '/includes/admin_nav.php';
     background: var(--card-bg);
     border: 1px solid var(--card-border);
     border-radius: var(--card-radius);
-    padding: 22px;
+    padding: 20px;
     box-shadow: var(--card-shadow);
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
 }
 
 .panel-header {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 18px;
-    padding-bottom: 12px;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
     border-bottom: 1px solid #f1f5f9;
 }
 
 .panel-header h3 {
-    font-size: 1.05rem;
+    font-size: 1.02rem;
     font-weight: 800;
     margin: 0;
     color: var(--text-dark);
@@ -1420,9 +1674,17 @@ include __DIR__ . '/includes/admin_nav.php';
     gap: 8px;
 }
 
-/* Trend Chart */
+/* Trend Chart with Contained Scrolling */
+.chart-container-wrap {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
+}
+
 .chart-container {
     height: 240px;
+    min-width: 100%;
     display: flex;
     align-items: flex-end;
     gap: 8px;
@@ -1430,10 +1692,12 @@ include __DIR__ . '/includes/admin_nav.php';
     padding-bottom: 10px;
     border-bottom: 2px solid #e2e8f0;
     position: relative;
+    box-sizing: border-box;
 }
 
 .chart-bar-group {
     flex: 1;
+    min-width: 16px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1502,7 +1766,8 @@ include __DIR__ . '/includes/admin_nav.php';
 .chart-legend {
     display: flex;
     justify-content: center;
-    gap: 20px;
+    flex-wrap: wrap;
+    gap: 18px;
     margin-top: 14px;
     font-size: 0.78rem;
     font-weight: 700;
@@ -1549,13 +1814,143 @@ include __DIR__ . '/includes/admin_nav.php';
     border-radius: 6px;
 }
 
+/* ── Recent Interaction History Filtering Toolbar ────────────────── */
+.interaction-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    background: #f8fafc;
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.interaction-filters-left {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.int-period-select-wrap select {
+    padding: 7px 12px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--text-dark);
+    background: #fff;
+    border: 1.5px solid var(--card-border);
+    border-radius: 8px;
+    cursor: pointer;
+    box-sizing: border-box;
+}
+
+.type-pill-group {
+    display: inline-flex;
+    background: #e2e8f0;
+    padding: 3px;
+    border-radius: 8px;
+    gap: 2px;
+}
+
+.type-pill {
+    padding: 5px 12px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--text-sub);
+    border-radius: 6px;
+    text-decoration: none;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    transition: all 0.15s ease;
+}
+
+.type-pill:hover {
+    background: rgba(255,255,255,0.6);
+    color: var(--text-dark);
+}
+
+.type-pill.active {
+    background: #fff;
+    color: var(--pepp-orange);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+.search-input-wrap {
+    position: relative;
+    flex: 1 1 220px;
+    min-width: 180px;
+    max-width: 380px;
+}
+
+.search-input-wrap input {
+    width: 100%;
+    padding: 7px 12px 7px 32px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    border: 1.5px solid var(--card-border);
+    border-radius: 8px;
+    background: #fff;
+    box-sizing: border-box;
+    transition: all 0.2s ease;
+}
+
+.search-input-wrap input:focus {
+    border-color: var(--pepp-orange);
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.12);
+}
+
+.search-icon {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #94a3b8;
+    font-size: 0.85rem;
+    pointer-events: none;
+}
+
+.btn-reset-filters {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #64748b;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    text-decoration: none;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.btn-reset-filters:hover {
+    background: #f1f5f9;
+    color: #0f172a;
+    border-color: #94a3b8;
+}
+
 /* Interaction & History Table */
 .data-table-wrap {
     overflow-x: auto;
+    width: 100%;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 8px;
 }
 
 .report-table {
     width: 100%;
+    min-width: 680px;
     border-collapse: collapse;
     font-size: 0.85rem;
 }
@@ -1563,7 +1958,7 @@ include __DIR__ . '/includes/admin_nav.php';
 .report-table th {
     text-align: left;
     padding: 10px 12px;
-    font-size: 0.75rem;
+    font-size: 0.74rem;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1577,6 +1972,7 @@ include __DIR__ . '/includes/admin_nav.php';
     border-bottom: 1px solid #f1f5f9;
     color: var(--text-sub);
     vertical-align: middle;
+    word-break: break-word;
 }
 
 .report-table tr:hover td {
@@ -1591,6 +1987,7 @@ include __DIR__ . '/includes/admin_nav.php';
     font-size: 0.7rem;
     padding: 2px 8px;
     border-radius: 6px;
+    white-space: nowrap;
 }
 
 .badge-event-remark {
@@ -1601,6 +1998,7 @@ include __DIR__ . '/includes/admin_nav.php';
     font-size: 0.7rem;
     padding: 2px 8px;
     border-radius: 6px;
+    white-space: nowrap;
 }
 
 /* Leaderboard Ranking Table */
@@ -1627,6 +2025,8 @@ include __DIR__ . '/includes/admin_nav.php';
     border-radius: var(--card-radius);
     padding: 20px;
     margin-top: 24px;
+    box-sizing: border-box;
+    width: 100%;
 }
 
 .insights-list {
@@ -1638,10 +2038,11 @@ include __DIR__ . '/includes/admin_nav.php';
 }
 
 /* Responsive adjustments */
-@media (max-width: 768px) {
+@media (max-width: 900px) {
     .mentor-hero-card {
         grid-template-columns: 1fr;
         text-align: center;
+        gap: 16px;
     }
     .mentor-avatar-badge {
         margin: 0 auto;
@@ -1675,6 +2076,9 @@ include __DIR__ . '/includes/admin_nav.php';
             <!-- Mentor Selector -->
             <form method="GET" id="mentor-select-form" style="margin:0;">
                 <input type="hidden" name="range" value="<?= htmlspecialchars($range_param, ENT_QUOTES, 'UTF-8') ?>">
+                <input type="hidden" name="int_period" value="<?= htmlspecialchars($int_period, ENT_QUOTES, 'UTF-8') ?>">
+                <input type="hidden" name="int_type" value="<?= htmlspecialchars($int_type, ENT_QUOTES, 'UTF-8') ?>">
+                <input type="hidden" name="int_search" value="<?= htmlspecialchars($int_search, ENT_QUOTES, 'UTF-8') ?>">
                 <?php if ($range_param === 'custom'): ?>
                     <input type="hidden" name="start_date" value="<?= htmlspecialchars($start_date, ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="end_date" value="<?= htmlspecialchars($end_date, ENT_QUOTES, 'UTF-8') ?>">
@@ -1695,27 +2099,36 @@ include __DIR__ . '/includes/admin_nav.php';
                 </div>
             </form>
 
-            <!-- Date Range Filters (Daily, Weekly, Monthly, Overall, Custom) -->
+            <!-- Date Range Filters (Daily Today, Weekly, Monthly, Last 30 Days, Overall, Custom) -->
             <div class="date-pill-group">
-                <a href="?mentor_id=<?= $selected_mentor_id ?>&range=today" class="date-pill <?= $range_param === 'today' ? 'active' : '' ?>">Daily (Today)</a>
-                <a href="?mentor_id=<?= $selected_mentor_id ?>&range=this_week" class="date-pill <?= $range_param === 'this_week' ? 'active' : '' ?>">Weekly</a>
-                <a href="?mentor_id=<?= $selected_mentor_id ?>&range=this_month" class="date-pill <?= $range_param === 'this_month' ? 'active' : '' ?>">Monthly</a>
-                <a href="?mentor_id=<?= $selected_mentor_id ?>&range=all_time" class="date-pill <?= $range_param === 'all_time' ? 'active' : '' ?>">Overall</a>
+                <a href="?mentor_id=<?= $selected_mentor_id ?>&range=today&int_period=<?= urlencode($int_period) ?>&int_type=<?= urlencode($int_type) ?>&int_search=<?= urlencode($int_search) ?>" class="date-pill <?= $range_param === 'today' ? 'active' : '' ?>">Daily (Today)</a>
+                <a href="?mentor_id=<?= $selected_mentor_id ?>&range=this_week&int_period=<?= urlencode($int_period) ?>&int_type=<?= urlencode($int_type) ?>&int_search=<?= urlencode($int_search) ?>" class="date-pill <?= $range_param === 'this_week' ? 'active' : '' ?>">Weekly</a>
+                <a href="?mentor_id=<?= $selected_mentor_id ?>&range=this_month&int_period=<?= urlencode($int_period) ?>&int_type=<?= urlencode($int_type) ?>&int_search=<?= urlencode($int_search) ?>" class="date-pill <?= $range_param === 'this_month' ? 'active' : '' ?>">Monthly</a>
+                <a href="?mentor_id=<?= $selected_mentor_id ?>&range=last_30_days&int_period=<?= urlencode($int_period) ?>&int_type=<?= urlencode($int_type) ?>&int_search=<?= urlencode($int_search) ?>" class="date-pill <?= $range_param === 'last_30_days' ? 'active' : '' ?>">Last 30 Days</a>
+                <a href="?mentor_id=<?= $selected_mentor_id ?>&range=all_time&int_period=<?= urlencode($int_period) ?>&int_type=<?= urlencode($int_type) ?>&int_search=<?= urlencode($int_search) ?>" class="date-pill <?= $range_param === 'all_time' ? 'active' : '' ?>">Overall</a>
                 <button type="button" onclick="document.getElementById('custom-range-drawer').classList.toggle('open')" class="date-pill <?= $range_param === 'custom' ? 'active' : '' ?>" style="background:transparent; border:none; cursor:pointer;">
                     <i class="fas fa-sliders"></i> Custom Range
                 </button>
             </div>
 
-            <!-- CSV Export Button -->
-            <a href="?export=csv&mentor_id=<?= $selected_mentor_id ?>&range=<?= urlencode($range_param) ?>&start_date=<?= urlencode($start_date) ?>&end_date=<?= urlencode($end_date) ?>" class="btn-export-report" title="Export report data as CSV">
-                <i class="fas fa-file-csv"></i> Export CSV
-            </a>
+            <!-- Export Buttons (PDF & CSV) -->
+            <div class="export-btn-group">
+                <a href="?export=pdf&mentor_id=<?= $selected_mentor_id ?>&range=<?= urlencode($range_param) ?>&int_period=<?= urlencode($int_period) ?>&int_type=<?= urlencode($int_type) ?>&int_search=<?= urlencode($int_search) ?>&start_date=<?= urlencode($start_date) ?>&end_date=<?= urlencode($end_date) ?>" class="btn-export-pdf" title="Export official PDF Mentor Performance Report">
+                    <i class="fas fa-file-pdf"></i> Export Report
+                </a>
+                <a href="?export=csv&mentor_id=<?= $selected_mentor_id ?>&range=<?= urlencode($range_param) ?>&int_period=<?= urlencode($int_period) ?>&int_type=<?= urlencode($int_type) ?>&int_search=<?= urlencode($int_search) ?>&start_date=<?= urlencode($start_date) ?>&end_date=<?= urlencode($end_date) ?>" class="btn-export-csv" title="Export report data as CSV">
+                    <i class="fas fa-file-csv"></i> Export CSV
+                </a>
+            </div>
         </div>
 
         <!-- Inline Custom Date Range Drawer -->
         <form method="GET" id="custom-range-drawer" class="custom-range-drawer <?= $range_param === 'custom' ? 'open' : '' ?>">
             <input type="hidden" name="mentor_id" value="<?= $selected_mentor_id ?>">
             <input type="hidden" name="range" value="custom">
+            <input type="hidden" name="int_period" value="<?= htmlspecialchars($int_period, ENT_QUOTES, 'UTF-8') ?>">
+            <input type="hidden" name="int_type" value="<?= htmlspecialchars($int_type, ENT_QUOTES, 'UTF-8') ?>">
+            <input type="hidden" name="int_search" value="<?= htmlspecialchars($int_search, ENT_QUOTES, 'UTF-8') ?>">
             <span style="font-size:0.82rem; font-weight:700; color:var(--text-dark);"><i class="fas fa-calendar-days"></i> Custom Range:</span>
             <label style="font-size:0.8rem; font-weight:600; color:var(--text-sub);">From:</label>
             <input type="date" name="start_date" value="<?= htmlspecialchars($start_date, ENT_QUOTES, 'UTF-8') ?>" class="date-input" required>
@@ -1837,25 +2250,27 @@ include __DIR__ . '/includes/admin_nav.php';
                         <p style="margin:0; font-size:0.9rem;">No call or remark activity recorded for the selected period.</p>
                     </div>
                 <?php else: ?>
-                    <div class="chart-container">
-                        <?php foreach ($daily_trend as $dt):
-                            $c_pct = round(($dt['calls'] / $max_daily_val) * 100);
-                            $r_pct = round(($dt['remarks'] / $max_daily_val) * 100);
-                        ?>
-                            <div class="chart-bar-group">
-                                <div class="chart-tooltip">
-                                    <strong><?= $dt['label'] ?></strong><br>
-                                    Calls: <?= $dt['calls'] ?><br>
-                                    Remarks: <?= $dt['remarks'] ?><br>
-                                    Total: <?= $dt['total'] ?>
+                    <div class="chart-container-wrap">
+                        <div class="chart-container">
+                            <?php foreach ($daily_trend as $dt):
+                                $c_pct = round(($dt['calls'] / $max_daily_val) * 100);
+                                $r_pct = round(($dt['remarks'] / $max_daily_val) * 100);
+                            ?>
+                                <div class="chart-bar-group">
+                                    <div class="chart-tooltip">
+                                        <strong><?= $dt['label'] ?></strong><br>
+                                        Calls: <?= $dt['calls'] ?><br>
+                                        Remarks: <?= $dt['remarks'] ?><br>
+                                        Total: <?= $dt['total'] ?>
+                                    </div>
+                                    <div class="chart-bars">
+                                        <div class="bar-call" style="height: <?= max(4, $c_pct) ?>%;"></div>
+                                        <div class="bar-remark" style="height: <?= max(4, $r_pct) ?>%;"></div>
+                                    </div>
+                                    <div class="chart-x-label"><?= $dt['label'] ?></div>
                                 </div>
-                                <div class="chart-bars">
-                                    <div class="bar-call" style="height: <?= max(4, $c_pct) ?>%;"></div>
-                                    <div class="bar-remark" style="height: <?= max(4, $r_pct) ?>%;"></div>
-                                </div>
-                                <div class="chart-x-label"><?= $dt['label'] ?></div>
-                            </div>
-                        <?php endforeach; ?>
+                            <?php endforeach; ?>
+                        </div>
                     </div>
 
                     <div class="chart-legend">
@@ -1914,7 +2329,7 @@ include __DIR__ . '/includes/admin_nav.php';
                     </div>
                 </div>
 
-                <div style="margin-top:20px; padding:12px; background:#f8fafc; border-radius:10px; font-size:0.8rem; color:var(--text-sub); display:flex; justify-content:space-between;">
+                <div style="margin-top:20px; padding:12px; background:#f8fafc; border-radius:10px; font-size:0.8rem; color:var(--text-sub); display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;">
                     <span>Assigned Active: <strong><?= $mentor_stats['assigned_students_count'] ?></strong></span>
                     <span>Contacted: <strong><?= $mentor_stats['unique_contacted_count'] ?></strong></span>
                 </div>
@@ -1968,7 +2383,7 @@ include __DIR__ . '/includes/admin_nav.php';
                                             <?= $r_photo_url ? '' : strtoupper(substr($rnk['full_name'] ?: $rnk['username'], 0, 1)) ?>
                                         </div>
                                         <div>
-                                            <a href="?mentor_id=<?= (int)$rnk['id'] ?>&range=<?= urlencode($range_param) ?>" style="color:var(--text-dark); text-decoration:none; font-weight:700;">
+                                            <a href="?mentor_id=<?= (int)$rnk['id'] ?>&range=<?= urlencode($range_param) ?>&int_period=<?= urlencode($int_period) ?>&int_type=<?= urlencode($int_type) ?>&int_search=<?= urlencode($int_search) ?>" style="color:var(--text-dark); text-decoration:none; font-weight:700;">
                                                 <?= htmlspecialchars($rnk['full_name'], ENT_QUOTES, 'UTF-8') ?>
                                             </a>
                                             <div style="font-size:0.75rem; color:var(--text-muted);"><?= htmlspecialchars($rnk['username'], ENT_QUOTES, 'UTF-8') ?></div>
@@ -1998,17 +2413,64 @@ include __DIR__ . '/includes/admin_nav.php';
             </div>
         </div>
 
-        <!-- ── 6. Recent Interaction History Table ─────────────────────── -->
+        <!-- ── 6. Recent Interaction History Section with Multi-Filter ───── -->
         <div class="panel-card" style="margin-bottom:24px;">
             <div class="panel-header">
                 <h3><i class="fas fa-clock-rotate-left" style="color:var(--brand-purple);"></i> Recent Interaction History (Calls & Remarks)</h3>
-                <span style="font-size:0.78rem; font-weight:700; color:var(--text-muted);">Showing last <?= count($recent_interactions) ?> interactions</span>
+                <span style="font-size:0.78rem; font-weight:700; color:var(--text-muted);"><?= count($recent_interactions) ?> interaction(s) found</span>
             </div>
 
+            <!-- Multi-Filter Toolbar -->
+            <form method="GET" class="interaction-toolbar" id="int-filter-form">
+                <input type="hidden" name="mentor_id" value="<?= $selected_mentor_id ?>">
+                <input type="hidden" name="range" value="<?= htmlspecialchars($range_param, ENT_QUOTES, 'UTF-8') ?>">
+                <?php if ($range_param === 'custom'): ?>
+                    <input type="hidden" name="start_date" value="<?= htmlspecialchars($start_date, ENT_QUOTES, 'UTF-8') ?>">
+                    <input type="hidden" name="end_date" value="<?= htmlspecialchars($end_date, ENT_QUOTES, 'UTF-8') ?>">
+                <?php endif; ?>
+                <input type="hidden" name="int_type" id="hidden_int_type" value="<?= htmlspecialchars($int_type, ENT_QUOTES, 'UTF-8') ?>">
+
+                <div class="interaction-filters-left">
+                    <!-- Period Filter Dropdown -->
+                    <div class="int-period-select-wrap">
+                        <select name="int_period" onchange="document.getElementById('int-filter-form').submit()" title="Filter interaction time period">
+                            <option value="last_1_day" <?= $int_period === 'last_1_day' ? 'selected' : '' ?>>Last 1 Day</option>
+                            <option value="today" <?= $int_period === 'today' ? 'selected' : '' ?>>Today</option>
+                            <option value="last_7_days" <?= $int_period === 'last_7_days' ? 'selected' : '' ?>>Last 7 Days</option>
+                            <option value="last_30_days" <?= $int_period === 'last_30_days' ? 'selected' : '' ?>>Last 30 Days</option>
+                            <option value="all" <?= $int_period === 'all' ? 'selected' : '' ?>>All Interactions</option>
+                        </select>
+                    </div>
+
+                    <!-- Type Toggle Pills [ All | Calls | Remarks ] -->
+                    <div class="type-pill-group">
+                        <button type="button" class="type-pill <?= $int_type === 'all' ? 'active' : '' ?>" onclick="document.getElementById('hidden_int_type').value='all'; document.getElementById('int-filter-form').submit();">All</button>
+                        <button type="button" class="type-pill <?= $int_type === 'call' ? 'active' : '' ?>" onclick="document.getElementById('hidden_int_type').value='call'; document.getElementById('int-filter-form').submit();">Calls</button>
+                        <button type="button" class="type-pill <?= $int_type === 'remark' ? 'active' : '' ?>" onclick="document.getElementById('hidden_int_type').value='remark'; document.getElementById('int-filter-form').submit();">Remarks</button>
+                    </div>
+
+                    <!-- Search Input Box -->
+                    <div class="search-input-wrap">
+                        <i class="fas fa-magnifying-glass search-icon"></i>
+                        <input type="text" name="int_search" value="<?= htmlspecialchars($int_search, ENT_QUOTES, 'UTF-8') ?>" placeholder="Search student, subject, remark, keyword..." autocomplete="off">
+                    </div>
+                </div>
+
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <button type="submit" class="btn-apply-range" style="padding:7px 14px; font-size:0.8rem;"><i class="fas fa-filter"></i> Search</button>
+                    <?php if ($int_period !== 'last_1_day' || $int_type !== 'all' || $int_search !== ''): ?>
+                        <a href="?mentor_id=<?= $selected_mentor_id ?>&range=<?= urlencode($range_param) ?>&int_period=last_1_day&int_type=all&int_search=" class="btn-reset-filters" title="Reset interaction filters">
+                            <i class="fas fa-rotate-left"></i> Reset Filters
+                        </a>
+                    <?php endif; ?>
+                </div>
+            </form>
+
             <?php if (empty($recent_interactions)): ?>
-                <div style="text-align:center; padding:40px 20px; color:var(--text-muted);">
+                <div style="text-align:center; padding:40px 20px; color:var(--text-muted); background:#f8fafc; border-radius:10px; border:1px dashed var(--card-border);">
                     <i class="fas fa-comments" style="font-size:2rem; margin-bottom:8px; opacity:0.3;"></i>
-                    <p style="margin:0;">No calls or remarks recorded in this period.</p>
+                    <p style="margin:0; font-size:0.9rem; font-weight:600;">No interactions found matching the selected filters.</p>
+                    <p style="margin:4px 0 0 0; font-size:0.78rem; opacity:0.8;">Try adjusting your period, type, or search term above.</p>
                 </div>
             <?php else: ?>
                 <div class="data-table-wrap">
@@ -2017,8 +2479,8 @@ include __DIR__ . '/includes/admin_nav.php';
                             <tr>
                                 <th style="width:90px;">Type</th>
                                 <th style="width:140px;">Timestamp</th>
-                                <th>Student</th>
-                                <th>Course</th>
+                                <th style="width:180px;">Student</th>
+                                <th style="width:140px;">Course</th>
                                 <th>Notes / Remark</th>
                             </tr>
                         </thead>
@@ -2033,15 +2495,15 @@ include __DIR__ . '/includes/admin_nav.php';
                                         <?php endif; ?>
                                     </td>
                                     <td style="white-space:nowrap; font-size:0.78rem; color:var(--text-muted);">
-                                        <?= date('d M Y, h:i A', strtotime($ri['event_time'])) ?>
+                                        <?= date('d M Y, h:i A', strtotime((string)$ri['event_time'])) ?>
                                     </td>
                                     <td>
                                         <strong><?= htmlspecialchars($ri['student_name'] ?: $ri['student_user_id'], ENT_QUOTES, 'UTF-8') ?></strong>
-                                        <div style="font-size:0.72rem; color:var(--text-muted);"><?= htmlspecialchars($ri['student_user_id'], ENT_QUOTES, 'UTF-8') ?></div>
+                                        <div style="font-size:0.72rem; color:var(--text-muted);"><?= htmlspecialchars((string)$ri['student_user_id'], ENT_QUOTES, 'UTF-8') ?></div>
                                     </td>
-                                    <td><?= htmlspecialchars($ri['pepp_course'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
+                                    <td><?= htmlspecialchars((string)($ri['pepp_course'] ?? '—'), ENT_QUOTES, 'UTF-8') ?></td>
                                     <td style="font-size:0.82rem; color:var(--text-dark);">
-                                        <?= nl2br(htmlspecialchars($ri['note'] ?? '—', ENT_QUOTES, 'UTF-8')) ?>
+                                        <?= nl2br(htmlspecialchars((string)($ri['note'] ?? '—'), ENT_QUOTES, 'UTF-8')) ?>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
@@ -2079,19 +2541,19 @@ include __DIR__ . '/includes/admin_nav.php';
                             <?php foreach ($login_history_rows as $lh): ?>
                                 <tr>
                                     <td style="white-space:nowrap; font-size:0.78rem; color:var(--text-muted);">
-                                        <?= date('d M Y, h:i A', strtotime($lh['created_at'])) ?>
+                                        <?= date('d M Y, h:i A', strtotime((string)$lh['created_at'])) ?>
                                     </td>
                                     <td>
                                         <span class="badge" style="background:#f1f5f9; color:var(--text-dark); font-weight:700; font-size:0.72rem; padding:2px 8px; border-radius:4px;">
-                                            <?= htmlspecialchars(strtoupper($lh['action_type']), ENT_QUOTES, 'UTF-8') ?>
+                                            <?= htmlspecialchars(strtoupper((string)$lh['action_type']), ENT_QUOTES, 'UTF-8') ?>
                                         </span>
                                     </td>
-                                    <td><?= htmlspecialchars($lh['details'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
+                                    <td><?= htmlspecialchars((string)($lh['details'] ?? '—'), ENT_QUOTES, 'UTF-8') ?></td>
                                     <td style="font-size:0.78rem; color:var(--text-sub);">
                                         <?= htmlspecialchars(parse_user_agent_summary($lh['user_agent'] ?? null), ENT_QUOTES, 'UTF-8') ?>
                                     </td>
                                     <td><?= htmlspecialchars($lh['location'] ?: 'Location unavailable', ENT_QUOTES, 'UTF-8') ?></td>
-                                    <td style="font-family:monospace; font-size:0.75rem; color:var(--text-muted);"><?= htmlspecialchars($lh['ip_address'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
+                                    <td style="font-family:monospace; font-size:0.75rem; color:var(--text-muted);"><?= htmlspecialchars((string)($lh['ip_address'] ?? '—'), ENT_QUOTES, 'UTF-8') ?></td>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>
