@@ -40,6 +40,10 @@ if ($tab === 'payments') {
 $success_message = '';
 $error_message = '';
 
+if (!empty($_GET['paid'])) {
+    $success_message = "Payment logged successfully. Voucher: " . htmlspecialchars(strip_tags($_GET['paid']));
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!csrf_verify()) {
         $action = $_POST['action'] ?? '';
@@ -372,7 +376,7 @@ if ($tab === 'payments') {
 
             // Aggregate by mode, excluding already paid ones
             $stmt = $pdo->prepare("
-                SELECT t.mode_id, t.mode_name_snapshot, t.mode_name, t.quantity_label_snapshot, SUM(tp.quantity) AS total_qty
+                SELECT t.mode_id, MAX(COALESCE(t.mode_name_snapshot, t.mode_name)) AS mode_title, t.quantity_label_snapshot, SUM(tp.quantity) AS total_qty
                 FROM ld_tasks t
                 JOIN ld_task_topics tp ON tp.task_id = t.id
                 WHERE t.admin_username = ?
@@ -393,8 +397,8 @@ if ($tab === 'payments') {
 
             $work_summary = [];
             foreach ($modes as $m) {
-                $mname = $m['mode_name_snapshot'] ?: $m['mode_name'];
-                $qlbl = $m['quantity_label_snapshot'] ?: 'units';
+                $mname = !empty($m['mode_title']) ? $m['mode_title'] : (!empty($m['mode_name']) ? $m['mode_name'] : 'Work Mode');
+                $qlbl = !empty($m['quantity_label_snapshot']) ? $m['quantity_label_snapshot'] : 'units';
                 $work_summary[] = [
                     'mode_name' => $mname,
                     'total_qty' => (float)$m['total_qty'],
@@ -454,7 +458,7 @@ if ($tab === 'payments') {
 
     // 2. Handle POST payout logging
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'record_payment') {
-        if (!verify_csrf()) {
+        if (!csrf_verify()) {
             $error_message = 'Invalid request (CSRF check failed).';
         } else {
             $intern_id = (int)($_POST['intern_id'] ?? 0);
@@ -464,6 +468,17 @@ if ($tab === 'payments') {
             $acct_id = (int)($_POST['payment_account_id'] ?? 0);
             $paid_date = trim($_POST['paid_date'] ?? '');
             $remarks = trim($_POST['remarks'] ?? '');
+            $admin_username = $_SESSION['admin_username'] ?? (function_exists('get_admin_username') ? get_admin_username() : (function_exists('get_admin_user') ? get_admin_user() : 'Admin'));
+
+            if (!empty($start) && strtotime($start)) {
+                $start = date('Y-m-d', strtotime($start));
+            }
+            if (!empty($end) && strtotime($end)) {
+                $end = date('Y-m-d', strtotime($end));
+            }
+            if (!empty($paid_date) && strtotime($paid_date)) {
+                $paid_date = date('Y-m-d', strtotime($paid_date));
+            }
 
             $stmt = $pdo->prepare("
                 SELECT username, full_name, DATE(created_at) AS joining_date
@@ -487,8 +502,8 @@ if ($tab === 'payments') {
                 $error_message = 'Start date, end date, and paid date are mandatory.';
             } elseif (!strtotime($start) || !strtotime($end) || !strtotime($paid_date)) {
                 $error_message = 'Invalid date format provided.';
-            } elseif ($start < $intern['joining_date']) {
-                $error_message = 'Start date cannot be earlier than intern joining/registration date.';
+            } elseif (!empty($intern['joining_date']) && $start < $intern['joining_date']) {
+                $error_message = 'Start date cannot be earlier than intern joining/registration date (' . $intern['joining_date'] . ').';
             } elseif ($end < $start) {
                 $error_message = 'End date cannot be earlier than start date.';
             } elseif ($end > date('Y-m-d')) {
@@ -545,26 +560,32 @@ if ($tab === 'payments') {
                             $error_message = 'Final paid amount cannot be negative.';
                         } else {
                             $screenshot_path = null;
-                            if (isset($_FILES['screenshot']) && $_FILES['screenshot']['error'] === UPLOAD_ERR_OK) {
-                                $file = $_FILES['screenshot'];
-                                $file_ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-                                $allowed_exts = ['jpg', 'jpeg', 'png', 'pdf'];
-
-                                if (!in_array($file_ext, $allowed_exts)) {
-                                    $error_message = 'Only image (JPG, PNG) or PDF screenshots are allowed.';
-                                } elseif ($file['size'] > 5 * 1024 * 1024) {
-                                    $error_message = 'Payment screenshot size cannot exceed 5MB.';
+                            if (isset($_FILES['screenshot']) && $_FILES['screenshot']['error'] !== UPLOAD_ERR_NO_FILE) {
+                                if ($_FILES['screenshot']['error'] === UPLOAD_ERR_INI_SIZE || $_FILES['screenshot']['error'] === UPLOAD_ERR_FORM_SIZE) {
+                                    $error_message = 'Payment screenshot exceeds the maximum allowed file size.';
+                                } elseif ($_FILES['screenshot']['error'] !== UPLOAD_ERR_OK) {
+                                    $error_message = 'Payment screenshot upload failed (Error code: ' . (int)$_FILES['screenshot']['error'] . ').';
                                 } else {
-                                    $upload_dir = __DIR__ . '/uploads/ld_payments/';
-                                    if (!file_exists($upload_dir)) {
-                                        mkdir($upload_dir, 0777, true);
-                                    }
-                                    $unique_name = 'ld_pay_' . bin2hex(random_bytes(8)) . '.' . $file_ext;
-                                    $target_path = $upload_dir . $unique_name;
-                                    if (move_uploaded_file($file['tmp_name'], $target_path)) {
-                                        $screenshot_path = 'uploads/ld_payments/' . $unique_name;
+                                    $file = $_FILES['screenshot'];
+                                    $file_ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+                                    $allowed_exts = ['jpg', 'jpeg', 'png', 'pdf'];
+
+                                    if (!in_array($file_ext, $allowed_exts)) {
+                                        $error_message = 'Only image (JPG, PNG) or PDF screenshots are allowed.';
+                                    } elseif ($file['size'] > 5 * 1024 * 1024) {
+                                        $error_message = 'Payment screenshot size cannot exceed 5MB.';
                                     } else {
-                                        $error_message = 'Failed to move uploaded screenshot file.';
+                                        $upload_dir = __DIR__ . '/uploads/ld_payments/';
+                                        if (!file_exists($upload_dir)) {
+                                            @mkdir($upload_dir, 0777, true);
+                                        }
+                                        $unique_name = 'ld_pay_' . bin2hex(random_bytes(8)) . '.' . $file_ext;
+                                        $target_path = $upload_dir . $unique_name;
+                                        if (move_uploaded_file($file['tmp_name'], $target_path)) {
+                                            $screenshot_path = 'uploads/ld_payments/' . $unique_name;
+                                        } else {
+                                            $error_message = 'Failed to move uploaded screenshot file.';
+                                        }
                                     }
                                 }
                             }
@@ -611,7 +632,7 @@ if ($tab === 'payments') {
                                         $screenshot_path, $remarks, $admin_username
                                     ]);
 
-                                    $inserted_id = $pdo->lastInsertId();
+                                    $inserted_id = (int)$pdo->lastInsertId();
                                     $voucher_no = 'VOU-LD-' . str_pad($inserted_id, 5, '0', STR_PAD_LEFT);
 
                                     $stmt = $pdo->prepare("UPDATE ld_intern_payments SET voucher_no = ? WHERE id = ?");
@@ -640,7 +661,7 @@ if ($tab === 'payments') {
 
                                     // Aggregate by work mode during the payment period and bulk insert snapshots into ld_intern_payment_items, excluding already paid ones
                                     $stmt = $pdo->prepare("
-                                        SELECT t.mode_id, t.mode_name_snapshot, t.mode_name, t.quantity_label_snapshot, SUM(tp.quantity) AS total_qty
+                                        SELECT t.mode_id, MAX(COALESCE(t.mode_name_snapshot, t.mode_name)) AS mode_title, t.quantity_label_snapshot, SUM(tp.quantity) AS total_qty
                                         FROM ld_tasks t
                                         JOIN ld_task_topics tp ON tp.task_id = t.id
                                         WHERE t.admin_username = ?
@@ -651,12 +672,13 @@ if ($tab === 'payments') {
                                           AND NOT EXISTS (
                                               SELECT 1 FROM ld_intern_payments p
                                               WHERE p.intern_id = ?
+                                                AND p.id != ?
                                                 AND p.status = 'Completed'
                                                 AND DATE(t.created_at) BETWEEN p.period_start_date AND p.period_end_date
                                           )
                                         GROUP BY t.mode_id, t.quantity_label_snapshot
                                     ");
-                                    $stmt->execute([$intern['username'], $start, $end, $intern_id]);
+                                    $stmt->execute([$intern['username'], $start, $end, $intern_id, $inserted_id]);
                                     $aggregated_items = $stmt->fetchAll();
 
                                     $item_stmt = $pdo->prepare("
@@ -667,8 +689,8 @@ if ($tab === 'payments') {
                                         )
                                     ");
                                     foreach ($aggregated_items as $item) {
-                                        $mtitle = $item['mode_name_snapshot'] ?: $item['mode_name'];
-                                        $qlbl = $item['quantity_label_snapshot'] ?: 'units';
+                                        $mtitle = !empty($item['mode_title']) ? $item['mode_title'] : (!empty($item['mode_name']) ? $item['mode_name'] : 'Work Mode');
+                                        $qlbl = !empty($item['quantity_label_snapshot']) ? $item['quantity_label_snapshot'] : 'units';
                                         $item_stmt->execute([
                                             $inserted_id,
                                             (int)$item['mode_id'],
@@ -682,9 +704,24 @@ if ($tab === 'payments') {
                                     log_admin_activity($pdo, $admin_username, 'ld_payment_recorded', $audit_details);
 
                                     $pdo->commit();
-                                    $success_message = "Payment logged successfully. Voucher: " . $voucher_no;
-                                } catch (Exception $txEx) {
-                                    $pdo->rollBack();
+
+                                    if (!headers_sent()) {
+                                        header("Location: ld-work-report.php?tab=payments&paid=" . urlencode($voucher_no));
+                                        exit();
+                                    } else {
+                                        $success_message = "Payment logged successfully. Voucher: " . $voucher_no;
+                                    }
+                                } catch (Throwable $txEx) {
+                                    if ($pdo->inTransaction()) {
+                                        $pdo->rollBack();
+                                    }
+                                    if (!empty($screenshot_path)) {
+                                        $orphan_file = __DIR__ . '/' . $screenshot_path;
+                                        if (file_exists($orphan_file)) {
+                                            @unlink($orphan_file);
+                                        }
+                                    }
+                                    error_log("L&D Intern Payment Recording Error: " . $txEx->getMessage() . " in " . $txEx->getFile() . ":" . $txEx->getLine());
                                     $error_message = "Database error: " . $txEx->getMessage();
                                 }
                             }
@@ -2293,6 +2330,15 @@ include 'includes/admin_nav.php';
             e.preventDefault();
             alertBox.innerHTML = '<div class="alert alert-error" style="padding: 8px 12px; font-size: 0.8rem;"><i class="fas fa-triangle-exclamation"></i> Cannot record payout: Selected period overlaps with an existing completed payment.</div>';
             return;
+        }
+
+        // Prevent accidental double-submission
+        var submitBtn = document.getElementById('btn-submit-payout');
+        if (submitBtn && !submitBtn.disabled) {
+            setTimeout(function() {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Recording...';
+            }, 0);
         }
     });
     </script>

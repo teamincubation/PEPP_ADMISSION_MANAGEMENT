@@ -486,6 +486,9 @@ function is_admin_logged_in(): bool {
 function get_admin_user(): string {
     return (string)($_SESSION['admin_username'] ?? 'Admin');
 }
+function get_admin_username(): string {
+    return get_admin_user();
+}
 function is_super_admin() {
     return ($_SESSION['admin_role'] ?? '') === 'super_admin';
 }
@@ -834,6 +837,9 @@ function verify_csrf_token(?string $token = null): bool {
         return csrf_verify();
     }
     return hash_equals($_SESSION['csrf_token'] ?? '', (string)$token);
+}
+function verify_csrf(): bool {
+    return csrf_verify();
 }
 
 /* ── Output helper ──────────────────────────────────────────────────────── */
