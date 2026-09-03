@@ -74,29 +74,91 @@ include 'includes/admin_nav.php';
         <!-- Input / Reply Bar -->
         <div id="reply-container" style="border-top: 1px solid #e2e8f0; background: #fff; padding: 16px; display: none; flex-direction: column; gap: 10px; flex-shrink: 0;">
             <!-- Meta 24 Hour Warning and Template Selector -->
-            <div id="twentyfour-hour-warning" style="display: none; background: #fffbeb; border: 1px solid #fef3c7; border-radius: 8px; padding: 10px; font-size: 0.75rem; color: #b45309; align-items: center; gap: 8px;">
-                <i class="fas fa-triangle-exclamation"></i>
-                <div style="flex:1;">The 24-hour response window has expired. You can only send approved templates.</div>
-                <select id="template-select" onchange="onTemplateSelectChange(this.value)" style="padding: 4px 8px; border-radius: 6px; border: 1px solid #cbd5e1; outline: none; font-size: 0.75rem;">
-                    <option value="">- Select Approved Template -</option>
-                    <?php foreach ($approvedTemplates as $tplName): ?>
-                        <option value="<?php echo htmlspecialchars($tplName); ?>"><?php echo htmlspecialchars($tplName); ?></option>
-                    <?php endforeach; ?>
-                </select>
+            <div id="twentyfour-hour-warning" style="display: none; flex-direction: column; gap: 12px; background: #fffdf5; border: 1.5px solid #fef3c7; border-radius: 12px; padding: 14px 16px; box-shadow: 0 2px 6px rgba(245, 158, 11, 0.06);">
+                <!-- Notice Header Banner -->
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px dashed #fde68a;">
+                    <div style="display: flex; align-items: flex-start; gap: 10px;">
+                        <div style="width: 34px; height: 34px; border-radius: 10px; background: #fef3c7; color: #d97706; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 1rem; border: 1px solid #fde68a;">
+                            <i class="fas fa-clock-rotate-left"></i>
+                        </div>
+                        <div>
+                            <div style="font-weight: 700; color: #92400e; font-size: 0.85rem; display: flex; align-items: center; gap: 6px;">
+                                24-Hour WhatsApp Messaging Window Expired
+                            </div>
+                            <div style="font-size: 0.75rem; color: #b45309; line-height: 1.45; margin-top: 2px;">
+                                Free-form messaging is locked by Meta WhatsApp policy. You can re-open conversation access by sending a pre-approved template message.
+                            </div>
+                        </div>
+                    </div>
+                    <span style="background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; font-size: 0.68rem; font-weight: 700; padding: 3px 9px; border-radius: 20px; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; letter-spacing: 0.2px;">
+                        <i class="fas fa-lock" style="font-size: 0.65rem;"></i> Free Text Locked
+                    </span>
+                </div>
+
+                <!-- Template Selector Form Group -->
+                <div style="display: flex; flex-direction: column; gap: 7px;">
+                    <!-- Dropdown Label & Meta Badge -->
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <label for="template-select" style="font-weight: 700; color: #1e293b; font-size: 0.82rem; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; margin: 0;">
+                            <i class="fab fa-whatsapp" style="color: #22c55e; font-size: 1rem;"></i>
+                            <span>Select Approved WhatsApp Template</span>
+                            <span style="font-size: 0.68rem; font-weight: 600; color: #4338ca; background: #e0e7ff; border: 1px solid #c7d2fe; padding: 1px 7px; border-radius: 6px; letter-spacing: 0.2px;">Meta Approved</span>
+                        </label>
+                        <span style="font-size: 0.72rem; color: #64748b; font-weight: 500;">
+                            <i class="fas fa-layer-group" style="color: #94a3b8; margin-right: 3px;"></i> <?php echo count($approvedTemplates); ?> templates available
+                        </span>
+                    </div>
+
+                    <!-- Custom Styled Select Input Wrapper -->
+                    <div class="template-select-wrapper" style="position: relative; width: 100%;">
+                        <div class="template-select-icon" style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: #64748b; font-size: 0.85rem; pointer-events: none; z-index: 1;">
+                            <i class="fas fa-file-lines"></i>
+                        </div>
+                        <select id="template-select" onchange="onTemplateSelectChange(this.value)" class="custom-template-select" style="width: 100%; height: 42px; padding: 0 40px 0 38px; border-radius: 8px; border: 1.5px solid #cbd5e1; background-color: #ffffff; color: #1e293b; font-size: 0.84rem; font-weight: 600; outline: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; appearance: none; -webkit-appearance: none; -moz-appearance: none; box-shadow: 0 1px 2px rgba(0,0,0,0.04);">
+                            <option value="">— Select an Approved WhatsApp Template —</option>
+                            <?php foreach ($approvedTemplates as $tplName): ?>
+                                <option value="<?php echo htmlspecialchars($tplName); ?>"><?php echo htmlspecialchars($tplName); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <div class="template-select-chevron" style="position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: #64748b; font-size: 0.75rem; pointer-events: none; z-index: 1;">
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                    </div>
+
+                    <!-- Helper Subtext -->
+                    <div style="font-size: 0.72rem; color: #64748b; display: flex; align-items: center; gap: 5px; margin-top: 1px;">
+                        <i class="fas fa-circle-info" style="color: #6366f1; font-size: 0.75rem;"></i>
+                        <span>Variables mapping and live student preview will resolve automatically upon selection.</span>
+                    </div>
+                </div>
+
             </div>
 
             <!-- Template Variables Mapping Visualizer (Safeguard 3) -->
-            <div id="template-variables-preview" style="display: none; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-size: 0.75rem;">
-                <h5 style="margin:0 0 6px; font-weight:700; color:#475569;">Variables Mapping &amp; Live Resolution:</h5>
-                <div id="variables-list" style="display:flex; flex-direction:column; gap:4px; margin-bottom:8px;"></div>
-                <h5 style="margin:0 0 4px; font-weight:700; color:#475569;">Message Preview:</h5>
-                <div id="template-text-preview" style="background:#e0f2fe; color:#0369a1; padding:8px; border-radius:6px; font-family:monospace; white-space:pre-wrap;"></div>
+            <div id="template-variables-preview" style="display: none; background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 14px 16px; font-size: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; border-bottom: 1px solid #f1f5f9; padding-bottom: 6px;">
+                    <h5 style="margin: 0; font-weight: 700; color: #334155; font-size: 0.8rem; display: flex; align-items: center; gap: 6px;">
+                        <i class="fas fa-code-branch" style="color: #6366f1;"></i> Variables Mapping &amp; Live Resolution
+                    </h5>
+                    <span style="font-size: 0.68rem; color: #059669; font-weight: 600; background: #ecfdf5; border: 1px solid #a7f3d0; padding: 1px 7px; border-radius: 10px;">
+                        <i class="fas fa-check-circle" style="font-size: 0.65rem;"></i> Auto-Resolved
+                    </span>
+                </div>
+                <div id="variables-list" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px;"></div>
+
+                <div style="display: flex; align-items: center; justify-content: space-between; margin: 10px 0 6px;">
+                    <h5 style="margin: 0; font-weight: 700; color: #334155; font-size: 0.8rem; display: flex; align-items: center; gap: 6px;">
+                        <i class="fab fa-whatsapp" style="color: #22c55e;"></i> WhatsApp Message Preview
+                    </h5>
+                    <span style="font-size: 0.68rem; color: #64748b;">Live Student Context Preview</span>
+                </div>
+                <div id="template-text-preview" style="background: #e7fed9; border: 1px solid #bbf7d0; color: #1e293b; padding: 12px 14px; border-radius: 12px; border-top-left-radius: 2px; font-size: 0.82rem; line-height: 1.5; white-space: pre-wrap; box-shadow: 0 1px 2px rgba(0,0,0,0.04);"></div>
             </div>
 
-            <!-- Free text message inputs -->
+            <!-- Free text message inputs / Template send action -->
             <div style="display: flex; gap: 10px; align-items: flex-end;" id="free-text-input-row">
                 <textarea id="reply-textarea" placeholder="Type a message..." rows="1" style="flex: 1; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 12px; font-size: 0.85rem; outline: none; resize: none; min-height: 38px; max-height: 120px;" oninput="adjustTextareaHeight(this)"></textarea>
-                <button onclick="sendReply()" class="btn btn-primary" style="padding: 9px 18px; border-radius: 8px; display: flex; align-items: center; gap: 6px; height: 38px;">
+                <button id="send-reply-btn" onclick="sendReply()" class="btn btn-primary" style="padding: 9px 18px; border-radius: 8px; display: flex; align-items: center; gap: 6px; height: 38px; font-weight: 600;">
                     <i class="fas fa-paper-plane"></i> Send
                 </button>
             </div>
@@ -185,6 +247,21 @@ include 'includes/admin_nav.php';
     background: #fef2f2 !important;
     color: #1e293b !important;
     border-color: #fca5a5 !important;
+}
+.custom-template-select:hover {
+    border-color: #94a3b8 !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.custom-template-select:focus {
+    border-color: #6366f1 !important;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18) !important;
+    background-color: #ffffff !important;
+}
+.template-select-wrapper:hover i.fa-file-lines {
+    color: #4f46e5 !important;
+}
+.template-select-wrapper:hover i.fa-chevron-down {
+    color: #1e293b !important;
 }
 </style>
 
@@ -452,6 +529,13 @@ function updateWindowPolicies() {
     if (diffHours <= 24) {
         warning.style.display = 'none';
         freeTextInput.style.display = 'flex';
+        document.getElementById('reply-textarea').style.display = 'block';
+        const sendBtn = document.getElementById('send-reply-btn');
+        if (sendBtn) {
+            sendBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Send';
+            sendBtn.style.background = '';
+            sendBtn.style.borderColor = '';
+        }
 
         const hoursLeft = Math.ceil(24 - diffHours);
         badge.innerHTML = `<span class="badge green" style="font-size:0.7rem; font-weight:700;"><i class="fas fa-clock"></i> ${hoursLeft}h left</span>`;
@@ -467,10 +551,16 @@ function onTemplateSelectChange(tplName) {
     const varList = document.getElementById('variables-list');
     const textPreview = document.getElementById('template-text-preview');
     const freeTextRow = document.getElementById('free-text-input-row');
+    const sendBtn = document.getElementById('send-reply-btn');
 
     if (!tplName) {
         tplPreview.style.display = 'none';
         freeTextRow.style.display = 'none';
+        if (sendBtn) {
+            sendBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Send';
+            sendBtn.style.background = '';
+            sendBtn.style.borderColor = '';
+        }
         return;
     }
 
@@ -482,12 +572,23 @@ function onTemplateSelectChange(tplName) {
                 freeTextRow.style.display = 'flex'; // show send button row
                 document.getElementById('reply-textarea').style.display = 'none'; // hide normal text area since we send template
 
+                if (sendBtn) {
+                    sendBtn.innerHTML = '<i class="fab fa-whatsapp"></i> Send Approved Template';
+                    sendBtn.style.background = '#10b981';
+                    sendBtn.style.borderColor = '#10b981';
+                }
+
                 // List parameters and resolved variables (Safeguard 3)
                 let varHtml = '';
                 res.parameters.forEach((val, idx) => {
-                    varHtml += `<div><strong>{{${idx + 1}}}:</strong> <span style="color:#059669;">${escapeHtml(val)}</span></div>`;
+                    varHtml += `
+                        <div style="display:inline-flex; align-items:center; gap:6px; background:#ffffff; border:1px solid #cbd5e1; border-radius:6px; padding:3px 9px; font-size:0.75rem; box-shadow:0 1px 2px rgba(0,0,0,0.03);">
+                            <span style="font-weight:700; color:#4f46e5; background:#e0e7ff; padding:1px 5px; border-radius:4px; font-size:0.7rem;">{{${idx + 1}}}</span>
+                            <span style="color:#0f172a; font-weight:600;">${escapeHtml(val)}</span>
+                        </div>
+                    `;
                 });
-                varList.innerHTML = varHtml || '<div style="color:#94a3b8;">No parameters required.</div>';
+                varList.innerHTML = varHtml || '<div style="color:#94a3b8; font-style:italic; padding:2px 0;">No variables required for this template.</div>';
                 textPreview.innerText = res.preview_body;
             } else {
                 alert('Failed to load template variables mapping: ' + res.error);
@@ -637,6 +738,12 @@ function sendReply() {
             document.getElementById('reply-textarea').style.display = 'block';
             if (tplSelect) tplSelect.value = '';
             document.getElementById('template-variables-preview').style.display = 'none';
+            const sendBtn = document.getElementById('send-reply-btn');
+            if (sendBtn) {
+                sendBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Send';
+                sendBtn.style.background = '';
+                sendBtn.style.borderColor = '';
+            }
 
             // Reload message thread immediately
             loadMessages(currentConversationId);
