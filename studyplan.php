@@ -225,6 +225,15 @@ function get_valid_url($url) {
     return $url;
 }
 
+// Helper to determine if a URL is an HTTPS resource URL under courses.pepplearning.com
+function is_pepp_app_eligible_url($url) {
+    $url = trim($url ?? '');
+    if (empty($url)) return false;
+    $parts = @parse_url($url);
+    if (!$parts || empty($parts['scheme']) || empty($parts['host'])) return false;
+    return (strtolower($parts['scheme']) === 'https' && strtolower($parts['host']) === 'courses.pepplearning.com');
+}
+
 $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'login') {
     $email = trim($_POST['email'] ?? '');
@@ -1313,8 +1322,11 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
 
                                                     <div>
                                                         <div style="font-size:0.85rem; font-weight:700; color:var(--text-main);">
-                                                            <?php if (!empty($it['resource_links'])): ?>
-                                                                <a href="<?php echo htmlspecialchars(get_valid_url($it['resource_links'])); ?>" target="_blank" style="color: var(--accent); text-decoration: underline; display: inline-flex; align-items: center; gap: 4px;">
+                                                            <?php if (!empty($it['resource_links'])):
+                                                                $valid_res_url = get_valid_url($it['resource_links']);
+                                                                $is_app_eligible = is_pepp_app_eligible_url($valid_res_url);
+                                                            ?>
+                                                                <a href="<?php echo htmlspecialchars($valid_res_url, ENT_QUOTES, 'UTF-8'); ?>" target="_blank" class="pepp-resource-link<?php echo $is_app_eligible ? ' pepp-app-eligible' : ''; ?>" data-pepp-url="<?php echo htmlspecialchars($valid_res_url, ENT_QUOTES, 'UTF-8'); ?>" style="color: var(--accent); text-decoration: underline; display: inline-flex; align-items: center; gap: 4px;">
                                                                     <?php echo p_esc($it['activity_title']); ?>
                                                                     <i class="fas fa-external-link-alt" style="font-size:0.68rem;"></i>
                                                                 </a>
@@ -1424,6 +1436,55 @@ function toggleTaskCompletion(activityId, planId) {
         alert('Server connection error.');
     });
 }
+
+// Smart PEPP Resource Link Handler (Android App Intent Router)
+document.addEventListener('click', function(e) {
+    var link = e.target.closest('a.pepp-resource-link');
+    if (!link) return;
+
+    var rawUrl = link.getAttribute('data-pepp-url') || link.getAttribute('href') || '';
+    if (!rawUrl) return;
+
+    var parsed;
+    try {
+        parsed = new URL(rawUrl, window.location.href);
+    } catch (err) {
+        return; // Invalid URL format -> continue normal link click
+    }
+
+    // Strict Security Rule 1: Protocol must be strictly https:
+    if (parsed.protocol !== 'https:') {
+        return; // Reject http:, javascript:, data:, file:, intent:, etc.
+    }
+
+    // Strict Security Rule 2: Hostname must be strictly exact 'courses.pepplearning.com'
+    if (parsed.hostname.toLowerCase() !== 'courses.pepplearning.com') {
+        return; // External domain -> preserve standard target="_blank" browser navigation
+    }
+
+    // Device Detection: Android check (Do NOT classify iOS/iPadOS as Android)
+    var ua = navigator.userAgent || '';
+    var isAndroid = /Android/i.test(ua);
+    var isIOS = /iPhone|iPad|iPod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+    // Desktop, Windows, Mac, Linux, iPhone, iPad -> preserve normal HTTPS browser target="_blank"
+    if (!isAndroid || isIOS) {
+        return;
+    }
+
+    // Android + courses.pepplearning.com: Intercept click to invoke Android Intent URI
+    e.preventDefault();
+
+    var pathAndQuery = parsed.pathname + parsed.search + parsed.hash;
+    var originalHttpsUrl = parsed.href;
+    var encodedFallback = encodeURIComponent(originalHttpsUrl);
+
+    var intentUrl = 'intent://' + parsed.hostname + pathAndQuery +
+                    '#Intent;scheme=https;package=com.pepplearning;S.browser_fallback_url=' +
+                    encodedFallback + ';end';
+
+    window.location.href = intentUrl;
+});
 </script>
 </body>
 </html>
