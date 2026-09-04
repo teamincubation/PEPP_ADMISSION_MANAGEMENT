@@ -414,7 +414,9 @@ class CommunicationEngine {
                 'account_security',
                 'auth_verification',
                 'alumni_verification_completed',
-                'alumni_referral_code_generated'
+                'alumni_referral_code_generated',
+                'referral_earning_credited',
+                'referral_payout_sent'
             ];
             $eventName = strtolower(trim((string)($item['event_name'] ?? '')));
             $isTransactional = in_array($eventName, $transactional_events, true)
@@ -1250,6 +1252,77 @@ class CommunicationEngine {
                         if ($refCode) {
                             $resolvedVal = 'https://pepplearning.in/admissions/register.php?ref=' . urlencode((string)$refCode);
                         }
+                    } elseif ($val === 'referred_student_name') {
+                        if (!empty($contextData['student_name'])) {
+                            $resolvedVal = $contextData['student_name'];
+                        } elseif (!empty($contextData['earning_id'])) {
+                            try {
+                                $stmtEarn = $this->pdo->prepare("SELECT student_name FROM referral_earnings WHERE id = ? LIMIT 1");
+                                $stmtEarn->execute([$contextData['earning_id']]);
+                                $resolvedVal = (string)$stmtEarn->fetchColumn();
+                            } catch (Exception $e) {}
+                        } elseif (!empty($contextData['user_id'])) {
+                            try {
+                                $stmtUser = $this->pdo->prepare("SELECT name FROM users WHERE user_id = ? LIMIT 1");
+                                $stmtUser->execute([$contextData['user_id']]);
+                                $resolvedVal = (string)$stmtUser->fetchColumn();
+                            } catch (Exception $e) {}
+                        }
+                    } elseif ($val === 'referred_student_course') {
+                        if (!empty($contextData['course_name'])) {
+                            $resolvedVal = $contextData['course_name'];
+                        } else {
+                            $uId = $contextData['user_id'] ?? null;
+                            if (!$uId && !empty($contextData['earning_id'])) {
+                                try {
+                                    $stmtEarn = $this->pdo->prepare("SELECT user_id FROM referral_earnings WHERE id = ? LIMIT 1");
+                                    $stmtEarn->execute([$contextData['earning_id']]);
+                                    $uId = $stmtEarn->fetchColumn();
+                                } catch (Exception $e) {}
+                            }
+                            if ($uId) {
+                                try {
+                                    $stmtUser = $this->pdo->prepare("SELECT pepp_course FROM users WHERE user_id = ? LIMIT 1");
+                                    $stmtUser->execute([$uId]);
+                                    $resolvedVal = (string)$stmtUser->fetchColumn();
+                                } catch (Exception $e) {}
+                            }
+                        }
+                    } elseif ($val === 'referral_earning_amount') {
+                        if (isset($contextData['amount'])) {
+                            $amt = (float)$contextData['amount'];
+                            $resolvedVal = ($amt == floor($amt)) ? number_format($amt) : number_format($amt, 2);
+                        } elseif (!empty($contextData['earning_id'])) {
+                            try {
+                                $stmtEarn = $this->pdo->prepare("SELECT credited_amount FROM referral_earnings WHERE id = ? LIMIT 1");
+                                $stmtEarn->execute([$contextData['earning_id']]);
+                                $earnVal = (float)$stmtEarn->fetchColumn();
+                                $resolvedVal = ($earnVal == floor($earnVal)) ? number_format($earnVal) : number_format($earnVal, 2);
+                            } catch (Exception $e) {}
+                        }
+                    } elseif ($val === 'referral_wallet_balance' || $val === 'referral_remaining_balance') {
+                        if (isset($contextData['balance'])) {
+                            $bal = (float)$contextData['balance'];
+                            $resolvedVal = ($bal == floor($bal)) ? number_format($bal) : number_format($bal, 2);
+                        } elseif (!empty($contextData['referee_id']) && function_exists('referee_wallet')) {
+                            try {
+                                $w = referee_wallet($this->pdo, $contextData['referee_id']);
+                                $balVal = (float)($w['balance'] ?? 0);
+                                $resolvedVal = ($balVal == floor($balVal)) ? number_format($balVal) : number_format($balVal, 2);
+                            } catch (Exception $e) {}
+                        }
+                    } elseif ($val === 'referral_payout_amount') {
+                        if (isset($contextData['amount'])) {
+                            $pamt = (float)$contextData['amount'];
+                            $resolvedVal = ($pamt == floor($pamt)) ? number_format($pamt) : number_format($pamt, 2);
+                        } elseif (!empty($contextData['payout_id'])) {
+                            try {
+                                $stmtPay = $this->pdo->prepare("SELECT amount FROM referral_payouts WHERE id = ? LIMIT 1");
+                                $stmtPay->execute([$contextData['payout_id']]);
+                                $payVal = (float)$stmtPay->fetchColumn();
+                                $resolvedVal = ($payVal == floor($payVal)) ? number_format($payVal) : number_format($payVal, 2);
+                            } catch (Exception $e) {}
+                        }
                     }
                 }
 
@@ -1315,7 +1388,11 @@ class CommunicationEngine {
     public function sendEventNotification($eventName, $recipient, array $contextData = [], $sentBy = 'system', $scheduledAt = null) {
         $this->lastError = null;
         $studentUid = $contextData['student_uid'] ?? null;
-        if (!$studentUid && !empty($contextData['peppian_id'])) {
+        if (!$studentUid && !empty($contextData['earning_id'])) {
+            $studentUid = 'ref_earning_' . $contextData['earning_id'];
+        } elseif (!$studentUid && !empty($contextData['payout_id'])) {
+            $studentUid = 'ref_payout_' . $contextData['payout_id'];
+        } elseif (!$studentUid && !empty($contextData['peppian_id'])) {
             $studentUid = 'peppian_' . $contextData['peppian_id'];
         }
         $invoiceId = $contextData['invoice_id'] ?? null;

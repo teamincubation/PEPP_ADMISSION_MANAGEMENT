@@ -12,7 +12,16 @@
 
 function pepp_tables_exist($pdo, $tables) {
     foreach ((array)$tables as $t) {
-        try { if (!$pdo->query("SHOW TABLES LIKE " . $pdo->quote($t))->fetchColumn()) return false; }
+        try {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $stmt = $pdo->prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?");
+                $stmt->execute([$t]);
+                if (!$stmt->fetchColumn()) return false;
+            } else {
+                if (!$pdo->query("SHOW TABLES LIKE " . $pdo->quote($t))->fetchColumn()) return false;
+            }
+        }
         catch (Exception $e) { return false; }
     }
     return true;
@@ -226,7 +235,7 @@ function credit_referral_for_user($pdo, $user_id) {
         if (!$earnings) return;
 
         // Student state (user_id is the varchar registration id, e.g. PEPP...)
-        $stmt = $pdo->prepare("SELECT status, onboarding_status, payment_plan FROM users WHERE user_id = ? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT status, onboarding_status, payment_plan, pepp_course, name FROM users WHERE user_id = ? LIMIT 1");
         $stmt->execute([$user_id]);
         $u = $stmt->fetch();
         if (!$u) return;
@@ -268,9 +277,64 @@ function credit_referral_for_user($pdo, $user_id) {
                     }
                 }
             }
-            if ($notifyAmt > 0 && file_exists(__DIR__ . '/peppian_notify.php')) {
-                require_once __DIR__ . '/peppian_notify.php';
-                try { notify_referral_credited($pdo, $notifyRef, $notifyAmt, $e['student_name'] ?? ''); marketing_flag($pdo, 'referral', 'Earning credited'); } catch (Exception $ex) {}
+            if ($notifyAmt > 0) {
+                if (file_exists(__DIR__ . '/peppian_notify.php')) {
+                    require_once __DIR__ . '/peppian_notify.php';
+                    try { notify_referral_credited($pdo, $notifyRef, $notifyAmt, $e['student_name'] ?? ''); marketing_flag($pdo, 'referral', 'Earning credited'); } catch (Exception $ex) {}
+                }
+
+                try {
+                    $pepStmt = $pdo->prepare("
+                        SELECT p.id AS peppian_id, p.full_name, p.whatsapp
+                        FROM referees r
+                        JOIN peppians p ON p.id = r.peppian_id
+                        WHERE r.id = ? LIMIT 1
+                    ");
+                    $pepStmt->execute([$notifyRef]);
+                    $peppian = $pepStmt->fetch();
+
+                    if ($peppian && !empty($peppian['whatsapp'])) {
+                        require_once __DIR__ . '/communication/CommunicationEngine.php';
+                        $commEngine = CommunicationEngine::getInstance($pdo);
+                        $wa_recipient = CommunicationEngine::normalizePhone($peppian['whatsapp']);
+
+                        if (!empty($wa_recipient)) {
+                            // Get referred student course from users if not in $u
+                            $stCourse = $u['pepp_course'] ?? '';
+                            if ($stCourse === '') {
+                                $cStmt = $pdo->prepare("SELECT pepp_course FROM users WHERE user_id = ? LIMIT 1");
+                                $cStmt->execute([$e['user_id']]);
+                                $stCourse = (string)($cStmt->fetchColumn() ?: '');
+                            }
+
+                            // Current wallet balance after earning credit
+                            $w = referee_wallet($pdo, $notifyRef);
+                            $walletBal = (float)($w['balance'] ?? 0.0);
+
+                            $fmtAmt = ($notifyAmt == floor($notifyAmt)) ? number_format($notifyAmt) : number_format($notifyAmt, 2);
+                            $fmtBal = ($walletBal == floor($walletBal)) ? number_format($walletBal) : number_format($walletBal, 2);
+
+                            $context = [
+                                'alumni_name'             => $peppian['full_name'],
+                                'referred_student_name'   => $e['student_name'] ?? ($u['name'] ?? ''),
+                                'referred_student_course' => $stCourse,
+                                'referral_earning_amount' => $fmtAmt,
+                                'referral_wallet_balance' => $fmtBal,
+                                'peppian_id'              => $peppian['peppian_id'],
+                                'referee_id'              => $notifyRef,
+                                'student_uid'             => 'ref_earning_' . $e['id'],
+                                'earning_id'              => $e['id'],
+                                'user_id'                 => $e['user_id']
+                            ];
+
+                            $commEngine->sendEventNotification('referral_earning_credited', $wa_recipient, $context, 'system_referral');
+                        } else {
+                            error_log("Referral earning credited WhatsApp notification skipped: invalid phone for peppian_id=" . $peppian['peppian_id']);
+                        }
+                    }
+                } catch (Exception $wEx) {
+                    error_log("Referral earning credited WhatsApp notification failed: " . $wEx->getMessage());
+                }
             }
         }
     } catch (Exception $e) { error_log('credit_referral_for_user: ' . $e->getMessage()); }

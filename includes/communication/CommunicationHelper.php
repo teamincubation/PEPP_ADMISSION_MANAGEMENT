@@ -590,6 +590,48 @@ class CommunicationHelper {
                 'description' => 'Complete PEPP registration referral URL generated from the alumnus referral code.',
                 'sample' => 'https://pepplearning.in/admissions/register.php?ref=CODE123',
                 'is_financial' => false
+            ],
+            'referred_student_name' => [
+                'label' => 'Referred Student Name',
+                'category' => 'Alumni / Referral',
+                'description' => 'Full name of the referred student.',
+                'sample' => 'Sarah Ahmed',
+                'is_financial' => false
+            ],
+            'referred_student_course' => [
+                'label' => 'Referred Student Course',
+                'category' => 'Alumni / Referral',
+                'description' => 'Course name enrolled by the referred student.',
+                'sample' => 'CUET UG 2026',
+                'is_financial' => false
+            ],
+            'referral_earning_amount' => [
+                'label' => 'Referral Earning Amount',
+                'category' => 'Alumni / Referral',
+                'description' => 'Amount credited to the alumnus wallet for a referral.',
+                'sample' => '500',
+                'is_financial' => true
+            ],
+            'referral_wallet_balance' => [
+                'label' => 'Referral Wallet Balance',
+                'category' => 'Alumni / Referral',
+                'description' => 'Current total wallet balance after earning credit.',
+                'sample' => '1,500',
+                'is_financial' => true
+            ],
+            'referral_payout_amount' => [
+                'label' => 'Referral Payout Amount',
+                'category' => 'Alumni / Referral',
+                'description' => 'Amount paid out to the referee from their referral wallet.',
+                'sample' => '1,000',
+                'is_financial' => true
+            ],
+            'referral_remaining_balance' => [
+                'label' => 'Referral Remaining Balance',
+                'category' => 'Alumni / Referral',
+                'description' => 'Remaining referral wallet balance after payout deduction.',
+                'sample' => '500',
+                'is_financial' => true
             ]
         ];
     }

@@ -164,10 +164,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $proof = handle_file_upload_with_replace('proof', 'payouts', null, ['jpg','jpeg','png','pdf','webp']);
                     $pdo->prepare("INSERT INTO referral_payouts (referee_id, amount, paid_date, payment_account_id, proof_path, remarks, created_by, created_at) VALUES (?,?,?,?,?,?,?,NOW())")
                         ->execute([$rid, $amt, $_POST['paid_date'] ?: date('Y-m-d'), ((int)($_POST['payment_account_id'] ?? 0)) ?: null, $proof, trim($_POST['remarks'] ?? '') ?: null, $admin_username]);
+                    $new_payout_id = (int)$pdo->lastInsertId();
                     // Mark fully-credited earnings as paid (best-effort: oldest first up to amount)
                     $pdo->prepare("UPDATE referral_earnings SET status = 'paid', updated_at = NOW() WHERE referee_id = ? AND status = 'credited'")->execute([$rid]);
                     log_admin_activity($pdo, $admin_username, 'referral_payout', "Paid Rs. " . number_format($amt, 2) . " to referee #{$rid}");
                     try { notify_referral_paid($pdo, $rid, $amt); } catch (Exception $e) {}
+
+                    try {
+                        $pepStmt = $pdo->prepare("
+                            SELECT p.id AS peppian_id, p.full_name, p.whatsapp
+                            FROM referees r
+                            JOIN peppians p ON p.id = r.peppian_id
+                            WHERE r.id = ? LIMIT 1
+                        ");
+                        $pepStmt->execute([$rid]);
+                        $peppian = $pepStmt->fetch();
+
+                        if ($peppian && !empty($peppian['whatsapp'])) {
+                            require_once __DIR__ . '/includes/communication/CommunicationEngine.php';
+                            $commEngine = CommunicationEngine::getInstance($pdo);
+                            $wa_recipient = CommunicationEngine::normalizePhone($peppian['whatsapp']);
+
+                            if (!empty($wa_recipient)) {
+                                // Remaining wallet balance after payout deduction
+                                $w = referee_wallet($pdo, $rid);
+                                $remBal = (float)($w['balance'] ?? 0.0);
+
+                                $fmtAmt = ($amt == floor($amt)) ? number_format($amt) : number_format($amt, 2);
+                                $fmtBal = ($remBal == floor($remBal)) ? number_format($remBal) : number_format($remBal, 2);
+
+                                $context = [
+                                    'alumni_name'                => $peppian['full_name'],
+                                    'referral_payout_amount'     => $fmtAmt,
+                                    'referral_remaining_balance' => $fmtBal,
+                                    'peppian_id'                 => $peppian['peppian_id'],
+                                    'referee_id'                 => $rid,
+                                    'student_uid'                => 'ref_payout_' . $new_payout_id,
+                                    'payout_id'                  => $new_payout_id
+                                ];
+
+                                $commEngine->sendEventNotification('referral_payout_sent', $wa_recipient, $context, $admin_username);
+                            } else {
+                                error_log("Referral payout sent WhatsApp notification skipped: invalid phone for peppian_id=" . $peppian['peppian_id']);
+                            }
+                        }
+                    } catch (Exception $wEx) {
+                        error_log("Referral payout sent WhatsApp notification failed: " . $wEx->getMessage());
+                    }
                     $success_message = 'Payout recorded.';
                 } else { $error_message = 'A referee and positive amount are required.'; }
             } elseif ($action === 'save_coupon') {
