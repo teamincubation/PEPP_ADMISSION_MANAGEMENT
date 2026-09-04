@@ -32,6 +32,17 @@ function pep_norm_phone($p) {
     return $d;
 }
 
+function pep_referral_link($code) {
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'pepplearning.in';
+    $scriptDir = !empty($_SERVER['SCRIPT_NAME']) ? rtrim(dirname($_SERVER['SCRIPT_NAME']), '/\\') : '/admissions';
+    if ($scriptDir === '' || $scriptDir === '.') {
+        $scriptDir = '/admissions';
+    }
+    $baseUrl = $scheme . '://' . $host . $scriptDir;
+    return $baseUrl . '/register.php?ref=' . urlencode((string)$code);
+}
+
 function sync_peppian_to_alumni($pdo, $peppian_id) {
     try {
         $stmt = $pdo->prepare("SELECT * FROM peppians WHERE id = ?");
@@ -207,7 +218,30 @@ if ($portal_ready && $_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $msg = 'Verified! Your PEPP alumni account is now linked.';
                                 try {
                                     $vstmt = $pdo->prepare("SELECT * FROM peppians WHERE id = ?"); $vstmt->execute([$_SESSION['peppian_id']]);
-                                    $vp = $vstmt->fetch(); if ($vp) notify_peppian_verified($pdo, $vp);
+                                    $vp = $vstmt->fetch();
+                                    if ($vp) {
+                                        notify_peppian_verified($pdo, $vp);
+                                        if (!empty($vp['whatsapp'])) {
+                                            try {
+                                                require_once __DIR__ . '/includes/communication/CommunicationEngine.php';
+                                                $commEngine = CommunicationEngine::getInstance($pdo);
+                                                $wa_recipient = CommunicationEngine::normalizePhone($vp['whatsapp']);
+                                                if (!empty($wa_recipient)) {
+                                                    $context = [
+                                                        'alumni_name'  => $vp['full_name'],
+                                                        'student_name' => $vp['full_name'],
+                                                        'peppian_id'   => $vp['id'],
+                                                        'student_uid'  => 'peppian_' . $vp['id']
+                                                    ];
+                                                    $commEngine->sendEventNotification('alumni_verification_completed', $wa_recipient, $context, 'system_alumni');
+                                                } else {
+                                                    error_log("Alumni verification WhatsApp notification skipped: invalid phone for peppian_id=" . $vp['id']);
+                                                }
+                                            } catch (Exception $we) {
+                                                error_log("Alumni verification WhatsApp notification failed: " . $we->getMessage());
+                                            }
+                                        }
+                                    }
                                 } catch (Exception $e) { error_log('verify notify: ' . $e->getMessage()); }
                             }
                         }
@@ -277,8 +311,36 @@ if ($portal_ready && $_SERVER['REQUEST_METHOD'] === 'POST') {
                             }
                             $pdo->prepare("INSERT INTO referees (program_id, peppian_id, referral_code, payout_method, payout_details, terms_accepted, status, created_at) VALUES (?,?,?,?,?,1,'active',NOW())")
                                 ->execute([$prog['id'], $_SESSION['peppian_id'], $code, $method, $details]);
+                            $new_referee_id = (int)$pdo->lastInsertId();
                             $msg = 'You are registered! Your referral code is ' . $code;
                             try { marketing_flag($pdo, 'referral', 'New referee joined: ' . $code); } catch (Exception $e) {}
+
+                            try {
+                                $pepStmt = $pdo->prepare("SELECT * FROM peppians WHERE id = ? LIMIT 1");
+                                $pepStmt->execute([$_SESSION['peppian_id']]);
+                                $currPeppian = $pepStmt->fetch();
+                                if ($currPeppian && !empty($currPeppian['whatsapp'])) {
+                                    require_once __DIR__ . '/includes/communication/CommunicationEngine.php';
+                                    $commEngine = CommunicationEngine::getInstance($pdo);
+                                    $wa_recipient = CommunicationEngine::normalizePhone($currPeppian['whatsapp']);
+                                    if (!empty($wa_recipient)) {
+                                        $referralLink = pep_referral_link($code);
+                                        $context = [
+                                            'alumni_name'   => $currPeppian['full_name'],
+                                            'referral_code' => $code,
+                                            'referral_link' => $referralLink,
+                                            'peppian_id'    => $currPeppian['id'],
+                                            'referee_id'    => $new_referee_id,
+                                            'student_uid'   => 'referee_' . $new_referee_id
+                                        ];
+                                        $commEngine->sendEventNotification('alumni_referral_code_generated', $wa_recipient, $context, 'system_referral');
+                                    } else {
+                                        error_log("Alumni referral WhatsApp notification skipped: invalid phone for peppian_id=" . $currPeppian['id']);
+                                    }
+                                }
+                            } catch (Exception $rwe) {
+                                error_log("Alumni referral WhatsApp notification failed: " . $rwe->getMessage());
+                            }
                         }
                     }
                 }
@@ -1497,7 +1559,7 @@ body {
 
         <!-- My referral codes + wallets -->
         <?php foreach ($my_referees as $r): $w = $r['wallet'];
-            $link = $base_url . '/register.php?ref=' . urlencode($r['referral_code']); ?>
+            $link = pep_referral_link($r['referral_code']); ?>
         <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
                 <h2>Referral - <?php echo pep_e($r['academic_year']); ?></h2>

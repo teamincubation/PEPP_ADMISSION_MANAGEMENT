@@ -47,7 +47,7 @@ try {
     }
 
     // Seed default event mappings
-    $events = ['student_registration', 'student_approval', 'student_rejection', 'installment_reminder', 'payment_receipt', 'session_scheduled', 'payment_rejection', 'installment_overdue', 'course_migration_completed'];
+    $events = ['student_registration', 'student_approval', 'student_rejection', 'installment_reminder', 'payment_receipt', 'session_scheduled', 'payment_rejection', 'installment_overdue', 'course_migration_completed', 'alumni_verification_completed', 'alumni_referral_code_generated'];
     $stmtSeed = $pdo->prepare("INSERT IGNORE INTO communication_event_mappings (event_name) VALUES (?)");
     foreach ($events as $ev) {
         $stmtSeed->execute([$ev]);
@@ -442,7 +442,9 @@ include 'includes/admin_nav.php';
         'session_scheduled' => 'Triggered when a live learning session or activity is scheduled.',
         'payment_rejection' => 'Triggered when a student payment proof is rejected by accounts.',
         'installment_overdue' => 'Triggered when a student installment payment due date has passed (overdue reminder).',
-        'course_migration_completed' => 'Triggered when a student course migration or upgrade is successfully completed.'
+        'course_migration_completed' => 'Triggered when a student course migration or upgrade is successfully completed.',
+        'alumni_verification_completed' => 'Triggered immediately after a PEPPian successfully completes alumni verification.',
+        'alumni_referral_code_generated' => 'Triggered immediately after a new referral record and referral code are successfully created for an alumnus.'
     ];
 
     // Build array of approved templates for JS

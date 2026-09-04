@@ -567,6 +567,29 @@ class CommunicationHelper {
                 'description' => 'Academic year after migration',
                 'sample' => '2026-27',
                 'is_financial' => false
+            ],
+
+            // Alumni / Referral Details
+            'alumni_name' => [
+                'label' => 'Alumni Name',
+                'category' => 'Alumni / Referral',
+                'description' => 'Full name of the verified PEPPian/alumnus.',
+                'sample' => 'Adnan',
+                'is_financial' => false
+            ],
+            'referral_code' => [
+                'label' => 'Referral Code',
+                'category' => 'Alumni / Referral',
+                'description' => 'Unique referral code generated for the PEPPian.',
+                'sample' => 'CODE123',
+                'is_financial' => false
+            ],
+            'referral_link' => [
+                'label' => 'Referral Link',
+                'category' => 'Alumni / Referral',
+                'description' => 'Complete PEPP registration referral URL generated from the alumnus referral code.',
+                'sample' => 'https://pepplearning.in/admissions/register.php?ref=CODE123',
+                'is_financial' => false
             ]
         ];
     }

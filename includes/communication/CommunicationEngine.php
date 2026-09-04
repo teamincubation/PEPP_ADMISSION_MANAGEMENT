@@ -412,7 +412,9 @@ class CommunicationEngine {
                 'system_alert',
                 'password_reset',
                 'account_security',
-                'auth_verification'
+                'auth_verification',
+                'alumni_verification_completed',
+                'alumni_referral_code_generated'
             ];
             $eventName = strtolower(trim((string)($item['event_name'] ?? '')));
             $isTransactional = in_array($eventName, $transactional_events, true)
@@ -426,7 +428,9 @@ class CommunicationEngine {
                 || strpos($eventName, 'admission') !== false
                 || strpos($eventName, 'migration') !== false
                 || strpos($eventName, 'auth_') === 0
-                || strpos($eventName, 'lead_') === 0;
+                || strpos($eventName, 'lead_') === 0
+                || strpos($eventName, 'alumni_') === 0
+                || strpos($eventName, 'referral_') === 0;
 
             if (!$isTransactional) {
                 $recipientIdent = !empty($item['student_uid']) ? $item['student_uid'] : $item['recipient'];
@@ -1214,6 +1218,38 @@ class CommunicationEngine {
                 if ($resolvedVal === '') {
                     if ($val === 'current_datetime') {
                         $resolvedVal = date('d M Y h:i A');
+                    } elseif ($val === 'alumni_name') {
+                        if (!empty($contextData['peppian_id'])) {
+                            try {
+                                $stmtPep = $this->pdo->prepare("SELECT full_name FROM peppians WHERE id = ? LIMIT 1");
+                                $stmtPep->execute([$contextData['peppian_id']]);
+                                $resolvedVal = (string)$stmtPep->fetchColumn();
+                            } catch (Exception $e) {}
+                        } elseif (!empty($contextData['name'])) {
+                            $resolvedVal = $contextData['name'];
+                        }
+                    } elseif ($val === 'referral_code') {
+                        if (!empty($contextData['referee_id'])) {
+                            try {
+                                $stmtRef = $this->pdo->prepare("SELECT referral_code FROM referees WHERE id = ? LIMIT 1");
+                                $stmtRef->execute([$contextData['referee_id']]);
+                                $resolvedVal = (string)$stmtRef->fetchColumn();
+                            } catch (Exception $e) {}
+                        } elseif (!empty($contextData['code'])) {
+                            $resolvedVal = $contextData['code'];
+                        }
+                    } elseif ($val === 'referral_link') {
+                        $refCode = $contextData['referral_code'] ?? $contextData['code'] ?? null;
+                        if (!$refCode && !empty($contextData['referee_id'])) {
+                            try {
+                                $stmtRef = $this->pdo->prepare("SELECT referral_code FROM referees WHERE id = ? LIMIT 1");
+                                $stmtRef->execute([$contextData['referee_id']]);
+                                $refCode = (string)$stmtRef->fetchColumn();
+                            } catch (Exception $e) {}
+                        }
+                        if ($refCode) {
+                            $resolvedVal = 'https://pepplearning.in/admissions/register.php?ref=' . urlencode((string)$refCode);
+                        }
                     }
                 }
 
@@ -1279,6 +1315,9 @@ class CommunicationEngine {
     public function sendEventNotification($eventName, $recipient, array $contextData = [], $sentBy = 'system', $scheduledAt = null) {
         $this->lastError = null;
         $studentUid = $contextData['student_uid'] ?? null;
+        if (!$studentUid && !empty($contextData['peppian_id'])) {
+            $studentUid = 'peppian_' . $contextData['peppian_id'];
+        }
         $invoiceId = $contextData['invoice_id'] ?? null;
 
         try {
@@ -1327,10 +1366,12 @@ class CommunicationEngine {
                 $bodyText .= "Param " . ($i + 1) . ": " . $p . "\n";
             }
 
+            $recipientName = $contextData['alumni_name'] ?? $contextData['student_name'] ?? null;
+
             $queueId = $this->queueMessage(
                 'whatsapp',
                 $recipient,
-                $contextData['student_name'] ?? null,
+                $recipientName,
                 "Event Notification: {$eventName}",
                 $bodyText,
                 $bodyText,
