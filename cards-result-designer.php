@@ -13,15 +13,38 @@ $success_message = '';
 $error_message = '';
 
 // ── GET parameters (New Design or Saved Design) ────────────
-$saved_id    = (int)($_GET['id'] ?? 0);
-$year        = $_GET['year'] ?? '';
-$course_id   = (int)($_GET['course_id'] ?? 0);
-$plan_id     = (int)($_GET['plan_id'] ?? 0);
-$activity_id = (int)($_GET['activity_id'] ?? 0);
-$template_id = (int)($_GET['template_id'] ?? 0);
+$saved_id          = (int)($_GET['id'] ?? 0);
+$year              = $_GET['year'] ?? '';
+$course_id         = (int)($_GET['course_id'] ?? 0);
+$plan_id           = (int)($_GET['plan_id'] ?? 0);
+$activity_id       = (int)($_GET['activity_id'] ?? 0);
+$template_id       = (int)($_GET['template_id'] ?? 0);
+$explicit_template = ($template_id > 0);
 
-// Resolve template_id from saved design if it exists
-if ($saved_id) {
+// Deterministic saved card resolution if id was not explicitly provided in URL
+if (!$saved_id && $activity_id && $year) {
+    try {
+        if ($template_id > 0) {
+            $stmt_match = $pdo->prepare("SELECT id FROM test_result_cards WHERE activity_id = ? AND academic_year = ? AND template_id = ? LIMIT 1");
+            $stmt_match->execute([$activity_id, $year, $template_id]);
+            $exact_id = $stmt_match->fetchColumn();
+            if ($exact_id) {
+                $saved_id = (int)$exact_id;
+            }
+        }
+        if (!$saved_id) {
+            $stmt_all = $pdo->prepare("SELECT id FROM test_result_cards WHERE activity_id = ? AND academic_year = ?");
+            $stmt_all->execute([$activity_id, $year]);
+            $all_matching = $stmt_all->fetchAll(PDO::FETCH_COLUMN);
+            if (count($all_matching) === 1) {
+                $saved_id = (int)$all_matching[0];
+            }
+        }
+    } catch (Exception $e) {}
+}
+
+// Resolve template_id from saved design if it exists and no explicit template was requested
+if ($saved_id && !$explicit_template) {
     try {
         $stmt_saved = $pdo->prepare("SELECT template_id FROM test_result_cards WHERE id = ?");
         $stmt_saved->execute([$saved_id]);
@@ -227,11 +250,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
 
             $upd = $pdo->prepare("
                 UPDATE test_result_cards
-                SET design_title = ?, output_format = ?, output_file = COALESCE(?, output_file),
+                SET template_id = ?, design_title = ?, output_format = ?, output_file = COALESCE(?, output_file),
                     student_rank_mappings = ?, design_config = ?, updated_at = NOW()
                 WHERE id = ?
             ");
-            $upd->execute([$design_title, $output_format, $file_path, $mappings_json, $config_json, $design_id]);
+            $upd->execute([$template_id, $design_title, $output_format, $file_path, $mappings_json, $config_json, $design_id]);
             $id = $design_id;
         } else {
             $ins = $pdo->prepare("
@@ -262,7 +285,9 @@ if ($saved_id) {
             $course_id   = (int)$saved_design['course_id'];
             $plan_id     = (int)$saved_design['study_plan_id'];
             $activity_id = (int)$saved_design['activity_id'];
-            $template_id = (int)$saved_design['template_id'];
+            if (!$explicit_template) {
+                $template_id = (int)$saved_design['template_id'];
+            }
         }
     } catch (Exception $e) {
         $error_message = 'Failed to load saved card config: ' . $e->getMessage();
@@ -293,6 +318,36 @@ try {
 if (!$tpl) {
     header('Location: cards.php?tab=test_results');
     exit;
+}
+
+// ── Load all active card templates for template selector ────────────
+$all_templates = [];
+try {
+    $stmt_all_tpl = $pdo->query("SELECT id, title, category, bg_image, canvas_width, canvas_height FROM card_templates WHERE status = 'active' ORDER BY title ASC");
+    $raw_templates = $stmt_all_tpl->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($raw_templates as $t) {
+        if (has_template_access($pdo, $admin_username, (int)$t['id'])) {
+            $all_templates[] = $t;
+        }
+    }
+} catch (Exception $e) {}
+
+$has_current = false;
+foreach ($all_templates as $t) {
+    if ((int)$t['id'] === (int)$tpl['id']) {
+        $has_current = true;
+        break;
+    }
+}
+if (!$has_current && $tpl) {
+    $all_templates[] = [
+        'id' => (int)$tpl['id'],
+        'title' => $tpl['title'],
+        'category' => $tpl['category'] ?? '',
+        'bg_image' => $tpl['bg_image'],
+        'canvas_width' => $tpl['canvas_width'],
+        'canvas_height' => $tpl['canvas_height']
+    ];
 }
 
 // ── Load Test/Activity snapshot ────────────
@@ -601,6 +656,16 @@ include 'includes/admin_nav.php';
                 <div class="field full" style="margin-bottom:8px;">
                     <label>Design Title</label>
                     <input type="text" id="prop-design-title" value="<?php echo htmlspecialchars($saved_design['design_title'] ?? $activity['activity_title'] . ' Card'); ?>" oninput="saveHistoryState()">
+                </div>
+                <div class="field full" style="margin-bottom:8px;">
+                    <label>Background Template</label>
+                    <select id="prop-background-template" onchange="changeBackgroundTemplate(this.value)">
+                        <?php foreach ($all_templates as $avail_tpl): ?>
+                            <option value="<?php echo (int)$avail_tpl['id']; ?>" <?php echo ((int)$avail_tpl['id'] === (int)$template_id) ? 'selected' : ''; ?>>
+                                <?php echo htmlspecialchars($avail_tpl['title']); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
                 </div>
                 <div class="field-row">
                     <div class="field" style="margin:0;">
@@ -1202,9 +1267,16 @@ function injectJPEGDPI(arrayBuffer) {
 }
 
 // ── Canvas coordinate configurations ────────────
-const bgW = <?php echo (int)$tpl['canvas_width']; ?>;
-const bgH = <?php echo (int)$tpl['canvas_height']; ?>;
-const bgUrl = '<?php echo addslashes($tpl['bg_image']); ?>';
+let bgW = <?php echo (int)$tpl['canvas_width']; ?>;
+let bgH = <?php echo (int)$tpl['canvas_height']; ?>;
+let bgUrl = '<?php echo addslashes($tpl['bg_image']); ?>';
+let currentTemplateId = <?php echo (int)$template_id; ?>;
+const availableTemplates = <?php echo json_encode($all_templates); ?>;
+
+function resolveBgUrl(url) {
+    if (!url) return '';
+    return (url.startsWith('linear-gradient') || url.startsWith('radial-gradient') || url.startsWith('#') || url.startsWith('http') || url.startsWith('../')) ? url : '../' + url;
+}
 
 // Loaded database data
 const rankingList = <?php echo json_encode($ranking_list); ?>;
@@ -1240,7 +1312,7 @@ let dragStartCoords = null;
 let dragElementState = null;
 let isDraggingPhoto = false;
 
-let resolvedBgUrl = bgUrl.startsWith('linear-gradient') || bgUrl.startsWith('radial-gradient') || bgUrl.startsWith('#') || bgUrl.startsWith('http') || bgUrl.startsWith('../') ? bgUrl : '../' + bgUrl;
+let resolvedBgUrl = resolveBgUrl(bgUrl);
 
 // Function to load template background image
 function loadBackgroundImage(url) {
@@ -1256,6 +1328,65 @@ function loadBackgroundImage(url) {
         img.onload = () => resolve(img);
         img.onerror = () => reject(new Error("Failed to load image from URL: " + url));
     });
+}
+
+// Function to dynamically change the background template while preserving all existing layers & geometry
+async function changeBackgroundTemplate(newTemplateId) {
+    const tplId = parseInt(newTemplateId, 10);
+    if (!tplId) return;
+
+    const tpl = availableTemplates.find(t => parseInt(t.id, 10) === tplId);
+    if (!tpl) {
+        console.error("Template not found in availableTemplates:", tplId);
+        return;
+    }
+
+    const loader = document.getElementById('generation-loader');
+    const loaderMsg = document.getElementById('loader-message');
+    if (loader) {
+        if (loaderMsg) loaderMsg.textContent = 'Switching background template...';
+        loader.style.display = 'flex';
+    }
+
+    const newResolvedBgUrl = resolveBgUrl(tpl.bg_image);
+
+    try {
+        await loadBackgroundImage(newResolvedBgUrl);
+
+        currentTemplateId = tplId;
+        bgUrl = tpl.bg_image;
+        resolvedBgUrl = newResolvedBgUrl;
+
+        // Preserve stored layer geometry exactly.
+        // Update canvas dimension bounds if specified by the new template:
+        if (tpl.canvas_width && tpl.canvas_height) {
+            bgW = parseInt(tpl.canvas_width, 10);
+            bgH = parseInt(tpl.canvas_height, 10);
+        }
+
+        // NOTE: We do NOT modify 'elements', 'studentRankMappings', or any layer coordinates.
+        // Stored layer geometry (left, top, width, height, etc.) remains strictly unchanged.
+
+        initCanvasSize();
+        drawElements();
+        renderLayersList();
+        saveHistoryState();
+
+        const bgSelect = document.getElementById('prop-background-template');
+        if (bgSelect && parseInt(bgSelect.value, 10) !== tplId) {
+            bgSelect.value = tplId;
+        }
+    } catch (err) {
+        console.error("Failed to load new background template image:", err);
+        alert("Could not load the selected background template image: " + err.message);
+        // Revert select dropdown to previous template
+        const bgSelect = document.getElementById('prop-background-template');
+        if (bgSelect) {
+            bgSelect.value = currentTemplateId;
+        }
+    } finally {
+        if (loader) loader.style.display = 'none';
+    }
 }
 
 // ── 1. Page Initialization ────────────
@@ -3493,7 +3624,7 @@ function saveDesign(isExporting = false) {
             payload.append('course_id', <?php echo $course_id; ?>);
             payload.append('study_plan_id', <?php echo $plan_id; ?>);
             payload.append('activity_id', <?php echo $activity_id; ?>);
-            payload.append('template_id', <?php echo $template_id; ?>);
+            payload.append('template_id', currentTemplateId);
             payload.append('output_format', format);
             payload.append('student_rank_mappings', JSON.stringify(studentRankMappings));
             payload.append('design_config', JSON.stringify({

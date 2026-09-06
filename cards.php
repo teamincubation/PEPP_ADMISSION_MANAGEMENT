@@ -922,6 +922,15 @@ include 'includes/admin_nav.php';
 
             <!-- JavaScript helper for selectors -->
             <script>
+            window.savedResultCards = <?php echo json_encode(array_map(function($sc) {
+                return [
+                    'id' => (int)$sc['id'],
+                    'activity_id' => (int)$sc['activity_id'],
+                    'academic_year' => (string)$sc['academic_year'],
+                    'template_id' => (int)$sc['template_id']
+                ];
+            }, $saved_cards ?: [])); ?>;
+
             // Searchable Dropdown control
             function showDropdownMenu() {
                 const year = document.getElementById('sel-year').value;
@@ -1219,10 +1228,25 @@ include 'includes/admin_nav.php';
 
                 const parts = testVal.split('_');
                 const planId = parts[0];
-                const activityId = parts[1];
+                const activityId = parseInt(parts[1], 10);
+
+                let extraParam = '';
+                if (window.savedResultCards && Array.isArray(window.savedResultCards)) {
+                    const matches = window.savedResultCards.filter(c => c.activity_id === activityId && c.academic_year === year);
+                    if (matches.length === 1) {
+                        // Unambiguously exactly one saved card exists for this test & year
+                        extraParam = `&id=${matches[0].id}`;
+                    } else if (matches.length > 1 && template) {
+                        // If multiple exist, check if there is an exact match on selected template
+                        const exactMatch = matches.find(c => c.template_id === parseInt(template, 10));
+                        if (exactMatch) {
+                            extraParam = `&id=${exactMatch.id}`;
+                        }
+                    }
+                }
 
                 // course_id is set to 0 for merged context designer loading
-                window.location.href = `cards-result-designer.php?year=${encodeURIComponent(year)}&course_id=0&plan_id=${planId}&activity_id=${activityId}&template_id=${template}`;
+                window.location.href = `cards-result-designer.php?year=${encodeURIComponent(year)}&course_id=0&plan_id=${planId}&activity_id=${activityId}&template_id=${template}${extraParam}`;
             }
             </script>
         <?php endif; ?>
