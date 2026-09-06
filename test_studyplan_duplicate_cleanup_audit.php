@@ -759,8 +759,10 @@ assertTest('DUP-29', 'No activity dates are shifted on survivor activities', $da
 $all_rest = $pdo->query("SELECT COUNT(*) FROM study_plan_activities WHERE (activity_title LIKE '%Rest Day%' OR activity_type = 'Rest Day')")->fetchColumn();
 assertTest('DUP-30', 'Zero automatic Rest Day activities created across all test operations', (int)$all_rest === 0);
 
+$total = $passed + $failed;
+$pct = $total > 0 ? round(($passed / $total) * 100) : 0;
 echo "\n----------------------------------------------------------------------\n";
-echo "  RESULT: {$passed}/30 TESTS PASSED (" . round(($passed / 30) * 100) . "%)\n";
+echo "  RESULT: {$passed}/{$total} TESTS PASSED ({$pct}%)\n";
 echo "======================================================================\n\n";
 
 if ($failed > 0) {

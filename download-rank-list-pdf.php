@@ -10,6 +10,7 @@ if (session_status() === PHP_SESSION_NONE) {
 
 require_once 'includes/auth.php';
 require_once 'config/database.php';
+require_once 'includes/assessment_rank_helper.php';
 
 // Verify admin permissions
 if (!can_access('cards')) {
@@ -203,7 +204,9 @@ class MultiPagePDF {
 
     private $pages = [];
     private $currentPageIndex = -1;
-    private $images = []; // filepath -> [alias, width, height, bytes]
+    private $images = []; // alias -> [alias, width, height, bytes]
+    private $imagesByPath = []; // filePath -> alias
+    private $imagesByHash = []; // sha1(bytes) -> alias
     private $nextImageId = 1;
     private $fonts = [];
 
@@ -375,7 +378,9 @@ class MultiPagePDF {
     public function image($jpegPath, $x, $y, $w, $h) {
         if (!$jpegPath || !is_readable($jpegPath)) return false;
 
-        if (!isset($this->images[$jpegPath])) {
+        if (isset($this->imagesByPath[$jpegPath])) {
+            $alias = $this->imagesByPath[$jpegPath];
+        } else {
             $bytes = @file_get_contents($jpegPath);
             if (!$bytes || substr($bytes, 0, 2) !== "\xFF\xD8") return false;
 
@@ -394,17 +399,22 @@ class MultiPagePDF {
             }
             if (!$pw || !$ph) return false;
 
-            $alias = 'Im' . $this->nextImageId++;
-            $this->images[$jpegPath] = [
-                'alias' => $alias,
-                'width' => $pw,
-                'height' => $ph,
-                'bytes' => $bytes
-            ];
+            $hash = sha1($bytes);
+            if (isset($this->imagesByHash[$hash])) {
+                $alias = $this->imagesByHash[$hash];
+                $this->imagesByPath[$jpegPath] = $alias;
+            } else {
+                $alias = 'Im' . $this->nextImageId++;
+                $this->images[$alias] = [
+                    'alias' => $alias,
+                    'width' => $pw,
+                    'height' => $ph,
+                    'bytes' => $bytes
+                ];
+                $this->imagesByHash[$hash] = $alias;
+                $this->imagesByPath[$jpegPath] = $alias;
+            }
         }
-
-        $img = $this->images[$jpegPath];
-        $alias = $img['alias'];
 
         if (!in_array($alias, $this->pages[$this->currentPageIndex]['images'])) {
             $this->pages[$this->currentPageIndex]['images'][] = $alias;
@@ -424,8 +434,8 @@ class MultiPagePDF {
             return false;
         }
 
-        $img = $this->images[$jpegPath];
-        $alias = $img['alias'];
+        $alias = $this->imagesByPath[$jpegPath] ?? null;
+        if (!$alias) return false;
 
         // Remove standard non-clipped image operators
         $standard_op = sprintf("q %.2f 0 0 %.2f %.2f %.2f cm /%s Do Q\n", $r * 2, $r * 2, $cx - $r, self::H - ($cy - $r) - ($r * 2), $alias);
@@ -500,8 +510,8 @@ class MultiPagePDF {
         $imageStartObj = 1000;
         $imageMap = [];
         $imgIndex = $imageStartObj;
-        foreach ($this->images as $path => $img) {
-            $imageMap[$img['alias']] = $imgIndex++;
+        foreach ($this->images as $alias => $img) {
+            $imageMap[$alias] = $imgIndex++;
         }
 
         foreach ($this->pages as $i => $page) {
@@ -566,8 +576,7 @@ class MultiPagePDF {
             }
         }
 
-        foreach ($this->images as $path => $img) {
-            $alias = $img['alias'];
+        foreach ($this->images as $alias => $img) {
             $objId = $imageMap[$alias];
             $jb = $img['bytes'];
             $jw = $img['width'];
@@ -678,157 +687,36 @@ if (empty($chapter_name)) {
 }
 $formatted_date = !empty($test_date_raw) ? date('j F Y', strtotime($test_date_raw)) : date('j F Y');
 
-// Fetch results
+// Fetch results using shared canonical ranking helper
 $ranking_list = [];
 try {
-    $placeholders = implode(',', array_fill(0, count($batch_ids), '?'));
-    $stmt_res = $pdo->prepare("
-        SELECT ar.student_email, ar.score, ar.attendance_status,
-               COALESCE(u.name, ar.src_name) AS name,
-               COALESCE(u.college_school, '-') AS college_school,
-               u.user_id, u.pepp_course AS course_name,
-               u.user_photo
-        FROM assessment_results ar
-        LEFT JOIN users u ON (ar.user_id = u.user_id OR LOWER(ar.student_email) = LOWER(u.email))
-        WHERE ar.batch_id IN ($placeholders)
-    ");
-    $stmt_res->execute($batch_ids);
-    $results = $stmt_res->fetchAll(PDO::FETCH_ASSOC);
+    $canonical_res = AssessmentRankHelper::getCanonicalTestResults($pdo, $batch_ids, $year, __DIR__);
+    $ranking_list = $canonical_res['ranked_list'];
+    $attended_keys = $canonical_res['canonical_attended_keys'];
+    $union_parents = $canonical_res['union_find_parents'];
 
-    // Deduplicate and retain highest scores
-    $merged = [];
-    foreach ($results as $r) {
-        if ($r['attendance_status'] !== 'attended' || $r['score'] === null) {
-            continue;
-        }
-        $uid = !empty($r['user_id']) ? $r['user_id'] : $r['student_email'];
-        if (empty($uid)) continue;
-
-        if (!isset($merged[$uid]) || $r['score'] > $merged[$uid]['score']) {
-            $merged[$uid] = $r;
-        }
-    }
-
-    $rankable = array_values($merged);
-    usort($rankable, function($a, $b) { return ($b['score'] ?? 0) <=> ($a['score'] ?? 0); });
-
-    $prev_score = null;
-    $rank = 0;
-    $count = 0;
-    foreach ($rankable as $r) {
-        $count++;
-        if ($r['score'] !== $prev_score) {
-            $rank = $count;
-        }
-        $r['computed_rank'] = $rank;
-        $ranking_list[] = $r;
-        $prev_score = $r['score'];
-    }
-
-    // Resolve eligible courses for the study plan
-    $eligible_courses = [];
-    try {
-        $stmt_assign = $pdo->prepare("SELECT assignment_type, assigned_value FROM study_plan_assignments WHERE study_plan_id = ?");
-        $stmt_assign->execute([$plan_id]);
-        $assignments = $stmt_assign->fetchAll(PDO::FETCH_ASSOC);
-
-        $is_all = false;
-        $assigned_names = [];
-        foreach ($assignments as $asg) {
-            if ($asg['assignment_type'] === 'all') {
-                $is_all = true;
-                break;
-            } elseif ($asg['assignment_type'] === 'course') {
-                $assigned_names[] = $asg['assigned_value'];
-            }
-        }
-
-        if ($is_all) {
-            $stmt_courses = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE academic_year = ? AND status = 'active'");
-            $stmt_courses->execute([$year]);
-            $eligible_courses = $stmt_courses->fetchAll(PDO::FETCH_COLUMN);
-        } else {
-            if (!empty($assigned_names)) {
-                $placeholders_c = implode(',', array_fill(0, count($assigned_names), '?'));
-                $stmt_courses = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE academic_year = ? AND status = 'active' AND course_name IN ($placeholders_c)");
-                $stmt_courses->execute(array_merge([$year], $assigned_names));
-                $eligible_courses = $stmt_courses->fetchAll(PDO::FETCH_COLUMN);
-            }
-        }
-    } catch (Exception $e) {}
-
-    // Fallback: if no assigned courses resolved, get the course of the published batches
-    if (empty($eligible_courses) && !empty($batches)) {
+    // Resolve fallback course names if study plan assignments are empty
+    $fallback_courses = [];
+    if (!empty($batches)) {
         try {
             $stmt_pc = $pdo->prepare("SELECT course_name FROM pepp_courses WHERE id = ?");
             $stmt_pc->execute([$batches[0]['course_id']]);
             $cname = $stmt_pc->fetchColumn();
             if ($cname) {
-                $eligible_courses[] = $cname;
+                $fallback_courses[] = $cname;
             }
         } catch (Exception $e) {}
     }
 
-    // Load all eligible students
-    $all_eligible_students = [];
-    if (!empty($eligible_courses)) {
-        try {
-            $placeholders_c = implode(',', array_fill(0, count($eligible_courses), '?'));
-            $stmt_stud = $pdo->prepare("
-                SELECT user_id, name, email, college_school, pepp_course AS course_name, user_photo
-                FROM users
-                WHERE status = 'approved'
-                  AND student_status IN ('active', 'completed')
-                  AND pepp_academic_year = ?
-                  AND LOWER(TRIM(pepp_course)) IN ($placeholders_c)
-            ");
-            $stmt_stud->execute(array_merge([$year], array_map(function($c) { return strtolower(trim($c)); }, $eligible_courses)));
-            $all_eligible_students = $stmt_stud->fetchAll(PDO::FETCH_ASSOC);
-        } catch (Exception $e) {}
-    }
-
-    // Build attended match sets
-    $attended_ids = [];
-    $attended_emails = [];
-    foreach ($ranking_list as $student) {
-        if (!empty($student['user_id'])) {
-            $attended_ids[$student['user_id']] = true;
-        }
-        if (!empty($student['student_email'])) {
-            $attended_emails[strtolower(trim($student['student_email']))] = true;
-        }
-    }
-
-    // Filter to find not-attended students
-    $not_attended_list = [];
-    $seen_not_attended = [];
-    foreach ($all_eligible_students as $student) {
-        $has_attended = false;
-        if (!empty($student['user_id']) && isset($attended_ids[$student['user_id']])) {
-            $has_attended = true;
-        }
-        if (!empty($student['email']) && isset($attended_emails[strtolower(trim($student['email']))])) {
-            $has_attended = true;
-        }
-
-        if (!$has_attended) {
-            $key = !empty($student['user_id']) ? $student['user_id'] : $student['email'];
-            if (empty($key) || isset($seen_not_attended[$key])) {
-                continue;
-            }
-            $seen_not_attended[$key] = true;
-
-            $student['student_email'] = $student['email']; // Map for fallback consistency
-            $student['score'] = null;
-            $student['computed_rank'] = 'Not Attended';
-            $not_attended_list[] = $student;
-        }
-    }
-
-    // Sort not-attended list alphabetically by student name (case-insensitive, trimmed)
-    usort($not_attended_list, function($a, $b) {
-        return strcasecmp(trim($a['name'] ?? ''), trim($b['name'] ?? ''));
-    });
+    // Build Not-Attended list from the same canonical identity model
+    $not_attended_list = AssessmentRankHelper::getNotAttendedStudents(
+        $pdo,
+        $plan_id,
+        $year,
+        $attended_keys,
+        $union_parents,
+        $fallback_courses
+    );
 
     // Merge: attended first, then not-attended
     $ranking_list = array_merge($ranking_list, $not_attended_list);
@@ -855,37 +743,133 @@ if (empty($course_name)) {
 }
 
 // ── Image Helper ──────────────────────────────────────────────────────
-function get_jpeg_photo_path($raw_photo_path) {
+function get_jpeg_photo_path($raw_photo_path, $is_logo = false) {
     if (empty($raw_photo_path)) return null;
-    $abs_path = __DIR__ . '/../' . $raw_photo_path;
+
+    $abs_path = $raw_photo_path;
     if (!file_exists($abs_path) || !is_file($abs_path)) {
-        return null;
+        $p1 = __DIR__ . '/../' . ltrim($raw_photo_path, '/\\');
+        if (file_exists($p1) && is_file($p1)) {
+            $abs_path = $p1;
+        } else {
+            $p2 = __DIR__ . '/' . ltrim($raw_photo_path, '/\\');
+            if (file_exists($p2) && is_file($p2)) {
+                $abs_path = $p2;
+            } else {
+                return null;
+            }
+        }
     }
-    $bytes = @file_get_contents($abs_path);
-    if ($bytes && substr($bytes, 0, 2) === "\xFF\xD8") {
+
+    $cache_dir = __DIR__ . '/scratch/pdf_thumbs';
+    if (!is_dir($cache_dir)) {
+        @mkdir($cache_dir, 0755, true);
+    }
+    if (!is_writable($cache_dir)) {
+        $cache_dir = sys_get_temp_dir() . '/pepp_pdf_thumbs';
+        if (!is_dir($cache_dir)) {
+            @mkdir($cache_dir, 0755, true);
+        }
+    }
+
+    $crop_mode = $is_logo ? 'aspect_fit_500x200' : 'center_crop_160x160';
+    $quality = 82;
+
+    $cache_key = hash('sha256', $abs_path . '|' . @filemtime($abs_path) . '|' . @filesize($abs_path) . '|' . $crop_mode . '|q' . $quality);
+    $cache_file = $cache_dir . '/thumb_' . $cache_key . '.jpg';
+
+    // Bounded cleanup: prune thumbnails older than 7 days (limit 50 per execution)
+    static $cleaned_up = false;
+    if (!$cleaned_up && is_dir($cache_dir)) {
+        $cleaned_up = true;
+        try {
+            $stale_limit = time() - (7 * 86400);
+            $pruned = 0;
+            $files = @glob($cache_dir . '/thumb_*.jpg');
+            if ($files) {
+                foreach ($files as $f) {
+                    if (@filemtime($f) < $stale_limit) {
+                        @unlink($f);
+                        if (++$pruned >= 50) break;
+                    }
+                }
+            }
+        } catch (Exception $e) {}
+    }
+
+    if (file_exists($cache_file) && filesize($cache_file) > 0) {
+        return $cache_file;
+    }
+
+    if (!function_exists('imagecreatefromstring')) {
         return $abs_path;
     }
 
-    // Convert PNG to temporary JPEG using GD dynamically
-    try {
-        if (function_exists('imagecreatefromstring')) {
-            $im = @imagecreatefromstring($bytes);
-            if ($im) {
-                $scratch_dir = __DIR__ . '/scratch';
-                if (!is_dir($scratch_dir)) {
-                    @mkdir($scratch_dir, 0755, true);
-                }
-                $temp_jpg = $scratch_dir . '/tmp_avatar_' . md5($raw_photo_path) . '.jpg';
-                if (imagejpeg($im, $temp_jpg, 85)) {
-                    imagedestroy($im);
-                    return $temp_jpg;
-                }
-                imagedestroy($im);
+    $bytes = @file_get_contents($abs_path);
+    if (!$bytes) return null;
+
+    $im = @imagecreatefromstring($bytes);
+    if (!$im) return null;
+
+    // Preserve EXIF orientation if available
+    if (function_exists('exif_read_data')) {
+        $exif = @exif_read_data($abs_path);
+        if ($exif && !empty($exif['Orientation'])) {
+            switch ((int)$exif['Orientation']) {
+                case 3:
+                    $rotated = imagerotate($im, 180, 0);
+                    if ($rotated) { imagedestroy($im); $im = $rotated; }
+                    break;
+                case 6:
+                    $rotated = imagerotate($im, -90, 0);
+                    if ($rotated) { imagedestroy($im); $im = $rotated; }
+                    break;
+                case 8:
+                    $rotated = imagerotate($im, 90, 0);
+                    if ($rotated) { imagedestroy($im); $im = $rotated; }
+                    break;
             }
         }
-    } catch (Exception $e) {}
+    }
 
-    return null;
+    $orig_w = imagesx($im);
+    $orig_h = imagesy($im);
+
+    if ($orig_w <= 0 || $orig_h <= 0) {
+        imagedestroy($im);
+        return null;
+    }
+
+    if ($is_logo) {
+        // Preserve aspect ratio for logos
+        $max_w = 500;
+        $max_h = 200;
+        $scale = min(1.0, min($max_w / $orig_w, $max_h / $orig_h));
+        $dst_w = max(1, (int)round($orig_w * $scale));
+        $dst_h = max(1, (int)round($orig_h * $scale));
+
+        $dst = imagecreatetruecolor($dst_w, $dst_h);
+        $bg = imagecolorallocate($dst, 255, 255, 255);
+        imagefilledrectangle($dst, 0, 0, $dst_w, $dst_h, $bg);
+        imagecopyresampled($dst, $im, 0, 0, 0, 0, $dst_w, $dst_h, $orig_w, $orig_h);
+    } else {
+        // Square center-crop for avatars without upscaling smaller images
+        $crop_size = min($orig_w, $orig_h);
+        $target_size = min(160, $crop_size);
+        $src_x = (int)round(($orig_w - $crop_size) / 2);
+        $src_y = (int)round(($orig_h - $crop_size) / 2);
+
+        $dst = imagecreatetruecolor($target_size, $target_size);
+        $bg = imagecolorallocate($dst, 255, 255, 255);
+        imagefilledrectangle($dst, 0, 0, $target_size, $target_size, $bg);
+        imagecopyresampled($dst, $im, 0, 0, $src_x, $src_y, $target_size, $target_size, $crop_size, $crop_size);
+    }
+
+    imagejpeg($dst, $cache_file, $quality);
+    imagedestroy($dst);
+    imagedestroy($im);
+
+    return file_exists($cache_file) ? $cache_file : null;
 }
 
 // ── Draw Header & Table Labels Function ────────────────────────────────
@@ -919,7 +903,7 @@ function draw_page_headers($pdf, $academic_year, $course_name, $chapter_name, $f
     $pdf->text($right_x - $w, $y + 28, 11, $course_name, 500, 'R', $w);
 
     // PEPP Logo
-    $logo_path = get_jpeg_photo_path('admissions/logo_pepp.jpg');
+    $logo_path = get_jpeg_photo_path('admissions/logo_pepp.jpg', true);
     if (!$logo_path) {
         $direct_path = __DIR__ . '/logo_pepp.jpg';
         if (file_exists($direct_path)) {

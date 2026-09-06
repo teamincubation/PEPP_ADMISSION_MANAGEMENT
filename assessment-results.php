@@ -9,6 +9,7 @@
  * All data is stored in assessment_result_batches + assessment_results.
  */
 require_once 'includes/auth.php';
+require_once 'includes/assessment_rank_helper.php';
 
 // Safe AJAX action check for card designer tools
 $ajax_action = $_GET['action'] ?? $_POST['action'] ?? '';
@@ -433,52 +434,8 @@ if (isset($_GET['action']) || (isset($_POST['action']) && !empty($_SERVER['HTTP_
                 exit;
             }
 
-            $placeholders = implode(',', array_fill(0, count($batch_ids), '?'));
-            $stmt_res = $pdo->prepare("
-                SELECT ar.student_email, ar.score, ar.attendance_status,
-                       COALESCE(u.name, ar.src_name) AS name,
-                       COALESCE(u.college_school, '-') AS college_school,
-                       u.user_id, u.pepp_course AS course_name
-                FROM assessment_results ar
-                LEFT JOIN users u ON (ar.user_id = u.user_id OR LOWER(ar.student_email) = LOWER(u.email))
-                WHERE ar.batch_id IN ($placeholders)
-            ");
-            $stmt_res->execute($batch_ids);
-            $results = $stmt_res->fetchAll(PDO::FETCH_ASSOC);
-
-            // Deduplicate and filter attended students
-            $merged = [];
-            foreach ($results as $r) {
-                if ($r['attendance_status'] !== 'attended' || $r['score'] === null) {
-                    continue;
-                }
-                $uid = !empty($r['user_id']) ? $r['user_id'] : $r['student_email'];
-                if (empty($uid)) continue;
-
-                // Retain only highest score if duplicates exist
-                if (!isset($merged[$uid]) || $r['score'] > $merged[$uid]['score']) {
-                    $merged[$uid] = $r;
-                }
-            }
-
-            $rankable = array_values($merged);
-            // Sort globally by score descending
-            usort($rankable, function($a, $b) { return ($b['score'] ?? 0) <=> ($a['score'] ?? 0); });
-
-            // Generate ranks
-            $ranking_list = [];
-            $prev_score = null;
-            $rank = 0;
-            $count = 0;
-            foreach ($rankable as $r) {
-                $count++;
-                if ($r['score'] !== $prev_score) {
-                    $rank = $count;
-                }
-                $r['computed_rank'] = $rank;
-                $ranking_list[] = $r;
-                $prev_score = $r['score'];
-            }
+            $canonical_res = AssessmentRankHelper::getCanonicalTestResults($pdo, $batch_ids, $year, __DIR__);
+            $ranking_list = $canonical_res['ranked_list'];
 
             echo json_encode(['success' => true, 'results' => $ranking_list]);
 
