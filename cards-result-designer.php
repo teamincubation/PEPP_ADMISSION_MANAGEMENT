@@ -1289,12 +1289,38 @@ function findStudentInList(uidOrEmail) {
         return (sUid && sUid === target) || (sEmail && sEmail === target);
     });
 }
-const templateElements = <?php echo $tpl['elements_json'] ?: '[]'; ?>;
+<?php
+// Safely prepare JSON variables for JavaScript
+$template_elements_json = '[]';
+if (!empty($tpl['elements_json'])) {
+    $decoded_tpl = json_decode($tpl['elements_json'], true);
+    if (is_array($decoded_tpl)) {
+        $template_elements_json = json_encode($decoded_tpl);
+    }
+}
+
+$saved_config_json = 'null';
+if ($saved_design && !empty($saved_design['design_config'])) {
+    $decoded_cfg = json_decode($saved_design['design_config'], true);
+    if ($decoded_cfg !== null) {
+        $saved_config_json = json_encode($decoded_cfg);
+    }
+}
+
+$saved_mappings_json = 'null';
+if ($saved_design && !empty($saved_design['student_rank_mappings'])) {
+    $decoded_map = json_decode($saved_design['student_rank_mappings'], true);
+    if ($decoded_map !== null) {
+        $saved_mappings_json = json_encode($decoded_map);
+    }
+}
+?>
+const templateElements = <?php echo $template_elements_json; ?>;
 
 // Saved design data if editing
-let savedDesignId = <?php echo $saved_id; ?>;
-const savedConfig = <?php echo $saved_design ? $saved_design['design_config'] : 'null'; ?>;
-const savedMappings = <?php echo ($saved_design && !empty($saved_design['student_rank_mappings'])) ? $saved_design['student_rank_mappings'] : 'null'; ?>;
+let savedDesignId = <?php echo (int)$saved_id; ?>;
+const savedConfig = <?php echo $saved_config_json; ?>;
+const savedMappings = <?php echo $saved_mappings_json; ?>;
 
 // Editor State variables
 let elements = [];
@@ -1369,7 +1395,7 @@ async function changeBackgroundTemplate(newTemplateId) {
 
         initCanvasSize();
         drawElements();
-        renderLayersList();
+        renderLayersSidebar();
         saveHistoryState();
 
         const bgSelect = document.getElementById('prop-background-template');
@@ -1407,9 +1433,17 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Check if template explicitly defines native coordinate mode (metadata node with coordinate_mode: native)
         const isNative = templateElements.some(el => el.id === 'metadata' && el.coordinate_mode === 'native');
 
-        if (savedDesignId) {
-            elements = (savedConfig && savedConfig.elements) ? savedConfig.elements : JSON.parse(JSON.stringify(templateElements));
-            studentRankMappings = savedMappings || {};
+        let hasSavedElements = false;
+        if (Array.isArray(savedConfig) && savedConfig.length > 0) {
+            elements = savedConfig;
+            hasSavedElements = true;
+        } else if (savedConfig && Array.isArray(savedConfig.elements) && savedConfig.elements.length > 0) {
+            elements = savedConfig.elements;
+            hasSavedElements = true;
+        }
+
+        if (savedDesignId && hasSavedElements) {
+            studentRankMappings = (savedMappings && typeof savedMappings === 'object') ? savedMappings : {};
             // Normalize studentRankMappings to ensure all mappings are object-based
             for (let key in studentRankMappings) {
                 let m = studentRankMappings[key];
@@ -1429,10 +1463,14 @@ document.addEventListener('DOMContentLoaded', async function() {
                     };
                 }
             }
-            if (savedConfig) {
-                document.getElementById('prop-ranks-count').value = savedConfig.ranksCount || '4';
+            if (savedConfig && savedConfig.ranksCount) {
+                const ranksInput = document.getElementById('prop-ranks-count');
+                if (ranksInput) ranksInput.value = savedConfig.ranksCount;
             }
-            document.getElementById('prop-export-format').value = '<?php echo $saved_design ? addslashes($saved_design['output_format']) : "png"; ?>';
+            const exportFormatInput = document.getElementById('prop-export-format');
+            if (exportFormatInput) {
+                exportFormatInput.value = '<?php echo addslashes($saved_design['output_format'] ?? "png"); ?>';
+            }
 
             // Self-heal saved design elements that were previously corrupted/oversized by the percentage conversion bug
             if (isNative) {
@@ -1452,8 +1490,9 @@ document.addEventListener('DOMContentLoaded', async function() {
                 });
             }
         } else {
-            // Initial setup from template
+            // Initial setup from template (used when creating new card OR when saved card has no elements saved yet)
             elements = JSON.parse(JSON.stringify(templateElements));
+            studentRankMappings = (savedMappings && typeof savedMappings === 'object') ? savedMappings : {};
 
             if (!isNative) {
                 // Convert percentage-based templates to native pixel coordinates
@@ -1551,7 +1590,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
             // ─── DYNAMICALLY POPULATE TEST DETAILS ───
             // For new designs, make sure chapter_name and test_date are present by default, aligned left and styled, and test_name is removed.
-            if (!savedDesignId) {
+            if (!hasSavedElements) {
                 elements = elements.filter(el => el.id !== 'test_name');
 
                 let chapterNameEl = elements.find(el => el.id === 'chapter_name');
