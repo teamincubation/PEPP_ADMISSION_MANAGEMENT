@@ -11,6 +11,49 @@ require_super_admin();
 $success_message = '';
 $error_message   = '';
 
+// ── Namespaced State Containers (Create Admin vs Edit Admin Isolation) ──
+$create_admin_error = '';
+$reopen_create_admin_modal = false;
+$form_ca_employee_id = 0;
+$form_ca_username = '';
+$form_ca_full_name = '';
+$form_ca_email = '';
+$form_ca_google_email = '';
+$form_ca_phone = '';
+$form_ca_password = '';
+$form_ca_confirm_password = '';
+$form_ca_admin_type = 'erp_admin';
+$form_ca_cred_vis = 'visible';
+$form_ca_cred_scopes = ['students'];
+$form_ca_can_edit = true;
+$form_ca_can_delete = true;
+$form_ca_can_export = true;
+$form_ca_allow_copy_email = true;
+$form_ca_allow_whatsapp_chat = true;
+$form_ca_allow_phone_call = true;
+$form_ca_perm_all = false;
+$form_ca_perms = [];
+
+$edit_admin_error = '';
+$reopen_edit_admin_modal = false;
+$form_ea_admin_id = 0;
+$form_ea_username = '';
+$form_ea_full_name = '';
+$form_ea_email = '';
+$form_ea_google_email = '';
+$form_ea_phone = '';
+$form_ea_admin_type = 'erp_admin';
+$form_ea_cred_vis = 'visible';
+$form_ea_cred_scopes = [];
+$form_ea_can_edit = true;
+$form_ea_can_delete = false;
+$form_ea_can_export = true;
+$form_ea_allow_copy_email = true;
+$form_ea_allow_whatsapp_chat = false;
+$form_ea_allow_phone_call = true;
+$form_ea_perm_all = false;
+$form_ea_perms = [];
+
 if (!admins_table_exists($pdo)) {
     $active_page = 'admin-management';
     $page_title  = 'Admin Management';
@@ -185,49 +228,168 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
         try {
             if ($action === 'add_admin') {
-                $username = trim($_POST['username'] ?? '');
-                $name     = trim($_POST['full_name'] ?? '');
-                $email    = trim($_POST['email'] ?? '');
-                $gemail   = trim($_POST['google_email'] ?? '');
-                $phone    = trim($_POST['phone'] ?? '');
-                $password = $_POST['password'] ?? '';
-                $perms    = isset($_POST['perm_all'])
-                    ? 'ALL'
-                    : implode(',', array_intersect(array_keys($GLOBALS['ADMIN_PAGES']), (array)($_POST['perms'] ?? [])));
+                $form_ca_employee_id = (int)($_POST['employee_id'] ?? 0);
+                $form_ca_username = trim($_POST['username'] ?? '');
+                $form_ca_full_name = trim($_POST['full_name'] ?? '');
+                $form_ca_email = trim($_POST['email'] ?? '');
+                $form_ca_google_email = trim($_POST['google_email'] ?? '');
+                $form_ca_phone = trim($_POST['phone'] ?? '');
+                $form_ca_password = $_POST['password'] ?? '';
+                $form_ca_confirm_password = $_POST['confirm_password'] ?? '';
+                $form_ca_admin_type = in_array($_POST['admin_type'] ?? 'erp_admin', ['superadmin','erp_admin','employee','intern','faculty'], true) ? $_POST['admin_type'] : 'erp_admin';
+                $form_ca_cred_vis = in_array($_POST['credential_visibility'] ?? 'visible', ['visible', 'hide', 'mask'], true) ? $_POST['credential_visibility'] : 'visible';
+                $form_ca_cred_scopes = (array)($_POST['credential_visibility_scopes'] ?? []);
+                $form_ca_can_edit = isset($_POST['can_edit']);
+                $form_ca_can_delete = isset($_POST['can_delete']);
+                $form_ca_can_export = isset($_POST['can_export']);
+                $form_ca_allow_copy_email = isset($_POST['allow_copy_email']);
+                $form_ca_allow_whatsapp_chat = isset($_POST['allow_whatsapp_chat']);
+                $form_ca_allow_phone_call = isset($_POST['allow_phone_call']);
+                $form_ca_perm_all = isset($_POST['perm_all']);
+                $form_ca_perms = (array)($_POST['perms'] ?? []);
 
-                if (!preg_match('/^[A-Za-z0-9_.@-]{3,50}$/', $username)) {
+                $perms = $form_ca_perm_all
+                    ? 'ALL'
+                    : implode(',', array_intersect(array_keys($GLOBALS['ADMIN_PAGES']), $form_ca_perms));
+
+                if (!preg_match('/^[A-Za-z0-9_.@-]{3,50}$/', $form_ca_username)) {
                     $error_message = 'Username must be 3-50 characters (letters, numbers, _ . @ -).';
-                } elseif (strlen($password) < 8) {
+                } elseif (strlen($form_ca_password) < 8) {
                     $error_message = 'Password must be at least 8 characters.';
+                } elseif ($form_ca_password !== $form_ca_confirm_password) {
+                    $error_message = 'Password and Confirm Password do not match.';
                 } elseif ($perms === '') {
                     $error_message = 'Grant at least one page, or tick Full access.';
                 } else {
                     $stmt = $pdo->prepare("SELECT COUNT(*) FROM admins WHERE username = ?");
-                    $stmt->execute([$username]);
+                    $stmt->execute([$form_ca_username]);
                     if ($stmt->fetchColumn() > 0) {
-                        $error_message = "Username \"{$username}\" already exists.";
-                    } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                        $error_message = "Username \"{$form_ca_username}\" already exists.";
+                    } elseif ($form_ca_email !== '' && !filter_var($form_ca_email, FILTER_VALIDATE_EMAIL)) {
                         $error_message = 'Please enter a valid email address (or leave it blank).';
                     } else {
-                        $scopes = implode(',', (array)($_POST['credential_visibility_scopes'] ?? []));
-                        $cred_vis = in_array($_POST['credential_visibility'] ?? 'visible', ['visible', 'hide', 'mask'], true) ? $_POST['credential_visibility'] : 'visible';
-                        $can_edit = isset($_POST['can_edit']) ? 1 : 0;
-                        $can_delete = isset($_POST['can_delete']) ? 1 : 0;
-                        $can_export = isset($_POST['can_export']) ? 1 : 0;
-                        $allow_copy_email = isset($_POST['allow_copy_email']) ? 1 : 0;
-                        $allow_whatsapp_chat = isset($_POST['allow_whatsapp_chat']) ? 1 : 0;
-                        $allow_phone_call = isset($_POST['allow_phone_call']) ? 1 : 0;
-                        
-                        $admin_type_val = in_array($_POST['admin_type'] ?? 'erp_admin', ['superadmin','erp_admin','employee','intern','faculty'], true) ? $_POST['admin_type'] : 'erp_admin';
-                        
-                        $stmt = $pdo->prepare("
-                            INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, admin_type, permissions, status, credential_visibility, credential_visibility_scopes, can_edit, can_delete, can_export, allow_copy_email, allow_whatsapp_chat, allow_phone_call, created_by, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-                        ");
-                        $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $admin_type_val, $perms, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $allow_copy_email, $allow_whatsapp_chat, $allow_phone_call, $admin_username]);
-                        log_admin_activity($pdo, $admin_username, 'admin_created', "Created admin \"{$username}\" ({$admin_type_val}) with access: {$perms}");
-                        $success_message = "Admin \"{$username}\" created.";
+                        // Validate selected employee if provided
+                        $selected_emp = null;
+                        if ($form_ca_employee_id > 0) {
+                            $stmt_emp_chk = $pdo->prepare("SELECT id, employee_id, full_name, email, mobile_number, status, admin_id FROM employees WHERE id = ?");
+                            $stmt_emp_chk->execute([$form_ca_employee_id]);
+                            $selected_emp = $stmt_emp_chk->fetch(PDO::FETCH_ASSOC);
+
+                            if (!$selected_emp) {
+                                $error_message = 'Selected employee record not found.';
+                            } elseif (!empty($selected_emp['admin_id'])) {
+                                $error_message = 'The selected employee is already linked to another admin account. Please choose a different employee or manual entry.';
+                            } else {
+                                $ineligible_statuses = ['inactive', 'suspended', 'resigned', 'contract_ended', 'terminated'];
+                                $emp_status_clean = strtolower(trim((string)($selected_emp['status'] ?? 'active')));
+                                if ($emp_status_clean !== '' && in_array($emp_status_clean, $ineligible_statuses, true)) {
+                                    $error_message = "The selected employee has status '{$selected_emp['status']}' and is not an active/eligible registered employee.";
+                                }
+                            }
+                        }
+
+                        if ($error_message === '') {
+                            $pdo->beginTransaction();
+                            try {
+                                if ($form_ca_employee_id > 0) {
+                                    // Concurrency check inside transaction
+                                    $stmt_lock = $pdo->prepare("SELECT id, employee_id, full_name, admin_id FROM employees WHERE id = ?");
+                                    $stmt_lock->execute([$form_ca_employee_id]);
+                                    $lock_emp = $stmt_lock->fetch(PDO::FETCH_ASSOC);
+                                    if (!$lock_emp || !empty($lock_emp['admin_id'])) {
+                                        throw new RuntimeException("Selected employee is already linked to another admin account. Concurrency conflict.");
+                                    }
+                                }
+
+                                $scopes = implode(',', $form_ca_cred_scopes);
+                                $stmt_ins = $pdo->prepare("
+                                    INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, admin_type, permissions, status, credential_visibility, credential_visibility_scopes, can_edit, can_delete, can_export, allow_copy_email, allow_whatsapp_chat, allow_phone_call, created_by, created_at)
+                                    VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                                ");
+                                $stmt_ins->execute([
+                                    $form_ca_username,
+                                    password_hash($form_ca_password, PASSWORD_DEFAULT),
+                                    $form_ca_full_name ?: null,
+                                    $form_ca_email ?: null,
+                                    ($form_ca_google_email ?: $form_ca_email) ?: null,
+                                    $form_ca_phone ?: null,
+                                    $form_ca_admin_type,
+                                    $perms,
+                                    $form_ca_cred_vis,
+                                    $scopes,
+                                    $form_ca_can_edit ? 1 : 0,
+                                    $form_ca_can_delete ? 1 : 0,
+                                    $form_ca_can_export ? 1 : 0,
+                                    $form_ca_allow_copy_email ? 1 : 0,
+                                    $form_ca_allow_whatsapp_chat ? 1 : 0,
+                                    $form_ca_allow_phone_call ? 1 : 0,
+                                    $admin_username
+                                ]);
+                                $new_admin_id = (int)$pdo->lastInsertId();
+
+                                if ($form_ca_employee_id > 0) {
+                                    // Check if linked_at and linked_by columns exist in employees table
+                                    $has_linked_cols = false;
+                                    try {
+                                        $chk_col = $pdo->query("SELECT linked_at, linked_by FROM employees LIMIT 0");
+                                        $has_linked_cols = ($chk_col !== false);
+                                    } catch (Exception $e) {
+                                        $has_linked_cols = false;
+                                    }
+
+                                    if ($has_linked_cols) {
+                                        $stmt_link = $pdo->prepare("UPDATE employees SET admin_id = ?, linked_at = NOW(), linked_by = ? WHERE id = ? AND admin_id IS NULL");
+                                        $stmt_link->execute([$new_admin_id, $admin_username, $form_ca_employee_id]);
+                                    } else {
+                                        $stmt_link = $pdo->prepare("UPDATE employees SET admin_id = ? WHERE id = ? AND admin_id IS NULL");
+                                        $stmt_link->execute([$new_admin_id, $form_ca_employee_id]);
+                                    }
+
+                                    if ($stmt_link->rowCount() !== 1) {
+                                        throw new RuntimeException("Failed to link employee to admin account. The employee may have already been linked.");
+                                    }
+
+                                    log_admin_activity($pdo, $admin_username, 'staff_admin_link', "Linked new admin \"{$form_ca_username}\" (ID: {$new_admin_id}) to staff \"{$selected_emp['full_name']}\" ({$selected_emp['employee_id']})");
+                                }
+
+                                log_admin_activity($pdo, $admin_username, 'admin_created', "Created admin \"{$form_ca_username}\" ({$form_ca_admin_type})" . ($selected_emp ? " linked to {$selected_emp['employee_id']}" : "") . " with access: {$perms}");
+
+                                $pdo->commit();
+                                $success_message = "Admin \"{$form_ca_username}\" created." . ($selected_emp ? " Linked to staff {$selected_emp['full_name']} ({$selected_emp['employee_id']})." : "");
+
+                                // Reset Create Admin form state on success
+                                $form_ca_employee_id = 0;
+                                $form_ca_username = '';
+                                $form_ca_full_name = '';
+                                $form_ca_email = '';
+                                $form_ca_google_email = '';
+                                $form_ca_phone = '';
+                                $form_ca_password = '';
+                                $form_ca_confirm_password = '';
+                                $form_ca_admin_type = 'erp_admin';
+                                $form_ca_cred_vis = 'visible';
+                                $form_ca_cred_scopes = ['students'];
+                                $form_ca_can_edit = true;
+                                $form_ca_can_delete = true;
+                                $form_ca_can_export = true;
+                                $form_ca_allow_copy_email = true;
+                                $form_ca_allow_whatsapp_chat = true;
+                                $form_ca_allow_phone_call = true;
+                                $form_ca_perm_all = false;
+                                $form_ca_perms = [];
+                            } catch (Exception $ex) {
+                                if ($pdo->inTransaction()) {
+                                    $pdo->rollBack();
+                                }
+                                $error_message = $ex->getMessage();
+                            }
+                        }
                     }
+                }
+
+                if ($error_message !== '') {
+                    $create_admin_error = $error_message;
+                    $reopen_create_admin_modal = true;
                 }
             } elseif ($action === 'update_perms') {
                 $id = (int)($_POST['admin_id'] ?? 0);
@@ -245,22 +407,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $name  = trim($_POST['full_name'] ?? $target['full_name']);
                     $email = trim($_POST['email'] ?? '');
                     $phone = trim($_POST['phone'] ?? '');
+                    $gemail = trim($_POST['google_email'] ?? '');
+                    $scopes = implode(',', (array)($_POST['credential_visibility_scopes'] ?? []));
+                    $cred_vis = in_array($_POST['credential_visibility'] ?? 'visible', ['visible', 'hide', 'mask'], true) ? $_POST['credential_visibility'] : 'visible';
+                    $admin_type_upd = in_array($_POST['admin_type'] ?? 'erp_admin', ['superadmin','erp_admin','employee','intern','faculty'], true) ? $_POST['admin_type'] : 'erp_admin';
+                    $can_edit = isset($_POST['can_edit']) ? 1 : 0;
+                    $can_delete = isset($_POST['can_delete']) ? 1 : 0;
+                    $can_export = isset($_POST['can_export']) ? 1 : 0;
+                    $allow_copy_email = isset($_POST['allow_copy_email']) ? 1 : 0;
+                    $allow_whatsapp_chat = isset($_POST['allow_whatsapp_chat']) ? 1 : 0;
+                    $allow_phone_call = isset($_POST['allow_phone_call']) ? 1 : 0;
+
                     if ($perms === '') {
                         $error_message = 'Grant at least one page, or tick Full access.';
+                        $edit_admin_error = $error_message;
+                        $reopen_edit_admin_modal = true;
+                        $form_ea_admin_id = $id;
+                        $form_ea_username = $target['username'];
+                        $form_ea_full_name = $name;
+                        $form_ea_email = $email;
+                        $form_ea_google_email = $gemail;
+                        $form_ea_phone = $phone;
+                        $form_ea_admin_type = $admin_type_upd;
+                        $form_ea_cred_vis = $cred_vis;
+                        $form_ea_cred_scopes = (array)($_POST['credential_visibility_scopes'] ?? []);
+                        $form_ea_can_edit = (bool)$can_edit;
+                        $form_ea_can_delete = (bool)$can_delete;
+                        $form_ea_can_export = (bool)$can_export;
+                        $form_ea_allow_copy_email = (bool)$allow_copy_email;
+                        $form_ea_allow_whatsapp_chat = (bool)$allow_whatsapp_chat;
+                        $form_ea_allow_phone_call = (bool)$allow_phone_call;
+                        $form_ea_perm_all = isset($_POST['perm_all']);
+                        $form_ea_perms = (array)($_POST['perms'] ?? []);
                     } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
                         $error_message = 'Please enter a valid email address (or leave it blank).';
+                        $edit_admin_error = $error_message;
+                        $reopen_edit_admin_modal = true;
+                        $form_ea_admin_id = $id;
+                        $form_ea_username = $target['username'];
+                        $form_ea_full_name = $name;
+                        $form_ea_email = $email;
+                        $form_ea_google_email = $gemail;
+                        $form_ea_phone = $phone;
+                        $form_ea_admin_type = $admin_type_upd;
+                        $form_ea_cred_vis = $cred_vis;
+                        $form_ea_cred_scopes = (array)($_POST['credential_visibility_scopes'] ?? []);
+                        $form_ea_can_edit = (bool)$can_edit;
+                        $form_ea_can_delete = (bool)$can_delete;
+                        $form_ea_can_export = (bool)$can_export;
+                        $form_ea_allow_copy_email = (bool)$allow_copy_email;
+                        $form_ea_allow_whatsapp_chat = (bool)$allow_whatsapp_chat;
+                        $form_ea_allow_phone_call = (bool)$allow_phone_call;
+                        $form_ea_perm_all = isset($_POST['perm_all']);
+                        $form_ea_perms = (array)($_POST['perms'] ?? []);
                     } else {
-                        $scopes = implode(',', (array)($_POST['credential_visibility_scopes'] ?? []));
-                        $cred_vis = in_array($_POST['credential_visibility'] ?? 'visible', ['visible', 'hide', 'mask'], true) ? $_POST['credential_visibility'] : 'visible';
-                        $admin_type_upd = in_array($_POST['admin_type'] ?? 'erp_admin', ['superadmin','erp_admin','employee','intern','faculty'], true) ? $_POST['admin_type'] : 'erp_admin';
-                        $gemail = trim($_POST['google_email'] ?? '');
-                        $can_edit = isset($_POST['can_edit']) ? 1 : 0;
-                        $can_delete = isset($_POST['can_delete']) ? 1 : 0;
-                        $can_export = isset($_POST['can_export']) ? 1 : 0;
-                        $allow_copy_email = isset($_POST['allow_copy_email']) ? 1 : 0;
-                        $allow_whatsapp_chat = isset($_POST['allow_whatsapp_chat']) ? 1 : 0;
-                        $allow_phone_call = isset($_POST['allow_phone_call']) ? 1 : 0;
-                        
                         $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ?, admin_type = ?, credential_visibility = ?, credential_visibility_scopes = ?, can_edit = ?, can_delete = ?, can_export = ?, allow_copy_email = ?, allow_whatsapp_chat = ?, allow_phone_call = ? WHERE id = ?")
                             ->execute([$perms, $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $admin_type_upd, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $allow_copy_email, $allow_whatsapp_chat, $allow_phone_call, $id]);
                         log_admin_activity($pdo, $admin_username, 'permissions_changed', "Access and visibility for \"{$target['username']}\" updated.");
@@ -416,6 +616,23 @@ try {
     $error_message = $error_message ?: 'Could not load admins.';
 }
 
+// ── Unlinked Registered Employees for Create Admin Dropdown ───────────
+$unlinked_employees = [];
+try {
+    $stmt_ue = $pdo->query("
+        SELECT id, employee_id, full_name, email, mobile_number, designation, department, application_for, status, admin_id
+        FROM employees
+        WHERE admin_id IS NULL
+          AND (status IS NULL OR status = '' OR LOWER(status) NOT IN ('inactive', 'suspended', 'resigned', 'contract_ended', 'terminated'))
+        ORDER BY full_name ASC
+    ");
+    if ($stmt_ue) {
+        $unlinked_employees = $stmt_ue->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (Exception $e) {
+    $unlinked_employees = [];
+}
+
 $active_page = 'admin-management';
 $page_title  = 'Admin Management';
 $page_sub    = 'Accounts, roles & page access - Super Admin only';
@@ -423,7 +640,7 @@ include 'includes/admin_nav.php';
 ?>
 
 <?php if ($success_message): ?><div class="alert alert-success"><i class="fas fa-circle-check"></i><span><?php echo e($success_message); ?></span></div><?php endif; ?>
-<?php if ($error_message):   ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($error_message); ?></span></div><?php endif; ?>
+<?php if ($error_message && !$reopen_create_admin_modal && !$reopen_edit_admin_modal): ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($error_message); ?></span></div><?php endif; ?>
 
 <div class="alert alert-info">
     <i class="fas fa-shield-halved"></i>
@@ -533,103 +750,192 @@ include 'includes/admin_nav.php';
 </div>
 
 <!-- ── CREATE ADMIN MODAL ── -->
-<div class="modal-backdrop" id="create-admin-modal">
-    <div class="modal" style="max-width:600px;">
+<div class="modal-backdrop<?php echo $reopen_create_admin_modal ? ' open' : ''; ?>" id="create-admin-modal"<?php echo $reopen_create_admin_modal ? ' style="display:flex;"' : ''; ?>>
+    <div class="modal" style="max-width:640px;">
         <div class="modal-head">
             <h3><i class="fas fa-user-plus" style="color:var(--accent);"></i> Create Admin Account</h3>
-            <button class="modal-close" onclick="closeModal('create-admin-modal')"><i class="fas fa-xmark"></i></button>
+            <button type="button" class="modal-close" onclick="closeModal('create-admin-modal')"><i class="fas fa-xmark"></i></button>
         </div>
-        <form method="POST">
+        <form method="POST" id="create-admin-form" onsubmit="return validateCreateAdminForm(event)">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="add_admin">
             <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
-                <div class="form-grid">
-                    <div class="field"><label>Username <span class="req">*</span></label>
-                        <input type="text" name="username" required pattern="[A-Za-z0-9_.@-]{3,50}" placeholder="e.g. office.staff"></div>
-                    <div class="field"><label>Full name</label>
-                        <input type="text" name="full_name" placeholder="Display name"></div>
-                    <div class="field"><label>Email</label>
-                        <input type="email" name="email" placeholder="admin@example.com">
-                        <div class="help">Used for reminders &amp; Google sign-in</div></div>
-                    <div class="field"><label>Google sign-in email</label>
-                        <input type="email" name="google_email" placeholder="(defaults to email above)">
-                        <div class="help">The Google account allowed to sign in as this admin</div></div>
-                    <div class="field"><label>Phone</label>
-                        <input type="text" name="phone" placeholder="Mobile number"></div>
-                    <div class="field"><label>Admin Type</label>
-                        <select name="admin_type" required>
-                            <option value="erp_admin">ERP Admin</option>
-                            <option value="employee">Employee</option>
-                            <option value="faculty">Faculty</option>
-                            <option value="intern">Intern</option>
-                            <option value="superadmin">Superadmin</option>
-                        </select>
-                        <div class="help">Classification for this admin account</div></div>
-                    <div class="field"><label>Credential Visibility</label>
-                        <select name="credential_visibility" required>
-                            <option value="visible">Visible</option>
-                            <option value="hide">Hide</option>
-                            <option value="mask">Mask</option>
-                        </select>
+                <?php if ($create_admin_error): ?>
+                    <div class="alert alert-error" id="ca-modal-error" style="margin-bottom:14px; padding:10px 14px; border-radius:8px; display:flex; align-items:center; gap:8px;">
+                        <i class="fas fa-circle-exclamation" style="font-size:1rem;"></i>
+                        <span><?php echo e($create_admin_error); ?></span>
                     </div>
-                    <div class="field" style="grid-column: span 2; margin-top:-8px; margin-bottom:12px;">
-                        <label style="margin-bottom:6px; display:block;">Credential Visibility Scopes</label>
-                        <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
-                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="credential_visibility_scopes[]" value="students" style="width:16px; height:16px; accent-color:var(--accent);" checked> Students
-                            </label>
-                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="credential_visibility_scopes[]" value="alumni" style="width:16px; height:16px; accent-color:var(--accent);"> Alumni Data
-                            </label>
-                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="credential_visibility_scopes[]" value="faculties" style="width:16px; height:16px; accent-color:var(--accent);"> Faculties
-                            </label>
-                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="credential_visibility_scopes[]" value="leads" style="width:16px; height:16px; accent-color:var(--accent);"> Leads
-                            </label>
-                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="credential_visibility_scopes[]" value="campaigns" style="width:16px; height:16px; accent-color:var(--accent);"> Custom Forms
-                            </label>
-                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="credential_visibility_scopes[]" value="student-study-reports" style="width:16px; height:16px; accent-color:var(--accent);"> Student Reports
-                            </label>
-                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="credential_visibility_scopes[]" value="financials" style="width:16px; height:16px; accent-color:var(--accent);"> Financials
-                            </label>
+                <?php endif; ?>
+
+                <div class="form-grid">
+                    <!-- 1. Link Registered Employee (Optional) -->
+                    <div class="field full" style="margin-bottom:4px;">
+                        <label for="ca-employee-id">Link Registered Employee (Optional)</label>
+                        <select name="employee_id" id="ca-employee-id" onchange="createAdminWorkflow.onEmployeeSelect(this.value)">
+                            <option value="">— Manual Entry (Non-Employee Admin) —</option>
+                            <?php if (empty($unlinked_employees)): ?>
+                                <option value="" disabled>No unlinked registered employees available</option>
+                            <?php else: ?>
+                                <?php foreach ($unlinked_employees as $ue): ?>
+                                    <option value="<?php echo (int)$ue['id']; ?>" <?php echo ((int)$ue['id'] === (int)$form_ca_employee_id) ? 'selected' : ''; ?>>
+                                        <?php echo e($ue['employee_id']); ?> — <?php echo e($ue['full_name']); ?> — <?php echo e($ue['designation'] ?: ($ue['department'] ?: 'Staff')); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </select>
+                        <div id="ca-employee-indicator" style="display:<?php echo ($form_ca_employee_id > 0) ? 'block' : 'none'; ?>; font-size:0.75rem; color:#166534; margin-top:5px; font-weight:600;">
+                            <i class="fas fa-circle-check"></i> Employee details loaded
+                            <a href="javascript:void(0)" onclick="createAdminWorkflow.clearEmployeeSelection()" style="color:var(--accent); margin-left:8px; text-decoration:underline;">Clear employee selection</a>
                         </div>
                     </div>
-                    <div class="field" style="grid-column: span 2; margin-top:-4px; margin-bottom:12px;">
+
+                    <!-- 2. Username * -->
+                    <div class="field">
+                        <label for="ca-username">Username <span class="req">*</span></label>
+                        <input type="text" name="username" id="ca-username" required pattern="[A-Za-z0-9_.@-]{3,50}" placeholder="e.g. office.staff" value="<?php echo e($form_ca_username); ?>">
+                    </div>
+
+                    <!-- 3. Full Name -->
+                    <div class="field">
+                        <label for="ca-full-name">Full Name</label>
+                        <input type="text" name="full_name" id="ca-full-name" placeholder="Display name" value="<?php echo e($form_ca_full_name); ?>">
+                    </div>
+
+                    <!-- 4. Email -->
+                    <div class="field">
+                        <label for="ca-email">Email</label>
+                        <input type="email" name="email" id="ca-email" placeholder="admin@example.com" value="<?php echo e($form_ca_email); ?>">
+                        <div class="help">Used for reminders &amp; Google sign-in</div>
+                    </div>
+
+                    <!-- 5. Google Sign-in Email -->
+                    <div class="field">
+                        <label for="ca-gemail">Google Sign-in Email</label>
+                        <input type="email" name="google_email" id="ca-gemail" placeholder="(defaults to email above)" value="<?php echo e($form_ca_google_email); ?>">
+                        <div class="help">The Google account allowed to sign in as this admin</div>
+                    </div>
+
+                    <!-- 6. Phone -->
+                    <div class="field">
+                        <label for="ca-phone">Phone</label>
+                        <input type="text" name="phone" id="ca-phone" placeholder="Mobile number" value="<?php echo e($form_ca_phone); ?>">
+                    </div>
+
+                    <!-- 7. Password * -->
+                    <div class="field">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                            <label for="ca-password" style="margin-bottom:0;">Password <span class="req">*</span></label>
+                            <button type="button" onclick="createAdminWorkflow.generateSecurePassword()" style="background:none; border:none; color:var(--accent); font-size:0.72rem; font-weight:700; cursor:pointer; padding:0; text-decoration:underline;" title="Generate a cryptographically secure random password">
+                                <i class="fas fa-key"></i> Generate
+                            </button>
+                        </div>
+                        <div style="position:relative;">
+                            <input type="password" name="password" id="ca-password" required minlength="8" placeholder="Min. 8 characters" autocomplete="new-password" style="padding-right:38px;">
+                            <button type="button" class="toggle-pw-btn" onclick="createAdminWorkflow.togglePasswordVisibility('ca-password', this)" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; color:#64748b; cursor:pointer; padding:4px;" aria-label="Toggle password visibility">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                        <div class="help">Minimum 8 characters</div>
+                    </div>
+
+                    <!-- 8. Confirm Password * -->
+                    <div class="field">
+                        <label for="ca-confirm-password">Confirm Password <span class="req">*</span></label>
+                        <div style="position:relative;">
+                            <input type="password" name="confirm_password" id="ca-confirm-password" required minlength="8" placeholder="Repeat password" autocomplete="new-password" style="padding-right:38px;">
+                            <button type="button" class="toggle-pw-btn" onclick="createAdminWorkflow.togglePasswordVisibility('ca-confirm-password', this)" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; color:#64748b; cursor:pointer; padding:4px;" aria-label="Toggle confirm password visibility">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                        <div id="ca-password-match-error" style="display:none; color:#ef4444; font-size:0.72rem; margin-top:4px; font-weight:600;">
+                            <i class="fas fa-circle-xmark"></i> Passwords do not match
+                        </div>
+                    </div>
+
+                    <!-- 9. Admin Type -->
+                    <div class="field">
+                        <label for="ca-admin-type">Admin Type</label>
+                        <select name="admin_type" id="ca-admin-type" required>
+                            <option value="erp_admin" <?php echo ($form_ca_admin_type === 'erp_admin') ? 'selected' : ''; ?>>ERP Admin</option>
+                            <option value="employee" <?php echo ($form_ca_admin_type === 'employee') ? 'selected' : ''; ?>>Employee</option>
+                            <option value="faculty" <?php echo ($form_ca_admin_type === 'faculty') ? 'selected' : ''; ?>>Faculty</option>
+                            <option value="intern" <?php echo ($form_ca_admin_type === 'intern') ? 'selected' : ''; ?>>Intern</option>
+                            <option value="superadmin" <?php echo ($form_ca_admin_type === 'superadmin') ? 'selected' : ''; ?>>Superadmin</option>
+                        </select>
+                        <div class="help">Classification for this admin account</div>
+                    </div>
+
+                    <!-- 10. Credential Visibility -->
+                    <div class="field">
+                        <label for="ca-cred-vis">Credential Visibility</label>
+                        <select name="credential_visibility" id="ca-cred-vis" required>
+                            <option value="visible" <?php echo ($form_ca_cred_vis === 'visible') ? 'selected' : ''; ?>>Visible</option>
+                            <option value="hide" <?php echo ($form_ca_cred_vis === 'hide') ? 'selected' : ''; ?>>Hide</option>
+                            <option value="mask" <?php echo ($form_ca_cred_vis === 'mask') ? 'selected' : ''; ?>>Mask</option>
+                        </select>
+                    </div>
+
+                    <!-- 11. Credential Visibility Scopes -->
+                    <div class="field full" style="margin-top:-4px; margin-bottom:8px;">
+                        <label style="margin-bottom:6px; display:block;">Credential Visibility Scopes</label>
+                        <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
+                            <?php
+                            $ca_scopes = [
+                                'students' => 'Students',
+                                'alumni' => 'Alumni Data',
+                                'faculties' => 'Faculties',
+                                'leads' => 'Leads',
+                                'campaigns' => 'Custom Forms',
+                                'student-study-reports' => 'Student Reports',
+                                'financials' => 'Financials'
+                            ];
+                            foreach ($ca_scopes as $sc_key => $sc_lbl):
+                                $checked = in_array($sc_key, $form_ca_cred_scopes, true);
+                            ?>
+                                <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                    <input type="checkbox" name="credential_visibility_scopes[]" value="<?php echo e($sc_key); ?>" style="width:16px; height:16px; accent-color:var(--accent);" <?php echo $checked ? 'checked' : ''; ?>> <?php echo e($sc_lbl); ?>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+
+                    <!-- 12. Action Permissions (Global) -->
+                    <div class="field full" style="margin-top:-4px; margin-bottom:8px;">
                         <label style="margin-bottom:6px; display:block;">Action Permissions (Global)</label>
                         <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="can_edit" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Edit / Modify
+                                <input type="checkbox" name="can_edit" value="1" style="width:16px; height:16px; accent-color:var(--accent);" <?php echo $form_ca_can_edit ? 'checked' : ''; ?>> Allow Edit / Modify
                             </label>
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="can_delete" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Delete
+                                <input type="checkbox" name="can_delete" value="1" style="width:16px; height:16px; accent-color:var(--accent);" <?php echo $form_ca_can_delete ? 'checked' : ''; ?>> Allow Delete
                             </label>
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="can_export" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Export
+                                <input type="checkbox" name="can_export" value="1" style="width:16px; height:16px; accent-color:var(--accent);" <?php echo $form_ca_can_export ? 'checked' : ''; ?>> Allow Export
                             </label>
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="allow_copy_email" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Copy Original Email
+                                <input type="checkbox" name="allow_copy_email" value="1" style="width:16px; height:16px; accent-color:var(--accent);" <?php echo $form_ca_allow_copy_email ? 'checked' : ''; ?>> Allow Copy Original Email
                             </label>
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="allow_whatsapp_chat" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow WhatsApp Chat
+                                <input type="checkbox" name="allow_whatsapp_chat" value="1" style="width:16px; height:16px; accent-color:var(--accent);" <?php echo $form_ca_allow_whatsapp_chat ? 'checked' : ''; ?>> Allow WhatsApp Chat
                             </label>
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
-                                <input type="checkbox" name="allow_phone_call" value="1" style="width:16px; height:16px; accent-color:var(--accent);" checked> Allow Phone Call
+                                <input type="checkbox" name="allow_phone_call" value="1" style="width:16px; height:16px; accent-color:var(--accent);" <?php echo $form_ca_allow_phone_call ? 'checked' : ''; ?>> Allow Phone Call
                             </label>
                         </div>
                     </div>
                 </div>
+
+                <!-- 13. Full Access & Page Permissions -->
                 <label style="display:inline-flex;align-items:center;gap:8px;font-size:.84rem;font-weight:700;background:var(--green-soft);color:var(--green-ink);border-radius:50px;padding:7px 16px;cursor:pointer;margin-bottom:10px;">
-                    <input type="checkbox" name="perm_all" value="1" id="ca-all" onchange="toggleAll(this, 'ca-perms')" style="width:16px;height:16px;accent-color:var(--green-ink);">
+                    <input type="checkbox" name="perm_all" value="1" id="ca-all" onchange="toggleAll(this, 'ca-perms')" style="width:16px;height:16px;accent-color:var(--green-ink);" <?php echo $form_ca_perm_all ? 'checked' : ''; ?>>
                     Full access (every current &amp; future page)
                 </label>
                 <div id="ca-perms" style="display:flex; gap:8px; flex-wrap:wrap;">
-                    <?php foreach ($GLOBALS['ADMIN_PAGES'] as $key => [$label, $icon]): ?>
+                    <?php foreach ($GLOBALS['ADMIN_PAGES'] as $key => [$label, $icon]):
+                        $p_checked = in_array($key, $form_ca_perms, true);
+                    ?>
                         <label style="display:inline-flex;align-items:center;gap:7px;font-size:.8rem;font-weight:600;background:var(--card);border-radius:50px;padding:7px 14px;cursor:pointer;color:var(--foreground);">
-                            <input type="checkbox" name="perms[]" value="<?php echo e($key); ?>" style="width:15px;height:15px;accent-color:var(--accent);">
+                            <input type="checkbox" name="perms[]" value="<?php echo e($key); ?>" style="width:15px;height:15px;accent-color:var(--accent);" <?php echo $p_checked ? 'checked' : ''; ?> <?php echo $form_ca_perm_all ? 'disabled' : ''; ?>>
                             <i class="fas <?php echo e($icon); ?>" style="color:var(--secondary);font-size:.75rem;"></i> <?php echo e($label); ?>
                         </label>
                     <?php endforeach; ?>
@@ -644,35 +950,41 @@ include 'includes/admin_nav.php';
 </div>
 
 <!-- ── PERMISSIONS & DETAILS MODAL ── -->
-<div class="modal-backdrop" id="perms-modal">
+<div class="modal-backdrop<?php echo $reopen_edit_admin_modal ? ' open' : ''; ?>" id="perms-modal"<?php echo $reopen_edit_admin_modal ? ' style="display:flex;"' : ''; ?>>
     <div class="modal" style="max-width:580px;">
         <div class="modal-head">
             <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-user-pen"></i></span>
-            <h2>Edit Admin Account: <span id="pm-username"></span></h2>
+            <h2>Edit Admin Account: <span id="pm-username"><?php echo e($form_ea_username); ?></span></h2>
             <button type="button" class="close-btn" onclick="closeModal('perms-modal')">&times;</button>
         </div>
         <form method="POST">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="update_perms">
-            <input type="hidden" name="admin_id" id="pm-id">
+            <input type="hidden" name="admin_id" id="pm-id" value="<?php echo (int)$form_ea_admin_id; ?>">
             <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+                <?php if ($edit_admin_error): ?>
+                    <div class="alert alert-error" id="pm-modal-error" style="margin-bottom:14px; padding:10px 14px; border-radius:8px; display:flex; align-items:center; gap:8px;">
+                        <i class="fas fa-circle-exclamation" style="font-size:1rem;"></i>
+                        <span><?php echo e($edit_admin_error); ?></span>
+                    </div>
+                <?php endif; ?>
                 <div class="grid-2">
                     <div class="field">
                         <label>Full Name</label>
-                        <input type="text" name="full_name" id="pm-name" placeholder="e.g. John Doe">
+                        <input type="text" name="full_name" id="pm-name" placeholder="e.g. John Doe" value="<?php echo e($form_ea_full_name); ?>">
                     </div>
                     <div class="field">
                         <label>Email Address</label>
-                        <input type="email" name="email" id="pm-email" placeholder="john@example.com">
+                        <input type="email" name="email" id="pm-email" placeholder="john@example.com" value="<?php echo e($form_ea_email); ?>">
                     </div>
                     <div class="field">
                         <label>Google OAuth Email</label>
-                        <input type="email" name="google_email" id="pm-gemail" placeholder="john.doe@gmail.com">
+                        <input type="email" name="google_email" id="pm-gemail" placeholder="john.doe@gmail.com" value="<?php echo e($form_ea_google_email); ?>">
                         <small style="color:var(--text-muted);font-size:0.75rem;">Used for Google Login (leave empty to match main email)</small>
                     </div>
                     <div class="field">
                         <label>Phone Number</label>
-                        <input type="text" name="phone" id="pm-phone" placeholder="e.g. 9876543210">
+                        <input type="text" name="phone" id="pm-phone" placeholder="e.g. 9876543210" value="<?php echo e($form_ea_phone); ?>">
                     </div>
                     <div class="field">
                         <label>Admin Type</label>
@@ -847,7 +1159,9 @@ include 'includes/admin_nav.php';
 </form>
 
 <?php
-$extra_scripts = "<script>
+ob_start();
+?>
+<script>
 let allStaffCache = null;
 let currentTargetAdmin = null;
 
@@ -855,6 +1169,174 @@ function toggleAll(cb, boxId) {
     document.querySelectorAll('#' + boxId + ' input[type=checkbox]').forEach(c => { c.disabled = cb.checked; if (cb.checked) c.checked = false; });
 }
 
+// ── CREATE ADMIN WORKFLOW (Namespaced) ───────────────────────────────────
+const createAdminWorkflow = {
+    unlinkedEmployees: <?php echo json_encode($unlinked_employees, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?: '[]'; ?>,
+    lastAutofilled: null,
+
+    onEmployeeSelect: function(empId) {
+        if (!empId) {
+            this.clearEmployeeSelection();
+            return;
+        }
+        const emp = this.unlinkedEmployees.find(e => String(e.id) === String(empId));
+        if (!emp) return;
+
+        if (!this.lastAutofilled) {
+            this.lastAutofilled = {};
+        }
+
+        const usernameEl = document.getElementById('ca-username');
+        const nameEl = document.getElementById('ca-full-name');
+        const emailEl = document.getElementById('ca-email');
+        const gemailEl = document.getElementById('ca-gemail');
+        const phoneEl = document.getElementById('ca-phone');
+        const adminTypeEl = document.getElementById('ca-admin-type');
+
+        // Suggest username from employee_id (e.g. EMP-101 -> emp-101)
+        const suggestedUser = (emp.employee_id || '').toLowerCase().replace(/[^a-z0-9_.@-]/g, '');
+        if (usernameEl && (!usernameEl.value || usernameEl.value === this.lastAutofilled.username)) {
+            usernameEl.value = suggestedUser;
+            this.lastAutofilled.username = suggestedUser;
+        }
+
+        if (nameEl && (!nameEl.value || nameEl.value === this.lastAutofilled.name)) {
+            nameEl.value = emp.full_name || '';
+            this.lastAutofilled.name = emp.full_name || '';
+        }
+
+        if (emailEl && (!emailEl.value || emailEl.value === this.lastAutofilled.email)) {
+            emailEl.value = emp.email || '';
+            this.lastAutofilled.email = emp.email || '';
+        }
+
+        if (gemailEl && (!gemailEl.value || gemailEl.value === this.lastAutofilled.gemail)) {
+            gemailEl.value = emp.email || '';
+            this.lastAutofilled.gemail = emp.email || '';
+        }
+
+        if (phoneEl && (!phoneEl.value || phoneEl.value === this.lastAutofilled.phone)) {
+            phoneEl.value = emp.mobile_number || '';
+            this.lastAutofilled.phone = emp.mobile_number || '';
+        }
+
+        if (adminTypeEl && (!adminTypeEl.dataset.manuallyChanged)) {
+            const appFor = (emp.application_for || '').toLowerCase();
+            if (appFor === 'faculty') adminTypeEl.value = 'faculty';
+            else if (appFor === 'intern') adminTypeEl.value = 'intern';
+            else if (appFor === 'employee') adminTypeEl.value = 'employee';
+        }
+
+        const indicator = document.getElementById('ca-employee-indicator');
+        if (indicator) indicator.style.display = 'block';
+    },
+
+    clearEmployeeSelection: function() {
+        const select = document.getElementById('ca-employee-id');
+        if (select) select.value = '';
+
+        if (this.lastAutofilled) {
+            const usernameEl = document.getElementById('ca-username');
+            const nameEl = document.getElementById('ca-full-name');
+            const emailEl = document.getElementById('ca-email');
+            const gemailEl = document.getElementById('ca-gemail');
+            const phoneEl = document.getElementById('ca-phone');
+
+            if (usernameEl && usernameEl.value === this.lastAutofilled.username) usernameEl.value = '';
+            if (nameEl && nameEl.value === this.lastAutofilled.name) nameEl.value = '';
+            if (emailEl && emailEl.value === this.lastAutofilled.email) emailEl.value = '';
+            if (gemailEl && gemailEl.value === this.lastAutofilled.gemail) gemailEl.value = '';
+            if (phoneEl && phoneEl.value === this.lastAutofilled.phone) phoneEl.value = '';
+
+            this.lastAutofilled = null;
+        }
+
+        const indicator = document.getElementById('ca-employee-indicator');
+        if (indicator) indicator.style.display = 'none';
+    },
+
+    generateSecurePassword: function() {
+        const charset = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*';
+        const arr = new Uint8Array(16);
+        window.crypto.getRandomValues(arr);
+        let pwd = '';
+        for (let i = 0; i < arr.length; i++) {
+            pwd += charset[arr[i] % charset.length];
+        }
+
+        const p1 = document.getElementById('ca-password');
+        const p2 = document.getElementById('ca-confirm-password');
+        if (p1 && p2) {
+            p1.value = pwd;
+            p2.value = pwd;
+            p1.type = 'text';
+            p2.type = 'text';
+
+            const icons = document.querySelectorAll('#create-admin-modal .toggle-pw-btn i');
+            icons.forEach(ic => { ic.className = 'fas fa-eye-slash'; });
+
+            const matchErr = document.getElementById('ca-password-match-error');
+            if (matchErr) matchErr.style.display = 'none';
+        }
+    },
+
+    togglePasswordVisibility: function(fieldId, btn) {
+        const input = document.getElementById(fieldId);
+        if (!input) return;
+        const icon = btn.querySelector('i');
+        if (input.type === 'password') {
+            input.type = 'text';
+            if (icon) icon.className = 'fas fa-eye-slash';
+        } else {
+            input.type = 'password';
+            if (icon) icon.className = 'fas fa-eye';
+        }
+    }
+};
+
+function validateCreateAdminForm(e) {
+    const p1 = document.getElementById('ca-password');
+    const p2 = document.getElementById('ca-confirm-password');
+    const matchErr = document.getElementById('ca-password-match-error');
+
+    if (p1 && p2) {
+        if (p1.value.length < 8) {
+            e.preventDefault();
+            alert('Password must be at least 8 characters.');
+            p1.focus();
+            return false;
+        }
+        if (p1.value !== p2.value) {
+            e.preventDefault();
+            if (matchErr) matchErr.style.display = 'block';
+            p2.focus();
+            return false;
+        }
+    }
+    return true;
+}
+
+document.getElementById('ca-confirm-password')?.addEventListener('input', function() {
+    const p1 = document.getElementById('ca-password')?.value;
+    const matchErr = document.getElementById('ca-password-match-error');
+    if (matchErr) {
+        if (p1 && this.value && p1 !== this.value) {
+            matchErr.style.display = 'block';
+        } else {
+            matchErr.style.display = 'none';
+        }
+    }
+});
+
+document.getElementById('ca-admin-type')?.addEventListener('change', function() {
+    this.dataset.manuallyChanged = 'true';
+});
+
+function openCreateAdminModal() {
+    openModal('create-admin-modal');
+}
+
+// ── EDIT ADMIN WORKFLOW (Protected / Legacy) ─────────────────────────────
 function openPerms(adminIdOrObj) {
     if (typeof adminIdOrObj === 'number' || (typeof adminIdOrObj === 'string' && !isNaN(adminIdOrObj))) {
         fetch('admin-management.php?action=get_admin_details&id=' + encodeURIComponent(adminIdOrObj))
@@ -951,10 +1433,10 @@ function openLinkStaffModal(adminId, username, fullName, email, phone, currentSt
     document.getElementById('lsm-submit-btn').disabled = true;
 
     const select = document.getElementById('lsm-staff-select');
-    select.innerHTML = '<option value=\"\">— Loading staff directory… —</option>';
+    select.innerHTML = '<option value="">— Loading staff directory… —</option>';
 
     loadStaffList().then(staff => {
-        select.innerHTML = '<option value=\"\">— Select Staff Member —</option>';
+        select.innerHTML = '<option value="">— Select Staff Member —</option>';
         staff.forEach(s => {
             const opt = document.createElement('option');
             opt.value = s.id;
@@ -986,14 +1468,14 @@ function checkStaffAdminMatch() {
     }
 
     verifyBox.style.display = 'block';
-    document.getElementById('lsm-status-badge').innerHTML = '<i class=\"fas fa-spinner fa-spin\"></i> Checking match…';
+    document.getElementById('lsm-status-badge').innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking match…';
 
     fetch('admin-management.php?action=check_staff_admin_match&admin_id=' + adminId + '&employee_id=' + empId)
         .then(r => r.json())
         .then(d => {
             if (!d.success) {
-                document.getElementById('lsm-status-badge').innerHTML = '<span class=\"badge red\">Error</span>';
-                document.getElementById('lsm-error-container').innerHTML = '<div style=\"color:#ef4444; font-size:0.8rem; margin-top:8px;\">' + (d.error || 'Check failed.') + '</div>';
+                document.getElementById('lsm-status-badge').innerHTML = '<span class="badge red">Error</span>';
+                document.getElementById('lsm-error-container').innerHTML = '<div style="color:#ef4444; font-size:0.8rem; margin-top:8px;">' + (d.error || 'Check failed.') + '</div>';
                 submitBtn.disabled = true;
                 return;
             }
@@ -1004,48 +1486,50 @@ function checkStaffAdminMatch() {
             document.getElementById('lsm-admin-phone-disp').textContent = d.admin_phone_masked;
 
             if (d.email_match) {
-                document.getElementById('lsm-email-match-indicator').innerHTML = '<span style=\"color:#22c55e;\"><i class=\"fas fa-circle-check\"></i> Email Matches</span>';
+                document.getElementById('lsm-email-match-indicator').innerHTML = '<span style="color:#22c55e;"><i class="fas fa-circle-check"></i> Email Matches</span>';
             } else {
-                document.getElementById('lsm-email-match-indicator').innerHTML = '<span style=\"color:#ef4444;\"><i class=\"fas fa-circle-xmark\"></i> Mismatch</span>';
+                document.getElementById('lsm-email-match-indicator').innerHTML = '<span style="color:#ef4444;"><i class="fas fa-circle-xmark"></i> Mismatch</span>';
             }
 
             if (d.phone_match) {
-                document.getElementById('lsm-phone-match-indicator').innerHTML = '<span style=\"color:#22c55e;\"><i class=\"fas fa-circle-check\"></i> Mobile Matches</span>';
+                document.getElementById('lsm-phone-match-indicator').innerHTML = '<span style="color:#22c55e;"><i class="fas fa-circle-check"></i> Mobile Matches</span>';
             } else {
-                document.getElementById('lsm-phone-match-indicator').innerHTML = '<span style=\"color:#ef4444;\"><i class=\"fas fa-circle-xmark\"></i> Mismatch</span>';
+                document.getElementById('lsm-phone-match-indicator').innerHTML = '<span style="color:#ef4444;"><i class="fas fa-circle-xmark"></i> Mismatch</span>';
             }
 
             let errHtml = '';
             if (d.errors && d.errors.length > 0) {
                 d.errors.forEach(e => {
-                    errHtml += '<div style=\"background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:6px 10px; border-radius:6px; font-size:0.78rem; margin-top:6px;\"><i class=\"fas fa-triangle-exclamation\"></i> ' + e + '</div>';
+                    errHtml += '<div style="background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:6px 10px; border-radius:6px; font-size:0.78rem; margin-top:6px;"><i class="fas fa-triangle-exclamation"></i> ' + e + '</div>';
                 });
             }
             if (d.conflict_warning) {
-                errHtml += '<div style=\"background:#fffbeb; border:1px solid #fde68a; color:#b45309; padding:6px 10px; border-radius:6px; font-size:0.78rem; margin-top:6px;\"><i class=\"fas fa-circle-info\"></i> ' + d.conflict_warning + '</div>';
+                errHtml += '<div style="background:#fffbeb; border:1px solid #fde68a; color:#b45309; padding:6px 10px; border-radius:6px; font-size:0.78rem; margin-top:6px;"><i class="fas fa-circle-info"></i> ' + d.conflict_warning + '</div>';
             }
             document.getElementById('lsm-error-container').innerHTML = errHtml;
 
             if (d.can_link) {
-                document.getElementById('lsm-status-badge').innerHTML = '<span class=\"badge green\"><i class=\"fas fa-check\"></i> Verified Match</span>';
+                document.getElementById('lsm-status-badge').innerHTML = '<span class="badge green"><i class="fas fa-check"></i> Verified Match</span>';
                 submitBtn.disabled = false;
             } else {
-                document.getElementById('lsm-status-badge').innerHTML = '<span class=\"badge red\"><i class=\"fas fa-times\"></i> Cannot Link</span>';
+                document.getElementById('lsm-status-badge').innerHTML = '<span class="badge red"><i class="fas fa-times"></i> Cannot Link</span>';
                 submitBtn.disabled = true;
             }
         })
         .catch(() => {
-            document.getElementById('lsm-status-badge').innerHTML = '<span class=\"badge red\">Error</span>';
+            document.getElementById('lsm-status-badge').innerHTML = '<span class="badge red">Error</span>';
             submitBtn.disabled = true;
         });
 }
 
 function unlinkStaff(adminId, username, staffName) {
-    if (confirm('Are you sure you want to unlink staff member \"' + staffName + '\" from admin account \"' + username + '\"?')) {
+    if (confirm('Are you sure you want to unlink staff member "' + staffName + '" from admin account "' + username + '"?')) {
         document.getElementById('unl-admin-id').value = adminId;
         document.getElementById('unlink-form').submit();
     }
 }
-</script>";
+</script>
+<?php
+$extra_scripts = ob_get_clean();
 include 'includes/admin_footer.php';
 ?>
