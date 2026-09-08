@@ -532,6 +532,20 @@ if ($followup_date_error !== '') {
     $error_message = $error_message ?: $followup_date_error;
 }
 
+// Follow-ups Needed: Search Remark & Multi-Filters
+$f_fn_remark     = trim($_GET['followup_remark'] ?? '');
+$raw_fn_courses  = $_GET['followup_courses'] ?? [];
+$f_fn_courses    = is_array($raw_fn_courses) ? array_values(array_unique(array_filter(array_map('trim', $raw_fn_courses)))) : [];
+
+$raw_fn_statuses = $_GET['followup_statuses'] ?? [];
+$f_fn_statuses   = is_array($raw_fn_statuses) ? array_values(array_unique(array_filter(array_map('trim', $raw_fn_statuses)))) : [];
+$f_fn_statuses   = array_values(array_filter($f_fn_statuses, function($st) use ($LEAD_STATUSES) {
+    return isset($LEAD_STATUSES[$st]);
+}));
+
+$raw_fn_assigned = $_GET['followup_assigned'] ?? [];
+$f_fn_assigned   = is_array($raw_fn_assigned) ? array_values(array_unique(array_filter(array_map('trim', $raw_fn_assigned)))) : [];
+
 $where = ['1=1']; $params = [];
 // Non-super admins see leads assigned to them OR to all admins
 if (!is_super_admin()) { $where[] = "(l.assigned_to = ? OR l.assigned_to = '__ALL__')"; $params[] = $admin_username; }
@@ -610,6 +624,11 @@ $today_leads_total = 0;
 $admin_list = []; $course_list = [];
 
 try {
+    if (is_super_admin()) {
+        $admin_list = $pdo->query("SELECT DISTINCT assigned_to FROM leads WHERE assigned_to IS NOT NULL AND assigned_to <> '' ORDER BY assigned_to")->fetchAll(PDO::FETCH_COLUMN);
+    }
+    $course_list = $pdo->query("SELECT DISTINCT interested_course FROM leads WHERE interested_course IS NOT NULL AND interested_course <> '' ORDER BY interested_course")->fetchAll(PDO::FETCH_COLUMN);
+
     // Stats (respect non-super scoping)
     $scope = is_super_admin() ? '1=1' : '(assigned_to = ' . $pdo->quote($admin_username) . " OR assigned_to = '__ALL__')";
     $stats['total']     = (int)$pdo->query("SELECT COUNT(*) FROM leads WHERE $scope")->fetchColumn();
@@ -617,17 +636,28 @@ try {
     $stats['overdue']   = (int)$pdo->query("SELECT COUNT(*) FROM leads WHERE $scope AND next_followup_date < CURDATE() AND status NOT IN ('converted','rejected','not_interested')")->fetchColumn();
     $stats['converted'] = (int)$pdo->query("SELECT COUNT(*) FROM leads WHERE $scope AND status = 'converted'")->fetchColumn();
 
-    // Follow-ups Needed query (supports display limit 50/100/500 & date range filter)
+    // Follow-ups Needed query (supports display limit 50/100/500, date range filter, search remark, and multi-filters)
     $today_leads = [];
     $today_leads_total = 0;
     if ($followup_date_error === '') {
         $fn_where = [
             $scope,
-            "status NOT IN ('converted','rejected','not_interested')",
             "next_followup_date IS NOT NULL"
         ];
         $fn_params = [];
 
+        // Status filter: use selected statuses if specified, otherwise default active leads
+        if (!empty($f_fn_statuses)) {
+            $st_placeholders = implode(',', array_fill(0, count($f_fn_statuses), '?'));
+            $fn_where[] = "status IN ($st_placeholders)";
+            foreach ($f_fn_statuses as $st) {
+                $fn_params[] = $st;
+            }
+        } else {
+            $fn_where[] = "status NOT IN ('converted','rejected','not_interested')";
+        }
+
+        // Date Range
         if ($has_fn_from && $has_fn_to) {
             $fn_where[] = "next_followup_date >= ? AND next_followup_date <= ?";
             $fn_params[] = $raw_fn_from;
@@ -642,6 +672,45 @@ try {
             // Default when no custom date filter is active: today or overdue
             $fn_where[] = "next_followup_date <= CURDATE()";
         }
+
+        // Interested In (courses) multi-filter
+        if (!empty($f_fn_courses)) {
+            $c_placeholders = implode(',', array_fill(0, count($f_fn_courses), '?'));
+            $fn_where[] = "interested_course IN ($c_placeholders)";
+            foreach ($f_fn_courses as $c) {
+                $fn_params[] = $c;
+            }
+        }
+
+        // Assigned To multi-filter (Super Admin only)
+        if (is_super_admin() && !empty($f_fn_assigned)) {
+            $a_placeholders = implode(',', array_fill(0, count($f_fn_assigned), '?'));
+            $fn_where[] = "assigned_to IN ($a_placeholders)";
+            foreach ($f_fn_assigned as $a) {
+                $fn_params[] = $a;
+            }
+        }
+
+        // Search Remark Keyword (strict explicit user remarks only via EXISTS subquery)
+        if ($f_fn_remark !== '') {
+            $fn_where[] = "EXISTS (
+                SELECT 1 FROM lead_activity la
+                WHERE la.lead_id = leads.id
+                  AND la.remark IS NOT NULL
+                  AND TRIM(la.remark) <> ''
+                  AND la.activity_type NOT IN ('details_change', 'reassigned')
+                  AND TRIM(la.remark) NOT IN ('Lead created', 'Imported from file', 'Follow-up done', 'Marked as converted')
+                  AND la.remark NOT LIKE 'Converted - linked to student%'
+                  AND la.remark NOT LIKE 'Lead marked converted via%'
+                  AND la.remark NOT LIKE 'Reassigned to %'
+                  AND la.remark NOT LIKE 'WhatsApp number updated:%'
+                  AND la.remark NOT LIKE 'WhatsApp Marketing:%'
+                  AND la.remark NOT LIKE 'Bulk update:%'
+                  AND LOWER(la.remark) LIKE LOWER(?)
+            )";
+            $fn_params[] = "%{$f_fn_remark}%";
+        }
+
         $fn_where_sql = implode(' AND ', $fn_where);
 
         // Matching count (logically separate from displayed count)
@@ -696,10 +765,6 @@ try {
         }
     }
 
-    if (is_super_admin()) {
-        $admin_list = $pdo->query("SELECT DISTINCT assigned_to FROM leads WHERE assigned_to IS NOT NULL AND assigned_to <> '' ORDER BY assigned_to")->fetchAll(PDO::FETCH_COLUMN);
-    }
-    $course_list = $pdo->query("SELECT DISTINCT interested_course FROM leads WHERE interested_course IS NOT NULL AND interested_course <> '' ORDER BY interested_course")->fetchAll(PDO::FETCH_COLUMN);
     $remark_authors = [];
     try {
         $remark_authors = $pdo->query("
@@ -756,6 +821,73 @@ $page_title  = 'Lead Management';
 $page_sub    = 'Track and convert prospective students';
 include 'includes/admin_nav.php';
 ?>
+
+<style>
+.fn-multiselect-wrap {
+    position: relative;
+    display: inline-block;
+}
+.fn-multiselect-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 4px 10px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #1e293b;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.fn-multiselect-btn:hover {
+    border-color: #94a3b8;
+}
+.fn-multiselect-btn.active {
+    border-color: var(--accent);
+    background: #f0fdf4;
+    color: var(--accent-dark);
+}
+.fn-multiselect-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 1000;
+    min-width: 200px;
+    max-width: 320px;
+    max-height: 240px;
+    overflow-y: auto;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);
+    padding: 6px 0;
+}
+.fn-multiselect-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    font-size: 0.78rem;
+    color: #334155;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.12s ease;
+    margin: 0;
+}
+.fn-multiselect-item:hover {
+    background: #f1f5f9;
+}
+.fn-multiselect-item input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--accent);
+}
+</style>
 
 <?php if (!empty($import_summary)): ?>
 <div class="panel" style="border-left: 4px solid var(--accent); margin-bottom: 20px; background: #fff;">
@@ -878,7 +1010,7 @@ include 'includes/admin_nav.php';
         </div>
     </div>
 
-    <!-- Follow-ups Controls Bar: Date Range + Display Limit -->
+    <!-- Follow-ups Controls Bar: Multi-Filter + Search Remark + Date Range + Display Limit -->
     <div style="background:#f8fafc; border-bottom:1px solid #e2e8f0; padding:10px 16px;">
         <form method="GET" action="lead-management.php" id="followups-filter-form" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:0;">
             <?php
@@ -889,22 +1021,103 @@ include 'includes/admin_nav.php';
                 }
             }
             ?>
-            <!-- Follow-up Date Filter -->
             <div style="display:flex; align-items:center; flex-wrap:wrap; gap:8px;">
-                <span style="font-size:0.82rem; font-weight:700; color:#334155; display:inline-flex; align-items:center; gap:6px;">
-                    <i class="fas fa-calendar-alt" style="color:var(--amber-ink);"></i> Follow-up Date:
-                </span>
-                <div style="display:flex; align-items:center; flex-wrap:gap; gap:6px;">
-                    <label for="fn-followup-from" style="font-size:0.75rem; font-weight:600; color:#64748b;">From</label>
-                    <input type="date" id="fn-followup-from" name="followup_from" value="<?php echo e($raw_fn_from); ?>" style="padding:4px 8px; font-size:0.8rem; border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#1e293b;">
-                    <span style="color:#94a3b8; font-size:0.8rem; font-weight:700;">&rarr;</span>
-                    <label for="fn-followup-to" style="font-size:0.75rem; font-weight:600; color:#64748b;">To</label>
-                    <input type="date" id="fn-followup-to" name="followup_to" value="<?php echo e($raw_fn_to); ?>" style="padding:4px 8px; font-size:0.8rem; border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#1e293b;">
-                    <button type="submit" class="btn btn-sm btn-primary" style="padding:4px 12px; font-size:0.8rem; font-weight:700; border-radius:6px;">Apply</button>
-                    <?php if ($raw_fn_from !== '' || $raw_fn_to !== ''): ?>
-                        <a href="<?php echo e(lqs(['followup_from' => null, 'followup_to' => null])); ?>" class="btn btn-sm btn-outline" style="padding:4px 10px; font-size:0.8rem; border-radius:6px; background:#fff;">Clear</a>
-                    <?php endif; ?>
+                <!-- Remark Search Keyword -->
+                <div style="display:flex; align-items:center; gap:5px;">
+                    <label for="fn-followup-remark" style="font-size:0.75rem; font-weight:600; color:#64748b;" title="Search user-entered remarks">
+                        <i class="fas fa-search" style="color:var(--accent);"></i> Remark:
+                    </label>
+                    <input type="text" id="fn-followup-remark" name="followup_remark" value="<?php echo e($f_fn_remark); ?>" placeholder="Search remark..." style="padding:4px 8px; font-size:0.8rem; border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#1e293b; width:130px;">
                 </div>
+
+                <!-- Interested In (Courses) Multi-Select -->
+                <?php if (!empty($course_list)): ?>
+                <div class="fn-multiselect-wrap" data-placeholder="Courses">
+                    <button type="button" class="fn-multiselect-btn<?php echo !empty($f_fn_courses) ? ' active' : ''; ?>" onclick="toggleFnDropdown('fn-courses-dropdown', event)">
+                        <span class="fn-multiselect-label"><?php
+                            $c_count = count($f_fn_courses);
+                            echo $c_count > 0 ? ('Courses (' . $c_count . ')') : 'All Courses';
+                        ?></span>
+                        <i class="fas fa-chevron-down" style="font-size:0.65rem; margin-left:3px; opacity:0.6;"></i>
+                    </button>
+                    <div id="fn-courses-dropdown" class="fn-multiselect-dropdown" style="display:none;">
+                        <?php foreach ($course_list as $c): ?>
+                            <label class="fn-multiselect-item">
+                                <input type="checkbox" name="followup_courses[]" value="<?php echo e($c); ?>" <?php echo in_array($c, $f_fn_courses, true) ? 'checked' : ''; ?>>
+                                <span><?php echo e($c); ?></span>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+                <?php endif; ?>
+
+                <!-- Status Multi-Select -->
+                <div class="fn-multiselect-wrap" data-placeholder="Statuses">
+                    <button type="button" class="fn-multiselect-btn<?php echo !empty($f_fn_statuses) ? ' active' : ''; ?>" onclick="toggleFnDropdown('fn-statuses-dropdown', event)">
+                        <span class="fn-multiselect-label"><?php
+                            $st_count = count($f_fn_statuses);
+                            echo $st_count > 0 ? ('Status (' . $st_count . ')') : 'Active Statuses';
+                        ?></span>
+                        <i class="fas fa-chevron-down" style="font-size:0.65rem; margin-left:3px; opacity:0.6;"></i>
+                    </button>
+                    <div id="fn-statuses-dropdown" class="fn-multiselect-dropdown" style="display:none;">
+                        <?php foreach ($LEAD_STATUSES as $k => $v): ?>
+                            <label class="fn-multiselect-item">
+                                <input type="checkbox" name="followup_statuses[]" value="<?php echo e($k); ?>" <?php echo in_array($k, $f_fn_statuses, true) ? 'checked' : ''; ?>>
+                                <span><?php echo e($v[0]); ?></span>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
+                <!-- Assigned To Multi-Select (Super Admin only) -->
+                <?php if (is_super_admin() && !empty($assignable)): ?>
+                <div class="fn-multiselect-wrap" data-placeholder="Assigned">
+                    <button type="button" class="fn-multiselect-btn<?php echo !empty($f_fn_assigned) ? ' active' : ''; ?>" onclick="toggleFnDropdown('fn-assigned-dropdown', event)">
+                        <span class="fn-multiselect-label"><?php
+                            $a_count = count($f_fn_assigned);
+                            echo $a_count > 0 ? ('Assigned (' . $a_count . ')') : 'All Admins';
+                        ?></span>
+                        <i class="fas fa-chevron-down" style="font-size:0.65rem; margin-left:3px; opacity:0.6;"></i>
+                    </button>
+                    <div id="fn-assigned-dropdown" class="fn-multiselect-dropdown" style="display:none;">
+                        <label class="fn-multiselect-item">
+                            <input type="checkbox" name="followup_assigned[]" value="__ALL__" <?php echo in_array('__ALL__', $f_fn_assigned, true) ? 'checked' : ''; ?>>
+                            <span>Unassigned (All Admins)</span>
+                        </label>
+                        <?php foreach ($assignable as $adm): ?>
+                            <label class="fn-multiselect-item">
+                                <input type="checkbox" name="followup_assigned[]" value="<?php echo e($adm); ?>" <?php echo in_array($adm, $f_fn_assigned, true) ? 'checked' : ''; ?>>
+                                <span><?php echo e($adm); ?></span>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+                <?php endif; ?>
+
+                <!-- Follow-up Date Filter -->
+                <div style="display:flex; align-items:center; gap:5px;">
+                    <span style="font-size:0.75rem; font-weight:600; color:#64748b; display:inline-flex; align-items:center; gap:4px;">
+                        <i class="fas fa-calendar-alt" style="color:var(--amber-ink);"></i> Date:
+                    </span>
+                    <input type="date" id="fn-followup-from" name="followup_from" value="<?php echo e($raw_fn_from); ?>" style="padding:4px 6px; font-size:0.8rem; border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#1e293b;" title="From Date">
+                    <span style="color:#94a3b8; font-size:0.8rem; font-weight:700;">&rarr;</span>
+                    <input type="date" id="fn-followup-to" name="followup_to" value="<?php echo e($raw_fn_to); ?>" style="padding:4px 6px; font-size:0.8rem; border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#1e293b;" title="To Date">
+                </div>
+
+                <button type="submit" class="btn btn-sm btn-primary" style="padding:4px 12px; font-size:0.8rem; font-weight:700; border-radius:6px;">Apply</button>
+                <?php
+                $has_active_fn_filters = ($raw_fn_from !== '' || $raw_fn_to !== '' || $f_fn_remark !== '' || !empty($f_fn_courses) || !empty($f_fn_statuses) || !empty($f_fn_assigned));
+                if ($has_active_fn_filters): ?>
+                    <a href="<?php echo e(lqs([
+                        'followup_from'     => null,
+                        'followup_to'       => null,
+                        'followup_remark'   => null,
+                        'followup_courses'  => null,
+                        'followup_statuses' => null,
+                        'followup_assigned' => null
+                    ])); ?>" class="btn btn-sm btn-outline" style="padding:4px 10px; font-size:0.8rem; border-radius:6px; background:#fff;">Clear</a>
+                <?php endif; ?>
             </div>
 
             <!-- Display Limit -->
@@ -923,8 +1136,8 @@ include 'includes/admin_nav.php';
         <?php if (empty($today_leads)): ?>
             <div class="empty-state">
                 <i class="fas fa-mug-hot"></i>
-                <?php if ($raw_fn_from !== '' || $raw_fn_to !== ''): ?>
-                    <p>No follow-ups found matching the selected date range.</p>
+                <?php if ($has_active_fn_filters): ?>
+                    <p>No follow-ups found matching the selected filters.</p>
                 <?php else: ?>
                     <p>No follow-ups due today or overdue. You're all caught up!</p>
                 <?php endif; ?>
@@ -1052,6 +1265,18 @@ include 'includes/admin_nav.php';
             <?php if (!empty($raw_fn_to)): ?>
                 <input type="hidden" name="followup_to" value="<?php echo e($raw_fn_to); ?>">
             <?php endif; ?>
+            <?php if ($f_fn_remark !== ''): ?>
+                <input type="hidden" name="followup_remark" value="<?php echo e($f_fn_remark); ?>">
+            <?php endif; ?>
+            <?php foreach ($f_fn_courses as $fc): ?>
+                <input type="hidden" name="followup_courses[]" value="<?php echo e($fc); ?>">
+            <?php endforeach; ?>
+            <?php foreach ($f_fn_statuses as $fs): ?>
+                <input type="hidden" name="followup_statuses[]" value="<?php echo e($fs); ?>">
+            <?php endforeach; ?>
+            <?php foreach ($f_fn_assigned as $fa): ?>
+                <input type="hidden" name="followup_assigned[]" value="<?php echo e($fa); ?>">
+            <?php endforeach; ?>
             <div class="field"><label>Status</label>
                 <select name="status">
                     <option value="">All statuses</option>
@@ -1649,6 +1874,51 @@ function validateBulkUpdateForm() {
     }
     return true;
 }
+
+function toggleFnDropdown(dropdownId, event) {
+    if (event) {
+        event.stopPropagation();
+        event.preventDefault();
+    }
+    var dropdown = document.getElementById(dropdownId);
+    if (!dropdown) return;
+    var isOpen = dropdown.style.display === 'block';
+    document.querySelectorAll('.fn-multiselect-dropdown').forEach(function(el) {
+        el.style.display = 'none';
+    });
+    if (!isOpen) {
+        dropdown.style.display = 'block';
+    }
+}
+
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.fn-multiselect-wrap')) {
+        document.querySelectorAll('.fn-multiselect-dropdown').forEach(function(el) {
+            el.style.display = 'none';
+        });
+    }
+});
+
+document.addEventListener('change', function(e) {
+    if (e.target && e.target.closest('.fn-multiselect-dropdown')) {
+        var wrap = e.target.closest('.fn-multiselect-wrap');
+        if (wrap) {
+            var label = wrap.querySelector('.fn-multiselect-label');
+            var btn = wrap.querySelector('.fn-multiselect-btn');
+            var placeholder = wrap.getAttribute('data-placeholder') || 'Filter';
+            var checkedCount = wrap.querySelectorAll('input[type=\"checkbox\"]:checked').length;
+            if (label) {
+                if (checkedCount === 0) {
+                    label.textContent = 'All ' + placeholder;
+                    if (btn) btn.classList.remove('active');
+                } else {
+                    label.textContent = placeholder + ' (' + checkedCount + ')';
+                    if (btn) btn.classList.add('active');
+                }
+            }
+        }
+    }
+});
 </script>";
 include 'includes/admin_footer.php';
 ?>
