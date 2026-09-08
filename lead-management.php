@@ -42,6 +42,7 @@ if (isset($_GET['lock'])) {
         'course'           => $_GET['course'] ?? '',
         'due'              => $_GET['due'] ?? '',
         'joined'           => $_GET['joined'] ?? '',
+        'converted_by'     => $_GET['converted_by'] ?? [],
         'q'                => $_GET['q'] ?? ''
     ];
     $cleanParams = $_GET;
@@ -60,6 +61,7 @@ if (isset($_SESSION['locked_lead_filters']) && !isset($_GET['unlock'])) {
         $_GET['course']           = $_SESSION['locked_lead_filters']['course'] ?? '';
         $_GET['due']              = $_SESSION['locked_lead_filters']['due'] ?? '';
         $_GET['joined']           = $_SESSION['locked_lead_filters']['joined'] ?? '';
+        $_GET['converted_by']     = $_SESSION['locked_lead_filters']['converted_by'] ?? [];
         $_GET['q']                = $_SESSION['locked_lead_filters']['q'] ?? '';
     }
 }
@@ -71,7 +73,16 @@ $import_summary  = null;
 if (!function_exists('leads_table_exists')) {
     function leads_table_exists($pdo) {
         static $e = null;
-        if ($e === null) { try { $e = (bool)$pdo->query("SHOW TABLES LIKE 'leads'")->fetchColumn(); } catch (Exception $ex) { $e = false; } }
+        if ($e === null) {
+            try {
+                $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+                if ($driver === 'sqlite') {
+                    $e = (bool)$pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='leads'")->fetchColumn();
+                } else {
+                    $e = (bool)$pdo->query("SHOW TABLES LIKE 'leads'")->fetchColumn();
+                }
+            } catch (Exception $ex) { $e = false; }
+        }
         return $e;
     }
 }
@@ -96,11 +107,26 @@ function clean_wa($n) {
     if (strlen($n) === 10) $n = '91' . $n;     // default India
     return $n;
 }
+ensure_lead_converted_by_column($pdo);
+
 // Admins that leads can be assigned to (super admin only)
 $assignable = [];
 if (is_super_admin() && admins_table_exists($pdo)) {
     try {
         $assignable = $pdo->query("SELECT username FROM admins WHERE status = 'active' ORDER BY role = 'super_admin' DESC, username")->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Exception $e) {}
+}
+
+// All legitimate admins for conversion attribution (all valid admins, not restricted to active unless established)
+$all_admins = [];
+$all_admin_names = [];
+if (admins_table_exists($pdo)) {
+    try {
+        $stmtAllAdm = $pdo->query("SELECT username, full_name FROM admins WHERE username IS NOT NULL AND TRIM(username) <> '' ORDER BY full_name ASC, username ASC");
+        $all_admins = $stmtAllAdm->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($all_admins as $admRow) {
+            $all_admin_names[$admRow['username']] = $admRow['full_name'] ?: $admRow['username'];
+        }
     } catch (Exception $e) {}
 }
 
@@ -418,7 +444,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $studPhone = normalizeLeadPhone($student['whatsapp_country_code'] . $student['whatsapp_number']);
                             
                             if ($studPhone === $normPhone) {
-                                $success = convertLeadFromApprovedAdmission($pdo, $lead['id'], $student['user_id'], $admin_username);
+                                $success = convertLeadFromApprovedAdmission($pdo, $lead['id'], $student['user_id'], $admin_username, $admin_username);
                                 if ($success) {
                                     $pdo->commit();
                                     $success_message = "Lead #{$lead['id']} successfully marked as converted for Student #{$student['user_id']}.";
@@ -441,6 +467,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         throw $ex;
                     } finally {
                         releaseLeadLock($pdo, $lead['whatsapp_number'], $lead['interested_course']);
+                    }
+                }
+            } elseif ($action === 'change_converted_by') {
+                if (!is_super_admin()) {
+                    $error_message = 'Only the Super Admin can change conversion attribution.';
+                } else {
+                    $lead_id = (int)($_POST['lead_id'] ?? 0);
+                    $new_converted_by = trim($_POST['converted_by'] ?? '');
+
+                    $stmtLead = $pdo->prepare("SELECT id, status, converted_by, whatsapp_number, name FROM leads WHERE id = ?");
+                    $stmtLead->execute([$lead_id]);
+                    $targetLead = $stmtLead->fetch(PDO::FETCH_ASSOC);
+
+                    if (!$targetLead) {
+                        $error_message = 'Lead not found.';
+                    } elseif ($targetLead['status'] !== 'converted') {
+                        $error_message = 'Attribution can only be changed for converted leads.';
+                    } elseif ($targetLead['converted_by'] === 'alumni_referral') {
+                        $error_message = 'Alumni Referral attribution is permanently locked and cannot be changed.';
+                    } else {
+                        try {
+                            $resolved = resolveLeadConversionAttribution($pdo, false, $new_converted_by, false);
+                            if ($resolved === 'alumni_referral') {
+                                throw new InvalidArgumentException("Cannot manually set Alumni Referral.");
+                            }
+
+                            $old_disp = ($targetLead['converted_by'] === 'auto_converted') ? 'Auto Converted' : ($targetLead['converted_by'] ?: 'None');
+                            $new_disp = ($resolved === 'auto_converted') ? 'Auto Converted' : $resolved;
+
+                            $adminMobile = get_admin_mobile($pdo, $admin_username);
+                            $mobileSuffix = ($adminMobile && $adminMobile !== 'N/A') ? " (Mobile: {$adminMobile})" : "";
+                            $remark = "Converted By changed from {$old_disp} to {$new_disp} by Super Admin {$admin_username}{$mobileSuffix}";
+
+                            $pdo->prepare("UPDATE leads SET converted_by = ?, updated_at = NOW(), last_activity_at = NOW() WHERE id = ?")->execute([$resolved, $lead_id]);
+
+                            lead_log($pdo, $lead_id, 'converted_by_change', $remark, null, null, null, $admin_username);
+                            log_admin_activity($pdo, $admin_username, 'converted_by_changed', "Lead #{$lead_id} ({$targetLead['whatsapp_number']}): Converted By changed from {$old_disp} to {$new_disp}{$mobileSuffix}");
+
+                            $success_message = "Conversion attribution for Lead #{$lead_id} updated to {$new_disp}.";
+                        } catch (Exception $e) {
+                            $error_message = 'Failed to update attribution: ' . $e->getMessage();
+                        }
                     }
                 }
             }
@@ -546,11 +614,29 @@ $f_fn_statuses   = array_values(array_filter($f_fn_statuses, function($st) use (
 $raw_fn_assigned = $_GET['followup_assigned'] ?? [];
 $f_fn_assigned   = is_array($raw_fn_assigned) ? array_values(array_unique(array_filter(array_map('trim', $raw_fn_assigned)))) : [];
 
+// Tab Navigation: 'followups' (default) or 'leads'
+$active_tab = (isset($_GET['tab']) && $_GET['tab'] === 'leads') ? 'leads' : 'followups';
+
+// Leads Display Limit (50, 100, 500; default 50)
+$raw_leads_limit = (int)($_GET['leads_limit'] ?? 50);
+$leads_limit     = in_array($raw_leads_limit, [50, 100, 500], true) ? $raw_leads_limit : 50;
+
+// Converted By Multi-Select Filter (Leads Tab)
+$raw_converted_by = $_GET['converted_by'] ?? [];
+$f_converted_by   = is_array($raw_converted_by) ? array_values(array_unique(array_filter(array_map('trim', $raw_converted_by)))) : [];
+
 $where = ['1=1']; $params = [];
 // Non-super admins see leads assigned to them OR to all admins
 if (!is_super_admin()) { $where[] = "(l.assigned_to = ? OR l.assigned_to = '__ALL__')"; $params[] = $admin_username; }
 if (isset($LEAD_STATUSES[$f_status])) { $where[] = "l.status = ?"; $params[] = $f_status; }
 if ($f_assigned !== '' && is_super_admin()) { $where[] = "l.assigned_to = ?"; $params[] = $f_assigned; }
+if (!empty($f_converted_by)) {
+    $cb_placeholders = implode(',', array_fill(0, count($f_converted_by), '?'));
+    $where[] = "l.converted_by IN ($cb_placeholders)";
+    foreach ($f_converted_by as $cb) {
+        $params[] = $cb;
+    }
+}
 if ($f_last_remarked_by !== '') {
     $where[] = "(
         SELECT la.performed_by
@@ -558,14 +644,16 @@ if ($f_last_remarked_by !== '') {
         WHERE la.lead_id = l.id
           AND la.remark IS NOT NULL
           AND TRIM(la.remark) <> ''
-          AND la.activity_type NOT IN ('details_change', 'reassigned')
+          AND la.activity_type NOT IN ('details_change', 'reassigned', 'converted_by_change')
           AND TRIM(la.remark) NOT IN ('Lead created', 'Imported from file', 'Follow-up done', 'Marked as converted')
           AND la.remark NOT LIKE 'Converted - linked to student%'
           AND la.remark NOT LIKE 'Lead marked converted via%'
+          AND la.remark NOT LIKE 'Lead converted (%'
           AND la.remark NOT LIKE 'Reassigned to %'
           AND la.remark NOT LIKE 'WhatsApp number updated:%'
           AND la.remark NOT LIKE 'WhatsApp Marketing:%'
           AND la.remark NOT LIKE 'Bulk update:%'
+          AND la.remark NOT LIKE 'Converted By changed from%'
         ORDER BY la.performed_at DESC, la.id DESC
         LIMIT 1
     ) = ?";
@@ -616,12 +704,13 @@ if ($f_q !== '') {
 $where_sql = implode(' AND ', $where);
 
 $page = max(1, (int)($_GET['page'] ?? 1));
-$per_page = 25;
+$per_page = $leads_limit;
 $total = 0; $leads = [];
 $stats = ['total' => 0, 'due_today' => 0, 'overdue' => 0, 'converted' => 0];
 $today_leads = [];
 $today_leads_total = 0;
 $admin_list = []; $course_list = [];
+$converted_breakdown = [];
 
 try {
     if (is_super_admin()) {
@@ -635,6 +724,20 @@ try {
     $stats['due_today'] = (int)$pdo->query("SELECT COUNT(*) FROM leads WHERE $scope AND next_followup_date = CURDATE() AND status NOT IN ('converted','rejected','not_interested')")->fetchColumn();
     $stats['overdue']   = (int)$pdo->query("SELECT COUNT(*) FROM leads WHERE $scope AND next_followup_date < CURDATE() AND status NOT IN ('converted','rejected','not_interested')")->fetchColumn();
     $stats['converted'] = (int)$pdo->query("SELECT COUNT(*) FROM leads WHERE $scope AND status = 'converted'")->fetchColumn();
+
+    // Converted Leads Breakdown (respects scoping, sum strictly equals $stats['converted'], zero duplicates)
+    try {
+        $stmt_cb = $pdo->query("
+            SELECT COALESCE(NULLIF(TRIM(converted_by), ''), 'auto_converted') as conv_key, COUNT(*) as qty
+            FROM leads
+            WHERE $scope AND status = 'converted'
+            GROUP BY conv_key
+            ORDER BY qty DESC
+        ");
+        $converted_breakdown = $stmt_cb->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        $converted_breakdown = [];
+    }
 
     // Follow-ups Needed query (supports display limit 50/100/500, date range filter, search remark, and multi-filters)
     $today_leads = [];
@@ -750,8 +853,10 @@ try {
         $chunks = array_chunk($phonesToSearch, 500);
         foreach ($chunks as $chunk) {
             $placeholders = implode(',', array_fill(0, count($chunk), '?'));
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            $idCol = ($driver === 'sqlite') ? "user_id AS id" : "id";
             $stmtPreload = $pdo->prepare("
-                SELECT id, user_id, name, whatsapp_number, whatsapp_country_code, pepp_course, status, approval_date
+                SELECT {$idCol}, user_id, name, whatsapp_number, whatsapp_country_code, pepp_course, status, approval_date
                 FROM users
                 WHERE (whatsapp_number IN ({$placeholders}) OR CONCAT(whatsapp_country_code, whatsapp_number) IN ({$placeholders}))
             ");
@@ -887,6 +992,36 @@ include 'includes/admin_nav.php';
     cursor: pointer;
     accent-color: var(--accent);
 }
+.pepp-tabs-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 20px 0 16px 0;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 0;
+    flex-wrap: wrap;
+}
+.pepp-tab-link {
+    text-decoration: none;
+    padding: 10px 18px;
+    font-weight: 700;
+    font-size: 0.92rem;
+    border-bottom: 3px solid transparent;
+    color: #64748b;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    margin-bottom: -2px;
+}
+.pepp-tab-link:hover {
+    color: var(--accent-dark);
+}
+.pepp-tab-link.active {
+    border-bottom-color: var(--accent);
+    color: var(--accent-dark);
+}
 </style>
 
 <?php if (!empty($import_summary)): ?>
@@ -972,23 +1107,43 @@ include 'includes/admin_nav.php';
         <div class="stat-value"><?php echo number_format($stats['total']); ?></div>
         <div class="stat-hint"><?php echo is_super_admin() ? 'All leads' : 'Assigned to you'; ?></div>
     </div>
-    <a href="<?php echo e(lqs(['due' => 'today', 'status' => '', 'page' => 1])); ?>" class="stat-card" style="text-decoration:none;">
+    <a href="<?php echo e(lqs(['tab' => 'leads', 'due' => 'today', 'status' => '', 'page' => 1])); ?>" class="stat-card" style="text-decoration:none;">
         <div class="stat-top"><span class="stat-label">Due Today</span><span class="stat-icon amber"><i class="fas fa-calendar-day"></i></span></div>
         <div class="stat-value"><?php echo number_format($stats['due_today']); ?></div>
         <div class="stat-hint">Follow-ups for <?php echo date('d M Y'); ?></div>
     </a>
-    <a href="<?php echo e(lqs(['due' => 'overdue', 'status' => '', 'page' => 1])); ?>" class="stat-card" style="text-decoration:none;">
+    <a href="<?php echo e(lqs(['tab' => 'leads', 'due' => 'overdue', 'status' => '', 'page' => 1])); ?>" class="stat-card" style="text-decoration:none;">
         <div class="stat-top"><span class="stat-label">Overdue</span><span class="stat-icon red"><i class="fas fa-triangle-exclamation"></i></span></div>
         <div class="stat-value"><?php echo number_format($stats['overdue']); ?></div>
         <div class="stat-hint">Past follow-up date</div>
     </a>
-    <div class="stat-card">
+    <div class="stat-card" style="cursor:pointer;" onclick="openConvertedBreakdownModal()" title="Click to view Converted Leads Breakdown">
         <div class="stat-top"><span class="stat-label">Converted</span><span class="stat-icon green"><i class="fas fa-circle-check"></i></span></div>
         <div class="stat-value"><?php echo number_format($stats['converted']); ?></div>
-        <div class="stat-hint">Became students</div>
+        <div class="stat-hint">Became students <i class="fas fa-chart-pie" style="font-size:0.75rem; margin-left:4px; opacity:0.7;"></i></div>
     </div>
 </div>
 
+<!-- ── TAB NAVIGATION ── -->
+<div class="pepp-tabs-bar">
+    <a href="<?php echo e(lqs(['tab' => 'followups', 'page' => 1])); ?>" class="pepp-tab-link <?php echo $active_tab === 'followups' ? 'active' : ''; ?>">
+        <i class="fas fa-bell"></i> Follow-ups Needed
+        <?php if ($stats['overdue'] > 0): ?>
+            <span class="badge" style="background:#ef4444; color:#ffffff; font-size:0.75rem; font-weight:700; padding:2px 7px; border-radius:999px; margin-left:4px; box-shadow:0 1px 2px rgba(239,68,68,0.3);"><?php echo number_format($stats['overdue']); ?></span>
+        <?php endif; ?>
+    </a>
+    <a href="<?php echo e(lqs(['tab' => 'leads', 'page' => 1])); ?>" class="pepp-tab-link <?php echo $active_tab === 'leads' ? 'active' : ''; ?>">
+        <i class="fas fa-users"></i> Leads
+        <span style="font-size:0.8rem; font-weight:600; opacity:0.85; margin-left:2px;">(<?php echo number_format($stats['total']); ?>)</span>
+    </a>
+    <div style="margin-left:auto; display:flex; align-items:center; gap:8px; padding-bottom:6px;">
+        <a href="communication-campaigns.php?target=leads" class="btn btn-sm btn-success" style="border-radius:6px; font-weight:700;"><i class="fas fa-bullhorn"></i> Create WhatsApp Campaign</a>
+        <button class="btn btn-sm btn-primary" onclick="openModal('add-lead-modal')"><i class="fas fa-plus"></i> Add Lead</button>
+        <button class="btn btn-sm btn-outline" onclick="openModal('import-modal')"><i class="fas fa-file-import"></i> Bulk Import</button>
+    </div>
+</div>
+
+<?php if ($active_tab === 'followups'): ?>
 <!-- ── TODAY'S / OVERDUE FOLLOW-UPS ── -->
 <div class="panel">
     <div class="panel-head" style="flex-wrap:wrap; gap:12px;">
@@ -1003,16 +1158,12 @@ include 'includes/admin_nav.php';
                 }
             ?></h2>
         </div>
-        <div class="head-right">
-            <a href="communication-campaigns.php?target=leads" class="btn btn-sm btn-success" style="border-radius:6px; font-weight:700;"><i class="fas fa-bullhorn"></i> Create WhatsApp Campaign</a>
-            <button class="btn btn-sm btn-primary" onclick="openModal('add-lead-modal')"><i class="fas fa-plus"></i> Add Lead</button>
-            <button class="btn btn-sm btn-outline" onclick="openModal('import-modal')"><i class="fas fa-file-import"></i> Bulk Import</button>
-        </div>
     </div>
 
     <!-- Follow-ups Controls Bar: Multi-Filter + Search Remark + Date Range + Display Limit -->
     <div style="background:#f8fafc; border-bottom:1px solid #e2e8f0; padding:10px 16px;">
         <form method="GET" action="lead-management.php" id="followups-filter-form" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:0;">
+            <input type="hidden" name="tab" value="followups">
             <?php
             $main_filter_keys = ['status', 'assigned', 'last_remarked_by', 'course', 'due', 'joined', 'q'];
             foreach ($main_filter_keys as $mfk) {
@@ -1252,10 +1403,15 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<?php else: ?>
 <!-- ── FILTERS ── -->
 <div class="panel">
     <div class="panel-body">
         <form method="GET" class="filter-bar">
+            <input type="hidden" name="tab" value="leads">
+            <?php if (isset($_GET['leads_limit'])): ?>
+                <input type="hidden" name="leads_limit" value="<?php echo e($leads_limit); ?>">
+            <?php endif; ?>
             <?php if (isset($_GET['followup_limit'])): ?>
                 <input type="hidden" name="followup_limit" value="<?php echo e($_GET['followup_limit']); ?>">
             <?php endif; ?>
@@ -1327,6 +1483,34 @@ include 'includes/admin_nav.php';
                     <option value="converted" <?php echo $f_joined === 'converted' ? 'selected' : ''; ?>>Joined &amp; Converted</option>
                 </select>
             </div>
+            <div class="field" style="min-width:140px;">
+                <label>Converted By</label>
+                <div class="fn-multiselect-wrap" data-placeholder="Converted By">
+                    <button type="button" class="fn-multiselect-btn<?php echo !empty($f_converted_by) ? ' active' : ''; ?>" onclick="toggleFnDropdown('leads-converted-by-dropdown', event)">
+                        <span class="fn-multiselect-label"><?php
+                            $cb_count = count($f_converted_by);
+                            echo $cb_count > 0 ? ('Converted (' . $cb_count . ')') : 'All Attributions';
+                        ?></span>
+                        <i class="fas fa-chevron-down" style="font-size:0.65rem; margin-left:3px; opacity:0.6;"></i>
+                    </button>
+                    <div id="leads-converted-by-dropdown" class="fn-multiselect-dropdown" style="display:none; min-width:210px;">
+                        <label class="fn-multiselect-item">
+                            <input type="checkbox" name="converted_by[]" value="auto_converted" <?php echo in_array('auto_converted', $f_converted_by, true) ? 'checked' : ''; ?>>
+                            <span>Auto Converted</span>
+                        </label>
+                        <label class="fn-multiselect-item">
+                            <input type="checkbox" name="converted_by[]" value="alumni_referral" <?php echo in_array('alumni_referral', $f_converted_by, true) ? 'checked' : ''; ?>>
+                            <span style="color:#6b21a8; font-weight:600;"><i class="fas fa-lock" style="font-size:0.7rem;"></i> Alumni Referral</span>
+                        </label>
+                        <?php foreach ($all_admins as $adm): ?>
+                            <label class="fn-multiselect-item">
+                                <input type="checkbox" name="converted_by[]" value="<?php echo e($adm['username']); ?>" <?php echo in_array($adm['username'], $f_converted_by, true) ? 'checked' : ''; ?>>
+                                <span><?php echo e(!empty($adm['full_name']) ? $adm['full_name'] : $adm['username']); ?></span>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            </div>
             <div class="field grow-2"><label>Search</label><input type="text" name="q" value="<?php echo e($f_q); ?>" placeholder="Name, WhatsApp, course or institute"></div>
             <button type="submit" class="btn btn-primary"><i class="fas fa-filter"></i> Filter</button>
             <?php if (isset($_SESSION['locked_lead_filters'])): ?>
@@ -1334,16 +1518,46 @@ include 'includes/admin_nav.php';
             <?php else: ?>
                 <button type="submit" name="lock" value="1" class="btn btn-outline" style="border-radius:8px; border-color:#cbd5e1; color:#475569; cursor:pointer;"><i class="fas fa-lock"></i> Lock</button>
             <?php endif; ?>
-            <a href="lead-management.php?unlock=1" class="btn btn-outline">Reset</a>
+            <a href="lead-management.php?tab=leads&unlock=1" class="btn btn-outline">Reset</a>
         </form>
     </div>
 </div>
 
 <!-- ── ALL LEADS ── -->
 <div class="panel">
-    <div class="panel-head">
-        <span class="head-icon" style="background:var(--accent-soft);color:var(--accent-dark);"><i class="fas fa-list"></i></span>
-        <h2>Leads (<?php echo number_format($total); ?>) <?php if (isset($_SESSION['locked_lead_filters'])): ?><i class="fas fa-lock" style="color:#ef4444; font-size:0.9rem; margin-left:6px;" title="Filters Locked"></i><?php endif; ?></h2>
+    <div class="panel-head" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+            <span class="head-icon" style="background:var(--accent-soft);color:var(--accent-dark);"><i class="fas fa-list"></i></span>
+            <h2>Leads (<?php echo number_format($total); ?>) <?php
+                if ($total > 0) {
+                    echo ' <span style="font-size:0.8rem; font-weight:500; color:var(--text-muted); opacity:0.85;">· Showing ' . count($leads) . '</span>';
+                }
+            ?> <?php if (isset($_SESSION['locked_lead_filters'])): ?><i class="fas fa-lock" style="color:#ef4444; font-size:0.9rem; margin-left:6px;" title="Filters Locked"></i><?php endif; ?></h2>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+            <form method="GET" action="lead-management.php" id="leads-limit-form" style="display:inline-flex; align-items:center; gap:6px; margin:0;">
+                <input type="hidden" name="tab" value="leads">
+                <?php
+                foreach ($_GET as $gk => $gv) {
+                    if ($gk !== 'leads_limit' && $gk !== 'page' && $gk !== 'tab') {
+                        if (is_array($gv)) {
+                            foreach ($gv as $item) {
+                                echo '<input type="hidden" name="' . e($gk) . '[]" value="' . e($item) . '">';
+                            }
+                        } else {
+                            echo '<input type="hidden" name="' . e($gk) . '" value="' . e($gv) . '">';
+                        }
+                    }
+                }
+                ?>
+                <label for="leads-limit-select" style="font-size:0.82rem; font-weight:600; color:#475569;">Show:</label>
+                <select name="leads_limit" id="leads-limit-select" onchange="this.form.submit()" style="padding:4px 10px; font-size:0.8rem; border:1px solid #cbd5e1; border-radius:6px; background:#fff; font-weight:600; color:#1e293b; cursor:pointer;">
+                    <option value="50" <?php echo $leads_limit === 50 ? 'selected' : ''; ?>>50</option>
+                    <option value="100" <?php echo $leads_limit === 100 ? 'selected' : ''; ?>>100</option>
+                    <option value="500" <?php echo $leads_limit === 500 ? 'selected' : ''; ?>>500</option>
+                </select>
+            </form>
+        </div>
     </div>
     <div class="panel-body flush table-wrap">
         <?php if (empty($leads)): ?>
@@ -1426,7 +1640,27 @@ include 'includes/admin_nav.php';
                         <?php echo e($l['last_institute'] ?: '-'); ?>
                         <?php if ($l['year_of_study']): ?><div><span class="badge gray" style="font-size:.62rem;"><?php echo e($l['year_of_study']); ?><?php echo $l['is_fyugp'] === 'yes' ? ' · FYUGP' : ''; ?></span></div><?php endif; ?>
                     </td>
-                    <td><span class="badge <?php echo $LEAD_STATUSES[$l['status']][1]; ?>"><?php echo $LEAD_STATUSES[$l['status']][0]; ?></span></td>
+                    <td>
+                        <span class="badge <?php echo $LEAD_STATUSES[$l['status']][1]; ?>"><?php echo $LEAD_STATUSES[$l['status']][0]; ?></span>
+                        <?php if ($l['status'] === 'converted'):
+                            $cbVal = $l['converted_by'] ?: 'auto_converted';
+                        ?>
+                            <div style="margin-top:4px;">
+                                <?php if ($cbVal === 'alumni_referral'): ?>
+                                    <span class="badge" style="background:#f3e8ff; color:#6b21a8; font-size:0.65rem; font-weight:700; border:1px solid #d8b4fe;" title="Locked: Alumni Referral"><i class="fas fa-lock"></i> Alumni Ref</span>
+                                <?php else: ?>
+                                    <span class="badge" style="background:#ecfdf5; color:#047857; font-size:0.65rem; font-weight:600; border:1px solid #a7f3d0;" title="Converted By: <?php echo e($cbVal); ?>">
+                                        By: <?php echo e($cbVal === 'auto_converted' ? 'Auto' : ($all_admin_names[$cbVal] ?? $cbVal)); ?>
+                                    </span>
+                                    <?php if (is_super_admin()): ?>
+                                        <button type="button" onclick="openEditConvertedByModal(<?php echo (int)$l['id']; ?>, '<?php echo e(addslashes($l['name'] ?: 'Lead #' . $l['id'])); ?>', '<?php echo e(addslashes($cbVal)); ?>')" title="Edit Converted By Attribution (Super Admin)" style="background:none; border:none; color:#64748b; cursor:pointer; font-size:0.7rem; padding:0 2px; vertical-align:middle;">
+                                            <i class="fas fa-pen"></i>
+                                        </button>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+                            </div>
+                        <?php endif; ?>
+                    </td>
                     <td>
                         <?php if (in_array($l['status'], $CLOSED, true)): ?>
                             <span class="cell-sub">-</span>
@@ -1472,6 +1706,7 @@ include 'includes/admin_nav.php';
         <?php endif; ?>
     </div>
 </div>
+<?php endif; ?>
 
 <!-- ── ADD LEAD MODAL ── -->
 <div class="modal-backdrop" id="add-lead-modal">
@@ -1606,6 +1841,127 @@ include 'includes/admin_nav.php';
         </form>
     </div>
 </div>
+
+<!-- ── CONVERTED LEADS BREAKDOWN MODAL ── -->
+<div id="converted-breakdown-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); align-items:center; justify-content:center; z-index:9999; backdrop-filter:blur(2px);">
+    <div style="background:#fff; border-radius:16px; width:100%; max-width:550px; padding:24px; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04); max-height:90vh; display:flex; flex-direction:column; margin:16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; border-bottom:1px solid #e2e8f0; padding-bottom:12px;">
+            <div>
+                <h3 style="margin:0; font-size:1.1rem; font-weight:700; color:#1e293b; display:flex; align-items:center; gap:8px;">
+                    <i class="fas fa-circle-check" style="color:#10b981;"></i> Converted Leads Breakdown
+                </h3>
+                <span style="font-size:0.75rem; color:#64748b;">Distribution of all <?php echo number_format($stats['converted']); ?> converted leads</span>
+            </div>
+            <button type="button" onclick="closeConvertedBreakdownModal()" style="background:none; border:none; font-size:1.4rem; cursor:pointer; color:#94a3b8; line-height:1;">&times;</button>
+        </div>
+        <div style="overflow-y:auto; flex:1; margin-bottom:16px;">
+            <table class="data-table" style="width:100%; font-size:0.85rem; margin:0;">
+                <thead>
+                    <tr style="background:#f8fafc;">
+                        <th style="padding:8px 12px; text-align:left; font-weight:700; color:#475569;">Converted By</th>
+                        <th style="padding:8px 12px; text-align:right; font-weight:700; color:#475569;">Quantity</th>
+                        <th style="padding:8px 12px; text-align:center; font-weight:700; color:#475569;">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (empty($converted_breakdown)): ?>
+                        <tr><td colspan="3" style="text-align:center; padding:16px; color:#94a3b8;">No converted leads found.</td></tr>
+                    <?php else: ?>
+                        <?php
+                        foreach ($converted_breakdown as $cb):
+                            $qty = (int)$cb['qty'];
+                            $k = $cb['conv_key'];
+                            $badgeStyle = 'background:#f1f5f9; color:#334155;';
+                            if ($k === 'alumni_referral') {
+                                $label = 'Alumni Referral 🔒';
+                                $badgeStyle = 'background:#f3e8ff; color:#6b21a8; font-weight:700; border:1px solid #d8b4fe;';
+                            } elseif ($k === 'auto_converted') {
+                                $label = 'Auto Converted';
+                                $badgeStyle = 'background:#f8fafc; color:#64748b; font-weight:600; border:1px solid #cbd5e1;';
+                            } else {
+                                $adminName = $all_admin_names[$k] ?? null;
+                                $label = $adminName ? "{$adminName} ({$k})" : $k;
+                                $badgeStyle = 'background:#ecfdf5; color:#065f46; font-weight:600; border:1px solid #a7f3d0;';
+                            }
+                        ?>
+                            <tr>
+                                <td style="padding:10px 12px;">
+                                    <span class="badge" style="<?php echo $badgeStyle; ?> padding:3px 8px; border-radius:6px; font-size:0.8rem;">
+                                        <?php echo e($label); ?>
+                                    </span>
+                                </td>
+                                <td style="padding:10px 12px; text-align:right; font-weight:700; font-size:0.9rem; color:#1e293b;">
+                                    <?php echo number_format($qty); ?>
+                                </td>
+                                <td style="padding:10px 12px; text-align:center;">
+                                    <a href="lead-management.php?tab=leads&status=converted&converted_by[]=<?php echo urlencode($k); ?>" class="btn btn-sm btn-outline" style="padding:3px 10px; font-size:0.75rem; border-radius:6px; font-weight:600;">
+                                        View Leads <i class="fas fa-arrow-right" style="font-size:0.7rem; margin-left:4px;"></i>
+                                    </a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </tbody>
+                <tfoot>
+                    <tr style="background:#f8fafc; border-top:2px solid #cbd5e1; font-weight:700;">
+                        <td style="padding:10px 12px; color:#1e293b;">TOTAL CONVERTED</td>
+                        <td style="padding:10px 12px; text-align:right; font-size:0.95rem; color:#10b981;"><?php echo number_format($stats['converted']); ?></td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid #e2e8f0; padding-top:12px;">
+            <a href="lead-management.php?tab=leads&status=converted" class="btn btn-sm btn-soft-green" style="font-weight:600;">
+                <i class="fas fa-list"></i> View All Converted Leads
+            </a>
+            <button type="button" onclick="closeConvertedBreakdownModal()" class="btn btn-sm btn-outline">Close</button>
+        </div>
+    </div>
+</div>
+
+<?php if (is_super_admin()): ?>
+<!-- ── SUPER ADMIN EDIT CONVERTED BY MODAL ── -->
+<div id="edit-converted-by-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); align-items:center; justify-content:center; z-index:9999; backdrop-filter:blur(2px);">
+    <div style="background:#fff; border-radius:16px; width:100%; max-width:440px; padding:24px; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1); margin:16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; border-bottom:1px solid #e2e8f0; padding-bottom:12px;">
+            <h4 style="margin:0; font-size:1rem; font-weight:700; color:#1e293b;">
+                <i class="fas fa-pen" style="color:var(--accent); margin-right:6px;"></i> Edit Converted By Attribution
+            </h4>
+            <button type="button" onclick="closeEditConvertedByModal()" style="background:none; border:none; font-size:1.4rem; cursor:pointer; color:#94a3b8;">&times;</button>
+        </div>
+        <form method="POST" action="lead-management.php">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="change_converted_by">
+            <input type="hidden" name="lead_id" id="edit-conv-lead-id">
+
+            <div style="margin-bottom:14px; font-size:0.85rem; color:#475569; background:#f8fafc; padding:8px 12px; border-radius:8px; border:1px solid #e2e8f0;">
+                Lead: <strong id="edit-conv-lead-name" style="color:#1e293b;">-</strong>
+            </div>
+
+            <div class="field" style="margin-bottom:16px;">
+                <label style="font-weight:700; color:#1e293b;">Attributed To <span class="req">*</span></label>
+                <select name="converted_by" id="edit-conv-select" required style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.88rem;">
+                    <option value="auto_converted">Auto Converted</option>
+                    <?php foreach ($all_admins as $adm): ?>
+                        <option value="<?php echo e($adm['username']); ?>">
+                            <?php echo e(!empty($adm['full_name']) ? $adm['full_name'] . ' (' . $adm['username'] . ')' : $adm['username']); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <span class="field-hint" style="font-size:0.75rem; color:#64748b; margin-top:6px; display:block;">
+                    Super Admin modification will be permanently logged with your name and mobile number.
+                </span>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button type="button" onclick="closeEditConvertedByModal()" class="btn btn-outline">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Update Attribution</button>
+            </div>
+        </form>
+    </div>
+</div>
+<?php endif; ?>
 
 <?php
 $extra_scripts = "
@@ -1919,6 +2275,32 @@ document.addEventListener('change', function(e) {
         }
     }
 });
+
+function openConvertedBreakdownModal() {
+    var modal = document.getElementById('converted-breakdown-modal');
+    if (modal) modal.style.display = 'flex';
+}
+
+function closeConvertedBreakdownModal() {
+    var modal = document.getElementById('converted-breakdown-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+function openEditConvertedByModal(leadId, leadName, currentVal) {
+    var idInput = document.getElementById('edit-conv-lead-id');
+    var nameSpan = document.getElementById('edit-conv-lead-name');
+    var sel = document.getElementById('edit-conv-select');
+    if (idInput) idInput.value = leadId;
+    if (nameSpan) nameSpan.textContent = leadName;
+    if (sel) sel.value = currentVal || 'auto_converted';
+    var modal = document.getElementById('edit-converted-by-modal');
+    if (modal) modal.style.display = 'flex';
+}
+
+function closeEditConvertedByModal() {
+    var modal = document.getElementById('edit-converted-by-modal');
+    if (modal) modal.style.display = 'none';
+}
 </script>";
 include 'includes/admin_footer.php';
 ?>

@@ -1371,46 +1371,216 @@ if (!function_exists('releaseLeadLock')) {
     }
 }
 
-if (!function_exists('convertLeadFromApprovedAdmission')) {
-    function convertLeadFromApprovedAdmission($pdo, $leadId, $studentUserId, $adminUsername) {
+if (!function_exists('ensure_lead_converted_by_column')) {
+    function ensure_lead_converted_by_column($pdo) {
+        static $ensured = false;
+        if ($ensured || !$pdo) return;
         try {
-            $stmtExist = $pdo->prepare("SELECT status FROM leads WHERE id = ?");
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $cols = $pdo->query("PRAGMA table_info(leads)")->fetchAll(PDO::FETCH_ASSOC);
+                $hasCol = false;
+                foreach ($cols as $col) {
+                    if (strtolower($col['name']) === 'converted_by') {
+                        $hasCol = true;
+                        break;
+                    }
+                }
+                if (!$hasCol) {
+                    $pdo->exec("ALTER TABLE leads ADD COLUMN converted_by TEXT DEFAULT NULL");
+                }
+            } else {
+                $stmt = $pdo->query("SHOW COLUMNS FROM leads LIKE 'converted_by'");
+                if (!$stmt->fetch()) {
+                    $pdo->exec("ALTER TABLE leads ADD COLUMN converted_by VARCHAR(100) DEFAULT NULL AFTER converted_user_id");
+                }
+            }
+            $ensured = true;
+        } catch (Exception $e) {}
+    }
+}
+
+if (!function_exists('get_admin_mobile')) {
+    function get_admin_mobile($pdo, $adminUsername) {
+        if (empty($adminUsername) || !$pdo) return 'N/A';
+        try {
+            $stmt = $pdo->prepare("SELECT phone FROM admins WHERE username = ? LIMIT 1");
+            $stmt->execute([$adminUsername]);
+            $phone = $stmt->fetchColumn();
+            if (!empty($phone)) return trim((string)$phone);
+        } catch (Exception $e) {}
+
+        try {
+            $stmt = $pdo->prepare("SELECT mobile_number FROM employees WHERE username = ? OR email = ? LIMIT 1");
+            $stmt->execute([$adminUsername, $adminUsername]);
+            $phone = $stmt->fetchColumn();
+            if (!empty($phone)) return trim((string)$phone);
+        } catch (Exception $e) {}
+
+        return 'N/A';
+    }
+}
+
+if (!function_exists('is_alumni_referral_student')) {
+    function is_alumni_referral_student($pdo, $studentUserId, $studentRow = null) {
+        if ($studentRow) {
+            $ref = strtoupper(trim((string)($studentRow['referral_code'] ?? '')));
+            $coup = strtoupper(trim((string)($studentRow['applied_coupon'] ?? '')));
+            if (str_starts_with($ref, 'ALUM') || str_starts_with($coup, 'ALUM')) {
+                return true;
+            }
+        }
+
+        if (empty($studentUserId) || !$pdo) {
+            return false;
+        }
+
+        try {
+            $stmt = $pdo->prepare("SELECT referral_code, applied_coupon FROM users WHERE user_id = ? LIMIT 1");
+            $stmt->execute([$studentUserId]);
+            $u = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($u) {
+                $ref = strtoupper(trim((string)($u['referral_code'] ?? '')));
+                $coup = strtoupper(trim((string)($u['applied_coupon'] ?? '')));
+                if (str_starts_with($ref, 'ALUM') || str_starts_with($coup, 'ALUM')) {
+                    return true;
+                }
+            }
+        } catch (Exception $e) {}
+
+        try {
+            $stmt = $pdo->prepare("SELECT coupon_code FROM coupon_redemptions WHERE user_id = ? AND UPPER(coupon_code) LIKE 'ALUM%' LIMIT 1");
+            $stmt->execute([$studentUserId]);
+            if ($stmt->fetchColumn()) {
+                return true;
+            }
+        } catch (Exception $e) {}
+
+        return false;
+    }
+}
+
+if (!function_exists('resolveLeadConversionAttribution')) {
+    function resolveLeadConversionAttribution($pdo, $is_alumni, $chosen_admin = null, $is_auto = false) {
+        if ($is_alumni) {
+            return 'alumni_referral';
+        }
+
+        $chosen = trim((string)$chosen_admin);
+        if ($chosen !== '' && $chosen !== 'auto_converted') {
+            if ($chosen === 'alumni_referral') {
+                return 'alumni_referral';
+            }
+            if ($pdo) {
+                $stmt = $pdo->prepare("SELECT username FROM admins WHERE username = ? LIMIT 1");
+                $stmt->execute([$chosen]);
+                $validAdmin = $stmt->fetchColumn();
+                if ($validAdmin) {
+                    return $validAdmin;
+                }
+            }
+            throw new InvalidArgumentException("Invalid admin identity for conversion attribution: {$chosen}");
+        }
+
+        if ($is_auto || $chosen === 'auto_converted') {
+            return 'auto_converted';
+        }
+
+        return null;
+    }
+}
+
+if (!function_exists('get_lead_last_explicit_remark')) {
+    function get_lead_last_explicit_remark($pdo, $leadId) {
+        if (!$pdo || !$leadId) return null;
+        try {
+            $stmt = $pdo->prepare("
+                SELECT la.remark, la.performed_by, la.performed_at, a.full_name as performed_by_name
+                FROM lead_activity la
+                LEFT JOIN admins a ON a.username = la.performed_by
+                WHERE la.lead_id = ?
+                  AND la.remark IS NOT NULL
+                  AND TRIM(la.remark) <> ''
+                  AND la.activity_type NOT IN ('details_change', 'reassigned', 'converted_by_change')
+                  AND TRIM(la.remark) NOT IN ('Lead created', 'Imported from file', 'Follow-up done', 'Marked as converted')
+                  AND la.remark NOT LIKE 'Converted - linked to student%'
+                  AND la.remark NOT LIKE 'Lead marked converted via%'
+                  AND la.remark NOT LIKE 'Lead converted (%'
+                  AND la.remark NOT LIKE 'Reassigned to %'
+                  AND la.remark NOT LIKE 'WhatsApp number updated:%'
+                  AND la.remark NOT LIKE 'WhatsApp Marketing:%'
+                  AND la.remark NOT LIKE 'Bulk update:%'
+                  AND la.remark NOT LIKE 'Converted By changed from%'
+                ORDER BY la.performed_at DESC, la.id DESC
+                LIMIT 1
+            ");
+            $stmt->execute([$leadId]);
+            return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        } catch (Exception $e) {
+            return null;
+        }
+    }
+}
+
+if (!function_exists('convertLeadFromApprovedAdmission')) {
+    function convertLeadFromApprovedAdmission($pdo, $leadId, $studentUserId, $adminUsername, $convertedBy = null) {
+        try {
+            ensure_lead_converted_by_column($pdo);
+
+            $stmtExist = $pdo->prepare("SELECT status, converted_by FROM leads WHERE id = ?");
             $stmtExist->execute([$leadId]);
-            $status = $stmtExist->fetchColumn();
+            $leadRow = $stmtExist->fetch(PDO::FETCH_ASSOC);
+            $status = $leadRow['status'] ?? null;
+            $existingConvertedBy = $leadRow['converted_by'] ?? null;
+
+            $is_alumni = is_alumni_referral_student($pdo, $studentUserId);
+            $finalAttribution = resolveLeadConversionAttribution($pdo, $is_alumni, $convertedBy, empty($convertedBy));
+
             if ($status === 'converted') {
-                return true; // Idempotent
+                if (!empty($existingConvertedBy)) {
+                    return true; // Idempotent
+                }
+                $pdo->prepare("UPDATE leads SET converted_by = ? WHERE id = ?")->execute([$finalAttribution, $leadId]);
+                return true;
             }
 
             $stmtUpdate = $pdo->prepare("
                 UPDATE leads
                 SET status = 'converted',
                     converted_user_id = ?,
+                    converted_by = ?,
+                    next_followup_date = NULL,
                     updated_at = NOW()
                 WHERE id = ?
             ");
-            $stmtUpdate->execute([$studentUserId, $leadId]);
+            $stmtUpdate->execute([$studentUserId, $finalAttribution, $leadId]);
+
+            $attributionDisplay = ($finalAttribution === 'alumni_referral') ? 'Alumni Referral' : (($finalAttribution === 'auto_converted') ? 'Auto Converted' : $finalAttribution);
+            $adminMobile = get_admin_mobile($pdo, $adminUsername);
+            $mobileSuffix = ($adminMobile && $adminMobile !== 'N/A') ? " (Mobile: {$adminMobile})" : "";
+            $logRemark = "Lead converted (Attribution: {$attributionDisplay}) via matched approved student #{$studentUserId} by {$adminUsername}{$mobileSuffix}";
 
             // Log lead activity timeline
             if (function_exists('lead_log')) {
-                lead_log($pdo, $leadId, 'status_change', "Lead marked converted via matched approved student #{$studentUserId}", $status, 'converted', null, $adminUsername);
+                lead_log($pdo, $leadId, 'status_change', $logRemark, $status, 'converted', null, $adminUsername);
             } else {
                 $stmtAct = $pdo->prepare("
                     INSERT INTO lead_activity (lead_id, activity_type, remark, old_status, new_status, performed_by, performed_at)
                     VALUES (?, 'status_change', ?, ?, 'converted', ?, NOW())
                 ");
-                $stmtAct->execute([$leadId, "Lead marked converted via matched approved student #{$studentUserId}", $status, $adminUsername]);
+                $stmtAct->execute([$leadId, $logRemark, $status, $adminUsername]);
                 $pdo->prepare("UPDATE leads SET last_activity_at = NOW() WHERE id = ?")->execute([$leadId]);
             }
 
             // Log admin activity
             if (function_exists('log_admin_activity')) {
-                log_admin_activity($pdo, $adminUsername, 'lead_converted', "Lead #{$leadId} marked converted for Student #{$studentUserId}");
+                log_admin_activity($pdo, $adminUsername, 'lead_converted', "Lead #{$leadId} converted (Attribution: {$attributionDisplay}) for Student #{$studentUserId}{$mobileSuffix}");
             } else {
                 $stmtLog = $pdo->prepare("
                     INSERT INTO admin_activity_log (username, action_type, description, ip_address, user_agent, timestamp)
                     VALUES (?, 'lead_converted', ?, ?, ?, NOW())
                 ");
-                $stmtLog->execute([$adminUsername, "Lead #{$leadId} marked converted for Student #{$studentUserId}", $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1', $_SERVER['HTTP_USER_AGENT'] ?? 'CLI']);
+                $stmtLog->execute([$adminUsername, "Lead #{$leadId} converted (Attribution: {$attributionDisplay}) for Student #{$studentUserId}{$mobileSuffix}", $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1', $_SERVER['HTTP_USER_AGENT'] ?? 'CLI']);
             }
 
             return true;

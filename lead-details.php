@@ -30,6 +30,19 @@ if (!function_exists('lead_log')) {
 $lead_id = (int)($_GET['id'] ?? 0);
 if (!$lead_id) { header('Location: lead-management.php'); exit(); }
 
+ensure_lead_converted_by_column($pdo);
+
+$all_admins = [];
+$all_admin_names = [];
+if (admins_table_exists($pdo)) {
+    try {
+        $all_admins = $pdo->query("SELECT username, full_name FROM admins WHERE username IS NOT NULL AND TRIM(username) <> '' ORDER BY full_name ASC, username ASC")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($all_admins as $adm) {
+            $all_admin_names[$adm['username']] = !empty($adm['full_name']) ? $adm['full_name'] : $adm['username'];
+        }
+    } catch (Exception $e) {}
+}
+
 $success_message = ''; $error_message = '';
 
 /* Load lead */
@@ -118,12 +131,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($action === 'convert_lead') {
                 // Link this lead to an existing student record (optional user_id)
                 $uid = trim($_POST['converted_user_id'] ?? '');
-                $pdo->prepare("UPDATE leads SET status = 'converted', converted_user_id = ?, next_followup_date = NULL, updated_at = NOW() WHERE id = ?")
-                    ->execute([$uid ?: null, $lead_id]);
-                lead_log($pdo, $lead_id, 'status_change', $uid ? "Converted - linked to student {$uid}" : 'Marked as converted', $lead['status'], 'converted', null, $admin_username);
-                log_admin_activity($pdo, $admin_username, 'lead_converted', "Lead #{$lead_id} converted" . ($uid ? " → {$uid}" : ''));
+                $conv_by_input = trim($_POST['converted_by'] ?? '');
+
+                // Check if matched student is alumni referral
+                $is_alumni = false;
+                if ($uid) {
+                    $sRow = null;
+                    try {
+                        $sStmt = $pdo->prepare("SELECT * FROM users WHERE user_id = ?");
+                        $sStmt->execute([$uid]);
+                        $sRow = $sStmt->fetch(PDO::FETCH_ASSOC);
+                    } catch (Exception $e) {}
+                    $is_alumni = is_alumni_referral_student($pdo, $uid, $sRow ?: []);
+                }
+
+                $resolved_by = resolveLeadConversionAttribution($pdo, $is_alumni, $conv_by_input, false);
+                if (!$resolved_by) {
+                    $resolved_by = resolveLeadConversionAttribution($pdo, $is_alumni, $admin_username, false);
+                }
+
+                $pdo->prepare("UPDATE leads SET status = 'converted', converted_user_id = ?, converted_by = ?, next_followup_date = NULL, updated_at = NOW() WHERE id = ?")
+                    ->execute([$uid ?: null, $resolved_by, $lead_id]);
+
+                $updater_mobile = get_admin_mobile($pdo, $admin_username);
+                $phoneInfo = $updater_mobile ? " (Mobile: {$updater_mobile})" : "";
+
+                lead_log($pdo, $lead_id, 'status_change', $uid ? "Converted - linked to student {$uid} (Attributed to: {$resolved_by}) by {$admin_username}{$phoneInfo}" : "Marked as converted (Attributed to: {$resolved_by}) by {$admin_username}{$phoneInfo}", $lead['status'], 'converted', null, $admin_username);
+                log_admin_activity($pdo, $admin_username, 'lead_converted', "Lead #{$lead_id} converted (Attributed to: {$resolved_by}) by {$admin_username}{$phoneInfo}" . ($uid ? " → {$uid}" : ''));
                 $success_message = 'Lead marked as converted.';
                 $lead = load_lead($pdo, $lead_id);
+            } elseif ($action === 'change_converted_by') {
+                if (!is_super_admin()) {
+                    $error_message = 'Only the Super Admin can change conversion attribution.';
+                } else {
+                    $new_converted_by = trim($_POST['converted_by'] ?? '');
+                    $current_converted_by = $lead['converted_by'] ?? '';
+                    if ($current_converted_by === 'alumni_referral') {
+                        $error_message = 'Alumni referral conversions are permanently locked and cannot be changed.';
+                    } else {
+                        $resolved = resolveLeadConversionAttribution($pdo, false, $new_converted_by, false);
+                        if (!$resolved) {
+                            $error_message = 'Invalid conversion attribution selected.';
+                        } else {
+                            $stmt = $pdo->prepare("UPDATE leads SET converted_by = ?, updated_at = NOW() WHERE id = ?");
+                            $stmt->execute([$resolved, $lead_id]);
+
+                            $updater_mobile = get_admin_mobile($pdo, $admin_username);
+                            $phoneInfo = $updater_mobile ? " (Mobile: {$updater_mobile})" : "";
+                            $oldLabel = $current_converted_by ?: 'none';
+                            $newLabel = $resolved;
+
+                            $logMsg = "Converted By changed from {$oldLabel} to {$newLabel} by {$admin_username}{$phoneInfo}";
+                            lead_log($pdo, $lead_id, 'converted_by_changed', $logMsg, null, null, null, $admin_username);
+                            log_admin_activity($pdo, $admin_username, 'lead_converted_by_updated', "Lead #{$lead_id} attribution updated: {$oldLabel} -> {$newLabel}{$phoneInfo}");
+
+                            $success_message = "Conversion attribution updated to '{$newLabel}'.";
+                            $lead = load_lead($pdo, $lead_id);
+                        }
+                    }
+                }
             } elseif ($action === 'delete_lead') {
                 if (!is_super_admin()) {
                     $error_message = 'Only the Super Admin can delete a lead.';
@@ -209,6 +275,38 @@ include 'includes/admin_nav.php';
                     <div class="detail-row"><div class="dl">Assigned to</div><div class="dv"><?php echo $lead['assigned_to'] === '__ALL__' ? 'All Admins' : e($lead['assigned_to'] ?: '-'); ?></div></div>
                     <div class="detail-row"><div class="dl">Source</div><div class="dv"><?php echo e(ucfirst($lead['source'])); ?></div></div>
                     <div class="detail-row"><div class="dl">Created</div><div class="dv"><?php echo date('d M Y, h:i A', strtotime($lead['created_at'])); ?> by <?php echo e($lead['created_by'] ?: '-'); ?></div></div>
+                    <?php if ($st === 'converted'):
+                        $cbVal = $lead['converted_by'] ?? '';
+                        $isAlum = ($cbVal === 'alumni_referral');
+                    ?>
+                    <div class="detail-row">
+                        <div class="dl">Converted By</div>
+                        <div class="dv" style="display:flex; align-items:center; gap:8px;">
+                            <?php if ($isAlum): ?>
+                                <span class="badge" style="background:#f3e8ff; color:#6b21a8; font-weight:700; border:1px solid #d8b4fe; padding:3px 8px;">
+                                    <i class="fas fa-lock" style="font-size:0.75rem; margin-right:4px;"></i> Alumni Referral
+                                </span>
+                            <?php elseif ($cbVal === 'auto_converted'): ?>
+                                <span class="badge" style="background:#f8fafc; color:#64748b; font-weight:600; border:1px solid #cbd5e1; padding:3px 8px;">
+                                    Auto Converted
+                                </span>
+                            <?php else:
+                                $aName = $all_admin_names[$cbVal] ?? null;
+                                $aLabel = $aName ? "{$aName} ({$cbVal})" : ($cbVal ?: 'Unassigned');
+                            ?>
+                                <span class="badge" style="background:#ecfdf5; color:#065f46; font-weight:600; border:1px solid #a7f3d0; padding:3px 8px;">
+                                    <?php echo e($aLabel); ?>
+                                </span>
+                            <?php endif; ?>
+
+                            <?php if (is_super_admin() && !$isAlum): ?>
+                                <button type="button" class="btn btn-sm btn-outline" onclick="openEditConvertedByModal()" style="padding:2px 8px; font-size:0.75rem;">
+                                    <i class="fas fa-pen"></i> Edit
+                                </button>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <?php endif; ?>
                     <?php if ($lead['converted_user_id']): ?>
                     <div class="detail-row"><div class="dl">Student</div><div class="dv"><a href="student-details.php?user_id=<?php echo urlencode($lead['converted_user_id']); ?>"><?php echo e($lead['converted_user_id']); ?></a></div></div>
                     <?php endif; ?>
@@ -285,6 +383,18 @@ include 'includes/admin_nav.php';
                     <?php else: ?>
                         <div class="field"><label>Student ID (optional)</label><input type="text" name="converted_user_id" placeholder="e.g. PEPP20260042 - leave blank if not registered yet"></div>
                     <?php endif; ?>
+                    <div class="field" style="margin-top:10px; margin-bottom:12px;">
+                        <label>Converted By Attribution <span class="req">*</span></label>
+                        <select name="converted_by" required style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem;">
+                            <option value="<?php echo e($admin_username); ?>" selected><?php echo e($all_admin_names[$admin_username] ?? $admin_username); ?> (Me)</option>
+                            <option value="auto_converted">Auto Converted</option>
+                            <?php foreach ($all_admins as $adm): if ($adm['username'] === $admin_username) continue; ?>
+                                <option value="<?php echo e($adm['username']); ?>">
+                                    <?php echo e(!empty($adm['full_name']) ? $adm['full_name'] . ' (' . $adm['username'] . ')' : $adm['username']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
                     <button type="submit" class="btn btn-soft-green" onclick="return confirm('Mark this lead as converted?');"><i class="fas fa-circle-check"></i> Mark as Converted</button>
                 </form>
             </div>
@@ -319,6 +429,7 @@ include 'includes/admin_nav.php';
                     elseif ($t['activity_type'] === 'followup') { $icon = 'fa-phone'; $color = 'var(--amber-ink)'; }
                     elseif ($t['activity_type'] === 'created') { $icon = 'fa-plus'; $color = 'var(--green-ink)'; }
                     elseif ($t['activity_type'] === 'reassigned') { $icon = 'fa-user-pen'; $color = 'var(--blue-ink)'; }
+                    elseif ($t['activity_type'] === 'converted_by_changed') { $icon = 'fa-user-gear'; $color = 'var(--accent)'; }
                 ?>
                 <div class="tl-item">
                     <div class="tl-dot" style="color:<?php echo $color; ?>;"><i class="fas <?php echo $icon; ?>"></i></div>
@@ -334,6 +445,8 @@ include 'includes/admin_nav.php';
                             <div class="tl-title">Lead created</div>
                         <?php elseif ($t['activity_type'] === 'reassigned'): ?>
                             <div class="tl-title">Reassigned</div>
+                        <?php elseif ($t['activity_type'] === 'converted_by_changed'): ?>
+                            <div class="tl-title">Attribution Changed</div>
                         <?php endif; ?>
                         <?php if ($t['remark']): ?><div class="tl-remark"><?php echo nl2br(e($t['remark'])); ?></div><?php endif; ?>
                         <div class="tl-meta">
@@ -349,6 +462,48 @@ include 'includes/admin_nav.php';
         </div>
     </div>
 </div>
+
+<?php if (is_super_admin()): ?>
+<!-- ── SUPER ADMIN EDIT CONVERTED BY MODAL ── -->
+<div id="edit-converted-by-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); align-items:center; justify-content:center; z-index:9999; backdrop-filter:blur(2px);">
+    <div style="background:#fff; border-radius:16px; width:100%; max-width:440px; padding:24px; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1); margin:16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; border-bottom:1px solid #e2e8f0; padding-bottom:12px;">
+            <h4 style="margin:0; font-size:1rem; font-weight:700; color:#1e293b;">
+                <i class="fas fa-pen" style="color:var(--accent); margin-right:6px;"></i> Edit Converted By Attribution
+            </h4>
+            <button type="button" onclick="closeEditConvertedByModal()" style="background:none; border:none; font-size:1.4rem; cursor:pointer; color:#94a3b8;">&times;</button>
+        </div>
+        <form method="POST">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="change_converted_by">
+
+            <div style="margin-bottom:14px; font-size:0.85rem; color:#475569; background:#f8fafc; padding:8px 12px; border-radius:8px; border:1px solid #e2e8f0;">
+                Lead: <strong style="color:#1e293b;"><?php echo e($lead['name'] ?: 'Lead #' . $lead['id']); ?></strong>
+            </div>
+
+            <div class="field" style="margin-bottom:16px;">
+                <label style="font-weight:700; color:#1e293b;">Attributed To <span class="req">*</span></label>
+                <select name="converted_by" required style="width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.88rem;">
+                    <option value="auto_converted" <?php echo ($lead['converted_by'] ?? '') === 'auto_converted' ? 'selected' : ''; ?>>Auto Converted</option>
+                    <?php foreach ($all_admins as $adm): ?>
+                        <option value="<?php echo e($adm['username']); ?>" <?php echo ($lead['converted_by'] ?? '') === $adm['username'] ? 'selected' : ''; ?>>
+                            <?php echo e(!empty($adm['full_name']) ? $adm['full_name'] . ' (' . $adm['username'] . ')' : $adm['username']); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <span class="field-hint" style="font-size:0.75rem; color:#64748b; margin-top:6px; display:block;">
+                    Super Admin modification will be permanently logged with your name and mobile number.
+                </span>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button type="button" onclick="closeEditConvertedByModal()" class="btn btn-outline">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Update Attribution</button>
+            </div>
+        </form>
+    </div>
+</div>
+<?php endif; ?>
 
 <style>
 .lead-timeline { position: relative; }
@@ -372,6 +527,16 @@ function toggleFU() {
     var r = document.getElementById('fu-req'); if (r) r.style.display = closed ? 'none' : 'inline';
 }
 toggleFU();
+
+function openEditConvertedByModal() {
+    var modal = document.getElementById('edit-converted-by-modal');
+    if (modal) modal.style.display = 'flex';
+}
+
+function closeEditConvertedByModal() {
+    var modal = document.getElementById('edit-converted-by-modal');
+    if (modal) modal.style.display = 'none';
+}
 </script>";
 include 'includes/admin_footer.php';
 ?>

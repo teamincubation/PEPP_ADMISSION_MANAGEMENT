@@ -29,7 +29,7 @@ $is_local_dev = in_array($_SERVER['SERVER_NAME'] ?? '', ['localhost', '127.0.0.1
     || str_starts_with($_SERVER['HTTP_HOST'] ?? '', '127.0.0.1')
     || (int)($_SERVER['SERVER_PORT'] ?? 0) === 8888
     || (!empty($sqlite_env_path))
-    || php_sapi_name() === 'cli'
+    || (php_sapi_name() === 'cli' && !getenv('PEPP_USE_MYSQL'))
     || ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true'));
 
 if ($is_local_dev) {
@@ -421,6 +421,9 @@ if ($is_local_dev) {
                 peppkit_eligible TEXT,
                 discount_amount REAL DEFAULT 0.00,
                 discount_remark TEXT,
+                applied_coupon TEXT,
+                referral_code TEXT,
+                coupon_discount REAL DEFAULT 0.00,
                 user_photo TEXT,
                 payment_screenshot TEXT,
                 status TEXT DEFAULT 'approved',
@@ -617,6 +620,39 @@ if ($is_local_dev) {
                 status TEXT DEFAULT 'completed',
                 revised_installment_schedule TEXT
             );
+            CREATE TABLE IF NOT EXISTS leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                whatsapp_number TEXT NOT NULL,
+                name TEXT DEFAULT NULL,
+                interested_course TEXT DEFAULT NULL,
+                last_institute TEXT DEFAULT NULL,
+                last_course TEXT DEFAULT NULL,
+                is_fyugp TEXT DEFAULT NULL,
+                year_of_study TEXT DEFAULT NULL,
+                status TEXT NOT NULL DEFAULT 'new',
+                next_followup_date TEXT DEFAULT NULL,
+                followup_count INTEGER NOT NULL DEFAULT 0,
+                assigned_to TEXT DEFAULT NULL,
+                source TEXT DEFAULT 'manual',
+                converted_user_id TEXT DEFAULT NULL,
+                converted_by TEXT DEFAULT NULL,
+                created_by TEXT DEFAULT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT NULL,
+                last_activity_at TEXT DEFAULT NULL,
+                is_opted_out INTEGER DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS lead_activity (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id INTEGER NOT NULL,
+                activity_type TEXT NOT NULL DEFAULT 'remark',
+                remark TEXT DEFAULT NULL,
+                old_status TEXT DEFAULT NULL,
+                new_status TEXT DEFAULT NULL,
+                followup_date TEXT DEFAULT NULL,
+                performed_by TEXT DEFAULT NULL,
+                performed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
         ");
 
         $perf_indexes = [
@@ -635,6 +671,17 @@ if ($is_local_dev) {
             try {
                 $pdo->exec($idx_sql);
             } catch (Throwable $e) {}
+        }
+
+        $sqlite_extra_cols = [
+            "ALTER TABLE users ADD COLUMN referral_code TEXT DEFAULT NULL",
+            "ALTER TABLE users ADD COLUMN applied_coupon TEXT DEFAULT NULL",
+            "ALTER TABLE users ADD COLUMN coupon_discount REAL DEFAULT 0.00",
+            "ALTER TABLE admins ADD COLUMN phone TEXT DEFAULT NULL",
+            "ALTER TABLE leads ADD COLUMN converted_by TEXT DEFAULT NULL"
+        ];
+        foreach ($sqlite_extra_cols as $alt_sql) {
+            try { $pdo->exec($alt_sql); } catch (Throwable $e) {}
         }
 
         $pdo->exec(<<<'SQL_SEED'

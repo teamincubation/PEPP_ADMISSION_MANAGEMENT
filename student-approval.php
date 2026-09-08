@@ -133,7 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 "Course access until {$course_duration_date}; {$created_installments} future installment(s) scheduled"
             ]);
 
-            // Automatic lead conversion logic on approval
+            // Automatic lead conversion logic on approval with authoritative attribution
             try {
                 $studentPhone = $student['whatsapp_country_code'] . $student['whatsapp_number'];
                 $studentCourse = $student['pepp_course'];
@@ -141,7 +141,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $dupRes = checkLeadDuplicate($pdo, $studentPhone, $studentCourse, null, true);
                 if ($dupRes['count'] === 1) {
                     $matchedLeadId = $dupRes['matches'][0]['id'];
-                    convertLeadFromApprovedAdmission($pdo, $matchedLeadId, $student['user_id'], $admin_username);
+                    $is_alumni = is_alumni_referral_student($pdo, $student['user_id'], $student);
+
+                    if ($is_alumni) {
+                        // Alumni Referral ALWAYS wins and cannot be overridden
+                        $chosenConvertedBy = 'alumni_referral';
+                    } else {
+                        $chosenConvertedBy = trim($_POST['converted_by'] ?? '');
+                        if (empty($chosenConvertedBy)) {
+                            $pdo->rollBack();
+                            echo json_encode(['success' => false, 'message' => 'Conversion attribution is mandatory for this lead. Please select who converted this lead.']);
+                            exit;
+                        }
+                    }
+
+                    convertLeadFromApprovedAdmission($pdo, $matchedLeadId, $student['user_id'], $admin_username, $chosenConvertedBy);
                 } elseif ($dupRes['count'] > 1) {
                     error_log("Student Approval Auto-Conversion Ambiguity: Phone '{$studentPhone}', Course '{$studentCourse}' matched {$dupRes['count']} duplicate leads. Skipping auto-conversion.");
                 } else {
@@ -357,6 +371,30 @@ try {
     ")->fetchAll();
 
     $payment_accounts = $pdo->query("SELECT id, account_name, account_type FROM payment_accounts WHERE status = 'active' ORDER BY account_name")->fetchAll();
+
+    $all_admins = $pdo->query("SELECT username, full_name FROM admins WHERE username IS NOT NULL AND TRIM(username) <> '' ORDER BY full_name ASC, username ASC")->fetchAll(PDO::FETCH_ASSOC);
+
+    $student_lead_map = [];
+    foreach ($pending_students as $ps) {
+        $phone = ($ps['whatsapp_country_code'] ?? '') . ($ps['whatsapp_number'] ?? '');
+        $course = $ps['pepp_course'] ?? '';
+        $dup = checkLeadDuplicate($pdo, $phone, $course, null, true);
+        if ($dup['count'] === 1) {
+            $m = $dup['matches'][0];
+            $leadId = (int)$m['id'];
+            $lastRemark = get_lead_last_explicit_remark($pdo, $leadId);
+            $student_lead_map[$ps['user_id']] = [
+                'id' => $leadId,
+                'name' => $m['name'] ?? '',
+                'status' => $m['status'] ?? 'new',
+                'assigned_to' => $m['assigned_to'] ?? '__ALL__',
+                'converted_by' => $m['converted_by'] ?? '',
+                'last_remark' => $lastRemark ? $lastRemark['remark'] : 'No remark',
+                'last_remark_author' => $lastRemark ? ($lastRemark['performed_by_name'] ?: $lastRemark['performed_by']) : '-',
+                'last_remark_time' => $lastRemark ? date('d M Y, h:i A', strtotime($lastRemark['performed_at'])) : '-',
+            ];
+        }
+    }
 } catch (Exception $e) {
     error_log('Approval page load: ' . $e->getMessage());
     $load_error = 'Could not load pending applications.';
@@ -467,7 +505,9 @@ include 'includes/admin_nav.php';
                                 "paid" => (float)$s["paid_amount"],
                                 "applied_coupon" => $s["applied_coupon"] ?? "",
                                 "referral_code" => $s["referral_code"] ?? "",
-                                "coupon_discount" => (float)($s["coupon_discount"] ?? 0)
+                                "coupon_discount" => (float)($s["coupon_discount"] ?? 0),
+                                "is_alumni" => is_alumni_referral_student($pdo, $s["user_id"], $s),
+                                "lead_details" => $student_lead_map[$s["user_id"]] ?? null
                             ], JSON_HEX_APOS | JSON_HEX_QUOT); ?>)'><i class="fas fa-check"></i> Approve</button>
                         <?php endif; ?>
                         <button class="btn btn-sm btn-soft-red" onclick="rejectStudent('<?php echo e($s['user_id']); ?>', '<?php echo e(addslashes($s['name'])); ?>')"><i class="fas fa-xmark"></i></button>
@@ -496,6 +536,42 @@ include 'includes/admin_nav.php';
                     <span id="ap-summary"></span>
                 </div>
                 <div id="ap-coupon-alert" style="display:none; margin-bottom:16px;"></div>
+
+                <!-- ── LEAD DETAILS CARD ── -->
+                <div id="ap-lead-details-card" style="display:none; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:14px 16px; margin-bottom:16px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                        <span style="font-size:0.75rem; font-weight:700; color:var(--accent-dark); text-transform:uppercase; letter-spacing:0.05em; display:flex; align-items:center; gap:6px;">
+                            <i class="fas fa-bullseye" style="color:var(--accent);"></i> LEAD DETAILS
+                        </span>
+                        <span id="ap-lead-badge"></span>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px 16px; font-size:0.82rem; margin-bottom:12px;">
+                        <div><span style="color:#64748b;">Lead Status:</span> <strong id="ap-lead-status">-</strong></div>
+                        <div><span style="color:#64748b;">Assigned To:</span> <strong id="ap-lead-assigned">-</strong></div>
+                        <div style="grid-column:1 / -1;"><span style="color:#64748b;">Last Remark:</span> <span id="ap-lead-remark" style="font-style:italic; font-weight:600; color:#1e293b;">No remark</span></div>
+                        <div><span style="color:#64748b;">Last Remark Added By:</span> <strong id="ap-lead-remark-author">-</strong></div>
+                        <div><span style="color:#64748b;">Last Remark Time:</span> <strong id="ap-lead-remark-time">-</strong></div>
+                    </div>
+                    <div class="field" style="margin:0;">
+                        <label style="font-weight:700; color:#1e293b; display:flex; align-items:center; gap:6px;">
+                            <span>This Lead Converted By</span> <span class="req" id="ap-converted-by-req">*</span>
+                        </label>
+                        <select name="converted_by" id="ap-converted-by" style="width:100%;">
+                            <option value="">-- Select Converted By (Mandatory) --</option>
+                            <option value="auto_converted">Auto Converted</option>
+                            <?php if (!empty($all_admins)): ?>
+                                <?php foreach ($all_admins as $adm): ?>
+                                    <option value="<?php echo e($adm['username']); ?>">
+                                        <?php echo e(!empty($adm['full_name']) ? $adm['full_name'] . ' (' . $adm['username'] . ')' : $adm['username']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </select>
+                        <div id="ap-alumni-lock-msg" style="display:none; font-size:0.75rem; color:#6b21a8; font-weight:600; margin-top:4px;">
+                            <i class="fas fa-lock"></i> Locked permanently: Alumni Referral registration.
+                        </div>
+                    </div>
+                </div>
                 <div class="form-grid">
                     <div class="field">
                         <label>Course access until <span class="req">*</span></label>
@@ -618,6 +694,77 @@ function openApproveModal(s) {
         couponAlert.style.display = 'none';
     }
 
+    // Handle LEAD DETAILS card and Converted By attribution
+    const leadCard = document.getElementById('ap-lead-details-card');
+    const convSelect = document.getElementById('ap-converted-by');
+    const convReq = document.getElementById('ap-converted-by-req');
+    const alumMsg = document.getElementById('ap-alumni-lock-msg');
+    const leadBadge = document.getElementById('ap-lead-badge');
+
+    // Clean up previous hidden input if any
+    const prevHidden = document.getElementById('ap-hidden-alumni-converted-by');
+    if (prevHidden) prevHidden.remove();
+
+    if (s.lead_details || s.is_alumni) {
+        leadCard.style.display = 'block';
+        if (s.lead_details) {
+            document.getElementById('ap-lead-status').textContent = s.lead_details.status || '-';
+            document.getElementById('ap-lead-assigned').textContent = s.lead_details.assigned_to || '__ALL__';
+            document.getElementById('ap-lead-remark').textContent = s.lead_details.last_remark || 'No remark';
+            document.getElementById('ap-lead-remark-author').textContent = s.lead_details.last_remark_author || '-';
+            document.getElementById('ap-lead-remark-time').textContent = s.lead_details.last_remark_time || '-';
+        } else {
+            document.getElementById('ap-lead-status').textContent = 'Direct Registration';
+            document.getElementById('ap-lead-assigned').textContent = '-';
+            document.getElementById('ap-lead-remark').textContent = 'No remark';
+            document.getElementById('ap-lead-remark-author').textContent = '-';
+            document.getElementById('ap-lead-remark-time').textContent = '-';
+        }
+
+        if (s.is_alumni) {
+            leadBadge.innerHTML = '<span class=\"badge\" style=\"background:#f3e8ff; color:#6b21a8; font-weight:700; border:1px solid #d8b4fe; padding:2px 8px; border-radius:6px;\"><i class=\"fas fa-lock\"></i> Alumni Referral</span>';
+            let alumOpt = convSelect.querySelector('option[value=\"alumni_referral\"]');
+            if (!alumOpt) {
+                alumOpt = document.createElement('option');
+                alumOpt.value = 'alumni_referral';
+                alumOpt.textContent = 'Alumni Referral 🔒';
+                convSelect.appendChild(alumOpt);
+            }
+            convSelect.value = 'alumni_referral';
+            convSelect.disabled = true;
+            convSelect.required = false;
+            if (convReq) convReq.style.display = 'none';
+            if (alumMsg) alumMsg.style.display = 'block';
+
+            const hiddenInput = document.createElement('input');
+            hiddenInput.type = 'hidden';
+            hiddenInput.name = 'converted_by';
+            hiddenInput.id = 'ap-hidden-alumni-converted-by';
+            hiddenInput.value = 'alumni_referral';
+            document.getElementById('approve-form').appendChild(hiddenInput);
+        } else {
+            leadBadge.innerHTML = '';
+            convSelect.disabled = false;
+            convSelect.required = true;
+            if (convReq) convReq.style.display = 'inline';
+            if (alumMsg) alumMsg.style.display = 'none';
+
+            const alumOpt = convSelect.querySelector('option[value=\"alumni_referral\"]');
+            if (alumOpt) alumOpt.remove();
+
+            if (s.lead_details && s.lead_details.assigned_to && s.lead_details.assigned_to !== '__ALL__') {
+                convSelect.value = s.lead_details.assigned_to;
+            } else {
+                convSelect.value = '';
+            }
+        }
+    } else {
+        leadCard.style.display = 'none';
+        convSelect.disabled = true;
+        convSelect.required = false;
+        convSelect.value = '';
+    }
+
     // sensible default: 1 year of access
     const d = new Date(); d.setFullYear(d.getFullYear() + 1);
     document.getElementById('ap-duration').value = d.toISOString().slice(0, 10);
@@ -654,6 +801,15 @@ document.getElementById('ap-discount').addEventListener('input', renderInstallme
 
 function submitApproval(ev) {
     ev.preventDefault();
+
+    if (currentStudent && (currentStudent.lead_details || currentStudent.is_alumni) && !currentStudent.is_alumni) {
+        const convVal = document.getElementById('ap-converted-by').value;
+        if (!convVal) {
+            flash('Conversion attribution is mandatory for this lead. Please select who converted this lead.', false);
+            return false;
+        }
+    }
+
     const btn = document.getElementById('ap-submit');
     btn.disabled = true;
     btn.innerHTML = '<i class=\"fas fa-spinner fa-spin\"></i> Approving…';
