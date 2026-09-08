@@ -36,12 +36,13 @@ if (isset($_GET['unlock'])) {
 
 if (isset($_GET['lock'])) {
     $_SESSION['locked_lead_filters'] = [
-        'status'   => $_GET['status'] ?? '',
-        'assigned' => $_GET['assigned'] ?? '',
-        'course'   => $_GET['course'] ?? '',
-        'due'      => $_GET['due'] ?? '',
-        'joined'   => $_GET['joined'] ?? '',
-        'q'        => $_GET['q'] ?? ''
+        'status'           => $_GET['status'] ?? '',
+        'assigned'         => $_GET['assigned'] ?? '',
+        'last_remarked_by' => $_GET['last_remarked_by'] ?? '',
+        'course'           => $_GET['course'] ?? '',
+        'due'              => $_GET['due'] ?? '',
+        'joined'           => $_GET['joined'] ?? '',
+        'q'                => $_GET['q'] ?? ''
     ];
     $cleanParams = $_GET;
     unset($cleanParams['lock']);
@@ -53,17 +54,19 @@ if (isset($_SESSION['locked_lead_filters']) && !isset($_GET['unlock'])) {
     $tempGet = $_GET;
     unset($tempGet['page']);
     if (empty($tempGet)) {
-        $_GET['status']   = $_SESSION['locked_lead_filters']['status'];
-        $_GET['assigned'] = $_SESSION['locked_lead_filters']['assigned'];
-        $_GET['course']   = $_SESSION['locked_lead_filters']['course'];
-        $_GET['due']      = $_SESSION['locked_lead_filters']['due'];
-        $_GET['joined']   = $_SESSION['locked_lead_filters']['joined'];
-        $_GET['q']        = $_SESSION['locked_lead_filters']['q'];
+        $_GET['status']           = $_SESSION['locked_lead_filters']['status'] ?? '';
+        $_GET['assigned']         = $_SESSION['locked_lead_filters']['assigned'] ?? '';
+        $_GET['last_remarked_by'] = $_SESSION['locked_lead_filters']['last_remarked_by'] ?? '';
+        $_GET['course']           = $_SESSION['locked_lead_filters']['course'] ?? '';
+        $_GET['due']              = $_SESSION['locked_lead_filters']['due'] ?? '';
+        $_GET['joined']           = $_SESSION['locked_lead_filters']['joined'] ?? '';
+        $_GET['q']                = $_SESSION['locked_lead_filters']['q'] ?? '';
     }
 }
 
 $success_message = '';
 $error_message   = '';
+$import_summary  = null;
 
 if (!function_exists('leads_table_exists')) {
     function leads_table_exists($pdo) {
@@ -92,6 +95,13 @@ function clean_wa($n) {
     $n = preg_replace('/\D/', '', (string)$n);
     if (strlen($n) === 10) $n = '91' . $n;     // default India
     return $n;
+}
+// Admins that leads can be assigned to (super admin only)
+$assignable = [];
+if (is_super_admin() && admins_table_exists($pdo)) {
+    try {
+        $assignable = $pdo->query("SELECT username FROM admins WHERE status = 'active' ORDER BY role = 'super_admin' DESC, username")->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Exception $e) {}
 }
 
 /* ── POST actions ───────────────────────────────────────────────── */
@@ -128,19 +138,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     is_fyugp, year_of_study, status, next_followup_date, assigned_to, source, created_by, created_at, last_activity_at)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, NOW(), NOW())
                             ");
+                            $yr = in_array($_POST['year_of_study'] ?? '', $YEARS, true) ? $_POST['year_of_study'] : null;
+                            $fy = in_array($_POST['is_fyugp'] ?? '', ['yes', 'no'], true) ? $_POST['is_fyugp'] : null;
                             $stmt->execute([
                                 normalizeLeadPhone($wa), trim($_POST['name'] ?? ''), $course_name,
                                 trim($_POST['last_institute'] ?? ''), trim($_POST['last_course'] ?? ''),
-                                in_array($_POST['is_fyugp'] ?? '', ['yes', 'no'], true) ? $_POST['is_fyugp'] : null,
-                                in_array($_POST['year_of_study'] ?? '', $YEARS, true) ? $_POST['year_of_study'] : null,
-                                $status, in_array($status, $CLOSED, true) ? ($followup ?: null) : $followup,
+                                $fy, $yr, $status, in_array($status, $CLOSED, true) ? ($followup ?: null) : $followup,
                                 $assigned, $admin_username
                             ]);
                             $lead_id = (int)$pdo->lastInsertId();
                             lead_log($pdo, $lead_id, 'created', trim($_POST['remarks'] ?? '') ?: 'Lead created', null, $status, $followup, $admin_username);
-                            log_admin_activity($pdo, $admin_username, 'lead_created', "Lead added: {$wa}" . (trim($_POST['name'] ?? '') ? ' (' . trim($_POST['name']) . ')' : ''));
                             $pdo->commit();
-                            $success_message = 'Lead added.';
+                            log_admin_activity($pdo, $admin_username, 'lead_created', "Lead #{$lead_id} (" . htmlspecialchars($wa) . ")");
+                            $success_message = 'Lead added successfully.';
                         }
                     } catch (Exception $ex) {
                         if ($pdo->inTransaction()) {
@@ -148,7 +158,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                         throw $ex;
                     } finally {
-                        releaseLeadLock($pdo, $wa, $course_name);
+                        if (isset($lockAcquired) && $lockAcquired) {
+                            releaseLeadLock($pdo, $wa, $course_name);
+                        }
                     }
                 }
             } elseif ($action === 'bulk_import') {
@@ -163,7 +175,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $skipped_invalid = 0;
                         $skipped_db_dup = 0;
                         $skipped_file_dup = 0;
-                        $duplicate_logs = [];
+                        $skipped_details = [];
                         $processed_in_sheet = [];
                         
                         $assigned_default = is_super_admin() ? (trim($_POST['bulk_assigned_to'] ?? '') ?: '__ALL__') : '__ALL__';
@@ -177,6 +189,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 
                                 if (strlen($wa) < 11) { 
                                     $skipped_invalid++; 
+                                    $skipped_details[] = [
+                                        'row'         => $rowNum,
+                                        'phone'       => $wa ?: 'Missing',
+                                        'course'      => $course_name ?: '-',
+                                        'reason'      => 'Invalid or missing phone number',
+                                        'existing_id' => '-'
+                                    ];
                                     continue; 
                                 }
                                 
@@ -187,7 +206,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 // Check duplicate in sheet
                                 if (isset($processed_in_sheet[$sheetKey])) {
                                     $skipped_file_dup++;
-                                    $duplicate_logs[] = "Row {$rowNum}: Phone '{$wa}', Course '{$course_name}' - Duplicate within import file.";
+                                    $skipped_details[] = [
+                                        'row'         => $rowNum,
+                                        'phone'       => $wa,
+                                        'course'      => $course_name ?: '-',
+                                        'reason'      => 'Duplicate within import file',
+                                        'existing_id' => '-'
+                                    ];
                                     continue;
                                 }
                                 
@@ -198,7 +223,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     if ($dupRes['count'] > 0) {
                                         $existingLead = $dupRes['matches'][0];
                                         $skipped_db_dup++;
-                                        $duplicate_logs[] = "Row {$rowNum}: Phone '{$wa}', Course '{$course_name}' - Duplicate (existing Lead #{$existingLead['id']} found).";
+                                        $skipped_details[] = [
+                                            'row'         => $rowNum,
+                                            'phone'       => $wa,
+                                            'course'      => $course_name ?: '-',
+                                            'reason'      => 'Already exists in database',
+                                            'existing_id' => '#' . $existingLead['id']
+                                        ];
                                         continue;
                                     }
                                     
@@ -236,19 +267,121 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         
                         log_admin_activity($pdo, $admin_username, 'leads_imported', "Bulk import: {$added} added, {$skipped_invalid} invalid, {$skipped_db_dup} db duplicates, {$skipped_file_dup} file duplicates");
                         
-                        $success_message = "<strong>Import Completed:</strong><br>";
-                        $success_message .= "Successfully Imported: {$added}<br>";
-                        $success_message .= "Duplicates in Database (Skipped): {$skipped_db_dup}<br>";
-                        $success_message .= "Duplicates in Upload File (Skipped): {$skipped_file_dup}<br>";
-                        $success_message .= "Invalid Suffix/Missing Phone (Skipped): {$skipped_invalid}<br>";
-                        
-                        if (!empty($duplicate_logs)) {
-                            $success_message .= "<div style='margin-top:10px; max-height:150px; overflow-y:auto; font-size:0.75rem; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px; text-align:left;'>";
-                            $success_message .= "<strong>Skipped rows details:</strong><br>";
-                            foreach ($duplicate_logs as $log) {
-                                $success_message .= htmlspecialchars($log) . "<br>";
+                        $import_summary = [
+                            'added'            => $added,
+                            'already_existing' => $skipped_db_dup,
+                            'file_dup'         => $skipped_file_dup,
+                            'invalid_phone'    => $skipped_invalid,
+                            'skipped_details'  => $skipped_details
+                        ];
+                    }
+                }
+            } elseif ($action === 'bulk_update_followups') {
+                $lead_ids = array_unique(array_filter(array_map('intval', $_POST['lead_ids'] ?? [])));
+                if (empty($lead_ids)) {
+                    $error_message = 'No leads selected for bulk update.';
+                } else {
+                    $date_action     = trim($_POST['bulk_date_action'] ?? 'keep');
+                    $target_date     = ($date_action === 'set') ? trim($_POST['bulk_next_followup_date'] ?? '') : '';
+                    $target_status   = trim($_POST['bulk_status'] ?? '');
+                    $target_assigned = is_super_admin() ? trim($_POST['bulk_assigned_to'] ?? '') : '';
+
+                    if ($date_action === 'keep' && $target_status === '' && $target_assigned === '') {
+                        $error_message = 'Please specify at least one field to update (Follow-up Date, Status, or Assigned To).';
+                    } elseif ($date_action === 'set' && (empty($target_date) || !strtotime($target_date))) {
+                        $error_message = 'Please provide a valid next follow-up date.';
+                    } elseif ($target_status !== '' && !isset($LEAD_STATUSES[$target_status])) {
+                        $error_message = 'Invalid status selected.';
+                    } elseif ($target_assigned !== '' && !in_array($target_assigned, array_merge(['__ALL__'], $assignable), true)) {
+                        $error_message = 'Invalid admin assigned.';
+                    } else {
+                        $pdo->beginTransaction();
+                        try {
+                            $placeholders = implode(',', array_fill(0, count($lead_ids), '?'));
+                            $stmt = $pdo->prepare("SELECT * FROM leads WHERE id IN ($placeholders) FOR UPDATE");
+                            $stmt->execute($lead_ids);
+                            $leads_by_id = [];
+                            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                                $leads_by_id[(int)$row['id']] = $row;
                             }
-                            $success_message .= "</div>";
+
+                            if (count($leads_by_id) !== count($lead_ids)) {
+                                $pdo->rollBack();
+                                $error_message = 'One or more selected leads could not be found.';
+                            } else {
+                                $auth_error = false;
+                                $auth_error_msg = '';
+                                $validation_error = false;
+                                $validation_error_msg = '';
+                                $updated_count = 0;
+
+                                foreach ($lead_ids as $lid) {
+                                    $curr = $leads_by_id[$lid];
+                                    if (!is_super_admin() && $curr['assigned_to'] !== $admin_username && $curr['assigned_to'] !== '__ALL__') {
+                                        $auth_error = true;
+                                        $auth_error_msg = "You do not have permission to update Lead #{$lid}.";
+                                        break;
+                                    }
+
+                                    $effective_status = ($target_status !== '') ? $target_status : $curr['status'];
+                                    $is_closed = in_array($effective_status, $CLOSED, true);
+
+                                    if ($date_action === 'set') {
+                                        $effective_followup = $target_date;
+                                    } else {
+                                        $effective_followup = $is_closed ? null : $curr['next_followup_date'];
+                                    }
+
+                                    if (!$is_closed && empty($effective_followup)) {
+                                        $validation_error = true;
+                                        $validation_error_msg = "Lead #{$lid} requires a next follow-up date because its status is active.";
+                                        break;
+                                    }
+
+                                    $effective_assigned = (is_super_admin() && $target_assigned !== '') ? $target_assigned : $curr['assigned_to'];
+                                    $status_changed   = ($effective_status !== $curr['status']);
+                                    $followup_changed = ($effective_followup !== $curr['next_followup_date']);
+                                    $assigned_changed = ($effective_assigned !== $curr['assigned_to']);
+
+                                    if ($status_changed || $followup_changed || $assigned_changed) {
+                                        $upd = $pdo->prepare("
+                                            UPDATE leads
+                                            SET status = ?, next_followup_date = ?, assigned_to = ?, updated_at = NOW(), last_activity_at = NOW()
+                                            WHERE id = ?
+                                        ");
+                                        $upd->execute([$effective_status, $effective_followup ?: null, $effective_assigned, $lid]);
+
+                                        if ($status_changed) {
+                                            lead_log($pdo, $lid, 'status_change', 'Bulk update: Status changed to ' . $LEAD_STATUSES[$effective_status][0], $curr['status'], $effective_status, $effective_followup, $admin_username);
+                                        }
+                                        if ($followup_changed && !$status_changed) {
+                                            lead_log($pdo, $lid, 'followup', 'Bulk update: Next follow-up date set to ' . date('d M Y', strtotime($effective_followup)), null, null, $effective_followup, $admin_username);
+                                        }
+                                        if ($assigned_changed) {
+                                            $assign_label = ($effective_assigned === '__ALL__') ? 'Unassigned (Visible to all admins)' : $effective_assigned;
+                                            lead_log($pdo, $lid, 'reassigned', 'Bulk update: Reassigned to ' . $assign_label, null, null, null, $admin_username);
+                                        }
+                                        $updated_count++;
+                                    }
+                                }
+
+                                if ($auth_error) {
+                                    $pdo->rollBack();
+                                    $error_message = $auth_error_msg ?: 'You are not authorized to update one or more of the selected leads.';
+                                } elseif ($validation_error) {
+                                    $pdo->rollBack();
+                                    $error_message = $validation_error_msg ?: 'Validation error on selected leads.';
+                                } else {
+                                    $pdo->commit();
+                                    log_admin_activity($pdo, $admin_username, 'lead_bulk_updated', "Bulk updated {$updated_count} lead(s) in Follow-ups Needed");
+                                    $success_message = "{$updated_count} lead(s) successfully updated.";
+                                }
+                            }
+                        } catch (Exception $ex) {
+                            if ($pdo->inTransaction()) {
+                                $pdo->rollBack();
+                            }
+                            throw $ex;
                         }
                     }
                 }
@@ -361,18 +494,39 @@ function parse_lead_file($tmp, $orig) {
 }
 
 /* ── Filters ────────────────────────────────────────────────────── */
-$f_status   = trim($_GET['status'] ?? '');
-$f_assigned = trim($_GET['assigned'] ?? '');
-$f_course   = trim($_GET['course'] ?? '');
-$f_due      = trim($_GET['due'] ?? '');           // today | overdue | upcoming
-$f_joined   = trim($_GET['joined'] ?? '');
-$f_q        = trim($_GET['q'] ?? '');
+$f_status           = trim($_GET['status'] ?? '');
+$f_assigned         = trim($_GET['assigned'] ?? '');
+$f_last_remarked_by = trim($_GET['last_remarked_by'] ?? '');
+$f_course           = trim($_GET['course'] ?? '');
+$f_due              = trim($_GET['due'] ?? '');           // today | overdue | upcoming
+$f_joined           = trim($_GET['joined'] ?? '');
+$f_q                = trim($_GET['q'] ?? '');
 
 $where = ['1=1']; $params = [];
 // Non-super admins see leads assigned to them OR to all admins
 if (!is_super_admin()) { $where[] = "(l.assigned_to = ? OR l.assigned_to = '__ALL__')"; $params[] = $admin_username; }
 if (isset($LEAD_STATUSES[$f_status])) { $where[] = "l.status = ?"; $params[] = $f_status; }
 if ($f_assigned !== '' && is_super_admin()) { $where[] = "l.assigned_to = ?"; $params[] = $f_assigned; }
+if ($f_last_remarked_by !== '') {
+    $where[] = "(
+        SELECT la.performed_by
+        FROM lead_activity la
+        WHERE la.lead_id = l.id
+          AND la.remark IS NOT NULL
+          AND TRIM(la.remark) <> ''
+          AND la.activity_type NOT IN ('details_change', 'reassigned')
+          AND TRIM(la.remark) NOT IN ('Lead created', 'Imported from file', 'Follow-up done', 'Marked as converted')
+          AND la.remark NOT LIKE 'Converted - linked to student%'
+          AND la.remark NOT LIKE 'Lead marked converted via%'
+          AND la.remark NOT LIKE 'Reassigned to %'
+          AND la.remark NOT LIKE 'WhatsApp number updated:%'
+          AND la.remark NOT LIKE 'WhatsApp Marketing:%'
+          AND la.remark NOT LIKE 'Bulk update:%'
+        ORDER BY la.performed_at DESC, la.id DESC
+        LIMIT 1
+    ) = ?";
+    $params[] = $f_last_remarked_by;
+}
 if ($f_course !== '') { $where[] = "l.interested_course = ?"; $params[] = $f_course; }
 if ($f_due === 'today')    { $where[] = "l.next_followup_date = CURDATE() AND l.status NOT IN ('converted','rejected','not_interested')"; }
 if ($f_due === 'overdue')  { $where[] = "l.next_followup_date < CURDATE() AND l.status NOT IN ('converted','rejected','not_interested')"; }
@@ -480,14 +634,34 @@ try {
         $admin_list = $pdo->query("SELECT DISTINCT assigned_to FROM leads WHERE assigned_to IS NOT NULL AND assigned_to <> '' ORDER BY assigned_to")->fetchAll(PDO::FETCH_COLUMN);
     }
     $course_list = $pdo->query("SELECT DISTINCT interested_course FROM leads WHERE interested_course IS NOT NULL AND interested_course <> '' ORDER BY interested_course")->fetchAll(PDO::FETCH_COLUMN);
+    $remark_authors = [];
+    try {
+        $remark_authors = $pdo->query("
+            SELECT DISTINCT la.performed_by, a.full_name
+            FROM lead_activity la
+            LEFT JOIN admins a ON a.username = la.performed_by
+            WHERE la.performed_by IS NOT NULL
+              AND la.performed_by <> ''
+              AND la.remark IS NOT NULL
+              AND TRIM(la.remark) <> ''
+              AND la.activity_type NOT IN ('details_change', 'reassigned')
+              AND TRIM(la.remark) NOT IN ('Lead created', 'Imported from file', 'Follow-up done', 'Marked as converted')
+              AND la.remark NOT LIKE 'Converted - linked to student%'
+              AND la.remark NOT LIKE 'Lead marked converted via%'
+              AND la.remark NOT LIKE 'Reassigned to %'
+              AND la.remark NOT LIKE 'WhatsApp number updated:%'
+              AND la.remark NOT LIKE 'WhatsApp Marketing:%'
+              AND la.remark NOT LIKE 'Bulk update:%'
+            ORDER BY la.performed_by ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
 } catch (Exception $e) {
     error_log('Lead list: ' . $e->getMessage());
     $error_message = $error_message ?: 'Could not load leads.';
 }
 
 // Admins that leads can be assigned to (super admin only)
-$assignable = [];
-if (is_super_admin() && admins_table_exists($pdo)) {
+if (empty($assignable) && is_super_admin() && admins_table_exists($pdo)) {
     try { $assignable = $pdo->query("SELECT username FROM admins WHERE status = 'active' ORDER BY role = 'super_admin' DESC, username")->fetchAll(PDO::FETCH_COLUMN); }
     catch (Exception $e) {}
 }
@@ -510,6 +684,79 @@ $page_title  = 'Lead Management';
 $page_sub    = 'Track and convert prospective students';
 include 'includes/admin_nav.php';
 ?>
+
+<?php if (!empty($import_summary)): ?>
+<div class="panel" style="border-left: 4px solid var(--accent); margin-bottom: 20px; background: #fff;">
+    <div class="panel-body" style="padding: 18px 20px;">
+        <div style="display:flex; align-items:flex-start; gap:14px;">
+            <div style="width:40px; height:40px; border-radius:10px; background:var(--accent-soft); color:var(--accent-dark); display:flex; align-items:center; justify-content:center; font-size:1.2rem; flex-shrink:0;">
+                <i class="fas fa-file-import"></i>
+            </div>
+            <div style="flex:1;">
+                <h3 style="margin:0 0 6px; font-size:1.05rem; font-weight:700; color:#1e293b;">Import Completed</h3>
+                <p style="margin:0 0 14px; font-size:0.875rem; color:#475569;">
+                    <?php if ($import_summary['added'] > 0): ?>
+                        <strong><?php echo (int)$import_summary['added']; ?></strong> <?php echo $import_summary['added'] === 1 ? 'lead was' : 'leads were'; ?> successfully added.
+                    <?php else: ?>
+                        No new leads were added. All rows were skipped due to duplicates or invalid data.
+                    <?php endif; ?>
+                </p>
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:10px; margin-bottom:14px;">
+                    <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px;">
+                        <div style="font-size:0.75rem; color:#64748b; font-weight:600; text-transform:uppercase;">Successfully Imported</div>
+                        <div style="font-size:1.25rem; font-weight:800; color:#059669;"><?php echo number_format($import_summary['added']); ?></div>
+                    </div>
+                    <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px;">
+                        <div style="font-size:0.75rem; color:#64748b; font-weight:600; text-transform:uppercase;">Already Existing</div>
+                        <div style="font-size:1.25rem; font-weight:800; color:#d97706;"><?php echo number_format($import_summary['already_existing']); ?></div>
+                    </div>
+                    <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px;">
+                        <div style="font-size:0.75rem; color:#64748b; font-weight:600; text-transform:uppercase;">Duplicate in File</div>
+                        <div style="font-size:1.25rem; font-weight:800; color:#475569;"><?php echo number_format($import_summary['file_dup']); ?></div>
+                    </div>
+                    <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px;">
+                        <div style="font-size:0.75rem; color:#64748b; font-weight:600; text-transform:uppercase;">Invalid / Missing Phone</div>
+                        <div style="font-size:1.25rem; font-weight:800; color:#dc2626;"><?php echo number_format($import_summary['invalid_phone']); ?></div>
+                    </div>
+                </div>
+
+                <?php if (!empty($import_summary['skipped_details'])): ?>
+                <details style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 14px;">
+                    <summary style="font-size:0.82rem; font-weight:600; color:var(--accent-dark); cursor:pointer;">
+                        View details of skipped rows (<?php echo count($import_summary['skipped_details']); ?>)
+                    </summary>
+                    <div style="margin-top:10px; max-height:220px; overflow-y:auto; border-top:1px solid #e2e8f0; padding-top:8px;">
+                        <table class="data-table" style="font-size:0.78rem; margin:0;">
+                            <thead>
+                                <tr>
+                                    <th>Row</th>
+                                    <th>Phone</th>
+                                    <th>Course</th>
+                                    <th>Reason</th>
+                                    <th>Existing Lead</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($import_summary['skipped_details'] as $sd): ?>
+                                <tr>
+                                    <td>Row <?php echo (int)$sd['row']; ?></td>
+                                    <td><code><?php echo e($sd['phone']); ?></code></td>
+                                    <td><?php echo e($sd['course']); ?></td>
+                                    <td><span style="color:#b91c1c; font-weight:600;"><?php echo e($sd['reason']); ?></span></td>
+                                    <td><?php echo e($sd['existing_id']); ?></td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
 
 <?php if ($success_message): ?><div class="alert alert-success"><i class="fas fa-circle-check"></i><span><?php echo e($success_message); ?></span></div><?php endif; ?>
 <?php if ($error_message):   ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($error_message); ?></span></div><?php endif; ?>
@@ -553,8 +800,17 @@ include 'includes/admin_nav.php';
         <?php if (empty($today_leads)): ?>
             <div class="empty-state"><i class="fas fa-mug-hot"></i><p>No follow-ups due today or overdue. You're all caught up!</p></div>
         <?php else: ?>
+        <div id="followups-bulk-toolbar" style="display:none; align-items:center; justify-content:space-between; padding:8px 16px; background:#eff6ff; border-bottom:1px solid #bfdbfe;">
+            <div style="display:flex; align-items:center; gap:10px;">
+                <span id="followups-selected-count" style="font-weight:700; font-size:0.85rem; color:#1e40af;">0 leads selected</span>
+                <button type="button" class="btn btn-sm btn-outline" onclick="clearFollowupSelection()" style="padding:2px 10px; font-size:0.75rem; background:#fff;">Deselect All</button>
+            </div>
+            <div>
+                <button type="button" class="btn btn-sm btn-primary" onclick="openBulkUpdateModal()" style="font-weight:700; font-size:0.8rem;"><i class="fas fa-pen-to-square"></i> Bulk Update</button>
+            </div>
+        </div>
         <table class="data-table">
-            <thead><tr><th>Lead</th><th>Interested In</th><th>Status</th><th>Follow-up</th><th style="text-align:right;">Actions</th></tr></thead>
+            <thead><tr><th style="width:36px; text-align:center;"><input type="checkbox" id="select-all-followups" onclick="toggleSelectAllFollowups(this)" title="Select all follow-ups"></th><th>Lead</th><th>Interested In</th><th>Status</th><th>Follow-up</th><th style="text-align:right;">Actions</th></tr></thead>
             <tbody>
             <?php foreach ($today_leads as $l): 
                 $overdue = $l['next_followup_date'] < date('Y-m-d');
@@ -600,6 +856,9 @@ include 'includes/admin_nav.php';
                 $detailsJson = htmlspecialchars(json_encode($matchedDetails));
             ?>
                 <tr<?php echo $overdue ? ' style="background:#fff7f7;"' : ''; ?>>
+                    <td style="text-align:center;">
+                        <input type="checkbox" class="followup-row-cb" value="<?php echo (int)$l['id']; ?>" onchange="onFollowupSelectChange()">
+                    </td>
                     <td>
                         <div class="cell-main"><?php echo e($l['name'] ?: 'Unknown'); ?></div>
                         <div class="cell-sub">
@@ -673,6 +932,18 @@ include 'includes/admin_nav.php';
                 <select name="assigned">
                     <option value="">All admins</option>
                     <?php foreach ($admin_list as $a): ?><option value="<?php echo e($a); ?>" <?php echo $f_assigned === $a ? 'selected' : ''; ?>><?php echo e($a); ?></option><?php endforeach; ?>
+                </select>
+            </div>
+            <?php endif; ?>
+            <?php if (!empty($remark_authors)): ?>
+            <div class="field"><label>Last Remarked By</label>
+                <select name="last_remarked_by">
+                    <option value="">All</option>
+                    <?php foreach ($remark_authors as $ra): ?>
+                        <option value="<?php echo e($ra['performed_by']); ?>" <?php echo $f_last_remarked_by === $ra['performed_by'] ? 'selected' : ''; ?>>
+                            <?php echo e(!empty($ra['full_name']) ? $ra['full_name'] . ' (' . $ra['performed_by'] . ')' : $ra['performed_by']); ?>
+                        </option>
+                    <?php endforeach; ?>
                 </select>
             </div>
             <?php endif; ?>
@@ -912,6 +1183,66 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- ── BULK UPDATE MODAL (FOLLOW-UPS) ── -->
+<div class="modal-backdrop" id="bulk-update-modal">
+    <div class="modal" style="max-width:520px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-pen-to-square" style="color:var(--accent);"></i> Bulk Update (<span id="bulk-selected-count">0</span> Leads)</h3>
+            <button type="button" class="modal-close" onclick="closeModal('bulk-update-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST" onsubmit="return validateBulkUpdateForm();">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="bulk_update_followups">
+            <div id="bulk-update-lead-ids"></div>
+
+            <div class="modal-body">
+                <p style="font-size:0.8rem; color:#64748b; margin-bottom:14px;">
+                    Update selected leads simultaneously. Each field defaults to <strong>No change</strong>. Only modified fields will be applied.
+                </p>
+
+                <div class="field">
+                    <label>Next Follow-up Date</label>
+                    <select name="bulk_date_action" id="bulk_date_action" onchange="toggleBulkDateField()">
+                        <option value="keep" selected>No change</option>
+                        <option value="set">Set new follow-up date...</option>
+                    </select>
+                    <div id="bulk_date_picker_wrap" style="display:none; margin-top:8px;">
+                        <input type="date" name="bulk_next_followup_date" id="bulk_next_followup_date" min="<?php echo date('Y-m-d'); ?>">
+                        <span class="field-hint" style="font-size:0.75rem; color:#64748b; display:block; margin-top:4px;">Applies to selected active leads.</span>
+                    </div>
+                </div>
+
+                <div class="field">
+                    <label>Lead Status</label>
+                    <select name="bulk_status" id="bulk_status">
+                        <option value="" selected>No change</option>
+                        <?php foreach ($LEAD_STATUSES as $k => $v): ?>
+                            <option value="<?php echo $k; ?>"><?php echo $v[0]; ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <?php if (is_super_admin() && !empty($assignable)): ?>
+                <div class="field">
+                    <label>Assigned To</label>
+                    <select name="bulk_assigned_to" id="bulk_assigned_to">
+                        <option value="" selected>No change</option>
+                        <option value="__ALL__">Unassigned (Visible to all admins)</option>
+                        <?php foreach ($assignable as $a): ?>
+                            <option value="<?php echo e($a); ?>"><?php echo e($a); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <?php endif; ?>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('bulk-update-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-check"></i> Apply Bulk Update</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <?php
 $extra_scripts = "
 <!-- Hidden POST Form for Manual Conversion -->
@@ -1055,6 +1386,129 @@ function toggleFollowupReq(prefix) {
     var req = document.getElementById(prefix + '-fu-req');
     if (fu) fu.required = !closed;
     if (req) req.style.display = closed ? 'none' : 'inline';
+}
+
+function getSelectedFollowupIds() {
+    var cbs = document.querySelectorAll('.followup-row-cb:checked');
+    var ids = [];
+    for (var i = 0; i < cbs.length; i++) {
+        ids.push(cbs[i].value);
+    }
+    return ids;
+}
+
+function updateFollowupsToolbar() {
+    var selected = getSelectedFollowupIds();
+    var toolbar = document.getElementById('followups-bulk-toolbar');
+    var countEl = document.getElementById('followups-selected-count');
+    var selectAllCb = document.getElementById('select-all-followups');
+    var allRowCbs = document.querySelectorAll('.followup-row-cb');
+
+    if (selected.length > 0) {
+        if (toolbar) toolbar.style.display = 'flex';
+        if (countEl) countEl.textContent = selected.length + (selected.length === 1 ? ' lead selected' : ' leads selected');
+    } else {
+        if (toolbar) toolbar.style.display = 'none';
+    }
+
+    if (selectAllCb && allRowCbs.length > 0) {
+        selectAllCb.checked = (selected.length === allRowCbs.length);
+        selectAllCb.indeterminate = (selected.length > 0 && selected.length < allRowCbs.length);
+    }
+}
+
+function onFollowupSelectChange() {
+    updateFollowupsToolbar();
+}
+
+function toggleSelectAllFollowups(master) {
+    var cbs = document.querySelectorAll('.followup-row-cb');
+    for (var i = 0; i < cbs.length; i++) {
+        cbs[i].checked = master.checked;
+    }
+    updateFollowupsToolbar();
+}
+
+function clearFollowupSelection() {
+    var cbs = document.querySelectorAll('.followup-row-cb');
+    for (var i = 0; i < cbs.length; i++) {
+        cbs[i].checked = false;
+    }
+    var selectAllCb = document.getElementById('select-all-followups');
+    if (selectAllCb) {
+        selectAllCb.checked = false;
+        selectAllCb.indeterminate = false;
+    }
+    updateFollowupsToolbar();
+}
+
+function openBulkUpdateModal() {
+    var selected = getSelectedFollowupIds();
+    if (selected.length === 0) {
+        alert('Please select at least one lead from Follow-ups Needed.');
+        return;
+    }
+    var container = document.getElementById('bulk-update-lead-ids');
+    if (container) {
+        container.innerHTML = '';
+        selected.forEach(function(id) {
+            var inp = document.createElement('input');
+            inp.type = 'hidden';
+            inp.name = 'lead_ids[]';
+            inp.value = id;
+            container.appendChild(inp);
+        });
+    }
+
+    var countSpan = document.getElementById('bulk-selected-count');
+    if (countSpan) countSpan.textContent = selected.length;
+
+    var dateAction = document.getElementById('bulk_date_action');
+    if (dateAction) { dateAction.value = 'keep'; toggleBulkDateField(); }
+    var bulkDate = document.getElementById('bulk_next_followup_date');
+    if (bulkDate) bulkDate.value = '';
+    var statusSelect = document.getElementById('bulk_status');
+    if (statusSelect) statusSelect.value = '';
+    var assignedSelect = document.getElementById('bulk_assigned_to');
+    if (assignedSelect) assignedSelect.value = '';
+
+    openModal('bulk-update-modal');
+}
+
+function toggleBulkDateField() {
+    var action = document.getElementById('bulk_date_action') ? document.getElementById('bulk_date_action').value : 'keep';
+    var wrap = document.getElementById('bulk_date_picker_wrap');
+    var input = document.getElementById('bulk_next_followup_date');
+    if (wrap && input) {
+        if (action === 'set') {
+            wrap.style.display = 'block';
+            input.required = true;
+        } else {
+            wrap.style.display = 'none';
+            input.required = false;
+            input.value = '';
+        }
+    }
+}
+
+function validateBulkUpdateForm() {
+    var dateAction = document.getElementById('bulk_date_action') ? document.getElementById('bulk_date_action').value : 'keep';
+    var status = document.getElementById('bulk_status') ? document.getElementById('bulk_status').value : '';
+    var assignedEl = document.getElementById('bulk_assigned_to');
+    var assigned = assignedEl ? assignedEl.value : '';
+
+    if (dateAction === 'keep' && status === '' && assigned === '') {
+        alert('Please specify at least one field to update (Follow-up Date, Status, or Assigned To).');
+        return false;
+    }
+    if (dateAction === 'set') {
+        var dateInput = document.getElementById('bulk_next_followup_date');
+        if (!dateInput || !dateInput.value) {
+            alert('Please select a valid follow-up date.');
+            return false;
+        }
+    }
+    return true;
 }
 </script>";
 include 'includes/admin_footer.php';
