@@ -502,6 +502,36 @@ $f_due              = trim($_GET['due'] ?? '');           // today | overdue | u
 $f_joined           = trim($_GET['joined'] ?? '');
 $f_q                = trim($_GET['q'] ?? '');
 
+// Follow-ups Needed controls: Display Limit & Date Range Filter
+$raw_followup_limit = (int)($_GET['followup_limit'] ?? 50);
+$followup_limit     = in_array($raw_followup_limit, [50, 100, 500], true) ? $raw_followup_limit : 50;
+
+$raw_fn_from = trim($_GET['followup_from'] ?? '');
+$raw_fn_to   = trim($_GET['followup_to'] ?? '');
+
+$is_valid_ymd = function ($d) {
+    if (!is_string($d) || trim($d) === '') return false;
+    $d = trim($d);
+    $dt = DateTime::createFromFormat('Y-m-d', $d);
+    return $dt && $dt->format('Y-m-d') === $d;
+};
+
+$has_fn_from = $is_valid_ymd($raw_fn_from);
+$has_fn_to   = $is_valid_ymd($raw_fn_to);
+
+$followup_date_error = '';
+if ($raw_fn_from !== '' && !$has_fn_from) {
+    $followup_date_error = 'Invalid From date format. Please use YYYY-MM-DD.';
+} elseif ($raw_fn_to !== '' && !$has_fn_to) {
+    $followup_date_error = 'Invalid To date format. Please use YYYY-MM-DD.';
+} elseif ($has_fn_from && $has_fn_to && $raw_fn_from > $raw_fn_to) {
+    $followup_date_error = 'From date cannot be later than To date.';
+}
+
+if ($followup_date_error !== '') {
+    $error_message = $error_message ?: $followup_date_error;
+}
+
 $where = ['1=1']; $params = [];
 // Non-super admins see leads assigned to them OR to all admins
 if (!is_super_admin()) { $where[] = "(l.assigned_to = ? OR l.assigned_to = '__ALL__')"; $params[] = $admin_username; }
@@ -576,6 +606,7 @@ $per_page = 25;
 $total = 0; $leads = [];
 $stats = ['total' => 0, 'due_today' => 0, 'overdue' => 0, 'converted' => 0];
 $today_leads = [];
+$today_leads_total = 0;
 $admin_list = []; $course_list = [];
 
 try {
@@ -586,10 +617,43 @@ try {
     $stats['overdue']   = (int)$pdo->query("SELECT COUNT(*) FROM leads WHERE $scope AND next_followup_date < CURDATE() AND status NOT IN ('converted','rejected','not_interested')")->fetchColumn();
     $stats['converted'] = (int)$pdo->query("SELECT COUNT(*) FROM leads WHERE $scope AND status = 'converted'")->fetchColumn();
 
-    // Today + overdue list for the action panel
-    $stmt = $pdo->prepare("SELECT * FROM leads WHERE $scope AND next_followup_date <= CURDATE() AND status NOT IN ('converted','rejected','not_interested') ORDER BY next_followup_date ASC, last_activity_at ASC LIMIT 50");
-    $stmt->execute();
-    $today_leads = $stmt->fetchAll();
+    // Follow-ups Needed query (supports display limit 50/100/500 & date range filter)
+    $today_leads = [];
+    $today_leads_total = 0;
+    if ($followup_date_error === '') {
+        $fn_where = [
+            $scope,
+            "status NOT IN ('converted','rejected','not_interested')",
+            "next_followup_date IS NOT NULL"
+        ];
+        $fn_params = [];
+
+        if ($has_fn_from && $has_fn_to) {
+            $fn_where[] = "next_followup_date >= ? AND next_followup_date <= ?";
+            $fn_params[] = $raw_fn_from;
+            $fn_params[] = $raw_fn_to;
+        } elseif ($has_fn_from) {
+            $fn_where[] = "next_followup_date >= ?";
+            $fn_params[] = $raw_fn_from;
+        } elseif ($has_fn_to) {
+            $fn_where[] = "next_followup_date <= ?";
+            $fn_params[] = $raw_fn_to;
+        } else {
+            // Default when no custom date filter is active: today or overdue
+            $fn_where[] = "next_followup_date <= CURDATE()";
+        }
+        $fn_where_sql = implode(' AND ', $fn_where);
+
+        // Matching count (logically separate from displayed count)
+        $stmt_count = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE $fn_where_sql");
+        $stmt_count->execute($fn_params);
+        $today_leads_total = (int)$stmt_count->fetchColumn();
+
+        // Displayed rows using SQL LIMIT
+        $stmt = $pdo->prepare("SELECT * FROM leads WHERE $fn_where_sql ORDER BY next_followup_date ASC, last_activity_at ASC LIMIT {$followup_limit}");
+        $stmt->execute($fn_params);
+        $today_leads = $stmt->fetchAll();
+    }
 
     // Filtered list
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM leads l WHERE $where_sql");
@@ -602,7 +666,7 @@ try {
     $stmt->execute($params);
     $leads = $stmt->fetchAll();
 
-    // Preload matching approved/pending admission records in a single database query to avoid N+1 query loops
+    // Preload matching approved/pending admission records in batched database queries to avoid N+1 query loops
     $preloadedAdmissions = [];
     $phonesToSearch = [];
     foreach (array_merge($leads, $today_leads) as $l) {
@@ -613,20 +677,22 @@ try {
         }
     }
     if (!empty($phonesToSearch)) {
-        $phonesToSearch = array_unique($phonesToSearch);
-        $placeholders = implode(',', array_fill(0, count($phonesToSearch), '?'));
-        
-        $stmtPreload = $pdo->prepare("
-            SELECT id, user_id, name, whatsapp_number, whatsapp_country_code, pepp_course, status, approval_date 
-            FROM users 
-            WHERE (whatsapp_number IN ({$placeholders}) OR CONCAT(whatsapp_country_code, whatsapp_number) IN ({$placeholders}))
-        ");
-        $stmtPreload->execute(array_merge($phonesToSearch, $phonesToSearch));
-        $admissions = $stmtPreload->fetchAll(PDO::FETCH_ASSOC);
-        
-        foreach ($admissions as $adm) {
-            $normPhone = normalizeLeadPhone($adm['whatsapp_country_code'] . $adm['whatsapp_number']);
-            $preloadedAdmissions[$normPhone][] = $adm;
+        $phonesToSearch = array_values(array_unique($phonesToSearch));
+        $chunks = array_chunk($phonesToSearch, 500);
+        foreach ($chunks as $chunk) {
+            $placeholders = implode(',', array_fill(0, count($chunk), '?'));
+            $stmtPreload = $pdo->prepare("
+                SELECT id, user_id, name, whatsapp_number, whatsapp_country_code, pepp_course, status, approval_date
+                FROM users
+                WHERE (whatsapp_number IN ({$placeholders}) OR CONCAT(whatsapp_country_code, whatsapp_number) IN ({$placeholders}))
+            ");
+            $stmtPreload->execute(array_merge($chunk, $chunk));
+            $admissions = $stmtPreload->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($admissions as $adm) {
+                $normPhone = normalizeLeadPhone($adm['whatsapp_country_code'] . $adm['whatsapp_number']);
+                $preloadedAdmissions[$normPhone][] = $adm;
+            }
         }
     }
 
@@ -673,7 +739,13 @@ $total_pages = max(1, (int)ceil($total / $per_page));
 function lqs($overrides = []) {
     $q = array_merge($_GET, $overrides);
     unset($q['logout']);
-    return '?' . http_build_query($q);
+    foreach ($overrides as $k => $v) {
+        if ($v === null) {
+            unset($q[$k]);
+        }
+    }
+    $qs = http_build_query($q);
+    return $qs ? ('?' . $qs) : '?';
 }
 function wa_link($num, $text = '') {
     return 'https://wa.me/' . preg_replace('/\D/', '', $num) . ($text ? '?text=' . rawurlencode($text) : '');
@@ -787,18 +859,76 @@ include 'includes/admin_nav.php';
 
 <!-- ── TODAY'S / OVERDUE FOLLOW-UPS ── -->
 <div class="panel">
-    <div class="panel-head">
-        <span class="head-icon" style="background:var(--amber-soft);color:var(--amber-ink);"><i class="fas fa-bell"></i></span>
-        <h2>Follow-ups Needed <?php echo count($today_leads) ? '(' . count($today_leads) . ')' : ''; ?></h2>
+    <div class="panel-head" style="flex-wrap:wrap; gap:12px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+            <span class="head-icon" style="background:var(--amber-soft);color:var(--amber-ink);"><i class="fas fa-bell"></i></span>
+            <h2>Follow-ups Needed <?php
+                if ($today_leads_total > 0) {
+                    echo '(' . number_format($today_leads_total) . ')';
+                    if (count($today_leads) < $today_leads_total) {
+                        echo ' <span style="font-size:0.8rem; font-weight:500; color:var(--text-muted); opacity:0.85;">· Showing ' . count($today_leads) . '</span>';
+                    }
+                }
+            ?></h2>
+        </div>
         <div class="head-right">
             <a href="communication-campaigns.php?target=leads" class="btn btn-sm btn-success" style="border-radius:6px; font-weight:700;"><i class="fas fa-bullhorn"></i> Create WhatsApp Campaign</a>
             <button class="btn btn-sm btn-primary" onclick="openModal('add-lead-modal')"><i class="fas fa-plus"></i> Add Lead</button>
             <button class="btn btn-sm btn-outline" onclick="openModal('import-modal')"><i class="fas fa-file-import"></i> Bulk Import</button>
         </div>
     </div>
+
+    <!-- Follow-ups Controls Bar: Date Range + Display Limit -->
+    <div style="background:#f8fafc; border-bottom:1px solid #e2e8f0; padding:10px 16px;">
+        <form method="GET" action="lead-management.php" id="followups-filter-form" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:0;">
+            <?php
+            $main_filter_keys = ['status', 'assigned', 'last_remarked_by', 'course', 'due', 'joined', 'q'];
+            foreach ($main_filter_keys as $mfk) {
+                if (isset($_GET[$mfk]) && trim((string)$_GET[$mfk]) !== '') {
+                    echo '<input type="hidden" name="' . e($mfk) . '" value="' . e($_GET[$mfk]) . '">';
+                }
+            }
+            ?>
+            <!-- Follow-up Date Filter -->
+            <div style="display:flex; align-items:center; flex-wrap:wrap; gap:8px;">
+                <span style="font-size:0.82rem; font-weight:700; color:#334155; display:inline-flex; align-items:center; gap:6px;">
+                    <i class="fas fa-calendar-alt" style="color:var(--amber-ink);"></i> Follow-up Date:
+                </span>
+                <div style="display:flex; align-items:center; flex-wrap:gap; gap:6px;">
+                    <label for="fn-followup-from" style="font-size:0.75rem; font-weight:600; color:#64748b;">From</label>
+                    <input type="date" id="fn-followup-from" name="followup_from" value="<?php echo e($raw_fn_from); ?>" style="padding:4px 8px; font-size:0.8rem; border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#1e293b;">
+                    <span style="color:#94a3b8; font-size:0.8rem; font-weight:700;">&rarr;</span>
+                    <label for="fn-followup-to" style="font-size:0.75rem; font-weight:600; color:#64748b;">To</label>
+                    <input type="date" id="fn-followup-to" name="followup_to" value="<?php echo e($raw_fn_to); ?>" style="padding:4px 8px; font-size:0.8rem; border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#1e293b;">
+                    <button type="submit" class="btn btn-sm btn-primary" style="padding:4px 12px; font-size:0.8rem; font-weight:700; border-radius:6px;">Apply</button>
+                    <?php if ($raw_fn_from !== '' || $raw_fn_to !== ''): ?>
+                        <a href="<?php echo e(lqs(['followup_from' => null, 'followup_to' => null])); ?>" class="btn btn-sm btn-outline" style="padding:4px 10px; font-size:0.8rem; border-radius:6px; background:#fff;">Clear</a>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <!-- Display Limit -->
+            <div style="display:flex; align-items:center; gap:6px;">
+                <label for="fn-followup-limit" style="font-size:0.82rem; font-weight:600; color:#475569;">Show:</label>
+                <select id="fn-followup-limit" name="followup_limit" onchange="this.form.submit()" style="padding:4px 10px; font-size:0.8rem; border:1px solid #cbd5e1; border-radius:6px; background:#fff; font-weight:600; color:#1e293b; cursor:pointer;">
+                    <option value="50" <?php echo $followup_limit === 50 ? 'selected' : ''; ?>>50</option>
+                    <option value="100" <?php echo $followup_limit === 100 ? 'selected' : ''; ?>>100</option>
+                    <option value="500" <?php echo $followup_limit === 500 ? 'selected' : ''; ?>>500</option>
+                </select>
+            </div>
+        </form>
+    </div>
+
     <div class="panel-body flush table-wrap">
         <?php if (empty($today_leads)): ?>
-            <div class="empty-state"><i class="fas fa-mug-hot"></i><p>No follow-ups due today or overdue. You're all caught up!</p></div>
+            <div class="empty-state">
+                <i class="fas fa-mug-hot"></i>
+                <?php if ($raw_fn_from !== '' || $raw_fn_to !== ''): ?>
+                    <p>No follow-ups found matching the selected date range.</p>
+                <?php else: ?>
+                    <p>No follow-ups due today or overdue. You're all caught up!</p>
+                <?php endif; ?>
+            </div>
         <?php else: ?>
         <div id="followups-bulk-toolbar" style="display:none; align-items:center; justify-content:space-between; padding:8px 16px; background:#eff6ff; border-bottom:1px solid #bfdbfe;">
             <div style="display:flex; align-items:center; gap:10px;">
@@ -913,6 +1043,15 @@ include 'includes/admin_nav.php';
 <div class="panel">
     <div class="panel-body">
         <form method="GET" class="filter-bar">
+            <?php if (isset($_GET['followup_limit'])): ?>
+                <input type="hidden" name="followup_limit" value="<?php echo e($_GET['followup_limit']); ?>">
+            <?php endif; ?>
+            <?php if (!empty($raw_fn_from)): ?>
+                <input type="hidden" name="followup_from" value="<?php echo e($raw_fn_from); ?>">
+            <?php endif; ?>
+            <?php if (!empty($raw_fn_to)): ?>
+                <input type="hidden" name="followup_to" value="<?php echo e($raw_fn_to); ?>">
+            <?php endif; ?>
             <div class="field"><label>Status</label>
                 <select name="status">
                     <option value="">All statuses</option>
@@ -1190,7 +1329,7 @@ include 'includes/admin_nav.php';
             <h3><i class="fas fa-pen-to-square" style="color:var(--accent);"></i> Bulk Update (<span id="bulk-selected-count">0</span> Leads)</h3>
             <button type="button" class="modal-close" onclick="closeModal('bulk-update-modal')"><i class="fas fa-xmark"></i></button>
         </div>
-        <form method="POST" onsubmit="return validateBulkUpdateForm();">
+        <form method="POST" action="lead-management.php<?php echo e(lqs()); ?>" onsubmit="return validateBulkUpdateForm();">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="bulk_update_followups">
             <div id="bulk-update-lead-ids"></div>
