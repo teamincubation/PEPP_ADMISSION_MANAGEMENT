@@ -19,6 +19,55 @@ try {
     error_log("Failed to create student_peppkit: " . $e->getMessage());
 }
 
+// ── Canonical PEPPKIT address formatter ────────────
+/**
+ * Canonical PEPPKIT address formatter.
+ * Derives formatted address strings consistently from standard address fields.
+ *
+ * @param array $user Array containing postal_address, place_post_office, district, state, postal_pincode
+ * @param string $format 'single_line' | 'with_pin' | 'multiline'
+ * @return string
+ */
+function format_peppkit_canonical_address(array $user, string $format = 'single_line'): string {
+    $addr  = trim((string)($user['postal_address'] ?? ''));
+    $place = trim((string)($user['place_post_office'] ?? ''));
+    $dist  = trim((string)($user['district'] ?? ''));
+    $state = trim((string)($user['state'] ?? ''));
+    $pin   = trim((string)($user['postal_pincode'] ?? ''));
+
+    // Regional parts: place, district, state
+    $regional_parts = array_filter([$place, $dist, $state], function($v) {
+        return $v !== '';
+    });
+    $regional_str = implode(', ', $regional_parts);
+
+    switch ($format) {
+        case 'multiline':
+            // For print stickers: multiline address + place/district/state.
+            // Note: Does NOT include PIN, so sticker can output PIN in its dedicated element without duplication.
+            $lines = array_filter([$addr, $regional_str], function($v) {
+                return $v !== '';
+            });
+            return implode("\n", $lines);
+
+        case 'with_pin':
+            // For email, WhatsApp, audit log: Address, Place, District, State - Pincode
+            $all_parts = array_filter([$addr, $regional_str], function($v) {
+                return $v !== '';
+            });
+            $base = implode(', ', $all_parts);
+            return $pin !== '' ? ($base !== '' ? $base . ' - ' . $pin : $pin) : $base;
+
+        case 'single_line':
+        default:
+            // For table display: Address, Place, District, State
+            $all_parts = array_filter([$addr, $regional_str], function($v) {
+                return $v !== '';
+            });
+            return implode(', ', $all_parts);
+    }
+}
+
 // ── Email notification helper ────────────
 function send_peppkit_email($student_name, $to_email, $status, $address_combined, $tracking_id = '') {
     if (!$to_email || !filter_var($to_email, FILTER_VALIDATE_EMAIL)) return;
@@ -119,6 +168,45 @@ function send_peppkit_email($student_name, $to_email, $status, $address_combined
     }
 }
 
+// ── AJAX: PIN Code lookup (India Post API proxy with timeout) ──
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'pincode') {
+    header('Content-Type: application/json');
+    $pincode = trim($_GET['pincode'] ?? '');
+    if (strlen($pincode) === 6 && ctype_digit($pincode)) {
+        $api_url = "https://api.postalpincode.in/pincode/{$pincode}";
+        $ctx = stream_context_create([
+            'http' => [
+                'timeout' => 5,
+                'ignore_errors' => true,
+                'user_agent' => 'PEPP-Shipping-Desk/1.0'
+            ]
+        ]);
+        $response = @file_get_contents($api_url, false, $ctx);
+        if ($response) {
+            $data = json_decode($response, true);
+            if (isset($data[0]['Status']) && $data[0]['Status'] === 'Success' && !empty($data[0]['PostOffice'])) {
+                $places = [];
+                foreach ($data[0]['PostOffice'] as $office) {
+                    if (!empty($office['Name'])) {
+                        $places[] = trim($office['Name']);
+                    }
+                }
+                echo json_encode([
+                    'success' => true,
+                    'state' => $data[0]['PostOffice'][0]['State'] ?? '',
+                    'district' => $data[0]['PostOffice'][0]['District'] ?? '',
+                    'places' => array_values(array_unique($places))
+                ]);
+                exit;
+            }
+        }
+        echo json_encode(['success' => false, 'message' => 'PIN code not found in postal directory']);
+        exit;
+    }
+    echo json_encode(['success' => false, 'message' => 'Invalid 6-digit PIN code']);
+    exit;
+}
+
 // ── AJAX POST Actions ────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!csrf_verify()) {
@@ -152,14 +240,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'update_address') {
         header('Content-Type: application/json');
-        $addr = trim($_POST['postal_address'] ?? '');
-        $pin = trim($_POST['postal_pincode'] ?? '');
+        $user_id = trim($_POST['user_id'] ?? '');
+        $addr    = trim($_POST['postal_address'] ?? '');
+        $pin     = trim($_POST['postal_pincode'] ?? '');
+        $state   = trim($_POST['state'] ?? '');
+        $dist    = trim($_POST['district'] ?? '');
+        $place   = trim($_POST['place_post_office'] ?? '');
+
+        // Authoritative server-side structural validation
+        if ($user_id === '') {
+            echo json_encode(['success' => false, 'message' => 'Student ID is required.']);
+            exit;
+        }
+        if ($addr === '') {
+            echo json_encode(['success' => false, 'message' => 'Postal address is required.']);
+            exit;
+        }
+        if ($pin === '' || !preg_match('/^[0-9]{6}$/', $pin)) {
+            echo json_encode(['success' => false, 'message' => 'PIN code must be a valid 6-digit number.']);
+            exit;
+        }
+        if ($place === '') {
+            echo json_encode(['success' => false, 'message' => 'Place / Post Office is required.']);
+            exit;
+        }
+        if ($dist === '') {
+            echo json_encode(['success' => false, 'message' => 'District is required.']);
+            exit;
+        }
+        if ($state === '') {
+            echo json_encode(['success' => false, 'message' => 'State is required.']);
+            exit;
+        }
 
         try {
-            $stmt = $pdo->prepare("UPDATE users SET postal_address = ?, postal_pincode = ? WHERE user_id = ?");
-            $stmt->execute([$addr, $pin, $user_id]);
-            track_record($pdo, $user_id, 'address_updated_peppkit', "Address updated: $addr ($pin)", $admin_username);
-            echo json_encode(['success' => true]);
+            // Fetch previous address for audit trail
+            $prev_stmt = $pdo->prepare("SELECT postal_address, postal_pincode, state, district, place_post_office FROM users WHERE user_id = ?");
+            $prev_stmt->execute([$user_id]);
+            $prev_user = $prev_stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$prev_user) {
+                echo json_encode(['success' => false, 'message' => 'Student record not found.']);
+                exit;
+            }
+
+            $old_canonical = format_peppkit_canonical_address($prev_user, 'with_pin');
+            $new_user_data = [
+                'postal_address'    => $addr,
+                'postal_pincode'    => $pin,
+                'state'             => $state,
+                'district'          => $dist,
+                'place_post_office' => $place,
+            ];
+            $new_canonical = format_peppkit_canonical_address($new_user_data, 'with_pin');
+
+            $stmt = $pdo->prepare("
+                UPDATE users
+                SET postal_address = ?, postal_pincode = ?, state = ?, district = ?, place_post_office = ?
+                WHERE user_id = ?
+            ");
+            $stmt->execute([$addr, $pin, $state, $dist, $place, $user_id]);
+
+            $audit_note = "PEPPKIT address updated: Old: [{$old_canonical}] -> New: [{$new_canonical}]";
+            track_record($pdo, $user_id, 'address_updated_peppkit', $audit_note, $admin_username);
+            log_admin_activity($pdo, $admin_username, 'address_updated_peppkit', "Updated address for student {$user_id}. Old: {$old_canonical} | New: {$new_canonical}");
+
+            echo json_encode([
+                'success'           => true,
+                'user_id'           => $user_id,
+                'postal_address'    => $addr,
+                'postal_pincode'    => $pin,
+                'state'             => $state,
+                'district'          => $dist,
+                'place_post_office' => $place,
+                'formatted_address' => format_peppkit_canonical_address($new_user_data, 'single_line'),
+                'full_address'      => $new_canonical
+            ]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'message' => $e->getMessage()]);
         }
@@ -194,11 +349,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             $stmt = $pdo->prepare("SELECT name, email, postal_address, postal_pincode, state, district, place_post_office FROM users WHERE user_id = ?");
             $stmt->execute([$user_id]);
-            $stud = $stmt->fetch();
+            $stud = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            $address_combined = $stud['postal_address'] . ', ' . $stud['place_post_office'] . ', ' . $stud['district'] . ', ' . $stud['state'] . ' - ' . $stud['postal_pincode'];
+            $address_combined = format_peppkit_canonical_address($stud ?: [], 'with_pin');
             
-            send_peppkit_email($stud['name'], $stud['email'], $status, $address_combined, $tracking_id);
+            send_peppkit_email($stud['name'] ?? '', $stud['email'] ?? '', $status, $address_combined, $tracking_id);
             
             track_record($pdo, $user_id, 'peppkit_status_changed', "PEPPKIT status: $status" . ($tracking_id ? " (Tracking ID: $tracking_id)" : ""), $admin_username);
             log_admin_activity($pdo, $admin_username, 'peppkit_status_changed', "Changed PEPPKIT status for student $user_id to $status");
@@ -309,7 +464,7 @@ if (isset($_GET['print']) && $_GET['print'] === '1') {
         <?php else: ?>
             <div class="grid">
                 <?php foreach ($stickers as $stk):
-                    $combined = $stk['postal_address'] . "\n" . $stk['place_post_office'] . ", " . $stk['district'] . ", " . $stk['state'];
+                    $combined = format_peppkit_canonical_address($stk, 'multiline');
                 ?>
                     <div class="sticker">
                         <div>
@@ -614,10 +769,10 @@ input:checked + .slider:before {
                 <?php 
                 $sl = 1;
                 foreach ($kits as $k):
-                    $combined = $k['postal_address'] . ', ' . $k['place_post_office'] . ', ' . $k['district'] . ', ' . $k['state'];
-                    $combined_display = $combined;
+                    $combined_display = format_peppkit_canonical_address($k, 'single_line');
+                    $full_address = format_peppkit_canonical_address($k, 'with_pin');
                     $phone = preg_replace('/\D/', '', $k['whatsapp_country_code'] . $k['whatsapp_number']);
-                    $wa_text = get_peppkit_wa_text($k['name'], $k['item_status'], $combined . ' - ' . $k['postal_pincode'], $k['tracking_id']);
+                    $wa_text = get_peppkit_wa_text($k['name'], $k['item_status'], $full_address, $k['tracking_id']);
                     
                     $badge_class = 'gray';
                     if ($k['item_status'] === 'Addr. Review') $badge_class = 'amber';
@@ -650,7 +805,20 @@ input:checked + .slider:before {
                         <div class="cell-sub">Joined: <?php echo date('d M Y', strtotime($k['joined_date'])); ?></div>
                     </td>
                     <td>
-                        <div id="addr-display-<?php echo htmlspecialchars($k['user_id']); ?>" class="cell-sub" style="max-width:280px; word-break:break-word; cursor:pointer;" onclick="openAddressEdit('<?php echo htmlspecialchars($k['user_id']); ?>', <?php echo htmlspecialchars(json_encode($k['postal_address'])); ?>, <?php echo htmlspecialchars(json_encode($k['postal_pincode'])); ?>)">
+                        <div id="addr-display-<?php echo htmlspecialchars($k['user_id']); ?>"
+                             class="cell-sub addr-edit-trigger"
+                             style="max-width:280px; word-break:break-word; cursor:pointer;"
+                             data-user-id="<?php echo htmlspecialchars($k['user_id']); ?>"
+                             data-address="<?php echo htmlspecialchars($k['postal_address'] ?? ''); ?>"
+                             data-pincode="<?php echo htmlspecialchars($k['postal_pincode'] ?? ''); ?>"
+                             data-state="<?php echo htmlspecialchars($k['state'] ?? ''); ?>"
+                             data-district="<?php echo htmlspecialchars($k['district'] ?? ''); ?>"
+                             data-place="<?php echo htmlspecialchars($k['place_post_office'] ?? ''); ?>"
+                             data-name="<?php echo htmlspecialchars($k['name'] ?? ''); ?>"
+                             data-status="<?php echo htmlspecialchars($k['item_status'] ?? ''); ?>"
+                             data-tracking="<?php echo htmlspecialchars($k['tracking_id'] ?? ''); ?>"
+                             data-phone="<?php echo htmlspecialchars($phone); ?>"
+                             onclick="openAddressEditFromElem(this)">
                             <?php echo htmlspecialchars($combined_display); ?> <i class="fas fa-edit" style="color:var(--accent); font-size:0.75rem; margin-left:4px;"></i>
                         </div>
                     </td>
@@ -676,7 +844,7 @@ input:checked + .slider:before {
                     </td>
                     <td style="text-align:right; white-space:nowrap;">
                         <button class="btn btn-sm btn-outline" title="Update status" onclick="openStatusChange('<?php echo htmlspecialchars($k['user_id']); ?>', '<?php echo htmlspecialchars(addslashes($k['name'])); ?>', '<?php echo htmlspecialchars($k['item_status']); ?>', '<?php echo htmlspecialchars($k['tracking_id'] ?? ''); ?>')"><i class="fas fa-truck-ramp-box"></i></button>
-                        <a href="https://wa.me/<?php echo $phone; ?>?text=<?php echo $wa_text; ?>" target="_blank" class="btn btn-sm btn-soft-green" title="Send WhatsApp Update"><i class="fab fa-whatsapp"></i></a>
+                        <a id="wa-link-<?php echo htmlspecialchars($k['user_id']); ?>" href="https://wa.me/<?php echo $phone; ?>?text=<?php echo $wa_text; ?>" target="_blank" class="btn btn-sm btn-soft-green" title="Send WhatsApp Update"><i class="fab fa-whatsapp"></i></a>
                     </td>
                 </tr>
                 <?php endforeach; ?>
@@ -724,26 +892,83 @@ input:checked + .slider:before {
 
 <!-- Inline Address Edit Modal -->
 <div class="modal-backdrop" id="address-edit-modal">
-    <div class="modal" style="max-width:440px;">
-        <div class="modal-head">
-            <h3><i class="fas fa-edit" style="color:var(--accent);"></i> Edit Shipping Address</h3>
+    <div class="modal" style="max-width:540px; width:94%; border-radius:16px;">
+        <div class="modal-head" style="padding:16px 20px; border-bottom:1px solid var(--border);">
+            <h3 style="margin:0; font-size:1.1rem; display:flex; align-items:center; gap:8px;">
+                <i class="fas fa-edit" style="color:var(--accent);"></i> Edit Shipping Address
+            </h3>
             <button class="modal-close" onclick="closeModal('address-edit-modal')"><i class="fas fa-xmark"></i></button>
         </div>
         <form id="address-edit-form" onsubmit="submitAddressEdit(event)">
             <input type="hidden" name="user_id" id="ae-user-id">
-            <div class="modal-body">
-                <div class="field full" style="margin-bottom:12px;">
-                    <label>Address Details <span class="req">*</span></label>
-                    <textarea name="postal_address" id="ae-address" rows="3" required></textarea>
+            <div class="modal-body" style="padding:20px;">
+                <!-- Error banner inside modal -->
+                <div id="ae-error-alert" style="display:none; background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:10px 14px; border-radius:8px; font-size:0.85rem; margin-bottom:14px; align-items:center; gap:8px;">
+                    <i class="fas fa-circle-exclamation" style="flex-shrink:0;"></i>
+                    <span id="ae-error-message"></span>
                 </div>
-                <div class="field">
-                    <label>PIN Code <span class="req">*</span></label>
-                    <input type="text" name="postal_pincode" id="ae-pincode" required>
+
+                <!-- Postal Address -->
+                <div class="field full" style="margin-bottom:14px;">
+                    <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted); margin-bottom:6px;">
+                        Address Details <span class="req" style="color:#ef4444;">*</span>
+                    </label>
+                    <textarea name="postal_address" id="ae-address" rows="3" required placeholder="House / Flat, Street, Area" style="width:100%; box-sizing:border-box; border-radius:8px; padding:10px 12px; border:1.5px solid var(--border); background:var(--card); color:var(--text); font-size:0.9rem; font-family:inherit; resize:vertical;"></textarea>
+                </div>
+
+                <!-- PIN Code & Post Office Row -->
+                <div style="display:grid; grid-template-columns: 1fr 1.3fr; gap:12px; margin-bottom:14px;">
+                    <div class="field">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <label style="font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted); margin:0;">
+                                PIN Code <span class="req" style="color:#ef4444;">*</span>
+                            </label>
+                            <span id="ae-pin-spinner" style="display:none; font-size:0.7rem; color:var(--accent);">
+                                <i class="fas fa-spinner fa-spin"></i>
+                            </span>
+                        </div>
+                        <input type="text" name="postal_pincode" id="ae-pincode" maxlength="6" pattern="[0-9]{6}" placeholder="6-digit PIN" required style="width:100%; box-sizing:border-box; border-radius:8px; padding:9px 12px; border:1.5px solid var(--border); background:var(--card); color:var(--text); font-size:0.9rem;">
+                        <div id="ae-pin-status" style="display:none; font-size:0.7rem; color:var(--text-muted); margin-top:3px;"></div>
+                    </div>
+
+                    <div class="field">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <label style="font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted); margin:0;">
+                                Post Office <span class="req" style="color:#ef4444;">*</span>
+                            </label>
+                            <button type="button" id="ae-toggle-place-mode" onclick="togglePlaceMode()" style="background:none; border:none; color:var(--accent); font-size:0.72rem; cursor:pointer; font-weight:600; padding:0; text-decoration:underline;">Type manually</button>
+                        </div>
+                        <div id="ae-place-select-wrap">
+                            <select name="place_post_office" id="ae-place-select" style="width:100%; box-sizing:border-box; border-radius:8px; padding:9px 12px; border:1.5px solid var(--border); background:var(--card); color:var(--text); font-size:0.9rem;">
+                                <option value="">Select Post Office</option>
+                            </select>
+                        </div>
+                        <div id="ae-place-input-wrap" style="display:none;">
+                            <input type="text" id="ae-place-input" placeholder="Type Post Office / Place" style="width:100%; box-sizing:border-box; border-radius:8px; padding:9px 12px; border:1.5px solid var(--border); background:var(--card); color:var(--text); font-size:0.9rem;">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- District & State Row -->
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                    <div class="field">
+                        <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted); margin-bottom:6px;">
+                            District <span class="req" style="color:#ef4444;">*</span>
+                        </label>
+                        <input type="text" name="district" id="ae-district" placeholder="District" required style="width:100%; box-sizing:border-box; border-radius:8px; padding:9px 12px; border:1.5px solid var(--border); background:var(--card); color:var(--text); font-size:0.9rem;">
+                    </div>
+
+                    <div class="field">
+                        <label style="display:block; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted); margin-bottom:6px;">
+                            State <span class="req" style="color:#ef4444;">*</span>
+                        </label>
+                        <input type="text" name="state" id="ae-state" placeholder="State" required style="width:100%; box-sizing:border-box; border-radius:8px; padding:9px 12px; border:1.5px solid var(--border); background:var(--card); color:var(--text); font-size:0.9rem;">
+                    </div>
                 </div>
             </div>
-            <div class="modal-foot">
+            <div class="modal-foot" style="padding:14px 20px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:8px;">
                 <button type="button" class="btn btn-outline" onclick="closeModal('address-edit-modal')">Cancel</button>
-                <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Update Address</button>
+                <button type="submit" class="btn btn-primary" id="ae-submit-btn"><i class="fas fa-save"></i> Update Address</button>
             </div>
         </form>
     </div>
@@ -798,37 +1023,405 @@ function submitStatusChange(e) {
     });
 }
 
-function openAddressEdit(userId, address, pincode) {
-    document.getElementById('ae-user-id').value = userId;
-    document.getElementById('ae-address').value = address;
-    document.getElementById('ae-pincode').value = pincode;
-    openModal('address-edit-modal');
+// ── Edit Address Modal Logic ─────────────────────────────────
+let currentAddressData = {};
+let placeModeManual = false;
+let pinLookupAbort = null;
+
+function togglePlaceMode(forceManual) {
+    if (typeof forceManual === 'boolean') {
+        placeModeManual = forceManual;
+    } else {
+        placeModeManual = !placeModeManual;
+    }
+
+    const selectWrap = document.getElementById('ae-place-select-wrap');
+    const inputWrap = document.getElementById('ae-place-input-wrap');
+    const select = document.getElementById('ae-place-select');
+    const input = document.getElementById('ae-place-input');
+    const toggleBtn = document.getElementById('ae-toggle-place-mode');
+
+    if (placeModeManual) {
+        input.value = select.value || input.value || currentAddressData.place || '';
+        select.removeAttribute('name');
+        input.setAttribute('name', 'place_post_office');
+        selectWrap.style.display = 'none';
+        inputWrap.style.display = 'block';
+        toggleBtn.textContent = 'Select from list';
+        input.focus();
+    } else {
+        input.removeAttribute('name');
+        select.setAttribute('name', 'place_post_office');
+        inputWrap.style.display = 'none';
+        selectWrap.style.display = 'block';
+        toggleBtn.textContent = 'Type manually';
+        if (input.value && !Array.from(select.options).some(o => o.value.toLowerCase() === input.value.trim().toLowerCase())) {
+            const opt = document.createElement('option');
+            opt.value = input.value.trim();
+            opt.textContent = input.value.trim();
+            opt.selected = true;
+            select.appendChild(opt);
+        } else if (input.value) {
+            select.value = input.value.trim();
+        }
+    }
 }
+
+function openAddressEditFromElem(elem) {
+    const d = elem.dataset;
+    openAddressEdit(
+        d.userId,
+        d.address,
+        d.pincode,
+        d.state,
+        d.district,
+        d.place,
+        {
+            name: d.name,
+            status: d.status,
+            tracking: d.tracking,
+            phone: d.phone
+        }
+    );
+}
+
+function openAddressEdit(userId, address, pincode, state, district, place, meta) {
+    currentAddressData = {
+        userId: userId || '',
+        address: address || '',
+        pincode: pincode || '',
+        state: state || '',
+        district: district || '',
+        place: place || '',
+        meta: meta || {}
+    };
+
+    const errorAlert = document.getElementById('ae-error-alert');
+    if (errorAlert) errorAlert.style.display = 'none';
+
+    document.getElementById('ae-user-id').value = currentAddressData.userId;
+    document.getElementById('ae-address').value = currentAddressData.address;
+    document.getElementById('ae-pincode').value = currentAddressData.pincode;
+    document.getElementById('ae-state').value = currentAddressData.state;
+    document.getElementById('ae-district').value = currentAddressData.district;
+
+    const select = document.getElementById('ae-place-select');
+    const input = document.getElementById('ae-place-input');
+    select.innerHTML = '<option value="">Select Post Office</option>';
+
+    if (currentAddressData.place) {
+        const opt = document.createElement('option');
+        opt.value = currentAddressData.place;
+        opt.textContent = currentAddressData.place;
+        opt.selected = true;
+        select.appendChild(opt);
+        input.value = currentAddressData.place;
+    } else {
+        input.value = '';
+    }
+
+    togglePlaceMode(false);
+
+    const spinner = document.getElementById('ae-pin-spinner');
+    const statusEl = document.getElementById('ae-pin-status');
+    if (spinner) spinner.style.display = 'none';
+    if (statusEl) statusEl.style.display = 'none';
+
+    openModal('address-edit-modal');
+
+    // If PIN is already 6 digits, populate dropdown options in background
+    if (/^\d{6}$/.test(currentAddressData.pincode)) {
+        fetchPinLookup(currentAddressData.pincode, false);
+    }
+}
+
+function fetchPinLookup(pin, isUserInitiated) {
+    if (pinLookupAbort) {
+        pinLookupAbort.abort();
+    }
+    pinLookupAbort = new AbortController();
+
+    const spinner = document.getElementById('ae-pin-spinner');
+    const statusEl = document.getElementById('ae-pin-status');
+    const stateInput = document.getElementById('ae-state');
+    const districtInput = document.getElementById('ae-district');
+    const select = document.getElementById('ae-place-select');
+    const input = document.getElementById('ae-place-input');
+
+    if (spinner) spinner.style.display = 'inline-block';
+    if (statusEl) statusEl.style.display = 'none';
+
+    fetch('peppkit-report.php?ajax=pincode&pincode=' + encodeURIComponent(pin), {
+        signal: pinLookupAbort.signal
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (spinner) spinner.style.display = 'none';
+        if (data.success && data.places && data.places.length > 0) {
+            // Auto-fill state & district:
+            // If user explicitly initiated PIN change, always set them.
+            // If background modal open, only set if currently empty to avoid changing valid existing values.
+            if (isUserInitiated || !stateInput.value.trim()) {
+                stateInput.value = data.state || stateInput.value;
+            }
+            if (isUserInitiated || !districtInput.value.trim()) {
+                districtInput.value = data.district || districtInput.value;
+            }
+
+            // Current value to preserve:
+            const targetPlace = (isUserInitiated ? (input.value || select.value) : (currentAddressData.place || input.value || select.value)).trim();
+
+            // Rebuild select options
+            select.innerHTML = '<option value="">Select Post Office</option>';
+            let found = false;
+            data.places.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p;
+                if (targetPlace && p.toLowerCase() === targetPlace.toLowerCase()) {
+                    opt.selected = true;
+                    found = true;
+                }
+                select.appendChild(opt);
+            });
+
+            // CORRECTION 1: If current post office is not present in the API result,
+            // add it as a preserved selectable option so it is NEVER lost!
+            if (targetPlace && !found) {
+                const existingOpt = document.createElement('option');
+                existingOpt.value = targetPlace;
+                existingOpt.textContent = targetPlace + ' (Current)';
+                existingOpt.selected = true;
+                select.appendChild(existingOpt);
+                found = true;
+            }
+
+            if (!targetPlace && data.places.length === 1) {
+                select.value = data.places[0];
+                input.value = data.places[0];
+            } else if (targetPlace) {
+                input.value = targetPlace;
+            }
+
+            if (statusEl) {
+                statusEl.textContent = `${data.places.length} post office(s) found`;
+                statusEl.style.color = 'var(--text-muted)';
+                statusEl.style.display = 'block';
+            }
+        } else {
+            if (statusEl) {
+                statusEl.textContent = data.message || 'Postal lookup unavailable';
+                statusEl.style.color = '#b45309';
+                statusEl.style.display = 'block';
+            }
+            if (isUserInitiated && select.options.length <= 1) {
+                togglePlaceMode(true);
+            }
+        }
+    })
+    .catch(err => {
+        if (err.name === 'AbortError') return;
+        if (spinner) spinner.style.display = 'none';
+        if (statusEl) {
+            statusEl.textContent = 'Postal lookup unavailable (manual entry allowed)';
+            statusEl.style.color = '#b45309';
+            statusEl.style.display = 'block';
+        }
+        if (isUserInitiated && select.options.length <= 1) {
+            togglePlaceMode(true);
+        }
+    });
+}
+
+// PIN input change listener
+document.addEventListener('DOMContentLoaded', function() {
+    const pinInput = document.getElementById('ae-pincode');
+    if (pinInput) {
+        let pinTimer = null;
+        pinInput.addEventListener('input', function() {
+            const val = this.value.trim();
+            clearTimeout(pinTimer);
+            if (val.length === 6 && /^\d{6}$/.test(val)) {
+                pinTimer = setTimeout(() => {
+                    fetchPinLookup(val, true);
+                }, 300);
+            }
+        });
+        pinInput.addEventListener('blur', function() {
+            const val = this.value.trim();
+            if (val.length === 6 && /^\d{6}$/.test(val)) {
+                fetchPinLookup(val, true);
+            }
+        });
+    }
+
+    const placeSelect = document.getElementById('ae-place-select');
+    if (placeSelect) {
+        placeSelect.addEventListener('change', function() {
+            document.getElementById('ae-place-input').value = this.value;
+        });
+    }
+});
 
 function submitAddressEdit(e) {
     e.preventDefault();
-    var form = document.getElementById('address-edit-form');
-    var formData = new FormData(form);
+    const errorAlert = document.getElementById('ae-error-alert');
+    const submitBtn = document.getElementById('ae-submit-btn');
+
+    if (errorAlert) errorAlert.style.display = 'none';
+
+    const userId = document.getElementById('ae-user-id').value.trim();
+    const address = document.getElementById('ae-address').value.trim();
+    const pincode = document.getElementById('ae-pincode').value.trim();
+    const state = document.getElementById('ae-state').value.trim();
+    const district = document.getElementById('ae-district').value.trim();
+    const place = (placeModeManual ? document.getElementById('ae-place-input').value : document.getElementById('ae-place-select').value).trim();
+
+    // Client-side validation
+    if (!address) {
+        showAddressError('Please enter the postal address details.');
+        document.getElementById('ae-address').focus();
+        return;
+    }
+    if (!pincode || !/^\d{6}$/.test(pincode)) {
+        showAddressError('PIN code must be exactly 6 digits.');
+        document.getElementById('ae-pincode').focus();
+        return;
+    }
+    if (!place) {
+        showAddressError('Please select or enter the Post Office / Place.');
+        if (placeModeManual) {
+            document.getElementById('ae-place-input').focus();
+        } else {
+            document.getElementById('ae-place-select').focus();
+        }
+        return;
+    }
+    if (!district) {
+        showAddressError('Please enter the district.');
+        document.getElementById('ae-district').focus();
+        return;
+    }
+    if (!state) {
+        showAddressError('Please enter the state.');
+        document.getElementById('ae-state').focus();
+        return;
+    }
+
+    const formData = new FormData();
     formData.append('action', 'update_address');
     formData.append('csrf_token', '<?php echo csrf_token(); ?>');
-    
+    formData.append('user_id', userId);
+    formData.append('postal_address', address);
+    formData.append('postal_pincode', pincode);
+    formData.append('state', state);
+    formData.append('district', district);
+    formData.append('place_post_office', place);
+
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+
     fetch('peppkit-report.php', {
         method: 'POST',
         body: formData
     })
     .then(r => r.json())
     .then(data => {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-save"></i> Update Address';
+
         if (data.success) {
             closeModal('address-edit-modal');
-            window.location.reload();
+
+            // In-place UI update without requiring full reload
+            const addrDisplay = document.getElementById('addr-display-' + userId);
+            if (addrDisplay) {
+                addrDisplay.dataset.address = data.postal_address;
+                addrDisplay.dataset.pincode = data.postal_pincode;
+                addrDisplay.dataset.state = data.state;
+                addrDisplay.dataset.district = data.district;
+                addrDisplay.dataset.place = data.place_post_office;
+                addrDisplay.innerHTML = escapeHtml(data.formatted_address) + ' <i class="fas fa-edit" style="color:var(--accent); font-size:0.75rem; margin-left:4px;"></i>';
+            }
+
+            const pinDisplay = document.getElementById('pin-display-' + userId);
+            if (pinDisplay) {
+                pinDisplay.textContent = data.postal_pincode;
+            }
+
+            // Update WhatsApp link if present
+            const waLink = document.getElementById('wa-link-' + userId);
+            if (waLink && addrDisplay) {
+                const studentName = addrDisplay.dataset.name || '';
+                const itemStatus = addrDisplay.dataset.status || 'Pending';
+                const trackingId = addrDisplay.dataset.tracking || '';
+                const phone = addrDisplay.dataset.phone || '';
+                if (phone) {
+                    const waText = buildWhatsAppText(studentName, itemStatus, data.full_address, trackingId);
+                    waLink.href = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(waText);
+                }
+            }
+
+            // Visual feedback: briefly highlight row
+            const row = document.getElementById('row-' + userId);
+            if (row) {
+                const origBg = row.style.backgroundColor;
+                row.style.transition = 'background-color 0.4s ease';
+                row.style.backgroundColor = '#ecfdf5';
+                setTimeout(() => {
+                    row.style.backgroundColor = origBg;
+                }, 1500);
+            }
         } else {
-            alert('Error: ' + data.message);
+            showAddressError(data.message || 'Failed to update address.');
         }
     })
     .catch(err => {
         console.error(err);
-        alert('Server connection error.');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-save"></i> Update Address';
+        showAddressError('Server connection error. Please try again.');
     });
+}
+
+function showAddressError(msg) {
+    const errorAlert = document.getElementById('ae-error-alert');
+    const errorMsg = document.getElementById('ae-error-message');
+    if (errorAlert && errorMsg) {
+        errorMsg.textContent = msg;
+        errorAlert.style.display = 'flex';
+    } else {
+        alert(msg);
+    }
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function buildWhatsAppText(studentName, status, fullAddress, trackingId) {
+    switch (status) {
+        case 'Addr. Review':
+            return `Hi ${studentName}, we are preparing your PEPPKIT. Please confirm if your shipping address is correct:\n\n${fullAddress}\n\nReply to confirm or let us know if you need to make changes.`;
+        case 'Addr. Verified':
+            return `Hi ${studentName}, your shipping address for PEPPKIT has been verified successfully. We will notify you once it's shipped.`;
+        case 'Packed':
+            return `Hi ${studentName}, your PEPPKIT is packed. Delivery via India Post is expected in 3-7 days. Please make sure someone is available to receive it.`;
+        case 'Sent':
+            return `Hi ${studentName}, your PEPPKIT has been dispatched via India Post. Tracking Consignment ID: ${trackingId}. Track it here: https://www.indiapost.gov.in`;
+        case 'Returned':
+            return `Hi ${studentName}, your PEPPKIT was returned to our office. Please confirm your address details and coordinate the resending charges.`;
+        case 'Delivered':
+            return `Hi ${studentName}, congratulations! Your PEPPKIT has been delivered. We wish you absolute peppiness on your learning journey with PEPP Learning!`;
+        default:
+            return `Hi ${studentName}, this is regarding your PEPPKIT shipment from PEPP Learning.`;
+    }
 }
 
 function toggleAutoEmail(checked) {
