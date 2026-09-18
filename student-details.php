@@ -340,120 +340,271 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_installments') {
     if (!csrf_verify()) {
         $error = 'Security token mismatch. Please retry.';
+    } elseif (is_credential_restricted('financials')) {
+        $error = 'Access Denied: You do not have permission to modify financial details.';
     } else {
-        if (is_credential_restricted('financials')) {
-            throw new Exception("Access Denied: You do not have permission to modify financial details.");
-        }
         try {
-            $new_discount = max(0, floatval($_POST['discount_amount'] ?? 0));
-            $new_plan = $_POST['payment_plan'] ?? 'One Time';
+            $lock_sql = ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') ? ' FOR UPDATE' : '';
 
-            // Recalculate fees
-            $course_fee = (float)($student['course_fee'] ?? 0);
-            $new_total_fee = max(0, $course_fee - $new_discount);
-            $reg_paid = (float)$student['paid_amount'];
-
-            // Calculate how many installments are paid/approved
-            $paid_count = 1; // 1 for registration payment
-            $stmt = $pdo->prepare("SELECT * FROM instalment_details WHERE user_id = ? ORDER BY instalment_number ASC");
-            $stmt->execute([$user_id]);
-            $current_installments = $stmt->fetchAll();
-
-            $already_paid = [];
-            foreach ($current_installments as $inst) {
-                if (in_array($inst['status'], ['approved', 'paid'], true) || !empty($inst['paid_date'])) {
-                    $paid_count++;
-                    $already_paid[$inst['instalment_number']] = $inst;
-                }
-            }
-
-            // Parse new plan count
-            $new_count = 1;
-            if ($new_plan !== 'One Time') {
-                $new_count = (int)explode(' ', $new_plan)[0];
-            }
-
-            // Validations
-            if ($new_count < $paid_count) {
-                throw new Exception("New plan term cannot be less than currently paid/approved installments count ($paid_count).");
-            }
-
-            // Read input installment amounts and due dates from POST
-            $new_installments_data = [];
-            $sum_installments = 0.0;
-            for ($i = 2; $i <= $new_count; $i++) {
-                if (isset($already_paid[$i])) {
-                    // For already paid installments, keep existing values
-                    $amt = (float)$already_paid[$i]['amount'];
-                    $due = $already_paid[$i]['due_date'];
-                    $status = $already_paid[$i]['status'];
-                    $paid_d = $already_paid[$i]['paid_date'];
-                    $ref = $already_paid[$i]['payment_reference'];
-                } else {
-                    // For upcoming/pending installments
-                    $amt = max(0.0, floatval($_POST["inst_{$i}_amount"] ?? 0));
-                    $due = $_POST["inst_{$i}_due_date"] ?? '';
-                    if ($amt < 1) {
-                        throw new Exception("Installment #$i amount must be at least ₹1.");
-                    }
-                    if (empty($due)) {
-                        throw new Exception("Due date for installment #$i is required.");
-                    }
-                    $status = 'pending';
-                    $paid_d = null;
-                    $ref = null;
-                }
-                $new_installments_data[$i] = [
-                    'amount' => $amt,
-                    'due_date' => $due,
-                    'status' => $status,
-                    'paid_date' => $paid_d,
-                    'payment_reference' => $ref
-                ];
-                $sum_installments += $amt;
-            }
-
-            // Total installment amounts assigned shouldn't overtake the total payable amount
-            $max_installments_allowed = max(0.0, $new_total_fee - $reg_paid);
-            if (round($sum_installments, 2) > round($max_installments_allowed, 2)) {
-                throw new Exception("Total scheduled installments (₹" . number_format($sum_installments) . ") cannot exceed the total payable balance (₹" . number_format($max_installments_allowed) . ").");
-            }
-
-            // Proceed with updates
             $pdo->beginTransaction();
 
-            // 1. Update user columns: discount_amount, total_fee, payment_plan
-            $stmt = $pdo->prepare("UPDATE users SET discount_amount = ?, total_fee = ?, payment_plan = ? WHERE user_id = ?");
-            $stmt->execute([$new_discount, $new_total_fee, $new_plan, $user_id]);
-
-            // 2. Clear old installments except already paid/approved ones
-            $pdo->prepare("DELETE FROM instalment_details WHERE user_id = ? AND status NOT IN ('approved', 'paid') AND paid_date IS NULL")->execute([$user_id]);
-
-            // 3. Insert or update the new installments
-            $ins = $pdo->prepare("
-                INSERT INTO instalment_details (user_id, instalment_number, amount, due_date, status, paid_date, payment_reference, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-                ON DUPLICATE KEY UPDATE amount = VALUES(amount), due_date = VALUES(due_date), status = VALUES(status), paid_date = VALUES(paid_date), payment_reference = VALUES(payment_reference), updated_at = NOW()
-            ");
-            foreach ($new_installments_data as $num => $data) {
-                $ins->execute([
-                    $user_id, $num, $data['amount'], $data['due_date'],
-                    $data['status'], $data['paid_date'], $data['payment_reference']
-                ]);
+            // 1. SELECT student FOR UPDATE
+            $stmt_student = $pdo->prepare("SELECT * FROM users WHERE user_id = ?" . $lock_sql);
+            $stmt_student->execute([$user_id]);
+            $student_locked = $stmt_student->fetch(PDO::FETCH_ASSOC);
+            if (!$student_locked) {
+                throw new Exception("Student not found.");
             }
 
-            $pdo->commit();
+            // 2. SELECT all instalment_details FOR UPDATE
+            $stmt_insts = $pdo->prepare("SELECT * FROM instalment_details WHERE user_id = ? ORDER BY instalment_number ASC" . $lock_sql);
+            $stmt_insts->execute([$user_id]);
+            $existing_rows = $stmt_insts->fetchAll(PDO::FETCH_ASSOC);
 
-            track_record($pdo, $user_id, 'installments_edited',
-                "Updated plan to $new_plan, discount to ₹$new_discount. Total fee: ₹$new_total_fee", $admin_username);
-            log_admin_activity($pdo, $admin_username, 'installments_edited',
-                "Edited installments configuration for student $user_id");
+            // 3. Detect in-flight payment submission
+            foreach ($existing_rows as $row) {
+                if ($row['status'] === 'pending' && !empty($row['paid_date'])) {
+                    $inst_num = (int)$row['instalment_number'];
+                    $pdo->rollBack();
+                    $error = "Installment schedule cannot be edited while a payment is awaiting review for installment #{$inst_num}. Please approve or reject the submitted payment first.";
+                    $student = load_student($pdo, $user_id);
+                    break;
+                }
+            }
 
-            $message = 'Installment configuration updated successfully.';
+            if (empty($error)) {
+                // 4. Validate payment plan against whitelist
+                $allowed_plans = ['One Time', '2 Installments', '3 Installments', '4 Installments', '5 Installments'];
+                $new_plan = trim($_POST['payment_plan'] ?? 'One Time');
+                if (!in_array($new_plan, $allowed_plans, true)) {
+                    throw new Exception("Invalid payment plan selected.");
+                }
+                $new_count = ($new_plan === 'One Time') ? 1 : (int)explode(' ', $new_plan)[0];
 
-            // Reload page data
-            $student = load_student($pdo, $user_id);
+                // 5. Fee & Discount validation
+                $new_discount = max(0.0, round(floatval($_POST['discount_amount'] ?? 0), 2));
+                $course_fee = (float)($student['course_fee'] ?? 0);
+                if ($new_discount > $course_fee) {
+                    throw new Exception("Discount amount (₹" . number_format($new_discount, 2) . ") cannot exceed course base fee (₹" . number_format($course_fee, 2) . ").");
+                }
+                $new_total_fee = max(0.0, round($course_fee - $new_discount, 2));
+                $reg_paid = (float)$student_locked['paid_amount'];
 
+                // 6. Index existing installments and calculate approved collections
+                $existing_by_num = [];
+                $paid_count = 1; // Installment #1 is registration
+                $approved_collected = 0.0;
+                $duplicates_pruned_audit = [];
+
+                // Group existing rows by instalment_number to handle any pre-existing duplicates deterministically
+                $grouped_existing = [];
+                foreach ($existing_rows as $inst) {
+                    $num = (int)$inst['instalment_number'];
+                    $grouped_existing[$num][] = $inst;
+                }
+
+                foreach ($grouped_existing as $num => $instGroup) {
+                    if (count($instGroup) === 1) {
+                        $inst = $instGroup[0];
+                        $existing_by_num[$num] = $inst;
+                        if (in_array($inst['status'], ['approved', 'paid'], true)) {
+                            $paid_count++;
+                            $approved_collected += (float)($inst['paid_amount'] ?: $inst['amount']);
+                        }
+                    } else {
+                        // Multiple rows exist for the same instalment_number
+                        $appr = [];
+                        $inflight = [];
+                        $emptyPend = [];
+                        foreach ($instGroup as $r) {
+                            if (in_array($r['status'], ['approved', 'paid'], true)) {
+                                $appr[] = $r;
+                            } elseif ($r['status'] === 'pending' && !empty($r['paid_date'])) {
+                                $inflight[] = $r;
+                            } else {
+                                $emptyPend[] = $r;
+                            }
+                        }
+
+                        // Group D: Conflicting financial evidence - MUST NOT auto-reconcile
+                        if (count($appr) > 1 || (count($appr) >= 1 && count($inflight) >= 1)) {
+                            throw new Exception("Multiple conflicting financial payment records found for installment #$num. Schedule cannot be modified automatically; manual review required.");
+                        }
+
+                        if (count($appr) === 1) {
+                            // Group A: 1 approved row + redundant empty pending rows
+                            $canonical = $appr[0];
+                            $existing_by_num[$num] = $canonical;
+                            $paid_count++;
+                            $approved_collected += (float)($canonical['paid_amount'] ?: $canonical['amount']);
+                            foreach ($emptyPend as $redundant) {
+                                $delStmt = $pdo->prepare("DELETE FROM instalment_details WHERE id = ?");
+                                $delStmt->execute([$redundant['id']]);
+                                $duplicates_pruned_audit[] = "Pruned redundant empty pending row ID {$redundant['id']} for #$num";
+                            }
+                        } elseif (count($emptyPend) === count($instGroup)) {
+                            // Group C: Multiple empty pending rows. Deterministic rule: non-empty remarks first, then lowest ID
+                            usort($emptyPend, function($a, $b) {
+                                $aRem = !empty(trim($a['admin_remarks'] ?? ''));
+                                $bRem = !empty(trim($b['admin_remarks'] ?? ''));
+                                if ($aRem !== $bRem) return $bRem <=> $aRem;
+                                return (int)$a['id'] <=> (int)$b['id'];
+                            });
+                            $canonical = $emptyPend[0];
+                            $existing_by_num[$num] = $canonical;
+                            $redundantRows = array_slice($emptyPend, 1);
+                            foreach ($redundantRows as $redundant) {
+                                $delStmt = $pdo->prepare("DELETE FROM instalment_details WHERE id = ?");
+                                $delStmt->execute([$redundant['id']]);
+                                $duplicates_pruned_audit[] = "Pruned redundant duplicate pending row ID {$redundant['id']} for #$num";
+                            }
+                        } else {
+                            throw new Exception("Conflicting duplicate records found for installment #$num. Manual review required.");
+                        }
+                    }
+                }
+
+                if ($new_count < $paid_count) {
+                    throw new Exception("New plan term cannot be less than currently paid/approved installments count ($paid_count).");
+                }
+
+                $total_collected = $reg_paid + $approved_collected;
+                $outstanding_balance = max(0.0, round($new_total_fee - $total_collected, 2));
+
+                if ($new_plan === 'One Time' && $outstanding_balance > 0) {
+                    throw new Exception("Outstanding balance of ₹" . number_format($outstanding_balance, 2) . " remains. You must select an installment plan to schedule remaining payments.");
+                }
+
+                // 7. Validate submitted schedule inputs
+                $scheduled_pending_sum = 0.0;
+                $schedule_to_apply = [];
+                $prev_due_date = null;
+
+                for ($i = 2; $i <= $new_count; $i++) {
+                    $existing = $existing_by_num[$i] ?? null;
+                    $is_paid = $existing && in_array($existing['status'], ['approved', 'paid'], true);
+
+                    if ($is_paid) {
+                        // Preserve existing paid installment row untouched
+                        $schedule_to_apply[$i] = [
+                            'type' => 'preserve_paid',
+                            'existing_id' => $existing['id'],
+                            'amount' => (float)$existing['amount'],
+                            'due_date' => $existing['due_date']
+                        ];
+                        $prev_due_date = $existing['due_date'];
+                    } else {
+                        $amt_raw = trim($_POST["inst_{$i}_amount"] ?? '');
+                        if (!is_numeric($amt_raw) || !is_finite((float)$amt_raw)) {
+                            throw new Exception("Installment #$i amount must be a valid number.");
+                        }
+                        $amt = round((float)$amt_raw, 2);
+                        if ($amt < 1.0) {
+                            throw new Exception("Installment #$i amount must be at least ₹1.");
+                        }
+
+                        $due = trim($_POST["inst_{$i}_due_date"] ?? '');
+                        if (empty($due) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $due) || !checkdate((int)substr($due, 5, 2), (int)substr($due, 8, 2), (int)substr($due, 0, 4))) {
+                            throw new Exception("A valid due date (YYYY-MM-DD) is required for installment #$i.");
+                        }
+
+                        if ($prev_due_date !== null && $due < $prev_due_date) {
+                            throw new Exception("Due date for installment #$i ($due) cannot be earlier than installment #" . ($i - 1) . " ($prev_due_date).");
+                        }
+                        $prev_due_date = $due;
+
+                        $scheduled_pending_sum += $amt;
+                        $schedule_to_apply[$i] = [
+                            'type' => $existing ? 'update_pending' : 'insert_new',
+                            'existing_id' => $existing['id'] ?? null,
+                            'amount' => $amt,
+                            'due_date' => $due
+                        ];
+                    }
+                }
+
+                // 8. Financial invariant check: pending schedule must equal outstanding balance when scheduling installments
+                if (round($scheduled_pending_sum, 2) > round($outstanding_balance, 2)) {
+                    throw new Exception("Total scheduled pending installments (₹" . number_format($scheduled_pending_sum, 2) . ") cannot exceed the remaining outstanding balance (₹" . number_format($outstanding_balance, 2) . ").");
+                }
+                if ($new_count > 1 && $outstanding_balance > 0 && round($scheduled_pending_sum, 2) !== round($outstanding_balance, 2)) {
+                    throw new Exception("Total scheduled pending installments (₹" . number_format($scheduled_pending_sum, 2) . ") must exactly equal the remaining outstanding balance (₹" . number_format($outstanding_balance, 2) . ").");
+                }
+
+                // 9. Update users table columns
+                $stmt_u = $pdo->prepare("UPDATE users SET discount_amount = ?, total_fee = ?, payment_plan = ?, updated_at = NOW() WHERE user_id = ?");
+                $stmt_u->execute([$new_discount, $new_total_fee, $new_plan, $user_id]);
+
+                // 10. Reconcile removed future installments (where installment_number > new_count)
+                foreach ($existing_rows as $r) {
+                    $n = (int)$r['instalment_number'];
+                    if ($n > $new_count) {
+                        if (in_array($r['status'], ['approved', 'paid'], true) || !empty($r['paid_date'])) {
+                            throw new Exception("Cannot reduce plan term: Installment #$n has financial payment history.");
+                        }
+                        $delStmt = $pdo->prepare("DELETE FROM instalment_details WHERE id = ?");
+                        $delStmt->execute([$r['id']]);
+                    }
+                }
+
+                // 11. Reconcile scheduled installments (in-place updates or new inserts only; paid rows untouched)
+                foreach ($schedule_to_apply as $i => $data) {
+                    if ($data['type'] === 'update_pending') {
+                        $stmt_upd = $pdo->prepare("UPDATE instalment_details SET amount = ?, due_date = ?, updated_at = NOW() WHERE id = ?");
+                        $stmt_upd->execute([$data['amount'], $data['due_date'], $data['existing_id']]);
+                    } elseif ($data['type'] === 'insert_new') {
+                        $stmt_ins = $pdo->prepare("INSERT INTO instalment_details (user_id, instalment_number, amount, due_date, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', NOW(), NOW())");
+                        $stmt_ins->execute([$user_id, $i, $data['amount'], $data['due_date']]);
+                    }
+                    // 'preserve_paid' leaves existing row completely untouched
+                }
+
+                // 12. Pre-Commit Invariant Integrity Checks
+                $chk_dup = $pdo->prepare("SELECT COUNT(*), COUNT(DISTINCT instalment_number) FROM instalment_details WHERE user_id = ?");
+                $chk_dup->execute([$user_id]);
+                [$tot_insts, $dist_insts] = $chk_dup->fetch(PDO::FETCH_NUM);
+                if ($tot_insts !== $dist_insts) {
+                    throw new Exception("Integrity violation: Duplicate installment numbers detected after schedule update.");
+                }
+
+                $chk_paid = $pdo->prepare("SELECT COALESCE(SUM(COALESCE(paid_amount, amount)), 0) FROM instalment_details WHERE user_id = ? AND status IN ('approved', 'paid')");
+                $chk_paid->execute([$user_id]);
+                $post_approved_sum = (float)$chk_paid->fetchColumn();
+                if (round($post_approved_sum, 2) !== round($approved_collected, 2)) {
+                    throw new Exception("Integrity violation: Historical approved installment revenue was altered.");
+                }
+
+                // 13. Audit Logging
+                $changes = [];
+                if ($student_locked['payment_plan'] !== $new_plan) {
+                    $changes[] = "Plan: {$student_locked['payment_plan']} → $new_plan";
+                }
+                if ((float)$student_locked['discount_amount'] !== (float)$new_discount) {
+                    $changes[] = "Discount: ₹" . number_format($student_locked['discount_amount']) . " → ₹" . number_format($new_discount);
+                }
+                foreach ($schedule_to_apply as $num => $info) {
+                    if ($info['type'] === 'update_pending') {
+                        $orig = $existing_by_num[$num];
+                        if ((float)$orig['amount'] !== (float)$info['amount'] || $orig['due_date'] !== $info['due_date']) {
+                            $changes[] = "#$num (₹{$orig['amount']}, due {$orig['due_date']} → ₹{$info['amount']}, due {$info['due_date']})";
+                        }
+                    } elseif ($info['type'] === 'insert_new') {
+                        $changes[] = "#$num added (₹{$info['amount']}, due {$info['due_date']})";
+                    }
+                }
+                if (!empty($duplicates_pruned_audit)) {
+                    $changes = array_merge($changes, $duplicates_pruned_audit);
+                }
+                $change_str = empty($changes) ? 'Schedule verified without alterations' : implode('; ', $changes);
+
+                track_record($pdo, $user_id, 'installments_edited', "Installment schedule edited: $change_str. Net fee: ₹$new_total_fee", $admin_username);
+                log_admin_activity($pdo, $admin_username, 'installments_edited', "Edited installment schedule for student $user_id: $change_str");
+
+                $pdo->commit();
+
+                $message = 'Installment configuration updated successfully.';
+                $student = load_student($pdo, $user_id);
+            }
         } catch (Exception $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             error_log('Edit installments: ' . $e->getMessage());
@@ -755,11 +906,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'migra
             $stmt_insts->execute([$user_id]);
             $current_installments = $stmt_insts->fetchAll();
 
+            // Detect in-flight payment submissions awaiting review
+            foreach ($current_installments as $inst) {
+                if ($inst['status'] === 'pending' && !empty($inst['paid_date'])) {
+                    $inst_num = (int)$inst['instalment_number'];
+                    throw new Exception("Course migration cannot proceed while a payment is awaiting review for installment #{$inst_num}. Please approve or reject the submitted payment first.");
+                }
+            }
+
             $inst_paid = 0.0;
             $paid_count = 1; // Registration payment is installment #1
             $already_paid_data = [];
             foreach ($current_installments as $inst) {
-                if (in_array($inst['status'], ['approved', 'paid'], true) || !empty($inst['paid_date'])) {
+                if (in_array($inst['status'], ['approved', 'paid'], true)) {
                     $inst_paid += (float)($inst['paid_amount'] ?: $inst['amount']);
                     $paid_count++;
                     $already_paid_data[$inst['instalment_number']] = $inst;
@@ -891,6 +1050,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'migra
 
             $immediate_inserted_id = null;
             foreach ($new_installments_data as $num => $data) {
+                // If this installment was already paid in the past, its row with original ID and invoice link is preserved
+                if (isset($already_paid_data[$num])) {
+                    continue;
+                }
+
                 $ins->execute([
                     $user_id, $num, $data['amount'], $data['due_date'],
                     $data['status'], $data['paid_amount'], $data['paid_date'], $data['payment_reference'],
@@ -984,6 +1148,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'migra
                 if ($inv_ok && $inv_no) {
                     $invoice_note = " Invoice $inv_no generated.";
                 }
+            }
+
+            // Pre-Commit Invariant Integrity Checks
+            $chk_dup = $pdo->prepare("SELECT COUNT(*), COUNT(DISTINCT instalment_number) FROM instalment_details WHERE user_id = ?");
+            $chk_dup->execute([$user_id]);
+            [$tot_insts, $dist_insts] = $chk_dup->fetch(PDO::FETCH_NUM);
+            if ($tot_insts !== $dist_insts) {
+                throw new Exception("Integrity violation: Duplicate installment numbers detected after course migration.");
+            }
+
+            $chk_paid = $pdo->prepare("SELECT COALESCE(SUM(COALESCE(paid_amount, amount)), 0) FROM instalment_details WHERE user_id = ? AND status IN ('approved', 'paid')");
+            $chk_paid->execute([$user_id]);
+            $post_approved_sum = (float)$chk_paid->fetchColumn();
+            $expected_approved_sum = $inst_paid + ($immediate_payment ? $immediate_amount : 0.0);
+            if (round($post_approved_sum, 2) !== round($expected_approved_sum, 2)) {
+                throw new Exception("Integrity violation: Historical approved installment revenue was altered during course migration.");
             }
 
             $pdo->commit();
@@ -1753,8 +1933,26 @@ function generateEIFields() {
     var container = document.getElementById('ei-fields-container');
     container.innerHTML = '';
 
+    // Check for in-flight payment submissions awaiting review
+    var inFlightInst = EXISTING_INSTALLMENTS.find(inst => inst.status === 'pending' && inst.paid_date);
+    var submitBtn = document.querySelector('#edit-installments-form button[type="submit"]');
+
+    if (inFlightInst) {
+        if (submitBtn) submitBtn.disabled = true;
+        var alertDiv = document.createElement('div');
+        alertDiv.className = 'alert alert-danger';
+        alertDiv.style.cssText = 'margin-bottom:12px; font-size:0.82rem; line-height:1.4;';
+        alertDiv.innerHTML = '<i class="fas fa-triangle-exclamation"></i> <strong>Payment Awaiting Review:</strong> Installment #' + inFlightInst.instalment_number + ' has a submitted payment receipt awaiting admin verification. The schedule cannot be modified until this payment is approved or rejected.';
+        container.appendChild(alertDiv);
+    } else {
+        if (submitBtn) submitBtn.disabled = false;
+    }
+
     if (count <= 1) {
-        container.innerHTML = '<div style="font-size:0.8rem; color:var(--text-muted);">One-time payment plan. No future installments scheduled.</div>';
+        var emptyMsg = document.createElement('div');
+        emptyMsg.style.cssText = 'font-size:0.8rem; color:var(--text-muted);';
+        emptyMsg.innerText = 'One-time payment plan. No future installments scheduled.';
+        container.appendChild(emptyMsg);
         return;
     }
 
@@ -1763,7 +1961,16 @@ function generateEIFields() {
         var amt = existing ? parseFloat(existing.amount) : '';
         var due = existing ? existing.due_date : '';
         var status = existing ? existing.status : 'pending';
-        var isLocked = existing && (status === 'approved' || status === 'paid' || existing.paid_date);
+        var isApproved = existing && (status === 'approved' || status === 'paid');
+        var isInFlight = existing && status === 'pending' && existing.paid_date;
+        var isLocked = isApproved || isInFlight;
+
+        var statusBadge = '<span class="badge gray">Pending</span>';
+        if (isApproved) {
+            statusBadge = '<span class="badge green">Paid</span>';
+        } else if (isInFlight) {
+            statusBadge = '<span class="badge amber" style="background:#fef3c7; color:#92400e; border:1px solid #fcd34d;">Review Req.</span>';
+        }
 
         var row = document.createElement('div');
         row.style.display = 'flex';
@@ -1779,7 +1986,7 @@ function generateEIFields() {
                 <input type="date" name="inst_${i}_due_date" value="${due}" required class="form-input" style="padding:6px 10px;" ${isLocked ? 'readonly style="background:var(--gray-100); color:var(--text-muted);"' : ''}>
             </div>
             <div style="width:80px; font-size:0.75rem; text-align:right; font-weight:700;">
-                ${isLocked ? '<span class="badge green">Paid</span>' : '<span class="badge gray">Pending</span>'}
+                ${statusBadge}
             </div>
         `;
         container.appendChild(row);
@@ -2326,6 +2533,27 @@ var MC_EXISTING_INSTALLMENTS = <?php echo json_encode($installments, JSON_HEX_TA
 var MC_CURRENT_PLAN = <?php echo json_encode($student['payment_plan'] ?: 'One Time'); ?>;
 
 function openMigrateCourseModal() {
+    // Detect in-flight payment submissions awaiting review
+    var inFlightInst = MC_EXISTING_INSTALLMENTS.find(inst => inst.status === 'pending' && inst.paid_date);
+    var submitBtn = document.querySelector('#migrate-course-form button[type="submit"]');
+    var alertEl = document.getElementById('mc-inflight-alert');
+    if (inFlightInst) {
+        if (!alertEl) {
+            alertEl = document.createElement('div');
+            alertEl.id = 'mc-inflight-alert';
+            alertEl.className = 'alert alert-danger';
+            alertEl.style.cssText = 'margin-bottom:12px; font-size:0.82rem; line-height:1.4;';
+            var modalBody = document.querySelector('#migrate-course-modal .modal-body');
+            if (modalBody) modalBody.insertBefore(alertEl, modalBody.firstChild);
+        }
+        alertEl.innerHTML = '<i class="fas fa-triangle-exclamation"></i> <strong>Payment Awaiting Review:</strong> Installment #' + inFlightInst.instalment_number + ' has a submitted payment receipt awaiting admin verification. Course migration cannot proceed until this payment is approved or rejected.';
+        alertEl.style.display = 'block';
+        if (submitBtn) submitBtn.disabled = true;
+    } else {
+        if (alertEl) alertEl.style.display = 'none';
+        if (submitBtn) submitBtn.disabled = false;
+    }
+
     document.getElementById('mc-target-course').value = '';
     document.getElementById('mc-target-fee').value = '';
     document.getElementById('mc-upgrade-diff').value = '';
