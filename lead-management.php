@@ -2,6 +2,7 @@
 require_once 'includes/auth.php';
 require_permission('leads');
 require_once 'includes/template_helper.php';
+require_once 'includes/lead_helper.php';
 
 /* Lead Management (CRM).
    Capture and work prospective students before they register. Super Admin and
@@ -543,45 +544,97 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $status_changed = ($selected_status !== '' && $selected_status !== $lead['status'] && isset($LEAD_STATUSES[$selected_status]));
                             $new_status = $status_changed ? $selected_status : $lead['status'];
 
-                            if ($status_changed) {
-                                $upd = $pdo->prepare("UPDATE leads SET status = ?, updated_at = NOW(), last_activity_at = NOW() WHERE id = ?");
-                                $upd->execute([$new_status, $lead_id]);
+                            // Optional next follow-up date (Correction 2, 3, 5, 6)
+                            $raw_followup = isset($_POST['next_followup_date']) ? trim((string)$_POST['next_followup_date']) : '';
+                            $current_db_date = $lead['next_followup_date'] ?: null; // DB date is strictly authoritative
+                            $followup_changed = false;
+
+                            if ($raw_followup !== '') {
+                                $parsed_followup = parse_lead_followup_date($raw_followup);
+                                if ($parsed_followup === false) {
+                                    // Case D: Malformed/impossible date -> reject request and rollback
+                                    $pdo->rollBack();
+                                    $error_message = 'Invalid follow-up date format. Please use a valid calendar date.';
+                                    if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+                                        header('Content-Type: application/json; charset=UTF-8');
+                                        http_response_code(422);
+                                        echo json_encode(['success' => false, 'error' => $error_message]);
+                                        exit;
+                                    }
+                                } else {
+                                    // Case C: Admin entered a new date
+                                    $effective_followup = $parsed_followup;
+                                    $followup_changed = ($effective_followup !== $current_db_date);
+                                }
                             } else {
-                                $upd = $pdo->prepare("UPDATE leads SET last_activity_at = NOW() WHERE id = ?");
-                                $upd->execute([$lead_id]);
+                                // Blank submitted date:
+                                // Case A: Existing DB date is preserved
+                                // Case B: If DB date is NULL, it remains NULL
+                                $effective_followup = $current_db_date;
+                                $followup_changed = false;
                             }
 
-                            // Activity entry (reusing existing lead_activity table, zero schema alterations)
-                            $act_type = ($contact_type === 'Called') ? 'contact_called' : 'contact_texted';
-                            $act_old = $status_changed ? $lead['status'] : null;
-                            $act_new = $status_changed ? $new_status : null;
-                            $act_remark = ($remark !== '') ? $remark : null;
+                            if (empty($error_message)) {
+                                // Active lead follow-up rule (Correction 5)
+                                $is_new_status_closed = in_array($new_status, $CLOSED, true);
+                                if (!$is_new_status_closed && empty($effective_followup)) {
+                                    $pdo->rollBack();
+                                    $error_message = 'A next follow-up date is required for active leads.';
+                                    if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+                                        header('Content-Type: application/json; charset=UTF-8');
+                                        http_response_code(422);
+                                        echo json_encode(['success' => false, 'error' => $error_message]);
+                                        exit;
+                                    }
+                                } else {
+                                    if ($status_changed || $followup_changed) {
+                                        $upd = $pdo->prepare("UPDATE leads SET status = ?, next_followup_date = ?, updated_at = NOW(), last_activity_at = NOW() WHERE id = ?");
+                                        $upd->execute([$new_status, $effective_followup ?: null, $lead_id]);
+                                    } else {
+                                        $upd = $pdo->prepare("UPDATE leads SET last_activity_at = NOW() WHERE id = ?");
+                                        $upd->execute([$lead_id]);
+                                    }
 
-                            $ins = $pdo->prepare("
-                                INSERT INTO lead_activity (lead_id, activity_type, remark, old_status, new_status, followup_date, performed_by, performed_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
-                            ");
-                            $ins->execute([
-                                $lead_id,
-                                $act_type,
-                                $act_remark,
-                                $act_old,
-                                $act_new,
-                                $lead['next_followup_date'] ?: null,
-                                $admin_username
-                            ]);
+                                    // Activity entry (reusing existing lead_activity table, zero schema alterations)
+                                    $act_type = ($contact_type === 'Called') ? 'contact_called' : 'contact_texted';
+                                    $act_old = $status_changed ? $lead['status'] : null;
+                                    $act_new = $status_changed ? $new_status : null;
+                                    $act_remark = ($remark !== '') ? $remark : null;
 
-                            // Atomic commit (Correction 2)
-                            $pdo->commit();
+                                    $ins = $pdo->prepare("
+                                        INSERT INTO lead_activity (lead_id, activity_type, remark, old_status, new_status, followup_date, performed_by, performed_at)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                                    ");
+                                    $ins->execute([
+                                        $lead_id,
+                                        $act_type,
+                                        $act_remark,
+                                        $act_old,
+                                        $act_new,
+                                        $effective_followup ?: null, // Correction 6: Effective date recorded in activity
+                                        $admin_username
+                                    ]);
 
-                            log_admin_activity($pdo, $admin_username, 'lead_instant_contact', "Lead #{$lead_id} ({$lead['whatsapp_number']}) contacted via {$contact_type}");
+                                    // Atomic commit (Correction 2 & 4)
+                                    $pdo->commit();
 
-                            if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
-                                header('Content-Type: application/json; charset=UTF-8');
-                                echo json_encode(['success' => true, 'message' => "Contact recorded: {$contact_type}"]);
-                                exit;
+                                    log_admin_activity($pdo, $admin_username, 'lead_instant_contact', "Lead #{$lead_id} ({$lead['whatsapp_number']}) contacted via {$contact_type}");
+
+                                    if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+                                        header('Content-Type: application/json; charset=UTF-8');
+                                        echo json_encode([
+                                            'success' => true,
+                                            'message' => "Contact recorded: {$contact_type}",
+                                            'lead_id' => $lead_id,
+                                            'next_followup_date' => $effective_followup ?: null,
+                                            'status' => $new_status,
+                                            'status_label' => $LEAD_STATUSES[$new_status][0] ?? $new_status
+                                        ]);
+                                        exit;
+                                    }
+                                    $success_message = "Contact recorded successfully: {$contact_type}." . ($followup_changed && $effective_followup ? " Next follow-up updated to " . date('d M Y', strtotime($effective_followup)) . "." : "");
+                                }
                             }
-                            $success_message = "Contact recorded successfully: {$contact_type}.";
                         }
                     } catch (Exception $ex) {
                         if ($pdo->inTransaction()) {
@@ -1779,7 +1832,7 @@ include 'includes/admin_nav.php';
                             </button>
                         <?php endif; ?>
                         <button type="button" class="btn btn-sm btn-outline btn-instant-contact" 
-                                onclick="openInstantContactModal(<?php echo (int)$l['id']; ?>, '<?php echo e(addslashes($l['name'] ?: 'Unknown')); ?>', '<?php echo e($l['status']); ?>', '<?php echo e(addslashes($LEAD_STATUSES[$l['status']][0] ?? $l['status'])); ?>')" 
+                                onclick="openInstantContactModal(<?php echo (int)$l['id']; ?>, '<?php echo e(addslashes($l['name'] ?: 'Unknown')); ?>', '<?php echo e($l['status']); ?>', '<?php echo e(addslashes($LEAD_STATUSES[$l['status']][0] ?? $l['status'])); ?>', '<?php echo e($l['next_followup_date'] ?? ''); ?>')" 
                                 title="Instant Contact Update" 
                                 style="color:#16a34a; border-color:#bbf7d0; background:#f0fdf4; padding:4px 8px; margin-right:4px;">
                             <i class="fas fa-check"></i>
@@ -2250,7 +2303,7 @@ include 'includes/admin_nav.php';
                             </button>
                         <?php endif; ?>
                         <button type="button" class="btn btn-sm btn-outline btn-instant-contact" 
-                                onclick="openInstantContactModal(<?php echo (int)$l['id']; ?>, '<?php echo e(addslashes($l['name'] ?: 'Unknown')); ?>', '<?php echo e($l['status']); ?>', '<?php echo e(addslashes($LEAD_STATUSES[$l['status']][0] ?? $l['status'])); ?>')" 
+                                onclick="openInstantContactModal(<?php echo (int)$l['id']; ?>, '<?php echo e(addslashes($l['name'] ?: 'Unknown')); ?>', '<?php echo e($l['status']); ?>', '<?php echo e(addslashes($LEAD_STATUSES[$l['status']][0] ?? $l['status'])); ?>', '<?php echo e($l['next_followup_date'] ?? ''); ?>')" 
                                 title="Instant Contact Update" 
                                 style="color:#16a34a; border-color:#bbf7d0; background:#f0fdf4; padding:4px 8px; margin-right:4px;">
                             <i class="fas fa-check"></i>
@@ -2644,6 +2697,17 @@ ob_start();
                     <span style="font-size:0.75rem; color:#64748b; margin-top:3px; display:block;">Pre-selected to current status. Status updates only if you pick a different status.</span>
                 </div>
 
+                <!-- Next Follow-up Date (Optional) -->
+                <div class="field" style="margin-bottom:14px;">
+                    <label style="font-size:0.82rem; font-weight:700; color:#334155; margin-bottom:4px; display:flex; justify-content:space-between; align-items:center;">
+                        <span>Next Follow-up Date <span style="font-weight:400; color:#64748b; font-size:0.78rem;">(Optional)</span></span>
+                        <span id="ic-followup-hint" style="font-weight:400; color:#64748b; font-size:0.75rem;"></span>
+                    </label>
+                    <input type="date" name="next_followup_date" id="ic-next-followup-date" style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; background:#fff; color:#1e293b;">
+                    <input type="hidden" name="initial_followup_date" id="ic-initial-followup-date" value="">
+                    <span style="font-size:0.75rem; color:#64748b; margin-top:3px; display:block;">Leave unchanged or blank to preserve existing date.</span>
+                </div>
+
                 <!-- Quick Remarks Badges -->
                 <div style="margin-bottom:12px;">
                     <label style="font-size:0.82rem; font-weight:700; color:#334155; margin-bottom:6px; display:block;">Quick Remarks</label>
@@ -2979,16 +3043,26 @@ function closeEditConvertedByModal() {
     if (modal) modal.style.display = 'none';
 }
 
-function openInstantContactModal(leadId, leadName, currentStatus, statusLabel) {
+function openInstantContactModal(leadId, leadName, currentStatus, statusLabel, currentFollowupDate) {
     var idInput = document.getElementById('ic-lead-id');
     var nameSpan = document.getElementById('ic-lead-name');
     var remarkText = document.getElementById('ic-remark-text');
     var statusSelect = document.getElementById('ic-status-select');
+    var fuInput = document.getElementById('ic-next-followup-date');
+    var fuInitial = document.getElementById('ic-initial-followup-date');
+    var fuHint = document.getElementById('ic-followup-hint');
 
     if (idInput) idInput.value = leadId;
     if (nameSpan) nameSpan.textContent = leadName;
     if (remarkText) remarkText.value = '';
     if (statusSelect) statusSelect.value = currentStatus;
+
+    var fuVal = currentFollowupDate || '';
+    if (fuInput) fuInput.value = fuVal;
+    if (fuInitial) fuInitial.value = fuVal;
+    if (fuHint) {
+        fuHint.textContent = fuVal ? ('Current: ' + fuVal) : 'No follow-up set';
+    }
 
     // Reset to step 1
     var step1 = document.getElementById('ic-step-1');

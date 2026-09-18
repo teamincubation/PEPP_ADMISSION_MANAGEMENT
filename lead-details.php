@@ -1,6 +1,7 @@
 <?php
 require_once 'includes/auth.php';
 require_permission('leads');
+require_once 'includes/lead_helper.php';
 
 /* Lead detail - full history of one lead with every remark, follow-up and
    status change (who did it and when), plus the update form. */
@@ -190,6 +191,80 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                     }
                 }
+            } elseif ($action === 'quick_update_followup') {
+                // Non-super admins may only edit leads assigned to them or __ALL__ (Correction 7)
+                if (!is_super_admin() && $lead['assigned_to'] !== $admin_username && $lead['assigned_to'] !== '__ALL__') {
+                    $error_message = 'You do not have permission to update this lead.';
+                    if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+                        header('Content-Type: application/json; charset=UTF-8');
+                        http_response_code(403);
+                        echo json_encode(['success' => false, 'error' => $error_message]);
+                        exit();
+                    }
+                } else {
+                    $raw_followup = isset($_POST['next_followup_date']) ? trim((string)$_POST['next_followup_date']) : '';
+                    $parsed_followup = parse_lead_followup_date($raw_followup);
+                    $is_closed = in_array($lead['status'], $CLOSED, true);
+
+                    if ($raw_followup !== '' && $parsed_followup === false) {
+                        $error_message = 'Invalid follow-up date format. Please use a valid calendar date.';
+                        if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+                            header('Content-Type: application/json; charset=UTF-8');
+                            http_response_code(422);
+                            echo json_encode(['success' => false, 'error' => $error_message]);
+                            exit();
+                        }
+                    } elseif (!$is_closed && empty($parsed_followup)) {
+                        $error_message = 'A next follow-up date is required until the lead is converted or rejected.';
+                        if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+                            header('Content-Type: application/json; charset=UTF-8');
+                            http_response_code(422);
+                            echo json_encode(['success' => false, 'error' => $error_message]);
+                            exit();
+                        }
+                    } else {
+                        $old_date = $lead['next_followup_date'];
+                        $new_date = $parsed_followup;
+
+                        if ($new_date !== $old_date) {
+                            $pdo->prepare("UPDATE leads SET next_followup_date = ?, updated_at = NOW(), last_activity_at = NOW() WHERE id = ?")
+                                ->execute([$new_date ?: null, $lead_id]);
+
+                            $old_label = $old_date ? date('d M Y', strtotime($old_date)) : 'None';
+                            $new_label = $new_date ? date('d M Y', strtotime($new_date)) : 'None';
+                            $remark = "Follow-up date changed: {$old_label} → {$new_label}";
+
+                            lead_log($pdo, $lead_id, 'followup', $remark, null, null, $new_date ?: null, $admin_username);
+                            log_admin_activity($pdo, $admin_username, 'lead_followup_updated', "Lead #{$lead_id} follow-up date changed: {$old_label} → {$new_label}");
+                        }
+
+                        $lead = load_lead($pdo, $lead_id);
+                        $overdue = $lead['next_followup_date'] && $lead['next_followup_date'] < date('Y-m-d') && !$is_closed;
+
+                        if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+                            $badge_html = '-';
+                            if ($is_closed) {
+                                $badge_html = '-';
+                            } elseif ($lead['next_followup_date']) {
+                                $badge_color = $overdue ? 'red' : 'amber';
+                                $badge_text = date('d M Y', strtotime($lead['next_followup_date'])) . ($overdue ? ' · overdue' : '');
+                                $badge_html = '<span class="badge ' . $badge_color . '">' . htmlspecialchars($badge_text) . '</span>';
+                            }
+                            header('Content-Type: application/json; charset=UTF-8');
+                            echo json_encode([
+                                'success' => true,
+                                'message' => 'Next follow-up date updated.',
+                                'lead_id' => $lead_id,
+                                'next_followup_date' => $lead['next_followup_date'],
+                                'formatted_date' => $lead['next_followup_date'] ? date('d M Y', strtotime($lead['next_followup_date'])) : '-',
+                                'is_overdue' => $overdue,
+                                'badge_html' => $badge_html
+                            ]);
+                            exit();
+                        }
+                        $success_message = 'Next follow-up date updated.';
+                    }
+                }
             } elseif ($action === 'delete_lead') {
                 if (!is_super_admin()) {
                     $error_message = 'Only the Super Admin can delete a lead.';
@@ -266,11 +341,18 @@ include 'includes/admin_nav.php';
                 <div class="detail-list" style="margin-bottom:14px;">
                     <div class="detail-row"><div class="dl">WhatsApp</div><div class="dv"><?php echo format_credential($lead['whatsapp_number'], 'phone', 'leads'); ?></div></div>
                     <div class="detail-row"><div class="dl">Follow-ups done</div><div class="dv"><?php echo (int)$lead['followup_count']; ?></div></div>
-                    <div class="detail-row"><div class="dl">Next follow-up</div><div class="dv">
-                        <?php if ($is_closed): ?>-
-                        <?php elseif ($lead['next_followup_date']): ?>
-                            <span class="badge <?php echo $overdue ? 'red' : 'amber'; ?>"><?php echo date('d M Y', strtotime($lead['next_followup_date'])); ?><?php echo $overdue ? ' · overdue' : ''; ?></span>
-                        <?php else: ?>-<?php endif; ?>
+                    <div class="detail-row"><div class="dl">Next follow-up</div><div class="dv" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                        <span id="top-fu-display">
+                            <?php if ($is_closed): ?>-
+                            <?php elseif ($lead['next_followup_date']): ?>
+                                <span class="badge <?php echo $overdue ? 'red' : 'amber'; ?>"><?php echo date('d M Y', strtotime($lead['next_followup_date'])); ?><?php echo $overdue ? ' · overdue' : ''; ?></span>
+                            <?php else: ?>-<?php endif; ?>
+                        </span>
+                        <?php if (!$is_closed): ?>
+                            <button type="button" class="btn btn-sm btn-outline" onclick="openQuickFollowupModal()" title="Edit next follow-up date" style="padding:2px 8px; font-size:0.75rem; border-radius:6px; display:inline-flex; align-items:center; gap:4px;">
+                                <i class="fas fa-pen"></i> Edit
+                            </button>
+                        <?php endif; ?>
                     </div></div>
                     <div class="detail-row"><div class="dl">Assigned to</div><div class="dv"><?php echo $lead['assigned_to'] === '__ALL__' ? 'All Admins' : e($lead['assigned_to'] ?: '-'); ?></div></div>
                     <div class="detail-row"><div class="dl">Source</div><div class="dv"><?php echo e(ucfirst($lead['source'])); ?></div></div>
@@ -454,7 +536,7 @@ include 'includes/admin_nav.php';
                                 <span class="badge <?php echo $LEAD_STATUSES[$t['new_status']][1] ?? 'gray'; ?>"><?php echo $LEAD_STATUSES[$t['new_status']][0] ?? $t['new_status']; ?></span>
                             </div>
                         <?php elseif ($t['activity_type'] === 'followup'): ?>
-                            <div class="tl-title">Follow-up done</div>
+                            <div class="tl-title"><?php echo ($t['remark'] && stripos($t['remark'], 'Follow-up date') !== false) ? 'Follow-up date changed' : 'Follow-up done'; ?></div>
                         <?php elseif ($t['activity_type'] === 'created'): ?>
                             <div class="tl-title">Lead created</div>
                         <?php elseif ($t['activity_type'] === 'reassigned'): ?>
@@ -519,6 +601,33 @@ include 'includes/admin_nav.php';
 </div>
 <?php endif; ?>
 
+<?php if (!$is_closed): ?>
+<!-- ── QUICK EDIT NEXT FOLLOW-UP MODAL ── -->
+<div id="quick-followup-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); align-items:center; justify-content:center; z-index:9999; backdrop-filter:blur(2px);">
+    <div style="background:#fff; border-radius:16px; width:100%; max-width:380px; padding:20px 24px; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1); margin:16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; border-bottom:1px solid #e2e8f0; padding-bottom:10px;">
+            <h4 style="margin:0; font-size:0.95rem; font-weight:700; color:#1e293b; display:flex; align-items:center; gap:6px;">
+                <i class="fas fa-calendar-alt" style="color:var(--accent);"></i> Next Follow-up Date
+            </h4>
+            <button type="button" onclick="closeQuickFollowupModal()" style="background:none; border:none; font-size:1.4rem; cursor:pointer; color:#94a3b8; line-height:1;">&times;</button>
+        </div>
+        <form id="quick-followup-form" method="POST" onsubmit="submitQuickFollowup(event)" style="margin:0;">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="quick_update_followup">
+            <div style="margin-bottom:14px;">
+                <label style="font-size:0.82rem; font-weight:700; color:#334155; margin-bottom:6px; display:block;">Follow-up Date <span class="req">*</span></label>
+                <input type="date" name="next_followup_date" id="quick-fu-input" value="<?php echo e($lead['next_followup_date']); ?>" required style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.88rem;">
+                <div id="quick-fu-error" style="display:none; font-size:0.78rem; color:#ef4444; margin-top:5px;"></div>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button type="button" onclick="closeQuickFollowupModal()" class="btn btn-sm btn-outline">Cancel</button>
+                <button type="submit" class="btn btn-sm btn-primary" id="quick-fu-submit-btn"><i class="fas fa-floppy-disk"></i> Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+<?php endif; ?>
+
 <style>
 .lead-timeline { position: relative; }
 .tl-item { display: flex; gap: 12px; padding-bottom: 16px; position: relative; }
@@ -533,7 +642,9 @@ include 'includes/admin_nav.php';
 </style>
 
 <?php
-$extra_scripts = "<script>
+ob_start();
+?>
+<script>
 function toggleFU() {
     var s = document.getElementById('status-sel').value;
     var closed = ['converted','rejected','not_interested'].indexOf(s) !== -1;
@@ -551,6 +662,71 @@ function closeEditConvertedByModal() {
     var modal = document.getElementById('edit-converted-by-modal');
     if (modal) modal.style.display = 'none';
 }
-</script>";
+
+function openQuickFollowupModal() {
+    var modal = document.getElementById('quick-followup-modal');
+    var input = document.getElementById('quick-fu-input');
+    var lowerInput = document.getElementById('fu-date');
+    if (input && lowerInput) {
+        input.value = lowerInput.value;
+    }
+    var err = document.getElementById('quick-fu-error');
+    if (err) { err.style.display = 'none'; err.textContent = ''; }
+    if (modal) modal.style.display = 'flex';
+}
+
+function closeQuickFollowupModal() {
+    var modal = document.getElementById('quick-followup-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+function submitQuickFollowup(e) {
+    e.preventDefault();
+    var form = document.getElementById('quick-followup-form');
+    var input = document.getElementById('quick-fu-input');
+    var err = document.getElementById('quick-fu-error');
+    var submitBtn = document.getElementById('quick-fu-submit-btn');
+
+    if (!input || !input.value) {
+        if (err) { err.textContent = 'Please select a date.'; err.style.display = 'block'; }
+        return;
+    }
+
+    var fd = new FormData(form);
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...'; }
+
+    fetch('lead-details.php?id=<?php echo (int)$lead_id; ?>', {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body: fd
+    })
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<i class="fas fa-floppy-disk"></i> Save'; }
+        if (data.success) {
+            var topDisplay = document.getElementById('top-fu-display');
+            if (topDisplay && data.badge_html) {
+                topDisplay.innerHTML = data.badge_html;
+            }
+            var lowerInput = document.getElementById('fu-date');
+            if (lowerInput && data.next_followup_date) {
+                lowerInput.value = data.next_followup_date;
+            }
+            closeQuickFollowupModal();
+        } else {
+            if (err) {
+                err.textContent = data.error || 'Failed to update follow-up date.';
+                err.style.display = 'block';
+            }
+        }
+    })
+    .catch(function(error) {
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<i class="fas fa-floppy-disk"></i> Save'; }
+        form.submit();
+    });
+}
+</script>
+<?php
+$extra_scripts = ob_get_clean();
 include 'includes/admin_footer.php';
 ?>
