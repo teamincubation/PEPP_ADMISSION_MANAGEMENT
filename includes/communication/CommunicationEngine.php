@@ -416,9 +416,49 @@ class CommunicationEngine {
                 'alumni_verification_completed',
                 'alumni_referral_code_generated',
                 'referral_earning_credited',
-                'referral_payout_sent'
+                'referral_payout_sent',
+                'course_access_suspended',
+                'installment_payment_confirmed',
+                'payment_approved',
+                'payment_receipt_received',
+                'installment_payment_due'
             ];
+
+            // Specific event identifiers exempted from 'suspended' status cancellation
+            $suspended_exempt_events = [
+                'course_access_suspended',
+                'installment_overdue',
+                'installment_payment_confirmed',
+                'payment_confirmation',
+                'payment_approved',
+                'invoice_email',
+                'payment_receipt_received',
+                'payment_receipt',
+                'installment_payment_due',
+                'installment_reminder'
+            ];
+
             $eventName = strtolower(trim((string)($item['event_name'] ?? '')));
+
+            // Conservative subject-based fallback for legacy queue items where event_name is empty
+            if ($eventName === '' && !empty($item['subject'])) {
+                $subj = $item['subject'];
+                if (stripos($subj, 'Course Access Suspended') !== false) {
+                    $eventName = 'course_access_suspended';
+                } elseif (stripos($subj, 'Installment Payment Confirmed') !== false ||
+                          (stripos($subj, 'Payment Approved') !== false && stripos($subj, 'Installment') !== false)) {
+                    $eventName = 'installment_payment_confirmed';
+                } elseif (stripos($subj, 'Payment Confirmed - Invoice') !== false) {
+                    $eventName = 'payment_approved';
+                } elseif (stripos($subj, 'Payment Receipt Received') !== false) {
+                    $eventName = 'payment_receipt_received';
+                } elseif (stripos($subj, 'Installment Payment Due') !== false ||
+                          stripos($subj, 'Upcoming Installment Payment Reminder') !== false ||
+                          (stripos($subj, 'Installment') !== false && (stripos($subj, 'Due Today') !== false || stripos($subj, 'Due in 3 Days') !== false || stripos($subj, 'Due Tomorrow') !== false))) {
+                    $eventName = 'installment_payment_due';
+                }
+            }
+
             $isTransactional = in_array($eventName, $transactional_events, true)
                 || strpos($eventName, 'installment_') === 0
                 || strpos($eventName, 'payment_') === 0
@@ -434,20 +474,42 @@ class CommunicationEngine {
                 || strpos($eventName, 'alumni_') === 0
                 || strpos($eventName, 'referral_') === 0;
 
-            if (!$isTransactional) {
-                $recipientIdent = !empty($item['student_uid']) ? $item['student_uid'] : $item['recipient'];
-                require_once __DIR__ . '/../auth.php';
-                $st_status = get_student_status($this->pdo, $recipientIdent);
+            $isSuspendedExempt = in_array($eventName, $suspended_exempt_events, true);
 
-                // If recipient is a student in the users table and is not strictly active -> cancel
-                if ($st_status !== 'unknown' && !is_student_active($this->pdo, $recipientIdent)) {
-                    $reason = get_student_status_reason($this->pdo, $recipientIdent, $st_status);
-                    $cancelMsg = "Non-transactional communication skipped: student status is '{$st_status}'" . ($reason ? " (Reason: {$reason})" : "");
-                    $cancelStmt = $this->pdo->prepare("UPDATE communication_queue SET status = 'cancelled', error_message = ?, updated_at = NOW() WHERE id = ?");
-                    $cancelStmt->execute([$cancelMsg, $queueId]);
-                    error_log("[COMMUNICATION_CANCELLED] queue_id={$queueId} recipient={$recipientIdent} event={$eventName} status={$st_status}");
-                    $this->pdo->commit();
-                    return false;
+            $recipientIdent = !empty($item['student_uid']) ? $item['student_uid'] : $item['recipient'];
+            require_once __DIR__ . '/../auth.php';
+            $st_status = get_student_status($this->pdo, $recipientIdent);
+
+            // Guard against non-active students
+            if ($st_status !== 'unknown' && !is_student_active($this->pdo, $recipientIdent)) {
+                if ($st_status === 'suspended') {
+                    // Suspended student guard:
+                    // Must satisfy BOTH requirements:
+                    // A. Transactional / event-driven
+                    // B. One of the five specifically exempted events
+                    if ($isTransactional && $isSuspendedExempt) {
+                        // Exempted: allow dispatch to proceed for suspended student
+                    } else {
+                        $reason = get_student_status_reason($this->pdo, $recipientIdent, $st_status);
+                        $cancelMsg = "Non-transactional communication skipped: student status is 'suspended'" . ($reason ? " (Reason: {$reason})" : "");
+                        $cancelStmt = $this->pdo->prepare("UPDATE communication_queue SET status = 'cancelled', error_message = ?, updated_at = NOW() WHERE id = ?");
+                        $cancelStmt->execute([$cancelMsg, $queueId]);
+                        error_log("[COMMUNICATION_CANCELLED] queue_id={$queueId} recipient={$recipientIdent} event={$eventName} status={$st_status}");
+                        $this->pdo->commit();
+                        return false;
+                    }
+                } else {
+                    // For other non-active statuses (e.g. 'rejected', 'dropped', 'inactive'):
+                    // Existing behavior: skip non-transactional communications
+                    if (!$isTransactional) {
+                        $reason = get_student_status_reason($this->pdo, $recipientIdent, $st_status);
+                        $cancelMsg = "Non-transactional communication skipped: student status is '{$st_status}'" . ($reason ? " (Reason: {$reason})" : "");
+                        $cancelStmt = $this->pdo->prepare("UPDATE communication_queue SET status = 'cancelled', error_message = ?, updated_at = NOW() WHERE id = ?");
+                        $cancelStmt->execute([$cancelMsg, $queueId]);
+                        error_log("[COMMUNICATION_CANCELLED] queue_id={$queueId} recipient={$recipientIdent} event={$eventName} status={$st_status}");
+                        $this->pdo->commit();
+                        return false;
+                    }
                 }
             }
 

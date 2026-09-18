@@ -219,7 +219,8 @@ function send_installment_reminder_email($pdo, $inst, $window) {
     }
 
     if ($subject && $heading && $message_html) {
-        return peppian_send_email_general($to_email, $subject, $heading, $message_html, false);
+        $cronEventName = ($window === 'overdue') ? 'course_access_suspended' : 'installment_payment_due';
+        return peppian_send_email_general($to_email, $subject, $heading, $message_html, false, $cronEventName, $inst['user_id']);
     }
     return false;
 }

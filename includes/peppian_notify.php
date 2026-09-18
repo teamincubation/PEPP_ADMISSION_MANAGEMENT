@@ -99,7 +99,7 @@ function peppian_send_email($to_email, $subject_text, $heading, $body_html, $cc_
 }
 
 /** General branded HTML email notification sender */
-function peppian_send_email_general($to_email, $subject_text, $heading, $body_html, $cc_admin = false) {
+function peppian_send_email_general($to_email, $subject_text, $heading, $body_html, $cc_admin = false, $eventName = null, $studentUid = null) {
     require_once __DIR__ . '/mailer.php';
 
     if (!$to_email || !filter_var($to_email, FILTER_VALIDATE_EMAIL)) {
@@ -128,9 +128,9 @@ function peppian_send_email_general($to_email, $subject_text, $heading, $body_ht
     $text = strip_tags(str_replace(['<br>', '</p>', '</div>'], "\n", $heading . "\n\n" . $body_html));
 
     try {
-        $result = pepp_mail($to_email, $subject, $html, $text);
+        $result = pepp_mail($to_email, $subject, $html, $text, [], '', '', $eventName, $studentUid);
         if ($cc_admin) {
-            pepp_mail(PEPP_ADMIN_NOTIFY_EMAIL, $subject, $html, $text);
+            pepp_mail(PEPP_ADMIN_NOTIFY_EMAIL, $subject, $html, $text, [], '', '', $eventName, $studentUid);
         }
         return $result;
     } catch (Exception $e) {

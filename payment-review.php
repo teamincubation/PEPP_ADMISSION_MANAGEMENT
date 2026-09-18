@@ -137,6 +137,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $stmt->execute([$next_due_date, $req['user_id'], $req['instalment_number']]);
                 }
 
+                // 4. Automatic reactivation if student is suspended and access date is valid
+                require_once __DIR__ . '/includes/student_access_helper.php';
+                reactivate_student_if_access_valid($pdo, $req['user_id'], $admin_username, 'Access valid after installment payment approval');
+
                 $pdo->commit();
 
                 status_log($pdo, $req['user_id'], 'payment_pending', 'payment_approved',
@@ -181,9 +185,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         try {
                             require_once 'includes/communication/CommunicationEngine.php';
                             $engine = CommunicationEngine::getInstance($pdo);
+                            $wa_phone = preg_replace('/\D/', '', ($req['whatsapp_country_code'] ?? '91') . ($req['whatsapp_number'] ?? ''));
                             
-                            $inst_num_raw = (int)($req['instalment_number'] ?? 1);
-                            $inst_num_str = ($inst_num_raw === 1) ? '1st' : (($inst_num_raw === 2) ? '2nd' : (($inst_num_raw === 3) ? '3rd' : ($inst_num_raw . 'th')));
+                            $inst_num_str = (int)$req['instalment_number'] === 1 ? '1st' : ((int)$req['instalment_number'] === 2 ? '2nd' : ((int)$req['instalment_number'] === 3 ? '3rd' : $req['instalment_number'] . 'th'));
 
                             $context = [
                                 'student_uid'        => $req['user_id'],
@@ -232,7 +236,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                  </div>
                                  <p>Your updated invoice has been generated and emailed. You can access all your learning resources and study modules as usual.</p>
                                  <p>Keep up the good work and keep learning!</p>";
-                        peppian_send_email_general($req['student_email'], $subj, $head, $body);
+                        peppian_send_email_general($req['student_email'], $subj, $head, $body, false, 'installment_payment_confirmed', $req['user_id']);
                     } catch (Exception $mailEx) {
                         error_log("Failed to send installment approval email: " . $mailEx->getMessage());
                     }

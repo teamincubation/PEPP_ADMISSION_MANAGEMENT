@@ -257,7 +257,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                      <p>We have successfully received your payment receipt submission for installment <strong>#{$inst_info['instalment_number']}</strong> (Amount: <strong>₹{$amt_f}</strong>) for your course <strong>{$std_info['pepp_course']}</strong>.</p>
                                      <p>Our accounts desk is currently reviewing your payment reference and document. Once verified and approved, you will receive a confirmation email along with your generated invoice.</p>
                                      <p>Thank you for choosing PEPP Learning!</p>";
-                            peppian_send_email_general($std_info['email'], $subj, $head, $body);
+                            peppian_send_email_general($std_info['email'], $subj, $head, $body, false, 'payment_receipt_received', $user_id);
                         }
                     }
                 } catch (Exception $mailEx) {

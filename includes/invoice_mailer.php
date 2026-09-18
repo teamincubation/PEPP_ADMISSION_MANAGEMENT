@@ -97,5 +97,5 @@ function send_invoice_email(array $inv, $pdfBytes) {
     ];
 
     require_once __DIR__ . '/mailer.php';
-    return pepp_mail($to, $subject, $html, $text, $attachments, 'noreply@pepplearning.in', 'PEPP Learning Payments');
+    return pepp_mail($to, $subject, $html, $text, $attachments, 'noreply@pepplearning.in', 'PEPP Learning Payments', 'payment_approved', $inv['user_id'] ?? null, $inv['id'] ?? null);
 }

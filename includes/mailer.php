@@ -178,7 +178,7 @@ class PEPPSMTPClient {
  *
  * Falls back to synchronous dispatch only when the queue is unavailable.
  */
-function pepp_mail($to, $subject, $bodyHtml, $bodyText = '', array $attachments = [], $fromEmail = '', $fromName = '') {
+function pepp_mail($to, $subject, $bodyHtml, $bodyText = '', array $attachments = [], $fromEmail = '', $fromName = '', $eventName = null, $studentUid = null, $invoiceId = null) {
     $finalFromEmail = $fromEmail ?: 'noreply@pepplearning.in';
     $finalFromName  = $fromName  ?: 'PEPP Learning';
 
@@ -186,7 +186,7 @@ function pepp_mail($to, $subject, $bodyHtml, $bodyText = '', array $attachments 
     $queueFile = __DIR__ . '/mail_queue.php';
     if (file_exists($queueFile)) {
         require_once $queueFile;
-        $queueId = pepp_enqueue_mail($to, $subject, $bodyHtml, $bodyText, $attachments, $finalFromEmail, $finalFromName);
+        $queueId = pepp_enqueue_mail($to, $subject, $bodyHtml, $bodyText, $attachments, $finalFromEmail, $finalFromName, 5, $eventName, 'system', $studentUid, $invoiceId);
         if ($queueId !== false) {
             return true; // Successfully queued
         }

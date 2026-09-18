@@ -2,6 +2,7 @@
 require_once 'includes/auth.php';
 require_once 'config/database.php';
 require_permission('students');
+require_once 'includes/student_access_helper.php';
 
 
 // AJAX API for remarks management
@@ -148,69 +149,104 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
 $success_message = '';
 $error_message   = '';
 
-/* ── POST actions: status change / extend access / add remark ──── */
+/* ── POST actions: status change / extend access / add remark / magic reactivate ──── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!csrf_verify()) {
         $error_message = 'Security token mismatch. Please retry.';
     } else {
-        $action  = $_POST['action'] ?? '';
-        $user_id = trim($_POST['user_id'] ?? '');
-        try {
-            $stmt = $pdo->prepare("SELECT * FROM users WHERE user_id = ?");
-            $stmt->execute([$user_id]);
-            $target = $stmt->fetch();
+        $action = $_POST['action'] ?? '';
+        if ($action === 'magic_reactivate') {
+            require_permission('students');
+            try {
+                $pdo->beginTransaction();
+                $result = bulk_reactivate_magic_students($pdo, $admin_username);
+                $pdo->commit();
 
-            if (!$target) {
-                $error_message = 'Student not found.';
-            } elseif ($action === 'update_status') {
-                $new_status = $_POST['student_status'] ?? '';
-                $allowed = ['active', 'inactive', 'suspended', 'completed', 'dropout'];
-                if (!in_array($new_status, $allowed, true)) {
-                    $error_message = 'Invalid status.';
+                if ($result['reactivated'] > 0) {
+                    log_admin_activity($pdo, $admin_username, 'magic_reactivate', "Magic Reactivation restored {$result['reactivated']} students to Active");
+                    $success_message = "Successfully reactivated {$result['reactivated']} student(s) to Active.";
                 } else {
-                    try {
-                        $pdo->beginTransaction();
-                        $stmt = $pdo->prepare("UPDATE users SET student_status = ?, course_status = ? WHERE user_id = ?");
-                        $course_status = $new_status === 'inactive' ? 'suspended' : ($new_status === 'completed' ? 'completed' : (($new_status === 'suspended' || $new_status === 'dropout') ? 'suspended' : 'active'));
-                        $stmt->execute([$new_status, $course_status, $user_id]);
-                        
-                        if ($new_status === 'dropout') {
-                            $pdo->prepare("DELETE FROM instalment_details WHERE user_id = ? AND status = 'pending' AND paid_date IS NULL")->execute([$user_id]);
+                    $success_message = "No eligible suspended students found to reactivate.";
+                }
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                error_log('Magic reactivate error: ' . $e->getMessage());
+                $error_message = 'Failed to execute Magic Reactivation: ' . $e->getMessage();
+            }
+        } else {
+            $user_id = trim($_POST['user_id'] ?? '');
+            try {
+                $stmt = $pdo->prepare("SELECT * FROM users WHERE user_id = ?");
+                $stmt->execute([$user_id]);
+                $target = $stmt->fetch();
+
+                if (!$target) {
+                    $error_message = 'Student not found.';
+                } elseif ($action === 'update_status') {
+                    $new_status = $_POST['student_status'] ?? '';
+                    $allowed = ['active', 'inactive', 'suspended', 'completed', 'dropout'];
+                    if (!in_array($new_status, $allowed, true)) {
+                        $error_message = 'Invalid status.';
+                    } else {
+                        try {
+                            $pdo->beginTransaction();
+                            $stmt = $pdo->prepare("UPDATE users SET student_status = ?, course_status = ? WHERE user_id = ?");
+                            $course_status = $new_status === 'inactive' ? 'suspended' : ($new_status === 'completed' ? 'completed' : (($new_status === 'suspended' || $new_status === 'dropout') ? 'suspended' : 'active'));
+                            $stmt->execute([$new_status, $course_status, $user_id]);
+                            
+                            if ($new_status === 'dropout') {
+                                $pdo->prepare("DELETE FROM instalment_details WHERE user_id = ? AND status = 'pending' AND paid_date IS NULL")->execute([$user_id]);
+                            }
+                            
+                            status_log($pdo, $user_id, $target['student_status'], $new_status, trim($_POST['reason'] ?? 'Status updated by admin'), $admin_username);
+                            track_record($pdo, $user_id, 'status_changed', "Student status: {$target['student_status']} → {$new_status}", $admin_username);
+                            $pdo->commit();
+                            $success_message = "Status updated for {$target['name']}.";
+                        } catch (Exception $ex) {
+                            $pdo->rollBack();
+                            throw $ex;
                         }
-                        
-                        status_log($pdo, $user_id, $target['student_status'], $new_status, trim($_POST['reason'] ?? 'Status updated by admin'), $admin_username);
-                        track_record($pdo, $user_id, 'status_changed', "Student status: {$target['student_status']} → {$new_status}", $admin_username);
-                        $pdo->commit();
-                        $success_message = "Status updated for {$target['name']}.";
-                    } catch (Exception $ex) {
-                        $pdo->rollBack();
-                        throw $ex;
+                    }
+                } elseif ($action === 'extend_access') {
+                    $new_date = $_POST['course_duration_date'] ?? '';
+                    if (!$new_date) {
+                        $error_message = 'A new access end date is required.';
+                    } else {
+                        $pdo->beginTransaction();
+                        try {
+                            $stmt = $pdo->prepare("UPDATE users SET course_duration_date = ? WHERE user_id = ?");
+                            $stmt->execute([$new_date, $user_id]);
+                            track_record($pdo, $user_id, 'access_extended',
+                                'Course access date changed from ' . ($target['course_duration_date'] ?: '-') . " to {$new_date}", $admin_username);
+
+                            // If student was suspended and new access date is valid (today or future), reactivate
+                            $reactivated = reactivate_student_if_access_valid($pdo, $user_id, $admin_username, 'Course access extended to valid date');
+
+                            $pdo->commit();
+                            $success_message = "Course access for {$target['name']} now ends " . date('d M Y', strtotime($new_date)) . '.' . ($reactivated ? ' Student status reactivated to Active.' : '');
+                        } catch (Exception $ex) {
+                            if ($pdo->inTransaction()) {
+                                $pdo->rollBack();
+                            }
+                            throw $ex;
+                        }
+                    }
+                } elseif ($action === 'add_remark') {
+                    $remark = trim($_POST['remark'] ?? '');
+                    if ($remark === '') {
+                        $error_message = 'Remark cannot be empty.';
+                    } else {
+                        status_log($pdo, $user_id, 'remark', 'remark', $remark, $admin_username);
+                        track_record($pdo, $user_id, 'remark_added', $remark, $admin_username);
+                        $success_message = 'Remark saved.';
                     }
                 }
-            } elseif ($action === 'extend_access') {
-                $new_date = $_POST['course_duration_date'] ?? '';
-                if (!$new_date) {
-                    $error_message = 'A new access end date is required.';
-                } else {
-                    $stmt = $pdo->prepare("UPDATE users SET course_duration_date = ? WHERE user_id = ?");
-                    $stmt->execute([$new_date, $user_id]);
-                    track_record($pdo, $user_id, 'access_extended',
-                        'Course access date changed from ' . ($target['course_duration_date'] ?: '-') . " to {$new_date}", $admin_username);
-                    $success_message = "Course access for {$target['name']} now ends " . date('d M Y', strtotime($new_date)) . '.';
-                }
-            } elseif ($action === 'add_remark') {
-                $remark = trim($_POST['remark'] ?? '');
-                if ($remark === '') {
-                    $error_message = 'Remark cannot be empty.';
-                } else {
-                    status_log($pdo, $user_id, 'remark', 'remark', $remark, $admin_username);
-                    track_record($pdo, $user_id, 'remark_added', $remark, $admin_username);
-                    $success_message = 'Remark saved.';
-                }
+            } catch (Exception $e) {
+                error_log('Student action: ' . $e->getMessage());
+                $error_message = 'Database error while saving changes.';
             }
-        } catch (Exception $e) {
-            error_log('Student action: ' . $e->getMessage());
-            $error_message = 'Database error while saving changes.';
         }
     }
 }
@@ -324,6 +360,9 @@ try {
 
     $courses = $pdo->query("SELECT DISTINCT course_name FROM pepp_courses ORDER BY course_name")->fetchAll(PDO::FETCH_COLUMN);
     $years   = $pdo->query("SELECT year FROM academic_years ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN);
+
+    $eligible_magic_students = get_eligible_magic_reactivation_students($pdo);
+    $magic_eligible_count    = count($eligible_magic_students);
 } catch (Exception $e) {
     error_log('Student list: ' . $e->getMessage());
     $error_message = $error_message ?: 'Could not load students.';
@@ -401,6 +440,11 @@ include 'includes/admin_nav.php';
         <span class="head-icon"><i class="fas fa-users"></i></span>
         <h2>Students (<?php echo number_format($total_students); ?>)</h2>
         <div class="head-right" style="display:flex; gap:8px; align-items:center;">
+            <?php if (!empty($magic_eligible_count) && $magic_eligible_count > 0): ?>
+                <button type="button" class="btn btn-sm btn-primary" onclick="openMagicModal()" style="background: linear-gradient(135deg, #f59e0b, #d97706); border-color: #d97706; color: #fff; font-weight: 600; box-shadow: 0 2px 4px rgba(217, 119, 6, 0.2);">
+                    <i class="fas fa-wand-magic-sparkles"></i> Reactivate Active-Access Students (<?php echo $magic_eligible_count; ?>)
+                </button>
+            <?php endif; ?>
             <?php if (can_admin_export()): ?>
                 <a class="btn btn-sm btn-soft-green" href="?<?php echo htmlspecialchars(http_build_query(array_merge($_GET, ['export' => 'excel']))); ?>"><i class="fas fa-file-excel"></i> Export to Excel</a>
             <?php endif; ?>
@@ -518,6 +562,59 @@ include 'includes/admin_nav.php';
         </form>
     </div>
 </div>
+
+<!-- ── MAGIC REACTIVATION MODAL ── -->
+<?php if (!empty($magic_eligible_count) && $magic_eligible_count > 0): ?>
+<div class="modal-backdrop" id="magic-modal">
+    <div class="modal" style="max-width:720px; width:95%;">
+        <div class="modal-head" style="background:linear-gradient(135deg, #fffbeb, #fef3c7); border-bottom:1px solid #fde68a;">
+            <h3 style="color:#b45309;"><i class="fas fa-wand-magic-sparkles" style="color:#d97706;"></i> Reactivate Active-Access Students</h3>
+            <button class="modal-close" onclick="closeModal('magic-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST" id="magic-form" onsubmit="return confirmMagicReactivation(<?php echo (int)$magic_eligible_count; ?>);">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="magic_reactivate">
+            <div class="modal-body" style="max-height:420px; overflow-y:auto; padding:20px;">
+                <div class="alert alert-info" style="margin-bottom:16px; background:#eff6ff; border-color:#bfdbfe; color:#1e40af;">
+                    <i class="fas fa-info-circle"></i>
+                    <div>
+                        <strong><?php echo (int)$magic_eligible_count; ?> student(s)</strong> are currently marked <strong>Suspended</strong> even though their course access expiry date is active (today or future).
+                        Reactivating them will restore their status to <strong>Active</strong> and record an audit log.
+                    </div>
+                </div>
+                <table class="data-table" style="font-size:0.85rem; width:100%;">
+                    <thead>
+                        <tr>
+                            <th>Student</th>
+                            <th>PEPP ID</th>
+                            <th>Course</th>
+                            <th>Access Until</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($eligible_magic_students as $ems): ?>
+                            <tr>
+                                <td><strong><?php echo e($ems['name']); ?></strong></td>
+                                <td><code><?php echo e($ems['user_id']); ?></code></td>
+                                <td><?php echo e($ems['pepp_course']); ?></td>
+                                <td><span class="badge badge-green"><?php echo date('d M Y', strtotime($ems['course_duration_date'])); ?></span></td>
+                                <td><span class="badge badge-red">Suspended</span></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <div class="modal-foot" style="display:flex; justify-content:flex-end; gap:10px; padding:14px 20px; background:#f9fafb; border-top:1px solid #e5e7eb;">
+                <button type="button" class="btn btn-outline" onclick="closeModal('magic-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary" style="background: linear-gradient(135deg, #f59e0b, #d97706); border-color: #d97706; color: #fff;">
+                    <i class="fas fa-wand-magic-sparkles"></i> Confirm Reactivate All (<?php echo (int)$magic_eligible_count; ?>)
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+<?php endif; ?>
 
 <!-- ── STATUS MODAL ── -->
 <div class="modal-backdrop" id="status-modal">
@@ -794,6 +891,12 @@ function deleteRemarkFromModal(remarkId) {
     });
 }
 
+function openMagicModal() {
+    openModal('magic-modal');
+}
+function confirmMagicReactivation(count) {
+    return confirm('Are you sure you want to restore ' + count + ' suspended student(s) with valid access back to Active status?');
+}
 function openExtend(id, name, current) {
     document.getElementById('ext-user-id').value = id;
     document.getElementById('ext-name').textContent = name + ' (' + id + ')';
