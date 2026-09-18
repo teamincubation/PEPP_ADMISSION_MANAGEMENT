@@ -430,11 +430,25 @@ include 'includes/admin_nav.php';
                     elseif ($t['activity_type'] === 'created') { $icon = 'fa-plus'; $color = 'var(--green-ink)'; }
                     elseif ($t['activity_type'] === 'reassigned') { $icon = 'fa-user-pen'; $color = 'var(--blue-ink)'; }
                     elseif ($t['activity_type'] === 'converted_by_changed') { $icon = 'fa-user-gear'; $color = 'var(--accent)'; }
+                    elseif ($t['activity_type'] === 'contact_called') { $icon = 'fa-phone-volume'; $color = 'var(--green-ink)'; }
+                    elseif ($t['activity_type'] === 'contact_texted') { $icon = 'fa-comment-dots'; $color = 'var(--blue-ink)'; }
                 ?>
                 <div class="tl-item">
                     <div class="tl-dot" style="color:<?php echo $color; ?>;"><i class="fas <?php echo $icon; ?>"></i></div>
                     <div class="tl-body">
-                        <?php if ($t['old_status'] || $t['new_status']): ?>
+                        <?php if ($t['activity_type'] === 'contact_called' || $t['activity_type'] === 'contact_texted'): ?>
+                            <div class="tl-title" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                                <span><?php echo $t['activity_type'] === 'contact_called' ? '<i class="fas fa-phone-volume" style="color:#16a34a;"></i> Called' : '<i class="fas fa-comment-dots" style="color:#2563eb;"></i> Texted'; ?></span>
+                                <?php if ($t['old_status'] && $t['new_status']): ?>
+                                    <span style="font-weight:400; color:var(--text-muted); font-size:0.8rem;">&middot; Status:</span>
+                                    <span class="badge <?php echo $LEAD_STATUSES[$t['old_status']][1] ?? 'gray'; ?>"><?php echo $LEAD_STATUSES[$t['old_status']][0] ?? $t['old_status']; ?></span> &rarr;
+                                    <span class="badge <?php echo $LEAD_STATUSES[$t['new_status']][1] ?? 'gray'; ?>"><?php echo $LEAD_STATUSES[$t['new_status']][0] ?? $t['new_status']; ?></span>
+                                <?php elseif ($t['new_status']): ?>
+                                    <span style="font-weight:400; color:var(--text-muted); font-size:0.8rem;">&middot; Status:</span>
+                                    <span class="badge <?php echo $LEAD_STATUSES[$t['new_status']][1] ?? 'gray'; ?>"><?php echo $LEAD_STATUSES[$t['new_status']][0] ?? $t['new_status']; ?></span>
+                                <?php endif; ?>
+                            </div>
+                        <?php elseif ($t['old_status'] || $t['new_status']): ?>
                             <div class="tl-title">
                                 <?php if ($t['old_status']): ?><span class="badge <?php echo $LEAD_STATUSES[$t['old_status']][1] ?? 'gray'; ?>"><?php echo $LEAD_STATUSES[$t['old_status']][0] ?? $t['old_status']; ?></span> &rarr; <?php endif; ?>
                                 <span class="badge <?php echo $LEAD_STATUSES[$t['new_status']][1] ?? 'gray'; ?>"><?php echo $LEAD_STATUSES[$t['new_status']][0] ?? $t['new_status']; ?></span>

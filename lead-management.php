@@ -43,6 +43,7 @@ if (isset($_GET['lock'])) {
         'due'              => $_GET['due'] ?? '',
         'joined'           => $_GET['joined'] ?? '',
         'converted_by'     => $_GET['converted_by'] ?? [],
+        'lead_remark'      => $_GET['lead_remark'] ?? '',
         'q'                => $_GET['q'] ?? ''
     ];
     $cleanParams = $_GET;
@@ -62,6 +63,7 @@ if (isset($_SESSION['locked_lead_filters']) && !isset($_GET['unlock'])) {
         $_GET['due']              = $_SESSION['locked_lead_filters']['due'] ?? '';
         $_GET['joined']           = $_SESSION['locked_lead_filters']['joined'] ?? '';
         $_GET['converted_by']     = $_SESSION['locked_lead_filters']['converted_by'] ?? [];
+        $_GET['lead_remark']      = $_SESSION['locked_lead_filters']['lead_remark'] ?? '';
         $_GET['q']                = $_SESSION['locked_lead_filters']['q'] ?? '';
     }
 }
@@ -511,12 +513,142 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                     }
                 }
+            } elseif ($action === 'instant_contact') {
+                $lead_id = (int)($_POST['lead_id'] ?? 0);
+                $contact_type = trim($_POST['contact_type'] ?? '');
+                $selected_status = trim($_POST['status'] ?? '');
+                $remark = trim($_POST['remark'] ?? '');
+
+                if ($lead_id <= 0) {
+                    $error_message = 'Invalid lead selected.';
+                } elseif (!in_array($contact_type, ['Called', 'Texted'], true)) {
+                    $error_message = 'Contact type must be either Called or Texted.';
+                } else {
+                    // Transaction MUST begin BEFORE SELECT ... FOR UPDATE (Pre-implementation correction 1)
+                    $pdo->beginTransaction();
+                    try {
+                        $stmt = $pdo->prepare("SELECT * FROM leads WHERE id = ? FOR UPDATE");
+                        $stmt->execute([$lead_id]);
+                        $lead = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                        if (!$lead) {
+                            $pdo->rollBack();
+                            $error_message = 'Lead not found.';
+                        } elseif (!is_super_admin() && $lead['assigned_to'] !== $admin_username && $lead['assigned_to'] !== '__ALL__') {
+                            // Consistent permission check (Correction 7)
+                            $pdo->rollBack();
+                            $error_message = 'You do not have permission to update this lead.';
+                        } else {
+                            // Status change: only populate if changed (Correction 4)
+                            $status_changed = ($selected_status !== '' && $selected_status !== $lead['status'] && isset($LEAD_STATUSES[$selected_status]));
+                            $new_status = $status_changed ? $selected_status : $lead['status'];
+
+                            if ($status_changed) {
+                                $upd = $pdo->prepare("UPDATE leads SET status = ?, updated_at = NOW(), last_activity_at = NOW() WHERE id = ?");
+                                $upd->execute([$new_status, $lead_id]);
+                            } else {
+                                $upd = $pdo->prepare("UPDATE leads SET last_activity_at = NOW() WHERE id = ?");
+                                $upd->execute([$lead_id]);
+                            }
+
+                            // Activity entry (reusing existing lead_activity table, zero schema alterations)
+                            $act_type = ($contact_type === 'Called') ? 'contact_called' : 'contact_texted';
+                            $act_old = $status_changed ? $lead['status'] : null;
+                            $act_new = $status_changed ? $new_status : null;
+                            $act_remark = ($remark !== '') ? $remark : null;
+
+                            $ins = $pdo->prepare("
+                                INSERT INTO lead_activity (lead_id, activity_type, remark, old_status, new_status, followup_date, performed_by, performed_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                            ");
+                            $ins->execute([
+                                $lead_id,
+                                $act_type,
+                                $act_remark,
+                                $act_old,
+                                $act_new,
+                                $lead['next_followup_date'] ?: null,
+                                $admin_username
+                            ]);
+
+                            // Atomic commit (Correction 2)
+                            $pdo->commit();
+
+                            log_admin_activity($pdo, $admin_username, 'lead_instant_contact', "Lead #{$lead_id} ({$lead['whatsapp_number']}) contacted via {$contact_type}");
+
+                            if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+                                header('Content-Type: application/json; charset=UTF-8');
+                                echo json_encode(['success' => true, 'message' => "Contact recorded: {$contact_type}"]);
+                                exit;
+                            }
+                            $success_message = "Contact recorded successfully: {$contact_type}.";
+                        }
+                    } catch (Exception $ex) {
+                        if ($pdo->inTransaction()) {
+                            $pdo->rollBack();
+                        }
+                        throw $ex;
+                    }
+                }
             }
         } catch (Exception $e) {
             error_log('Lead action: ' . $e->getMessage());
-            $error_message = 'Database error while saving the lead.';
+            $error_message = 'Database error while saving the lead: ' . $e->getMessage();
         }
     }
+}
+
+// ── AJAX Contact History Endpoint (Correction 8) ──────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'get_contact_history') {
+    $hist_lead_id = (int)($_GET['lead_id'] ?? 0);
+    $stmtLead = $pdo->prepare("SELECT id, name, whatsapp_number, assigned_to FROM leads WHERE id = ?");
+    $stmtLead->execute([$hist_lead_id]);
+    $chkLead = $stmtLead->fetch(PDO::FETCH_ASSOC);
+
+    header('Content-Type: application/json; charset=UTF-8');
+    if (!$chkLead) {
+        http_response_code(404);
+        echo json_encode(['error' => 'Lead not found']);
+        exit;
+    }
+    if (!is_super_admin() && $chkLead['assigned_to'] !== $admin_username && $chkLead['assigned_to'] !== '__ALL__') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    $stmtHist = $pdo->prepare("
+        SELECT id, lead_id, activity_type, remark, old_status, new_status, performed_by, performed_at
+        FROM lead_activity
+        WHERE lead_id = ? AND activity_type IN ('contact_called', 'contact_texted')
+        ORDER BY performed_at DESC, id DESC
+    ");
+    $stmtHist->execute([$hist_lead_id]);
+    $history_rows = $stmtHist->fetchAll(PDO::FETCH_ASSOC);
+
+    $formatted = [];
+    foreach ($history_rows as $hr) {
+        $ts = strtotime((string)$hr['performed_at']);
+        $admUsername = (string)$hr['performed_by'];
+        $admName = $all_admin_names[$admUsername] ?? $admUsername;
+        $formatted[] = [
+            'id'           => (int)$hr['id'],
+            'activity_type'=> $hr['activity_type'],
+            'contact_type' => ($hr['activity_type'] === 'contact_called') ? 'Called' : 'Texted',
+            'contact_icon' => ($hr['activity_type'] === 'contact_called') ? 'fa-phone-volume' : 'fa-comment-dots',
+            'performed_by' => $admUsername,
+            'admin_name'   => $admName,
+            'date_str'     => date('d M Y', $ts),
+            'time_str'     => date('h:i A', $ts),
+            'remark'       => $hr['remark'] ?: '',
+            'old_status'   => $hr['old_status'],
+            'new_status'   => $hr['new_status'],
+            'old_label'    => $hr['old_status'] ? ($LEAD_STATUSES[$hr['old_status']][0] ?? $hr['old_status']) : '',
+            'new_label'    => $hr['new_status'] ? ($LEAD_STATUSES[$hr['new_status']][0] ?? $hr['new_status']) : ''
+        ];
+    }
+    echo json_encode(['lead' => $chkLead, 'history' => $formatted]);
+    exit;
 }
 
 /** Parse an uploaded CSV (Excel saved as CSV). Returns array of assoc rows or null.
@@ -614,12 +746,40 @@ $f_fn_statuses   = array_values(array_filter($f_fn_statuses, function($st) use (
 $raw_fn_assigned = $_GET['followup_assigned'] ?? [];
 $f_fn_assigned   = is_array($raw_fn_assigned) ? array_values(array_unique(array_filter(array_map('trim', $raw_fn_assigned)))) : [];
 
-// Tab Navigation: 'followups' (default) or 'leads'
-$active_tab = (isset($_GET['tab']) && $_GET['tab'] === 'leads') ? 'leads' : 'followups';
+// Tab Navigation: 'followups' (default), 'leads', or 'call-reports'
+$active_tab = (isset($_GET['tab']) && in_array($_GET['tab'], ['leads', 'call-reports'], true)) ? $_GET['tab'] : 'followups';
+
+// Call Reports Controls & Filters
+$raw_call_from     = trim($_GET['call_date_from'] ?? $_GET['call_from'] ?? '');
+$raw_call_to       = trim($_GET['call_date_to'] ?? $_GET['call_to'] ?? '');
+$has_call_from     = $is_valid_ymd($raw_call_from);
+$has_call_to       = $is_valid_ymd($raw_call_to);
+$f_contacted_by    = trim($_GET['contacted_by'] ?? '');
+$f_contact_type    = trim($_GET['contact_type'] ?? '');
+$f_call_q          = trim($_GET['call_q'] ?? '');
+$raw_call_limit    = (int)($_GET['call_limit'] ?? 50);
+$call_limit        = in_array($raw_call_limit, [25, 50, 100, 500], true) ? $raw_call_limit : 50;
+$call_page         = max(1, (int)($_GET['call_page'] ?? $_GET['page'] ?? 1));
+
+$call_date_error = '';
+if ($raw_call_from !== '' && !$has_call_from) {
+    $call_date_error = 'Invalid From date format. Please use YYYY-MM-DD.';
+} elseif ($raw_call_to !== '' && !$has_call_to) {
+    $call_date_error = 'Invalid To date format. Please use YYYY-MM-DD.';
+} elseif ($has_call_from && $has_call_to && $raw_call_from > $raw_call_to) {
+    $call_date_error = 'From date cannot be later than To date.';
+}
+
+if ($active_tab === 'call-reports' && $call_date_error !== '') {
+    $error_message = $error_message ?: $call_date_error;
+}
 
 // Leads Display Limit (50, 100, 500; default 50)
 $raw_leads_limit = (int)($_GET['leads_limit'] ?? 50);
 $leads_limit     = in_array($raw_leads_limit, [50, 100, 500], true) ? $raw_leads_limit : 50;
+
+// Leads Tab: Search Remark (Part 2)
+$f_lead_remark    = trim($_GET['lead_remark'] ?? '');
 
 // Converted By Multi-Select Filter (Leads Tab)
 $raw_converted_by = $_GET['converted_by'] ?? [];
@@ -658,6 +818,25 @@ if ($f_last_remarked_by !== '') {
         LIMIT 1
     ) = ?";
     $params[] = $f_last_remarked_by;
+}
+if ($f_lead_remark !== '') {
+    // Explicit/manual lead remarks search using established Follow-ups semantics (Part 2)
+    $where[] = "EXISTS (
+        SELECT 1 FROM lead_activity la
+        WHERE la.lead_id = l.id
+          AND la.remark IS NOT NULL
+          AND TRIM(la.remark) <> ''
+          AND la.activity_type NOT IN ('details_change', 'reassigned', 'converted_by_change')
+          AND TRIM(la.remark) NOT IN ('Lead created', 'Imported from file', 'Follow-up done', 'Marked as converted')
+          AND la.remark NOT LIKE 'Converted - linked to student%'
+          AND la.remark NOT LIKE 'Lead marked converted via%'
+          AND la.remark NOT LIKE 'Reassigned to %'
+          AND la.remark NOT LIKE 'WhatsApp number updated:%'
+          AND la.remark NOT LIKE 'WhatsApp Marketing:%'
+          AND la.remark NOT LIKE 'Bulk update:%'
+          AND LOWER(la.remark) LIKE LOWER(?)
+    )";
+    $params[] = "%{$f_lead_remark}%";
 }
 if ($f_course !== '') { $where[] = "l.interested_course = ?"; $params[] = $f_course; }
 if ($f_due === 'today')    { $where[] = "l.next_followup_date = CURDATE() AND l.status NOT IN ('converted','rejected','not_interested')"; }
@@ -894,6 +1073,211 @@ try {
 } catch (Exception $e) {
     error_log('Lead list: ' . $e->getMessage());
     $error_message = $error_message ?: 'Could not load leads.';
+}
+
+// ── Call Reports Query (Correction 3 & 5) ──────────────────────────
+/**
+ * CALL REPORT DATE SEMANTICS:
+ * Call Reports represent the latest instant-contact activity PER LEAD
+ * within the currently selected report/filter scope.
+ * 
+ * Therefore:
+ * - without date filters -> latest instant contact overall
+ * - with Date From/To -> latest instant contact occurring within that selected date range
+ * - Contacted By filter -> latest matching contact performed by the selected admin
+ * - Contact Type filter -> latest matching Called/Texted activity
+ * 
+ * The complete underlying lead_activity history remains untouched and auditable.
+ * Latest Remark refers strictly to the remark on that matching instant-contact activity.
+ */
+$call_reports_rows = [];
+$call_reports_total = 0;
+$call_total_pages = 1;
+
+if ($active_tab === 'call-reports') {
+    $call_in_where = ["la_in.activity_type IN ('contact_called', 'contact_texted')"];
+    $call_in_params = [];
+
+    if ($has_call_from) {
+        $call_in_where[] = "la_in.performed_at >= ?";
+        $call_in_params[] = $raw_call_from . ' 00:00:00';
+    }
+    if ($has_call_to) {
+        $call_in_where[] = "la_in.performed_at <= ?";
+        $call_in_params[] = $raw_call_to . ' 23:59:59';
+    }
+    if ($f_contacted_by !== '') {
+        $call_in_where[] = "la_in.performed_by = ?";
+        $call_in_params[] = $f_contacted_by;
+    }
+    if ($f_contact_type === 'Called') {
+        $call_in_where[] = "la_in.activity_type = 'contact_called'";
+    } elseif ($f_contact_type === 'Texted') {
+        $call_in_where[] = "la_in.activity_type = 'contact_texted'";
+    }
+
+    $call_in_where_sql = implode(' AND ', $call_in_where);
+
+    $call_out_where = ['1=1'];
+    $call_out_params = [];
+
+    if (!is_super_admin()) {
+        $call_out_where[] = "(l.assigned_to = ? OR l.assigned_to = '__ALL__')";
+        $call_out_params[] = $admin_username;
+    }
+    if ($f_call_q !== '') {
+        $call_out_where[] = "(l.name LIKE ? OR l.whatsapp_number LIKE ? OR l.interested_course LIKE ?)";
+        $call_like = "%{$f_call_q}%";
+        array_push($call_out_params, $call_like, $call_like, $call_like);
+    }
+    $call_out_where_sql = implode(' AND ', $call_out_where);
+
+    $call_base_from = "
+        FROM (
+            SELECT MAX(la_in.id) AS max_id
+            FROM lead_activity la_in
+            WHERE {$call_in_where_sql}
+            GROUP BY la_in.lead_id
+        ) latest_scope
+        JOIN lead_activity la ON la.id = latest_scope.max_id
+        JOIN leads l ON l.id = la.lead_id
+        WHERE {$call_out_where_sql}
+    ";
+    $call_combined_params = array_merge($call_in_params, $call_out_params);
+
+    if ($call_date_error === '') {
+        try {
+            $stmtCallCount = $pdo->prepare("SELECT COUNT(*) {$call_base_from}");
+            $stmtCallCount->execute($call_combined_params);
+            $call_reports_total = (int)$stmtCallCount->fetchColumn();
+            $call_total_pages = max(1, (int)ceil($call_reports_total / $call_limit));
+
+            $export_mode = trim($_GET['export'] ?? '');
+            if (in_array($export_mode, ['excel', 'pdf'], true)) {
+                $stmtExport = $pdo->prepare("
+                    SELECT la.id AS activity_id, la.lead_id, la.activity_type, la.remark, la.old_status, la.new_status,
+                           la.performed_by, la.performed_at,
+                           l.name, l.whatsapp_number, l.interested_course, l.status AS current_status,
+                           l.assigned_to, l.next_followup_date
+                    {$call_base_from}
+                    ORDER BY la.performed_at DESC, la.id DESC
+                ");
+                $stmtExport->execute($call_combined_params);
+                $export_rows = $stmtExport->fetchAll(PDO::FETCH_ASSOC);
+
+                if ($export_mode === 'excel') {
+                    // Excel Export (Correction 6)
+                    $filename = 'lead_contact_report_' . date('Ymd_His') . '.xls';
+                    header('Content-Type: application/vnd.ms-excel; charset=UTF-8');
+                    header('Content-Disposition: attachment; filename="' . $filename . '"');
+                    header('Cache-Control: max-age=0');
+                    header('Pragma: public');
+
+                    echo "<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:x='urn:schemas-microsoft-com:office:excel' xmlns='http://www.w3.org/TR/REC-html40'>";
+                    echo "<head><meta charset='UTF-8'><style>td, th { mso-number-format:'\@'; }</style></head><body>";
+                    echo "<h3>PEPP LEARNING — LEAD CONTACT REPORT</h3>";
+                    echo "<p>Generated: " . date('d M Y, h:i A') . " | Scope: Latest contact per lead within selected filter scope</p>";
+                    echo "<table border='1' cellpadding='5' cellspacing='0' style='border-collapse:collapse; font-family:sans-serif; font-size:12px;'>";
+                    echo "<tr style='background-color:#ff6b00; color:#ffffff; font-weight:bold;'>";
+                    echo "<th>Lead ID</th><th>Lead Name</th><th>Phone</th><th>WhatsApp</th><th>Interested Course</th><th>Lead Status</th><th>Contact Type</th><th>Contacted By</th><th>Contact Date</th><th>Contact Time</th><th>Remark</th><th>Assigned To</th><th>Next Follow-up</th>";
+                    echo "</tr>";
+
+                    foreach ($export_rows as $er) {
+                        $ts = strtotime((string)$er['performed_at']);
+                        $cType = ($er['activity_type'] === 'contact_called') ? 'Called' : 'Texted';
+                        $admName = $all_admin_names[$er['performed_by']] ?? $er['performed_by'];
+                        $dispPhone = format_credential_text($er['whatsapp_number'], 'phone', 'leads');
+
+                        echo "<tr>";
+                        echo "<td>" . (int)$er['lead_id'] . "</td>";
+                        echo "<td>" . htmlspecialchars($er['name'] ?: 'Unknown', ENT_QUOTES, 'UTF-8') . "</td>";
+                        echo "<td>" . htmlspecialchars($dispPhone, ENT_QUOTES, 'UTF-8') . "</td>";
+                        echo "<td>" . htmlspecialchars($dispPhone, ENT_QUOTES, 'UTF-8') . "</td>";
+                        echo "<td>" . htmlspecialchars($er['interested_course'] ?: '-', ENT_QUOTES, 'UTF-8') . "</td>";
+                        echo "<td>" . htmlspecialchars($LEAD_STATUSES[$er['current_status']][0] ?? $er['current_status'], ENT_QUOTES, 'UTF-8') . "</td>";
+                        echo "<td>" . htmlspecialchars($cType, ENT_QUOTES, 'UTF-8') . "</td>";
+                        echo "<td>" . htmlspecialchars($admName, ENT_QUOTES, 'UTF-8') . "</td>";
+                        echo "<td>" . date('d M Y', $ts) . "</td>";
+                        echo "<td>" . date('h:i A', $ts) . "</td>";
+                        echo "<td>" . htmlspecialchars($er['remark'] ?: '', ENT_QUOTES, 'UTF-8') . "</td>";
+                        echo "<td>" . htmlspecialchars($er['assigned_to'] === '__ALL__' ? 'All Admins' : ($er['assigned_to'] ?: '-'), ENT_QUOTES, 'UTF-8') . "</td>";
+                        echo "<td>" . ($er['next_followup_date'] ? date('d M Y', strtotime($er['next_followup_date'])) : '-') . "</td>";
+                        echo "</tr>";
+                    }
+                    echo "</table></body></html>";
+                    exit;
+                } elseif ($export_mode === 'pdf') {
+                    // PDF Export (Part 5)
+                    require_once __DIR__ . '/includes/lead_contact_report_pdf.php';
+
+                    $pdf_called = 0; $pdf_texted = 0; $pdf_admins = [];
+                    $formatted_pdf_rows = [];
+                    foreach ($export_rows as $er) {
+                        $ts = strtotime((string)$er['performed_at']);
+                        $cType = ($er['activity_type'] === 'contact_called') ? 'Called' : 'Texted';
+                        if ($cType === 'Called') $pdf_called++; else $pdf_texted++;
+                        if (!empty($er['performed_by'])) $pdf_admins[$er['performed_by']] = true;
+                        $admName = $all_admin_names[$er['performed_by']] ?? $er['performed_by'];
+
+                        $formatted_pdf_rows[] = [
+                            'name'         => $er['name'] ?: 'Unknown',
+                            'phone'        => format_credential_text($er['whatsapp_number'], 'phone', 'leads'),
+                            'course'       => $er['interested_course'] ?: '-',
+                            'contact_type' => $cType,
+                            'contacted_by' => $admName,
+                            'contact_date' => date('d M Y', $ts),
+                            'contact_time' => date('h:i A', $ts),
+                            'status'       => $LEAD_STATUSES[$er['current_status']][0] ?? $er['current_status'],
+                            'remark'       => $er['remark'] ?: ''
+                        ];
+                    }
+
+                    $pdf_data = [
+                        'period' => [
+                            'from' => $has_call_from ? date('d M Y', strtotime($raw_call_from)) : '',
+                            'to'   => $has_call_to ? date('d M Y', strtotime($raw_call_to)) : ''
+                        ],
+                        'generated_at' => date('d M Y, h:i A'),
+                        'contacted_by' => $f_contacted_by ? ($all_admin_names[$f_contacted_by] ?? $f_contacted_by) : 'All Admins',
+                        'contact_type' => $f_contact_type ?: 'All Types',
+                        'summary' => [
+                            'total'  => count($export_rows),
+                            'called' => $pdf_called,
+                            'texted' => $pdf_texted,
+                            'admins' => count($pdf_admins)
+                        ],
+                        'rows' => $formatted_pdf_rows
+                    ];
+
+                    $pdf_bytes = render_lead_contact_report_pdf($pdf_data);
+                    $filename = 'lead_contact_report_' . date('Ymd_His') . '.pdf';
+                    header('Content-Type: application/pdf');
+                    header('Content-Disposition: attachment; filename="' . $filename . '"');
+                    header('Content-Length: ' . strlen($pdf_bytes));
+                    header('Cache-Control: private, must-revalidate, max-age=0');
+                    header('Pragma: public');
+                    echo $pdf_bytes;
+                    exit;
+                }
+            }
+
+            $call_offset = ($call_page - 1) * $call_limit;
+            $stmtCallRows = $pdo->prepare("
+                SELECT la.id AS activity_id, la.lead_id, la.activity_type, la.remark, la.old_status, la.new_status,
+                       la.performed_by, la.performed_at,
+                       l.name, l.whatsapp_number, l.interested_course, l.status AS current_status,
+                       l.assigned_to, l.next_followup_date
+                {$call_base_from}
+                ORDER BY la.performed_at DESC, la.id DESC
+                LIMIT ? OFFSET ?
+            ");
+            $stmtCallRows->execute(array_merge($call_combined_params, [$call_limit, $call_offset]));
+            $call_reports_rows = $stmtCallRows->fetchAll(PDO::FETCH_ASSOC);
+
+        } catch (Exception $e) {
+            error_log('Call reports query: ' . $e->getMessage());
+        }
+    }
 }
 
 // Admins that leads can be assigned to (super admin only)
@@ -1135,6 +1519,9 @@ include 'includes/admin_nav.php';
     <a href="<?php echo e(lqs(['tab' => 'leads', 'page' => 1])); ?>" class="pepp-tab-link <?php echo $active_tab === 'leads' ? 'active' : ''; ?>">
         <i class="fas fa-users"></i> Leads
         <span style="font-size:0.8rem; font-weight:600; opacity:0.85; margin-left:2px;">(<?php echo number_format($stats['total']); ?>)</span>
+    </a>
+    <a href="<?php echo e(lqs(['tab' => 'call-reports', 'page' => 1])); ?>" class="pepp-tab-link <?php echo $active_tab === 'call-reports' ? 'active' : ''; ?>">
+        <i class="fas fa-phone-volume"></i> Call Reports
     </a>
     <div style="margin-left:auto; display:flex; align-items:center; gap:8px; padding-bottom:6px;">
         <a href="communication-campaigns.php?target=leads" class="btn btn-sm btn-success" style="border-radius:6px; font-weight:700;"><i class="fas fa-bullhorn"></i> Create WhatsApp Campaign</a>
@@ -1391,6 +1778,12 @@ include 'includes/admin_nav.php';
                                 <i class="fas fa-check-circle"></i> Mark Converted
                             </button>
                         <?php endif; ?>
+                        <button type="button" class="btn btn-sm btn-outline btn-instant-contact" 
+                                onclick="openInstantContactModal(<?php echo (int)$l['id']; ?>, '<?php echo e(addslashes($l['name'] ?: 'Unknown')); ?>', '<?php echo e($l['status']); ?>', '<?php echo e(addslashes($LEAD_STATUSES[$l['status']][0] ?? $l['status'])); ?>')" 
+                                title="Instant Contact Update" 
+                                style="color:#16a34a; border-color:#bbf7d0; background:#f0fdf4; padding:4px 8px; margin-right:4px;">
+                            <i class="fas fa-check"></i>
+                        </button>
                         <a class="btn btn-sm btn-outline" href="tel:<?php echo preg_replace('/\D/', '', $l['whatsapp_number']); ?>" title="Call"><i class="fas fa-phone"></i></a>
                         <a class="btn btn-sm btn-whatsapp" href="<?php echo e(wa_link($l['whatsapp_number'])); ?>" target="_blank" title="WhatsApp"><i class="fab fa-whatsapp"></i></a>
                         <a class="btn btn-sm btn-primary" href="lead-details.php?id=<?php echo (int)$l['id']; ?>"><i class="fas fa-pen"></i> Update</a>
@@ -1399,6 +1792,175 @@ include 'includes/admin_nav.php';
             <?php endforeach; ?>
             </tbody>
         </table>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php elseif ($active_tab === 'call-reports'): ?>
+<!-- ── CALL REPORTS ── -->
+<div class="panel">
+    <div class="panel-head" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+            <span class="head-icon" style="background:#ecfdf5; color:#16a34a;"><i class="fas fa-phone-volume"></i></span>
+            <h2>Call Reports (<?php echo number_format($call_reports_total); ?>)<?php
+                if ($call_reports_total > 0) {
+                    echo ' <span style="font-size:0.8rem; font-weight:500; color:var(--text-muted); opacity:0.85;">· Showing ' . count($call_reports_rows) . '</span>';
+                }
+            ?></h2>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+            <form method="GET" action="lead-management.php" id="call-reports-limit-form" style="display:inline-flex; align-items:center; gap:6px; margin:0;">
+                <input type="hidden" name="tab" value="call-reports">
+                <?php
+                foreach ($_GET as $gk => $gv) {
+                    if ($gk !== 'call_limit' && $gk !== 'call_page' && $gk !== 'page' && $gk !== 'tab' && $gk !== 'export') {
+                        if (is_array($gv)) {
+                            foreach ($gv as $item) {
+                                echo '<input type="hidden" name="' . e($gk) . '[]" value="' . e($item) . '">';
+                            }
+                        } else {
+                            echo '<input type="hidden" name="' . e($gk) . '" value="' . e($gv) . '">';
+                        }
+                    }
+                }
+                ?>
+                <label for="call-limit-select" style="font-size:0.82rem; font-weight:600; color:#475569;">Show:</label>
+                <select name="call_limit" id="call-limit-select" onchange="this.form.submit()" style="padding:4px 10px; font-size:0.8rem; border:1px solid #cbd5e1; border-radius:6px; background:#fff; font-weight:600; color:#1e293b; cursor:pointer;">
+                    <option value="25" <?php echo $call_limit === 25 ? 'selected' : ''; ?>>25</option>
+                    <option value="50" <?php echo $call_limit === 50 ? 'selected' : ''; ?>>50</option>
+                    <option value="100" <?php echo $call_limit === 100 ? 'selected' : ''; ?>>100</option>
+                    <option value="500" <?php echo $call_limit === 500 ? 'selected' : ''; ?>>500</option>
+                </select>
+            </form>
+            <a href="<?php echo e(lqs(['export' => 'excel'])); ?>" class="btn btn-sm btn-outline" style="border-radius:6px; font-weight:600;" title="Export Excel"><i class="fas fa-file-excel" style="color:#16a34a;"></i> Export Excel</a>
+            <a href="<?php echo e(lqs(['export' => 'pdf'])); ?>" target="_blank" class="btn btn-sm btn-outline" style="border-radius:6px; font-weight:600;" title="Export PDF"><i class="fas fa-file-pdf" style="color:#dc2626;"></i> Export PDF</a>
+        </div>
+    </div>
+
+    <!-- Call Reports Filters Bar -->
+    <div style="background:#f8fafc; border-bottom:1px solid #e2e8f0; padding:12px 16px;">
+        <form method="GET" action="lead-management.php" class="filter-bar" style="margin:0; gap:10px;">
+            <input type="hidden" name="tab" value="call-reports">
+            <?php if (isset($_GET['call_limit'])): ?>
+                <input type="hidden" name="call_limit" value="<?php echo e($call_limit); ?>">
+            <?php endif; ?>
+            <div class="field">
+                <label>Date From</label>
+                <input type="date" name="call_date_from" value="<?php echo e($raw_call_from); ?>" style="padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.85rem;">
+            </div>
+            <div class="field">
+                <label>Date To</label>
+                <input type="date" name="call_date_to" value="<?php echo e($raw_call_to); ?>" style="padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.85rem;">
+            </div>
+            <div class="field">
+                <label>Contacted By</label>
+                <select name="contacted_by" style="padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.85rem;">
+                    <option value="">All Admins</option>
+                    <?php foreach ($all_admins as $adm): ?>
+                        <option value="<?php echo e($adm['username']); ?>" <?php echo $f_contacted_by === $adm['username'] ? 'selected' : ''; ?>>
+                            <?php echo e(!empty($adm['full_name']) ? $adm['full_name'] : $adm['username']); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="field">
+                <label>Contact Type</label>
+                <select name="contact_type" style="padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.85rem;">
+                    <option value="">All Types</option>
+                    <option value="Called" <?php echo $f_contact_type === 'Called' ? 'selected' : ''; ?>>📞 Called</option>
+                    <option value="Texted" <?php echo $f_contact_type === 'Texted' ? 'selected' : ''; ?>>💬 Texted</option>
+                </select>
+            </div>
+            <div class="field grow-2">
+                <label>Search</label>
+                <input type="text" name="call_q" value="<?php echo e($f_call_q); ?>" placeholder="Lead name, WhatsApp or course..." style="padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.85rem;">
+            </div>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-filter"></i> Filter</button>
+            <a href="lead-management.php?tab=call-reports" class="btn btn-outline">Reset</a>
+        </form>
+    </div>
+
+    <?php if ($call_date_error !== ''): ?>
+        <div style="padding:12px 16px;">
+            <div class="alert alert-danger" style="margin:0;"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($call_date_error); ?></span></div>
+        </div>
+    <?php endif; ?>
+
+    <div class="panel-body flush table-wrap">
+        <?php if (empty($call_reports_rows)): ?>
+            <div class="empty-state"><i class="fas fa-phone-slash"></i><p>No contact activities match the selected criteria.</p></div>
+        <?php else: ?>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Lead Name</th>
+                    <th>WhatsApp / Phone</th>
+                    <th>Interested Course</th>
+                    <th>Current Status</th>
+                    <th>Contact Type</th>
+                    <th>Contacted By</th>
+                    <th>Contact Date</th>
+                    <th>Contact Time</th>
+                    <th>Latest Remark</th>
+                    <th>Assigned To</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($call_reports_rows as $cr):
+                $ts = strtotime((string)$cr['performed_at']);
+                $cType = ($cr['activity_type'] === 'contact_called') ? 'Called' : 'Texted';
+                $admName = $all_admin_names[$cr['performed_by']] ?? $cr['performed_by'];
+                $dispPhone = format_credential_text($cr['whatsapp_number'], 'phone', 'leads');
+            ?>
+                <tr>
+                    <td>
+                        <strong><a href="lead-details.php?id=<?php echo (int)$cr['lead_id']; ?>" style="color:var(--text); text-decoration:none;"><?php echo e($cr['name'] ?: 'Unknown'); ?></a></strong>
+                    </td>
+                    <td>
+                        <span class="cell-sub" style="font-family:monospace;"><?php echo e($dispPhone); ?></span>
+                    </td>
+                    <td class="cell-sub"><?php echo e($cr['interested_course'] ?: '-'); ?></td>
+                    <td>
+                        <span class="badge <?php echo $LEAD_STATUSES[$cr['current_status']][1] ?? 'gray'; ?>"><?php echo $LEAD_STATUSES[$cr['current_status']][0] ?? $cr['current_status']; ?></span>
+                    </td>
+                    <td>
+                        <?php if ($cr['activity_type'] === 'contact_called'): ?>
+                            <span class="badge" style="background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0;"><i class="fas fa-phone-volume"></i> Called</span>
+                        <?php else: ?>
+                            <span class="badge" style="background:#eff6ff; color:#2563eb; border:1px solid #bfdbfe;"><i class="fas fa-comment-dots"></i> Texted</span>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <span class="badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1;"><?php echo e($admName); ?></span>
+                    </td>
+                    <td style="white-space:nowrap;"><?php echo date('d M Y', $ts); ?></td>
+                    <td style="white-space:nowrap; color:var(--text-muted); font-size:0.8rem;"><?php echo date('h:i A', $ts); ?></td>
+                    <td style="max-width:260px; font-size:0.82rem; line-height:1.35; color:#334155;">
+                        <?php echo e($cr['remark'] ?: '-'); ?>
+                    </td>
+                    <td class="cell-sub"><?php echo $cr['assigned_to'] === '__ALL__' ? '<span class="badge violet">All Admins</span>' : e($cr['assigned_to'] ?: '-'); ?></td>
+                    <td style="text-align:right; white-space:nowrap;">
+                        <button type="button" class="btn btn-sm btn-outline" onclick="openViewHistoryModal(<?php echo (int)$cr['lead_id']; ?>, '<?php echo e(addslashes($cr['name'] ?: 'Unknown')); ?>')" title="View Contact History" style="border-radius:6px; font-size:0.75rem; padding:4px 8px; font-weight:600;">
+                            <i class="fas fa-history"></i> History
+                        </button>
+                        <a class="btn btn-sm btn-outline" href="tel:<?php echo preg_replace('/\D/', '', $cr['whatsapp_number']); ?>" title="Call"><i class="fas fa-phone"></i></a>
+                        <a class="btn btn-sm btn-whatsapp" href="<?php echo e(wa_link($cr['whatsapp_number'])); ?>" target="_blank" title="WhatsApp"><i class="fab fa-whatsapp"></i></a>
+                        <a class="btn btn-sm btn-primary" href="lead-details.php?id=<?php echo (int)$cr['lead_id']; ?>" title="Open lead"><i class="fas fa-arrow-right"></i></a>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php if ($call_total_pages > 1): ?>
+        <div class="pagination">
+            <?php if ($call_page > 1): ?><a class="page-link" href="<?php echo e(lqs(['call_page' => $call_page - 1])); ?>"><i class="fas fa-chevron-left"></i></a><?php endif; ?>
+            <?php for ($p = max(1, $call_page - 3); $p <= min($call_total_pages, $call_page + 3); $p++): ?>
+                <a class="page-link <?php echo $p === $call_page ? 'active' : ''; ?>" href="<?php echo e(lqs(['call_page' => $p])); ?>"><?php echo $p; ?></a>
+            <?php endfor; ?>
+            <?php if ($call_page < $call_total_pages): ?><a class="page-link" href="<?php echo e(lqs(['call_page' => $call_page + 1])); ?>"><i class="fas fa-chevron-right"></i></a><?php endif; ?>
+        </div>
+        <?php endif; ?>
         <?php endif; ?>
     </div>
 </div>
@@ -1511,6 +2073,7 @@ include 'includes/admin_nav.php';
                     </div>
                 </div>
             </div>
+            <div class="field"><label>Search Remark</label><input type="text" name="lead_remark" value="<?php echo e($f_lead_remark); ?>" placeholder="Search remarks..."></div>
             <div class="field grow-2"><label>Search</label><input type="text" name="q" value="<?php echo e($f_q); ?>" placeholder="Name, WhatsApp, course or institute"></div>
             <button type="submit" class="btn btn-primary"><i class="fas fa-filter"></i> Filter</button>
             <?php if (isset($_SESSION['locked_lead_filters'])): ?>
@@ -1686,6 +2249,12 @@ include 'includes/admin_nav.php';
                                 <i class="fas fa-check-circle"></i> Mark Converted
                             </button>
                         <?php endif; ?>
+                        <button type="button" class="btn btn-sm btn-outline btn-instant-contact" 
+                                onclick="openInstantContactModal(<?php echo (int)$l['id']; ?>, '<?php echo e(addslashes($l['name'] ?: 'Unknown')); ?>', '<?php echo e($l['status']); ?>', '<?php echo e(addslashes($LEAD_STATUSES[$l['status']][0] ?? $l['status'])); ?>')" 
+                                title="Instant Contact Update" 
+                                style="color:#16a34a; border-color:#bbf7d0; background:#f0fdf4; padding:4px 8px; margin-right:4px;">
+                            <i class="fas fa-check"></i>
+                        </button>
                         <a class="btn btn-sm btn-outline" href="tel:<?php echo preg_replace('/\D/', '', $l['whatsapp_number']); ?>" title="Call"><i class="fas fa-phone"></i></a>
                         <a class="btn btn-sm btn-whatsapp" href="<?php echo e(wa_link($l['whatsapp_number'])); ?>" target="_blank" title="WhatsApp"><i class="fab fa-whatsapp"></i></a>
                         <a class="btn btn-sm btn-primary" href="lead-details.php?id=<?php echo (int)$l['id']; ?>" title="Open lead"><i class="fas fa-arrow-right"></i></a>
@@ -1964,10 +2533,11 @@ include 'includes/admin_nav.php';
 <?php endif; ?>
 
 <?php
-$extra_scripts = "
+ob_start();
+?>
 <!-- Hidden POST Form for Manual Conversion -->
 <form id='manual-conversion-form' method='POST' action='lead-management.php' style='display:none;'>
-    " . csrf_field() . "
+    <?php echo csrf_field(); ?>
     <input type='hidden' name='action' value='mark_converted'>
     <input type='hidden' name='lead_id' id='post-convert-lead-id'>
     <input type='hidden' name='student_user_id' id='post-convert-student-id'>
@@ -2011,8 +2581,115 @@ $extra_scripts = "
         </div>
         
         <div style='display:flex; justify-content:end; gap:8px;'>
-            <button onclick=\"document.getElementById('confirm-conversion-modal').style.display='none'\" class='btn btn-outline' style='border-radius:8px; font-size:0.8rem; padding:6px 14px;'>Cancel</button>
+            <button onclick="document.getElementById('confirm-conversion-modal').style.display='none'" class='btn btn-outline' style='border-radius:8px; font-size:0.8rem; padding:6px 14px;'>Cancel</button>
             <button onclick='submitManualConversion()' class='btn btn-success' style='border-radius:8px; font-size:0.8rem; padding:6px 14px; font-weight:700;'>Yes, Mark Converted</button>
+        </div>
+    </div>
+</div>
+
+<!-- ── INSTANT CONTACT MODAL (2-STEP) ── -->
+<div class="modal-backdrop" id="instant-contact-modal" style="display:none;">
+    <div class="modal" style="max-width:500px;">
+        <div class="modal-head" style="display:flex; justify-content:space-between; align-items:center;">
+            <h3><i class="fas fa-check-circle" style="color:#16a34a;"></i> Instant Contact — <span id="ic-lead-name"></span></h3>
+            <button type="button" class="modal-close" onclick="closeModal('instant-contact-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+
+        <!-- Step 1: Method Choice -->
+        <div id="ic-step-1" style="padding:24px 20px;">
+            <p style="font-size:0.92rem; font-weight:600; color:#334155; margin-bottom:18px; text-align:center;">
+                How did you contact this prospective student?
+            </p>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:20px;">
+                <button type="button" onclick="selectInstantContactMethod('Called')" style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:22px 14px; border:2px solid #bbf7d0; border-radius:12px; background:#f0fdf4; color:#166534; font-size:1.05rem; font-weight:700; cursor:pointer; transition:all 0.15s ease;" onmouseover="this.style.background='#dcfce7'; this.style.borderColor='#86efac';" onmouseout="this.style.background='#f0fdf4'; this.style.borderColor='#bbf7d0';">
+                    <i class="fas fa-phone-volume" style="font-size:1.8rem; color:#16a34a;"></i>
+                    <span>Called</span>
+                </button>
+                <button type="button" onclick="selectInstantContactMethod('Texted')" style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:22px 14px; border:2px solid #bfdbfe; border-radius:12px; background:#eff6ff; color:#1e40af; font-size:1.05rem; font-weight:700; cursor:pointer; transition:all 0.15s ease;" onmouseover="this.style.background='#dbeafe'; this.style.borderColor='#93c5fd';" onmouseout="this.style.background='#eff6ff'; this.style.borderColor='#bfdbfe';">
+                    <i class="fas fa-comment-dots" style="font-size:1.8rem; color:#2563eb;"></i>
+                    <span>Texted</span>
+                </button>
+            </div>
+            <div style="display:flex; justify-content:flex-end;">
+                <button type="button" class="btn btn-outline" onclick="closeModal('instant-contact-modal')">Cancel</button>
+            </div>
+        </div>
+
+        <!-- Step 2: Status, Remarks, and Submit -->
+        <form method="POST" action="lead-management.php<?php echo e(lqs()); ?>" id="ic-step-2-form" style="display:none; margin:0;">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="instant_contact">
+            <input type="hidden" name="lead_id" id="ic-lead-id" value="">
+            <input type="hidden" name="contact_type" id="ic-contact-type" value="">
+
+            <div class="modal-body" style="padding:16px 20px;">
+                <!-- Method summary banner -->
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; padding:8px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
+                    <div style="font-size:0.85rem; font-weight:600; color:#475569;">
+                        Method: <span id="ic-method-badge" style="margin-left:4px;"></span>
+                    </div>
+                    <button type="button" onclick="backToInstantContactStep1()" style="background:none; border:none; color:var(--accent); font-size:0.75rem; font-weight:600; cursor:pointer; text-decoration:underline;">
+                        Change
+                    </button>
+                </div>
+
+                <!-- Lead Status Dropdown (pre-selected to current status) -->
+                <div class="field" style="margin-bottom:14px;">
+                    <label style="font-size:0.82rem; font-weight:700; color:#334155; margin-bottom:4px; display:block;">Lead Status</label>
+                    <select name="status" id="ic-status-select" style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; font-weight:600;">
+                        <?php foreach ($LEAD_STATUSES as $k => $v): ?>
+                            <option value="<?php echo $k; ?>"><?php echo $v[0]; ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <span style="font-size:0.75rem; color:#64748b; margin-top:3px; display:block;">Pre-selected to current status. Status updates only if you pick a different status.</span>
+                </div>
+
+                <!-- Quick Remarks Badges -->
+                <div style="margin-bottom:12px;">
+                    <label style="font-size:0.82rem; font-weight:700; color:#334155; margin-bottom:6px; display:block;">Quick Remarks</label>
+                    <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                        <button type="button" onclick="applyQuickRemark('Student confirmed to do the payment')" style="font-size:0.75rem; font-weight:600; padding:4px 10px; border-radius:999px; border:1px solid #bbf7d0; background:#f0fdf4; color:#166534; cursor:pointer;">
+                            💰 Payment Confirmed
+                        </button>
+                        <button type="button" onclick="applyQuickRemark('Call was not attended')" style="font-size:0.75rem; font-weight:600; padding:4px 10px; border-radius:999px; border:1px solid #fed7aa; background:#fff7ed; color:#9a3412; cursor:pointer;">
+                            📵 Call not attended
+                        </button>
+                        <button type="button" onclick="applyQuickRemark('Student requested to be contacted later')" style="font-size:0.75rem; font-weight:600; padding:4px 10px; border-radius:999px; border:1px solid #bfdbfe; background:#eff6ff; color:#1e40af; cursor:pointer;">
+                            ⏰ Call Later
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Remark Field -->
+                <div class="field full" style="margin-bottom:0;">
+                    <label style="font-size:0.82rem; font-weight:700; color:#334155; margin-bottom:4px; display:block;">Interaction Remark</label>
+                    <textarea name="remark" id="ic-remark-text" rows="3" placeholder="Add interaction notes..." style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; font-family:inherit;"></textarea>
+                </div>
+            </div>
+
+            <div class="modal-foot" style="display:flex; justify-content:flex-end; gap:8px; padding:12px 20px; background:#f8fafc; border-top:1px solid #e2e8f0;">
+                <button type="button" class="btn btn-outline" onclick="closeModal('instant-contact-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="ic-submit-btn"><i class="fas fa-floppy-disk"></i> Update</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── VIEW CONTACT HISTORY MODAL ── -->
+<div class="modal-backdrop" id="view-history-modal" style="display:none;">
+    <div class="modal" style="max-width:580px;">
+        <div class="modal-head" style="display:flex; justify-content:space-between; align-items:center;">
+            <h3><i class="fas fa-history" style="color:var(--accent);"></i> Contact History — <span id="vh-lead-name"></span></h3>
+            <button type="button" class="modal-close" onclick="closeModal('view-history-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div class="modal-body" style="padding:16px 20px; max-height:480px; overflow-y:auto;" id="vh-history-body">
+            <div style="text-align:center; padding:30px; color:#64748b;">
+                <i class="fas fa-spinner fa-spin" style="font-size:1.5rem; margin-bottom:8px;"></i>
+                <p>Loading history...</p>
+            </div>
+        </div>
+        <div class="modal-foot" style="display:flex; justify-content:flex-end; padding:10px 20px; background:#f8fafc; border-top:1px solid #e2e8f0;">
+            <button type="button" class="btn btn-outline" onclick="closeModal('view-history-modal')">Close</button>
         </div>
     </div>
 </div>
@@ -2301,6 +2978,129 @@ function closeEditConvertedByModal() {
     var modal = document.getElementById('edit-converted-by-modal');
     if (modal) modal.style.display = 'none';
 }
-</script>";
+
+function openInstantContactModal(leadId, leadName, currentStatus, statusLabel) {
+    var idInput = document.getElementById('ic-lead-id');
+    var nameSpan = document.getElementById('ic-lead-name');
+    var remarkText = document.getElementById('ic-remark-text');
+    var statusSelect = document.getElementById('ic-status-select');
+
+    if (idInput) idInput.value = leadId;
+    if (nameSpan) nameSpan.textContent = leadName;
+    if (remarkText) remarkText.value = '';
+    if (statusSelect) statusSelect.value = currentStatus;
+
+    // Reset to step 1
+    var step1 = document.getElementById('ic-step-1');
+    var step2 = document.getElementById('ic-step-2-form');
+    if (step1) step1.style.display = 'block';
+    if (step2) step2.style.display = 'none';
+
+    openModal('instant-contact-modal');
+}
+
+function selectInstantContactMethod(method) {
+    var typeInput = document.getElementById('ic-contact-type');
+    if (typeInput) typeInput.value = method;
+
+    var badge = document.getElementById('ic-method-badge');
+    if (badge) {
+        if (method === 'Called') {
+            badge.innerHTML = '<span class="badge" style="background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0;"><i class="fas fa-phone-volume"></i> Called</span>';
+        } else {
+            badge.innerHTML = '<span class="badge" style="background:#eff6ff; color:#2563eb; border:1px solid #bfdbfe;"><i class="fas fa-comment-dots"></i> Texted</span>';
+        }
+    }
+
+    var step1 = document.getElementById('ic-step-1');
+    var step2 = document.getElementById('ic-step-2-form');
+    if (step1) step1.style.display = 'none';
+    if (step2) step2.style.display = 'block';
+
+    var remarkText = document.getElementById('ic-remark-text');
+    if (remarkText) remarkText.focus();
+}
+
+function backToInstantContactStep1() {
+    var step1 = document.getElementById('ic-step-1');
+    var step2 = document.getElementById('ic-step-2-form');
+    if (step2) step2.style.display = 'none';
+    if (step1) step1.style.display = 'block';
+}
+
+function applyQuickRemark(text) {
+    var ta = document.getElementById('ic-remark-text');
+    if (ta) {
+        ta.value = text;
+        ta.focus();
+    }
+}
+
+function openViewHistoryModal(leadId, leadName) {
+    var nameSpan = document.getElementById('vh-lead-name');
+    if (nameSpan) nameSpan.textContent = leadName;
+
+    var container = document.getElementById('vh-history-body');
+    if (container) {
+        container.innerHTML = '<div style="text-align:center; padding:30px; color:#64748b;"><i class="fas fa-spinner fa-spin" style="font-size:1.5rem; margin-bottom:8px;"></i><p>Loading contact history...</p></div>';
+    }
+
+    openModal('view-history-modal');
+
+    fetch('lead-management.php?action=get_contact_history&lead_id=' + encodeURIComponent(leadId))
+        .then(function(res) {
+            if (!res.ok) throw new Error('HTTP error ' + res.status);
+            return res.json();
+        })
+        .then(function(data) {
+            if (!container) return;
+            if (!data.history || data.history.length === 0) {
+                container.innerHTML = '<div class="empty-state" style="padding:24px 0;"><i class="fas fa-phone-slash" style="font-size:1.8rem; color:#94a3b8; margin-bottom:8px;"></i><p style="color:#64748b; font-size:0.88rem;">No contact history recorded yet.</p></div>';
+                return;
+            }
+            var html = '<div style="display:flex; flex-direction:column; gap:12px;">';
+            data.history.forEach(function(item) {
+                var isCalled = item.contact_type === 'Called';
+                var badgeStyle = isCalled
+                    ? 'background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0;'
+                    : 'background:#eff6ff; color:#2563eb; border:1px solid #bfdbfe;';
+                var iconClass = isCalled ? 'fa-phone-volume' : 'fa-comment-dots';
+
+                html += '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px;">';
+                html += '  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:6px;">';
+                html += '    <div style="display:flex; align-items:center; gap:8px;">';
+                html += '      <span class="badge" style="' + badgeStyle + '"><i class="fas ' + iconClass + '"></i> ' + escapeHtml(item.contact_type) + '</span>';
+                html += '      <span style="font-size:0.8rem; font-weight:600; color:#475569;">by ' + escapeHtml(item.admin_name) + '</span>';
+                html += '    </div>';
+                html += '    <span style="font-size:0.75rem; color:#64748b;">' + escapeHtml(item.date_str) + ' at ' + escapeHtml(item.time_str) + '</span>';
+                html += '  </div>';
+
+                if (item.old_label && item.new_label && item.old_label !== item.new_label) {
+                    html += '  <div style="font-size:0.75rem; color:#475569; margin-bottom:6px; display:flex; align-items:center; gap:4px;">';
+                    html += '    <span style="color:#64748b;">Status changed:</span> ';
+                    html += '    <span class="badge gray" style="font-size:0.7rem;">' + escapeHtml(item.old_label) + '</span> &rarr; ';
+                    html += '    <span class="badge green" style="font-size:0.7rem;">' + escapeHtml(item.new_label) + '</span>';
+                    html += '  </div>';
+                }
+
+                if (item.remark) {
+                    html += '  <div style="font-size:0.82rem; color:#1e293b; background:#fff; border:1px solid #f1f5f9; border-radius:6px; padding:8px 10px; margin-top:4px; line-height:1.4;">';
+                    html += escapeHtml(item.remark);
+                    html += '  </div>';
+                }
+                html += '</div>';
+            });
+            html += '</div>';
+            container.innerHTML = html;
+        })
+        .catch(function(err) {
+            if (container) {
+                container.innerHTML = '<div class="alert alert-danger" style="margin:10px 0;"><i class="fas fa-circle-exclamation"></i><span>Could not load contact history: ' + escapeHtml(err.message) + '</span></div>';
+            }
+        });
+}
+</script>
+<?php
+$extra_scripts = ob_get_clean();
 include 'includes/admin_footer.php';
 ?>
