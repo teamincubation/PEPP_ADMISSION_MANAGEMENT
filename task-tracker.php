@@ -482,12 +482,46 @@ var workModesConfig = <?php echo json_encode($modes_json); ?>;
 }
 .topic-input-row {
     display: flex;
-    gap: 8px;
+    gap: 10px;
     margin-bottom: 8px;
     align-items: center;
 }
-.topic-input-row input {
-    flex: 1;
+.topic-input-row .topic-input {
+    flex: 1 1 auto;
+    min-width: 140px;
+}
+.topic-input-row .qty-container {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+.topic-input-row .qty-input {
+    width: 90px !important;
+    min-width: 80px;
+    max-width: 100px;
+    flex: 0 0 90px;
+    box-sizing: border-box;
+    text-align: center;
+    padding: 9px 8px;
+}
+.topic-input-row .qty-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+@media (max-width: 576px) {
+    .topic-input-row {
+        flex-wrap: wrap;
+    }
+    .topic-input-row .topic-input {
+        width: 100%;
+        flex: 1 1 100%;
+    }
+    .topic-input-row .qty-container {
+        flex: 1;
+    }
 }
 .timeline-list {
     position: relative;
@@ -716,11 +750,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     <div class="field">
                         <label>Topics Completed <span class="req">*</span></label>
                         <div id="topics-container">
-                            <div class="topic-input-row" style="display:flex; gap:10px; margin-bottom:8px; align-items:center;">
-                                <input type="text" name="topics[]" class="topic-input" placeholder="e.g. Personality theories" required style="flex:2;">
-                                <div class="qty-container" style="display:flex; align-items:center; gap:6px; flex:1;">
-                                    <input type="number" min="1" step="1" required name="quantities[]" class="qty-input" placeholder="Qty *" style="width:100px;">
-                                    <span class="qty-label" style="font-size:0.85rem; font-weight:600; color:var(--text-muted);">Qty *</span>
+                            <div class="topic-input-row">
+                                <input type="text" name="topics[]" class="topic-input" placeholder="e.g. Personality theories" required>
+                                <div class="qty-container">
+                                    <input type="number" min="1" step="1" required name="quantities[]" class="qty-input" placeholder="Qty *">
+                                    <span class="qty-label">Qty *</span>
                                 </div>
                                 <button type="button" class="btn btn-sm btn-soft-red" style="opacity:0; pointer-events:none; padding:10px 12px;"><i class="fas fa-trash"></i></button>
                             </div>
@@ -1020,10 +1054,6 @@ function addTopicRow(val = '', qty = '') {
     var container = document.getElementById('topics-container');
     var row = document.createElement('div');
     row.className = 'topic-input-row';
-    row.style.display = 'flex';
-    row.style.gap = '10px';
-    row.style.marginBottom = '8px';
-    row.style.alignItems = 'center';
 
     var input = document.createElement('input');
     input.type = 'text';
@@ -1032,14 +1062,9 @@ function addTopicRow(val = '', qty = '') {
     input.placeholder = 'Next topic completed';
     input.value = val;
     input.required = true;
-    input.style.flex = '2';
 
     var qtyContainer = document.createElement('div');
     qtyContainer.className = 'qty-container';
-    qtyContainer.style.display = 'flex';
-    qtyContainer.style.alignItems = 'center';
-    qtyContainer.style.gap = '6px';
-    qtyContainer.style.flex = '1';
 
     var qtyLabelText = getSelectedModeQtyLabel();
     var displayLabel = qtyLabelText ? (qtyLabelText + ' *') : 'Qty *';
@@ -1054,13 +1079,9 @@ function addTopicRow(val = '', qty = '') {
     qtyInput.value = (qty !== '' && qty !== null && qty !== undefined) ? qty : '1';
     qtyInput.required = true;
     qtyInput.classList.add('qty-required');
-    qtyInput.style.width = '100px';
 
     var qtyLabel = document.createElement('span');
     qtyLabel.className = 'qty-label';
-    qtyLabel.style.fontSize = '0.85rem';
-    qtyLabel.style.fontWeight = '600';
-    qtyLabel.style.color = 'var(--text-muted)';
     qtyLabel.textContent = displayLabel;
 
     qtyContainer.appendChild(qtyInput);
@@ -1096,10 +1117,6 @@ function enterEditMode(data) {
         if (idx === 0) {
             var row = document.createElement('div');
             row.className = 'topic-input-row';
-            row.style.display = 'flex';
-            row.style.gap = '10px';
-            row.style.marginBottom = '8px';
-            row.style.alignItems = 'center';
 
             var input = document.createElement('input');
             input.type = 'text';
@@ -1107,14 +1124,9 @@ function enterEditMode(data) {
             input.className = 'topic-input';
             input.value = tp.name;
             input.required = true;
-            input.style.flex = '2';
 
             var qtyContainer = document.createElement('div');
             qtyContainer.className = 'qty-container';
-            qtyContainer.style.display = 'flex';
-            qtyContainer.style.alignItems = 'center';
-            qtyContainer.style.gap = '6px';
-            qtyContainer.style.flex = '1';
 
             var qtyLabelText = getSelectedModeQtyLabel();
             var displayLabel = qtyLabelText ? (qtyLabelText + ' *') : 'Qty *';
@@ -1129,13 +1141,9 @@ function enterEditMode(data) {
             qtyInput.value = tp.qty;
             qtyInput.required = true;
             qtyInput.classList.add('qty-required');
-            qtyInput.style.width = '100px';
 
             var qtyLabel = document.createElement('span');
             qtyLabel.className = 'qty-label';
-            qtyLabel.style.fontSize = '0.85rem';
-            qtyLabel.style.fontWeight = '600';
-            qtyLabel.style.color = 'var(--text-muted)';
             qtyLabel.textContent = displayLabel;
 
             qtyContainer.appendChild(qtyInput);
@@ -1181,10 +1189,6 @@ function cancelEditMode() {
 
     var row = document.createElement('div');
     row.className = 'topic-input-row';
-    row.style.display = 'flex';
-    row.style.gap = '10px';
-    row.style.marginBottom = '8px';
-    row.style.alignItems = 'center';
 
     var input = document.createElement('input');
     input.type = 'text';
@@ -1192,14 +1196,9 @@ function cancelEditMode() {
     input.className = 'topic-input';
     input.placeholder = 'e.g. Personality theories';
     input.required = true;
-    input.style.flex = '2';
 
     var qtyContainer = document.createElement('div');
     qtyContainer.className = 'qty-container';
-    qtyContainer.style.display = 'flex';
-    qtyContainer.style.alignItems = 'center';
-    qtyContainer.style.gap = '6px';
-    qtyContainer.style.flex = '1';
 
     var qtyInput = document.createElement('input');
     qtyInput.type = 'number';
@@ -1210,13 +1209,9 @@ function cancelEditMode() {
     qtyInput.placeholder = 'Qty *';
     qtyInput.required = true;
     qtyInput.classList.add('qty-required');
-    qtyInput.style.width = '100px';
 
     var qtyLabel = document.createElement('span');
     qtyLabel.className = 'qty-label';
-    qtyLabel.style.fontSize = '0.85rem';
-    qtyLabel.style.fontWeight = '600';
-    qtyLabel.style.color = 'var(--text-muted)';
     qtyLabel.textContent = 'Qty *';
 
     qtyContainer.appendChild(qtyInput);
