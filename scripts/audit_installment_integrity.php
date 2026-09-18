@@ -123,6 +123,10 @@ if ($mode === 'dry-run') {
     }
     echo "Composite UNIQUE constraint (user_id, instalment_number): " . ($hasCompositeUnique ? "PRESENT" : "MISSING") . "\n\n";
 
+    $stmtTotal = safe_query($pdo, "SELECT COUNT(*) FROM instalment_details", [], true);
+    $totalRows = (int)$stmtTotal->fetchColumn();
+    echo "Total Installment Rows in Table: {$totalRows}\n\n";
+
     echo "--- 2. IN-FLIGHT PAYMENT SUBMISSION AUDIT ---\n";
     $stmtInFlight = safe_query($pdo, "
         SELECT id, user_id, instalment_number, status, amount, paid_amount, paid_date, payment_reference, payment_mode, approved_by, approved_at
@@ -184,7 +188,6 @@ if ($mode === 'dry-run') {
             } elseif ($r['status'] === 'pending' && empty($r['paid_date'])) {
                 $emptyPendingRows[] = $r;
             } else {
-                // Rejected or other status
                 $emptyPendingRows[] = $r;
             }
         }
@@ -197,31 +200,26 @@ if ($mode === 'dry-run') {
         ];
 
         if (count($approvedRows) === 1 && count($inFlightSubmissions) === 0) {
-            // Group A: Exactly one approved row, remainder are empty pending
             $groupInfo['canonical_row'] = $approvedRows[0];
             $groupInfo['redundant_rows'] = $emptyPendingRows;
             $classifiedGroups['A_approved_with_pending'][] = $groupInfo;
         } elseif (count($inFlightSubmissions) === 1 && count($approvedRows) === 0) {
-            // Group B: Exactly one payment awaiting review, remainder are empty pending
             $groupInfo['canonical_row'] = $inFlightSubmissions[0];
             $groupInfo['redundant_rows'] = $emptyPendingRows;
             $classifiedGroups['B_inflight_with_pending'][] = $groupInfo;
         } elseif (count($approvedRows) === 0 && count($inFlightSubmissions) === 0) {
-            // Group C: Multiple empty pending rows
-            // Deterministic canonical rule: prefer row with non-empty admin_remarks or oldest ID
             usort($rows, function($a, $b) {
                 $aHasRemark = !empty(trim($a['admin_remarks'] ?? ''));
                 $bHasRemark = !empty(trim($b['admin_remarks'] ?? ''));
                 if ($aHasRemark !== $bHasRemark) {
-                    return $bHasRemark <=> $aHasRemark; // row with remark comes first
+                    return $bHasRemark <=> $aHasRemark;
                 }
-                return (int)$a['id'] <=> (int)$b['id']; // earliest id as tie-breaker
+                return (int)$a['id'] <=> (int)$b['id'];
             });
             $groupInfo['canonical_row'] = $rows[0];
             $groupInfo['redundant_rows'] = array_slice($rows, 1);
             $classifiedGroups['C_multiple_pending'][] = $groupInfo;
         } else {
-            // Group D: Conflicting financial evidence (multiple approved rows or approved + in-flight)
             $classifiedGroups['D_manual_review_needed'][] = $groupInfo;
         }
     }
@@ -230,22 +228,47 @@ if ($mode === 'dry-run') {
     echo "Total Affected Students         : " . count($affectedStudents) . "\n";
     echo "Total Affected Rows             : {$totalAffectedRows}\n\n";
 
-    echo "--- 4. DUPLICATE CLASSIFICATION BREAKDOWN ---\n";
+    echo "--- 4. DUPLICATE CLASSIFICATION BREAKDOWN & PROPOSED ACTIONS ---\n";
     echo "Group A (Approved payment + redundant pending duplicate)     : " . count($classifiedGroups['A_approved_with_pending']) . " groups\n";
     echo "Group B (In-flight review payment + redundant pending)      : " . count($classifiedGroups['B_inflight_with_pending']) . " groups\n";
     echo "Group C (Multiple empty pending rows)                       : " . count($classifiedGroups['C_multiple_pending']) . " groups\n";
     echo "Group D (CONFLICTING FINANCIAL EVIDENCE / MANUAL REVIEW)    : " . count($classifiedGroups['D_manual_review_needed']) . " groups\n\n";
 
-    if (count($classifiedGroups['D_manual_review_needed']) > 0) {
-        echo "🚨 WARNING: Group D records require MANUAL review. They will NOT be auto-reconciled.\n";
-        foreach ($classifiedGroups['D_manual_review_needed'] as $dGrp) {
-            echo "  - Student {$dGrp['user_id']}, Inst #{$dGrp['instalment_number']}:\n";
-            foreach ($dGrp['rows'] as $r) {
-                echo "      Row ID {$r['id']} | Status: {$r['status']} | Amount: ₹{$r['amount']} | Paid Amount: ₹{$r['paid_amount']} | Ref: {$r['payment_reference']}\n";
+    $printGroupDetails = function(string $title, array $groups, string $actionTemplate) {
+        if (empty($groups)) return;
+        echo "=== $title (" . count($groups) . " groups) ===\n";
+        foreach ($groups as $idx => $grp) {
+            $num = $idx + 1;
+            echo "--------------------------------------------------------------------\n";
+            echo "Group #$num: Student [{$grp['user_id']}] — Installment #{$grp['instalment_number']} ({$grp['total_count']} rows)\n";
+            foreach ($grp['rows'] as $r) {
+                echo "  • Row ID: " . str_pad($r['id'], 6) . 
+                     " | Status: " . str_pad($r['status'], 8) . 
+                     " | Amount: ₹" . str_pad(number_format((float)$r['amount'], 2), 10) . 
+                     " | Paid Amt: " . ($r['paid_amount'] !== null ? "₹" . number_format((float)$r['paid_amount'], 2) : "NULL      ") . 
+                     " | Paid Date: " . ($r['paid_date'] ?: "NULL      ") . 
+                     " | Ref: " . ($r['payment_reference'] ?: "NULL") . 
+                     " | Mode: " . ($r['payment_mode'] ?: "NULL") . 
+                     " | Approved By: " . ($r['approved_by'] ?: "NULL") . 
+                     " | Approved At: " . ($r['approved_at'] ?: "NULL") . 
+                     " | Created: {$r['created_at']}" . 
+                     " | Updated: {$r['updated_at']}\n";
+            }
+            if (isset($grp['canonical_row'])) {
+                $canId = $grp['canonical_row']['id'];
+                $redIds = implode(', ', array_column($grp['redundant_rows'], 'id'));
+                echo "  >>> PROPOSED ACTION: Keep canonical Row ID $canId ({$grp['canonical_row']['status']}); Prune redundant unevidenced pending Row ID(s): [$redIds]\n";
+            } else {
+                echo "  >>> PROPOSED ACTION: MANUAL REVIEW REQUIRED — NO AUTOMATIC ACTION. Preserving all records untouched.\n";
             }
         }
         echo "\n";
-    }
+    };
+
+    $printGroupDetails("GROUP A: APPROVED PAYMENT + REDUNDANT PENDING DUPLICATE", $classifiedGroups['A_approved_with_pending'], "Retain canonical approved row, prune empty pending duplicate");
+    $printGroupDetails("GROUP B: IN-FLIGHT REVIEW PAYMENT + REDUNDANT PENDING", $classifiedGroups['B_inflight_with_pending'], "Retain canonical in-flight review row, prune empty pending duplicate");
+    $printGroupDetails("GROUP C: MULTIPLE EMPTY PENDING ROWS", $classifiedGroups['C_multiple_pending'], "Retain deterministic row (remarks first, else lowest ID), prune redundant empty pending");
+    $printGroupDetails("GROUP D: CONFLICTING FINANCIAL EVIDENCE (MANUAL REVIEW)", $classifiedGroups['D_manual_review_needed'], "MANUAL REVIEW REQUIRED");
 
     echo "--- 5. DRY-RUN RECONCILIATION SUMMARY ---\n";
     $safePrunableRows = 0;
