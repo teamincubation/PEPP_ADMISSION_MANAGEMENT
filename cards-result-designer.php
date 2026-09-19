@@ -6,6 +6,7 @@
 require_once 'includes/auth.php';
 require_once 'config/database.php';
 require_once 'includes/assessment_rank_helper.php';
+require_once 'includes/card_helper.php';
 
 require_permission('cards');
 
@@ -1121,6 +1122,7 @@ include 'includes/admin_nav.php';
     <h3 style="margin-top: 15px; font-weight: 700; color: #1e293b;" id="loader-message">Saving Design Config...</h3>
 </div>
 
+<?php render_card_bg_js_helper(); ?>
 <script>
 // Binary array conversion helpers for physical DPI metadata injection
 function dataURLToArrayBuffer(dataUrl) {
@@ -1274,8 +1276,7 @@ let currentTemplateId = <?php echo (int)$template_id; ?>;
 const availableTemplates = <?php echo json_encode($all_templates); ?>;
 
 function resolveBgUrl(url) {
-    if (!url) return '';
-    return (url.startsWith('linear-gradient') || url.startsWith('radial-gradient') || url.startsWith('#') || url.startsWith('http') || url.startsWith('../')) ? url : '../' + url;
+    return resolveCardBgUrl(url);
 }
 
 // Loaded database data
@@ -1343,16 +1344,17 @@ let resolvedBgUrl = resolveBgUrl(bgUrl);
 // Function to load template background image
 function loadBackgroundImage(url) {
     return new Promise((resolve, reject) => {
-        if (url.startsWith('linear-gradient') || url.startsWith('radial-gradient') || url.startsWith('#')) {
+        const type = getCardBgType(url);
+        if (type === 'gradient' || type === 'color' || type === 'empty') {
             // Gradient/Color background doesn't need an image load
             resolve({ naturalWidth: bgW, naturalHeight: bgH });
             return;
         }
         const img = new Image();
         img.crossOrigin = 'anonymous';
-        img.src = url;
+        img.src = resolveCardBgUrl(url);
         img.onload = () => resolve(img);
-        img.onerror = () => reject(new Error("Failed to load image from URL: " + url));
+        img.onerror = () => reject(new Error("Failed to load image from URL: " + resolveCardBgUrl(url)));
     });
 }
 
@@ -1825,8 +1827,7 @@ function drawElements() {
     bg.style.left = '0';
     bg.style.width = bgW + 'px';
     bg.style.height = bgH + 'px';
-    bg.style.backgroundImage = 'url("' + resolvedBgUrl + '")';
-    bg.style.backgroundSize = '100% 100%';
+    applyCardBgToElement(bg, resolvedBgUrl);
     bg.style.zIndex = '1';
     bg.style.pointerEvents = 'none';
     canvas.appendChild(bg);
@@ -3401,14 +3402,7 @@ function saveDesign(isExporting = false) {
 
     ctx.clearRect(0, 0, bgW, bgH);
 
-    // Load background image
-    const bgImg = new Image();
-    bgImg.crossOrigin = 'anonymous';
-    bgImg.src = resolvedBgUrl;
-
-    bgImg.onload = function() {
-        ctx.drawImage(bgImg, 0, 0, bgW, bgH);
-
+    function renderElementsOnCanvas() {
         // Render elements sequentially to preserve order
         const elementPromises = elements.map(function(el, idx) {
             return new Promise((resolve) => {
@@ -3706,11 +3700,29 @@ function saveDesign(isExporting = false) {
                 alert('Save failed: network or connection error.');
             });
         });
-    };
-    bgImg.onerror = function() {
-        loader.style.display = 'none';
-        alert('Failed to load background template image.');
-    };
+    }
+
+    const bgType = getCardBgType(resolvedBgUrl);
+    if (bgType === 'gradient' || bgType === 'color') {
+        drawBackgroundOnCanvasCtx(ctx, resolvedBgUrl, bgW, bgH);
+        renderElementsOnCanvas();
+    } else if (bgType === 'url') {
+        const bgImg = new Image();
+        bgImg.crossOrigin = 'anonymous';
+        bgImg.src = resolveCardBgUrl(resolvedBgUrl);
+        bgImg.onload = function() {
+            ctx.drawImage(bgImg, 0, 0, bgW, bgH);
+            renderElementsOnCanvas();
+        };
+        bgImg.onerror = function() {
+            loader.style.display = 'none';
+            alert('Failed to load background template image.');
+        };
+    } else {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, bgW, bgH);
+        renderElementsOnCanvas();
+    }
 }
 </script>
 

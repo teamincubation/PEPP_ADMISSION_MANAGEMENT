@@ -3,6 +3,7 @@
  * Shared file helper for PEPP admissions.
  * Handles file compression, upload, path management, and replacing old files.
  */
+require_once __DIR__ . '/card_helper.php';
 
 if (!function_exists('compress_image')) {
     function compress_image($source_path, $destination_path, $quality = 80) {

@@ -2,6 +2,7 @@
 require_once 'includes/auth.php';
 require_once 'config/database.php';
 require_once 'includes/file_helper.php';
+require_once 'includes/card_helper.php';
 
 // AJAX: Save template admin access
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_GET['action'] ?? '') === 'save_template_access') {
@@ -262,20 +263,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if (!$orig) {
                         $error_message = 'Source template not found.';
                     } else {
-                        // Duplicate background image if exists
-                        $new_bg_db_path = $orig['bg_image'];
-                        if (!empty($orig['bg_image'])) {
-                            $orig_file_path = __DIR__ . '/../' . ltrim($orig['bg_image'], '/');
-                            if (file_exists($orig_file_path)) {
-                                $target_dir = __DIR__ . '/../uploads/card_templates';
-                                if (!is_dir($target_dir)) {
-                                    @mkdir($target_dir, 0755, true);
-                                }
-                                $new_filename = uniqid('clone_') . '_' . preg_replace('/[^A-Za-z0-9._-]/', '_', basename($orig['bg_image']));
-                                $new_file_path = $target_dir . '/' . $new_filename;
-                                if (@copy($orig_file_path, $new_file_path)) {
-                                    $new_bg_db_path = 'uploads/card_templates/' . $new_filename;
-                                }
+                        // Duplicate background image if it is a local card-template asset
+                        $new_bg_db_path = canonicalize_card_bg_for_db($orig['bg_image']);
+                        $disk_path = resolve_card_bg_disk_path($orig['bg_image'], __DIR__);
+                        if ($disk_path && file_exists($disk_path)) {
+                            $target_dir = __DIR__ . '/../uploads/card_templates';
+                            if (!is_dir($target_dir)) {
+                                @mkdir($target_dir, 0755, true);
+                            }
+                            $new_filename = uniqid('clone_') . '_' . preg_replace('/[^A-Za-z0-9._-]/', '_', basename($disk_path));
+                            $new_file_path = $target_dir . '/' . $new_filename;
+                            if (@copy($disk_path, $new_file_path)) {
+                                $new_bg_db_path = 'uploads/card_templates/' . $new_filename;
                             }
                         }
 
@@ -318,8 +317,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$tid]);
 
                 if ($bg) {
-                    $real_bg = __DIR__ . '/../' . $bg;
-                    if (file_exists($real_bg)) {
+                    $real_bg = resolve_card_bg_disk_path($bg, __DIR__);
+                    if ($real_bg && file_exists($real_bg)) {
                         @unlink($real_bg);
                     }
                 }
@@ -1277,14 +1276,7 @@ include 'includes/admin_nav.php';
             <?php else: ?>
                 <div class="templates-grid">
                     <?php foreach ($active_templates as $tpl):
-                        $bg_style = $tpl['bg_image'];
-                        if (strpos($bg_style, 'gradient') !== false) {
-                            $bg_css = "background: " . $bg_style . ";";
-                        } elseif (strpos($bg_style, '#') === 0 || strpos($bg_style, 'rgb') === 0) {
-                            $bg_css = "background-color: " . $bg_style . ";";
-                        } else {
-                            $bg_css = "background-image: url('../" . htmlspecialchars($bg_style) . "');";
-                        }
+                        $bg_css = get_card_bg_css_style($tpl['bg_image']);
 
                         $has_access = has_template_access($pdo, $admin_username, $tpl['id']);
                         $current_access_ids = [];
@@ -1526,14 +1518,7 @@ include 'includes/admin_nav.php';
             <?php else: ?>
                 <div class="templates-grid">
                     <?php foreach ($all_templates as $tpl):
-                        $bg_style = $tpl['bg_image'];
-                        if (strpos($bg_style, 'gradient') !== false) {
-                            $bg_css = "background: " . $bg_style . ";";
-                        } elseif (strpos($bg_style, '#') === 0 || strpos($bg_style, 'rgb') === 0) {
-                            $bg_css = "background-color: " . $bg_style . ";";
-                        } else {
-                            $bg_css = "background-image: url('../" . htmlspecialchars($bg_style) . "');";
-                        }
+                        $bg_css = get_card_bg_css_style($tpl['bg_image']);
                     ?>
                         <div class="tpl-card">
                             <div class="tpl-preview" style="<?php echo $bg_css; ?>">

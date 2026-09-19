@@ -2,6 +2,7 @@
 require_once 'includes/auth.php';
 require_once 'config/database.php';
 require_once 'includes/file_helper.php';
+require_once 'includes/card_helper.php';
 
 require_permission('card-templates');
 
@@ -46,14 +47,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $height = 600;
         
         if ($bg_source_type === 'file') {
-            $bg_path = handle_file_upload_with_replace('bg_file', 'card_templates', null, ['jpg', 'jpeg', 'png', 'webp']);
-            if (!$bg_path) {
-                $error_message = 'Please select a valid high-quality background image.';
+            if (!empty($_FILES['bg_file']['name']) && $_FILES['bg_file']['error'] !== UPLOAD_ERR_OK) {
+                $error_message = 'Background image upload failed: ' . get_upload_error_message($_FILES['bg_file']['error']);
             } else {
-                $real_path = __DIR__ . '/../' . $bg_path;
-                $dims = @getimagesize($real_path);
-                $width = $dims ? $dims[0] : 800;
-                $height = $dims ? $dims[1] : 600;
+                $bg_path = handle_file_upload_with_replace('bg_file', 'card_templates', null, ['jpg', 'jpeg', 'png', 'webp']);
+                if (!$bg_path) {
+                    $error_message = 'Please select a valid high-quality background image (PNG, JPG, or WEBP under 5MB).';
+                } else {
+                    $real_path = resolve_card_bg_disk_path($bg_path, __DIR__);
+                    $dims = ($real_path && file_exists($real_path)) ? @getimagesize($real_path) : null;
+                    $width = $dims ? $dims[0] : 800;
+                    $height = $dims ? $dims[1] : 600;
+                }
             }
         } else {
             // Gradient or Solid color background
@@ -62,7 +67,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $height = max(100, (int)($_POST['preset_height'] ?? 600));
         }
         
-        if ($bg_path) {
+        $canonical_bg = canonicalize_card_bg_for_db($bg_path);
+        
+        if ($canonical_bg && empty($error_message)) {
             // Calculate aspect ratio
             $gcd = function($a, $b) use (&$gcd) {
                 return ($a % $b) ? $gcd($b, $a % $b) : $b;
@@ -76,11 +83,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 if ($template_id) {
                     // Update existing
                     $stmt = $pdo->prepare("UPDATE card_templates SET title = ?, category = ?, description = ?, bg_image = ?, canvas_width = ?, canvas_height = ?, aspect_ratio = ?, updated_at = NOW() WHERE id = ?");
-                    $stmt->execute([$title, $category, $description, $bg_path, $width, $height, $ratio_str, $template_id]);
+                    $stmt->execute([$title, $category, $description, $canonical_bg, $width, $height, $ratio_str, $template_id]);
                 } else {
                     // Insert new
                     $stmt = $pdo->prepare("INSERT INTO card_templates (title, category, description, bg_image, canvas_width, canvas_height, aspect_ratio, elements_json, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?)");
-                    $stmt->execute([$title, $category, $description, $bg_path, $width, $height, $ratio_str, $admin_username]);
+                    $stmt->execute([$title, $category, $description, $canonical_bg, $width, $height, $ratio_str, $admin_username]);
                     $template_id = $pdo->lastInsertId();
                 }
                 header("Location: cards-edit.php?id=" . $template_id);
@@ -115,47 +122,90 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     try {
-        // Optional background file upload
+        // Retrieve existing template data to preserve state
+        $stmt = $pdo->prepare("SELECT bg_image, canvas_width, canvas_height, resolution_dpi FROM card_templates WHERE id = ?");
+        $stmt->execute([$template_id]);
+        $current_tpl = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$current_tpl) {
+            echo json_encode(['success' => false, 'message' => 'Template not found.']);
+            exit;
+        }
+        $existing_bg = $current_tpl['bg_image'];
+
+        // Four-state background handling:
         $bg_path = null;
-        if (!empty($_FILES['bg_file']['name']) && $_FILES['bg_file']['error'] === UPLOAD_ERR_OK) {
-            // Retrieve old background image to replace
-            $stmt = $pdo->prepare("SELECT bg_image FROM card_templates WHERE id = ?");
-            $stmt->execute([$template_id]);
-            $old_bg = $stmt->fetchColumn();
-            
-            $bg_path = handle_file_upload_with_replace('bg_file', 'card_templates', $old_bg, ['jpg', 'jpeg', 'png', 'webp']);
-            if ($bg_path) {
-                // If a new background was uploaded, set default canvas width/height to the new background's dimensions
-                $real_path = __DIR__ . '/../' . $bg_path;
-                $dims = @getimagesize($real_path);
+        $has_file_upload = isset($_FILES['bg_file']) && !empty($_FILES['bg_file']['name']);
+        if ($has_file_upload) {
+            // State D pre-check: PHP upload error reported
+            if ($_FILES['bg_file']['error'] !== UPLOAD_ERR_OK) {
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Background image upload failed: ' . get_upload_error_message($_FILES['bg_file']['error'])
+                ]);
+                exit;
+            }
+
+            $bg_path = handle_file_upload_with_replace('bg_file', 'card_templates', $existing_bg, ['jpg', 'jpeg', 'png', 'webp']);
+            if (!$bg_path) {
+                // State D: processing failed
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Failed to process background image. Please ensure the file is a valid JPG, PNG, or WEBP under 5MB.'
+                ]);
+                exit;
+            }
+
+            // State A: new valid file uploaded
+            $disk_path = resolve_card_bg_disk_path($bg_path, __DIR__);
+            if ($disk_path && file_exists($disk_path)) {
+                $dims = @getimagesize($disk_path);
                 if ($dims) {
                     $manual_w = $dims[0];
                     $manual_h = $dims[1];
                 }
             }
         }
-        
-        $bg_path_style = trim($_POST['bg_path_style'] ?? '');
+
+        // Determine final bg_image value:
+        $final_bg = $existing_bg; // Default: State C (preserve existing)
         if ($bg_path) {
-            $stmt = $pdo->prepare("UPDATE card_templates SET title = ?, category = ?, description = ?, status = ?, bg_image = ?, canvas_width = ?, canvas_height = ?, resolution_dpi = ?, elements_json = ?, updated_at = NOW() WHERE id = ?");
-            $stmt->execute([$title, $category, $description, $status, $bg_path, $manual_w, $manual_h, $resolution_dpi, $elements_json, $template_id]);
-        } elseif ($bg_path_style !== '') {
-            $stmt = $pdo->prepare("UPDATE card_templates SET title = ?, category = ?, description = ?, status = ?, bg_image = ?, canvas_width = ?, canvas_height = ?, resolution_dpi = ?, elements_json = ?, updated_at = NOW() WHERE id = ?");
-            $stmt->execute([$title, $category, $description, $status, $bg_path_style, $manual_w, $manual_h, $resolution_dpi, $elements_json, $template_id]);
-        } else {
-            if ($manual_w > 0 && $manual_h > 0) {
-                $stmt = $pdo->prepare("UPDATE card_templates SET title = ?, category = ?, description = ?, status = ?, elements_json = ?, canvas_width = ?, canvas_height = ?, resolution_dpi = ?, updated_at = NOW() WHERE id = ?");
-                $stmt->execute([$title, $category, $description, $status, $elements_json, $manual_w, $manual_h, $resolution_dpi, $template_id]);
-            } else {
-                $stmt = $pdo->prepare("UPDATE card_templates SET title = ?, category = ?, description = ?, status = ?, elements_json = ?, resolution_dpi = ?, updated_at = NOW() WHERE id = ?");
-                $stmt->execute([$title, $category, $description, $status, $elements_json, $resolution_dpi, $template_id]);
+            // State A: new valid upload
+            $final_bg = canonicalize_card_bg_for_db($bg_path);
+        } elseif (isset($_POST['bg_path_style']) && trim($_POST['bg_path_style']) !== '') {
+            $submitted_style = trim($_POST['bg_path_style']);
+            $canonical_style = canonicalize_card_bg_for_db($submitted_style);
+            if ($canonical_style !== '') {
+                // State B: Valid bg_path_style supplied
+                $final_bg = $canonical_style;
             }
+            // If submitted_style was invalid / traversal, $final_bg remains $existing_bg
         }
-        echo json_encode(['success' => true]);
+
+        $final_w = $manual_w > 0 ? $manual_w : (int)$current_tpl['canvas_width'];
+        $final_h = $manual_h > 0 ? $manual_h : (int)$current_tpl['canvas_height'];
+        $final_dpi = $resolution_dpi > 0 ? $resolution_dpi : (int)($current_tpl['resolution_dpi'] ?? 72);
+
+        $stmt = $pdo->prepare("
+            UPDATE card_templates 
+            SET title = ?, category = ?, description = ?, status = ?, bg_image = ?, 
+                canvas_width = ?, canvas_height = ?, resolution_dpi = ?, elements_json = ?, updated_at = NOW() 
+            WHERE id = ?
+        ");
+        $stmt->execute([
+            $title, $category, $description, $status, $final_bg,
+            $final_w, $final_h, $final_dpi, $elements_json, $template_id
+        ]);
+
+        echo json_encode([
+            'success' => true,
+            'bg_image' => $final_bg,
+            'bg_url' => resolve_card_bg_browser_url($final_bg)
+        ]);
+        exit;
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        exit;
     }
-    exit;
 }
 
 // Query custom fonts
@@ -804,13 +854,12 @@ include 'includes/admin_nav.php';
         </div>
     </div>
 
+    <?php render_card_bg_js_helper(); ?>
+
     <script>
     var bgW = <?php echo (int)$canvas_w; ?>;
     var bgH = <?php echo (int)$canvas_h; ?>;
-    var bgUrl = '<?php echo addslashes($bg_image_path); ?>';
-    if (bgUrl && !bgUrl.startsWith('linear-gradient') && !bgUrl.startsWith('radial-gradient') && !bgUrl.startsWith('#') && !bgUrl.startsWith('http') && !bgUrl.startsWith('../')) {
-        bgUrl = '../' + bgUrl;
-    }
+    var bgUrl = resolveCardBgUrl('<?php echo addslashes($bg_image_path); ?>');
     var elements = <?php echo $tpl['elements_json'] ?: '[]'; ?>;
     var activeId = null;
 
@@ -1140,9 +1189,9 @@ include 'includes/admin_nav.php';
 
     var originalW = bgW;
     var originalH = bgH;
-    if (bgUrl && !bgUrl.includes('gradient') && !bgUrl.startsWith('#')) {
+    if (getCardBgType(bgUrl) === 'url') {
         var tempBg = new Image();
-        tempBg.src = bgUrl;
+        tempBg.src = resolveCardBgUrl(bgUrl);
         tempBg.onload = function() {
             originalW = tempBg.naturalWidth;
             originalH = tempBg.naturalHeight;
@@ -1222,15 +1271,7 @@ include 'includes/admin_nav.php';
         bgOverlay.style.width = '100%';
         bgOverlay.style.height = '100%';
         
-        if (bgUrl && (bgUrl.indexOf('linear-gradient') !== -1 || bgUrl.indexOf('radial-gradient') !== -1)) {
-            bgOverlay.style.background = bgUrl;
-        } else if (bgUrl && (bgUrl.startsWith('#') || bgUrl.startsWith('rgb'))) {
-            bgOverlay.style.backgroundColor = bgUrl;
-            bgOverlay.style.backgroundImage = 'none';
-        } else {
-            bgOverlay.style.backgroundImage = 'url("' + bgUrl + '")';
-            bgOverlay.style.backgroundSize = '100% 100%';
-        }
+        applyCardBgToElement(bgOverlay, bgUrl);
         bgOverlay.style.zIndex = 2;
         bgOverlay.style.pointerEvents = 'none';
         container.appendChild(bgOverlay);
@@ -1892,11 +1933,8 @@ include 'includes/admin_nav.php';
         var status = statusInput ? statusInput.value : 'active';
         var dpiVal = document.getElementById('resize-dpi') ? parseInt(document.getElementById('resize-dpi').value) || 72 : 72;
         
-        // Strip ../ prefix if saving a background image or gradient style to database
-        var saveBgPath = bgUrl;
-        if (saveBgPath.startsWith('../')) {
-            saveBgPath = saveBgPath.replace(/^\.\.\//, '');
-        }
+        // Canonicalize background image or gradient style for database storage
+        var saveBgPath = canonicalizeCardBgForDb(bgUrl);
         
         var formData = new FormData();
         formData.append('action', 'save_template');
@@ -1913,8 +1951,8 @@ include 'includes/admin_nav.php';
         var bgFileInput = document.getElementById('resize-bg-file');
         if (bgFileInput && bgFileInput.files.length > 0) {
             formData.append('bg_file', bgFileInput.files[0]);
-        } else {
-            // Save gradient or solid background path in bg_image parameter
+        }
+        if (saveBgPath) {
             formData.append('bg_path_style', saveBgPath);
         }
         
@@ -1928,7 +1966,7 @@ include 'includes/admin_nav.php';
                 alert('Template configuration saved successfully.');
                 window.location.href = 'cards.php?tab=templates';
             } else {
-                alert('Error: ' + data.message);
+                alert('Save failed: ' + (data.message || 'Unknown error.'));
             }
         })
         .catch(err => {

@@ -1,6 +1,7 @@
 <?php
 require_once 'includes/auth.php';
 require_once 'config/database.php';
+require_once 'includes/card_helper.php';
 
 require_permission('cards');
 
@@ -584,14 +585,12 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<?php render_card_bg_js_helper(); ?>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
 <script>
 var bgW = <?php echo $canvas_w; ?>;
 var bgH = <?php echo $canvas_h; ?>;
-var bgUrl = '<?php echo addslashes($tpl['bg_image']); ?>';
-if (bgUrl && !bgUrl.startsWith('linear-gradient') && !bgUrl.startsWith('radial-gradient') && !bgUrl.startsWith('#') && !bgUrl.startsWith('http') && !bgUrl.startsWith('../')) {
-    bgUrl = '../' + bgUrl;
-}
+var bgUrl = resolveCardBgUrl('<?php echo addslashes($tpl['bg_image']); ?>');
 var defaultPastelGradients = [
     { name: 'Sunset Pastel', val: 'linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%)' },
     { name: 'Soft Peach', val: 'linear-gradient(135deg, #ffedd5 0%, #fed7aa 100%)' },
@@ -930,16 +929,7 @@ function drawElements() {
     bgOverlay.style.width = '100%';
     bgOverlay.style.height = '100%';
     
-    if (bgUrl && (bgUrl.indexOf('linear-gradient') !== -1 || bgUrl.indexOf('radial-gradient') !== -1)) {
-        bgOverlay.style.background = bgUrl;
-    } else if (bgUrl && (bgUrl.startsWith('#') || bgUrl.startsWith('rgb'))) {
-        bgOverlay.style.backgroundColor = bgUrl;
-        bgOverlay.style.backgroundImage = 'none';
-    } else {
-        var rawBg = bgUrl.startsWith('../') ? bgUrl : '../' + bgUrl;
-        bgOverlay.style.backgroundImage = 'url("' + rawBg + '")';
-        bgOverlay.style.backgroundSize = '100% 100%';
-    }
+    applyCardBgToElement(bgOverlay, bgUrl);
     bgOverlay.style.zIndex = 2;
     bgOverlay.style.pointerEvents = 'none';
     container.appendChild(bgOverlay);
@@ -1821,14 +1811,15 @@ function triggerGeneration(e) {
     }
 
     setTimeout(function() {
-        if (bgUrl && (bgUrl.includes('gradient') || bgUrl.startsWith('#') || bgUrl.startsWith('rgb'))) {
+        var bgType = getCardBgType(bgUrl);
+        if (bgType === 'gradient' || bgType === 'color') {
             startCanvasRender(function(ctx) {
                 drawBackgroundOnCanvasCtx(ctx, bgUrl, bgW, bgH);
             });
-        } else {
+        } else if (bgType === 'url') {
             var bgImg = new Image();
             bgImg.crossOrigin = "anonymous";
-            bgImg.src = bgUrl.startsWith('../') ? bgUrl : '../' + bgUrl;
+            bgImg.src = resolveCardBgUrl(bgUrl);
             bgImg.onload = function() {
                 startCanvasRender(function(ctx) {
                     ctx.drawImage(bgImg, 0, 0, bgW, bgH);
@@ -1840,6 +1831,11 @@ function triggerGeneration(e) {
                     ctx.fillRect(0, 0, bgW, bgH);
                 });
             };
+        } else {
+            startCanvasRender(function(ctx) {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, bgW, bgH);
+            });
         }
     }, 50);
 }
