@@ -29,7 +29,7 @@ try {
 }
 
 // Load settings from admin_settings
-$stmt = $pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%'");
+$stmt = $pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%' OR setting_name LIKE 'communication_%'");
 $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
 
 require_once 'includes/communication/CommunicationEngine.php';
@@ -50,7 +50,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error_message = 'Security token mismatch. Please try again.';
     } else {
         $action = $_POST['action'] ?? '';
-        
+
         if ($action === 'save_settings') {
             $pdo->beginTransaction();
             try {
@@ -69,23 +69,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'whatsapp_cron_worker_key',
                     'whatsapp_api_version'
                 ];
-                
+
                 $saveStmt = $pdo->prepare("
-                    INSERT INTO admin_settings (setting_name, setting_value, updated_at) 
-                    VALUES (?, ?, NOW()) 
+                    INSERT INTO admin_settings (setting_name, setting_value, updated_at)
+                    VALUES (?, ?, NOW())
                     ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()
                 ");
-                
+
                 foreach ($keys as $k) {
                     $val = trim($_POST[$k] ?? '');
                     $saveStmt->execute([$k, $val]);
                 }
-                
+
                 $pdo->commit();
                 $success_message = 'Communication configuration settings saved successfully.';
-                
+
                 // Reload settings
-                $stmt = $pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%'");
+                $stmt = $pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%' OR setting_name LIKE 'communication_%'");
                 $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
             } catch (Exception $e) {
                 $pdo->rollBack();
@@ -94,14 +94,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif ($action === 'test_send') {
             $testPhone = trim($_POST['test_phone'] ?? '');
             $testMsg = trim($_POST['test_message'] ?? 'PEPP Learning ERP - WhatsApp Connection test successful! ✓');
-            
+
             if (!$testPhone) {
                 $error_message = 'Please specify a test phone number.';
             } else {
                 try {
                     require_once 'includes/communication/CommunicationEngine.php';
                     $engine = CommunicationEngine::getInstance($pdo);
-                    
+
                     // Directly queue the test message
                     $queueId = $engine->queueMessage(
                         'whatsapp',
@@ -114,10 +114,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         [],
                         $admin_username
                     );
-                    
+
                     // Run it synchronously right now
                     $dispatched = $engine->processQueueItem($queueId);
-                    
+
                     if ($dispatched) {
                         $success_message = 'Test message successfully queued and dispatched via Meta Cloud API!';
                     } else {
@@ -150,8 +150,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         // Update the setting
                         $updateStmt = $pdo->prepare("
-                            INSERT INTO admin_settings (setting_name, setting_value, updated_at) 
-                            VALUES ('whatsapp_outbound_mode', ?, NOW()) 
+                            INSERT INTO admin_settings (setting_name, setting_value, updated_at)
+                            VALUES ('whatsapp_outbound_mode', ?, NOW())
                             ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()
                         ");
                         $updateStmt->execute([$new_mode]);
@@ -194,7 +194,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($status && in_array($status, ['pending', 'scheduled', 'failed'], true)) {
                         $upd = $pdo->prepare("UPDATE communication_queue SET status = 'paused', updated_at = NOW() WHERE id = ?");
                         $upd->execute([$queueId]);
-                        
+
                         try {
                             $updRemStmt = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'paused' WHERE queue_id = ?");
                             $updRemStmt->execute([$queueId]);
@@ -222,7 +222,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($status === 'paused') {
                         $upd = $pdo->prepare("UPDATE communication_queue SET status = 'pending', next_attempt_at = NOW(), updated_at = NOW() WHERE id = ?");
                         $upd->execute([$queueId]);
-                        
+
                         try {
                             $updRemStmt = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued' WHERE queue_id = ?");
                             $updRemStmt->execute([$queueId]);
@@ -230,7 +230,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         $pdo->commit();
                         $success_message = "Queue item #{$queueId} resumed successfully.";
-                        
+
                         // Trigger background processing instantly
                         require_once 'includes/communication/CommunicationEngine.php';
                         CommunicationEngine::getInstance($pdo)->triggerCronBackground();
@@ -255,7 +255,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $reason = trim($_POST['cancel_reason'] ?? 'No longer required');
                         $upd = $pdo->prepare("UPDATE communication_queue SET status = 'cancelled', next_attempt_at = '2038-01-01 00:00:00', error_message = ?, updated_at = NOW() WHERE id = ?");
                         $upd->execute(['Cancelled: ' . $reason, $queueId]);
-                        
+
                         try {
                             $updCampStmt = $pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = ? WHERE queue_id = ?");
                             $updCampStmt->execute(['Cancelled: ' . $reason, $queueId]);
@@ -288,7 +288,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if (in_array($status, ['failed', 'cancelled'], true)) {
                         $upd = $pdo->prepare("UPDATE communication_queue SET status = 'pending', retry_count = 0, next_attempt_at = NOW(), error_message = NULL, updated_at = NOW() WHERE id = ?");
                         $upd->execute([$queueId]);
-                        
+
                         try {
                             $updRemStmt = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued' WHERE queue_id = ?");
                             $updRemStmt->execute([$queueId]);
@@ -296,7 +296,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         $pdo->commit();
                         $success_message = "Queue item #{$queueId} re-queued for retry successfully.";
-                        
+
                         // Trigger background processing instantly
                         require_once 'includes/communication/CommunicationEngine.php';
                         CommunicationEngine::getInstance($pdo)->triggerCronBackground();
@@ -317,14 +317,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $cancelledCount = 0;
                 $skippedCount = 0;
-                
+
                 try {
                     $pdo->beginTransaction();
                     $placeholders = implode(',', array_fill(0, count($queueIds), '?'));
                     $stmt = $pdo->prepare("SELECT id, status FROM communication_queue WHERE id IN ($placeholders) FOR UPDATE");
                     $stmt->execute($queueIds);
                     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                    
+
                     $eligibleIds = [];
                     foreach ($rows as $row) {
                         $status = $row['status'] ?? '';
@@ -334,25 +334,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $skippedCount++;
                         }
                     }
-                    
+
                     if (!empty($eligibleIds)) {
                         $placeholdersEligible = implode(',', array_fill(0, count($eligibleIds), '?'));
                         $upd = $pdo->prepare("UPDATE communication_queue SET status = 'cancelled', next_attempt_at = '2038-01-01 00:00:00', error_message = ?, updated_at = NOW() WHERE id IN ($placeholdersEligible)");
                         $upd->execute(array_merge(['Cancelled: ' . $reason], $eligibleIds));
-                        
+
                         try {
                             $updCamp = $pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = ? WHERE queue_id IN ($placeholdersEligible)");
                             $updCamp->execute(array_merge(['Cancelled: ' . $reason], $eligibleIds));
                         } catch (Exception $campEx) {}
-                        
+
                         try {
                             $updRem = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'failed' WHERE queue_id IN ($placeholdersEligible)");
                             $updRem->execute($eligibleIds);
                         } catch (Exception $remEx) {}
-                        
+
                         $cancelledCount = count($eligibleIds);
                     }
-                    
+
                     $pdo->commit();
                     $success_message = "Successfully cancelled {$cancelledCount} messages." . ($skippedCount > 0 ? " (Skipped {$skippedCount} already sent/cancelled items)." : "");
                 } catch (Exception $e) {
@@ -368,24 +368,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $retriedCount = 0;
                 $skippedPermanentCount = 0;
                 $skippedStatusCount = 0;
-                
+
                 try {
                     $pdo->beginTransaction();
                     $placeholders = implode(',', array_fill(0, count($queueIds), '?'));
                     $stmt = $pdo->prepare("SELECT id, status, error_message FROM communication_queue WHERE id IN ($placeholders) FOR UPDATE");
                     $stmt->execute($queueIds);
                     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                    
+
                     $eligibleIds = [];
                     foreach ($rows as $row) {
                         $status = $row['status'] ?? '';
                         $error_message_orig = $row['error_message'] ?? '';
-                        
+
                         if (!in_array($status, ['failed', 'cancelled'], true)) {
                             $skippedStatusCount++;
                             continue;
                         }
-                        
+
                         $errCode = null;
                         if (!empty($error_message_orig)) {
                             if (preg_match('/\\[Meta Code (\\d+)\\]/', $error_message_orig, $matches)) {
@@ -397,32 +397,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $skippedPermanentCount++;
                             continue;
                         }
-                        
+
                         $eligibleIds[] = (int)$row['id'];
                     }
-                    
+
                     if (!empty($eligibleIds)) {
                         $placeholdersEligible = implode(',', array_fill(0, count($eligibleIds), '?'));
                         $upd = $pdo->prepare("UPDATE communication_queue SET status = 'pending', retry_count = 0, next_attempt_at = NOW(), error_message = NULL, updated_at = NOW() WHERE id IN ($placeholdersEligible)");
                         $upd->execute($eligibleIds);
-                        
+
                         try {
                             $updRem = $pdo->prepare("UPDATE installment_whatsapp_reminders SET status = 'queued' WHERE queue_id IN ($placeholdersEligible)");
                             $updRem->execute($eligibleIds);
                         } catch (Exception $remEx) {}
-                        
+
                         $retriedCount = count($eligibleIds);
                     }
-                    
+
                     $pdo->commit();
-                    
+
                     $feedback = [];
                     if ($retriedCount > 0) $feedback[] = "{$retriedCount} retried";
                     if ($skippedPermanentCount > 0) $feedback[] = "{$skippedPermanentCount} skipped because they are permanent Meta failures";
                     if ($skippedStatusCount > 0) $feedback[] = "{$skippedStatusCount} skipped because they are not failed/cancelled";
-                    
+
                     $success_message = count($queueIds) . " selected — " . implode(', ', $feedback) . ".";
-                    
+
                     if ($retriedCount > 0) {
                         try {
                             require_once 'includes/communication/CommunicationEngine.php';
@@ -447,33 +447,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $_SESSION['last_queue_process_at'] = $currentTime;
                 try {
-                    // Claim and identify the IDs we are about to process
-                    $stmtIds = $pdo->prepare("
-                        SELECT id FROM communication_queue 
-                        WHERE status IN ('pending', 'failed') 
-                          AND next_attempt_at <= NOW() 
-                          AND retry_count < 3
-                        ORDER BY priority DESC, created_at ASC 
-                        LIMIT 25
-                    ");
-                    $stmtIds->execute();
-                    $ids = $stmtIds->fetchAll(PDO::FETCH_COLUMN);
-                    
-                    if (empty($ids)) {
-                        $success_message = 'No pending queue messages are currently due for dispatch.';
+                    require_once 'includes/communication/QueueProcessor.php';
+                    $processor = new QueueProcessor($pdo, 25);
+                    $res = $processor->execute();
+                    $processed = is_array($res) ? $res['processed'] : (int)$res;
+                    $failed_count = is_array($res) ? $res['failed'] : 0;
+                    $eligible_count = is_array($res) ? $res['eligible'] : 0;
+
+                    if ($eligible_count === 0) {
+                        $success_message = 'No pending or scheduled queue messages are currently due for dispatch.';
                     } else {
-                        $processed = 0;
-                        $failed_count = 0;
-                        
-                        foreach ($ids as $queueId) {
-                            $success = $engine->processQueueItem($queueId);
-                            if ($success) {
-                                $processed++;
-                            } else {
-                                $failed_count++;
-                            }
-                        }
-                        
                         $success_message = "Queue run complete: Successfully processed {$processed} messages" . ($failed_count > 0 ? ", failed/skipped {$failed_count} messages." : ".");
                     }
                 } catch (Exception $e) {
@@ -495,9 +478,9 @@ $stats = [
 try {
     if ($view === 'installments') {
         $stmtStats = $pdo->prepare("
-            SELECT cq.status, COUNT(*) c 
-            FROM communication_queue cq 
-            INNER JOIN installment_whatsapp_reminders r ON r.queue_id = cq.id 
+            SELECT cq.status, COUNT(*) c
+            FROM communication_queue cq
+            INNER JOIN installment_whatsapp_reminders r ON r.queue_id = cq.id
             GROUP BY cq.status
         ");
         $stmtStats->execute();
@@ -556,7 +539,7 @@ if ($page < 1) {
 try {
     if ($view === 'installments') {
         $countSql = "
-            SELECT COUNT(*) 
+            SELECT COUNT(*)
             FROM communication_queue cq
             INNER JOIN installment_whatsapp_reminders r ON r.queue_id = cq.id
             LEFT JOIN instalment_details inst ON inst.id = r.installment_id
@@ -565,7 +548,7 @@ try {
         ";
     } else {
         $countSql = "
-            SELECT COUNT(*) 
+            SELECT COUNT(*)
             FROM communication_queue cq
             $whereSql
         ";
@@ -829,7 +812,9 @@ include 'includes/admin_nav.php';
     <!-- ── CRON HEALTH STATUS CARD ── -->
     <?php
     $lastCron = null;
-    if (!empty($settings['whatsapp_last_cron_run'])) {
+    if (!empty($settings['communication_last_worker_run'])) {
+        $lastCron = json_decode($settings['communication_last_worker_run'], true);
+    } elseif (!empty($settings['whatsapp_last_cron_run'])) {
         $lastCron = json_decode($settings['whatsapp_last_cron_run'], true);
     }
     $isCronActive = false;
@@ -902,12 +887,12 @@ include 'includes/admin_nav.php';
                 </div>
                 <i class="fas fa-chevron-down" id="api-settings-toggle-icon" style="color:#6b7280; font-size:1rem; transition: transform 0.2s;"></i>
             </div>
-            
+
             <div id="api-settings-body" style="padding:20px; border-top:1px solid #e5e7eb; display:none;">
                 <form method="POST">
                     <?php echo csrf_field(); ?>
                     <input type="hidden" name="action" value="save_settings">
-                    
+
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-bottom:16px;">
                         <div>
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">WhatsApp Phone Number ID</label>
@@ -952,7 +937,8 @@ include 'includes/admin_nav.php';
                     <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px dashed #e5e7eb; padding-top:14px; flex-wrap:wrap; gap:12px;">
                         <div style="display:flex; flex-direction:column; gap:4px; font-size:0.8rem; color:#6b7280; text-align:left;">
                             <span><i class="fas fa-link"></i> Webhook Callback URL: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-family:monospace; font-size:0.75rem;">https://pepplearning.in/admissions/api/v1/communication/webhook.php</code></span>
-                            <span><i class="fas fa-clock"></i> Hostinger Cron URL: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-family:monospace; font-size:0.75rem;">https://pepplearning.in/admissions/cron-queue.php?key=<?php echo htmlspecialchars($settings['whatsapp_cron_worker_key'] ?? ''); ?></code></span>
+                            <span><i class="fas fa-clock"></i> Hostinger HTTPS Cron URL: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-family:monospace; font-size:0.75rem;">https://pepplearning.in/admissions/cron-queue.php?key=<?php echo htmlspecialchars($settings['whatsapp_cron_worker_key'] ?? ''); ?></code></span>
+                            <span><i class="fas fa-terminal"></i> Hostinger CLI Cron Command: <code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-family:monospace; font-size:0.75rem;">/usr/bin/php /home/u361910773/domains/pepplearning.in/public_html/admissions/cron-queue.php &gt; /dev/null 2&gt;&amp;1</code></span>
                         </div>
                         <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save API Config</button>
                     </div>
@@ -970,7 +956,7 @@ include 'includes/admin_nav.php';
                     <form method="POST">
                         <?php echo csrf_field(); ?>
                         <input type="hidden" name="action" value="test_send">
-                        
+
                         <div style="margin-bottom:12px;">
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Recipient Phone Number</label>
                             <input type="text" name="test_phone" placeholder="e.g. 917025381915" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:0.85rem;" required>
@@ -979,7 +965,7 @@ include 'includes/admin_nav.php';
                             <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Message Text</label>
                             <textarea name="test_message" rows="2" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:0.85rem;">PEPP Learning ERP - Meta WhatsApp Connection test successful! ✓</textarea>
                         </div>
-                        
+
                         <button type="submit" class="btn btn-outline" style="width:100%; border-radius:8px;"><i class="fas fa-paper-plane"></i> Send Test Message</button>
                     </form>
                 </div>
@@ -1006,13 +992,13 @@ include 'includes/admin_nav.php';
     <!-- Search and Filter Panel -->
     <form method="GET" style="background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-top:16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
         <input type="hidden" name="view" value="<?php echo htmlspecialchars($view); ?>">
-        
+
         <!-- Search Input -->
         <div style="flex:1; min-width:240px; position:relative;">
             <i class="fas fa-search" style="position:absolute; left:12px; top:12px; color:#94a3b8; font-size:0.85rem;"></i>
             <input type="text" name="queue_search" value="<?php echo htmlspecialchars($filter_search); ?>" placeholder="Search by recipient name, phone, or queue ID..." style="width:100%; height:38px; padding-left:36px; padding-right:12px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:0.82rem; font-weight:500; color:#1e293b; box-sizing:border-box;" onfocus="this.style.borderColor='#7c3aed';" onblur="this.style.borderColor='#cbd5e1';">
         </div>
-        
+
         <!-- Status Dropdown -->
         <div style="width:200px; min-width:160px;">
             <select name="queue_status" style="width:100%; height:38px; padding:0 12px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:0.82rem; font-weight:500; color:#1e293b; background-color:#fff; box-sizing:border-box;" onchange="this.form.submit()">
@@ -1027,7 +1013,7 @@ include 'includes/admin_nav.php';
                 <option value="cancelled" <?php echo $filter_status === 'cancelled' ? 'selected' : ''; ?>>Cancelled</option>
             </select>
         </div>
-        
+
         <!-- Action Buttons -->
         <div style="display:flex; gap:8px;">
             <button type="submit" class="btn btn-primary" style="height:38px; border-radius:8px; font-size:0.82rem; font-weight:700; padding:0 16px; background:#7c3aed; border-color:#7c3aed; color:#fff; display:flex; align-items:center; gap:6px; cursor:pointer;"><i class="fas fa-filter"></i> Filter</button>
@@ -1076,7 +1062,7 @@ include 'includes/admin_nav.php';
             </div>
         </div>
         </div>
-        
+
         <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
             <thead>
                 <tr style="background:#f9fafb; text-align:left; border-bottom:1px solid #e5e7eb;">
@@ -1142,7 +1128,7 @@ include 'includes/admin_nav.php';
                                     <span style="font-size:0.75rem; color:#6b7280; font-weight:normal;">Due: <?php echo $log['installment_due_date'] ? date('d M Y', strtotime($log['installment_due_date'])) : '-'; ?></span>
                                 </td>
                                 <td style="padding:12px;">
-                                    <span class="badge <?php 
+                                    <span class="badge <?php
                                         if ($log['queue_status'] === 'read' || $log['queue_status'] === 'delivered' || $log['queue_status'] === 'sent') {
                                             echo 'green';
                                         } elseif ($log['queue_status'] === 'failed') {
@@ -1155,11 +1141,11 @@ include 'includes/admin_nav.php';
                                             echo 'blue';
                                         }
                                     ?>">
-                                        <?php 
+                                        <?php
                                             if ($log['queue_status'] === 'failed') {
                                                 echo ($log['retry_count'] >= 3) ? 'FAILED — PERMANENT' : 'FAILED — RETRYING';
                                             } else {
-                                                echo strtoupper($log['queue_status']); 
+                                                echo strtoupper($log['queue_status']);
                                             }
                                         ?>
                                     </span>
@@ -1205,9 +1191,9 @@ include 'includes/admin_nav.php';
                                     </div>
                                 </td>
                                 <td style="padding:12px;">
-                                    <span class="badge <?php 
-                                        echo $log['tracking_status'] === 'sent' ? 'green' : 
-                                             ($log['tracking_status'] === 'failed' ? 'red' : 'amber'); 
+                                    <span class="badge <?php
+                                        echo $log['tracking_status'] === 'sent' ? 'green' :
+                                             ($log['tracking_status'] === 'failed' ? 'red' : 'amber');
                                     ?>">
                                         <?php echo strtoupper($log['tracking_status'] ?? 'UNKNOWN'); ?>
                                     </span>
@@ -1251,7 +1237,7 @@ include 'includes/admin_nav.php';
                                 <td style="padding:12px; color:#6b7280;"><?php echo date('d M Y, h:i A', strtotime($log['updated_at'])); ?></td>
                                 <td style="padding:12px; font-weight:600;">
                                     <?php if ($log['invoice_id'] && $log['event_name'] === 'payment_receipt'): ?>
-                                        <?php 
+                                        <?php
                                         $inv_hmac = hash_hmac('sha256', (string)$log['invoice_id'], INVOICE_HMAC_SECRET);
                                         $secure_inv_link = "invoice-pdf.php?token=" . urlencode($log['invoice_id'] . '-' . $inv_hmac);
                                         ?>
@@ -1263,7 +1249,7 @@ include 'includes/admin_nav.php';
                                     <?php endif; ?>
                                 </td>
                                 <td style="padding:12px;">
-                                    <span class="badge <?php 
+                                    <span class="badge <?php
                                         if ($log['status'] === 'read' || $log['status'] === 'delivered' || $log['status'] === 'sent') {
                                             echo 'green';
                                         } elseif ($log['status'] === 'failed') {
@@ -1276,11 +1262,11 @@ include 'includes/admin_nav.php';
                                             echo 'blue';
                                         }
                                     ?>">
-                                        <?php 
+                                        <?php
                                             if ($log['status'] === 'failed') {
                                                 echo ($log['retry_count'] >= 3) ? 'FAILED — PERMANENT' : 'FAILED — RETRYING';
                                             } else {
-                                                echo strtoupper($log['status']); 
+                                                echo strtoupper($log['status']);
                                             }
                                         ?>
                                     </span>
@@ -1332,7 +1318,7 @@ include 'includes/admin_nav.php';
                 <?php endif; ?>
             </tbody>
         </table>
-        
+
         <!-- Pagination controls -->
         <div style="padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e5e7eb; background: #f8fafc; flex-wrap: wrap; gap: 12px;">
             <div style="font-size: 0.85rem; color: #475569; font-weight: 500;">
@@ -1342,7 +1328,7 @@ include 'includes/admin_nav.php';
                     No communication records found.
                 <?php endif; ?>
             </div>
-            
+
             <?php if ($totalPages > 1): ?>
                 <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
                     <!-- Previous Button -->
@@ -1356,7 +1342,7 @@ include 'includes/admin_nav.php';
                     <?php
                     $startPage = max(1, $page - 2);
                     $endPage = min($totalPages, $page + 2);
-                    
+
                     if ($startPage > 1) {
                         echo '<a href="' . getPageUrl(1) . '" style="padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.85rem; background: #fff; color: #374151; font-weight: 600; text-decoration: none; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">1</a>';
                         if ($startPage > 2) {
@@ -1398,7 +1384,7 @@ include 'includes/admin_nav.php';
         <h3 style="margin-top:0; font-size:1.15rem; font-weight:700; color:#111827; display:flex; align-items:center; gap:8px;">
             <i class="fas fa-circle-exclamation" style="color:#ef4444;"></i> Cancel Queue <span id="modalQueueIdDisplay">#XXX</span>?
         </h3>
-        
+
         <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px; margin:16px 0; font-size:0.85rem;">
             <div style="margin-bottom:6px; color:#475569;"><strong>Recipient:</strong> <span id="modalRecipientDisplay">+91XXXXXXXXXX</span></div>
             <div style="color:#475569;"><strong>Status:</strong> <span id="modalStatusDisplay">Failed</span></div>
@@ -1412,7 +1398,7 @@ include 'includes/admin_nav.php';
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="cancel_queue_item">
             <input type="hidden" name="queue_id" id="modalQueueIdInput" value="">
-            
+
             <div style="margin-bottom:20px;">
                 <label style="display:block; font-size:0.8rem; font-weight:600; color:#4b5563; margin-bottom:6px;">Reason for Cancellation (Optional):</label>
                 <select name="cancel_reason" style="width:100%; padding:8px 12px; border-radius:8px; border:1px solid #d1d5db; font-size:0.85rem; background:#fff;">
@@ -1465,7 +1451,7 @@ function toggleApiSettings() {
         <h3 style="margin-top:0; font-size:1.15rem; font-weight:700; color:#111827; display:flex; align-items:center; gap:8px;">
             <i class="fas fa-circle-exclamation" style="color:#ef4444;"></i> Cancel Selected Queue Messages?
         </h3>
-        
+
         <p style="font-size:0.85rem; color:#4b5563; margin-bottom:20px; line-height:1.5;">
             You are about to cancel <strong id="bulkCancelCountDisplay">0</strong> queued messages. Cancelled messages will not be processed or retried by the communication queue.
         </p>
@@ -1474,7 +1460,7 @@ function toggleApiSettings() {
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="bulk_cancel_queue_items">
             <div id="bulkCancelIdsContainer"></div>
-            
+
             <div style="margin-bottom:20px;">
                 <label style="display:block; font-size:0.8rem; font-weight:600; color:#4b5563; margin-bottom:6px;">Reason for Cancellation (Optional):</label>
                 <select name="cancel_reason" style="width:100%; padding:8px 12px; border-radius:8px; border:1px solid #d1d5db; font-size:0.85rem; background:#fff;">
@@ -1500,7 +1486,7 @@ function toggleApiSettings() {
         <h3 style="margin-top:0; font-size:1.15rem; font-weight:700; color:#111827; display:flex; align-items:center; gap:8px;">
             <i class="fas fa-rotate-right" style="color:#8b5cf6;"></i> Retry Selected Queue Messages?
         </h3>
-        
+
         <p style="font-size:0.85rem; color:#4b5563; margin-bottom:20px; line-height:1.5;">
             You are about to retry <strong id="bulkRetryCountDisplay">0</strong> selected messages. Already cancelled, delivered, read, or permanently failed Meta errors will be skipped automatically.
         </p>
@@ -1534,7 +1520,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             if (toolbar) toolbar.style.display = 'none';
         }
-        
+
         selectAllChks.forEach(selectAllChk => {
             selectAllChk.checked = (chks.length > 0 && count === chks.length);
         });
@@ -1554,7 +1540,7 @@ document.addEventListener('DOMContentLoaded', () => {
             updateToolbar();
         });
     });
-    
+
     // Wire up modal cancel buttons
     document.querySelectorAll('#bulkCancelModal button, #bulkRetryModal button').forEach(btn => {
         if (btn.innerText.trim() === 'Cancel') {
@@ -1580,13 +1566,13 @@ function openBulkCancelModal() {
     const ids = getSelectedQueueIds();
     if (ids.length === 0) return;
     document.getElementById('bulkCancelCountDisplay').innerText = ids.length;
-    
+
     const container = document.getElementById('bulkCancelIdsContainer');
     container.innerHTML = '';
     ids.forEach(id => {
         container.innerHTML += `<input type="hidden" name="queue_ids[]" value="${id}">`;
     });
-    
+
     document.getElementById('bulkCancelModal').style.display = 'flex';
 }
 
@@ -1598,13 +1584,13 @@ function openBulkRetryModal() {
     const ids = getSelectedQueueIds();
     if (ids.length === 0) return;
     document.getElementById('bulkRetryCountDisplay').innerText = ids.length;
-    
+
     const container = document.getElementById('bulkRetryIdsContainer');
     container.innerHTML = '';
     ids.forEach(id => {
         container.innerHTML += `<input type="hidden" name="queue_ids[]" value="${id}">`;
     });
-    
+
     document.getElementById('bulkRetryModal').style.display = 'flex';
 }
 

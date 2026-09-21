@@ -23,14 +23,21 @@ if (!defined('INVOICE_HMAC_SECRET')) {
     define('INVOICE_HMAC_SECRET', getenv('INVOICE_HMAC_SECRET') ?: 'CHANGE_ME');
 }
 
+$force_mysql = (getenv('PEPP_USE_MYSQL') === '1' || (!empty($_ENV['PEPP_USE_MYSQL']) && $_ENV['PEPP_USE_MYSQL'] === '1'));
 $sqlite_env_path = getenv('PEPP_SQLITE_PATH') ?: ($_ENV['PEPP_SQLITE_PATH'] ?? ($_SERVER['PEPP_SQLITE_PATH'] ?? ''));
-$is_local_dev = in_array($_SERVER['SERVER_NAME'] ?? '', ['localhost', '127.0.0.1'], true)
-    || str_starts_with($_SERVER['HTTP_HOST'] ?? '', 'localhost')
-    || str_starts_with($_SERVER['HTTP_HOST'] ?? '', '127.0.0.1')
-    || (int)($_SERVER['SERVER_PORT'] ?? 0) === 8888
-    || (!empty($sqlite_env_path))
-    || (php_sapi_name() === 'cli' && !getenv('PEPP_USE_MYSQL'))
-    || ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true'));
+
+// Production MySQL routing: if PEPP_USE_MYSQL=1 is set, NEVER use SQLite fallback.
+if ($force_mysql) {
+    $is_local_dev = false;
+} else {
+    $is_local_dev = in_array($_SERVER['SERVER_NAME'] ?? '', ['localhost', '127.0.0.1'], true)
+        || str_starts_with($_SERVER['HTTP_HOST'] ?? '', 'localhost')
+        || str_starts_with($_SERVER['HTTP_HOST'] ?? '', '127.0.0.1')
+        || (int)($_SERVER['SERVER_PORT'] ?? 0) === 8888
+        || (!empty($sqlite_env_path))
+        || ((isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true'))
+        || (php_sapi_name() === 'cli' && (getenv('PEPP_TESTING_ENV') || getenv('PEPP_USE_SQLITE')));
+}
 
 if ($is_local_dev) {
     try {
@@ -785,6 +792,13 @@ try {
     $pdo->exec("SET time_zone = '+05:30'");
 } catch (PDOException $e) {
     error_log("Database connection failed: " . $e->getMessage());
+    if ($force_mysql || php_sapi_name() === 'cli') {
+        // Production CLI / PEPP_USE_MYSQL: FAIL LOUDLY. Never fall back silently.
+        if (defined('STDERR')) {
+            fwrite(STDERR, "CRITICAL DATABASE ERROR: Production MySQL connection failed: " . $e->getMessage() . "\n");
+        }
+        throw new RuntimeException("CRITICAL: Production MySQL connection failed: " . $e->getMessage(), 0, $e);
+    }
     // Don't leak credentials or internals to the browser
     http_response_code(500);
     die("Database connection failed. Please try again later.");

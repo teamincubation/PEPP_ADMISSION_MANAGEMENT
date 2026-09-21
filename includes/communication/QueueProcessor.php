@@ -23,47 +23,140 @@ class QueueProcessor {
 
 
         // ── Stale-job recovery ──────────────────────────────────────────
-        // If PHP crashed during processQueueItem(), jobs stay stuck in
-        // 'processing' forever. Reset items older than INTERVAL 10 MINUTE back to
-        // 'pending' so the next cron run can retry them.
+        // If PHP crashed during processQueueItem(), jobs stay stuck in 'processing'.
+        // Channel-aware recovery:
+        // - Email: SMTP submission is non-atomic with DB update. Outcome is ambiguous.
+        //   Do NOT blindly resend. Mark as 'failed' with max retries and descriptive error.
+        // - WhatsApp: Check if message_id exists (Meta accepted) or webhook event arrived.
+        //   If message_id exists, mark as 'sent'. If no trace and retry_count < 3, reset to 'pending'.
         try {
-            $cutoff = date('Y-m-d H:i:s', time() - 600); // INTERVAL 10 MINUTE threshold
+            $cutoff = date('Y-m-d H:i:s', time() - 600); // 10-minute threshold
             $isSqlite = ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
-            if ($isSqlite) {
-                $staleStmt = $this->pdo->prepare("
-                    UPDATE communication_queue
-                    SET status = 'pending',
-                        retry_count = retry_count + 1,
-                        error_message = COALESCE(error_message,'') || ' [stale-recovery]',
-                        updated_at = datetime('now')
-                    WHERE status = 'processing'
-                      AND worker_started_at < ?
-                ");
-            } else {
-                $staleStmt = $this->pdo->prepare("
-                    UPDATE communication_queue
-                    SET status = 'pending',
-                        retry_count = retry_count + 1,
-                        error_message = CONCAT(COALESCE(error_message,''), ' [stale-recovery]'),
-                        updated_at = NOW()
-                    WHERE status = 'processing'
-                      AND worker_started_at < ?
-                ");
-            }
-            $staleStmt->execute([$cutoff]);
-            $recovered = $staleStmt->rowCount();
-            if ($recovered > 0) {
-                error_log("QueueProcessor: Recovered {$recovered} stale job(s) stuck in 'processing'.");
+
+            $staleSelect = $this->pdo->prepare("
+                SELECT id, channel, recipient, message_id, retry_count, error_message
+                FROM communication_queue
+                WHERE status = 'processing'
+                  AND worker_started_at < ?
+            ");
+            $staleSelect->execute([$cutoff]);
+            $staleJobs = $staleSelect->fetchAll(PDO::FETCH_ASSOC);
+
+            if (!empty($staleJobs)) {
+                $farFuture = date('Y-m-d H:i:s', time() + 3600 * 24 * 365);
+                foreach ($staleJobs as $stale) {
+                    $sId = (int)$stale['id'];
+                    $sChan = strtolower($stale['channel'] ?? 'whatsapp');
+                    $sMsgId = trim($stale['message_id'] ?? '');
+                    $sErr = (string)($stale['error_message'] ?? '');
+                    $sRetries = (int)($stale['retry_count'] ?? 0);
+
+                    if ($sChan === 'email') {
+                        // Ambiguous SMTP submission: do NOT blindly resend. Prevent duplicate delivery.
+                        $flag = '[stale:smtp_outcome_ambiguous_requires_review]';
+                        $newErr = trim($sErr . ' ' . $flag);
+                        $upd = $this->pdo->prepare("
+                            UPDATE communication_queue
+                            SET status = 'failed',
+                                retry_count = 5,
+                                next_attempt_at = ?,
+                                error_message = ?,
+                                updated_at = " . ($isSqlite ? "datetime('now')" : "NOW()") . "
+                            WHERE id = ? AND status = 'processing'
+                        ");
+                        $upd->execute([$farFuture, $newErr, $sId]);
+                        error_log("QueueProcessor stale recovery: Email item #{$sId} marked 'failed' (ambiguous SMTP submission). Resend prevented.");
+                    } elseif ($sChan === 'whatsapp') {
+                        if (!empty($sMsgId)) {
+                            // Meta accepted the message earlier. Mark as sent rather than resending.
+                            $flag = '[stale:meta_message_id_retained]';
+                            $newErr = trim($sErr . ' ' . $flag);
+                            $upd = $this->pdo->prepare("
+                                UPDATE communication_queue
+                                SET status = 'sent',
+                                    error_message = ?,
+                                    updated_at = " . ($isSqlite ? "datetime('now')" : "NOW()") . "
+                                WHERE id = ? AND status = 'processing'
+                            ");
+                            $upd->execute([$newErr, $sId]);
+                            error_log("QueueProcessor stale recovery: WhatsApp item #{$sId} marked 'sent' (Meta ID {$sMsgId} retained).");
+                        } else {
+                            // Check if a webhook arrived for this recipient
+                            $whEvent = null;
+                            try {
+                                $whCheck = $this->pdo->prepare("
+                                    SELECT id FROM communication_webhook_events
+                                    WHERE payload LIKE ?
+                                    LIMIT 1
+                                ");
+                                $whCheck->execute(['%' . $stale['recipient'] . '%']);
+                                $whEvent = $whCheck->fetchColumn();
+                            } catch (Exception $whEx) {}
+
+                            if ($whEvent) {
+                                $flag = '[stale:webhook_evidence_found]';
+                                $newErr = trim($sErr . ' ' . $flag);
+                                $upd = $this->pdo->prepare("
+                                    UPDATE communication_queue
+                                    SET status = 'sent',
+                                        error_message = ?,
+                                        updated_at = " . ($isSqlite ? "datetime('now')" : "NOW()") . "
+                                    WHERE id = ? AND status = 'processing'
+                                ");
+                                $upd->execute([$newErr, $sId]);
+                            } elseif ($sRetries < 3) {
+                                // Pre-dispatch crash without external evidence; safe to retry
+                                $flag = '[stale-recovery]';
+                                $newErr = trim($sErr . ' ' . $flag);
+                                $upd = $this->pdo->prepare("
+                                    UPDATE communication_queue
+                                    SET status = 'pending',
+                                        retry_count = retry_count + 1,
+                                        error_message = ?,
+                                        updated_at = " . ($isSqlite ? "datetime('now')" : "NOW()") . "
+                                    WHERE id = ? AND status = 'processing'
+                                ");
+                                $upd->execute([$newErr, $sId]);
+                            } else {
+                                // Max retries exhausted
+                                $flag = '[stale:retries_exhausted]';
+                                $newErr = trim($sErr . ' ' . $flag);
+                                $upd = $this->pdo->prepare("
+                                    UPDATE communication_queue
+                                    SET status = 'failed',
+                                        next_attempt_at = ?,
+                                        error_message = ?,
+                                        updated_at = " . ($isSqlite ? "datetime('now')" : "NOW()") . "
+                                    WHERE id = ? AND status = 'processing'
+                                ");
+                                $upd->execute([$farFuture, $newErr, $sId]);
+                            }
+                        }
+                    } else {
+                        // Other channels: mark failed for safety
+                        $flag = '[stale:channel_unknown_requires_review]';
+                        $newErr = trim($sErr . ' ' . $flag);
+                        $upd = $this->pdo->prepare("
+                            UPDATE communication_queue
+                            SET status = 'failed',
+                                next_attempt_at = ?,
+                                error_message = ?,
+                                updated_at = " . ($isSqlite ? "datetime('now')" : "NOW()") . "
+                            WHERE id = ? AND status = 'processing'
+                        ");
+                        $upd->execute([$farFuture, $newErr, $sId]);
+                    }
+                }
             }
         } catch (Exception $staleEx) {
             error_log("QueueProcessor stale-recovery error: " . $staleEx->getMessage());
         }
 
-        // Query pending, failed, or retrying items that are ready for attempt
+        // Query pending, scheduled, failed, or retrying items that are ready for attempt
         $nowCutoff = date('Y-m-d H:i:s');
         $stmt = $this->pdo->prepare("
             SELECT id FROM communication_queue
-            WHERE status IN ('pending', 'failed', 'retrying')
+            WHERE status IN ('pending', 'scheduled', 'failed', 'retrying')
               AND next_attempt_at <= ?
               AND (
                 (channel = 'whatsapp' AND retry_count < 3) OR

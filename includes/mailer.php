@@ -65,7 +65,10 @@ class PEPPSMTPClient {
 
             $this->read(); // Read greeting
 
-            $this->command('EHLO ' . (isset($_SERVER['SERVER_NAME']) ? $_SERVER['SERVER_NAME'] : 'localhost'), 250);
+            $ehloHost = !empty($_SERVER['SERVER_NAME']) ? $_SERVER['SERVER_NAME'] : (!empty($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : (defined('PEPP_DOMAIN') ? PEPP_DOMAIN : 'pepplearning.in'));
+            $ehloHost = preg_replace('/:\d+$/', '', $ehloHost);
+
+            $this->command('EHLO ' . $ehloHost, 250);
 
             if ($this->secure === 'tls') {
                 $this->command('STARTTLS', 220);
@@ -81,7 +84,7 @@ class PEPPSMTPClient {
                 if (!stream_socket_enable_crypto($this->socket, true, $cryptoMethod)) {
                     throw new Exception("TLS handshake failed");
                 }
-                $this->command('EHLO ' . (isset($_SERVER['SERVER_NAME']) ? $_SERVER['SERVER_NAME'] : 'localhost'), 250);
+                $this->command('EHLO ' . $ehloHost, 250);
             }
 
             try {
@@ -129,7 +132,7 @@ class PEPPSMTPClient {
 
             $body .= "--$bAlt\r\n";
             $body .= "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
-            $body .= ($bodyText ?: strip_tags($bodyHtml)) . "\r\n\r\n";
+            $body .= ($bodyText ?: strip_tags((string)$bodyHtml)) . "\r\n\r\n";
 
             $body .= "--$bAlt\r\n";
             $body .= "Content-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
@@ -302,15 +305,15 @@ function pepp_mail_fallback($to, $subject, $bodyHtml, $bodyText = '', array $att
 
         $body  = "--$bAlt\r\n";
         $body .= "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
-        $body .= ($bodyText ?: strip_tags($bodyHtml)) . "\r\n\r\n";
+        $body .= ($bodyText ?: strip_tags((string)$bodyHtml)) . "\r\n\r\n";
 
         $body .= "--$bAlt\r\n";
         $body .= "Content-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
-        $body .= $bodyHtml . "\r\n\r\n";
+        $body .= ((string)$bodyHtml) . "\r\n\r\n";
         $body .= "--$bAlt--";
     }
 
-    $subjectEnc = '=?UTF-8?B?' . base64_encode($subject) . '?=';
+    $subjectEnc = '=?UTF-8?B?' . base64_encode((string)$subject) . '?=';
     try {
         return @mail($to, $subjectEnc, $body, $headers);
     } catch (Exception $e) {

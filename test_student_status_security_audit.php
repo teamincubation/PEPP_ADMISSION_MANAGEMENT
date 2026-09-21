@@ -121,6 +121,9 @@ class StudentStatusSecurityTestSuite {
                 retry_count INTEGER DEFAULT 0,
                 last_retry_at TEXT,
                 worker_started_at TEXT,
+                message_id TEXT,
+                api_requested_at TEXT,
+                api_responded_at TEXT,
                 created_at TEXT,
                 updated_at TEXT
             );
@@ -452,11 +455,18 @@ class StudentStatusSecurityTestSuite {
 
         // Process Transactional item at send-time (Allowed for non-active students)
         // Transactional message proceeds to dispatch attempt without status-based cancellation
+        $engine->mockProvider = new class implements CommunicationProviderInterface {
+            public function sendMessage($to, $subject, $bodyHtml, $bodyText = '', array $attachments = [], array $templateData = []) {
+                return ['success' => true, 'message_id' => 'mock_mail_trans_001'];
+            }
+        };
         $engine->processQueueItem($transQueueId);
-        $stmt_tr = $this->pdo->prepare("SELECT status FROM communication_queue WHERE id = ?");
+        $stmt_tr = $this->pdo->prepare("SELECT status, message_id FROM communication_queue WHERE id = ?");
         $stmt_tr->execute([$transQueueId]);
         $transResult = $stmt_tr->fetch(PDO::FETCH_ASSOC);
-        $this->assert($transResult['status'] !== 'cancelled', "Transactional communication is NOT cancelled for suspended student");
+        $this->assert($transResult['status'] === 'sent', "Transactional communication is NOT cancelled for suspended student and reaches SENT status");
+        $this->assert($transResult['message_id'] === 'mock_mail_trans_001', "Transactional communication records exact provider message_id");
+        $engine->mockProvider = null;
 
         // Reset STU001 back to active
         $this->pdo->prepare("UPDATE users SET student_status = 'active' WHERE user_id = 'STU001'")->execute();

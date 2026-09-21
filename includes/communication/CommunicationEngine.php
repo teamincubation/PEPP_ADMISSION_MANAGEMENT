@@ -324,7 +324,7 @@ class CommunicationEngine {
                         // Mark old queue item as failed / superseded (storing the exact mismatch reason)
                         $updStale = $this->pdo->prepare("
                             UPDATE communication_queue
-                            SET status = 'failed',
+                            SET status = 'cancelled',
                                 error_message = 'Superseded: Recipient number changed',
                                 updated_at = NOW()
                             WHERE id = ?
@@ -693,7 +693,7 @@ class CommunicationEngine {
                 return false;
             }
 
-            if (!empty($chkItem['student_uid'])) {
+            if ($channel === 'whatsapp' && !empty($chkItem['student_uid'])) {
                 $studStmt = $this->pdo->prepare("SELECT whatsapp_country_code, whatsapp_number FROM users WHERE user_id = ?");
                 $studStmt->execute([$chkItem['student_uid']]);
                 $student = $studStmt->fetch();
@@ -702,7 +702,7 @@ class CommunicationEngine {
                     $queuedPhone = self::normalizePhone($chkItem['recipient']);
                     if ($currentPhone !== $queuedPhone) {
                         // Recipient changed! Mark old item as superseded
-                        $updStale = $this->pdo->prepare("UPDATE communication_queue SET status = 'failed', error_message = 'Superseded: Recipient number changed', updated_at = NOW() WHERE id = ?");
+                        $updStale = $this->pdo->prepare("UPDATE communication_queue SET status = 'cancelled', error_message = 'Superseded: Recipient number changed', updated_at = NOW() WHERE id = ?");
                         $updStale->execute([$queueId]);
 
                         // Enqueue replacement for new number
@@ -1721,7 +1721,7 @@ class CommunicationEngine {
                 // Supersede the old queue item
                 $updOld = $this->pdo->prepare("
                     UPDATE communication_queue
-                    SET status = 'failed',
+                    SET status = 'cancelled',
                         error_message = 'Superseded: Recipient number changed',
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
@@ -1755,14 +1755,15 @@ class CommunicationEngine {
             $token = $stmtSec->fetchColumn();
             if (!$token) return;
 
-            $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-            $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+            $host = !empty($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : (defined('PEPP_DOMAIN') ? PEPP_DOMAIN : 'pepplearning.in');
+            $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : (isset($_SERVER['HTTP_HOST']) ? 'http' : 'https');
             $scriptName = $_SERVER['SCRIPT_NAME'] ?? '/admissions/index.php';
             $dir = dirname($scriptName);
             if ($dir === '\\' || $dir === '/') {
                 $dir = '';
             }
             $url = $protocol . '://' . $host . $dir . '/cron-queue.php?key=' . $token;
+            $redactedUrl = $protocol . '://' . $host . $dir . '/cron-queue.php?key=***REDACTED***';
 
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, $url);
@@ -1770,8 +1771,15 @@ class CommunicationEngine {
             curl_setopt($ch, CURLOPT_TIMEOUT, 1);
             curl_setopt($ch, CURLOPT_NOSIGNAL, 1);
             curl_exec($ch);
+            $curlErr = curl_error($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
-            error_log("[CRON_TRIGGER] background cron loopback triggered. URL: {$url}");
+
+            if ($curlErr && stripos($curlErr, 'timed out') === false) {
+                error_log("[CRON_TRIGGER_WARN] loopback curl notice: {$curlErr} for URL: {$redactedUrl}");
+            } else {
+                error_log("[CRON_TRIGGER] background cron loopback triggered. URL: {$redactedUrl} (HTTP {$httpCode})");
+            }
         } catch (Exception $e) {
             error_log("Failed to trigger background cron: " . $e->getMessage());
         }
