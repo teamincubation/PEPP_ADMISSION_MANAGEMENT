@@ -149,6 +149,24 @@ try {
             echo json_encode(['success' => true, 'history' => $history]);
             exit;
 
+        // 6b. Get Work Report Data (Super Admin Only)
+        case 'export_work_report':
+            if (!$is_super) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'Unauthorized: Only Super Admin can export task work reports.']);
+                exit;
+            }
+            $filters = [
+                'event_type'  => $_GET['event_type'] ?? '',
+                'admin'       => $_GET['admin'] ?? '',
+                'date_preset' => $_GET['date_preset'] ?? '',
+                'date_from'   => $_GET['date_from'] ?? '',
+                'date_to'     => $_GET['date_to'] ?? ''
+            ];
+            $reportData = task_reminders_get_history_report_data($pdo, $filters, $current_admin_id, $current_username, true);
+            echo json_encode(['success' => true, 'report' => $reportData]);
+            exit;
+
         // 7. Get Task Details & Timeline (Strict IDOR Protected)
         case 'get_details':
             $task_id = (int)($_GET['task_id'] ?? 0);

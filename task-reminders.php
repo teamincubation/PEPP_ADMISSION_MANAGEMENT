@@ -633,6 +633,11 @@ include 'includes/admin_nav.php';
                     <input type="date" id="history-date-to" style="padding:6px 10px; font-size:0.84rem; border:1px solid var(--border,#cbd5e1); border-radius:6px;" onchange="loadHistory()" title="To Date">
                 </div>
                 <button type="button" class="btn btn-sm btn-outline" onclick="resetHistoryFilters()"><i class="fas fa-rotate-left"></i> Reset</button>
+                <?php if ($is_super): ?>
+                    <button type="button" class="btn btn-sm btn-primary" id="btn-export-work-report" onclick="exportTaskWorkReport()" style="margin-left:auto; background:#ff6b00; border-color:#ff6b00; color:#fff; display:inline-flex; align-items:center; gap:6px; font-weight:600; box-shadow:0 1px 3px rgba(255,107,0,0.25);">
+                        <i class="fas fa-file-pdf"></i> Export Work Report
+                    </button>
+                <?php endif; ?>
             </div>
 
             <div class="table-wrap">
@@ -1049,6 +1054,41 @@ function resetHistoryFilters() {
     document.getElementById('history-date-from').value = '';
     document.getElementById('history-date-to').value = '';
     loadHistory();
+}
+
+function onHistoryDateFilterChange() {
+    var datePreset = document.getElementById('history-date-filter') ? document.getElementById('history-date-filter').value : '';
+    var customWrap = document.getElementById('history-custom-dates');
+    if (customWrap) {
+        if (datePreset === 'custom') {
+            customWrap.style.display = 'flex';
+        } else if (datePreset !== '') {
+            if (document.getElementById('history-date-from')) document.getElementById('history-date-from').value = '';
+            if (document.getElementById('history-date-to')) document.getElementById('history-date-to').value = '';
+        }
+    }
+    loadHistory();
+}
+
+function exportTaskWorkReport() {
+    var eventTypeEl = document.getElementById('history-event-filter');
+    var eventType = eventTypeEl ? eventTypeEl.value : '';
+    var adminEl = document.getElementById('history-admin-filter');
+    var admin = adminEl ? adminEl.value : '';
+    var datePresetEl = document.getElementById('history-date-filter');
+    var datePreset = datePresetEl ? datePresetEl.value : '';
+    var dateFromEl = document.getElementById('history-date-from');
+    var dateFrom = dateFromEl ? dateFromEl.value : '';
+    var dateToEl = document.getElementById('history-date-to');
+    var dateTo = dateToEl ? dateToEl.value : '';
+
+    var url = 'task-reminder-report-pdf.php?event_type=' + encodeURIComponent(eventType) +
+              '&admin=' + encodeURIComponent(admin) +
+              '&date_preset=' + encodeURIComponent(datePreset) +
+              '&date_from=' + encodeURIComponent(dateFrom) +
+              '&date_to=' + encodeURIComponent(dateTo);
+
+    window.open(url, '_blank');
 }
 
 function openCompleteTaskModal(taskId, title) {

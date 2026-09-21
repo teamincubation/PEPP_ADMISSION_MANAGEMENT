@@ -45,8 +45,9 @@ if (!function_exists('reminders_table_exists')) {
 
 if (!function_exists('ensure_task_reminders_schema')) {
     function ensure_task_reminders_schema(PDO $pdo, bool $force = false): bool {
-        static $task_schema_checked = false;
-        if ($task_schema_checked && !$force) {
+        static $checked_pdos = [];
+        $pdoKey = spl_object_hash($pdo);
+        if (isset($checked_pdos[$pdoKey]) && !$force) {
             return true;
         }
 
@@ -456,7 +457,7 @@ if (!function_exists('ensure_task_reminders_schema')) {
                 }
             }
 
-            $task_schema_checked = true;
+            $checked_pdos[$pdoKey] = true;
             return true;
         } catch (Throwable $e) {
             error_log("ensure_task_reminders_schema error: " . $e->getMessage());
@@ -1183,7 +1184,7 @@ function task_reminders_create(PDO $pdo, array $data, int $creator_admin_id, str
     $title = trim($data['title'] ?? '');
     $notes = trim($data['notes'] ?? '');
     $remind_at = trim($data['remind_at'] ?? '');
-    $assigned_to_username = trim($data['assigned_to'] ?? $creator_username);
+    $assigned_to_username = trim($data['assigned_to'] ?? $data['assigned_to_username'] ?? $creator_username);
 
     // Recurrence fields (defaults to 'none' for one-time tasks)
     $recurrence_type = trim($data['recurrence_type'] ?? 'none');
@@ -2626,3 +2627,590 @@ function reminders_email($recipients, $r) {
         error_log('reminder mail: ' . $e->getMessage());
     }
 }
+
+/**
+ * Authoritative Report Data Aggregator for Super Admin Work & Performance Reports
+ *
+ * Implements:
+ * 1. Decoupled event filter semantics (DB status is never conflated with filtered activity)
+ * 2. Explicit report_activity_date strictly bounded within selected date range
+ * 3. Strict separation of Postponed Tasks vs Postponement Events
+ * 4. Hybrid task-centric retrieval preventing omission of postponed/pending tasks
+ * 5. Intelligent same-day similar task grouping without loss of times, notes, or remarks
+ */
+function task_reminders_get_history_report_data(
+    PDO $pdo,
+    array $filters = [],
+    ?int $admin_id = null,
+    ?string $admin_username = null,
+    bool $is_super_admin = false
+): array {
+    task_reminders_ensure_schema($pdo);
+    if (!reminders_table_exists($pdo)) {
+        return [
+            'scope' => [],
+            'summary' => [],
+            'task_types' => [],
+            'admins' => [],
+            'days' => []
+        ];
+    }
+
+    try {
+        // 1. Resolve normalized filters
+        $event_type = strtoupper(trim($filters['event_type'] ?? ''));
+        $valid_events = ['CREATED', 'ASSIGNED', 'REASSIGNED', 'STARTED', 'POSTPONED', 'COMPLETED', 'CANCELLED'];
+        if (!in_array($event_type, $valid_events, true)) {
+            $event_type = '';
+        }
+
+        $admin_filter = trim($filters['admin'] ?? '');
+        $date_preset = strtolower(trim($filters['date_preset'] ?? $filters['date_filter'] ?? ''));
+        $raw_date_from = trim($filters['date_from'] ?? '');
+        $raw_date_to = trim($filters['date_to'] ?? '');
+
+        $resolved_date_from = null;
+        $resolved_date_to = null;
+
+        $todayDate = date('Y-m-d');
+        $tomorrowDate = date('Y-m-d', strtotime('+1 day'));
+        $mondayThisWeek = date('Y-m-d', strtotime('monday this week'));
+        $sundayThisWeek = date('Y-m-d', strtotime('sunday this week'));
+
+        if ($date_preset === 'today') {
+            $resolved_date_from = $todayDate;
+            $resolved_date_to = $todayDate;
+        } elseif ($date_preset === 'tomorrow') {
+            $resolved_date_from = $tomorrowDate;
+            $resolved_date_to = $tomorrowDate;
+        } elseif ($date_preset === 'this_week') {
+            $resolved_date_from = $mondayThisWeek;
+            $resolved_date_to = $sundayThisWeek;
+        } elseif ($date_preset === 'custom' || !empty($raw_date_from) || !empty($raw_date_to)) {
+            $resolved_date_from = !empty($raw_date_from) ? $raw_date_from : $raw_date_to;
+            $resolved_date_to = !empty($raw_date_to) ? $raw_date_to : $raw_date_from;
+        }
+
+        if ($resolved_date_from && $resolved_date_to && $resolved_date_from > $resolved_date_to) {
+            $tmp = $resolved_date_from;
+            $resolved_date_from = $resolved_date_to;
+            $resolved_date_to = $tmp;
+        }
+
+        $startTs = $resolved_date_from ? ($resolved_date_from . ' 00:00:00') : null;
+        $endTs = $resolved_date_to ? ($resolved_date_to . ' 23:59:59') : null;
+
+        // Human-readable labels
+        $admin_full_name = '';
+        if (!empty($admin_filter)) {
+            try {
+                if (admins_table_exists($pdo)) {
+                    $stAdm = $pdo->prepare("SELECT full_name, username FROM admins WHERE username = ? LIMIT 1");
+                    $stAdm->execute([$admin_filter]);
+                    $admRow = $stAdm->fetch(PDO::FETCH_ASSOC);
+                    if ($admRow) {
+                        $admin_full_name = $admRow['full_name'] ?: $admRow['username'];
+                    }
+                }
+            } catch (Exception $eAdm) {}
+            if (!$admin_full_name) {
+                $admin_full_name = $admin_filter;
+            }
+        }
+
+        $period_label = 'All Time / Complete History';
+        if ($resolved_date_from && $resolved_date_to) {
+            if ($resolved_date_from === $resolved_date_to) {
+                $period_label = date('d M Y', strtotime($resolved_date_from));
+            } else {
+                $period_label = date('d M Y', strtotime($resolved_date_from)) . ' — ' . date('d M Y', strtotime($resolved_date_to));
+            }
+        }
+
+        $scope = [
+            'event_type' => $event_type,
+            'event_label' => !empty($event_type) ? ucfirst(strtolower($event_type)) : 'All Events',
+            'admin' => $admin_filter,
+            'admin_label' => !empty($admin_filter) ? $admin_full_name : 'All Admins',
+            'date_preset' => $date_preset,
+            'date_from' => $resolved_date_from,
+            'date_to' => $resolved_date_to,
+            'period_label' => $period_label,
+            'generated_at' => date('d M Y, h:i A'),
+            'generated_by' => $admin_username ? ($is_super_admin ? "Super Admin ({$admin_username})" : $admin_username) : 'Super Admin'
+        ];
+
+        // 2. Resolve matching task IDs
+        $where = [];
+        $params = [];
+
+        // Exclude templates and soft deleted
+        $where[] = "(r.is_series_parent = 0 OR r.is_series_parent IS NULL)";
+        $where[] = "r.deleted_at IS NULL";
+        $where[] = "r.status != 'deleted'";
+
+        // Non-super admin security scoping
+        if (!$is_super_admin && $admin_id !== null && $admin_username !== null) {
+            $where[] = "(
+                r.assigned_to_admin_id = ? OR (r.assigned_to_admin_id IS NULL AND (r.assigned_to_username = ? OR r.assigned_to = ?))
+                OR r.assigned_by_admin_id = ? OR (r.assigned_by_admin_id IS NULL AND r.assigned_by_username = ?)
+                OR r.created_by_admin_id = ? OR (r.created_by_admin_id IS NULL AND (r.created_by_username = ? OR r.created_by = ?))
+            )";
+            for ($i = 0; $i < 8; $i++) {
+                $params[] = ($i === 0 || $i === 3 || $i === 5) ? $admin_id : $admin_username;
+            }
+        }
+
+        // Admin filter
+        if (!empty($admin_filter)) {
+            $where[] = "(r.assigned_to_username = ? OR r.assigned_to = ? OR r.created_by_username = ? OR r.created_by = ? OR r.assigned_by_username = ? OR trsh.changed_by_username = ?)";
+            $params[] = $admin_filter;
+            $params[] = $admin_filter;
+            $params[] = $admin_filter;
+            $params[] = $admin_filter;
+            $params[] = $admin_filter;
+            $params[] = $admin_filter;
+        }
+
+        // Date and Event Scoping
+        if (!empty($event_type)) {
+            // Specific event filter
+            $where[] = "trsh.event_type = ?";
+            $params[] = $event_type;
+
+            if ($startTs !== null && $endTs !== null) {
+                $where[] = "trsh.changed_at >= ? AND trsh.changed_at <= ?";
+                $params[] = $startTs;
+                $params[] = $endTs;
+            }
+        } else {
+            // "All Events" (Task-Centric Hybrid: Due in range, Completed in range, or Active in range)
+            if ($startTs !== null && $endTs !== null) {
+                $where[] = "(
+                    (r.remind_at >= ? AND r.remind_at <= ?)
+                    OR (r.completed_at >= ? AND r.completed_at <= ?)
+                    OR (trsh.changed_at >= ? AND trsh.changed_at <= ?)
+                )";
+                $params[] = $startTs;
+                $params[] = $endTs;
+                $params[] = $startTs;
+                $params[] = $endTs;
+                $params[] = $startTs;
+                $params[] = $endTs;
+            }
+        }
+
+        $whereClause = "WHERE " . implode(" AND ", $where);
+
+        $sqlIds = "SELECT DISTINCT r.id as task_id
+                   FROM reminders r
+                   LEFT JOIN task_reminder_status_history trsh ON trsh.task_id = r.id
+                   {$whereClause}";
+
+        $stmtIds = $pdo->prepare($sqlIds);
+        $stmtIds->execute($params);
+        $taskIds = $stmtIds->fetchAll(PDO::FETCH_COLUMN);
+
+        if (empty($taskIds)) {
+            return [
+                'scope' => $scope,
+                'summary' => [
+                    'total_tasks' => 0,
+                    'completed' => 0,
+                    'pending' => 0,
+                    'in_progress' => 0,
+                    'overdue' => 0,
+                    'open_total' => 0,
+                    'postponed_tasks' => 0,
+                    'postponement_events' => 0,
+                    'completion_rate' => 0.0,
+                    'active_task_types' => 0,
+                    'working_days' => 0
+                ],
+                'task_types' => [],
+                'admins' => [],
+                'days' => []
+            ];
+        }
+
+        // 3. Hydrate tasks and history
+        $inPlaceholders = implode(',', array_fill(0, count($taskIds), '?'));
+
+        $sqlTasks = "SELECT r.*, tt.name as task_type_name
+                     FROM reminders r
+                     LEFT JOIN task_reminder_types tt ON tt.id = r.task_type_id
+                     WHERE r.id IN ({$inPlaceholders})
+                     ORDER BY r.remind_at ASC, r.id ASC";
+        $stmtTasks = $pdo->prepare($sqlTasks);
+        $stmtTasks->execute($taskIds);
+        $tasksRaw = $stmtTasks->fetchAll(PDO::FETCH_ASSOC);
+
+        $sqlHist = "SELECT * FROM task_reminder_status_history
+                    WHERE task_id IN ({$inPlaceholders})
+                    ORDER BY changed_at ASC, id ASC";
+        $stmtHist = $pdo->prepare($sqlHist);
+        $stmtHist->execute($taskIds);
+        $allHistRows = $stmtHist->fetchAll(PDO::FETCH_ASSOC);
+
+        $historyByTask = [];
+        foreach ($allHistRows as $h) {
+            $historyByTask[(int)$h['task_id']][] = $h;
+        }
+
+        // 4. Evaluate each task's period status, postponement counts, and explicit report_activity_date
+        $processedTasks = [];
+        $nowTs = time();
+
+        foreach ($tasksRaw as $task) {
+            $tid = (int)$task['id'];
+            $tEvents = $historyByTask[$tid] ?? [];
+
+            // Filter history events falling within [startTs, endTs]
+            $inRangeEvents = [];
+            $inRangePostponeEvents = 0;
+            $lifetimePostponeEvents = 0;
+            $inRangeCompletedEvents = [];
+
+            foreach ($tEvents as $ev) {
+                if ($ev['event_type'] === 'POSTPONED') {
+                    $lifetimePostponeEvents++;
+                }
+
+                $evTs = $ev['changed_at'];
+                $isInRange = ($startTs === null || ($evTs >= $startTs && $evTs <= $endTs));
+                if ($isInRange) {
+                    $inRangeEvents[] = $ev;
+                    if ($ev['event_type'] === 'POSTPONED') {
+                        $inRangePostponeEvents++;
+                    } elseif ($ev['event_type'] === 'COMPLETED') {
+                        $inRangeCompletedEvents[] = $ev;
+                    }
+                }
+            }
+
+            // Determine period status and explicit report_activity_date
+            $periodStatus = 'pending';
+            $isCompletedInPeriod = false;
+            $reportActivityDate = $todayDate;
+            $completedAtTs = null;
+            $completerUsername = null;
+            $completionRemarks = '';
+
+            if (!empty($event_type)) {
+                // Event-filter mode: driven strictly by matching history event in range
+                $matchingEvents = array_filter($inRangeEvents, function($e) use ($event_type) {
+                    return $e['event_type'] === $event_type;
+                });
+                $firstMatch = reset($matchingEvents);
+                if ($firstMatch) {
+                    $reportActivityDate = date('Y-m-d', strtotime($firstMatch['changed_at']));
+                } elseif ($resolved_date_from) {
+                    $reportActivityDate = $resolved_date_from;
+                }
+
+                if ($event_type === 'COMPLETED') {
+                    $periodStatus = 'completed';
+                    $isCompletedInPeriod = true;
+                    $completedAtTs = $firstMatch ? $firstMatch['changed_at'] : $task['completed_at'];
+                    $completerUsername = $firstMatch ? ($firstMatch['changed_by_username'] ?: $task['completed_by_username']) : $task['completed_by_username'];
+                    $completionRemarks = $firstMatch ? ($firstMatch['remarks'] ?: $task['latest_remarks']) : $task['latest_remarks'];
+                } elseif ($event_type === 'POSTPONED') {
+                    $periodStatus = 'pending';
+                    $isCompletedInPeriod = false;
+                } elseif ($event_type === 'CANCELLED') {
+                    $periodStatus = 'cancelled';
+                    $isCompletedInPeriod = false;
+                } elseif ($event_type === 'STARTED') {
+                    $periodStatus = 'in_progress';
+                    $isCompletedInPeriod = false;
+                } else {
+                    $periodStatus = ($task['status'] === 'in_progress') ? 'in_progress' : 'pending';
+                    $isCompletedInPeriod = false;
+                }
+            } else {
+                // All Events mode
+                $hasCompletedInRange = !empty($inRangeCompletedEvents)
+                    || (!empty($task['completed_at']) && ($startTs === null || ($task['completed_at'] >= $startTs && $task['completed_at'] <= $endTs)));
+
+                if ($hasCompletedInRange) {
+                    $periodStatus = 'completed';
+                    $isCompletedInPeriod = true;
+                    $latestComp = !empty($inRangeCompletedEvents) ? end($inRangeCompletedEvents) : null;
+                    $completedAtTs = $latestComp ? $latestComp['changed_at'] : $task['completed_at'];
+                    $completerUsername = $latestComp ? ($latestComp['changed_by_username'] ?: $task['completed_by_username']) : $task['completed_by_username'];
+                    $completionRemarks = $latestComp ? ($latestComp['remarks'] ?: $task['latest_remarks']) : $task['latest_remarks'];
+                    $reportActivityDate = date('Y-m-d', strtotime($completedAtTs));
+                } else {
+                    $isCompletedInPeriod = false;
+                    if ($task['status'] === 'cancelled') {
+                        $periodStatus = 'cancelled';
+                        $reportActivityDate = !empty($inRangeEvents) ? date('Y-m-d', strtotime(end($inRangeEvents)['changed_at'])) : date('Y-m-d', strtotime($task['remind_at']));
+                    } elseif ($inRangePostponeEvents > 0) {
+                        $periodStatus = 'pending';
+                        $postponeEvents = array_filter($inRangeEvents, function($e) { return $e['event_type'] === 'POSTPONED'; });
+                        $latestPostpone = end($postponeEvents);
+                        $reportActivityDate = date('Y-m-d', strtotime($latestPostpone['changed_at']));
+                    } elseif ($startTs === null || ($task['remind_at'] >= $startTs && $task['remind_at'] <= $endTs)) {
+                        $isOverdue = strtotime($task['remind_at']) < $nowTs;
+                        $periodStatus = ($task['status'] === 'in_progress') ? 'in_progress' : ($isOverdue ? 'overdue' : 'pending');
+                        $reportActivityDate = date('Y-m-d', strtotime($task['remind_at']));
+                    } elseif (!empty($inRangeEvents)) {
+                        $firstEv = reset($inRangeEvents);
+                        $reportActivityDate = date('Y-m-d', strtotime($firstEv['changed_at']));
+                        $periodStatus = ($task['status'] === 'in_progress') ? 'in_progress' : 'pending';
+                    } else {
+                        $reportActivityDate = $resolved_date_from ?: date('Y-m-d', strtotime($task['remind_at']));
+                        $periodStatus = 'pending';
+                    }
+                }
+            }
+
+            // Strictly clamp report_activity_date to [resolved_date_from, resolved_date_to]
+            if ($resolved_date_from && $reportActivityDate < $resolved_date_from) {
+                $reportActivityDate = $resolved_date_from;
+            }
+            if ($resolved_date_to && $reportActivityDate > $resolved_date_to) {
+                $reportActivityDate = $resolved_date_to;
+            }
+
+            $taskPostponeCount = ($startTs !== null && $endTs !== null) ? $inRangePostponeEvents : $lifetimePostponeEvents;
+            $wasPostponedInPeriod = ($inRangePostponeEvents > 0);
+
+            $processedTasks[] = [
+                'id' => $tid,
+                'title' => $task['title'],
+                'notes' => $task['notes'] ?? '',
+                'remind_at' => $task['remind_at'],
+                'scheduled_time' => date('h:i A', strtotime($task['remind_at'])),
+                'task_type_id' => (int)($task['task_type_id'] ?? 0),
+                'task_type_name' => $task['task_type_name'] ?: 'General Task',
+                'assigned_to_username' => $task['assigned_to_username'] ?: ($task['assigned_to'] ?: 'Unassigned'),
+                'created_by_username' => $task['created_by_username'] ?: ($task['created_by'] ?: 'System'),
+                'assigned_by_username' => $task['assigned_by_username'] ?: $task['created_by_username'],
+                'period_status' => $periodStatus,
+                'is_completed' => $isCompletedInPeriod,
+                'completed_at' => $completedAtTs ? date('d M Y, h:i A', strtotime($completedAtTs)) : null,
+                'completed_by' => $completerUsername,
+                'completion_remarks' => $completionRemarks ?: ($task['latest_remarks'] ?? ''),
+                'latest_remarks' => $task['latest_remarks'] ?? '',
+                'postpone_events_count' => $taskPostponeCount,
+                'was_postponed' => $wasPostponedInPeriod,
+                'lifetime_postpone_events' => $lifetimePostponeEvents,
+                'report_activity_date' => $reportActivityDate,
+            ];
+        }
+
+        // 5. Aggregate Executive Summary Metrics
+        $totalTasks = count($processedTasks);
+        $completedCount = 0;
+        $pendingCount = 0;
+        $inProgressCount = 0;
+        $overdueCount = 0;
+        $cancelledCount = 0;
+        $postponedTasksCount = 0;
+        $totalPostponementEvents = 0;
+
+        foreach ($processedTasks as $pt) {
+            if ($pt['is_completed']) {
+                $completedCount++;
+            } elseif ($pt['period_status'] === 'in_progress') {
+                $inProgressCount++;
+            } elseif ($pt['period_status'] === 'overdue') {
+                $overdueCount++;
+            } elseif ($pt['period_status'] === 'cancelled') {
+                $cancelledCount++;
+            } else {
+                $pendingCount++;
+            }
+
+            if ($pt['was_postponed']) {
+                $postponedTasksCount++;
+            }
+            $totalPostponementEvents += $pt['postpone_events_count'];
+        }
+
+        $openTotal = $pendingCount + $inProgressCount + $overdueCount;
+        $actionableTotal = $completedCount + $openTotal;
+        $completionRate = $actionableTotal > 0 ? round(($completedCount / $actionableTotal) * 100, 1) : 0.0;
+
+        // 6. Aggregate Task Type Analytics
+        $typeMap = [];
+        foreach ($processedTasks as $pt) {
+            $tName = $pt['task_type_name'];
+            if (!isset($typeMap[$tName])) {
+                $typeMap[$tName] = [
+                    'name' => $tName,
+                    'total' => 0,
+                    'completed' => 0,
+                    'pending' => 0,
+                    'postponed_tasks' => 0,
+                    'postpone_events' => 0
+                ];
+            }
+            $typeMap[$tName]['total']++;
+            if ($pt['is_completed']) {
+                $typeMap[$tName]['completed']++;
+            } else {
+                $typeMap[$tName]['pending']++;
+            }
+            if ($pt['was_postponed']) {
+                $typeMap[$tName]['postponed_tasks']++;
+            }
+            $typeMap[$tName]['postpone_events'] += $pt['postpone_events_count'];
+        }
+        foreach ($typeMap as &$tm) {
+            $tmActionable = $tm['completed'] + $tm['pending'];
+            $tm['completion_rate'] = $tmActionable > 0 ? round(($tm['completed'] / $tmActionable) * 100, 1) : 0.0;
+        }
+        unset($tm);
+        uasort($typeMap, function($a, $b) { return $b['total'] <=> $a['total']; });
+
+        // 7. Aggregate Admin Performance Breakdown (All Admins)
+        $adminMap = [];
+        foreach ($processedTasks as $pt) {
+            $aName = $pt['assigned_to_username'];
+            if (!isset($adminMap[$aName])) {
+                $adminMap[$aName] = [
+                    'username' => $aName,
+                    'total' => 0,
+                    'completed' => 0,
+                    'pending' => 0,
+                    'postponed_tasks' => 0,
+                    'postpone_events' => 0
+                ];
+            }
+            $adminMap[$aName]['total']++;
+            if ($pt['is_completed']) {
+                $adminMap[$aName]['completed']++;
+            } else {
+                $adminMap[$aName]['pending']++;
+            }
+            if ($pt['was_postponed']) {
+                $adminMap[$aName]['postponed_tasks']++;
+            }
+            $adminMap[$aName]['postpone_events'] += $pt['postpone_events_count'];
+        }
+        foreach ($adminMap as &$am) {
+            $amActionable = $am['completed'] + $am['pending'];
+            $am['completion_rate'] = $amActionable > 0 ? round(($am['completed'] / $amActionable) * 100, 1) : 0.0;
+        }
+        unset($am);
+        uasort($adminMap, function($a, $b) { return $b['total'] <=> $a['total']; });
+
+        // 8. Daily Grouping and Similar Task Consolidation
+        $daysMap = [];
+        foreach ($processedTasks as $pt) {
+            $d = $pt['report_activity_date'];
+            if (!isset($daysMap[$d])) {
+                $daysMap[$d] = [
+                    'date' => $d,
+                    'formatted_date' => date('d M Y', strtotime($d)),
+                    'day_name' => date('l', strtotime($d)),
+                    'total' => 0,
+                    'completed' => 0,
+                    'pending' => 0,
+                    'postponed_tasks' => 0,
+                    'postpone_events' => 0,
+                    'tasks' => []
+                ];
+            }
+            $daysMap[$d]['total']++;
+            if ($pt['is_completed']) {
+                $daysMap[$d]['completed']++;
+            } else {
+                $daysMap[$d]['pending']++;
+            }
+            if ($pt['was_postponed']) {
+                $daysMap[$d]['postponed_tasks']++;
+            }
+            $daysMap[$d]['postpone_events'] += $pt['postpone_events_count'];
+            $daysMap[$d]['tasks'][] = $pt;
+        }
+
+        // Sort days chronologically ASC
+        ksort($daysMap);
+
+        // Within each day, group similar tasks
+        foreach ($daysMap as &$dayObj) {
+            $dActionable = $dayObj['completed'] + $dayObj['pending'];
+            $dayObj['completion_rate'] = $dActionable > 0 ? round(($dayObj['completed'] / $dActionable) * 100, 1) : 0.0;
+
+            $groupedBuckets = [];
+            foreach ($dayObj['tasks'] as $t) {
+                $normTitle = strtolower(trim($t['title']));
+                $gKey = $normTitle . '|' . $t['task_type_id'] . '|' . strtolower(trim($t['assigned_to_username']));
+                if (!isset($groupedBuckets[$gKey])) {
+                    $groupedBuckets[$gKey] = [
+                        'group_key' => $gKey,
+                        'title' => $t['title'],
+                        'task_type_id' => $t['task_type_id'],
+                        'task_type_name' => $t['task_type_name'],
+                        'assigned_to_username' => $t['assigned_to_username'],
+                        'occurrences' => 0,
+                        'completed' => 0,
+                        'pending' => 0,
+                        'postponed_tasks' => 0,
+                        'postpone_events' => 0,
+                        'items' => [],
+                        'notes_list' => [],
+                        'remarks_list' => []
+                    ];
+                }
+                $groupedBuckets[$gKey]['occurrences']++;
+                if ($t['is_completed']) {
+                    $groupedBuckets[$gKey]['completed']++;
+                } else {
+                    $groupedBuckets[$gKey]['pending']++;
+                }
+                if ($t['was_postponed']) {
+                    $groupedBuckets[$gKey]['postponed_tasks']++;
+                }
+                $groupedBuckets[$gKey]['postpone_events'] += $t['postpone_events_count'];
+                $groupedBuckets[$gKey]['items'][] = $t;
+
+                if (!empty($t['notes']) && !in_array($t['notes'], $groupedBuckets[$gKey]['notes_list'], true)) {
+                    $groupedBuckets[$gKey]['notes_list'][] = $t['notes'];
+                }
+                $rText = $t['completion_remarks'] ?: $t['latest_remarks'];
+                if (!empty($rText) && !in_array($rText, $groupedBuckets[$gKey]['remarks_list'], true)) {
+                    $groupedBuckets[$gKey]['remarks_list'][] = $rText;
+                }
+            }
+
+            $dayObj['groups'] = array_values($groupedBuckets);
+            unset($dayObj['tasks']);
+        }
+        unset($dayObj);
+
+        return [
+            'scope' => $scope,
+            'summary' => [
+                'total_tasks' => $totalTasks,
+                'completed' => $completedCount,
+                'pending' => $pendingCount,
+                'in_progress' => $inProgressCount,
+                'overdue' => $overdueCount,
+                'open_total' => $openTotal,
+                'postponed_tasks' => $postponedTasksCount,
+                'postponement_events' => $totalPostponementEvents,
+                'completion_rate' => $completionRate,
+                'active_task_types' => count($typeMap),
+                'working_days' => count($daysMap)
+            ],
+            'task_types' => array_values($typeMap),
+            'admins' => array_values($adminMap),
+            'days' => array_values($daysMap)
+        ];
+
+    } catch (Exception $e) {
+        error_log("task_reminders_get_history_report_data error: " . $e->getMessage());
+        return [
+            'scope' => [],
+            'summary' => [],
+            'task_types' => [],
+            'admins' => [],
+            'days' => []
+        ];
+    }
+}
+
