@@ -1018,6 +1018,16 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
         die('Access denied.');
     }
 
+    require_once __DIR__ . '/includes/ld_report_pdf.php';
+
+    $mask_charge = false;
+    if (isset($_GET['mask_charge'])) {
+        $mc = strtolower(trim((string)$_GET['mask_charge']));
+        if ($mc === '1' || $mc === 'true' || $mc === 'yes' || $mc === 'on') {
+            $mask_charge = true;
+        }
+    }
+
     // Fetch metrics
     $total_tasks = 0;
     $total_topics = 0;
@@ -1026,6 +1036,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     $mode_breakdown = [];
     $tasks = [];
     $total_charge_sum = 0.00;
+    $report_quantities = [];
 
     try {
         // Fetch raw tasks matching filters
@@ -1061,19 +1072,28 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
 
             $dates[date('Y-m-d', strtotime($tk['created_at']))] = true;
 
-            if (!isset($course_breakdown[$tk['course_name']])) {
-                $course_breakdown[$tk['course_name']] = 0;
+            $c_name = $tk['course_name'] ?: 'Unknown Course';
+            if (!isset($course_breakdown[$c_name])) {
+                $course_breakdown[$c_name] = ['cnt' => 0, 'quantities' => []];
             }
-            $course_breakdown[$tk['course_name']] += $cnt;
+            $course_breakdown[$c_name]['cnt'] += $cnt;
 
             $mode_title = $tk['mode_name_snapshot'] ?: $tk['mode_name'];
             if (!isset($mode_breakdown[$mode_title])) {
-                $mode_breakdown[$mode_title] = 0;
+                $mode_breakdown[$mode_title] = ['cnt' => 0, 'quantities' => []];
             }
-            $mode_breakdown[$mode_title] += $cnt;
+            $mode_breakdown[$mode_title]['cnt'] += $cnt;
+
+            $unit = ld_normalize_unit($tk['quantity_label_snapshot'] ?? null);
 
             foreach ($tk['topics'] as $tp) {
-                $total_charge_sum += (float)$tp['calculated_charge'];
+                $total_charge_sum += (float)($tp['calculated_charge'] ?? 0.0);
+                if ($tp['quantity'] !== null) {
+                    $q = (float)$tp['quantity'];
+                    $report_quantities[$unit] = ($report_quantities[$unit] ?? 0.0) + $q;
+                    $course_breakdown[$c_name]['quantities'][$unit] = ($course_breakdown[$c_name]['quantities'][$unit] ?? 0.0) + $q;
+                    $mode_breakdown[$mode_title]['quantities'][$unit] = ($mode_breakdown[$mode_title]['quantities'][$unit] ?? 0.0) + $q;
+                }
             }
         }
         $active_days = count($dates);
@@ -1081,105 +1101,22 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
         die("PDF Stats Error: " . $e->getMessage());
     }
 
-    $pdf = new MiniPDF();
-    $L = 50; $R = MiniPDF::W - 50; $W = $R - $L;
+    $report_data = [
+        'tasks'             => $tasks,
+        'total_tasks'       => $total_tasks,
+        'total_topics'      => $total_topics,
+        'active_days'       => $active_days,
+        'total_charge_sum'  => $total_charge_sum,
+        'course_breakdown'  => $course_breakdown,
+        'mode_breakdown'    => $mode_breakdown,
+        'report_quantities' => $report_quantities,
+        'generated_at'      => date('d-m-Y h:i A')
+    ];
 
-    // Check if logo exists
-    $logo = __DIR__ . '/pepp-logo.jpg';
-    if (file_exists($logo)) {
-        $pdf->image($logo, $L, 44, 92, 42);
-    } else {
-        $pdf->text($L, 44, 18, 'PEPP Learning', true);
-    }
+    $bytes = render_ld_work_report_pdf($report_data, $mask_charge);
+    $fname = 'ld-work-report-' . date('Y-m-d-Hi') . ($mask_charge ? '-masked' : '') . '.pdf';
 
-    $pdf->text($L, 48, 9, 'L&D Operations Work Report', false, 'R', $W);
-    $pdf->text($L, 60, 9, 'Generated: ' . date('d-m-Y h:i A'), false, 'R', $W);
-    $pdf->text($L, 95, 14, 'L&D OPERATIONS WORK REPORT', true, 'C', $W);
-
-    $y = 120;
-    $pdf->line($L, $y, $R, $y); $y += 12;
-
-    // Summary table
-    $pdf->text($L, $y, 10, 'Summary Metrics', true); $y += 16;
-    $pdf->text($L, $y, 9, 'Total Task Logs: ' . $total_tasks);
-    $pdf->text($L + 120, $y, 9, 'Total Topics: ' . $total_topics);
-    $pdf->text($L + 220, $y, 9, 'Active Days: ' . $active_days);
-    $pdf->text($L + 300, $y, 9, 'Total Charge: INR ' . number_format($total_charge_sum, 2));
-    $y += 14;
-    $pdf->text($L, $y, 9, 'Avg Topics/Active Day: ' . ($active_days > 0 ? number_format($total_topics / $active_days, 1) : '0'));
-    $y += 16;
-    $pdf->line($L, $y, $R, $y); $y += 16;
-
-    // Course breakdown table
-    $pdf->text($L, $y, 10, 'Course Breakdown (Topics completed)', true); $y += 14;
-    $pdf->line($L, $y, $R, $y); $y += 8;
-    foreach ($course_breakdown as $c_name => $c_cnt) {
-        if ($y > 760) { $pdf->line($L, $y, $R, $y); $y = 50; }
-        $pdf->text($L, $y, 9, $c_name);
-        $pdf->text($R - 50, $y, 9, $c_cnt, false, 'R');
-        $y += 14;
-    }
-    $y += 10;
-    $pdf->line($L, $y, $R, $y); $y += 16;
-
-    // Mode breakdown table
-    $pdf->text($L, $y, 10, 'Work Mode Breakdown (Topics completed)', true); $y += 14;
-    $pdf->line($L, $y, $R, $y); $y += 8;
-    foreach ($mode_breakdown as $m_name => $m_cnt) {
-        if ($y > 760) { $pdf->line($L, $y, $R, $y); $y = 50; }
-        $pdf->text($L, $y, 9, $m_name);
-        $pdf->text($R - 50, $y, 9, $m_cnt, false, 'R');
-        $y += 14;
-    }
-    $y += 10;
-    $pdf->line($L, $y, $R, $y); $y += 20;
-
-    // Daily activity detail list (Up to 15 rows to fit pages)
-    $pdf->text($L, $y, 10, 'Recent Activity Logs', true); $y += 14;
-    $pdf->line($L, $y, $R, $y); $y += 8;
-
-    $pdf->text($L, $y, 8.5, 'Date/Time', true);
-    $pdf->text($L + 80, $y, 8.5, 'Staff', true);
-    $pdf->text($L + 180, $y, 8.5, 'Course', true);
-    $pdf->text($L + 280, $y, 8.5, 'Mode', true);
-    $pdf->text($L + 380, $y, 8.5, 'Topics', true, 'R', 40);
-    $pdf->text($R, $y, 8.5, 'Charge (₹)', true, 'R');
-    $y += 8; $pdf->line($L, $y, $R, $y); $y += 10;
-
-    $limit = 15;
-    $count = 0;
-    foreach ($tasks as $tk) {
-        if ($count >= $limit) break;
-        if ($y > 760) { $pdf->line($L, $y, $R, $y); $y = 50; }
-
-        $task_charge = 0.00;
-        $has_incomplete = false;
-        foreach ($tk['topics'] as $tp) {
-            if ($tp['quantity'] === null) $has_incomplete = true;
-            $task_charge += (float)$tp['calculated_charge'];
-        }
-
-        $pdf->text($L, $y, 8, date('d-m-y H:i', strtotime($tk['created_at'])));
-        $pdf->text($L + 80, $y, 8, substr($tk['admin_name'], 0, 18));
-        $pdf->text($L + 180, $y, 8, substr($tk['course_name'], 0, 18));
-        $pdf->text($L + 280, $y, 8, substr($tk['mode_name_snapshot'] ?: $tk['mode_name'], 0, 18));
-        $pdf->text($L + 380, $y, 8, count($tk['topics']), false, 'R', 40);
-
-        $charge_display = $has_incomplete ? 'Incomplete' : '₹' . number_format($task_charge, 2);
-        $pdf->text($R, $y, 8, $charge_display, false, 'R');
-
-        $y += 14;
-        $count++;
-    }
-
-    $y += 10;
-    $pdf->line($L, $y, $R, $y); $y += 12;
-    $pdf->text($L, $y, 8, 'PEPP Learning Operations · office@pepplearning.com · Confidential Report', false, 'C', $W);
-
-    $bytes = $pdf->output();
-    $fname = 'ld-work-report-' . date('Y-m-d-Hi') . '.pdf';
-
-    log_admin_activity($pdo, $admin_username, 'data_export', "Exported L&D Work PDF report");
+    log_admin_activity($pdo, $admin_username, 'data_export', "Exported L&D Work PDF report" . ($mask_charge ? " (Masked)" : ""));
 
     header('Content-Type: application/pdf');
     header('Content-Disposition: attachment; filename="' . $fname . '"');
@@ -1676,15 +1613,31 @@ include 'includes/admin_nav.php';
         <div class="panel-head">
             <span class="head-icon" style="background:var(--blue-soft);color:var(--blue-ink);"><i class="fas fa-list"></i></span>
             <h2>Activity Logs</h2>
-            <div class="head-right" style="display:flex; gap:8px;">
+            <div class="head-right" style="display:flex; align-items:center; gap:10px;">
                 <!-- Respect Active Filters inside URL -->
                 <?php
-                $query_str = http_build_query($_GET);
-                $csv_url = "ld-work-report.php?export=csv" . ($query_str ? '&' . $query_str : '');
-                $pdf_url = "ld-work-report.php?export=pdf" . ($query_str ? '&' . $query_str : '');
+                $is_masked_checked = (!empty($_GET['mask_charge']) && in_array(strtolower((string)$_GET['mask_charge']), ['1', 'true', 'yes', 'on'], true));
+                $get_copy_csv = $_GET;
+                unset($get_copy_csv['export']);
+                $query_str_csv = http_build_query($get_copy_csv);
+                $csv_url = "ld-work-report.php?export=csv" . ($query_str_csv ? '&' . $query_str_csv : '');
+
+                $get_copy_pdf = $_GET;
+                unset($get_copy_pdf['export']);
+                if ($is_masked_checked) {
+                    $get_copy_pdf['mask_charge'] = '1';
+                } else {
+                    unset($get_copy_pdf['mask_charge']);
+                }
+                $query_str_pdf = http_build_query($get_copy_pdf);
+                $pdf_url = "ld-work-report.php?export=pdf" . ($query_str_pdf ? '&' . $query_str_pdf : '');
                 ?>
                 <a href="<?php echo $csv_url; ?>" class="btn btn-sm btn-outline"><i class="fas fa-file-excel"></i> Export CSV</a>
-                <a href="<?php echo $pdf_url; ?>" class="btn btn-sm btn-outline"><i class="fas fa-file-pdf"></i> Export PDF</a>
+                <label style="display:inline-flex; align-items:center; gap:6px; font-size:0.82rem; font-weight:600; cursor:pointer; user-select:none; margin-left:4px;" title="Hide all financial amounts, rates and charge columns in the exported PDF">
+                    <input type="checkbox" id="mask-charge-pdf-toggle" <?php echo $is_masked_checked ? 'checked' : ''; ?> style="cursor:pointer; width:15px; height:15px; accent-color:var(--primary, #e11d48);">
+                    <span>Mask Charge</span>
+                </label>
+                <a href="<?php echo $pdf_url; ?>" id="btn-export-pdf" class="btn btn-sm btn-outline" target="_blank"><i class="fas fa-file-pdf"></i> Export PDF</a>
             </div>
         </div>
         <div class="panel-body">
@@ -2744,10 +2697,33 @@ function updateDistributionChart(type) {
             alertContainer.className = 'alert alert-error';
             alertContainer.style.padding = '8px 12px';
             alertContainer.style.fontSize = '0.8rem';
-            alertContainer.innerHTML = '<i class="fas fa-triangle-exclamation"></i> Connection/Server error occurred. Please try again.';
-            alertContainer.style.display = 'block';
         });
     });
+
+    // Mask Charge PDF Link Handler
+    (function() {
+        var maskToggle = document.getElementById('mask-charge-pdf-toggle');
+        var pdfBtn = document.getElementById('btn-export-pdf');
+        if (maskToggle && pdfBtn) {
+            function updatePdfExportUrl() {
+                try {
+                    var url = new URL(pdfBtn.href, window.location.href);
+                    if (maskToggle.checked) {
+                        url.searchParams.set('mask_charge', '1');
+                    } else {
+                        url.searchParams.delete('mask_charge');
+                    }
+                    pdfBtn.href = url.toString();
+                } catch (e) {
+                    var base = pdfBtn.href.replace(/([?&])mask_charge=[^&]*(&|$)/g, '$1').replace(/[?&]$/, '');
+                    var sep = base.indexOf('?') !== -1 ? '&' : '?';
+                    pdfBtn.href = maskToggle.checked ? base + sep + 'mask_charge=1' : base;
+                }
+            }
+            maskToggle.addEventListener('change', updatePdfExportUrl);
+            updatePdfExportUrl();
+        }
+    })();
     </script>
 
 <?php include 'includes/admin_footer.php'; ?>
