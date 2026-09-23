@@ -31,3 +31,8 @@
 # Directory browsing protection
 # ----------------------------------------------------------------------
 Options -Indexes
+
+# ----------------------------------------------------------------------
+# Enable PATH_INFO for clean PHP URLs (e.g. birthday-rewards.php/{id})
+# ----------------------------------------------------------------------
+AcceptPathInfo On

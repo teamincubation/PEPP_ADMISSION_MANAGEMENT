@@ -293,6 +293,21 @@ try {
     $nav_unread_inbox_count = (int)$pdo->query("SELECT IFNULL(SUM(unread_count), 0) FROM whatsapp_conversations")->fetchColumn();
 } catch (Exception $navEx) { /* sidebar still renders */ }
 
+// Birthday count for sidebar badge
+$nav_today_birthdays = 0;
+try {
+    $tz_nav = new DateTimeZone('Asia/Kolkata');
+    $now_nav = new DateTime('now', $tz_nav);
+    $bday_m = (int)$now_nav->format('m');
+    $bday_d = (int)$now_nav->format('d');
+    // Feb 29 policy: on non-leap Feb 28, also count Feb 29 students
+    $bday_sql = "SELECT COUNT(*) FROM users WHERE status = 'approved' AND student_status = 'active' AND pepp_academic_year = (SELECT year FROM academic_years WHERE status = 'active' ORDER BY start_date DESC LIMIT 1) AND date_of_birth IS NOT NULL AND date_of_birth <> '0000-00-00' AND (MONTH(date_of_birth) = {$bday_m} AND DAY(date_of_birth) = {$bday_d})";
+    if ($bday_m === 2 && $bday_d === 28 && !$now_nav->format('L')) {
+        $bday_sql = "SELECT COUNT(*) FROM users WHERE status = 'approved' AND student_status = 'active' AND pepp_academic_year = (SELECT year FROM academic_years WHERE status = 'active' ORDER BY start_date DESC LIMIT 1) AND date_of_birth IS NOT NULL AND date_of_birth <> '0000-00-00' AND MONTH(date_of_birth) = 2 AND DAY(date_of_birth) IN (28, 29)";
+    }
+    $nav_today_birthdays = (int)$pdo->query($bday_sql)->fetchColumn();
+} catch (Exception $e) { $nav_today_birthdays = 0; }
+
 function nav_active($key, $active) { return $key === $active ? 'active' : ''; }
 
 // Function to render nav items dynamically based on their keys
@@ -327,6 +342,14 @@ function render_nav_item($key, $active_page, $nav_data) {
             break;
         case 'students':
             echo '<a class="nav-item ' . nav_active('students', $active_page) . '" href="studentpage.php"><i class="fas fa-users"></i> All Students</a>';
+            break;
+        case 'student-birthdays':
+            echo '<a class="nav-item ' . nav_active('student-birthdays', $active_page) . '" href="students-birthdays.php"><i class="fas fa-cake-candles"></i> Birthdays';
+            $nav_bday_count = $nav_data['today_birthdays'] ?? 0;
+            if ($nav_bday_count > 0) {
+                echo '<span class="nav-badge" style="background:#f59e0b; color:#fff;" title="' . $nav_bday_count . ' birthdays today">' . $nav_bday_count . '</span>';
+            }
+            echo '</a>';
             break;
         case 'onboarding':
             echo '<a class="nav-item ' . nav_active('onboarding', $active_page) . '" href="studentonboarding.php"><i class="fas fa-handshake"></i> Onboarding';
@@ -512,7 +535,7 @@ $default_sidebar = [
         'id' => 'students',
         'title' => 'Students',
         'icon' => 'fas fa-user-graduate',
-        'items' => ['students', 'onboarding', 'sessions', 'student-mentoring']
+        'items' => ['students', 'student-birthdays', 'onboarding', 'sessions', 'student-mentoring']
     ],
     [
         'id' => 'crm',
@@ -686,7 +709,8 @@ $nav_data = [
     'mkt' => $nav_mkt ?? [],
     'pending_payments' => $nav_pending_payments ?? 0,
     'due_within_10_days' => $nav_due_within_10_days ?? 0,
-    'unread_inbox_count' => $nav_unread_inbox_count ?? 0
+    'unread_inbox_count' => $nav_unread_inbox_count ?? 0,
+    'today_birthdays' => $nav_today_birthdays ?? 0
 ];
 ?>
 <!DOCTYPE html>

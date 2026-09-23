@@ -22,6 +22,9 @@ define('DB_PASS', defined('PEPP_DB_PASS') ? PEPP_DB_PASS : (getenv('PEPP_DB_PASS
 if (!defined('INVOICE_HMAC_SECRET')) {
     define('INVOICE_HMAC_SECRET', getenv('INVOICE_HMAC_SECRET') ?: 'CHANGE_ME');
 }
+if (!defined('BIRTHDAY_CLAIM_HMAC_SECRET')) {
+    define('BIRTHDAY_CLAIM_HMAC_SECRET', getenv('BIRTHDAY_CLAIM_HMAC_SECRET') ?: 'CHANGE_ME_BIRTHDAY');
+}
 
 $force_mysql = (getenv('PEPP_USE_MYSQL') === '1' || (!empty($_ENV['PEPP_USE_MYSQL']) && $_ENV['PEPP_USE_MYSQL'] === '1'));
 $sqlite_env_path = getenv('PEPP_SQLITE_PATH') ?: ($_ENV['PEPP_SQLITE_PATH'] ?? ($_SERVER['PEPP_SQLITE_PATH'] ?? ''));
@@ -71,6 +74,10 @@ if ($is_local_dev) {
             $pdo->sqliteCreateFunction('MONTH', function($date) {
                 if (!$date) return null;
                 return (int)date('m', strtotime((string)$date));
+            });
+            $pdo->sqliteCreateFunction('DAY', function($date) {
+                if (!$date) return null;
+                return (int)date('d', strtotime((string)$date));
             });
             $pdo->sqliteCreateFunction('YEAR', function($date) {
                 if (!$date) return null;
@@ -659,6 +666,41 @@ if ($is_local_dev) {
                 followup_date TEXT DEFAULT NULL,
                 performed_by TEXT DEFAULT NULL,
                 performed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS birthday_reward_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reward_title TEXT NOT NULL DEFAULT 'Birthday Reward',
+                reward_description TEXT,
+                birthday_header_image TEXT DEFAULT NULL,
+                reward_voucher_image TEXT DEFAULT NULL,
+                coupon_code TEXT DEFAULT NULL,
+                valid_till TEXT DEFAULT NULL,
+                instructions TEXT,
+                terms TEXT,
+                claim_message TEXT,
+                is_active INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS birthday_reward_claims (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                person_identity TEXT NOT NULL,
+                student_id TEXT NOT NULL,
+                birthday_date TEXT NOT NULL,
+                reward_setting_id INTEGER DEFAULT NULL,
+                coupon_code TEXT DEFAULT NULL,
+                claimed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(person_identity, birthday_date)
+            );
+            CREATE TABLE IF NOT EXISTS birthday_notifications_sent (
+                person_identity TEXT NOT NULL,
+                student_id TEXT NOT NULL,
+                birthday_date TEXT NOT NULL,
+                queue_id INTEGER DEFAULT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (person_identity, birthday_date)
             );
         ");
 

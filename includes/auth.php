@@ -82,6 +82,7 @@ $GLOBALS['ADMIN_PAGES'] = [
     'student-study-reports' => ['Student Reports',   'fa-chart-line'],
     'assessment-results'  => ['Mega Test Results',  'fa-chart-column'],
     'task-reminders'      => ['Task Reminders',      'fa-bell'],
+    'student-birthdays'   => ['Student Birthdays',   'fa-cake-candles'],
     'settings'      => ['Settings',                'fa-gear'],
 ];
 

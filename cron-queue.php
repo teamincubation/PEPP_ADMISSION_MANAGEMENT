@@ -314,6 +314,18 @@ try {
             error_log("Cron: Monthly activity backup error: " . $backupEx->getMessage());
         }
 
+        // ── 5. SECONDARY TASK: Birthday Greeting Scheduler ────────────
+        try {
+            if (file_exists(__DIR__ . '/includes/birthday_scheduler.php')) {
+                require_once __DIR__ . '/includes/birthday_scheduler.php';
+                if (function_exists('birthday_dispatch_notifications')) {
+                    birthday_dispatch_notifications($pdo);
+                }
+            }
+        } catch (Exception $bdayEx) {
+            error_log("Cron: Birthday scheduler error: " . $bdayEx->getMessage());
+        }
+
         if ($telemetry['status'] === 'FAILED') {
             if ($is_cli) {
                 echo "Queue processing failed: " . ($telemetry['error'] ?? 'Unknown error') . "\n";
