@@ -356,10 +356,12 @@ function birthday_dispatch_notifications(PDO $pdo): array {
     }
 
     // ── Guard: Birthday reward system active? ───────────────────────────
+    $rewardSetting = null;
     try {
-        $activeStmt = $pdo->prepare("SELECT id FROM birthday_reward_settings WHERE is_active = 1 LIMIT 1");
+        $activeStmt = $pdo->prepare("SELECT id, birthday_header_image FROM birthday_reward_settings WHERE is_active = 1 LIMIT 1");
         $activeStmt->execute();
-        if (!$activeStmt->fetchColumn()) {
+        $rewardSetting = $activeStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$rewardSetting) {
             $result['skipped'] = true;
             $result['reason'] = 'birthday_rewards_inactive';
             return $result;
@@ -368,6 +370,17 @@ function birthday_dispatch_notifications(PDO $pdo): array {
         $result['skipped'] = true;
         $result['reason'] = 'birthday_reward_settings_table_missing';
         return $result;
+    }
+
+    // Resolve public HTTPS header image URL if configured in reward settings
+    $rawHeaderImg = trim((string)($rewardSetting['birthday_header_image'] ?? ''));
+    $headerImageUrl = null;
+    if ($rawHeaderImg !== '') {
+        if (preg_match('/^https?:\/\//i', $rawHeaderImg)) {
+            $headerImageUrl = $rawHeaderImg;
+        } else {
+            $headerImageUrl = 'https://pepplearning.in/' . ltrim($rawHeaderImg, '/');
+        }
     }
 
     // ── Guard: Active academic year ──────────────────────────────────────
@@ -476,6 +489,10 @@ function birthday_dispatch_notifications(PDO $pdo): array {
                 'student_uid'  => $studentId,
                 'student_name' => $studentName,
             ];
+
+            if (!empty($headerImageUrl)) {
+                $context['header_media_url'] = $headerImageUrl;
+            }
 
             // Build HMAC claim URL using the canonical student_id
             $hmac = hash_hmac('sha256', $studentId, BIRTHDAY_CLAIM_HMAC_SECRET);

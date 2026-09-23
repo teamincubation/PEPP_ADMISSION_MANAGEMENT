@@ -20,11 +20,11 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
     public function sendMessage($to, $subject, $bodyHtml, $bodyText = '', array $attachments = [], array $templateData = []) {
         // Meta expects phone numbers without leading '+' or special chars.
         $cleanPhone = preg_replace('/\D/', '', $to);
-        
-        // Indian numbers default check (if 10 digits, prepend 91)
         if (strlen($cleanPhone) === 10) {
             $cleanPhone = '91' . $cleanPhone;
         }
+
+        $payload = $this->buildMessagePayload($to, $subject, $bodyHtml, $bodyText, $attachments, $templateData);
 
         if (isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true') {
             if ($cleanPhone === '910000000001') {
@@ -39,13 +39,72 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
                 return [
                     'success' => true,
                     'message_id' => 'mock_wamid_' . uniqid(),
-                    'response' => ['messages' => [['id' => 'mock_wamid_' . uniqid()]]]
+                    'response' => ['messages' => [['id' => 'mock_wamid_' . uniqid()]]],
+                    'mock_payload' => $payload
                 ];
             }
         }
 
         $url = "https://graph.facebook.com/{$this->apiVersion}/{$this->phoneId}/messages";
-        
+        $headers = [
+            "Authorization: Bearer {$this->accessToken}",
+            "Content-Type: application/json"
+        ];
+
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+
+        if ($err) {
+            $this->lastError = "CURL Error: " . $err;
+            $this->lastErrorCode = 0;
+            error_log("WhatsApp API CURL Error: " . $err);
+            return false;
+        }
+
+        $respDecoded = json_decode($response, true);
+        if ($httpCode >= 200 && $httpCode < 300 && isset($respDecoded['messages'][0]['id'])) {
+            return [
+                'success' => true,
+                'message_id' => $respDecoded['messages'][0]['id'],
+                'response' => $respDecoded
+            ];
+        } else {
+            $errDetails = $respDecoded['error']['message'] ?? 'Unknown API Error';
+            $this->lastErrorCode = $respDecoded['error']['code'] ?? 0;
+            $this->lastError = "HTTP {$httpCode}: {$errDetails}";
+            error_log("WhatsApp API Error Details: Code {$httpCode} - Response " . $response);
+            return false;
+        }
+    }
+
+    /**
+     * Constructs the Meta WhatsApp Cloud API JSON payload structure without sending.
+     *
+     * @param string $to
+     * @param string $subject
+     * @param string $bodyHtml
+     * @param string $bodyText
+     * @param array $attachments
+     * @param array $templateData
+     * @return array
+     */
+    public function buildMessagePayload($to, $subject, $bodyHtml, $bodyText = '', array $attachments = [], array $templateData = []) {
+        $cleanPhone = preg_replace('/\D/', '', $to);
+        if (strlen($cleanPhone) === 10) {
+            $cleanPhone = '91' . $cleanPhone;
+        }
+
         $payload = [
             'messaging_product' => 'whatsapp',
             'recipient_type'    => 'individual',
@@ -225,46 +284,7 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
             ];
         }
 
-        $headers = [
-            "Authorization: Bearer {$this->accessToken}",
-            "Content-Type: application/json"
-        ];
-
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err = curl_error($ch);
-        curl_close($ch);
-
-        if ($err) {
-            $this->lastError = "CURL Error: " . $err;
-            $this->lastErrorCode = 0;
-            error_log("WhatsApp API CURL Error: " . $err);
-            return false;
-        }
-
-        $respDecoded = json_decode($response, true);
-        if ($httpCode >= 200 && $httpCode < 300 && isset($respDecoded['messages'][0]['id'])) {
-            return [
-                'success' => true,
-                'message_id' => $respDecoded['messages'][0]['id'],
-                'response' => $respDecoded
-            ];
-        } else {
-            $errDetails = $respDecoded['error']['message'] ?? 'Unknown API Error';
-            $this->lastErrorCode = $respDecoded['error']['code'] ?? 0;
-            $this->lastError = "HTTP {$httpCode}: {$errDetails}";
-            error_log("WhatsApp API Error Details: Code {$httpCode} - Response " . $response);
-            return false;
-        }
+        return $payload;
     }
 
     public function getLastErrorCode() {

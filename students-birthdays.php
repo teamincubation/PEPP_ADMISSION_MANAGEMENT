@@ -477,7 +477,7 @@ include 'includes/admin_nav.php';
 <!-- Reward Settings -->
 <div class="tab-content" id="tab-settings">
     <form method="POST" enctype="multipart/form-data">
-        <?php csrf_field(); ?>
+        <?php echo csrf_field(); ?>
         <input type="hidden" name="save_birthday_settings" value="1">
 
         <div class="settings-section">

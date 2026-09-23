@@ -1434,6 +1434,45 @@ class CommunicationEngine {
             }
         }
 
+        // Inspect template components to check for media or text HEADER
+        $headerType = $meta['header_type'] ?? 'NONE';
+        if ($headerType === 'NONE' && isset($meta['components']) && is_array($meta['components'])) {
+            foreach ($meta['components'] as $comp) {
+                if (strtoupper($comp['type'] ?? '') === 'HEADER') {
+                    $headerType = strtoupper($comp['format'] ?? 'NONE');
+                    break;
+                }
+            }
+        }
+
+        if ($headerType !== 'NONE') {
+            if (in_array($headerType, ['IMAGE', 'VIDEO', 'DOCUMENT'], true)) {
+                $headerUrl = $contextData['header_media_url']
+                    ?? $contextData['header_image_url']
+                    ?? $contextData['header_image']
+                    ?? $contextData['header_url']
+                    ?? null;
+
+                if (empty($headerUrl) && !empty($meta['header_media_url'])) {
+                    $fallbackUrl = $meta['header_media_url'];
+                    if (strpos($fallbackUrl, 'scontent.whatsapp.net') === false && strpos($fallbackUrl, 'fbcdn.net') === false) {
+                        $headerUrl = $fallbackUrl;
+                    }
+                }
+
+                if (!empty($headerUrl)) {
+                    $result['header_type'] = $headerType;
+                    $result['header_parameters'] = [(string)$headerUrl];
+                    if ($headerType === 'DOCUMENT' && !empty($contextData['header_document_filename'])) {
+                        $result['header_document_filename'] = (string)$contextData['header_document_filename'];
+                    }
+                }
+            } elseif ($headerType === 'TEXT' && !empty($contextData['header_text'])) {
+                $result['header_type'] = 'TEXT';
+                $result['header_parameters'] = [(string)$contextData['header_text']];
+            }
+        }
+
         return $result;
     }
 

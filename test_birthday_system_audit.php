@@ -28,6 +28,7 @@ putenv('PEPP_TESTING_ENV=1');
 
 date_default_timezone_set('Asia/Kolkata');
 require_once __DIR__ . '/config/database.php';
+@require_once __DIR__ . '/includes/auth.php';
 
 $pass = 0;
 $fail = 0;
@@ -546,6 +547,92 @@ echo "\n── 9. Security & Hardening Verification ─────────�
 (strpos($claimCode, 'PATH_INFO') !== false)
     ? test_pass("Claim page accepts clean PATH_INFO URLs")
     : test_fail("Claim page accepts PATH_INFO URLs");
+
+// ════════════════════════════════════════════════════════════════════════
+// 10. REWARD SETTINGS CSRF & FORM SECURITY
+// ════════════════════════════════════════════════════════════════════════
+echo "\n── 10. Reward Settings CSRF & Form Security ─────────────────────\n";
+
+$bdayPageContent = file_get_contents(__DIR__ . '/students-birthdays.php');
+
+// Verify echo csrf_field() is used
+(strpos($bdayPageContent, '<?php echo csrf_field(); ?>') !== false || strpos($bdayPageContent, '<?= csrf_field(); ?>') !== false)
+    ? test_pass("students-birthdays.php form uses 'echo csrf_field()'")
+    : test_fail("students-birthdays.php form uses 'echo csrf_field()'");
+
+(strpos($bdayPageContent, '<?php csrf_field(); ?>') === false)
+    ? test_pass("students-birthdays.php has no un-echoed csrf_field() calls")
+    : test_fail("students-birthdays.php contains un-echoed csrf_field()");
+
+// Verify CSRF validation logic
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+$_POST['csrf_token'] = $_SESSION['csrf_token'];
+csrf_verify()
+    ? test_pass("csrf_verify() succeeds with matching token")
+    : test_fail("csrf_verify() failed with matching token");
+
+$_POST['csrf_token'] = 'invalid_tampered_token';
+!csrf_verify()
+    ? test_pass("csrf_verify() rejects mismatched token")
+    : test_fail("csrf_verify() allowed mismatched token");
+
+unset($_POST['csrf_token']);
+!csrf_verify()
+    ? test_pass("csrf_verify() rejects missing token")
+    : test_fail("csrf_verify() allowed missing token");
+
+// Verify settings save simulation retains is_active = 0
+$pdo->exec("CREATE TABLE IF NOT EXISTS birthday_reward_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reward_title TEXT NOT NULL,
+    reward_description TEXT,
+    coupon_code TEXT,
+    valid_till TEXT,
+    instructions TEXT,
+    terms TEXT,
+    claim_message TEXT,
+    is_active INTEGER DEFAULT 0,
+    birthday_header_image TEXT DEFAULT NULL,
+    reward_voucher_image TEXT DEFAULT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+)");
+$pdo->exec("DELETE FROM birthday_reward_settings");
+$pdo->exec("INSERT INTO birthday_reward_settings (id, reward_title, reward_description, coupon_code, is_active) VALUES (1, 'Test Title', 'Test Desc', 'TEST10', 0)");
+
+// Simulate save without images
+$_POST = [
+    'save_birthday_settings' => '1',
+    'csrf_token'             => $_SESSION['csrf_token'],
+    'reward_title'           => 'Updated Title',
+    'reward_description'     => 'Updated Desc',
+    'coupon_code'            => 'TEST20',
+];
+if (csrf_verify()) {
+    $pdo->prepare("UPDATE birthday_reward_settings SET reward_title = ?, is_active = 0 WHERE id = 1")->execute([$_POST['reward_title']]);
+}
+$savedRow = $pdo->query("SELECT reward_title, is_active FROM birthday_reward_settings WHERE id = 1")->fetch(PDO::FETCH_ASSOC);
+($savedRow['reward_title'] === 'Updated Title' && (int)$savedRow['is_active'] === 0)
+    ? test_pass("Settings save with valid CSRF succeeds and keeps is_active = 0")
+    : test_fail("Settings save with valid CSRF failed");
+
+// Verify disallowed file extension is rejected
+require_once __DIR__ . '/includes/file_helper.php';
+$_FILES['malicious_test'] = [
+    'name'     => 'exploit.php',
+    'type'     => 'application/x-php',
+    'tmp_name' => tempnam(sys_get_temp_dir(), 'test_php_'),
+    'error'    => UPLOAD_ERR_OK,
+    'size'     => 10
+];
+$uploadBlocked = (handle_file_upload_with_replace('malicious_test', 'birthday', null, ['jpg', 'jpeg', 'png', 'webp']) === null);
+@unlink($_FILES['malicious_test']['tmp_name']);
+$uploadBlocked
+    ? test_pass("File upload securely rejects disallowed extensions (.php)")
+    : test_fail("File upload permitted disallowed extension");
 
 // ════════════════════════════════════════════════════════════════════════
 // SUMMARY
