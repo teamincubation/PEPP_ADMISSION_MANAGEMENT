@@ -204,12 +204,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_birthday_setting
 
 // ── Fetch Data ──────────────────────────────────────────────────────────
 $tz = new DateTimeZone('Asia/Kolkata');
-$now = new DateTime('now', $tz);
-$todayStr = $now->format('Y-m-d');
-$month = (int)$now->format('m');
-$day = (int)$now->format('d');
-$year = (int)$now->format('Y');
-$isLeapYear = (bool)$now->format('L');
+$nowDateTime = new DateTime('now', $tz);
+$todayStr = $nowDateTime->format('Y-m-d');
+$month = (int)$nowDateTime->format('m');
+$day = (int)$nowDateTime->format('d');
+$year = (int)$nowDateTime->format('Y');
+$isLeapYear = (bool)$nowDateTime->format('L');
 
 // Birthday reward settings
 $settings = [];
@@ -464,7 +464,7 @@ include 'includes/admin_nav.php';
                     <p><i class="fas fa-graduation-cap"></i> <?php echo e($bday['pepp_course'] ?? '-'); ?></p>
                     <p><i class="fas fa-calendar"></i> <?php echo date('d M', strtotime($bday['date_of_birth'])); ?> (<?php
                         $nbDate = new DateTime($bday['next_birthday']);
-                        $diff = $now->diff($nbDate);
+                        $diff = $nowDateTime->diff($nbDate);
                         echo $diff->days . ' day' . ($diff->days !== 1 ? 's' : '') . ' away';
                     ?>)</p>
                 </div>

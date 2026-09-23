@@ -66,7 +66,7 @@ if (file_exists(__DIR__ . '/reminders_helper.php')) {
 
 // Background Reminders & Campaigns: runs lazily on page loads throttled with a 30s cooldown.
 try {
-    $now = time();
+    $nav_lazy_now = time();
     $cooldown = 30; // 30 seconds cooldown between lazy background triggers
 
     // Fetch last check timestamp from admin_settings
@@ -74,13 +74,13 @@ try {
     $stmtLazy->execute();
     $lastLazyTime = (int)$stmtLazy->fetchColumn();
 
-    if (($now - $lastLazyTime) >= $cooldown) {
+    if (($nav_lazy_now - $lastLazyTime) >= $cooldown) {
         // Atomically update check timestamp
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         if ($driver === 'mysql') {
-            $pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('whatsapp_last_lazy_trigger', ?, NOW()) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()")->execute([(string)$now]);
+            $pdo->prepare("INSERT INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('whatsapp_last_lazy_trigger', ?, NOW()) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()")->execute([(string)$nav_lazy_now]);
         } else {
-            $pdo->prepare("INSERT OR REPLACE INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('whatsapp_last_lazy_trigger', ?, datetime('now'))")->execute([(string)$now]);
+            $pdo->prepare("INSERT OR REPLACE INTO admin_settings (setting_name, setting_value, updated_at) VALUES ('whatsapp_last_lazy_trigger', ?, datetime('now'))")->execute([(string)$nav_lazy_now]);
         }
 
         // Automatic session reminders (12h / 4h / 10m / start)
