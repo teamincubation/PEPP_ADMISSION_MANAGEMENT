@@ -339,12 +339,220 @@ include 'includes/admin_nav.php';
 .form-group label { font-size: 0.8rem; font-weight: 600; color: var(--text-primary, #1e293b); }
 .form-group input, .form-group textarea, .form-group select { padding: 10px 12px; border: 1px solid var(--border-color, #d1d5db); border-radius: 8px; font-size: 0.85rem; background: var(--input-bg, #fff); color: var(--text-primary, #1e293b); }
 .form-group textarea { min-height: 80px; resize: vertical; }
+/* Modern Accessible Toggle Banner */
+.reward-toggle-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 16px 20px;
+    background: #f8fafc;
+    border: 2px solid #e2e8f0;
+    border-radius: 12px;
+    margin-bottom: 22px;
+    transition: all 0.25s ease;
+}
+
+.reward-toggle-banner:has(.switch-checkbox:checked),
+.reward-toggle-banner.is-active {
+    background: rgba(139, 92, 246, 0.04);
+    border-color: #8b5cf6;
+}
+
+.reward-toggle-details {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex: 1;
+    min-width: 0;
+}
+
+.reward-toggle-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    background: #e2e8f0;
+    color: #64748b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    flex-shrink: 0;
+    transition: all 0.25s ease;
+}
+
+.reward-toggle-banner:has(.switch-checkbox:checked) .reward-toggle-icon,
+.reward-toggle-banner.is-active .reward-toggle-icon {
+    background: #8b5cf6;
+    color: #ffffff;
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.35);
+}
+
+.reward-toggle-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.reward-toggle-title {
+    font-size: 0.92rem;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    color: var(--text-primary, #1e293b);
+    text-transform: uppercase;
+}
+
+.reward-toggle-hint {
+    font-size: 0.8rem;
+    line-height: 1.4;
+}
+
+.reward-toggle-hint.hint-off {
+    color: #64748b;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.reward-toggle-hint.hint-off strong {
+    color: #ef4444;
+}
+
+.reward-toggle-hint.hint-on {
+    color: #059669;
+    display: none;
+    align-items: center;
+    gap: 6px;
+}
+
+.reward-toggle-hint.hint-on strong {
+    color: #10b981;
+}
+
+.reward-toggle-banner:has(.switch-checkbox:checked) .reward-toggle-hint.hint-off,
+.reward-toggle-banner.is-active .reward-toggle-hint.hint-off {
+    display: none;
+}
+
+.reward-toggle-banner:has(.switch-checkbox:checked) .reward-toggle-hint.hint-on,
+.reward-toggle-banner.is-active .reward-toggle-hint.hint-on {
+    display: flex;
+}
+
+/* Switch Control (Interactive Label) */
+.switch-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    padding: 4px;
+    border-radius: 50px;
+    flex-shrink: 0;
+}
+
+/* Visually Hidden Checkbox - Retains Tab Focus */
+.switch-checkbox {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
+}
+
+/* Switch Track (58px x 32px) */
+.switch-track {
+    width: 58px;
+    height: 32px;
+    background: #cbd5e1;
+    border-radius: 50px;
+    position: relative;
+    display: inline-block;
+    transition: background-color 0.25s ease, box-shadow 0.25s ease;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.12);
+}
+
+/* Keyboard Focus Ring */
+.switch-checkbox:focus-visible + .switch-track {
+    outline: 2px solid #8b5cf6;
+    outline-offset: 3px;
+    box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.3);
+}
+
+/* Switch Knob / Thumb */
+.switch-thumb {
+    width: 24px;
+    height: 24px;
+    background: #ffffff;
+    border-radius: 50%;
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+/* Checked State - Brand Color */
+.switch-checkbox:checked + .switch-track {
+    background: #8b5cf6;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.18), 0 0 10px rgba(139, 92, 246, 0.35);
+}
+
+.switch-checkbox:checked + .switch-track .switch-thumb {
+    transform: translateX(26px);
+}
+
+/* Status Pill Badge */
+.switch-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    min-width: 72px;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.switch-status.status-off {
+    background: #f1f5f9;
+    color: #64748b;
+    border: 1px solid #cbd5e1;
+}
+
+.switch-status.status-on {
+    display: none;
+    background: rgba(16, 185, 129, 0.12);
+    color: #059669;
+    border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.switch-checkbox:checked ~ .switch-status.status-off {
+    display: none;
+}
+
+.switch-checkbox:checked ~ .switch-status.status-on {
+    display: inline-flex;
+}
+
+@media (max-width: 640px) {
+    .reward-toggle-banner {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 14px;
+    }
+    .switch-control {
+        align-self: flex-start;
+    }
+}
 .image-preview { max-width: 200px; border-radius: 8px; margin-top: 8px; }
-.toggle-switch { display: flex; align-items: center; gap: 10px; }
-.toggle-switch input[type="checkbox"] { width: 40px; height: 22px; appearance: none; background: #d1d5db; border-radius: 11px; position: relative; cursor: pointer; transition: 0.3s; }
-.toggle-switch input[type="checkbox"]:checked { background: #8b5cf6; }
-.toggle-switch input[type="checkbox"]::before { content: ''; position: absolute; width: 18px; height: 18px; border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: 0.3s; }
-.toggle-switch input[type="checkbox"]:checked::before { left: 20px; }
 .btn-save { padding: 10px 24px; background: #8b5cf6; color: #fff; border: none; border-radius: 10px; font-weight: 600; font-size: 0.85rem; cursor: pointer; transition: all 0.2s; }
 .btn-save:hover { background: #7c3aed; transform: translateY(-1px); }
 .section-tabs { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
@@ -483,9 +691,25 @@ include 'includes/admin_nav.php';
         <div class="settings-section">
             <h3><i class="fas fa-gift"></i> Birthday Reward Configuration</h3>
 
-            <div class="toggle-switch" style="margin-bottom:16px;">
-                <input type="checkbox" name="is_active" id="reward_active" <?php echo ($settings['is_active'] ?? 0) ? 'checked' : ''; ?>>
-                <label for="reward_active" style="font-weight:600; font-size:0.85rem; cursor:pointer;">Enable Birthday Reward System</label>
+            <div class="reward-toggle-banner <?php echo ($settings['is_active'] ?? 0) ? 'is-active' : ''; ?>">
+                <div class="reward-toggle-details">
+                    <div class="reward-toggle-icon">
+                        <i class="fas fa-power-off"></i>
+                    </div>
+                    <div class="reward-toggle-text">
+                        <span class="reward-toggle-title">ENABLE BIRTHDAY REWARD SYSTEM</span>
+                        <span class="reward-toggle-hint hint-off"><i class="fas fa-circle-xmark"></i> System is currently <strong>DISABLED</strong>. Automatic birthday greetings and reward claims are inactive.</span>
+                        <span class="reward-toggle-hint hint-on"><i class="fas fa-circle-check"></i> System is currently <strong>ENABLED</strong>. Automatic birthday greetings and reward claims are active.</span>
+                    </div>
+                </div>
+                <label class="switch-control" for="reward_active" title="Toggle Birthday Reward System">
+                    <input type="checkbox" name="is_active" id="reward_active" value="1" class="switch-checkbox" <?php echo ($settings['is_active'] ?? 0) ? 'checked' : ''; ?> aria-label="Enable Birthday Reward System">
+                    <span class="switch-track" aria-hidden="true">
+                        <span class="switch-thumb"></span>
+                    </span>
+                    <span class="switch-status status-off" aria-hidden="true"><i class="fas fa-circle-xmark"></i> OFF</span>
+                    <span class="switch-status status-on" aria-hidden="true"><i class="fas fa-circle-check"></i> ON</span>
+                </label>
             </div>
 
             <div class="form-row">
@@ -584,6 +808,21 @@ function sendBirthdayManual(studentId, btn) {
         btn.innerHTML = '<i class="fas fa-paper-plane"></i> Send';
         alert('Network error. Please try again.');
     });
+}
+
+// Synchronize toggle banner state on switch change
+const rewardToggle = document.getElementById('reward_active');
+const rewardBanner = document.querySelector('.reward-toggle-banner');
+if (rewardToggle && rewardBanner) {
+    const updateToggleState = () => {
+        if (rewardToggle.checked) {
+            rewardBanner.classList.add('is-active');
+        } else {
+            rewardBanner.classList.remove('is-active');
+        }
+    };
+    rewardToggle.addEventListener('change', updateToggleState);
+    updateToggleState();
 }
 
 // Auto-switch to settings tab if URL hash is present
