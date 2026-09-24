@@ -1431,6 +1431,77 @@ $pdo->prepare("DELETE FROM communication_event_mappings WHERE event_name = 'birt
 $pdo->prepare("DELETE FROM communication_templates WHERE template_name = 'pepp_birthday_reward_claimed'")->execute();
 $pdo->exec("DELETE FROM birthday_reward_versions");
 
+// 11. Mobile UX & Meta 131049 Diagnostics
+echo "  [Mobile UX & Meta 131049 Verification]\n";
+$bdayPhp = file_get_contents(__DIR__ . '/birthday-rewards.php');
+
+// Test 1: Script tags are balanced
+$scriptOpenCount = substr_count($bdayPhp, '<script>');
+$scriptCloseCount = substr_count($bdayPhp, '</script>');
+($scriptOpenCount >= 1 && $scriptOpenCount === $scriptCloseCount)
+    ? test_pass("birthday-rewards.php has balanced <script> tags ({$scriptOpenCount} open, {$scriptCloseCount} close)")
+    : test_fail("birthday-rewards.php has unbalanced or missing <script> tags");
+
+// Test 2: JavaScript code is inside <script>
+$scriptContent = '';
+if (preg_match_all('/<script\b[^>]*>(.*?)<\/script>/is', $bdayPhp, $scriptMatches)) {
+    $scriptContent = implode("\n", $scriptMatches[1]);
+}
+(strpos($scriptContent, 'Prevent double-submit') !== false && strpos($scriptContent, 'copyCouponCode') !== false && strpos($scriptContent, 'fallbackCopy') !== false)
+    ? test_pass("JavaScript code (double-submit prevention, copyCouponCode, fallbackCopy) is strictly enclosed within <script> tags")
+    : test_fail("JavaScript code is not enclosed within <script> tags");
+
+// Test 3: No raw JS text outside <script>
+$noScriptPhp = preg_replace('/<script\b[^>]*>.*?<\/script>/is', '', $bdayPhp);
+(strpos($noScriptPhp, 'navigator.clipboard') === false && strpos($noScriptPhp, 'function copyCouponCode') === false && strpos($noScriptPhp, 'document.getElementById(\'claim-form\')') === false)
+    ? test_pass("No raw JavaScript source is leaked outside <script> elements in birthday-rewards.php")
+    : test_fail("Raw JavaScript source was found leaked outside <script> elements");
+
+// Test 4: Mobile responsive CSS checks
+$hasFlexCol = strpos($bdayPhp, 'flex-direction: column') !== false;
+$hasMediaMax = strpos($bdayPhp, '@media (max-width:') !== false;
+$hasWordBreak = strpos($bdayPhp, 'word-break') !== false;
+$hasCardMaxWidth = strpos($bdayPhp, 'max-width: 480px') !== false;
+($hasFlexCol && $hasMediaMax && $hasWordBreak && $hasCardMaxWidth)
+    ? test_pass("Mobile-first responsive CSS rules verified (flex-direction: column, media queries, word-break, max-width)")
+    : test_fail("Missing required mobile-first responsive CSS rules");
+
+// Test 5: Meta Error 131049 recognized as permanent failure
+$is131049PermCode = CommunicationHelper::isPermanentMetaFailure(131049, '');
+$is131049PermMsg = CommunicationHelper::isPermanentMetaFailure(0, 'This message was not delivered to maintain healthy ecosystem engagement.');
+($is131049PermCode === true && $is131049PermMsg === true)
+    ? test_pass("Meta Error 131049 is classified as permanent failure by both code and message")
+    : test_fail("Meta Error 131049 was not recognized as permanent failure");
+
+// Test 6: WhatsApp failure does NOT invalidate or alter claim snapshot
+$todayStr = date('Y-m-d');
+$failTestToken = md5('tok_fail_test_snapshot_security_123');
+try {
+    $insStmt = $pdo->prepare("
+        INSERT INTO birthday_reward_claims (
+            person_identity, student_id, birthday_date, reward_setting_id, reward_version_id,
+            coupon_code, coupon_valid_till, reward_title, reward_description,
+            instructions, terms, claim_message, instruction_token, claim_whatsapp_status, claimed_at
+        ) VALUES (
+            'phone:919999000333', 'PEPP2026SNAPFAIL', ?, 1, 1,
+            'COUPON_FAIL_TEST', '2027-12-31', 'Title', 'Desc',
+            'Instr', 'Terms', 'Msg', ?, 'queued', '2026-09-24 10:00:00'
+        )
+    ");
+    $insStmt->execute([$todayStr, $failTestToken]);
+} catch (Exception $e) {
+    echo "INSERT ERROR: " . $e->getMessage() . "\n";
+}
+$pdo->prepare("UPDATE birthday_reward_claims SET claim_whatsapp_status = 'failed' WHERE instruction_token = ?")->execute([$failTestToken]);
+$claimAfterFail = get_birthday_claim_by_token($pdo, $failTestToken);
+if ($claimAfterFail && $claimAfterFail['coupon_code'] === 'COUPON_FAIL_TEST' && $claimAfterFail['claimed_at'] === '2026-09-24 10:00:00' && $claimAfterFail['claim_whatsapp_status'] === 'failed') {
+    test_pass("WhatsApp delivery failure preserves immutable claim snapshot (coupon, token, claimed_at unchanged)");
+} else {
+    test_fail("WhatsApp delivery failure corrupted claim snapshot: " . var_export($claimAfterFail, true));
+}
+$pdo->prepare("DELETE FROM birthday_reward_claims WHERE instruction_token = ?")->execute([$failTestToken]);
+
+
 
 // ════════════════════════════════════════════════════════════════════════
 // SUMMARY

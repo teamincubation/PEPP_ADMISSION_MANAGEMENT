@@ -266,12 +266,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
         body {
             font-family: 'Plus Jakarta Sans', 'Segoe UI', sans-serif;
             min-height: 100vh;
-            display: flex; align-items: center; justify-content: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
             padding: 2rem 1rem;
             background: #0f0a1e;
             background-image:
                 radial-gradient(ellipse 80% 60% at 20% 10%, rgba(139,92,246,0.18) 0%, transparent 60%),
                 radial-gradient(ellipse 60% 50% at 80% 80%, rgba(245,158,11,0.12) 0%, transparent 55%);
+            color: #fff;
+            width: 100%;
+            overflow-x: hidden;
         }
         .card {
             max-width: 480px; width: 100%;
@@ -279,19 +285,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
             backdrop-filter: blur(20px);
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: 24px;
-            padding: 2rem;
+            padding: 2rem 1.75rem;
             text-align: center;
             box-shadow: 0 24px 80px rgba(0,0,0,0.3);
+            margin: 0 auto;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
         .celebration { font-size: 3rem; margin-bottom: 12px; line-height: 1; }
-        h1 { font-size: 1.5rem; font-weight: 800; color: #fff; margin-bottom: 6px; }
-        .student-name { font-size: 1.1rem; color: #c4b5fd; font-weight: 600; margin-bottom: 16px; }
-        .description { font-size: 0.88rem; color: rgba(255,255,255,0.65); line-height: 1.5; margin-bottom: 20px; }
-        .voucher-image { max-width: 100%; border-radius: 14px; margin-bottom: 20px; box-shadow: 0 8px 30px rgba(0,0,0,0.2); }
+        h1 { font-size: 1.5rem; font-weight: 800; color: #fff; margin-bottom: 6px; letter-spacing: -0.02em; }
+        .student-name { font-size: 1.1rem; color: #c4b5fd; font-weight: 600; margin-bottom: 16px; word-break: break-word; }
+        .description { font-size: 0.88rem; color: rgba(255,255,255,0.65); line-height: 1.55; margin-bottom: 20px; word-break: break-word; }
+        .voucher-image { width: 100%; max-width: 100%; height: auto; object-fit: cover; border-radius: 14px; margin-bottom: 20px; box-shadow: 0 8px 30px rgba(0,0,0,0.2); }
         .coupon-box {
             background: linear-gradient(135deg, #8b5cf6, #a78bfa);
-            border-radius: 14px; padding: 20px; margin: 20px 0;
+            border-radius: 14px; padding: 20px 16px; margin: 20px 0;
             position: relative; overflow: hidden;
+            box-shadow: 0 8px 24px rgba(139,92,246,0.3);
         }
         .coupon-box::before {
             content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
@@ -299,53 +309,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
         }
         .coupon-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 2px; color: rgba(255,255,255,0.7); margin-bottom: 8px; position: relative; }
         .coupon-code {
-            font-size: 1.8rem; font-weight: 800; color: #fff; letter-spacing: 4px; position: relative;
-            font-family: 'Courier New', monospace; margin-bottom: 10px;
+            font-size: clamp(1.4rem, 6vw, 1.85rem); font-weight: 800; color: #fff; letter-spacing: 3px; position: relative;
+            font-family: 'Courier New', monospace; margin-bottom: 12px; word-break: break-all;
         }
         .copy-btn {
             display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-            padding: 6px 16px; border-radius: 50px;
+            padding: 8px 20px; min-height: 40px; border-radius: 50px;
             border: 1px solid rgba(255,255,255,0.3);
             background: rgba(255,255,255,0.2);
-            color: #fff; font-size: 0.78rem; font-weight: 700;
+            color: #fff; font-size: 0.8rem; font-weight: 700;
             cursor: pointer; transition: all 0.2s ease;
-            position: relative;
+            position: relative; touch-action: manipulation;
         }
         .copy-btn:hover { background: rgba(255,255,255,0.35); transform: translateY(-1px); }
         .copy-btn.copied { background: #10b981; border-color: #10b981; }
 
         .claim-btn {
-            display: inline-flex; align-items: center; gap: 8px;
-            padding: 14px 32px; border: none; border-radius: 50px;
+            display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+            width: 100%; max-width: 320px; min-height: 48px;
+            padding: 14px 28px; border: none; border-radius: 50px;
             background: linear-gradient(135deg, #f59e0b, #f97316);
             color: #fff; font-weight: 700; font-size: 1rem; cursor: pointer;
             transition: all 0.3s; box-shadow: 0 8px 24px rgba(245,158,11,0.3);
+            touch-action: manipulation;
         }
         .claim-btn:hover { transform: translateY(-2px); box-shadow: 0 12px 32px rgba(245,158,11,0.4); }
         .claim-btn:active { transform: translateY(0); }
 
         .instructions-cta-btn {
             display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-            width: 100%; padding: 12px 20px; border-radius: 12px;
+            width: 100%; min-height: 44px; padding: 12px 20px; border-radius: 12px;
             background: linear-gradient(135deg, #7c3aed, #9333ea);
             color: #fff; font-weight: 700; font-size: 0.88rem; text-decoration: none;
             margin: 16px 0; transition: all 0.2s; box-shadow: 0 6px 20px rgba(124,58,237,0.35);
+            touch-action: manipulation;
         }
         .instructions-cta-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 25px rgba(124,58,237,0.45); }
 
         .claimed-badge {
-            display: inline-flex; align-items: center; gap: 8px;
-            padding: 10px 24px; border-radius: 50px;
+            display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+            padding: 10px 20px; border-radius: 50px;
             background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.3);
             color: #4ade80; font-weight: 600; font-size: 0.85rem;
+            max-width: 100%;
         }
         .instructions { text-align: left; margin-top: 16px; padding: 16px; background: rgba(255,255,255,0.05); border-radius: 12px; }
         .instructions h3 { font-size: 0.82rem; color: #c4b5fd; margin-bottom: 8px; }
-        .instructions p, .instructions li { font-size: 0.78rem; color: rgba(255,255,255,0.6); line-height: 1.6; }
-        .terms { font-size: 0.68rem; color: rgba(255,255,255,0.35); margin-top: 16px; line-height: 1.5; text-align: left; }
+        .instructions p, .instructions li { font-size: 0.78rem; color: rgba(255,255,255,0.6); line-height: 1.6; word-break: break-word; }
+        .instructions ul, .instructions ol { padding-left: 20px; margin-bottom: 8px; }
+        .terms { font-size: 0.68rem; color: rgba(255,255,255,0.35); margin-top: 16px; line-height: 1.5; text-align: left; word-break: break-word; }
         .error-icon { font-size: 2.5rem; color: #ef4444; margin-bottom: 16px; }
-        .error-text { color: rgba(255,255,255,0.7); font-size: 0.9rem; }
-        .pepp-logo { max-width: 100px; margin-bottom: 16px; opacity: 0.8; }
+        .error-text { color: rgba(255,255,255,0.7); font-size: 0.9rem; line-height: 1.5; word-break: break-word; }
+        .pepp-logo { max-width: 100px; height: auto; margin-bottom: 16px; opacity: 0.8; }
         @keyframes confetti { 0% { transform: translateY(0) rotate(0); opacity: 1; } 100% { transform: translateY(-60px) rotate(360deg); opacity: 0; } }
         .confetti-burst { position: relative; }
         .confetti-burst::after {
@@ -353,6 +368,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
             position: absolute; top: -20px; left: 50%; transform: translateX(-50%);
             font-size: 1.5rem; animation: confetti 1.5s ease-out forwards;
             pointer-events: none;
+        }
+
+        /* Mobile Responsive Enhancements */
+        @media (max-width: 520px) {
+            body {
+                padding: 1rem 0.75rem;
+                justify-content: flex-start;
+            }
+            .card {
+                padding: 1.5rem 1.1rem;
+                border-radius: 20px;
+            }
+            h1 {
+                font-size: 1.35rem;
+            }
+            .student-name {
+                font-size: 1rem;
+                margin-bottom: 12px;
+            }
+            .coupon-box {
+                padding: 16px 12px;
+                margin: 16px 0;
+            }
+            .claim-btn {
+                max-width: 100%;
+                font-size: 0.95rem;
+                padding: 14px 20px;
+            }
+            .instructions-cta-btn {
+                font-size: 0.82rem;
+                padding: 12px 14px;
+            }
         }
     </style>
 </head>
@@ -472,13 +519,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
         <?php endif; ?>
     </div>
 
+    <script>
     // Prevent double-submit
     const form = document.getElementById('claim-form');
     if (form) {
         form.addEventListener('submit', function() {
             const btn = document.getElementById('claim-btn');
-            btn.disabled = true;
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Claiming...';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Claiming...';
+            }
         });
     }
 

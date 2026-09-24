@@ -25,6 +25,7 @@ class CommunicationHelper {
 
         // Explicitly permanent/non-retryable error codes:
         // 131026: Message undeliverable (user block, non-WhatsApp number)
+        // 131049: Ecosystem engagement / frequency capping limit
         // 131053: Ecosystem engagement / Policy block
         // 131047: Outside 24h window (cannot send free-form message)
         // 131045: Business account locked/suspended
@@ -32,7 +33,7 @@ class CommunicationHelper {
         // 131052: Template is disabled
         // 100: Invalid parameters, template mismatch, invalid phone, etc.
         // 190: Invalid oauth token
-        if (in_array($code, [131026, 131053, 131047, 131045, 131051, 131052, 100, 190], true)) {
+        if (in_array($code, [131026, 131049, 131053, 131047, 131045, 131051, 131052, 100, 190], true)) {
             return true;
         }
 
