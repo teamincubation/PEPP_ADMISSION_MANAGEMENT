@@ -360,7 +360,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
         .terms { font-size: 0.68rem; color: rgba(255,255,255,0.35); margin-top: 16px; line-height: 1.5; text-align: left; word-break: break-word; }
         .error-icon { font-size: 2.5rem; color: #ef4444; margin-bottom: 16px; }
         .error-text { color: rgba(255,255,255,0.7); font-size: 0.9rem; line-height: 1.5; word-break: break-word; }
-        .pepp-logo { max-width: 100px; height: auto; margin-bottom: 16px; opacity: 0.8; }
+        .pepp-logo {
+            max-width: 80px;
+            height: auto;
+            margin-bottom: 16px;
+            border-radius: 50%;
+            background: transparent;
+            border: none;
+            outline: none;
+            box-shadow: none;
+            display: inline-block;
+        }
         @keyframes confetti { 0% { transform: translateY(0) rotate(0); opacity: 1; } 100% { transform: translateY(-60px) rotate(360deg); opacity: 0; } }
         .confetti-burst { position: relative; }
         .confetti-burst::after {

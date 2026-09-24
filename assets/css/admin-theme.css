@@ -68,6 +68,9 @@ a:hover { text-decoration: underline; }
     border-radius: 50%;
     object-fit: cover;
     flex-shrink: 0;
+    background: transparent;
+    border: none;
+    outline: none;
 }
 .sidebar-brand .brand-name {
     font-family: 'Space Grotesk', sans-serif;

@@ -90,7 +90,17 @@ $validTillFormatted = !empty($claim['coupon_valid_till']) ? date('d M Y', strtot
             text-align: center;
             box-shadow: 0 24px 80px rgba(0,0,0,0.35);
         }
-        .pepp-logo { max-width: 110px; margin-bottom: 18px; opacity: 0.9; }
+        .pepp-logo {
+            max-width: 80px;
+            height: auto;
+            margin-bottom: 18px;
+            border-radius: 50%;
+            background: transparent;
+            border: none;
+            outline: none;
+            box-shadow: none;
+            display: inline-block;
+        }
         .celebration-icon { font-size: 2.8rem; margin-bottom: 10px; line-height: 1; }
         h1 { font-size: 1.45rem; font-weight: 800; color: #fff; margin-bottom: 6px; letter-spacing: -0.02em; }
         .student-name { font-size: 1.05rem; color: #c4b5fd; font-weight: 600; margin-bottom: 14px; }

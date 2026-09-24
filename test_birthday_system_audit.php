@@ -1501,7 +1501,78 @@ if ($claimAfterFail && $claimAfterFail['coupon_code'] === 'COUPON_FAIL_TEST' && 
 }
 $pdo->prepare("DELETE FROM birthday_reward_claims WHERE instruction_token = ?")->execute([$failTestToken]);
 
+// ── 14. PEPP ERP Logo Presentation & Asset Integrity ──────────
+echo "\n── 14. PEPP ERP Logo Presentation & Asset Integrity ───────────\n";
 
+// Test 1: Canonical PEPP logo asset exists and is true PNG
+$canonPath = __DIR__ . '/assets/img/pepp-logo-icon.png';
+$canonExists = file_exists($canonPath);
+$canonInfo = $canonExists ? getimagesize($canonPath) : null;
+($canonExists && $canonInfo && $canonInfo[2] === IMAGETYPE_PNG && $canonInfo['mime'] === 'image/png')
+    ? test_pass("Canonical PEPP logo asset (pepp-logo-icon.png) exists and is a valid PNG image")
+    : test_fail("Canonical PEPP logo asset missing or invalid");
+
+// Test 2: Canonical PEPP logo has full alpha transparency (no black background)
+$canonImg = $canonExists ? @imagecreatefrompng($canonPath) : null;
+$canonHasAlpha = false;
+if ($canonImg) {
+    $tlColor = imagecolorsforindex($canonImg, imagecolorat($canonImg, 0, 0));
+    $trColor = imagecolorsforindex($canonImg, imagecolorat($canonImg, imagesx($canonImg) - 1, 0));
+    if ($tlColor['alpha'] === 127 && $trColor['alpha'] === 127) {
+        $canonHasAlpha = true;
+    }
+    imagedestroy($canonImg);
+}
+$canonHasAlpha
+    ? test_pass("Canonical PEPP logo has 100% alpha transparency in corner pixels (no black background)")
+    : test_fail("Canonical PEPP logo corners lack transparency");
+
+// Test 3: Root logo.png is genuine PNG with alpha transparency (not a JPEG with black corners)
+$rootLogoPath = __DIR__ . '/logo.png';
+$rootInfo = file_exists($rootLogoPath) ? getimagesize($rootLogoPath) : null;
+$rootImg = ($rootInfo && $rootInfo[2] === IMAGETYPE_PNG) ? @imagecreatefrompng($rootLogoPath) : null;
+$rootHasAlpha = false;
+if ($rootImg) {
+    $tl = imagecolorsforindex($rootImg, imagecolorat($rootImg, 0, 0));
+    $tr = imagecolorsforindex($rootImg, imagecolorat($rootImg, imagesx($rootImg) - 1, 0));
+    if ($tl['alpha'] === 127 && $tr['alpha'] === 127) {
+        $rootHasAlpha = true;
+    }
+    imagedestroy($rootImg);
+}
+($rootInfo && $rootInfo[2] === IMAGETYPE_PNG && $rootHasAlpha)
+    ? test_pass("Root logo.png is verified genuine PNG with transparent corners (JPEG/black-edge removed)")
+    : test_fail("Root logo.png is not a transparent PNG");
+
+// Test 4: birthday-rewards.php CSS enforces circular presentation and transparent background
+$bdaySrc = file_get_contents(__DIR__ . '/birthday-rewards.php');
+$bdayHasCircular = strpos($bdaySrc, '.pepp-logo') !== false
+    && strpos($bdaySrc, 'border-radius: 50%') !== false
+    && strpos($bdaySrc, 'background: transparent') !== false;
+$bdayHasNoBlackBorder = !preg_match('/\.pepp-logo\s*\{[^}]*border:\s*[^;}]*black/i', $bdaySrc)
+    && !preg_match('/\.pepp-logo\s*\{[^}]*background:\s*#(?:000|000000|black)/i', $bdaySrc);
+($bdayHasCircular && $bdayHasNoBlackBorder)
+    ? test_pass("birthday-rewards.php .pepp-logo styles enforce circular clipping and transparent background")
+    : test_fail("birthday-rewards.php .pepp-logo styles missing circular clipping or transparent background");
+
+// Test 5: birthday-instructions.php CSS enforces circular presentation and transparent background
+$instructSrc = file_get_contents(__DIR__ . '/birthday-instructions.php');
+$instructHasCircular = strpos($instructSrc, '.pepp-logo') !== false
+    && strpos($instructSrc, 'border-radius: 50%') !== false
+    && strpos($instructSrc, 'background: transparent') !== false;
+$instructHasNoBlackBorder = !preg_match('/\.pepp-logo\s*\{[^}]*border:\s*[^;}]*black/i', $instructSrc)
+    && !preg_match('/\.pepp-logo\s*\{[^}]*background:\s*#(?:000|000000|black)/i', $instructSrc);
+($instructHasCircular && $instructHasNoBlackBorder)
+    ? test_pass("birthday-instructions.php .pepp-logo styles enforce circular clipping and transparent background")
+    : test_fail("birthday-instructions.php .pepp-logo styles missing circular clipping or transparent background");
+
+// Test 6: admin-theme.css .sidebar-brand img enforces transparent background
+$adminThemeSrc = file_get_contents(__DIR__ . '/assets/css/admin-theme.css');
+$adminThemeHasTransparent = strpos($adminThemeSrc, '.sidebar-brand img') !== false
+    && strpos($adminThemeSrc, 'background: transparent') !== false;
+$adminThemeHasTransparent
+    ? test_pass("admin-theme.css .sidebar-brand img enforces transparent background")
+    : test_fail("admin-theme.css .sidebar-brand img missing transparent background");
 
 // ════════════════════════════════════════════════════════════════════════
 // SUMMARY
