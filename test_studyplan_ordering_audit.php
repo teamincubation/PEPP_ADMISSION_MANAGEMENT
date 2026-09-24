@@ -37,9 +37,10 @@ assertTest("course_name query orders by sp.start_date DESC, sp.id DESC",
     preg_match('/WHERE\s+sp\.status\s*=\s*\'published\'.*?ORDER\s+BY\s+sp\.start_date\s+DESC,\s*sp\.id\s+DESC/s', $source) === 1
 );
 
-// Check that form_id query uses start_date DESC, sp.id DESC
-assertTest("form_id query orders by sp.start_date DESC, sp.id DESC",
-    preg_match('/WHERE\s+sp\.status\s*=\s*\'published\'.*?sa\.assignment_type\s*=\s*\'form\'.*?ORDER\s+BY\s+sp\.start_date\s+DESC,\s*sp\.id\s+DESC/s', $source) === 1
+// Check that form_id query and assignment_type = 'form' have been removed
+assertTest("form_id query is removed from studyplan.php",
+    strpos($source, "assignment_type = 'form'") === false &&
+    strpos($source, "\$_GET['form_id']") === false
 );
 
 // Check that no client-side JS sort hacks are introduced
@@ -142,27 +143,15 @@ assertTest("Fourth item is July 2026 (PG) (oldest date)",
     $retrievedIds[3] === 1 && $retrievedTitles[3] === 'July 2026 (PG)'
 );
 
-// Form ID Assignment Verification
-$pdo->exec("
-    INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value, is_deleted) VALUES
-    (1, 'form', '10', 0),
-    (2, 'form', '10', 0),
-    (3, 'form', '10', 0);
-");
-
+// Verification that form assignments do not exist
 $stmtForm = $pdo->prepare("
-    SELECT DISTINCT sp.*
-    FROM study_plans sp
-    JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-    WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND sa.assignment_type = 'form' AND sa.assigned_value = ?
-    ORDER BY sp.start_date DESC, sp.id DESC
+    SELECT COUNT(*) FROM study_plan_assignments WHERE assignment_type = 'form'
 ");
-$stmtForm->execute(['10']);
-$formResults = $stmtForm->fetchAll(PDO::FETCH_ASSOC);
-$formIds = array_column($formResults, 'id');
+$stmtForm->execute();
+$formCount = (int)$stmtForm->fetchColumn();
 
-assertTest("Form query returns plans in strict latest -> oldest order [3, 2, 1]", 
-    $formIds === [3, 2, 1]
+assertTest("Zero form assignments exist in study plan assignments", 
+    $formCount === 0
 );
 
 echo "============================================================\n";

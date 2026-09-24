@@ -329,9 +329,8 @@ try {
     }
 } catch (Exception $e) {}
 
-// Fetch eligible courses and forms cards for the logged in email
+// Fetch eligible courses cards for the logged in email
 $my_courses = [];
-$my_forms = [];
 if ($is_logged_in) {
     try {
         $email = $_SESSION['sp_email'];
@@ -339,20 +338,10 @@ if ($is_logged_in) {
         $stmt_courses = $pdo->prepare("SELECT DISTINCT pepp_course FROM users WHERE email = ? AND status = 'approved' AND pepp_course IS NOT NULL AND pepp_course != ''");
         $stmt_courses->execute([$email]);
         $my_courses = $stmt_courses->fetchAll(PDO::FETCH_COLUMN);
-
-        $stmt_forms = $pdo->prepare("
-            SELECT DISTINCT f.id, f.title
-            FROM campaign_form_submissions s
-            JOIN campaign_forms f ON s.form_id = f.id
-            LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
-            WHERE (s.respondent_identifier = ? OR a.answer_text = ?) AND s.is_deleted = 0
-        ");
-        $stmt_forms->execute([$email, $email]);
-        $my_forms = $stmt_forms->fetchAll();
     } catch (Exception $e) {}
 }
 
-// Fetch plans inside selected course or form card
+// Fetch plans inside selected course card
 $plans = [];
 if ($is_logged_in) {
     try {
@@ -365,16 +354,6 @@ if ($is_logged_in) {
                 ORDER BY sp.start_date DESC, sp.id DESC
             ");
             $stmt->execute([$_GET['course_name']]);
-            $plans = $stmt->fetchAll();
-        } elseif (isset($_GET['form_id'])) {
-            $stmt = $pdo->prepare("
-                SELECT DISTINCT sp.*
-                FROM study_plans sp
-                JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                WHERE sp.status = 'published' AND sp.is_deleted = 0 AND sa.is_deleted = 0 AND sa.assignment_type = 'form' AND sa.assigned_value = ?
-                ORDER BY sp.start_date DESC, sp.id DESC
-            ");
-            $stmt->execute([$_GET['form_id']]);
             $plans = $stmt->fetchAll();
         }
     } catch (Exception $e) {
@@ -400,17 +379,15 @@ if ($is_logged_in && $selected_plan_id > 0) {
                 (sa.assignment_type = 'course' AND sa.assigned_value IN (
                     SELECT pepp_course FROM users WHERE email = ? AND status = 'approved'
                 )) OR
-                (sa.assignment_type = 'form' AND sa.assigned_value IN (
-                    SELECT CAST(form_id AS CHAR) FROM campaign_form_submissions WHERE respondent_identifier = ? AND is_deleted = 0
-                    UNION
-                    SELECT CAST(s.form_id AS CHAR) FROM campaign_form_submissions s JOIN campaign_form_answers a ON s.id = a.submission_id WHERE a.answer_text = ? AND s.is_deleted = 0
+                (sa.assignment_type = 'batch' AND sa.assigned_value IN (
+                    SELECT academic_year FROM users WHERE email = ? AND status = 'approved'
                 )) OR
                 (sa.assignment_type = 'student' AND sa.assigned_value IN (
                     SELECT user_id FROM users WHERE email = ? AND status = 'approved'
                 ))
             )
         ");
-        $stmt_validate->execute([$selected_plan_id, $email, $email, $email, $email]);
+        $stmt_validate->execute([$selected_plan_id, $email, $email, $email]);
         $selected_plan = $stmt_validate->fetch();
 
         if ($selected_plan) {
@@ -1112,7 +1089,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
 
             <?php if (!$selected_plan): ?>
                 <!-- Enrolled Cards selector -->
-                <h3 style="font-family:var(--header-font); font-weight:700; font-size:0.9rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px;">Your Course &amp; Form Registrations</h3>
+                <h3 style="font-family:var(--header-font); font-weight:700; font-size:0.9rem; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px;">Your Course Enrollments</h3>
                 <div style="display:grid; grid-template-columns:1fr; gap:10px; margin-bottom:12px;">
                     <!-- Course Cards -->
                     <?php foreach ($my_courses as $cname):
@@ -1123,20 +1100,10 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                             <div style="font-size:0.95rem; font-weight:700; color:var(--text-main);"><?php echo p_esc($cname); ?></div>
                         </a>
                     <?php endforeach; ?>
-
-                    <!-- Form Cards -->
-                    <?php foreach ($my_forms as $form_card):
-                        $isSelected = isset($_GET['form_id']) && $_GET['form_id'] == $form_card['id'];
-                    ?>
-                        <a href="?form_id=<?php echo $form_card['id']; ?>" style="display:block; text-decoration:none; color:inherit; background: <?php echo $isSelected ? 'var(--accent-soft)' : 'var(--card-bg)'; ?>; border: 2px solid <?php echo $isSelected ? 'var(--accent)' : 'var(--border)'; ?>; padding: 12px; border-radius: 12px; transition: all 0.2s;">
-                            <div style="font-size:0.7rem; text-transform:uppercase; font-weight:700; color:var(--text-muted); margin-bottom:4px;"><i class="fab fa-wpforms"></i> Custom Form</div>
-                            <div style="font-size:0.95rem; font-weight:700; color:var(--text-main);"><?php echo p_esc($form_card['title']); ?></div>
-                        </a>
-                    <?php endforeach; ?>
                 </div>
 
                 <!-- List plans assigned to selected target -->
-                <?php if (isset($_GET['course_name']) || isset($_GET['form_id'])): ?>
+                <?php if (isset($_GET['course_name'])): ?>
                     <h3 style="font-family:var(--header-font); font-weight:700; font-size:0.9rem; color:var(--text-muted); text-transform:uppercase; margin-top:0.5rem; letter-spacing:0.5px;">Available Study Plans</h3>
 
                     <?php if (empty($plans)): ?>
@@ -1188,7 +1155,7 @@ $layout = !empty($selected_plan['layout']) ? $selected_plan['layout'] : 'timelin
                 <?php else: ?>
                     <div style="text-align:center; padding:3rem; border:1px dashed var(--border); border-radius:16px; color:var(--text-muted); background:var(--bg);">
                         <i class="fas fa-arrow-pointer" style="font-size:2rem; margin-bottom:8px; display:block; color:var(--accent);"></i>
-                        Please select a course or custom form card above to view available study plans.
+                        Please select a course card above to view available study plans.
                     </div>
                 <?php endif; ?>
             <?php else:

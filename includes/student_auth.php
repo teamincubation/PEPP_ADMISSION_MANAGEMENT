@@ -457,7 +457,6 @@ if (!function_exists('can_student_access_study_plan')) {
     /**
      * Canonical helper: Can student access the study plan portal?
      * Enrolled students must be strictly approved and active.
-     * Non-enrolled users must have a valid campaign form submission.
      */
     function can_student_access_study_plan($pdo, $student_user_id_or_email): bool {
         if (!$pdo || empty($student_user_id_or_email)) return false;
@@ -465,29 +464,7 @@ if (!function_exists('can_student_access_study_plan')) {
         if ($st_status !== 'unknown') {
             return ($st_status === 'active');
         }
-        try {
-            $has_campaign_tables = false;
-            try {
-                if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
-                    $has_campaign_tables = (bool)$pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='campaign_form_submissions'")->fetchColumn();
-                } else {
-                    $has_campaign_tables = (bool)$pdo->query("SHOW TABLES LIKE 'campaign_form_submissions'")->fetchColumn();
-                }
-            } catch (Exception $e) {}
-
-            if ($has_campaign_tables) {
-                $stmt = $pdo->prepare("
-                    SELECT COUNT(*) FROM campaign_form_submissions s
-                    LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
-                    WHERE (s.respondent_identifier = ? OR a.answer_text = ?) AND s.is_deleted = 0
-                ");
-                $stmt->execute([$student_user_id_or_email, $student_user_id_or_email]);
-                return ($stmt->fetchColumn() > 0);
-            }
-            return false;
-        } catch (Exception $e) {
-            return false;
-        }
+        return false;
     }
 }
 
@@ -823,71 +800,6 @@ function authenticate_student_by_credentials($pdo, string $email, string $dob_ra
                 'student' => $student,
                 'active_session_id' => $active_session_id
             ];
-        }
-
-        // 2. Check Custom Campaign Form Submissions
-        $has_campaign_tables = false;
-        try {
-            if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
-                $has_campaign_tables = (bool)$pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='campaign_form_submissions'")->fetchColumn()
-                                    && (bool)$pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='campaign_forms'")->fetchColumn();
-            } else {
-                $has_campaign_tables = (bool)$pdo->query("SHOW TABLES LIKE 'campaign_form_submissions'")->fetchColumn()
-                                    && (bool)$pdo->query("SHOW TABLES LIKE 'campaign_forms'")->fetchColumn();
-            }
-        } catch (Exception $e) {}
-
-        if ($has_campaign_tables) {
-            $stmt_form = $pdo->prepare("
-                SELECT DISTINCT s.*, f.title as form_title
-                FROM campaign_form_submissions s
-                JOIN campaign_forms f ON s.form_id = f.id
-                LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
-                WHERE (LOWER(s.respondent_identifier) = LOWER(?) OR LOWER(a.answer_text) = LOWER(?)) AND s.is_deleted = 0
-                LIMIT 1
-            ");
-            $stmt_form->execute([$email, $email]);
-            $form_user = $stmt_form->fetch(PDO::FETCH_ASSOC);
-
-            if ($form_user) {
-                $name = $form_user['respondent_identifier'] ?: 'User';
-                try {
-                    $stmt_name = $pdo->prepare("
-                        SELECT a.answer_text
-                        FROM campaign_form_answers a
-                        JOIN campaign_form_fields f ON a.field_id = f.id
-                        WHERE a.submission_id = ? AND (f.label LIKE '%name%' OR f.field_name LIKE '%name%')
-                        ORDER BY f.sort_order ASC
-                        LIMIT 1
-                    ");
-                    $stmt_name->execute([$form_user['id']]);
-                    $resolved = $stmt_name->fetchColumn();
-                    if ($resolved) $name = $resolved;
-                } catch (Exception $e) {}
-
-                record_student_login_attempt($pdo, $ip, $email, true);
-                $active_session_id = generate_student_active_session($pdo, null, $email);
-
-                log_student_login_audit($pdo, [
-                    'student_email' => $email,
-                    'login_method' => 'email_dob',
-                    'session_id_ref' => $active_session_id,
-                    'status' => 'success'
-                ]);
-
-                return [
-                    'success' => true,
-                    'type' => 'campaign',
-                    'student' => [
-                        'name' => $name,
-                        'email' => $email,
-                        'user_id' => null,
-                        'pepp_course' => null,
-                        'pepp_academic_year' => null
-                    ],
-                    'active_session_id' => $active_session_id
-                ];
-            }
         }
 
         // Generic failure message (No PII leakage)

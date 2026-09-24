@@ -111,31 +111,11 @@ if (!empty($course_name) || !empty($user_id) || !empty($email)) {
             sa.assignment_type = 'all' OR
             (sa.assignment_type = 'course' AND LOWER(sa.assigned_value) = LOWER(?)) OR
             (sa.assignment_type = 'batch' AND LOWER(sa.assigned_value) = LOWER(?)) OR
-            (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
-            (sa.assignment_type = 'form' AND EXISTS (
-                SELECT 1 FROM campaign_form_submissions s
-                WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
-            ))
+            (sa.assignment_type = 'student' AND sa.assigned_value = ?)
         )
     ");
-    $stmt_access->execute([$course_name, $academic_year, $user_id, $email]);
+    $stmt_access->execute([$course_name, $academic_year, $user_id]);
     $accessible_plan_ids = $stmt_access->fetchAll(PDO::FETCH_COLUMN);
-}
-
-// Fallback: Check if study plan was accessed via direct valid custom form
-if ($study_plan_id > 0 && !in_array($study_plan_id, $accessible_plan_ids)) {
-    // Check form assignments specifically
-    $stmt_form_check = $pdo->prepare("
-        SELECT 1
-        FROM study_plan_assignments sa
-        JOIN campaign_form_submissions s ON CAST(s.form_id AS CHAR) = sa.assigned_value
-        WHERE sa.study_plan_id = ? AND s.respondent_identifier = ? AND sa.assignment_type = 'form' AND sa.is_deleted = 0 AND s.is_deleted = 0
-        LIMIT 1
-    ");
-    $stmt_form_check->execute([$study_plan_id, $email]);
-    if ($stmt_form_check->fetchColumn()) {
-        $accessible_plan_ids[] = $study_plan_id;
-    }
 }
 
 // Auto-select first accessible plan if none specified

@@ -760,17 +760,7 @@ if (!function_exists('can_student_access_study_plan')) {
         if ($st_status !== 'unknown') {
             return ($st_status === 'active');
         }
-        try {
-            $stmt = $pdo->prepare("
-                SELECT COUNT(*) FROM campaign_form_submissions s
-                LEFT JOIN campaign_form_answers a ON s.id = a.submission_id
-                WHERE (s.respondent_identifier = ? OR a.answer_text = ?) AND s.is_deleted = 0
-            ");
-            $stmt->execute([$student_user_id_or_email, $student_user_id_or_email]);
-            return ($stmt->fetchColumn() > 0);
-        } catch (Exception $e) {
-            return false;
-        }
+        return false;
     }
 }
 

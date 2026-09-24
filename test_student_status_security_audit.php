@@ -329,7 +329,7 @@ class StudentStatusSecurityTestSuite {
         $this->assert(can_student_access_study_plan($this->pdo, 'ian@example.com') === false, "Inactive enrolled student CANNOT access study plan");
         $this->assert(can_student_access_study_plan($this->pdo, 'david@example.com') === false, "Dropout enrolled student CANNOT access study plan");
         $this->assert(can_student_access_study_plan($this->pdo, 'cathy@example.com') === false, "Completed enrolled student CANNOT access study plan");
-        $this->assert(can_student_access_study_plan($this->pdo, 'guest_cuet@example.com') === true, "Valid campaign form respondent CAN access study plan");
+        $this->assert(can_student_access_study_plan($this->pdo, 'guest_cuet@example.com') === false, "Campaign form respondent CANNOT access study plan (integration removed)");
 
         echo "\n--- Test Suite 6: Academic vs Transactional Email Permissions ---\n";
         $this->assert(can_send_academic_email($this->pdo, 'alice@example.com') === true, "can_send_academic_email('alice@example.com' - active) is TRUE");

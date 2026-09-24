@@ -44,9 +44,6 @@ if ($plan_id > 0) {
 $courses = $pdo->query("SELECT * FROM pepp_courses WHERE status = 'active' ORDER BY course_name ASC")->fetchAll();
 // Fetch active academic years
 $years = $pdo->query("SELECT year FROM academic_years WHERE status = 'active' ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN);
-// Fetch active campaign forms
-$campaign_forms = $pdo->query("SELECT * FROM campaign_forms WHERE status = 'published' ORDER BY title ASC")->fetchAll();
-
 // Predefined activity types
 $default_types = [
     'Read Material' => ['icon' => 'fa-book-open', 'color' => '#3b82f6', 'badge' => 'Read'],
@@ -870,28 +867,6 @@ include 'includes/admin_nav.php';
                                 <?php endforeach; ?>
                             </div>
                         </div>
-
-                        <div class="access-rules-card">
-                            <div class="access-rules-header">
-                                <span class="access-rules-title"><i class="fab fa-wpforms"></i> Registered in Custom Forms</span>
-                                <span class="access-rules-badge" id="forms-count-badge">0 Selected</span>
-                            </div>
-                            <div class="modern-scroll-box">
-                                <?php foreach ($campaign_forms as $f):
-                                    $isChecked = false;
-                                    foreach ($assigned as $a) {
-                                        if ($a['assignment_type'] === 'form' && $a['assigned_value'] === (string)$f['id']) {
-                                            $isChecked = true; break;
-                                        }
-                                    }
-                                ?>
-                                    <label for="af-<?php echo $f['id']; ?>" class="modern-check-item <?php echo $isChecked ? 'active' : ''; ?>">
-                                        <input type="checkbox" name="access_forms[]" value="<?php echo htmlspecialchars($f['id']); ?>" id="af-<?php echo $f['id']; ?>" <?php echo $isChecked ? 'checked' : ''; ?> onchange="toggleCheckItemStyle(this)">
-                                        <span class="modern-check-text"><?php echo htmlspecialchars($f['title']); ?></span>
-                                    </label>
-                                <?php endforeach; ?>
-                            </div>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -1400,7 +1375,6 @@ include 'includes/admin_nav.php';
 
     function updateAccessCounts() {
         var coursesCount = document.querySelectorAll('input[name="access_courses[]"]:checked').length;
-        var formsCount = document.querySelectorAll('input[name="access_forms[]"]:checked').length;
 
         var cBadge = document.getElementById('courses-count-badge');
         if (cBadge) {
@@ -1413,20 +1387,6 @@ include 'includes/admin_nav.php';
                 cBadge.style.background = '#f1f5f9';
                 cBadge.style.color = '#64748b';
                 cBadge.style.borderColor = '#e2e8f0';
-            }
-        }
-
-        var fBadge = document.getElementById('forms-count-badge');
-        if (fBadge) {
-            fBadge.textContent = formsCount + ' Selected';
-            if (formsCount > 0) {
-                fBadge.style.background = '#e0e7ff';
-                fBadge.style.color = '#3730a3';
-                fBadge.style.borderColor = '#c7d2fe';
-            } else {
-                fBadge.style.background = '#f1f5f9';
-                fBadge.style.color = '#64748b';
-                fBadge.style.borderColor = '#e2e8f0';
             }
         }
     }
@@ -2928,9 +2888,6 @@ include 'includes/admin_nav.php';
         var assignments = [];
         document.querySelectorAll('input[name="access_courses[]"]:checked').forEach(function(el) {
             assignments.push({ type: 'course', value: el.value });
-        });
-        document.querySelectorAll('input[name="access_forms[]"]:checked').forEach(function(el) {
-            assignments.push({ type: 'form', value: el.value });
         });
 
         var isDateWise = document.getElementById('type-date-wise').checked;

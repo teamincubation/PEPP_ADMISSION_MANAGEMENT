@@ -103,13 +103,9 @@ if (!function_exists('student_has_plans')) {
                 sa.assignment_type = 'all' OR
                 (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
                 (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
-                (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
-                (sa.assignment_type = 'form' AND EXISTS (
-                    SELECT 1 FROM campaign_form_submissions s
-                    WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
-                ))
+                (sa.assignment_type = 'student' AND sa.assigned_value = ?)
             )
-        ", [$pepp_academic_year, $pepp_course, $pepp_academic_year, $user_id, $email]) > 0;
+        ", [$pepp_academic_year, $pepp_course, $pepp_academic_year, $user_id]) > 0;
     }
 }
 
@@ -387,15 +383,11 @@ if (isset($_GET['action'])) {
                     sa.assignment_type = 'all' OR
                     (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
                     (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
-                    (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
-                    (sa.assignment_type = 'form' AND EXISTS (
-                        SELECT 1 FROM campaign_form_submissions s
-                        WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
-                    ))
+                    (sa.assignment_type = 'student' AND sa.assigned_value = ?)
                 )
                 ORDER BY sp.start_date DESC, sp.end_date DESC, sp.id DESC
             ");
-            $stmt_as->execute([$student['academic_year'], $student['pepp_course'], $student['academic_year'], $student['user_id'], $student['email']]);
+            $stmt_as->execute([$student['academic_year'], $student['pepp_course'], $student['academic_year'], $student['user_id']]);
             $assigned_plans = $stmt_as->fetchAll(PDO::FETCH_ASSOC);
 
             $plans_data = [];
@@ -1140,11 +1132,7 @@ if (isset($_GET['action'])) {
                         sa.assignment_type = 'all' OR
                         (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
                         (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
-                        (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
-                        (sa.assignment_type = 'form' AND EXISTS (
-                            SELECT 1 FROM campaign_form_submissions s
-                            WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
-                        ))
+                        (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id)
                     )
                 )
                 WHERE u.pepp_course = ? AND u.status = 'approved'
@@ -1191,645 +1179,6 @@ if (isset($_GET['action'])) {
         exit;
     }
 
-    // 10. Form & Campaign Dashboard stats
-    if ($_GET['action'] === 'get_form_dashboard') {
-        try {
-            $forms = $pdo->query("SELECT id, title FROM campaign_forms WHERE status = 'published'")->fetchAll(PDO::FETCH_ASSOC);
-            $form_data = [];
-            foreach ($forms as $f) {
-                $sub_cnt = db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = ? AND is_deleted = 0", [$f['id']]);
-                $conv_cnt = db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = ? AND is_deleted = 0 AND is_converted_lead = 1", [$f['id']]);
-
-                $form_data[] = [
-                    'id' => $f['id'],
-                    'title' => r_esc($f['title']),
-                    'submissions' => $sub_cnt,
-                    'conversions' => $conv_cnt,
-                    'rate' => $sub_cnt > 0 ? round(($conv_cnt / $sub_cnt) * 100, 1) . '%' : '0%'
-                ];
-            }
-            echo json_encode($form_data);
-        } catch (Exception $e) {
-            echo json_encode(['error' => $e->getMessage()]);
-        }
-        exit;
-    }
-
-    // 11. Form submissions drilldown
-    if ($_GET['action'] === 'get_form_details') {
-        $form_id = (int)($_GET['form_id'] ?? 0);
-        try {
-            $stmt = $pdo->prepare("SELECT * FROM campaign_form_submissions WHERE form_id = ? AND is_deleted = 0 ORDER BY created_at DESC");
-            $stmt->execute([$form_id]);
-            $subs = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-            $data = [];
-            foreach ($subs as $s) {
-                $data[] = [
-                    'id' => $s['id'],
-                    'identifier' => r_esc($s['respondent_identifier']),
-                    'masked_identifier' => format_credential_text($s['respondent_identifier'], 'email', 'students'),
-                    'date' => date('d M Y h:i A', strtotime($s['created_at'])),
-                    'converted' => $s['is_converted_lead'] ? 'Yes' : 'No'
-                ];
-            }
-            echo json_encode($data);
-        } catch (Exception $e) {
-            echo json_encode(['error' => $e->getMessage()]);
-        }
-        exit;
-    }
-
-    // 11.1 Campaign Analytics statistics summary
-    if ($_GET['action'] === 'get_campaign_analytics') {
-        $form_id = (int)($_GET['form_id'] ?? 0);
-        try {
-            // Total submissions
-            $submissions = db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = ? AND is_deleted = 0", [$form_id]);
-            // Converted leads
-            $conversions = db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions WHERE form_id = ? AND is_deleted = 0 AND is_converted_lead = 1", [$form_id]);
-
-            // Approved students
-            $stmt_emails = $pdo->prepare("
-                SELECT u.email, u.user_id, u.pepp_course, u.pepp_academic_year
-                FROM users u
-                JOIN campaign_form_submissions s ON (
-                    u.email = s.respondent_identifier OR
-                    EXISTS (
-                        SELECT 1 FROM campaign_form_answers fa
-                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
-                    )
-                )
-                WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
-            ");
-            $stmt_emails->execute([$form_id]);
-            $students = $stmt_emails->fetchAll(PDO::FETCH_ASSOC);
-            $respondents_count = count($students);
-
-            // Assigned plans IDs (either direct or via student courses)
-            $stmt_pids = $pdo->prepare("
-                SELECT DISTINCT sp.id
-                FROM study_plans sp
-                JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                WHERE (
-                    (sa.assignment_type = 'form' AND sa.assigned_value = ?) OR
-                    (sa.assignment_type = 'course' AND sa.assigned_value IN (
-                        SELECT DISTINCT u.pepp_course
-                        FROM users u
-                        JOIN campaign_form_submissions s ON (
-                            u.email = s.respondent_identifier OR
-                            EXISTS (
-                                SELECT 1 FROM campaign_form_answers fa
-                                WHERE fa.submission_id = s.id AND fa.answer_text = u.email
-                            )
-                        )
-                        WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved' AND u.pepp_course IS NOT NULL AND u.pepp_course != ''
-                    ))
-                )
-            ");
-            $stmt_pids->execute([(string)$form_id, $form_id]);
-            $pids = $stmt_pids->fetchAll(PDO::FETCH_COLUMN);
-
-            $plans_count = count($pids);
-
-            $total_available_tasks = 0;
-            $total_completed_tasks = 0;
-            $active_30d = 0;
-
-            if (!empty($pids) && !empty($students)) {
-                $in_clause = implode(',', array_fill(0, count($pids), '?'));
-
-                // Count total available tasks for all assigned plans (multiplied by eligible students)
-                foreach ($pids as $pid) {
-                    $tasks_in_plan = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0", [$pid]);
-
-                    $assigned_students_count = 0;
-                    foreach ($students as $s) {
-                        $is_assigned = db_count($pdo, "
-                            SELECT COUNT(*)
-                            FROM study_plan_assignments sa
-                            WHERE sa.study_plan_id = ? AND (
-                                sa.assignment_type = 'all' OR
-                                (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
-                                (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
-                                (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
-                                (sa.assignment_type = 'form' AND sa.assigned_value = ?)
-                            )
-                        ", [$pid, $s['pepp_course'], $s['pepp_academic_year'], $s['user_id'], (string)$form_id]) > 0;
-
-                        if ($is_assigned) {
-                            $assigned_students_count++;
-                        }
-                    }
-                    $total_available_tasks += $tasks_in_plan * $assigned_students_count;
-                }
-
-                // Count completions by these students for activities in these plans
-                $student_emails = array_map(fn($s) => $s['email'], $students);
-                $email_placeholders = implode(',', array_fill(0, count($student_emails), '?'));
-                $plan_placeholders = implode(',', array_fill(0, count($pids), '?'));
-
-                $stmt_comp_cnt = $pdo->prepare("
-                    SELECT COUNT(*)
-                    FROM study_plan_analytics
-                    WHERE student_email IN ($email_placeholders)
-                      AND study_plan_id IN ($plan_placeholders)
-                      AND action_type = 'complete_activity'
-                      AND completion_status = 'completed'
-                ");
-                $stmt_comp_cnt->execute(array_merge($student_emails, $pids));
-                $total_completed_tasks = (int)$stmt_comp_cnt->fetchColumn();
-
-                // Active in last 30 days
-                $stmt_active = $pdo->prepare("
-                    SELECT COUNT(DISTINCT student_email)
-                    FROM study_plan_analytics
-                    WHERE student_email IN ($email_placeholders)
-                      AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-                ");
-                $stmt_active->execute($student_emails);
-                $active_30d = (int)$stmt_active->fetchColumn();
-            }
-
-            $avg_completion_rate = $total_available_tasks > 0 ? round(($total_completed_tasks / $total_available_tasks) * 100, 1) : 0;
-
-            echo json_encode([
-                'submissions' => $submissions,
-                'conversions' => $conversions,
-                'conversion_rate' => $submissions > 0 ? round(($conversions / $submissions) * 100, 1) . '%' : '0%',
-                'plans_count' => $plans_count,
-                'respondents' => $respondents_count,
-                'avg_completion_rate' => $avg_completion_rate . '%',
-                'active_30d' => $active_30d
-            ]);
-        } catch (Exception $e) {
-            echo json_encode(['error' => $e->getMessage()]);
-        }
-        exit;
-    }
-
-    // 11.2 Campaign Assigned Plans
-    if ($_GET['action'] === 'get_campaign_plans') {
-        $form_id = (int)($_GET['form_id'] ?? 0);
-        try {
-            // Get assigned plans (either direct or via student courses)
-            $stmt_plans = $pdo->prepare("
-                 SELECT DISTINCT sp.id, sp.title, sp.status, sp.start_date, sp.end_date
-                 FROM study_plans sp
-                 JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                 WHERE sp.is_deleted = 0 AND sa.is_deleted = 0 AND (
-                    (sa.assignment_type = 'form' AND sa.assigned_value = ?) OR
-                    (sa.assignment_type = 'course' AND sa.assigned_value IN (
-                        SELECT DISTINCT u.pepp_course
-                        FROM users u
-                        JOIN campaign_form_submissions s ON (
-                            u.email = s.respondent_identifier OR
-                            EXISTS (
-                                SELECT 1 FROM campaign_form_answers fa
-                                WHERE fa.submission_id = s.id AND fa.answer_text = u.email
-                            )
-                        )
-                        WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved' AND u.pepp_course IS NOT NULL AND u.pepp_course != ''
-                    ))
-                )
-                ORDER BY sp.start_date DESC, sp.end_date DESC, sp.id DESC
-            ");
-            $stmt_plans->execute([(string)$form_id, $form_id]);
-            $plans = $stmt_plans->fetchAll(PDO::FETCH_ASSOC);
-
-            // Fetch approved students to count eligible ones for each plan
-            $stmt_students = $pdo->prepare("
-                SELECT u.email, u.user_id, u.pepp_course, u.pepp_academic_year
-                FROM users u
-                JOIN campaign_form_submissions s ON (
-                    u.email = s.respondent_identifier OR
-                    EXISTS (
-                        SELECT 1 FROM campaign_form_answers fa
-                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
-                    )
-                )
-                WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
-            ");
-            $stmt_students->execute([$form_id]);
-            $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
-
-            $data = [];
-            $today = date('Y-m-d');
-            foreach ($plans as $p) {
-                $is_active = (!empty($p['start_date']) && !empty($p['end_date']) && $p['start_date'] !== '0000-00-00' && $p['end_date'] !== '0000-00-00' && $today >= $p['start_date'] && $today <= $p['end_date']);
-                $tasks_count = db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id = ? AND is_deleted = 0", [$p['id']]);
-
-                // Find which students are assigned to this study plan
-                $assigned_students = [];
-                foreach ($students as $s) {
-                    $is_assigned = db_count($pdo, "
-                        SELECT COUNT(*)
-                        FROM study_plan_assignments sa
-                        WHERE sa.study_plan_id = ? AND (
-                            sa.assignment_type = 'all' OR
-                            (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
-                            (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
-                            (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
-                            (sa.assignment_type = 'form' AND sa.assigned_value = ?)
-                        )
-                    ", [$p['id'], $s['pepp_course'], $s['pepp_academic_year'], $s['user_id'], (string)$form_id]) > 0;
-
-                    if ($is_assigned) {
-                        $assigned_students[] = $s['email'];
-                    }
-                }
-
-                $total_possible = $tasks_count * count($assigned_students);
-                $completions_count = 0;
-                if (!empty($assigned_students)) {
-                    $placeholders = implode(',', array_fill(0, count($assigned_students), '?'));
-                    $stmt_comp = $pdo->prepare("
-                       SELECT COUNT(*)
-                       FROM study_plan_analytics
-                       WHERE study_plan_id = ? AND student_email IN ($placeholders) AND action_type = 'complete_activity' AND completion_status = 'completed'
-                    ");
-                    $stmt_comp->execute(array_merge([$p['id']], $assigned_students));
-                    $completions_count = (int)$stmt_comp->fetchColumn();
-                }
-
-                $data[] = [
-                    'id' => $p['id'],
-                    'title' => r_esc($p['title']),
-                    'status' => ucfirst($p['status']),
-                    'is_active' => $is_active,
-                    'start_date' => $p['start_date'] ? date('d M Y', strtotime($p['start_date'])) : 'N/A',
-                    'end_date' => $p['end_date'] ? date('d M Y', strtotime($p['end_date'])) : 'N/A',
-                    'duration' => $p['start_date'] && $p['end_date'] ? (int)round((strtotime($p['end_date']) - strtotime($p['start_date'])) / 86400) . ' days' : 'N/A',
-                    'tasks' => $tasks_count,
-                    'pct' => $total_possible > 0 ? round(($completions_count / $total_possible) * 100, 1) : 0
-                ];
-            }
-            echo json_encode($data);
-        } catch (Exception $e) {
-            echo json_encode(['error' => $e->getMessage()]);
-        }
-        exit;
-    }
-
-    // 11.3 Campaign Respondents learning details
-    if ($_GET['action'] === 'get_campaign_respondents') {
-        $form_id = (int)($_GET['form_id'] ?? 0);
-        try {
-            // Get approved respondents
-            $stmt_students = $pdo->prepare("
-                SELECT u.user_id, u.name, u.email, u.phone, u.created_at, u.pepp_course, u.pepp_academic_year, s.is_converted_lead
-                FROM users u
-                JOIN campaign_form_submissions s ON (
-                    u.email = s.respondent_identifier OR
-                    EXISTS (
-                        SELECT 1 FROM campaign_form_answers fa
-                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
-                    )
-                )
-                WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
-                ORDER BY u.name ASC
-            ");
-            $stmt_students->execute([$form_id]);
-            $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
-
-            // Assigned plans IDs (either direct or via student courses)
-            $stmt_pids = $pdo->prepare("
-                SELECT DISTINCT sp.id
-                FROM study_plans sp
-                JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                WHERE (
-                    (sa.assignment_type = 'form' AND sa.assigned_value = ?) OR
-                    (sa.assignment_type = 'course' AND sa.assigned_value IN (
-                        SELECT DISTINCT u.pepp_course
-                        FROM users u
-                        JOIN campaign_form_submissions s ON (
-                            u.email = s.respondent_identifier OR
-                            EXISTS (
-                                SELECT 1 FROM campaign_form_answers fa
-                                WHERE fa.submission_id = s.id AND fa.answer_text = u.email
-                            )
-                        )
-                        WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved' AND u.pepp_course IS NOT NULL AND u.pepp_course != ''
-                    ))
-                )
-            ");
-            $stmt_pids->execute([(string)$form_id, $form_id]);
-            $pids = $stmt_pids->fetchAll(PDO::FETCH_COLUMN);
-
-            $data = [];
-            foreach ($students as $s) {
-                // Filter plans assigned to this specific student
-                $assigned_pids = [];
-                foreach ($pids as $pid) {
-                    $is_assigned = db_count($pdo, "
-                        SELECT COUNT(*)
-                        FROM study_plan_assignments sa
-                        WHERE sa.study_plan_id = ? AND (
-                            sa.assignment_type = 'all' OR
-                            (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
-                            (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
-                            (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
-                            (sa.assignment_type = 'form' AND sa.assigned_value = ?)
-                        )
-                    ", [$pid, $s['pepp_course'], $s['pepp_academic_year'], $s['user_id'], (string)$form_id]) > 0;
-
-                    if ($is_assigned) {
-                        $assigned_pids[] = $pid;
-                    }
-                }
-
-                $tasks_count = 0;
-                $comp = 0;
-                if (!empty($assigned_pids)) {
-                    $in_clause = implode(',', array_fill(0, count($assigned_pids), '?'));
-                    $stmt_tasks_cnt = $pdo->prepare("SELECT COUNT(*) FROM study_plan_activities WHERE study_plan_id IN ($in_clause) AND is_deleted = 0");
-                    $stmt_tasks_cnt->execute($assigned_pids);
-                    $tasks_count = (int)$stmt_tasks_cnt->fetchColumn();
-
-                    $stmt_comp = $pdo->prepare("
-                        SELECT COUNT(DISTINCT act.id)
-                        FROM study_plan_analytics an
-                        JOIN study_plan_activities act ON (
-                            (an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '')
-                            OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))
-                        )
-                        WHERE an.student_email = ? AND an.study_plan_id IN ($in_clause) AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND act.is_deleted = 0
-                    ");
-                    $stmt_comp->execute(array_merge([$s['email']], $assigned_pids));
-                    $comp = (int)$stmt_comp->fetchColumn();
-                }
-
-                $streak = 0;
-                $score = $comp * 10;
-
-                $data[] = [
-                    'user_id' => $s['user_id'],
-                    'name' => r_esc($s['name']),
-                    'email' => is_credential_restricted('students') ? format_credential_text($s['email'], 'email', 'students') : $s['email'],
-                    'phone' => is_credential_restricted('students') ? format_credential_text($s['phone'], 'phone', 'students') : $s['phone'],
-                    'masked_email' => format_credential_text($s['email'], 'email', 'students'),
-                    'masked_phone' => format_credential_text($s['phone'], 'phone', 'students'),
-                    'joined' => date('d M Y', strtotime($s['created_at'])),
-                    'converted' => $s['is_converted_lead'] ? 'Yes' : 'No',
-                    'completed' => $comp,
-                    'total_tasks' => $tasks_count,
-                    'streak' => $streak,
-                    'score' => $score,
-                    'pct' => $tasks_count > 0 ? round(($comp / $tasks_count) * 100, 1) : 0
-                ];
-            }
-            echo json_encode($data);
-        } catch (Exception $e) {
-            echo json_encode(['error' => $e->getMessage()]);
-        }
-        exit;
-    }
-
-    // 11.4 Campaign task matrices list
-    if ($_GET['action'] === 'get_campaign_tasks') {
-        $form_id = (int)($_GET['form_id'] ?? 0);
-        try {
-            // Assigned plans IDs (either direct or via student courses)
-            $stmt_pids = $pdo->prepare("
-                SELECT DISTINCT sp.id
-                FROM study_plans sp
-                JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                WHERE (
-                    (sa.assignment_type = 'form' AND sa.assigned_value = ?) OR
-                    (sa.assignment_type = 'course' AND sa.assigned_value IN (
-                        SELECT DISTINCT u.pepp_course
-                        FROM users u
-                        JOIN campaign_form_submissions s ON (
-                            u.email = s.respondent_identifier OR
-                            EXISTS (
-                                SELECT 1 FROM campaign_form_answers fa
-                                WHERE fa.submission_id = s.id AND fa.answer_text = u.email
-                            )
-                        )
-                        WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved' AND u.pepp_course IS NOT NULL AND u.pepp_course != ''
-                    ))
-                )
-            ");
-            $stmt_pids->execute([(string)$form_id, $form_id]);
-            $pids = $stmt_pids->fetchAll(PDO::FETCH_COLUMN);
-
-            // Campaign Respondents (approved students)
-            $stmt_students = $pdo->prepare("
-                SELECT u.email, u.user_id, u.pepp_course, u.pepp_academic_year
-                FROM users u
-                JOIN campaign_form_submissions s ON (
-                    u.email = s.respondent_identifier OR
-                    EXISTS (
-                        SELECT 1 FROM campaign_form_answers fa
-                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
-                    )
-                )
-                WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
-            ");
-            $stmt_students->execute([$form_id]);
-            $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
-
-            $data = [];
-            if (!empty($pids)) {
-                $in_clause = implode(',', array_fill(0, count($pids), '?'));
-                $stmt_tasks = $pdo->prepare("
-                    SELECT a.*, sp.title as plan_title, sp.is_deleted as plan_deleted
-                    FROM study_plan_activities a
-                    JOIN study_plans sp ON a.study_plan_id = sp.id
-                    WHERE a.study_plan_id IN ($in_clause) AND a.is_deleted = 0
-                    ORDER BY sp.title ASC, a.day_number ASC
-                ");
-                $stmt_tasks->execute($pids);
-                $tasks = $stmt_tasks->fetchAll(PDO::FETCH_ASSOC);
-
-                foreach ($tasks as $t) {
-                    // Only count students assigned to this task's plan
-                    $assigned_students = [];
-                    foreach ($students as $s) {
-                        $is_assigned = db_count($pdo, "
-                            SELECT COUNT(*)
-                            FROM study_plan_assignments sa
-                            WHERE sa.study_plan_id = ? AND (
-                                sa.assignment_type = 'all' OR
-                                (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
-                                (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
-                                (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
-                                (sa.assignment_type = 'form' AND sa.assigned_value = ?)
-                            )
-                        ", [$t['study_plan_id'], $s['pepp_course'], $s['pepp_academic_year'], $s['user_id'], (string)$form_id]) > 0;
-
-                        if ($is_assigned) {
-                            $assigned_students[] = $s['email'];
-                        }
-                    }
-
-                    $total_assigned = count($assigned_students);
-                    $comp = 0;
-                    if ($total_assigned > 0) {
-                        $placeholders = implode(',', array_fill(0, $total_assigned, '?'));
-                        $stmt_comp = $pdo->prepare("
-                            SELECT COUNT(*)
-                            FROM study_plan_analytics
-                            WHERE (activity_uid = ? OR (activity_id = ? AND (activity_uid IS NULL OR activity_uid = ''))) AND action_type = 'complete_activity' AND completion_status = 'completed' AND student_email IN ($placeholders)
-                        ");
-                        $stmt_comp->execute(array_merge([$t['activity_uid'], $t['id']], $assigned_students));
-                        $comp = (int)$stmt_comp->fetchColumn();
-                    }
-
-                    $pending = $total_assigned - $comp;
-
-                    $raw_camp_topic = trim((string)($t['topic'] ?? ''));
-                    $raw_camp_subj = trim((string)($t['subject'] ?? ''));
-                    $camp_topic_val = ($raw_camp_topic !== '') ? $raw_camp_topic : (($raw_camp_subj !== '') ? $raw_camp_subj : '');
-
-                    $data[] = [
-                       'id' => $t['id'],
-                       'day' => $t['day_number'],
-                       'date' => $t['activity_date'] ? date('d M Y', strtotime($t['activity_date'])) : 'TBD',
-                       'title' => r_esc($t['activity_title'] ?? ($t['title'] ?? '')),
-                       'subject' => r_esc($camp_topic_val),
-                       'chapter' => r_esc($t['chapter']),
-                       'topic' => r_esc($camp_topic_val),
-                       'faculty' => r_esc($t['faculty'] ?? ''),
-                       'plan' => ((int)$t['plan_deleted'] === 1 ? '[Archived / Deleted] ' : '') . r_esc($t['plan_title']),
-                       'completed' => $comp,
-                       'pending' => $pending,
-                       'pct' => $total_assigned > 0 ? round(($comp / $total_assigned) * 100) : 0
-                    ];
-                }
-            }
-            echo json_encode($data);
-        } catch (Exception $e) {
-            echo json_encode(['error' => $e->getMessage()]);
-        }
-        exit;
-    }
-
-    // 11.5 Campaign completed task drilldown
-    if ($_GET['action'] === 'get_campaign_completed_tasks_drilldown') {
-        $activity_id = (int)($_GET['activity_id'] ?? 0);
-        $form_id = (int)($_GET['form_id'] ?? 0);
-        try {
-            $anal_cols = get_table_columns_safe($pdo, 'study_plan_analytics');
-
-            $an_fields = ['an.created_at', 'an.ip_address'];
-            if (in_array('browser', $anal_cols)) $an_fields[] = 'an.browser';
-            if (in_array('device', $anal_cols)) $an_fields[] = 'an.device';
-            if (in_array('latitude', $anal_cols)) $an_fields[] = 'an.latitude';
-            if (in_array('longitude', $anal_cols)) $an_fields[] = 'an.longitude';
-
-            $select_str = implode(', ', $an_fields);
-
-            $stmt = $pdo->prepare("
-                SELECT u.name, u.email, {$select_str}
-                FROM study_plan_analytics an
-                JOIN users u ON an.student_email = u.email
-                JOIN campaign_form_submissions s ON (
-                    u.email = s.respondent_identifier OR
-                    EXISTS (
-                        SELECT 1 FROM campaign_form_answers fa
-                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
-                    )
-                )
-                WHERE an.activity_id = ?
-                  AND an.action_type = 'complete_activity'
-                  AND an.completion_status = 'completed'
-                  AND s.form_id = ?
-                  AND s.is_deleted = 0
-                  AND u.status = 'approved'
-                ORDER BY an.created_at DESC
-            ");
-            $stmt->execute([$activity_id, $form_id]);
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-            $data = [];
-            foreach ($rows as $r) {
-                $location = 'N/A';
-                if (isset($r['latitude']) && isset($r['longitude']) && $r['latitude'] && $r['longitude']) {
-                    $location = $r['latitude'] . ',' . $r['longitude'];
-                }
-
-                $data[] = [
-                    'name' => r_esc($r['name']),
-                    'masked_email' => format_credential_text($r['email'], 'email', 'students'),
-                    'completed_at' => date('d M Y h:i A', strtotime($r['created_at'])),
-                    'ip' => $r['ip_address'] ?: 'N/A',
-                    'browser' => $r['browser'] ?? 'N/A',
-                    'device' => $r['device'] ?? 'N/A',
-                    'location' => $location
-                ];
-            }
-            echo json_encode($data);
-        } catch (Exception $e) {
-            echo json_encode(['error' => $e->getMessage()]);
-        }
-        exit;
-    }
-
-    // 11.6 Campaign pending task drilldown
-    if ($_GET['action'] === 'get_campaign_pending_tasks_drilldown') {
-        $activity_id = (int)($_GET['activity_id'] ?? 0);
-        $form_id = (int)($_GET['form_id'] ?? 0);
-        try {
-            $stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ?");
-            $stmt_act->execute([$activity_id]);
-            $act = $stmt_act->fetch(PDO::FETCH_ASSOC);
-            $plan_id = $act ? $act['study_plan_id'] : 0;
-
-            // Get all approved students in this campaign who are assigned to this study plan
-            $stmt_students = $pdo->prepare("
-                SELECT DISTINCT u.name, u.email, u.phone
-                FROM users u
-                JOIN campaign_form_submissions s ON (
-                    u.email = s.respondent_identifier OR
-                    EXISTS (
-                        SELECT 1 FROM campaign_form_answers fa
-                        WHERE fa.submission_id = s.id AND fa.answer_text = u.email
-                    )
-                )
-                JOIN study_plan_assignments sa ON (
-                    sa.study_plan_id = ? AND (
-                        sa.assignment_type = 'all' OR
-                        (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
-                        (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
-                        (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
-                        (sa.assignment_type = 'form' AND CAST(s.form_id AS CHAR) = sa.assigned_value)
-                    )
-                )
-                WHERE s.form_id = ? AND s.is_deleted = 0 AND u.status = 'approved'
-            ");
-            $stmt_students->execute([$plan_id, $form_id]);
-            $students = $stmt_students->fetchAll(PDO::FETCH_ASSOC);
-
-            $data = [];
-            $today = new DateTime();
-            $due_date = $act['activity_date'] ? new DateTime($act['activity_date']) : null;
-            $overdue_days = 0;
-            if ($due_date && $due_date < $today) {
-                $overdue_days = $today->diff($due_date)->days;
-            }
-
-            foreach ($students as $s) {
-                // Check if completed
-                $comp = db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics WHERE (activity_uid = ? OR (activity_id = ? AND (activity_uid IS NULL OR activity_uid = ''))) AND student_email = ? AND action_type = 'complete_activity' AND completion_status = 'completed'", [$act['activity_uid'], $activity_id, $s['email']]);
-                if ($comp === 0) {
-                    $data[] = [
-                        'name' => r_esc($s['name']),
-                        'email' => is_credential_restricted('students') ? format_credential_text($s['email'], 'email', 'students') : $s['email'],
-                        'phone' => is_credential_restricted('students') ? format_credential_text($s['phone'], 'phone', 'students') : $s['phone'],
-                        'masked_email' => format_credential_text($s['email'], 'email', 'students'),
-                        'masked_phone' => format_credential_text($s['phone'], 'phone', 'students'),
-                        'overdue_days' => $overdue_days
-                    ];
-                }
-            }
-            echo json_encode($data);
-        } catch (Exception $e) {
-            echo json_encode(['error' => $e->getMessage()]);
-        }
-        exit;
-    }
-
     // 12. KPI Card Click Drilldowns (Load detailed lists dynamically)
     if ($_GET['action'] === 'kpi_drilldown') {
         $kpi = $_GET['kpi'] ?? '';
@@ -1845,11 +1194,7 @@ if (isset($_GET['action'])) {
                     sa.assignment_type = 'all' OR
                     (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
                     (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
-                    (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
-                    (sa.assignment_type = 'form' AND EXISTS (
-                        SELECT 1 FROM campaign_form_submissions s
-                        WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
-                    ))
+                    (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id)
                 )
             )
         ";
@@ -1875,13 +1220,9 @@ if (isset($_GET['action'])) {
                                 sa.assignment_type = 'all' OR
                                 (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
                                 (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
-                                (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
-                                (sa.assignment_type = 'form' AND EXISTS (
-                                    SELECT 1 FROM campaign_form_submissions s
-                                    WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
-                                ))
+                                (sa.assignment_type = 'student' AND sa.assigned_value = ?)
                             )
-                        ", [$r['pepp_course'], $r['academic_year'], $r['user_id'], $r['email']]);
+                        ", [$r['pepp_course'], $r['academic_year'], $r['user_id']]);
 
                         $data[] = [
                             r_esc($r['name']),
@@ -2054,7 +1395,7 @@ if (isset($_GET['action'])) {
                          SELECT DISTINCT sp.id, sp.title, sp.plan_type, sp.start_date, sp.end_date, sa.assignment_type, sa.assigned_value
                          FROM study_plans sp
                          LEFT JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-                         WHERE sp.status = 'published' AND sp.is_deleted = 0 AND (sa.is_deleted = 0 OR sa.is_deleted IS NULL) AND (sa.assignment_type IS NULL OR sa.assignment_type != 'form')
+                         WHERE sp.status = 'published' AND sp.is_deleted = 0 AND (sa.is_deleted = 0 OR sa.is_deleted IS NULL)
                          ORDER BY sp.start_date DESC, sp.end_date DESC, sp.id DESC
                     ");
                     $rows = $stmt->fetchAll();
@@ -2140,14 +1481,10 @@ if (isset($_GET['action'])) {
                                 sa.assignment_type = 'all' OR
                                 (sa.assignment_type = 'course' AND sa.assigned_value = ?) OR
                                 (sa.assignment_type = 'batch' AND sa.assigned_value = ?) OR
-                                (sa.assignment_type = 'student' AND sa.assigned_value = ?) OR
-                                (sa.assignment_type = 'form' AND EXISTS (
-                                    SELECT 1 FROM campaign_form_submissions s
-                                    WHERE s.respondent_identifier = ? AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
-                                ))
+                                (sa.assignment_type = 'student' AND sa.assigned_value = ?)
                             )
                         ");
-                        $stmt_plans->execute([$std['pepp_course'], $std['academic_year'], $std['user_id'], $std['email']]);
+                        $stmt_plans->execute([$std['pepp_course'], $std['academic_year'], $std['user_id']]);
                         $pids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
 
                         $total = 0;
@@ -2197,7 +1534,6 @@ if (isset($_GET['action'])) {
     // 13. Export CSV Action Handler
     if ($_GET['action'] === 'export_report') {
         $course_filter = $_GET['course_name'] ?? null;
-        $form_filter = isset($_GET['form_id']) ? (int)$_GET['form_id'] : null;
         $search = trim($_GET['search'] ?? '');
         $status = $_GET['perf_status'] ?? '';
 
@@ -2211,34 +1547,19 @@ if (isset($_GET['action'])) {
                     sa.assignment_type = 'all' OR
                     (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
                     (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
-                    (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
-                    (sa.assignment_type = 'form' AND EXISTS (
-                        SELECT 1 FROM campaign_form_submissions s
-                        WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
-                    ))
+                    (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id)
                 )
             )
         ";
 
         try {
-            if ($form_filter) {
-                $stmt = $pdo->prepare("
-                    SELECT DISTINCT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year
-                    FROM users u
-                    JOIN campaign_form_submissions s ON u.email = s.respondent_identifier
-                    WHERE s.form_id = ? AND u.status = 'approved' AND $assigned_plans_subquery
-                ");
-                $stmt->execute([$form_filter]);
-                $stds = $stmt->fetchAll();
-            } else {
-                $stmt = $pdo->prepare("
-                    SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year
-                    FROM users u
-                    WHERE u.pepp_course = ? AND u.status = 'approved' AND $assigned_plans_subquery
-                ");
-                $stmt->execute([$course_filter]);
-                $stds = $stmt->fetchAll();
-            }
+            $stmt = $pdo->prepare("
+                SELECT u.user_id, u.name, u.email, u.pepp_course, u.pepp_academic_year AS academic_year
+                FROM users u
+                WHERE u.pepp_course = ? AND u.status = 'approved' AND $assigned_plans_subquery
+            ");
+            $stmt->execute([$course_filter]);
+            $stds = $stmt->fetchAll();
 
             // Prepare bulk students array for canonical course analytics
             $bulk_students = [];
@@ -2365,7 +1686,6 @@ $source = $_GET['source'] ?? '';
 $isMentoringReport = ($source === 'mentoring');
 $kpis = [];
 $assigned_courses = [];
-$assigned_forms = [];
 
 if ($source === 'courses' || $source === 'mentoring') {
     $assigned_plans_subquery = "
@@ -2376,11 +1696,7 @@ if ($source === 'courses' || $source === 'mentoring') {
                 sa.assignment_type = 'all' OR
                 (sa.assignment_type = 'course' AND sa.assigned_value = u.pepp_course) OR
                 (sa.assignment_type = 'batch' AND sa.assigned_value = u.pepp_academic_year) OR
-                (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id) OR
-                (sa.assignment_type = 'form' AND EXISTS (
-                    SELECT 1 FROM campaign_form_submissions s
-                    WHERE s.respondent_identifier = u.email AND CAST(s.form_id AS CHAR) = sa.assigned_value AND s.is_deleted = 0
-                ))
+                (sa.assignment_type = 'student' AND sa.assigned_value = u.user_id)
             )
         )
     ";
@@ -2399,11 +1715,9 @@ if ($source === 'courses' || $source === 'mentoring') {
             SELECT COUNT(DISTINCT sp.id)
             FROM study_plans sp
             LEFT JOIN study_plan_assignments sa ON sp.id = sa.study_plan_id
-            WHERE sp.status = 'published' AND sp.is_deleted = 0 AND (sa.is_deleted = 0 OR sa.is_deleted IS NULL) AND (sa.assignment_type IS NULL OR sa.assignment_type != 'form')
+            WHERE sp.status = 'published' AND sp.is_deleted = 0 AND (sa.is_deleted = 0 OR sa.is_deleted IS NULL)
               AND sp.start_date <= CURDATE() AND sp.end_date >= CURDATE()
         "),
-        'total_custom_forms' => db_count($pdo, "SELECT COUNT(*) FROM campaign_forms WHERE status = 'published'"),
-        'total_submissions' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions s JOIN users u ON s.respondent_identifier = u.email WHERE s.is_deleted = 0 AND u.status = 'approved' AND $assigned_plans_subquery"),
         'total_assignments' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_assignments WHERE is_deleted = 0"),
         'learning_started' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM users u JOIN study_plan_analytics an ON u.email = an.student_email LEFT JOIN study_plan_activities act ON ((an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '') OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))) WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND (act.id IS NULL OR act.is_deleted = 0 OR act.is_deleted = 1) AND $assigned_plans_subquery"),
         'total_checklist_completions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email LEFT JOIN study_plan_activities act ON ((an.activity_uid = act.activity_uid AND act.activity_uid IS NOT NULL AND act.activity_uid != '') OR (an.activity_id = act.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR act.activity_uid IS NULL OR act.activity_uid = ''))) WHERE u.status = 'approved' AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' AND (act.id IS NULL OR act.is_deleted = 0 OR act.is_deleted = 1) AND $assigned_plans_subquery"),
@@ -2413,7 +1727,6 @@ if ($source === 'courses' || $source === 'mentoring') {
         'active_weekly' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND $assigned_plans_subquery"),
         'active_monthly' => db_count($pdo, "SELECT COUNT(DISTINCT u.email) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND $assigned_plans_subquery"),
         'logins_today' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_analytics an JOIN users u ON an.student_email = u.email WHERE u.status = 'approved' AND an.action_type = 'view' AND DATE(an.created_at) = CURDATE() AND $assigned_plans_subquery"),
-        'leads_converted' => db_count($pdo, "SELECT COUNT(*) FROM campaign_form_submissions s JOIN users u ON s.respondent_identifier = u.email WHERE s.is_converted_lead = 1 AND u.status = 'approved' AND $assigned_plans_subquery"),
         'total_faculty' => db_count($pdo, "SELECT COUNT(DISTINCT faculty) FROM study_plan_activities WHERE faculty IS NOT NULL AND faculty != '' AND is_deleted = 0"),
         'pending_activities' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities a LEFT JOIN study_plan_analytics an ON ((an.activity_uid = a.activity_uid AND a.activity_uid IS NOT NULL AND a.activity_uid != '') OR (an.activity_id = a.id AND (an.activity_uid IS NULL OR an.activity_uid = '' OR a.activity_uid IS NULL OR a.activity_uid = ''))) AND an.action_type = 'complete_activity' AND an.completion_status = 'completed' WHERE a.is_deleted = 0 AND an.id IS NULL"),
         'upcoming_sessions' => db_count($pdo, "SELECT COUNT(*) FROM study_plan_activities WHERE activity_date >= CURDATE() AND is_deleted = 0")
@@ -3272,7 +2585,6 @@ include 'includes/admin_nav.php';
                 <p style="font-size:0.8rem; color:var(--text-muted); margin:0;">
                     <?php
                         if ($source === 'courses') echo 'Dashboard / PEPP Course Analytics';
-                        elseif ($source === 'forms') echo 'Dashboard / Custom Forms Campaigns';
                         else echo $page_sub;
                     ?>
                 </p>
@@ -3296,9 +2608,9 @@ include 'includes/admin_nav.php';
                 <h2 style="font-family:var(--header-font); font-weight:800; font-size:2rem; color:var(--text-main); margin-bottom:8px;">Welcome to Performance & Analytics Intelligence</h2>
                 <p style="font-size:0.95rem; color:var(--text-muted); margin-bottom:2.5rem;">Select an analytics data source to load your reporting dashboard workspace.</p>
 
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:2rem;">
+                <div style="display:flex; justify-content:center;">
                     <!-- Courses Selection Card -->
-                    <a href="?source=courses" style="text-decoration:none;">
+                    <a href="?source=courses" style="text-decoration:none; max-width:480px; width:100%;">
                         <div class="landing-card">
                             <div class="landing-icon" style="background:rgba(79, 70, 229, 0.08); width:70px; height:70px; border-radius:20px; display:flex; align-items:center; justify-content:center; color:#4f46e5; font-size:2rem; transition:all 0.3s ease;">
                                 <i class="fas fa-graduation-cap"></i>
@@ -3306,19 +2618,6 @@ include 'includes/admin_nav.php';
                             <div>
                                 <h3 style="font-family:var(--header-font); font-weight:800; font-size:1.4rem; color:var(--text-main); margin:0 0 8px 0;">PEPP Courses</h3>
                                 <p style="font-size:0.85rem; color:var(--text-muted); line-height:1.5; margin:0;">Track student progress, study plan completions, learning streaks, daily task checklist submissions, and academic KPIs.</p>
-                            </div>
-                        </div>
-                    </a>
-
-                    <!-- Forms Selection Card -->
-                    <a href="?source=forms" style="text-decoration:none;">
-                        <div class="landing-card">
-                            <div class="landing-icon" style="background:rgba(16, 185, 129, 0.08); width:70px; height:70px; border-radius:20px; display:flex; align-items:center; justify-content:center; color:#10b981; font-size:2rem; transition:all 0.3s ease;">
-                                <i class="fab fa-wpforms"></i>
-                            </div>
-                            <div>
-                                <h3 style="font-family:var(--header-font); font-weight:800; font-size:1.4rem; color:var(--text-main); margin:0 0 8px 0;">Custom Forms &amp; Campaigns</h3>
-                                <p style="font-size:0.85rem; color:var(--text-muted); line-height:1.5; margin:0;">Analyze campaign submission funnels, visitor statistics, response records, lead conversions, and form submission analytics.</p>
                             </div>
                         </div>
                     </a>
@@ -3371,13 +2670,6 @@ include 'includes/admin_nav.php';
                 <div class="kpi-info">
                     <div class="kpi-value"><?php echo $kpis['attendance_pct']; ?>%</div>
                     <div class="kpi-label">Attendance Rate</div>
-                </div>
-            </div>
-            <div class="kpi-card amber" id="card-leads-converted">
-                <div class="kpi-icon amber"><i class="fas fa-filter"></i></div>
-                <div class="kpi-info">
-                    <div class="kpi-value"><?php echo number_format($kpis['leads_converted']); ?></div>
-                    <div class="kpi-label">Leads Converted</div>
                 </div>
             </div>
             <div class="kpi-card red" id="card-mock-tests">
@@ -3646,28 +2938,6 @@ include 'includes/admin_nav.php';
             </div>
         </div>
         <?php endif; ?>
-
-    <!-- 3. CUSTOM FORMS & CAMPAIGNS WORKSPACE VIEW -->
-    <?php elseif ($source === 'forms'): ?>
-        <div style="display:grid; grid-template-columns: 280px 1fr; gap:1.5rem; align-items:start;">
-            <!-- Left sidebar listing campaign forms -->
-            <div class="filter-panel">
-                <h5 style="font-size:0.75rem; text-transform:uppercase; font-weight:800; color:var(--text-muted); letter-spacing:0.8px; margin-bottom:12px; border-bottom:1.5px solid var(--border); padding-bottom:6px;"><i class="fab fa-wpforms"></i> Campaign Forms</h5>
-                <div style="display:flex; flex-direction:column; gap:8px;" id="forms-sidebar-list">
-                    <!-- Loaded dynamically via JS -->
-                </div>
-            </div>
-
-            <!-- Right dynamic analytics workspace pane -->
-            <div id="form-intelligence-workspace">
-                <div class="landing-container" style="display:flex; justify-content:center; align-items:center; min-height:45vh; border:2px dashed var(--border); border-radius:16px;">
-                    <div style="text-align:center; color:var(--text-muted);">
-                        <i class="fab fa-wpforms" style="font-size:3rem; margin-bottom:10px;"></i>
-                        <p style="margin:0; font-weight:700;">Select a Campaign Form on the left to analyze submissions funnel</p>
-                    </div>
-                </div>
-            </div>
-        </div>
     <?php endif; ?>
 </div>
 
@@ -3707,10 +2977,6 @@ include 'includes/admin_nav.php';
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="font-size:0.85rem; font-weight:600; color:var(--text-main);">Attendance Rate Metrics</span>
                 <label class="switch"><input type="checkbox" class="card-toggle" data-card-id="card-attendance" checked><span class="slider"></span></label>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="font-size:0.85rem; font-weight:600; color:var(--text-main);">Leads Converted Stats</span>
-                <label class="switch"><input type="checkbox" class="card-toggle" data-card-id="card-leads-converted" checked><span class="slider"></span></label>
             </div>
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="font-size:0.85rem; font-weight:600; color:var(--text-main);">Mock Test Analytics</span>
@@ -3993,9 +3259,6 @@ include 'includes/admin_nav.php';
             if (document.getElementById('kpi-grid-container')) {
                 initKPIDrilldown();
             }
-
-        } else if (sourceVal === 'forms') {
-            loadFormsDashboardSidebar();
         }
     });
 
@@ -4064,7 +3327,6 @@ include 'includes/admin_nav.php';
             { id: 'card-active-plans', key: 'active_plans' },
             { id: 'card-checklist-completions', key: 'task_completions' },
             { id: 'card-attendance', key: 'attendance_rate' },
-            { id: 'card-leads-converted', key: 'leads_converted' },
             { id: 'card-mock-tests', key: 'mock_tests' },
             { id: 'card-live-sessions', key: 'live_sessions' },
             { id: 'card-certificates', key: 'certificates' }
@@ -6630,11 +5892,6 @@ include 'includes/admin_nav.php';
     let currentCourseNameSelected = '';
     let courseTasksData = [];
 
-    let currentCampaignIdSelected = 0;
-    let currentCampaignTitleSelected = '';
-    let campaignRespondentsData = [];
-    let campaignTasksData = [];
-
     function loadCourseDashboard(cname) {
         currentCourseNameSelected = cname;
         const workspace = document.getElementById('course-dashboard-workspace');
@@ -7015,610 +6272,6 @@ include 'includes/admin_nav.php';
 
         const title = currentDrilldownActivityTitle.replace(/\\s+/g, '_');
         XLSX.writeFile(wb, `${type}_tasks_${title}.xlsx`);
-    }
-
-    // ════════════════ CUSTOM CAMPAIGNS & FORMS WORKSPACE ════════════════
-    function loadFormsDashboardSidebar() {
-        const container = document.getElementById('forms-sidebar-list');
-        container.innerHTML = '<div style="text-align:center;"><i class="fas fa-spinner fa-spin"></i> Loading forms...</div>';
-
-        fetch('?action=get_form_dashboard')
-            .then(res => res.json())
-            .then(data => {
-                container.innerHTML = '';
-                if (data.length === 0) {
-                    container.innerHTML = '<div style="padding:10px; color:var(--text-muted);">No campaign forms found with study plan links.</div>';
-                    return;
-                }
-
-                data.forEach(f => {
-                    const item = document.createElement('div');
-                    item.style.background = '#f8fafc';
-                    item.style.border = '1px solid var(--border)';
-                    item.style.borderRadius = '12px';
-                    item.style.padding = '12px';
-                    item.style.cursor = 'pointer';
-                    item.style.transition = 'all 0.2s ease';
-                    item.innerHTML = `
-                        <div style="font-weight:800; color:var(--text-main); font-size:0.85rem; margin-bottom:4px;">${f.title}</div>
-                        <small style="color:var(--text-muted); font-size:0.72rem; display:block;">Submissions: ${f.submissions} · Converted: ${f.conversions} (${f.rate})</small>
-                    `;
-
-                    item.addEventListener('click', function() {
-                        document.querySelectorAll('#forms-sidebar-list > div').forEach(c => {
-                            c.style.borderColor = 'var(--border)';
-                            c.style.background = '#f8fafc';
-                            c.style.boxShadow = 'none';
-                        });
-                        item.style.borderColor = 'var(--accent)';
-                        item.style.background = 'rgba(79, 70, 229, 0.02)';
-                        item.style.boxShadow = '0 4px 12px rgba(79, 70, 229, 0.05)';
-
-                        loadFormAnalyticsWorkspace(f.id, f.title);
-                    });
-
-                    item.addEventListener('mouseenter', () => {
-                        if (currentCampaignIdSelected !== f.id) {
-                            item.style.borderColor = 'var(--accent)';
-                            item.style.background = '#fff';
-                            item.style.boxShadow = '0 4px 12px rgba(0,0,0,0.05)';
-                        }
-                    });
-
-                    item.addEventListener('mouseleave', () => {
-                        if (currentCampaignIdSelected !== f.id) {
-                            item.style.borderColor = 'var(--border)';
-                            item.style.background = '#f8fafc';
-                            item.style.boxShadow = 'none';
-                        }
-                    });
-
-                    container.appendChild(item);
-                });
-            });
-    }
-
-    let formDonutChartInstance = null;
-
-    function loadFormAnalyticsWorkspace(formId, title) {
-        currentCampaignIdSelected = formId;
-        currentCampaignTitleSelected = title;
-        const workspace = document.getElementById('form-intelligence-workspace');
-        workspace.innerHTML = `
-            <div class="chart-card" style="text-align:center; padding:4rem;"><i class="fas fa-spinner fa-spin" style="font-size:2rem; color:var(--accent);"></i><p>Gathering campaign performance metrics...</p></div>
-        `;
-
-        fetch('?action=get_campaign_analytics&form_id=' + formId)
-            .then(res => res.json())
-            .then(stats => {
-                workspace.innerHTML = '';
-                if (stats.error) {
-                    workspace.innerHTML = `<div class="chart-card" style="color:#ef4444; text-align:center; padding:2rem;"><i class="fas fa-circle-exclamation"></i> Error: ${stats.error}</div>`;
-                    return;
-                }
-
-                // Render KPI Stats cards & Tab panes
-                workspace.innerHTML = `
-                    <div class="chart-card">
-                        <!-- Dashboard Header -->
-                        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid var(--border); padding-bottom:12px; margin-bottom:15px; flex-wrap:wrap; gap:8px;">
-                            <div>
-                                <h4 style="font-family:var(--header-font); font-weight:800; font-size:1.15rem; color:var(--text-main); margin:0;">
-                                    <i class="fab fa-wpforms" style="color:var(--accent); margin-right:6px;"></i> Campaign Dashboard: ${title}
-                                </h4>
-                                <p style="font-size:0.75rem; color:var(--text-muted); margin:4px 0 0 0;">Comprehensive analytics and study plan performance tracker.</p>
-                            </div>
-                        </div>
-
-                        <!-- KPI Grid -->
-                        <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); margin-bottom:20px;">
-                            <div class="kpi-card indigo">
-                                <div class="kpi-icon indigo"><i class="fab fa-wpforms"></i></div>
-                                <div class="kpi-info">
-                                    <div class="kpi-value">${stats.submissions}</div>
-                                    <div class="kpi-label">Submissions</div>
-                                </div>
-                            </div>
-                            <div class="kpi-card green">
-                                <div class="kpi-icon green"><i class="fas fa-funnel-dollar"></i></div>
-                                <div class="kpi-info">
-                                    <div class="kpi-value">${stats.conversions}</div>
-                                    <div class="kpi-label">Converted Leads (${stats.conversion_rate})</div>
-                                </div>
-                            </div>
-                            <div class="kpi-card blue">
-                                <div class="kpi-icon blue"><i class="fas fa-user-graduate"></i></div>
-                                <div class="kpi-info">
-                                    <div class="kpi-value">${stats.respondents}</div>
-                                    <div class="kpi-label">Approved Students</div>
-                                </div>
-                            </div>
-                            <div class="kpi-card purple">
-                                <div class="kpi-icon purple"><i class="fas fa-folder-open"></i></div>
-                                <div class="kpi-info">
-                                    <div class="kpi-value">${stats.plans_count}</div>
-                                    <div class="kpi-label">Assigned Plans</div>
-                                </div>
-                            </div>
-                            <div class="kpi-card amber">
-                                <div class="kpi-icon amber"><i class="fas fa-percent"></i></div>
-                                <div class="kpi-info">
-                                    <div class="kpi-value">${stats.avg_completion_rate}</div>
-                                    <div class="kpi-label">Avg. Task Completion</div>
-                                </div>
-                            </div>
-                            <div class="kpi-card teal">
-                                <div class="kpi-icon teal"><i class="fas fa-users-viewfinder"></i></div>
-                                <div class="kpi-info">
-                                    <div class="kpi-value">${stats.active_30d}</div>
-                                    <div class="kpi-label">Active Users (30d)</div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Tab Headers -->
-                        <div style="display:flex; gap:10px; border-bottom:1px solid var(--border); padding-bottom:8px; margin-bottom:15px;">
-                            <button class="btn btn-sm btn-outline campaign-tab-btn active" id="btn-c-tab-plans" onclick="switchCampaignTab('plans')"><i class="fas fa-folder-open"></i> Assigned Plans</button>
-                            <button class="btn btn-sm btn-outline campaign-tab-btn" id="btn-c-tab-respondents" onclick="switchCampaignTab('respondents')"><i class="fas fa-user-graduate"></i> Respondent Performance</button>
-                            <button class="btn btn-sm btn-outline campaign-tab-btn" id="btn-c-tab-tasks" onclick="switchCampaignTab('tasks')"><i class="fas fa-list-check"></i> Task Checklist Matrix</button>
-                        </div>
-
-                        <!-- 1. Assigned Plans Pane -->
-                        <div class="campaign-tab-pane" id="pane-campaign-plans" style="display:block;">
-                            <div class="table-responsive" style="border:1.5px solid var(--border); border-radius:12px;">
-                                <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
-                                    <thead>
-                                        <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:#f8fafc;">
-                                            <th style="padding:12px 10px; font-weight:700;">Study Plan Title</th>
-                                            <th style="padding:12px 10px; font-weight:700;">Active Dates</th>
-                                            <th style="padding:12px 10px; font-weight:700; text-align:center;">Duration</th>
-                                            <th style="padding:12px 10px; font-weight:700; text-align:center;">Total Tasks</th>
-                                            <th style="padding:12px 10px; font-weight:700; text-align:right;">Completions Rate</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="campaign-plans-table-body"></tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <!-- 2. Respondent Performance Pane -->
-                        <div class="campaign-tab-pane" id="pane-campaign-respondents" style="display:none;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
-                                <input type="text" id="campaign-respondent-search" oninput="filterCampaignRespondentsTable()" placeholder="Search student name, email, phone..." style="padding:6px 12px; font-size:0.8rem; border:1.5px solid var(--border); border-radius:8px; width:260px; outline:none; height:34px;">
-                                <button class="btn btn-sm btn-outline" style="height:34px; padding:0 12px;" onclick="exportCampaignRespondentsCSV()"><i class="fas fa-file-csv"></i> Export CSV</button>
-                            </div>
-                            <div class="table-responsive" style="border:1.5px solid var(--border); border-radius:12px; max-height:400px; overflow-y:auto;">
-                                <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
-                                    <thead>
-                                        <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:#f8fafc; position:sticky; top:0; z-index:2;">
-                                            <th style="padding:12px 10px; font-weight:700;">Respondent Name</th>
-                                            <th style="padding:12px 10px; font-weight:700;">Contact Details</th>
-                                            <th style="padding:12px 10px; font-weight:700; text-align:center;">Converted</th>
-                                            <th style="padding:12px 10px; font-weight:700; text-align:center;">Tasks Done</th>
-                                            <th style="padding:12px 10px; font-weight:700; text-align:center;">Score</th>
-                                            <th style="padding:12px 10px; font-weight:700; text-align:center;">Attendance Rate</th>
-                                            <th style="padding:12px 10px; font-weight:700; text-align:right;">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="campaign-respondents-table-body"></tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <!-- 3. Task Checklist Matrix Pane -->
-                        <div class="campaign-tab-pane" id="pane-campaign-tasks" style="display:none;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
-                                <div style="display:flex; gap:10px; align-items:center; flex-grow:1;">
-                                    <input type="text" id="campaign-task-search" oninput="filterCampaignTasksTable()" placeholder="Search task title, subject, chapter, plan..." style="padding:6px 12px; font-size:0.8rem; border:1.5px solid var(--border); border-radius:8px; width:220px; outline:none; height:34px;">
-                                    <select id="campaign-task-chapter-filter" onchange="filterCampaignTasksTable()" style="padding:0 10px; font-size:0.8rem; border:1.5px solid var(--border); border-radius:8px; width:160px; height:34px; background:#fff; cursor:pointer; outline:none;">
-                                        <option value="ALL">All Chapters</option>
-                                    </select>
-                                </div>
-                                <button class="btn btn-sm btn-outline" style="height:34px; padding:0 12px;" onclick="exportCampaignTasksCSV()"><i class="fas fa-file-csv"></i> Export CSV</button>
-                            </div>
-                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px;">
-                                <div class="table-responsive" style="border:1.5px solid var(--border); border-radius:12px; max-height:400px; overflow-y:auto;">
-                                    <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
-                                        <thead>
-                                            <tr style="border-bottom:1.5px solid var(--border); text-align:left; background:#f8fafc; position:sticky; top:0; z-index:2;">
-                                                <th style="padding:12px 10px; font-weight:700;">Plan</th>
-                                                <th style="padding:12px 10px; font-weight:700; text-align:center; width:100px;">Date</th>
-                                                <th style="padding:12px 10px; font-weight:700;">Task Activity</th>
-                                                <th style="padding:12px 10px; font-weight:700;">Topic &amp; Chapter</th>
-                                                <th style="padding:12px 10px; font-weight:700; text-align:center; width:65px;">Done</th>
-                                                <th style="padding:12px 10px; font-weight:700; text-align:center; width:65px;">Pend</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="campaign-tasks-table-body"></tbody>
-                                    </table>
-                                </div>
-                                <div class="widget-card" id="campaign-drilldown-card" style="border:1.5px solid var(--border); border-radius:12px; background:#fff; padding:15px; display:none; max-height:400px; overflow-y:auto;">
-                                    <!-- Dynamic Drilldown Completed/Pending student details populated here -->
-                                </div>
-                            </div>
-                        </div>
-
-                    </div>
-                `;
-
-                // Load default sub-tab
-                switchCampaignTab('plans');
-            });
-    }
-
-    function switchCampaignTab(tabKey) {
-        document.querySelectorAll('.campaign-tab-pane').forEach(p => p.style.display = 'none');
-        document.querySelectorAll('.campaign-tab-btn').forEach(b => b.classList.remove('active'));
-
-        if (tabKey === 'plans') {
-            document.getElementById('pane-campaign-plans').style.display = 'block';
-            document.getElementById('btn-c-tab-plans').classList.add('active');
-            loadCampaignPlansTab(currentCampaignIdSelected);
-        } else if (tabKey === 'respondents') {
-            document.getElementById('pane-campaign-respondents').style.display = 'block';
-            document.getElementById('btn-c-tab-respondents').classList.add('active');
-            loadCampaignRespondentsTab(currentCampaignIdSelected);
-        } else if (tabKey === 'tasks') {
-            document.getElementById('pane-campaign-tasks').style.display = 'block';
-            document.getElementById('btn-c-tab-tasks').classList.add('active');
-            loadCampaignTasksTab(currentCampaignIdSelected);
-        }
-    }
-
-    function loadCampaignPlansTab(formId) {
-        const tbody = document.getElementById('campaign-plans-table-body');
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin"></i> Loading campaign plans...</td></tr>';
-        fetch('?action=get_campaign_plans&form_id=' + formId)
-            .then(res => res.json())
-            .then(data => {
-                tbody.innerHTML = '';
-                if (data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:2rem;">No study plans mapped to this campaign.</td></tr>';
-                    return;
-                }
-                data.forEach(p => {
-                    const dot = p.is_active ? '<span class="pulse-dot" title="Currently Active Plan"></span>' : '';
-                    const badge = p.is_active ? '<span class="badge green" style="font-size:0.6rem; padding:2px 6px; margin-left:6px;">ACTIVE</span>' : '';
-                    tbody.innerHTML += `
-                        <tr style="border-bottom:1px solid #f1f5f9; ${p.is_active ? 'background:#f0fdf4;' : ''}">
-                            <td style="padding:12px 10px;">
-                                <div style="display:inline-flex; align-items:center; gap:6px;">
-                                    ${dot}
-                                    <strong style="font-size:0.85rem; color:var(--text-main);">${p.title}</strong>
-                                    ${badge}
-                                </div>
-                                <br><small style="color:var(--text-muted); font-size:0.72rem;">Status: ${p.status}</small>
-                            </td>
-                            <td style="padding:12px 10px; font-size:0.78rem;">${p.start_date} to ${p.end_date}</td>
-                            <td style="padding:12px 10px; text-align:center; font-weight:700;">${p.duration}</td>
-                            <td style="padding:12px 10px; text-align:center; font-weight:700;">${p.tasks}</td>
-                            <td style="padding:12px 10px; text-align:right;"><strong style="color:var(--accent); font-size:0.85rem;">${p.pct}%</strong></td>
-                        </tr>
-                    `;
-                });
-            });
-    }
-
-    function loadCampaignRespondentsTab(formId) {
-        const tbody = document.getElementById('campaign-respondents-table-body');
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin"></i> Loading respondents list...</td></tr>';
-        fetch('?action=get_campaign_respondents&form_id=' + formId)
-            .then(res => res.json())
-            .then(data => {
-                campaignRespondentsData = data;
-
-                // Clear search
-                const searchInp = document.getElementById('campaign-respondent-search');
-                if (searchInp) searchInp.value = '';
-
-                renderCampaignRespondentsTable(data);
-            });
-    }
-
-    function renderCampaignRespondentsTable(data) {
-        const tbody = document.getElementById('campaign-respondents-table-body');
-        tbody.innerHTML = '';
-        if (data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:2rem;">No respondents matching criteria.</td></tr>';
-            return;
-        }
-        data.forEach(s => {
-            const badgeColor = s.converted === 'Yes' ? 'green' : 'gray';
-            tbody.innerHTML += `
-                <tr style="border-bottom:1px solid #f1f5f9;">
-                    <td style="padding:10px 8px;"><strong style="font-size:0.82rem; color:var(--text-main);">${s.name}</strong><br><small style="color:var(--text-muted); font-size:0.72rem;">${s.masked_email}</small></td>
-                    <td style="padding:10px 8px; font-size:0.78rem;">${s.phone}<br><small style="color:var(--text-muted); font-size:0.72rem;">Joined: ${s.joined}</small></td>
-                    <td style="padding:10px 8px; text-align:center;"><span class="badge ${badgeColor}" style="font-size:0.65rem; text-transform:uppercase;">${s.converted}</span></td>
-                    <td style="padding:10px 8px; text-align:center; font-weight:700;">${s.completed} of ${s.total_tasks}</td>
-                    <td style="padding:10px 8px; text-align:center; font-weight:700;">${s.score}</td>
-                    <td style="padding:10px 8px; text-align:center; font-weight:700; color:var(--accent);">${s.pct}%</td>
-                    <td style="padding:10px 8px; text-align:right;">
-                        <button class="btn btn-xs btn-outline" style="padding:4px 8px;" onclick="loadStudentIntelligenceDashboard(null, '${s.user_id}')"><i class="fas fa-eye"></i> View Dossier</button>
-                    </td>
-                </tr>
-            `;
-        });
-    }
-
-    function filterCampaignRespondentsTable() {
-        const query = document.getElementById('campaign-respondent-search').value.toLowerCase().trim();
-        const filtered = campaignRespondentsData.filter(s =>
-            s.name.toLowerCase().includes(query) ||
-            s.email.toLowerCase().includes(query) ||
-            s.phone.includes(query)
-        );
-        renderCampaignRespondentsTable(filtered);
-    }
-
-    function loadCampaignTasksTab(formId) {
-        const tbody = document.getElementById('campaign-tasks-table-body');
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin"></i> Mapping task matrix...</td></tr>';
-
-        // Hide drilldown card initially
-        const drilldownCard = document.getElementById('campaign-drilldown-card');
-        if (drilldownCard) {
-            drilldownCard.style.display = 'none';
-            drilldownCard.innerHTML = '';
-        }
-
-        fetch('?action=get_campaign_tasks&form_id=' + formId)
-            .then(res => res.json())
-            .then(data => {
-                campaignTasksData = data;
-
-                // Populate Chapter select
-                const chapterSelect = document.getElementById('campaign-task-chapter-filter');
-                if (chapterSelect) {
-                    chapterSelect.innerHTML = '<option value="ALL">All Chapters</option>';
-                    const uniqueChapters = [...new Set(data.map(t => t.chapter).filter(Boolean))];
-                    uniqueChapters.sort().forEach(ch => {
-                        const opt = document.createElement('option');
-                        opt.value = ch;
-                        opt.innerText = ch;
-                        chapterSelect.appendChild(opt);
-                    });
-                }
-
-                // Clear filters
-                const searchInp = document.getElementById('campaign-task-search');
-                if (searchInp) searchInp.value = '';
-                if (chapterSelect) chapterSelect.value = 'ALL';
-
-                renderCampaignTasksTable(data);
-            });
-    }
-
-    function renderCampaignTasksTable(data) {
-        const tbody = document.getElementById('campaign-tasks-table-body');
-        tbody.innerHTML = '';
-        if (data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:2rem;">No matching tasks found.</td></tr>';
-            return;
-        }
-        data.forEach(t => {
-            tbody.innerHTML += `
-                <tr style="border-bottom:1px solid #f1f5f9;">
-                    <td style="padding:10px 8px; font-weight:600; color:var(--text-muted); font-size:0.72rem;">${t.plan}</td>
-                    <td style="padding:10px 8px; text-align:center; font-weight:700; font-size:0.72rem;">${t.date}</td>
-                    <td style="padding:10px 8px;"><strong style="color:var(--text-main); font-size:0.82rem;">${t.title}</strong><br><small style="color:var(--text-muted); font-size:0.72rem;">${t.topic}</small></td>
-                    <td style="padding:10px 8px; font-size:0.72rem;">Topic: ${t.topic || t.subject || '-'}<br>Ch: ${t.chapter}</td>
-                    <td style="padding:10px 8px; text-align:center;">
-                        <button class="btn btn-xs btn-link" onclick="drilldownCampaignCompleted(${t.id}, '${t.title.replace(/'/g, "\\\\'")}')" style="color:#10b981; font-weight:800; font-size:0.78rem; text-decoration:none;">${t.completed} <i class="fas fa-eye" style="font-size:0.65rem;"></i></button>
-                    </td>
-                    <td style="padding:10px 8px; text-align:center;">
-                        <button class="btn btn-xs btn-link" onclick="drilldownCampaignPending(${t.id}, '${t.title.replace(/'/g, "\\\\'")}')" style="color:#ef4444; font-weight:800; font-size:0.78rem; text-decoration:none;">${t.pending} <i class="fas fa-eye" style="font-size:0.65rem;"></i></button>
-                    </td>
-                </tr>
-            `;
-        });
-    }
-
-    function filterCampaignTasksTable() {
-        const searchVal = document.getElementById('campaign-task-search').value.toLowerCase().trim();
-        const chapterVal = document.getElementById('campaign-task-chapter-filter').value;
-        const filtered = campaignTasksData.filter(t => {
-            const matchesSearch = !searchVal ||
-                (t.title && t.title.toLowerCase().includes(searchVal)) ||
-                (t.topic && t.topic.toLowerCase().includes(searchVal)) ||
-                (t.subject && t.subject.toLowerCase().includes(searchVal)) ||
-                (t.chapter && t.chapter.toLowerCase().includes(searchVal)) ||
-                (t.plan && t.plan.toLowerCase().includes(searchVal));
-            const matchesChapter = (chapterVal === 'ALL' || t.chapter === chapterVal);
-            return matchesSearch && matchesChapter;
-        });
-        renderCampaignTasksTable(filtered);
-    }
-
-    function drilldownCampaignCompleted(activityId, title) {
-        const card = document.getElementById('campaign-drilldown-card');
-        card.style.display = 'block';
-        card.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:8px; margin-bottom:10px;">
-                <strong style="font-size:0.8rem; color:var(--text-main);">Completed for: ${title}</strong>
-                <button class="btn btn-xs btn-outline" onclick="exportCampaignDrilldownExcel('completed', '${title.replace(/'/g, "\\\\'")}')"><i class="fas fa-file-excel"></i> Export</button>
-            </div>
-            <div class="table-responsive" style="max-height:300px; overflow-y:auto; border:1px solid var(--border); border-radius:8px;">
-                <table class="data-table" style="width:100%; font-size:0.78rem;">
-                    <thead>
-                        <tr style="text-align:left; background:#f8fafc;">
-                            <th style="padding:8px;">Respondent</th>
-                            <th style="padding:8px;">Completed At</th>
-                            <th style="padding:8px; text-align:right;">Map</th>
-                        </tr>
-                    </thead>
-                    <tbody id="campaign-drilldown-completed-body">
-                        <tr><td colspan="3" style="text-align:center; padding:1.5rem;"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        `;
-        const tbody = document.getElementById('campaign-drilldown-completed-body');
-        fetch(`?action=get_campaign_completed_tasks_drilldown&activity_id=${activityId}&form_id=${currentCampaignIdSelected}`)
-            .then(res => res.json())
-            .then(data => {
-                tbody.innerHTML = '';
-                if (data.error) {
-                    tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#ef4444; padding:1rem;">Error: ${data.error}</td></tr>`;
-                    return;
-                }
-                if (data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:1rem;">No students completed this task yet.</td></tr>';
-                    return;
-                }
-                data.forEach(s => {
-                    const mapLink = s.location !== 'N/A' ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(s.location)}" target="_blank" style="color:var(--accent); font-weight:700;"><i class="fas fa-map-location-dot"></i> Maps</a>` : 'N/A';
-                    tbody.innerHTML += `
-                        <tr>
-                            <td style="padding:6px; font-weight:700;">${s.name}<br><small style="color:var(--text-muted); font-size:0.7rem;">${s.masked_email}</small></td>
-                            <td style="padding:6px; font-size:0.7rem;">${s.completed_at}<br><small style="color:var(--text-muted);">${s.ip}</small></td>
-                            <td style="padding:6px; text-align:right;">${mapLink}</td>
-                        </tr>
-                    `;
-                });
-            });
-    }
-
-    function drilldownCampaignPending(activityId, title) {
-        const card = document.getElementById('campaign-drilldown-card');
-        card.style.display = 'block';
-        card.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:8px; margin-bottom:10px;">
-                <strong style="font-size:0.8rem; color:var(--text-main);">Pending for: ${title}</strong>
-                <button class="btn btn-xs btn-outline" onclick="exportCampaignDrilldownExcel('pending', '${title.replace(/'/g, "\\\\'")}')"><i class="fas fa-file-excel"></i> Export</button>
-            </div>
-            <div class="table-responsive" style="max-height:300px; overflow-y:auto; border:1px solid var(--border); border-radius:8px;">
-                <table class="data-table" style="width:100%; font-size:0.78rem;">
-                    <thead>
-                        <tr style="text-align:left; background:#f8fafc;">
-                            <th style="padding:8px;">Respondent</th>
-                            <th style="padding:8px;">Contact Number</th>
-                            <th style="padding:8px; text-align:right;">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="campaign-drilldown-pending-body">
-                        <tr><td colspan="3" style="text-align:center; padding:1.5rem;"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        `;
-        const tbody = document.getElementById('campaign-drilldown-pending-body');
-        fetch(`?action=get_campaign_pending_tasks_drilldown&activity_id=${activityId}&form_id=${currentCampaignIdSelected}`)
-            .then(res => res.json())
-            .then(data => {
-                tbody.innerHTML = '';
-                if (data.error) {
-                    tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#ef4444; padding:1rem;">Error: ${data.error}</td></tr>`;
-                    return;
-                }
-                if (data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:#10b981; font-weight:700; padding:1rem;"><i class="fas fa-check-double"></i> All respondents completed!</td></tr>';
-                    return;
-                }
-                data.forEach(s => {
-                    const waLink = `https://wa.me/${s.phone.replace(/\\D/g, '')}`;
-                    tbody.innerHTML += `
-                        <tr>
-                            <td style="padding:6px; font-weight:700;">${s.name}<br><small style="color:var(--text-muted); font-size:0.7rem;">${s.masked_email}</small></td>
-                            <td style="padding:6px;">${s.masked_phone}</td>
-                            <td style="padding:6px; text-align:right;">
-                                <div style="display:inline-flex; gap:3px;">
-                                    ${isCredentialRestricted ? `
-                                        <button class="btn btn-xs btn-success" style="padding:2px 4px; font-size:0.6rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fab fa-whatsapp"></i></button>
-                                        <button class="btn btn-xs btn-primary" style="padding:2px 4px; font-size:0.6rem; opacity:0.6; cursor:not-allowed;" disabled><i class="fas fa-envelope"></i></button>
-                                    ` : `
-                                        <a href="${waLink}" target="_blank" class="btn btn-xs btn-success" style="padding:2px 4px; font-size:0.6rem;"><i class="fab fa-whatsapp"></i></a>
-                                        <a href="mailto:${s.email}?subject=Pending Task Checklist Alert" class="btn btn-xs btn-primary" style="padding:2px 4px; font-size:0.6rem;"><i class="fas fa-envelope"></i></a>
-                                    `}
-                                </div>
-                            </td>
-                        </tr>
-                    `;
-                });
-            });
-    }
-
-    function exportCampaignRespondentsCSV() {
-        let csv = 'Respondent Name,Email Address,Phone Number,Joined Date,Converted Lead,Completed Tasks,Streak Count,Total Score,Completion %\r\n';
-        campaignRespondentsData.forEach(s => {
-            csv += `"${s.name}","${s.email}","${s.phone}","${s.joined}","${s.converted}","${s.completed} of ${s.total_tasks}","${s.streak}","${s.score}","${s.pct}%"\r\n`;
-        });
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.setAttribute("download", `Campaign_Respondents_Performance_${currentCampaignTitleSelected.replace(/\\s+/g, '_')}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    }
-
-    function exportCampaignTasksCSV() {
-        let csv = 'Plan Title,Task Date,Task Title,Topic & Chapter,Completed Count,Pending Count,Completion %\r\n';
-        campaignTasksData.forEach(t => {
-            csv += `"${t.plan}","${t.date}","${t.title}","Topic: ${t.topic || t.subject || ''} | Chapter: ${t.chapter}","${t.completed}","${t.pending}","${t.pct}%"\r\n`;
-        });
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.setAttribute("download", `Campaign_Tasks_Analytics_${currentCampaignTitleSelected.replace(/\\s+/g, '_')}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    }
-
-    function exportCampaignDrilldownExcel(type, taskTitle) {
-        const tableId = type === 'completed' ? 'campaign-drilldown-completed-body' : 'campaign-drilldown-pending-body';
-        const rows = document.querySelectorAll(`#${tableId} tr`);
-        const dataArr = [];
-
-        if (type === 'completed') {
-            dataArr.push(['Respondent Name', 'Completion Timestamp', 'Map Coordinates']);
-            rows.forEach(row => {
-                const cols = row.querySelectorAll('td');
-                if (cols.length >= 3) {
-                    dataArr.push([
-                        cols[0].innerText.split('\n')[0],
-                        cols[1].innerText.replace(/\n/g, ' '),
-                        cols[2].innerText
-                    ]);
-                }
-            });
-        } else {
-            dataArr.push(['Respondent Name', 'Contact Number']);
-            rows.forEach(row => {
-                const cols = row.querySelectorAll('td');
-                if (cols.length >= 2) {
-                    dataArr.push([
-                        cols[0].innerText.split('\n')[0],
-                        cols[1].innerText
-                    ]);
-                }
-            });
-        }
-
-        const ws = XLSX.utils.aoa_to_sheet(dataArr);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Campaign Drilldown");
-        XLSX.writeFile(wb, `campaign_${type}_drilldown_${taskTitle.replace(/\\s+/g, '_')}.xlsx`);
-    }
-
-    function exportTimelineExcel() {
-        const rows = document.querySelectorAll('#st-timeline-container > div');
-        const dataArr = [['Day & Date', 'Activity / Task Title', 'Metadata & Info', 'Status', 'Logged Details']];
-
-        rows.forEach(row => {
-            const dayDate = row.querySelector('span').innerText;
-            const title = row.querySelector('h6').innerText;
-            const meta = row.querySelector('p').innerText;
-            const status = row.querySelector('.badge').innerText;
-            const logsBox = row.querySelector('div[style*="background"]');
-            const logs = logsBox ? logsBox.innerText.replace(/\\n+/g, ' | ') : 'N/A';
-            dataArr.push([dayDate, title, meta, status, logs]);
-        });
-
-        const ws = XLSX.utils.aoa_to_sheet(dataArr);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Timeline");
-        XLSX.writeFile(wb, "Student_Timeline_Report.xlsx");
     }
 
     // Scroll helper methods

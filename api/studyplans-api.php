@@ -496,6 +496,20 @@ try {
             exit();
         }
 
+        // Explicit Backend Validation: Reject any Campaign Form Study Plan assignments
+        if (isset($data['assignments']) && is_array($data['assignments'])) {
+            foreach ($data['assignments'] as $assign) {
+                $a_type = $assign['type'] ?? $assign['assignment_type'] ?? '';
+                if ($a_type === 'form') {
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'Campaign Form Study Plan assignments are no longer supported.'
+                    ]);
+                    exit();
+                }
+            }
+        }
+
         $pdo->beginTransaction();
 
         // ── OPTIMISTIC CONCURRENCY PROTECTION ────────────────────────────
@@ -570,9 +584,21 @@ try {
         if (isset($data['assignments']) && is_array($data['assignments'])) {
             $pdo->prepare("DELETE FROM study_plan_assignments WHERE study_plan_id = ?")->execute([$plan_id]);
             $stmt_assign = $pdo->prepare("INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value, created_at) VALUES (?, ?, ?, NOW())");
+            $allowed_assign_types = ['all', 'course', 'batch', 'student'];
             foreach ($data['assignments'] as $assign) {
-                if (!empty($assign['type']) && !empty($assign['value'])) {
-                    $stmt_assign->execute([$plan_id, $assign['type'], $assign['value']]);
+                $a_type = $assign['type'] ?? $assign['assignment_type'] ?? '';
+                if ($a_type === 'form') {
+                    if ($pdo->inTransaction()) {
+                        $pdo->rollBack();
+                    }
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'Campaign Form Study Plan assignments are no longer supported.'
+                    ]);
+                    exit();
+                }
+                if (!empty($a_type) && !empty($assign['value']) && in_array($a_type, $allowed_assign_types, true)) {
+                    $stmt_assign->execute([$plan_id, $a_type, $assign['value']]);
                 }
             }
         }

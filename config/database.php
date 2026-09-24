@@ -1862,7 +1862,7 @@ $conn = $pdo;
             CREATE TABLE IF NOT EXISTS `study_plan_assignments` (
               `id` INT AUTO_INCREMENT PRIMARY KEY,
               `study_plan_id` INT NOT NULL,
-              `assignment_type` ENUM('all','course','batch','student','form') NOT NULL,
+              `assignment_type` ENUM('all','course','batch','student') NOT NULL,
               `assigned_value` VARCHAR(255) NOT NULL,
               `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
               `deleted_at` DATETIME DEFAULT NULL,
@@ -1990,10 +1990,10 @@ $conn = $pdo;
               KEY `idx_spc_course` (`course_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
-
-        try {
-            $pdo->exec("ALTER TABLE study_plan_assignments MODIFY COLUMN assignment_type ENUM('all','course','batch','student','form') NOT NULL");
-        } catch (Exception $e) {}
+        // Note: Destructive Migration 48 (physical removal of assignment_type='form' and ENUM modification)
+        // is strictly decoupled from runtime HTTP page requests to prevent accidental execution upon code deployment.
+        // Migration 48 must be executed deliberately via database-update-48.sql or CLI:
+        // php scripts/audit_campaign_form_studyplan_impact.php --mysql --apply-migration
 
         try {
             $cols_anal = $pdo->query("SHOW COLUMNS FROM study_plan_analytics LIKE 'latitude'")->fetch();
