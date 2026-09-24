@@ -60,15 +60,8 @@ function get_table_count(PDO $pdo, string $table): int {
 
 function table_exists(PDO $pdo, string $table): bool {
     try {
-        if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
-            $stmt = $pdo->prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?");
-            $stmt->execute([$table]);
-            return (bool)$stmt->fetchColumn();
-        } else {
-            $stmt = $pdo->prepare("SHOW TABLES LIKE ?");
-            $stmt->execute([$table]);
-            return (bool)$stmt->fetchColumn();
-        }
+        $pdo->query("SELECT 1 FROM `{$table}` LIMIT 0");
+        return true;
     } catch (Exception $e) {
         return false;
     }
