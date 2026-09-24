@@ -295,6 +295,64 @@ function resolve_birthday_persons(array $students, PDO $pdo, ?string $matchDobDa
 }
 
 /**
+ * Resolves the configured public HTTPS header image URL from birthday_reward_settings.
+ * Single source of truth for both manual and automatic birthday sends.
+ *
+ * @param PDO $pdo
+ * @return string|null
+ */
+function get_birthday_header_image_url(PDO $pdo): ?string {
+    try {
+        $stmt = $pdo->query("SELECT birthday_header_image FROM birthday_reward_settings LIMIT 1");
+        $raw = trim((string)$stmt->fetchColumn());
+        if ($raw === '') {
+            return null;
+        }
+        if (preg_match('/^https?:\/\//i', $raw)) {
+            return $raw;
+        }
+        return 'https://pepplearning.in/' . ltrim($raw, '/');
+    } catch (Exception $e) {
+        return null;
+    }
+}
+
+/**
+ * Builds the canonical communication context for a birthday greeting.
+ * Guarantees 100% parity between manual send, retry/resend, and automatic scheduler.
+ *
+ * Output context keys:
+ *   - student_uid: Student unique identifier
+ *   - student_name: Student name
+ *   - claim_url: HMAC-signed birthday reward redemption URL
+ *   - header_media_url: Public HTTPS URL for Meta IMAGE header (if configured)
+ *
+ * @param array $student Student record array (must contain user_id / student_id, name)
+ * @param PDO $pdo
+ * @return array
+ */
+function build_birthday_communication_context(array $student, PDO $pdo): array {
+    $studentId = $student['user_id'] ?? ($student['student_id'] ?? '');
+    $studentName = $student['name'] ?? 'Student';
+
+    $hmac = hash_hmac('sha256', (string)$studentId, BIRTHDAY_CLAIM_HMAC_SECRET);
+    $claimUrl = "https://pepplearning.in/admissions/birthday-rewards.php/{$studentId}?token={$hmac}";
+
+    $context = [
+        'student_uid'  => (string)$studentId,
+        'student_name' => (string)$studentName,
+        'claim_url'    => $claimUrl,
+    ];
+
+    $headerImgUrl = get_birthday_header_image_url($pdo);
+    if (!empty($headerImgUrl)) {
+        $context['header_media_url'] = $headerImgUrl;
+    }
+
+    return $context;
+}
+
+/**
  * Main birthday notification dispatcher.
  * Dispatches birthday greeting WhatsApp messages to unique active students
  * belonging to the current active academic year whose birthday falls today.
@@ -330,7 +388,7 @@ function birthday_dispatch_notifications(PDO $pdo): array {
         return $result;
     }
 
-    // ── Guard: Safe daytime hours (08:00 AM - 08:00 PM IST) ─────────────
+    // ── Guard: Safe daytime hours (08:00 AM - 08:00 PM Asia/Kolkata) ────
     $tz = new DateTimeZone('Asia/Kolkata');
     $now = new DateTime('now', $tz);
     $hour = (int)$now->format('H');
@@ -340,9 +398,9 @@ function birthday_dispatch_notifications(PDO $pdo): array {
         return $result;
     }
 
-    // ── Guard: Already ran today? (skip on lazy nav calls, allow on cron) ─
+    // ── Guard: Already ran today? (skip on lazy nav calls, allow on cron runner) ─
     $todayStr = $now->format('Y-m-d');
-    if (php_sapi_name() !== 'cli' && !defined('FORCE_BIRTHDAY_TEST')) {
+    if (!defined('IS_CRON_QUEUE_RUNNER') && php_sapi_name() !== 'cli' && !defined('FORCE_BIRTHDAY_TEST')) {
         try {
             $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'last_birthday_scheduler_run_date' LIMIT 1");
             $stmt->execute();
@@ -356,7 +414,6 @@ function birthday_dispatch_notifications(PDO $pdo): array {
     }
 
     // ── Guard: Birthday reward system active? ───────────────────────────
-    $rewardSetting = null;
     try {
         $activeStmt = $pdo->prepare("SELECT id, birthday_header_image FROM birthday_reward_settings WHERE is_active = 1 LIMIT 1");
         $activeStmt->execute();
@@ -370,17 +427,6 @@ function birthday_dispatch_notifications(PDO $pdo): array {
         $result['skipped'] = true;
         $result['reason'] = 'birthday_reward_settings_table_missing';
         return $result;
-    }
-
-    // Resolve public HTTPS header image URL if configured in reward settings
-    $rawHeaderImg = trim((string)($rewardSetting['birthday_header_image'] ?? ''));
-    $headerImageUrl = null;
-    if ($rawHeaderImg !== '') {
-        if (preg_match('/^https?:\/\//i', $rawHeaderImg)) {
-            $headerImageUrl = $rawHeaderImg;
-        } else {
-            $headerImageUrl = 'https://pepplearning.in/' . ltrim($rawHeaderImg, '/');
-        }
     }
 
     // ── Guard: Active academic year ──────────────────────────────────────
@@ -482,22 +528,8 @@ function birthday_dispatch_notifications(PDO $pdo): array {
                 continue;
             }
 
-            // ── Build template payload ──────────────────────────────────
-            $studentName = $person['name'] ?? 'Student';
-
-            $context = [
-                'student_uid'  => $studentId,
-                'student_name' => $studentName,
-            ];
-
-            if (!empty($headerImageUrl)) {
-                $context['header_media_url'] = $headerImageUrl;
-            }
-
-            // Build HMAC claim URL using the canonical student_id
-            $hmac = hash_hmac('sha256', $studentId, BIRTHDAY_CLAIM_HMAC_SECRET);
-            $claimUrl = "https://pepplearning.in/admissions/birthday-rewards.php/{$studentId}?token={$hmac}";
-            $context['claim_url'] = $claimUrl;
+            // ── Build template payload using shared context builder ────
+            $context = build_birthday_communication_context($person, $pdo);
 
             $queueId = $commEngine->sendEventNotification(
                 'birthday_greeting',

@@ -902,6 +902,13 @@ class CommunicationEngine {
                     $legStmt = $this->pdo->prepare("UPDATE whatsapp_notifications SET status = 'sent', updated_at = NOW() WHERE id = ?");
                     $legStmt->execute([$legacyId]);
                 }
+
+                // Sync status to birthday_notifications_sent on successful dispatch
+                if (($item['event_name'] ?? '') === 'birthday_greeting') {
+                    try {
+                        $this->pdo->prepare("UPDATE birthday_notifications_sent SET status = 'sent' WHERE queue_id = ?")->execute([$queueId]);
+                    } catch (Exception $exBday) {}
+                }
                 return true;
             } else {
                 $errMsg = 'Provider failed to dispatch message.';
@@ -992,6 +999,12 @@ class CommunicationEngine {
                     $updCampStmt = $this->pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = ? WHERE queue_id = ?");
                     $updCampStmt->execute([$errMsg, $queueId]);
                 } catch (Exception $campEx) {}
+
+                if (($item['event_name'] ?? '') === 'birthday_greeting') {
+                    try {
+                        $this->pdo->prepare("UPDATE birthday_notifications_sent SET status = 'failed' WHERE queue_id = ?")->execute([$queueId]);
+                    } catch (Exception $bdayEx) {}
+                }
             }
 
             // Sync status to legacy log table if applicable
@@ -1015,6 +1028,11 @@ class CommunicationEngine {
      * @return array|null Array containing 'name', 'language', and 'parameters', or null if not mapped
      */
     public function resolveEventTemplate($eventName, $studentUid = null, array $contextData = []) {
+        if (is_array($studentUid)) {
+            $contextData = !empty($contextData) ? array_merge($studentUid, $contextData) : $studentUid;
+            $studentUid = $contextData['student_uid'] ?? null;
+        }
+
         $stmt = $this->pdo->prepare("SELECT * FROM communication_event_mappings WHERE event_name = ? LIMIT 1");
         $stmt->execute([$eventName]);
         $mapping = $stmt->fetch();
@@ -1457,6 +1475,21 @@ class CommunicationEngine {
                     $fallbackUrl = $meta['header_media_url'];
                     if (strpos($fallbackUrl, 'scontent.whatsapp.net') === false && strpos($fallbackUrl, 'fbcdn.net') === false) {
                         $headerUrl = $fallbackUrl;
+                    }
+                }
+
+                // Birthday Greeting fallback if caller omitted header_media_url
+                if (empty($headerUrl) && $eventName === 'birthday_greeting' && $headerType === 'IMAGE') {
+                    if (function_exists('get_birthday_header_image_url')) {
+                        $headerUrl = get_birthday_header_image_url($this->pdo);
+                    } else {
+                        try {
+                            $stmtHdr = $this->pdo->query("SELECT birthday_header_image FROM birthday_reward_settings LIMIT 1");
+                            $rawHdr = trim((string)$stmtHdr->fetchColumn());
+                            if ($rawHdr !== '') {
+                                $headerUrl = preg_match('/^https?:\/\//i', $rawHdr) ? $rawHdr : 'https://pepplearning.in/' . ltrim($rawHdr, '/');
+                            }
+                        } catch (Exception $e) {}
                     }
                 }
 

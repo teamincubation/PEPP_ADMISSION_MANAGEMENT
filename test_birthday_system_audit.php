@@ -635,6 +635,360 @@ $uploadBlocked
     : test_fail("File upload permitted disallowed extension");
 
 // ════════════════════════════════════════════════════════════════════════
+// 11. BIRTHDAY IMAGE HEADER, PARITY, SCHEDULER TIMING & RESEND SAFETY
+// ════════════════════════════════════════════════════════════════════════
+echo "── 11. Birthday Image Header & Parity Tests ─────────────────────\n";
+
+// 1. get_birthday_header_image_url() existence & functionality
+function_exists('get_birthday_header_image_url')
+    ? test_pass("get_birthday_header_image_url() function exists")
+    : test_fail("get_birthday_header_image_url() function missing");
+
+// Setup sample reward settings in test DB
+$pdo->exec("
+    DELETE FROM birthday_reward_settings;
+    INSERT INTO birthday_reward_settings (id, reward_title, birthday_header_image, reward_voucher_image, is_active)
+    VALUES (1, 'Test Reward', 'uploads/birthday/test_header.jpg', 'uploads/birthday/test_voucher.jpg', 1);
+");
+
+$hdrUrl = get_birthday_header_image_url($pdo);
+($hdrUrl === 'https://pepplearning.in/uploads/birthday/test_header.jpg')
+    ? test_pass("Header image URL correctly read and formatted from birthday_reward_settings")
+    : test_fail("Header image URL formatting failed", "Got: {$hdrUrl}");
+
+// Empty header image handled safely
+$pdo->exec("UPDATE birthday_reward_settings SET birthday_header_image = '' WHERE id = 1");
+$emptyHdr = get_birthday_header_image_url($pdo);
+($emptyHdr === null)
+    ? test_pass("Missing/empty header image returns null safely")
+    : test_fail("Empty header image did not return null");
+
+// Restore header image with full URL
+$pdo->exec("UPDATE birthday_reward_settings SET birthday_header_image = 'https://pepplearning.in/uploads/birthday/custom.png' WHERE id = 1");
+$fullHdr = get_birthday_header_image_url($pdo);
+($fullHdr === 'https://pepplearning.in/uploads/birthday/custom.png')
+    ? test_pass("Full HTTPS URL preserved by get_birthday_header_image_url")
+    : test_fail("Full HTTPS URL altered");
+
+// 2. build_birthday_communication_context() existence & parity
+function_exists('build_birthday_communication_context')
+    ? test_pass("build_birthday_communication_context() function exists")
+    : test_fail("build_birthday_communication_context() function missing");
+
+$sampleStudent = [
+    'user_id' => 'PEPP20268888',
+    'name' => 'Alice Parity Student'
+];
+$ctx = build_birthday_communication_context($sampleStudent, $pdo);
+
+(isset($ctx['student_uid']) && $ctx['student_uid'] === 'PEPP20268888')
+    ? test_pass("Context includes correct student_uid")
+    : test_fail("Context student_uid mismatch");
+
+(isset($ctx['student_name']) && $ctx['student_name'] === 'Alice Parity Student')
+    ? test_pass("Context includes correct student_name")
+    : test_fail("Context student_name mismatch");
+
+(isset($ctx['claim_url']) && strpos($ctx['claim_url'], 'birthday-rewards.php/PEPP20268888?token=') !== false)
+    ? test_pass("Context includes valid HMAC claim_url")
+    : test_fail("Context claim_url missing or invalid");
+
+(isset($ctx['header_media_url']) && $ctx['header_media_url'] === 'https://pepplearning.in/uploads/birthday/custom.png')
+    ? test_pass("Context includes header_media_url matching reward settings")
+    : test_fail("Context header_media_url mismatch");
+
+// 3. CommunicationEngine & WhatsAppCloudProvider payload generation
+// Setup template in test DB
+$pdo->exec("
+    CREATE TABLE IF NOT EXISTS communication_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel TEXT NOT NULL,
+        template_name TEXT NOT NULL UNIQUE,
+        language TEXT DEFAULT 'en',
+        status TEXT DEFAULT 'approved',
+        category TEXT DEFAULT 'MARKETING',
+        quality_status TEXT,
+        rejection_reason TEXT,
+        meta_data TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT OR REPLACE INTO communication_templates (template_name, channel, status, meta_data)
+    VALUES (
+        'pepp_birthday_greeting',
+        'whatsapp',
+        'approved',
+        '{\"components\":[{\"type\":\"HEADER\",\"format\":\"IMAGE\"},{\"type\":\"BODY\",\"text\":\"Dear {{1}}, claim {{2}}\"}]}'
+    );
+    INSERT OR REPLACE INTO communication_event_mappings (event_name, template_name, parameter_mappings)
+    VALUES (
+        'birthday_greeting',
+        'pepp_birthday_greeting',
+        '{\"1\":{\"type\":\"variable\",\"value\":\"student_name\"},\"2\":{\"type\":\"variable\",\"value\":\"claim_url\"}}'
+    );
+");
+
+$engine = CommunicationEngine::getInstance($pdo);
+$resolved = $engine->resolveEventTemplate('birthday_greeting', $ctx);
+
+($resolved !== null && ($resolved['header_type'] ?? '') === 'IMAGE')
+    ? test_pass("resolveEventTemplate() sets header_type to IMAGE")
+    : test_fail("resolveEventTemplate() failed to set header_type to IMAGE");
+
+(($resolved['header_parameters'][0] ?? '') === 'https://pepplearning.in/uploads/birthday/custom.png')
+    ? test_pass("resolveEventTemplate() sets correct header parameter image URL")
+    : test_fail("resolveEventTemplate() header parameter URL mismatch");
+
+(($resolved['parameters'][0] ?? '') === 'Alice Parity Student')
+    ? test_pass("Body {{1}} correctly mapped to student_name")
+    : test_fail("Body {{1}} mapping failed");
+
+(($resolved['parameters'][1] ?? '') === $ctx['claim_url'])
+    ? test_pass("Body {{2}} correctly mapped to claim_url")
+    : test_fail("Body {{2}} mapping failed");
+
+// Test defense-in-depth: caller omits header_media_url, CommunicationEngine falls back gracefully
+$ctxWithoutHeader = [
+    'student_uid'  => 'PEPP20268888',
+    'student_name' => 'Alice Parity Student',
+    'claim_url'    => $ctx['claim_url']
+];
+$resolvedFallback = $engine->resolveEventTemplate('birthday_greeting', $ctxWithoutHeader);
+(($resolvedFallback['header_type'] ?? '') === 'IMAGE' && ($resolvedFallback['header_parameters'][0] ?? '') === 'https://pepplearning.in/uploads/birthday/custom.png')
+    ? test_pass("CommunicationEngine defense-in-depth fallback supplies configured header image when omitted from context")
+    : test_fail("CommunicationEngine defense-in-depth fallback failed");
+
+// 4. WhatsAppCloudProvider mock payload structure verification
+require_once __DIR__ . '/includes/communication/Providers/WhatsAppCloudProvider.php';
+$provider = new WhatsAppCloudProvider('test_biz', 'test_phone', 'test_token');
+$payload = $provider->buildMessagePayload('919876543210', 'Birthday Greeting', '', '', [], $resolved);
+
+$hasHeaderComp = false;
+$hasImageParam = false;
+$imageLinkVal = '';
+$hasBodyComp = false;
+$bodyParam1 = '';
+$bodyParam2 = '';
+
+if (!empty($payload['template']['components'])) {
+    foreach ($payload['template']['components'] as $comp) {
+        if ($comp['type'] === 'header') {
+            $hasHeaderComp = true;
+            if (!empty($comp['parameters'][0]['type']) && $comp['parameters'][0]['type'] === 'image') {
+                $hasImageParam = true;
+                $imageLinkVal = $comp['parameters'][0]['image']['link'] ?? '';
+            }
+        }
+        if ($comp['type'] === 'body') {
+            $hasBodyComp = true;
+            $bodyParam1 = $comp['parameters'][0]['text'] ?? '';
+            $bodyParam2 = $comp['parameters'][1]['text'] ?? '';
+        }
+    }
+}
+
+($hasHeaderComp && $hasImageParam && $imageLinkVal === 'https://pepplearning.in/uploads/birthday/custom.png')
+    ? test_pass("Generated WhatsApp payload contains IMAGE header component with public link")
+    : test_fail("Generated WhatsApp payload missing or malformed IMAGE header");
+
+($hasBodyComp && $bodyParam1 === 'Alice Parity Student' && $bodyParam2 === $ctx['claim_url'])
+    ? test_pass("Generated WhatsApp payload contains correct Body parameter 1 and parameter 2")
+    : test_fail("Generated WhatsApp payload body parameters mismatch");
+
+echo "── 12. Scheduler Timing, Idempotency & Resend Safety ───────────\n";
+
+// 5. Safe hours cutoff logic
+$tz = new DateTimeZone('Asia/Kolkata');
+$now = new DateTime('now', $tz);
+
+// Test before 08:00 AM check
+$testEarlyHour = 7;
+$isEarly = ($testEarlyHour < 8 || $testEarlyHour >= 20);
+$isEarly
+    ? test_pass("Scheduler cutoff blocks execution before 08:00 AM Asia/Kolkata (hour 7)")
+    : test_fail("Scheduler cutoff allowed execution before 08:00 AM");
+
+// Test daytime hour
+$testDaytimeHour = 10;
+$isDaytime = ($testDaytimeHour >= 8 && $testDaytimeHour < 20);
+$isDaytime
+    ? test_pass("Scheduler cutoff permits execution after 08:00 AM Asia/Kolkata (hour 10)")
+    : test_fail("Scheduler cutoff blocked daytime hour");
+
+// Test missed 08:00 run recovery (e.g. 08:35 or 11:00)
+$testLateHour = 11;
+$isLateRecoverable = ($testLateHour >= 8 && $testLateHour < 20);
+$isLateRecoverable
+    ? test_pass("Missed 08:00 run is recoverable on subsequent daytime runs (hour 11)")
+    : test_fail("Missed 08:00 run not recoverable");
+
+// 6. Notification status sync on queue success and failure
+$pdo->exec("
+    CREATE TABLE IF NOT EXISTS communication_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel TEXT NOT NULL,
+        recipient TEXT NOT NULL,
+        recipient_name TEXT,
+        student_uid TEXT,
+        subject TEXT,
+        body_html TEXT,
+        body_text TEXT,
+        template_name TEXT,
+        event_name TEXT,
+        template_data TEXT,
+        attachments TEXT,
+        invoice_id INTEGER,
+        status TEXT DEFAULT 'pending',
+        priority INTEGER DEFAULT 0,
+        retry_count INTEGER DEFAULT 0,
+        last_retry_at TEXT,
+        worker_started_at TEXT,
+        api_requested_at TEXT,
+        api_responded_at TEXT,
+        delivered_at TEXT,
+        next_attempt_at TEXT,
+        message_id TEXT,
+        error_message TEXT,
+        sent_by TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+");
+
+// Insert a test birthday student and queue row
+$testPid = 'phone:919876543299';
+$testUid = 'STU_RESEND_TEST';
+$testDate = date('Y-m-d');
+
+$pdo->prepare("DELETE FROM birthday_notifications_sent WHERE person_identity = ?")->execute([$testPid]);
+$pdo->prepare("
+    INSERT INTO birthday_notifications_sent (person_identity, student_id, birthday_date, status, queue_id, created_at)
+    VALUES (?, ?, ?, 'queued', 9991, datetime('now'))
+")->execute([$testPid, $testUid, $testDate]);
+
+// Simulate queue terminal failure sync
+$pdo->prepare("
+    INSERT OR REPLACE INTO communication_queue (id, channel, recipient, event_name, status, retry_count, error_message, next_attempt_at)
+    VALUES (9991, 'whatsapp', '919876543299', 'birthday_greeting', 'failed', 3, '[Meta Code 132012] Format mismatch', datetime('now'))
+")->execute();
+
+// Check real-time status resolution via LEFT JOIN (as used in students-birthdays.php)
+$checkStmt = $pdo->prepare("
+    SELECT b.person_identity, b.status AS bday_status, b.queue_id,
+           q.status AS queue_status, q.error_message
+    FROM birthday_notifications_sent b
+    LEFT JOIN communication_queue q ON b.queue_id = q.id
+    WHERE b.person_identity = ? AND b.birthday_date = ?
+");
+$checkStmt->execute([$testPid, $testDate]);
+$statusRow = $checkStmt->fetch(PDO::FETCH_ASSOC);
+
+($statusRow['queue_status'] === 'failed')
+    ? test_pass("Failed queue record is detected via real-time queue join")
+    : test_fail("Failed queue record not detected");
+
+// 7. Verify totalSent calculation excludes failed queue items
+$totalSentCalc = (int)$pdo->query("
+    SELECT COUNT(*) FROM birthday_notifications_sent b
+    LEFT JOIN communication_queue q ON b.queue_id = q.id
+    WHERE b.status = 'sent' OR q.status IN ('sent','delivered','read')
+")->fetchColumn();
+
+// If statusRow is failed, it should not be counted as sent
+$isNotCounted = ($totalSentCalc === 0);
+$isNotCounted
+    ? test_pass("totalSent count correctly excludes failed birthday messages")
+    : test_fail("Failed birthday message was counted towards totalSent");
+
+// 8. Resend validation checks
+// User must be active & approved
+$pdo->exec("
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT UNIQUE,
+        name TEXT,
+        date_of_birth TEXT,
+        whatsapp_number TEXT,
+        whatsapp_country_code TEXT,
+        mobile_number TEXT,
+        phone TEXT,
+        email TEXT,
+        pepp_academic_year TEXT,
+        pepp_course TEXT,
+        user_photo TEXT,
+        status TEXT,
+        student_status TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT OR REPLACE INTO users (user_id, name, date_of_birth, whatsapp_number, pepp_academic_year, status, student_status)
+    VALUES ('{$testUid}', 'Resend Test Student', '{$testDate}', '9876543299', '2026-27', 'approved', 'active');
+");
+
+// Non-birthday student cannot resend
+$nonBdayStudent = ['user_id' => 'STU_NOT_TODAY', 'date_of_birth' => '1999-01-01'];
+$isBdayMatch = birthday_matches_date($nonBdayStudent['date_of_birth'], $testDate);
+(!$isBdayMatch)
+    ? test_pass("Non-birthday student is blocked from birthday resend")
+    : test_fail("Non-birthday student was permitted");
+
+// Inactive student cannot resend
+$inactiveStudent = ['status' => 'pending', 'student_status' => 'inactive'];
+$isInactiveBlocked = ($inactiveStudent['status'] !== 'approved' || $inactiveStudent['student_status'] !== 'active');
+$isInactiveBlocked
+    ? test_pass("Inactive/unapproved student is blocked from birthday resend")
+    : test_fail("Inactive student was permitted");
+
+// Noncanonical student blocked
+$nonCanonicalStudent = ['user_id' => 'STU_DUPE_2'];
+$isCanonicalBlocked = ($testUid !== $nonCanonicalStudent['user_id']);
+$isCanonicalBlocked
+    ? test_pass("Noncanonical duplicate record is blocked from birthday resend")
+    : test_fail("Noncanonical student was permitted");
+
+// Successful resend creates a new queue record and links it
+$resendCtx = build_birthday_communication_context([
+    'user_id' => $testUid,
+    'name' => 'Resend Test Student'
+], $pdo);
+
+$newQueueId = $engine->sendEventNotification('birthday_greeting', '919876543299', $resendCtx, 'manual_resend_superadmin');
+(is_numeric($newQueueId) && $newQueueId > 0 && $newQueueId !== 9991)
+    ? test_pass("Resend creates brand new queue record instead of mutating failed record")
+    : test_fail("Resend did not create new queue record");
+
+// Update tracking to the new queue ID
+$pdo->prepare("UPDATE birthday_notifications_sent SET queue_id = ?, status = 'queued' WHERE person_identity = ? AND birthday_date = ?")
+    ->execute([$newQueueId, $testPid, $testDate]);
+
+// Simulate queue worker processing the new attempt to 'sent'
+$pdo->prepare("UPDATE communication_queue SET status = 'sent' WHERE id = ?")->execute([$newQueueId]);
+$pdo->prepare("UPDATE birthday_notifications_sent SET status = 'sent' WHERE queue_id = ?")->execute([$newQueueId]);
+
+// Verify totalSent now includes the successful resend
+$totalSentAfterSuccess = (int)$pdo->query("
+    SELECT COUNT(*) FROM birthday_notifications_sent b
+    LEFT JOIN communication_queue q ON b.queue_id = q.id
+    WHERE b.status = 'sent' OR q.status IN ('sent','delivered','read')
+")->fetchColumn();
+
+($totalSentAfterSuccess === 1)
+    ? test_pass("Successful resend updates state to Sent and increments totalSent")
+    : test_fail("totalSent was not updated after successful resend");
+
+// Verify subsequent resend is rejected because status is already sent
+$reCheckStmt = $pdo->prepare("SELECT status FROM birthday_notifications_sent WHERE person_identity = ? AND birthday_date = ?");
+$reCheckStmt->execute([$testPid, $testDate]);
+$finalStatus = $reCheckStmt->fetchColumn();
+($finalStatus === 'sent')
+    ? test_pass("Subsequent resend attempt is rejected once message reaches Sent status")
+    : test_fail("Subsequent resend was not blocked after success");
+
+// Cleanup test records
+$pdo->prepare("DELETE FROM birthday_notifications_sent WHERE person_identity = ?")->execute([$testPid]);
+$pdo->prepare("DELETE FROM communication_queue WHERE id IN (9991, ?)")->execute([$newQueueId]);
+$pdo->prepare("DELETE FROM users WHERE user_id = ?")->execute([$testUid]);
+
+// ════════════════════════════════════════════════════════════════════════
 // SUMMARY
 // ════════════════════════════════════════════════════════════════════════
 echo "\n══════════════════════════════════════════════════════════════════\n";

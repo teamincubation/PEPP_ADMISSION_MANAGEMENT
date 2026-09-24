@@ -13,15 +13,15 @@ require_once 'includes/birthday_scheduler.php';
 $success_msg = '';
 $error_msg = '';
 
-// ── AJAX: Trigger manual birthday send ──────────────────────────────────
-if (isset($_POST['ajax_action']) && $_POST['ajax_action'] === 'manual_birthday_send') {
+// ── AJAX: Trigger manual birthday send or resend ────────────────────────
+if (isset($_POST['ajax_action']) && in_array($_POST['ajax_action'], ['manual_birthday_send', 'manual_birthday_resend'], true)) {
     header('Content-Type: application/json');
     if (!csrf_verify()) {
         echo json_encode(['error' => 'Security token mismatch.']);
         exit;
     }
     if (!is_super_admin()) {
-        echo json_encode(['error' => 'Only super admins can manually trigger birthday sends.']);
+        echo json_encode(['error' => 'Only super admins can trigger birthday greetings.']);
         exit;
     }
     $studentId = trim($_POST['student_id'] ?? '');
@@ -33,16 +33,30 @@ if (isset($_POST['ajax_action']) && $_POST['ajax_action'] === 'manual_birthday_s
     require_once 'includes/birthday_scheduler.php';
     require_once 'includes/communication/CommunicationEngine.php';
 
-    $todayStr = date('Y-m-d');
+    $isResend = ($_POST['ajax_action'] === 'manual_birthday_resend');
     $commEngine = CommunicationEngine::getInstance($pdo);
 
+    // 1. Guard: Birthday reward system active?
+    try {
+        $activeStmt = $pdo->query("SELECT id, is_active FROM birthday_reward_settings LIMIT 1");
+        $rewardSetting = $activeStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$rewardSetting || empty($rewardSetting['is_active'])) {
+            echo json_encode(['error' => 'Birthday Reward System is currently disabled. Enable it in settings before sending.']);
+            exit;
+        }
+    } catch (Exception $e) {
+        echo json_encode(['error' => 'Birthday reward settings unavailable.']);
+        exit;
+    }
+
+    // 2. Guard: Active academic year
     $activeYear = get_birthday_active_academic_year($pdo);
     if (!$activeYear) {
         echo json_encode(['error' => 'No active academic year found.']);
         exit;
     }
 
-    // Fetch student details
+    // 3. Fetch student details
     $stmt = $pdo->prepare("
         SELECT user_id, name, date_of_birth, whatsapp_number, whatsapp_country_code,
                mobile_number, phone, email, pepp_academic_year, status, student_status, created_at
@@ -67,28 +81,59 @@ if (isset($_POST['ajax_action']) && $_POST['ajax_action'] === 'manual_birthday_s
         exit;
     }
 
+    // 4. Verify birthday is today in Asia/Kolkata
+    $tz = new DateTimeZone('Asia/Kolkata');
+    $now = new DateTime('now', $tz);
+    $todayStr = $now->format('Y-m-d');
+    if (!birthday_matches_date((string)$student['date_of_birth'], $todayStr)) {
+        echo json_encode(['error' => 'Student does not have a birthday today (' . $todayStr . ').']);
+        exit;
+    }
+
+    // 5. Verify canonical person identity
     $personIdentity = resolve_person_identity($student);
     if (!$personIdentity) {
         echo json_encode(['error' => 'Student has no valid contact details (phone or email).']);
         exit;
     }
 
-    // Verify canonical record status
     $canonical = get_canonical_student_record($personIdentity, $pdo, $activeYear);
     if (!$canonical || $canonical['user_id'] !== $studentId) {
         echo json_encode(['error' => 'Only the canonical student record (' . ($canonical['user_id'] ?? 'unknown') . ') can receive birthday notifications for this person.']);
         exit;
     }
 
-    // Check idempotency by (person_identity, birthday_date)
-    $stmt = $pdo->prepare("SELECT status FROM birthday_notifications_sent WHERE person_identity = ? AND birthday_date = ?");
+    // 6. Check existing notification status & queue status
+    $stmt = $pdo->prepare("
+        SELECT b.status AS bday_status, b.queue_id, q.status AS queue_status
+        FROM birthday_notifications_sent b
+        LEFT JOIN communication_queue q ON b.queue_id = q.id
+        WHERE b.person_identity = ? AND b.birthday_date = ?
+    ");
     $stmt->execute([$personIdentity, $todayStr]);
-    $existing = $stmt->fetchColumn();
-    if ($existing === 'queued' || $existing === 'sent') {
-        echo json_encode(['error' => 'Birthday notification already sent for this person today.']);
-        exit;
+    $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($existing) {
+        $bStat = $existing['bday_status'] ?? '';
+        $qStat = $existing['queue_status'] ?? '';
+
+        if ($bStat === 'sent' || in_array($qStat, ['sent', 'delivered', 'read'], true)) {
+            echo json_encode(['error' => 'Birthday notification already successfully sent for this person today.']);
+            exit;
+        }
+
+        if (in_array($qStat, ['pending', 'scheduled', 'processing', 'retrying'], true)) {
+            echo json_encode(['error' => 'Birthday notification is currently queued or being dispatched.']);
+            exit;
+        }
+
+        if (!$isResend && $bStat !== 'failed' && $qStat !== 'failed') {
+            echo json_encode(['error' => 'Birthday notification already exists for this person today.']);
+            exit;
+        }
     }
 
+    // 7. Resolve WhatsApp recipient phone
     $waPhone = '';
     if (str_starts_with($personIdentity, 'phone:')) {
         $waPhone = substr($personIdentity, 6);
@@ -106,33 +151,32 @@ if (isset($_POST['ajax_action']) && $_POST['ajax_action'] === 'manual_birthday_s
 
     try {
         $pdo->beginTransaction();
+
         $insertIgnore = ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') ? 'INSERT OR IGNORE INTO' : 'INSERT IGNORE INTO';
-        $insertStmt = $pdo->prepare("
+        $pdo->prepare("
             {$insertIgnore} birthday_notifications_sent (person_identity, student_id, birthday_date, status, created_at)
             VALUES (?, ?, ?, 'queued', NOW())
-        ");
-        $insertStmt->execute([$personIdentity, $studentId, $todayStr]);
+        ")->execute([$personIdentity, $studentId, $todayStr]);
 
-        if ($insertStmt->rowCount() === 0) {
-            $pdo->rollBack();
-            echo json_encode(['error' => 'Birthday notification already exists for this person today.']);
-            exit;
+        if ($existing) {
+            $pdo->prepare("UPDATE birthday_notifications_sent SET status = 'queued' WHERE person_identity = ? AND birthday_date = ?")
+                ->execute([$personIdentity, $todayStr]);
         }
 
-        $hmac = hash_hmac('sha256', $studentId, BIRTHDAY_CLAIM_HMAC_SECRET);
-        $context = [
-            'student_uid'  => $studentId,
-            'student_name' => $student['name'] ?? 'Student',
-            'claim_url'    => "https://pepplearning.in/admissions/birthday-rewards.php/{$studentId}?token={$hmac}"
-        ];
+        // Build context using shared helper (single source of truth with IMAGE header)
+        $context = build_birthday_communication_context($student, $pdo);
 
-        $queueId = $commEngine->sendEventNotification('birthday_greeting', $waPhone, $context, 'system_scheduler');
+        $currentAdmin = $_SESSION['admin_username'] ?? 'superadmin';
+        $senderTag = $isResend ? ('manual_resend_' . $currentAdmin) : ('manual_send_' . $currentAdmin);
+
+        $queueId = $commEngine->sendEventNotification('birthday_greeting', $waPhone, $context, $senderTag);
 
         if ($queueId) {
-            $pdo->prepare("UPDATE birthday_notifications_sent SET queue_id = ? WHERE person_identity = ? AND birthday_date = ?")
+            $pdo->prepare("UPDATE birthday_notifications_sent SET queue_id = ?, status = 'queued' WHERE person_identity = ? AND birthday_date = ?")
                 ->execute([$queueId, $personIdentity, $todayStr]);
             $pdo->commit();
-            echo json_encode(['success' => true, 'message' => 'Birthday greeting queued successfully.', 'queue_id' => $queueId]);
+            $actionMsg = $isResend ? 'Birthday greeting requeued successfully.' : 'Birthday greeting queued successfully.';
+            echo json_encode(['success' => true, 'message' => $actionMsg, 'queue_id' => $queueId]);
         } else {
             $pdo->prepare("UPDATE birthday_notifications_sent SET status = 'failed' WHERE person_identity = ? AND birthday_date = ?")
                 ->execute([$personIdentity, $todayStr]);
@@ -140,8 +184,10 @@ if (isset($_POST['ajax_action']) && $_POST['ajax_action'] === 'manual_birthday_s
             echo json_encode(['error' => 'Failed to queue birthday notification. Check template mapping.']);
         }
     } catch (Exception $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
-        echo json_encode(['error' => 'Error: ' . $e->getMessage()]);
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        echo json_encode(['error' => 'Server error: ' . $e->getMessage()]);
     }
     exit;
 }
@@ -246,9 +292,15 @@ if ($activeYear) {
         $rawToday = $stmt->fetchAll(PDO::FETCH_ASSOC);
         $todayBirthdays = resolve_birthday_persons($rawToday, $pdo, $todayStr);
 
-        // Fetch sent notifications and claims for today by person_identity
+        // Fetch sent notifications and claims for today by person_identity (with real-time queue status)
         if (!empty($todayBirthdays)) {
-            $sentStmt = $pdo->prepare("SELECT person_identity, status, queue_id FROM birthday_notifications_sent WHERE birthday_date = ?");
+            $sentStmt = $pdo->prepare("
+                SELECT b.person_identity, b.status AS bday_status, b.queue_id,
+                       q.status AS queue_status, q.error_message
+                FROM birthday_notifications_sent b
+                LEFT JOIN communication_queue q ON b.queue_id = q.id
+                WHERE b.birthday_date = ?
+            ");
             $sentStmt->execute([$todayStr]);
             $sentMap = [];
             while ($row = $sentStmt->fetch(PDO::FETCH_ASSOC)) {
@@ -264,8 +316,11 @@ if ($activeYear) {
 
             foreach ($todayBirthdays as &$bday) {
                 $pid = $bday['person_identity'];
-                $bday['notification_status'] = $sentMap[$pid]['status'] ?? null;
-                $bday['queue_id'] = $sentMap[$pid]['queue_id'] ?? null;
+                $sInfo = $sentMap[$pid] ?? null;
+                $bday['notification_status'] = $sInfo['bday_status'] ?? null;
+                $bday['queue_status'] = $sInfo['queue_status'] ?? null;
+                $bday['queue_id'] = $sInfo['queue_id'] ?? null;
+                $bday['error_message'] = $sInfo['error_message'] ?? null;
                 $bday['claimed_at'] = $claimMap[$pid]['claimed_at'] ?? null;
             }
             unset($bday);
@@ -297,11 +352,15 @@ if ($activeYear) {
     } catch (Exception $e) {}
 }
 
-// Notification & claim stats
+// Notification & claim stats (only count actual sent/delivered dispatches)
 $totalSent = 0;
 $totalClaimed = 0;
 try {
-    $totalSent = (int)$pdo->query("SELECT COUNT(*) FROM birthday_notifications_sent WHERE status IN ('queued','sent')")->fetchColumn();
+    $totalSent = (int)$pdo->query("
+        SELECT COUNT(*) FROM birthday_notifications_sent b
+        LEFT JOIN communication_queue q ON b.queue_id = q.id
+        WHERE b.status = 'sent' OR q.status IN ('sent','delivered','read')
+    ")->fetchColumn();
     $totalClaimed = (int)$pdo->query("SELECT COUNT(*) FROM birthday_reward_claims")->fetchColumn();
 } catch (Exception $e) {}
 
@@ -326,8 +385,15 @@ include 'includes/admin_nav.php';
 .bday-info p { font-size: 0.78rem; color: var(--text-secondary, #64748b); margin: 2px 0; }
 .bday-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 6px; font-size: 0.68rem; font-weight: 600; }
 .bday-badge-sent { background: rgba(34,197,94,0.12); color: #16a34a; }
-.bday-badge-pending { background: rgba(234,179,8,0.12); color: #d97706; }
+.bday-badge-failed { background: rgba(239,68,68,0.12); color: #dc2626; }
+.bday-badge-sending { background: rgba(59,130,246,0.12); color: #2563eb; }
+.bday-badge-queued { background: rgba(234,179,8,0.12); color: #d97706; }
+.bday-badge-pending { background: rgba(148,163,184,0.12); color: #64748b; }
 .bday-badge-claimed { background: rgba(139,92,246,0.12); color: #8b5cf6; }
+.send-btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 6px; font-size: 0.72rem; font-weight: 600; background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; cursor: pointer; transition: all 0.2s; }
+.send-btn:hover { background: #16a34a; color: #fff; border-color: #16a34a; }
+.resend-btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 6px; font-size: 0.72rem; font-weight: 600; background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; cursor: pointer; transition: all 0.2s; }
+.resend-btn:hover { background: #dc2626; color: #fff; border-color: #dc2626; }
 .bday-badge-failed { background: rgba(239,68,68,0.12); color: #ef4444; }
 .send-btn { padding: 5px 12px; border-radius: 8px; border: none; background: #8b5cf6; color: #fff; font-size: 0.75rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
 .send-btn:hover { background: #7c3aed; transform: translateY(-1px); }
@@ -623,23 +689,32 @@ include 'includes/admin_nav.php';
                     <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
                         <?php
                         $ns = $bday['notification_status'] ?? null;
-                        if ($ns === 'sent' || $ns === 'queued'):
+                        $qs = $bday['queue_status'] ?? null;
+                        if ($ns === 'sent' || in_array($qs, ['sent', 'delivered', 'read'], true)):
                         ?>
                             <span class="bday-badge bday-badge-sent"><i class="fas fa-check"></i> Sent</span>
-                        <?php elseif ($ns === 'failed'): ?>
-                            <span class="bday-badge bday-badge-failed"><i class="fas fa-times"></i> Failed</span>
+                        <?php elseif ($ns === 'failed' || $qs === 'failed'): ?>
+                            <span class="bday-badge bday-badge-failed" title="<?php echo htmlspecialchars($bday['error_message'] ?? 'Delivery failed'); ?>"><i class="fas fa-times-circle"></i> Failed</span>
+                            <?php if (is_super_admin()): ?>
+                                <button class="resend-btn" onclick="resendBirthdayManual('<?php echo e($bday['user_id']); ?>', this)">
+                                    <i class="fas fa-redo"></i> Resend
+                                </button>
+                            <?php endif; ?>
+                        <?php elseif ($qs === 'processing'): ?>
+                            <span class="bday-badge bday-badge-sending"><i class="fas fa-spinner fa-spin"></i> Sending</span>
+                        <?php elseif ($ns === 'queued' || in_array($qs, ['pending', 'scheduled', 'retrying'], true)): ?>
+                            <span class="bday-badge bday-badge-queued"><i class="fas fa-clock"></i> Queued</span>
                         <?php else: ?>
                             <span class="bday-badge bday-badge-pending"><i class="fas fa-clock"></i> Pending</span>
+                            <?php if (is_super_admin()): ?>
+                                <button class="send-btn" onclick="sendBirthdayManual('<?php echo e($bday['user_id']); ?>', this)">
+                                    <i class="fas fa-paper-plane"></i> Send
+                                </button>
+                            <?php endif; ?>
                         <?php endif; ?>
 
                         <?php if ($bday['claimed_at']): ?>
                             <span class="bday-badge bday-badge-claimed"><i class="fas fa-gift"></i> Claimed <?php echo date('h:i A', strtotime($bday['claimed_at'])); ?></span>
-                        <?php endif; ?>
-
-                        <?php if (is_super_admin() && !$ns): ?>
-                            <button class="send-btn" onclick="sendBirthdayManual('<?php echo e($bday['user_id']); ?>', this)">
-                                <i class="fas fa-paper-plane"></i> Send
-                            </button>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -796,7 +871,7 @@ function sendBirthdayManual(studentId, btn) {
     .then(r => r.json())
     .then(data => {
         if (data.success) {
-            btn.outerHTML = '<span class="bday-badge bday-badge-sent"><i class="fas fa-check"></i> Sent</span>';
+            btn.outerHTML = '<span class="bday-badge bday-badge-queued"><i class="fas fa-clock"></i> Queued</span>';
         } else {
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-paper-plane"></i> Send';
@@ -806,6 +881,33 @@ function sendBirthdayManual(studentId, btn) {
     .catch(() => {
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-paper-plane"></i> Send';
+        alert('Network error. Please try again.');
+    });
+}
+
+function resendBirthdayManual(studentId, btn) {
+    if (!confirm('Resend birthday greeting to this student via WhatsApp?')) return;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+    fetch('students-birthdays.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'ajax_action=manual_birthday_resend&student_id=' + encodeURIComponent(studentId) + '&csrf_token=' + encodeURIComponent(document.querySelector('[name="csrf_token"]')?.value || '<?php echo csrf_token(); ?>')
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            btn.outerHTML = '<span class="bday-badge bday-badge-queued"><i class="fas fa-clock"></i> Queued</span>';
+        } else {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-redo"></i> Resend';
+            alert(data.error || 'Failed to resend.');
+        }
+    })
+    .catch(() => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-redo"></i> Resend';
         alert('Network error. Please try again.');
     });
 }

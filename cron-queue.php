@@ -6,6 +6,9 @@
 // Force production MySQL routing for all cron invocations (CLI and HTTP)
 putenv('PEPP_USE_MYSQL=1');
 $_ENV['PEPP_USE_MYSQL'] = '1';
+if (!defined('IS_CRON_QUEUE_RUNNER')) {
+    define('IS_CRON_QUEUE_RUNNER', true);
+}
 
 require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/includes/communication/QueueProcessor.php';
@@ -319,7 +322,12 @@ try {
             if (file_exists(__DIR__ . '/includes/birthday_scheduler.php')) {
                 require_once __DIR__ . '/includes/birthday_scheduler.php';
                 if (function_exists('birthday_dispatch_notifications')) {
-                    birthday_dispatch_notifications($pdo);
+                    $bdayRes = birthday_dispatch_notifications($pdo);
+                    if (!empty($bdayRes['dispatched']) && $bdayRes['dispatched'] > 0) {
+                        // Immediately dispatch newly enqueued birthday messages
+                        $processor = new QueueProcessor($pdo, 25);
+                        $processor->execute();
+                    }
                 }
             }
         } catch (Exception $bdayEx) {
