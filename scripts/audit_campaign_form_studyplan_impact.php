@@ -274,7 +274,35 @@ printf("  %-48s : %d\n", "Plans having form + all", $impact_metrics['plans_form_
 printf("  %-48s : %d\n", "Students accessing Study Plans ONLY via form", $impact_metrics['students_only_form_access']);
 printf("  %-48s : %d\n", "Students also having legit course/batch/all", $impact_metrics['students_form_plus_legit_access']);
 
-// ── 3. EXECUTION / VERIFICATION HANDLING ──────────────────────────────────────
+// ── 2.1 ROW 89 & SCHEMA STATE VERIFICATION ───────────────────────────
+echo "\n2.1 ROW 89 & MIGRATION 48 STATUS\n";
+echo "--------------------------------------------------------------------\n";
+if (table_exists($pdo, 'study_plan_assignments')) {
+    $stmt89 = $pdo->prepare("SELECT id, study_plan_id, assignment_type, assigned_value, is_deleted, created_at FROM study_plan_assignments WHERE id = 89");
+    $stmt89->execute();
+    $r89 = $stmt89->fetch(PDO::FETCH_ASSOC);
+    if ($r89) {
+        echo "  Row id=89 Status                                 : PRESENT\n";
+        echo "    - study_plan_id: " . $r89['study_plan_id'] . " | assigned_value: " . $r89['assigned_value'] . " | assignment_type: " . $r89['assignment_type'] . "\n";
+        echo "    - is_deleted   : " . $r89['is_deleted'] . " | created_at: " . $r89['created_at'] . "\n";
+    } else {
+        echo "  Row id=89 Status                                 : NOT PRESENT (Deleted or Purged)\n";
+    }
+
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
+        $colStmt = $pdo->query("SHOW COLUMNS FROM study_plan_assignments LIKE 'assignment_type'");
+        $colInfo = $colStmt->fetch(PDO::FETCH_ASSOC);
+        $colType = $colInfo['Type'] ?? 'UNKNOWN';
+        echo "  Column assignment_type ENUM                      : " . $colType . "\n";
+        if (strpos($colType, "'form'") !== false) {
+            echo "  Migration 48 State                               : NOT EXECUTED (ENUM still contains 'form')\n";
+        } else {
+            echo "  Migration 48 State                               : EXECUTED (ENUM altered to remove 'form')\n";
+        }
+    } else {
+        echo "  Database Driver                                  : sqlite (Skipping MySQL SHOW COLUMNS)\n";
+    }
+}
 if ($mode === 'apply-migration') {
     echo "\n3. APPLYING MIGRATION (database-update-48.sql logic)\n";
     echo "--------------------------------------------------------------------\n";
