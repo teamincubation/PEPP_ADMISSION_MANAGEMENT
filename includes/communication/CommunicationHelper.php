@@ -632,6 +632,15 @@ class CommunicationHelper {
                 'description' => 'Remaining referral wallet balance after payout deduction.',
                 'sample' => '500',
                 'is_financial' => true
+            ],
+
+            // Birthday / Rewards
+            'claim_url' => [
+                'label' => 'Birthday Claim URL',
+                'category' => 'Birthday / Rewards',
+                'description' => 'Secure HMAC-signed birthday reward redemption URL for the student',
+                'sample' => 'https://pepplearning.in/admissions/birthday-rewards.php/PEPP20268575?token=abc123xyz',
+                'is_financial' => false
             ]
         ];
     }

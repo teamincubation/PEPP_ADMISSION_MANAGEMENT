@@ -47,7 +47,7 @@ try {
     }
 
     // Seed default event mappings
-    $events = ['student_registration', 'student_approval', 'student_rejection', 'installment_reminder', 'payment_receipt', 'session_scheduled', 'payment_rejection', 'installment_overdue', 'course_migration_completed', 'alumni_verification_completed', 'alumni_referral_code_generated', 'referral_earning_credited', 'referral_payout_sent'];
+    $events = ['student_registration', 'student_approval', 'student_rejection', 'installment_reminder', 'payment_receipt', 'session_scheduled', 'payment_rejection', 'installment_overdue', 'course_migration_completed', 'alumni_verification_completed', 'alumni_referral_code_generated', 'referral_earning_credited', 'referral_payout_sent', 'birthday_greeting'];
     $stmtSeed = $pdo->prepare("INSERT IGNORE INTO communication_event_mappings (event_name) VALUES (?)");
     foreach ($events as $ev) {
         $stmtSeed->execute([$ev]);
@@ -446,7 +446,8 @@ include 'includes/admin_nav.php';
         'alumni_verification_completed' => 'Triggered immediately after a PEPPian successfully completes alumni verification.',
         'alumni_referral_code_generated' => 'Triggered immediately after a new referral record and referral code are successfully created for an alumnus.',
         'referral_earning_credited' => 'Triggered after a referral earning is successfully credited to an alumnus wallet.',
-        'referral_payout_sent' => 'Triggered after a referral payout is successfully recorded and paid to an alumnus.'
+        'referral_payout_sent' => 'Triggered after a referral payout is successfully recorded and paid to an alumnus.',
+        'birthday_greeting' => "Triggered daily on a student's birthday with a personalized greeting and claim link."
     ];
 
     // Build array of approved templates for JS
@@ -778,8 +779,18 @@ window.onclick = function(event) {
     }
 }
 
+<?php
+$savedMappingsJs = [];
+foreach ($eventMappings as $m) {
+    $savedMappingsJs[$m['event_name']] = [
+        'template_name' => $m['template_name'] ?? '',
+        'parameters' => json_decode($m['parameter_mappings'] ?? '[]', true) ?: []
+    ];
+}
+?>
 const approvedTemplates = <?php echo json_encode($approvedTemplates); ?>;
 const erpVariables = <?php echo json_encode(CommunicationHelper::getERPVariables()); ?>;
+const savedMappings = <?php echo json_encode($savedMappingsJs); ?>;
 const isFinancialRestricted = <?php echo json_encode(is_credential_restricted('financials')); ?>;
 
 function onMappingTemplateChange(eventName, selectedTemplateName) {
@@ -803,23 +814,33 @@ function onMappingTemplateChange(eventName, selectedTemplateName) {
     const paramList = container.querySelector('.params-list');
     paramList.innerHTML = '';
 
-    let selectOptionsHtml = '<option value="">-- Select Variable --</option>';
     const grouped = {};
     for (const [key, varInfo] of Object.entries(erpVariables)) {
         const cat = varInfo.category || 'General';
         if (!grouped[cat]) grouped[cat] = [];
         grouped[cat].push(Object.assign({ key: key }, varInfo));
     }
-    for (const [cat, vars] of Object.entries(grouped)) {
-        selectOptionsHtml += `<optgroup label="${cat}">`;
-        for (const varInfo of vars) {
-            selectOptionsHtml += `<option value="${varInfo.key}" title="${varInfo.description}">${varInfo.label} — ${varInfo.key}</option>`;
-        }
-        selectOptionsHtml += `</optgroup>`;
-    }
+
+    const savedInfo = savedMappings[eventName] || null;
+    const isSavedTpl = (savedInfo && savedInfo.template_name === selectedTemplateName);
+    const savedParams = isSavedTpl ? (savedInfo.parameters || {}) : {};
 
     if (tplInfo && tplInfo.param_count > 0) {
         for (let i = 1; i <= tplInfo.param_count; i++) {
+            const pInfo = savedParams[i] || null;
+            const pType = pInfo ? (pInfo.type || 'variable') : 'variable';
+            const pVal = pInfo ? (pInfo.value || '') : '';
+
+            let selectOptionsHtml = '<option value="">-- Select Variable --</option>';
+            for (const [cat, vars] of Object.entries(grouped)) {
+                selectOptionsHtml += `<optgroup label="${cat}">`;
+                for (const varInfo of vars) {
+                    const isSel = (pType === 'variable' && pVal === varInfo.key) ? ' selected' : '';
+                    selectOptionsHtml += `<option value="${varInfo.key}" title="${varInfo.description}"${isSel}>${varInfo.label} — ${varInfo.key}</option>`;
+                }
+                selectOptionsHtml += `</optgroup>`;
+            }
+
             const paramContainer = document.createElement('div');
             paramContainer.style.display = 'flex';
             paramContainer.style.flexDirection = 'column';
@@ -831,17 +852,23 @@ function onMappingTemplateChange(eventName, selectedTemplateName) {
             row.style.alignItems = 'center';
             row.style.gap = '8px';
 
+            const isVar = (pType === 'variable');
+            const custDisplay = isVar ? 'none' : 'inline-block';
+            const custDisabled = isVar ? 'disabled' : '';
+            const varDisplay = isVar ? 'inline-block' : 'none';
+            const varDisabled = isVar ? '' : 'disabled';
+
             row.innerHTML = `
                 <span style="font-size:0.75rem; font-weight:700; color:#4b5563; min-width:40px;">{{${i}}} :</span>
                 <select name="mappings[${eventName}][parameters][${i}][type]" class="form-control" style="width:110px; font-size:0.75rem;" onchange="onParamTypeChange('${eventName}', ${i}, this.value); updatePreviews('${eventName}');">
-                    <option value="variable" selected>ERP Variable</option>
-                    <option value="custom">Custom Text</option>
+                    <option value="variable"${pType === 'variable' ? ' selected' : ''}>ERP Variable</option>
+                    <option value="custom"${pType === 'custom' ? ' selected' : ''}>Custom Text</option>
                 </select>
-                <select name="mappings[${eventName}][parameters][${i}][value]" class="form-control value-field-variable" id="val-var-${eventName}-${i}" style="flex:1; font-size:0.75rem;" onchange="updatePreviews('${eventName}');">
+                <select name="mappings[${eventName}][parameters][${i}][value]" class="form-control value-field-variable" id="val-var-${eventName}-${i}" style="flex:1; font-size:0.75rem; display:${varDisplay};" ${varDisabled} onchange="updatePreviews('${eventName}');">
                     ${selectOptionsHtml}
                 </select>
 
-                <input type="text" name="mappings[${eventName}][parameters][${i}][value]" class="form-control value-field-custom" id="val-cust-${eventName}-${i}" placeholder="Enter custom value..." style="flex:1; font-size:0.75rem; display:none;" disabled oninput="updatePreviews('${eventName}');">
+                <input type="text" name="mappings[${eventName}][parameters][${i}][value]" class="form-control value-field-custom" id="val-cust-${eventName}-${i}" value="${pType === 'custom' ? pVal : ''}" placeholder="Enter custom value..." style="flex:1; font-size:0.75rem; display:${custDisplay};" ${custDisabled} oninput="updatePreviews('${eventName}');">
             `;
 
             const descRow = document.createElement('div');
@@ -851,14 +878,21 @@ function onMappingTemplateChange(eventName, selectedTemplateName) {
             descRow.style.paddingLeft = '48px';
             descRow.style.marginTop = '-4px';
             descRow.style.marginBottom = '4px';
-            descRow.style.display = 'none';
+            if (isVar && pVal && erpVariables[pVal]) {
+                descRow.innerHTML = `<i class="fas fa-info-circle"></i> ${erpVariables[pVal].description}`;
+                descRow.style.display = 'block';
+            } else {
+                descRow.style.display = 'none';
+            }
 
             paramContainer.appendChild(row);
             paramContainer.appendChild(descRow);
             paramList.appendChild(paramContainer);
         }
+        updatePreviews(eventName);
     } else {
         paramList.innerHTML = '<span style="font-size:0.75rem; color:#9ca3af;">No parameters required for this template.</span>';
+        updatePreviews(eventName);
     }
 }
 
