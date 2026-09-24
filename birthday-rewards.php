@@ -224,8 +224,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>🎂 Birthday Reward — PEPP Learning</title>
-    <link rel="icon" type="image/png" href="logo.png">
-    <link rel="apple-touch-icon" href="logo.png">
+    <link rel="icon" type="image/png" href="/admissions/logo.png">
+    <link rel="apple-touch-icon" href="/admissions/logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -305,8 +305,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
 </head>
 <body>
     <div class="card">
-        <?php if (file_exists('logo.png')): ?>
-            <img class="pepp-logo" src="logo.png" alt="PEPP Learning">
+        <?php if (file_exists(__DIR__ . '/logo.png') || file_exists('logo.png')): ?>
+            <img class="pepp-logo" src="/admissions/logo.png" alt="PEPP Learning">
         <?php endif; ?>
 
         <?php if ($error): ?>
@@ -322,7 +322,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
             <p class="student-name"><?php echo htmlspecialchars($studentName); ?></p>
 
             <?php if (!empty($rewardData['settings']['reward_voucher_image'])): ?>
-                <img class="voucher-image" src="../<?php echo htmlspecialchars($rewardData['settings']['reward_voucher_image']); ?>" alt="Birthday Voucher">
+                <img class="voucher-image" src="/<?php echo ltrim(htmlspecialchars($rewardData['settings']['reward_voucher_image']), '/'); ?>" alt="Birthday Voucher">
             <?php endif; ?>
 
             <?php if (!empty($rewardData['coupon_code'])): ?>
@@ -371,7 +371,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
             <?php endif; ?>
 
             <?php if (!empty($settings['reward_voucher_image'])): ?>
-                <img class="voucher-image" src="../<?php echo htmlspecialchars($settings['reward_voucher_image']); ?>" alt="Birthday Voucher">
+                <img class="voucher-image" src="/<?php echo ltrim(htmlspecialchars($settings['reward_voucher_image']), '/'); ?>" alt="Birthday Voucher">
             <?php endif; ?>
 
             <p class="description" style="margin-bottom:24px;">
