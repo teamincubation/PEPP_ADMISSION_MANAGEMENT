@@ -580,3 +580,359 @@ function _birthday_save_run_date(PDO $pdo, string $dateStr): void {
         } catch (Exception $e) {}
     }
 }
+
+/**
+ * Allowlist-based HTML sanitizer for Quill content (Instructions, T&C, Claim Message).
+ *
+ * Allowed tags: p, br, strong, b, em, i, u, ul, ol, li, h1, h2, h3, h4, h5, h6, a, span
+ * Allowed link protocols: http:// and https:// (all javascript:, data:, vbscript: rejected)
+ * Strips all on* event attributes (onclick, onerror, onload, etc.) and inline style attributes.
+ * Strips dangerous tags completely (script, iframe, object, embed, svg, form, etc.).
+ */
+function sanitize_reward_html(?string $html): string {
+    if ($html === null || trim($html) === '') return '';
+    $raw = trim($html);
+
+    // If input is purely plain text without any tags, preserve line breaks
+    if (strpos($raw, '<') === false) {
+        return nl2br(htmlspecialchars($raw, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
+    }
+
+    $libxmlErrors = libxml_use_internal_errors(true);
+    $dom = new DOMDocument('1.0', 'UTF-8');
+    // Wrap in utf-8 container to avoid encoding glitches
+    $wrapped = '<?xml encoding="utf-8" ?><div>' . $raw . '</div>';
+    $dom->loadHTML($wrapped, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+    libxml_clear_errors();
+    libxml_use_internal_errors($libxmlErrors);
+
+    $allowedTags = ['p', 'br', 'strong', 'b', 'em', 'i', 'u', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'a', 'span'];
+    $dangerousTags = ['script', 'style', 'iframe', 'object', 'embed', 'svg', 'math', 'form', 'input', 'button', 'textarea', 'select', 'link', 'meta', 'applet', 'base', 'img'];
+
+    $cleanNode = function($node) use (&$cleanNode, $allowedTags, $dangerousTags) {
+        if ($node->nodeType === XML_ELEMENT_NODE) {
+            $tag = strtolower($node->nodeName);
+            if (in_array($tag, $dangerousTags, true)) {
+                $node->parentNode->removeChild($node);
+                return;
+            }
+
+            // Recurse children first so nested nodes are sanitized before parent decisions
+            $children = [];
+            foreach ($node->childNodes as $child) {
+                $children[] = $child;
+            }
+            foreach ($children as $child) {
+                $cleanNode($child);
+            }
+
+            if (!in_array($tag, $allowedTags, true)) {
+                // Non-allowed formatting tag (e.g. div): unwrap text/children
+                while ($node->firstChild) {
+                    $node->parentNode->insertBefore($node->firstChild, $node);
+                }
+                $node->parentNode->removeChild($node);
+                return;
+            }
+
+            // Element is allowed: sanitize attributes
+            if ($node->hasAttributes()) {
+                $attrsToRemove = [];
+                foreach ($node->attributes as $attr) {
+                    $attrName = strtolower($attr->name);
+                    // Remove all on* event handlers and styles
+                    if (str_starts_with($attrName, 'on') || $attrName === 'style') {
+                        $attrsToRemove[] = $attrName;
+                        continue;
+                    }
+                    if ($tag === 'a') {
+                        if ($attrName === 'href') {
+                            $href = trim($attr->value);
+                            if (!preg_match('/^https?:\/\//i', $href)) {
+                                $attrsToRemove[] = $attrName;
+                            }
+                        } elseif (!in_array($attrName, ['target', 'rel', 'title'], true)) {
+                            $attrsToRemove[] = $attrName;
+                        }
+                    } else {
+                        $attrsToRemove[] = $attrName;
+                    }
+                }
+                foreach ($attrsToRemove as $a) {
+                    $node->removeAttribute($a);
+                }
+                if ($tag === 'a' && $node->hasAttribute('href')) {
+                    $node->setAttribute('target', '_blank');
+                    $node->setAttribute('rel', 'noopener noreferrer');
+                }
+            }
+        }
+    };
+
+    $container = $dom->getElementsByTagName('div')->item(0);
+    if (!$container) return '';
+
+    $topChildren = [];
+    foreach ($container->childNodes as $child) {
+        $topChildren[] = $child;
+    }
+    foreach ($topChildren as $child) {
+        $cleanNode($child);
+    }
+
+    $output = '';
+    foreach ($container->childNodes as $child) {
+        $output .= $dom->saveHTML($child);
+    }
+    return trim($output);
+}
+
+/**
+ * Generate a cryptographically secure, high-entropy 32-character hex instruction token.
+ */
+function generate_instruction_token(): string {
+    return bin2hex(random_bytes(16));
+}
+
+/**
+ * Retrieves the latest reward version or creates Version 1 from current settings.
+ */
+function get_or_create_current_reward_version(PDO $pdo, ?string $adminUser = 'system', ?string $reason = 'Initial Version'): ?array {
+    try {
+        $stmt = $pdo->query("SELECT * FROM birthday_reward_versions ORDER BY version_number DESC LIMIT 1");
+        $version = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($version) {
+            return $version;
+        }
+
+        // None exists: seed from birthday_reward_settings
+        $setStmt = $pdo->query("SELECT * FROM birthday_reward_settings ORDER BY id DESC LIMIT 1");
+        $settings = $setStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$settings) {
+            return null;
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $insert = $pdo->prepare("
+            INSERT INTO birthday_reward_versions
+            (version_number, reward_title, coupon_code, valid_till, reward_description, instructions, terms, claim_message, birthday_header_image, reward_voucher_image, is_active, created_by, change_notes, created_at)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+        $insert->execute([
+            $settings['reward_title'] ?? 'Birthday Reward',
+            $settings['coupon_code'] ?? null,
+            $settings['valid_till'] ?: null,
+            $settings['reward_description'] ?? null,
+            $settings['instructions'] ?? null,
+            $settings['terms'] ?? null,
+            $settings['claim_message'] ?? null,
+            $settings['birthday_header_image'] ?? null,
+            $settings['reward_voucher_image'] ?? null,
+            (int)($settings['is_active'] ?? 0),
+            $adminUser ?: 'system',
+            $reason ?: 'Initial Version',
+            $now
+        ]);
+        $settings['id'] = (int)$pdo->lastInsertId();
+        $settings['version_number'] = 1;
+        return $settings;
+    } catch (Exception $e) {
+        error_log("get_or_create_current_reward_version error: " . $e->getMessage());
+        return null;
+    }
+}
+
+/**
+ * Detects whether meaningful content changed and creates a new immutable reward version.
+ * Returns new version ID if created, or null if only is_active was toggled.
+ */
+function record_reward_version_if_changed(PDO $pdo, array $newSettings, ?string $adminUser = 'admin', ?string $reason = null): ?int {
+    try {
+        $latest = get_or_create_current_reward_version($pdo, $adminUser);
+        if (!$latest) {
+            return null;
+        }
+
+        // Compare 9 meaningful content fields
+        $fields = [
+            'reward_title', 'coupon_code', 'valid_till', 'reward_description',
+            'instructions', 'terms', 'claim_message', 'birthday_header_image', 'reward_voucher_image'
+        ];
+
+        $changed = [];
+        foreach ($fields as $f) {
+            $oldVal = trim((string)($latest[$f] ?? ''));
+            $newVal = trim((string)($newSettings[$f] ?? ''));
+            // Normalize valid_till
+            if ($f === 'valid_till') {
+                $oldVal = ($oldVal === '0000-00-00') ? '' : $oldVal;
+                $newVal = ($newVal === '0000-00-00') ? '' : $newVal;
+            }
+            if ($oldVal !== $newVal) {
+                $changed[] = $f;
+            }
+        }
+
+        if (empty($changed)) {
+            // No meaningful content changes - update is_active on existing latest if needed
+            $isActive = (int)($newSettings['is_active'] ?? 0);
+            if ((int)($latest['is_active'] ?? 0) !== $isActive) {
+                $pdo->prepare("UPDATE birthday_reward_versions SET is_active = ? WHERE id = ?")
+                    ->execute([$isActive, $latest['id']]);
+            }
+            return null;
+        }
+
+        // Content changed: create new immutable version
+        $nextVersionNumber = (int)($latest['version_number'] ?? 1) + 1;
+        $notes = $reason ?: ('Updated ' . implode(', ', $changed));
+        $now = date('Y-m-d H:i:s');
+
+        $stmt = $pdo->prepare("
+            INSERT INTO birthday_reward_versions
+            (version_number, reward_title, coupon_code, valid_till, reward_description, instructions, terms, claim_message, birthday_header_image, reward_voucher_image, is_active, created_by, change_notes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+        $stmt->execute([
+            $nextVersionNumber,
+            $newSettings['reward_title'] ?? 'Birthday Reward',
+            $newSettings['coupon_code'] ?? null,
+            $newSettings['valid_till'] ?: null,
+            $newSettings['reward_description'] ?? null,
+            $newSettings['instructions'] ?? null,
+            $newSettings['terms'] ?? null,
+            $newSettings['claim_message'] ?? null,
+            $newSettings['birthday_header_image'] ?? null,
+            $newSettings['reward_voucher_image'] ?? null,
+            (int)($newSettings['is_active'] ?? 0),
+            $adminUser ?: 'admin',
+            $notes,
+            $now
+        ]);
+
+        return (int)$pdo->lastInsertId();
+    } catch (Exception $e) {
+        error_log("record_reward_version_if_changed error: " . $e->getMessage());
+        return null;
+    }
+}
+
+/**
+ * Fetch a student's claim by person identity and birthday date.
+ * Resolves immutable snapshot fields. Distinguishes legacy claims cleanly.
+ */
+function get_birthday_claim_by_identity(PDO $pdo, string $personIdentity, string $birthdayDate): ?array {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT c.*, v.version_number
+            FROM birthday_reward_claims c
+            LEFT JOIN birthday_reward_versions v ON c.reward_version_id = v.id
+            WHERE c.person_identity = ? AND c.birthday_date = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$personIdentity, $birthdayDate]);
+        $claim = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$claim) return null;
+
+        $claim['is_legacy'] = empty($claim['reward_version_id']) && empty($claim['instruction_token']);
+        return $claim;
+    } catch (Exception $e) {
+        return null;
+    }
+}
+
+/**
+ * Fetch an immutable claim by its unique high-entropy instruction token.
+ */
+function get_birthday_claim_by_token(PDO $pdo, string $token): ?array {
+    $token = trim($token);
+    if ($token === '' || !preg_match('/^[a-f0-9]{32,64}$/i', $token)) {
+        return null;
+    }
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT c.*, v.version_number
+            FROM birthday_reward_claims c
+            LEFT JOIN birthday_reward_versions v ON c.reward_version_id = v.id
+            WHERE c.instruction_token = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$token]);
+        $claim = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$claim) return null;
+
+        $claim['is_legacy'] = empty($claim['reward_version_id']);
+        return $claim;
+    } catch (Exception $e) {
+        return null;
+    }
+}
+
+/**
+ * Dispatches post-claim WhatsApp notification using CommunicationEngine.
+ * Queued only after reward claim transaction successfully commits.
+ */
+function dispatch_birthday_claim_whatsapp(PDO $pdo, array $claim, array $student, string $personIdentity): ?int {
+    try {
+        require_once __DIR__ . '/communication/CommunicationEngine.php';
+        $commEngine = CommunicationEngine::getInstance($pdo);
+
+        $waPhone = '';
+        if (str_starts_with($personIdentity, 'phone:')) {
+            $waPhone = substr($personIdentity, 6);
+        } else {
+            $waPhone = CommunicationEngine::normalizePhone(($student['whatsapp_country_code'] ?? '') . ($student['whatsapp_number'] ?? ''));
+            if (empty($waPhone) || strlen($waPhone) < 10) {
+                $waPhone = CommunicationEngine::normalizePhone($student['mobile_number'] ?? '');
+            }
+        }
+
+        if (empty($waPhone) || strlen($waPhone) < 10) {
+            if (!empty($claim['instruction_token'])) {
+                $pdo->prepare("UPDATE birthday_reward_claims SET claim_whatsapp_status = 'failed' WHERE instruction_token = ?")
+                    ->execute([$claim['instruction_token']]);
+            }
+            return null;
+        }
+
+        $instructionUrl = 'https://pepplearning.in/admissions/birthday-instructions.php/' . ($claim['instruction_token'] ?? '');
+        $validUntilFormatted = !empty($claim['coupon_valid_till']) ? date('d M Y', strtotime($claim['coupon_valid_till'])) : 'No Expiry';
+
+        $context = [
+            'student_uid'        => $student['user_id'] ?? ($claim['student_id'] ?? ''),
+            'student_id'         => $student['user_id'] ?? ($claim['student_id'] ?? ''),
+            'student_name'       => $student['name'] ?? 'Student',
+            'coupon_code'        => $claim['coupon_code'] ?? '',
+            'valid_until'        => $validUntilFormatted,
+            'coupon_valid_till'  => $validUntilFormatted,
+            'instruction_url'    => $instructionUrl,
+            'instruction_token'  => $claim['instruction_token'] ?? '',
+            'button_parameters'  => [$claim['instruction_token'] ?? '']
+        ];
+
+        $queueId = $commEngine->sendEventNotification(
+            'birthday_reward_claimed',
+            $waPhone,
+            $context,
+            'system_claim'
+        );
+
+        if ($queueId) {
+            if (!empty($claim['instruction_token'])) {
+                $pdo->prepare("UPDATE birthday_reward_claims SET claim_whatsapp_queue_id = ?, claim_whatsapp_status = 'queued' WHERE instruction_token = ?")
+                    ->execute([$queueId, $claim['instruction_token']]);
+            }
+            return $queueId;
+        } else {
+            if (!empty($claim['instruction_token'])) {
+                $pdo->prepare("UPDATE birthday_reward_claims SET claim_whatsapp_status = 'failed' WHERE instruction_token = ?")
+                    ->execute([$claim['instruction_token']]);
+            }
+            return null;
+        }
+    } catch (Exception $e) {
+        error_log("dispatch_birthday_claim_whatsapp error: " . $e->getMessage());
+        return null;
+    }
+}

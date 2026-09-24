@@ -1416,15 +1416,19 @@ class CommunicationEngine {
             'parameters' => $resolvedParameters
         ];
 
-        // Inspect template components to check if there is a URL button ending in ?token={{1}}
+        // Inspect template components to check if there is a dynamic URL button
         $meta = json_decode($template['meta_data'], true) ?: [];
-        $hasUrlButton = false;
+        $hasInvoiceUrlButton = false;
+        $hasDynamicUrlButton = false;
         if (isset($meta['components']) && is_array($meta['components'])) {
             foreach ($meta['components'] as $comp) {
                 if (($comp['type'] ?? '') === 'BUTTONS' && isset($comp['buttons']) && is_array($comp['buttons'])) {
                     foreach ($comp['buttons'] as $btn) {
-                        if (($btn['type'] ?? '') === 'URL' && strpos($btn['url'] ?? '', 'token={{1}}') !== false) {
-                            $hasUrlButton = true;
+                        if (($btn['type'] ?? '') === 'URL' && strpos($btn['url'] ?? '', '{{1}}') !== false) {
+                            $hasDynamicUrlButton = true;
+                            if (strpos($btn['url'] ?? '', 'token={{1}}') !== false) {
+                                $hasInvoiceUrlButton = true;
+                            }
                             break 2;
                         }
                     }
@@ -1432,9 +1436,11 @@ class CommunicationEngine {
             }
         }
 
-        // Retrieve invoice ID for generating dynamic URL token
-        $invoiceId = $contextData['invoice_id'] ?? null;
-        if ($hasUrlButton) {
+        if (!empty($contextData['button_parameters'])) {
+            $result['button_parameters'] = (array)$contextData['button_parameters'];
+        } elseif ($hasInvoiceUrlButton) {
+            // Retrieve invoice ID for generating dynamic URL token
+            $invoiceId = $contextData['invoice_id'] ?? null;
             if (!$invoiceId && $student) {
                 try {
                     $invStmt = $this->pdo->prepare("
@@ -1450,6 +1456,8 @@ class CommunicationEngine {
                 $hmac = hash_hmac('sha256', (string)$invoiceId, INVOICE_HMAC_SECRET);
                 $result['button_parameters'] = [$invoiceId . '-' . $hmac];
             }
+        } elseif ($hasDynamicUrlButton && !empty($contextData['instruction_token'])) {
+            $result['button_parameters'] = [(string)$contextData['instruction_token']];
         }
 
         // Inspect template components to check for media or text HEADER

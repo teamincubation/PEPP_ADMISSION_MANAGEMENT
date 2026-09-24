@@ -144,23 +144,11 @@ if (!$error) {
 
     // Point 10: Check if already claimed for this person identity
     if (!$error && $personIdentity) {
-        try {
-            $stmt = $pdo->prepare("
-                SELECT claimed_at, coupon_code
-                FROM birthday_reward_claims
-                WHERE person_identity = ? AND birthday_date = ?
-            ");
-            $stmt->execute([$personIdentity, $todayStr]);
-            $existingClaim = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($existingClaim) {
-                $alreadyClaimed = true;
-                $rewardData = [
-                    'coupon_code' => $existingClaim['coupon_code'],
-                    'claimed_at'  => $existingClaim['claimed_at'],
-                    'settings'    => $settings
-                ];
-            }
-        } catch (Exception $e) {}
+        $existingClaim = get_birthday_claim_by_identity($pdo, $personIdentity, $todayStr);
+        if ($existingClaim) {
+            $alreadyClaimed = true;
+            $rewardData = $existingClaim;
+        }
     }
 }
 
@@ -180,36 +168,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
 
         if (!$error) {
             $pdo->beginTransaction();
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            $forUpdate = ($driver === 'sqlite') ? '' : ' FOR UPDATE';
 
-            $insertIgnore = ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') ? 'INSERT OR IGNORE INTO' : 'INSERT IGNORE INTO';
+            // Lock active settings to prevent race condition
+            $stmt = $pdo->prepare("SELECT * FROM birthday_reward_settings WHERE is_active = 1 LIMIT 1" . $forUpdate);
+            $stmt->execute();
+            $lockedSettings = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            // Atomic insert — unique constraint on (person_identity, birthday_date) prevents duplicates
-            $insertStmt = $pdo->prepare("
-                {$insertIgnore} birthday_reward_claims (person_identity, student_id, birthday_date, reward_setting_id, coupon_code, claimed_at)
-                VALUES (?, ?, ?, ?, ?, NOW())
-            ");
-            $insertStmt->execute([$personIdentity, $studentId, $todayStr, $settings['id'], $settings['coupon_code'] ?? '']);
-
-            if ($insertStmt->rowCount() > 0) {
-                $pdo->commit();
-                $claimed = true;
-                $rewardData = [
-                    'coupon_code' => $settings['coupon_code'],
-                    'claimed_at'  => date('Y-m-d H:i:s'),
-                    'settings'    => $settings
-                ];
-            } else {
+            if (!$lockedSettings) {
                 $pdo->rollBack();
-                $alreadyClaimed = true;
-                // Fetch existing claim data by person_identity
-                $stmt = $pdo->prepare("SELECT claimed_at, coupon_code FROM birthday_reward_claims WHERE person_identity = ? AND birthday_date = ?");
-                $stmt->execute([$personIdentity, $todayStr]);
-                $existingClaim = $stmt->fetch(PDO::FETCH_ASSOC);
-                $rewardData = [
-                    'coupon_code' => $existingClaim['coupon_code'] ?? '',
-                    'claimed_at'  => $existingClaim['claimed_at'] ?? '',
-                    'settings'    => $settings
-                ];
+                $error = 'Birthday rewards are not currently available.';
+            } else {
+                // Ensure current reward version exists
+                $version = get_or_create_current_reward_version($pdo, 'system', 'Claim Version Initialization');
+                $versionId = $version['id'] ?? null;
+                $instructionToken = generate_instruction_token();
+
+                $couponCode = $lockedSettings['coupon_code'] ?? '';
+                $couponValidTill = $lockedSettings['valid_till'] ?: null;
+                $rewardTitle = $lockedSettings['reward_title'] ?? 'Birthday Reward';
+                $rewardDesc = $lockedSettings['reward_description'] ?? '';
+                $instructions = $lockedSettings['instructions'] ?? '';
+                $terms = $lockedSettings['terms'] ?? '';
+                $claimMessage = $lockedSettings['claim_message'] ?? '';
+                $voucherImage = $lockedSettings['reward_voucher_image'] ?? null;
+
+                $insertIgnore = ($driver === 'sqlite') ? 'INSERT OR IGNORE INTO' : 'INSERT IGNORE INTO';
+
+                // Atomic insert with immutable snapshot
+                $insertStmt = $pdo->prepare("
+                    {$insertIgnore} birthday_reward_claims
+                    (person_identity, student_id, birthday_date, reward_setting_id, reward_version_id,
+                     coupon_code, coupon_valid_till, reward_title, reward_description,
+                     instructions, terms, claim_message, voucher_image, instruction_token,
+                     claim_whatsapp_status, claimed_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_queued', NOW(), NOW())
+                ");
+                $insertStmt->execute([
+                    $personIdentity, $studentId, $todayStr, $lockedSettings['id'], $versionId,
+                    $couponCode, $couponValidTill, $rewardTitle, $rewardDesc,
+                    $instructions, $terms, $claimMessage, $voucherImage, $instructionToken
+                ]);
+
+                if ($insertStmt->rowCount() > 0) {
+                    $claimId = (int)$pdo->lastInsertId();
+                    $pdo->commit();
+                    $claimed = true;
+                    $rewardData = [
+                        'id'                 => $claimId,
+                        'person_identity'    => $personIdentity,
+                        'student_id'         => $studentId,
+                        'birthday_date'      => $todayStr,
+                        'reward_setting_id'  => $lockedSettings['id'],
+                        'reward_version_id'  => $versionId,
+                        'coupon_code'        => $couponCode,
+                        'coupon_valid_till'  => $couponValidTill,
+                        'reward_title'       => $rewardTitle,
+                        'reward_description' => $rewardDesc,
+                        'instructions'       => $instructions,
+                        'terms'              => $terms,
+                        'claim_message'      => $claimMessage,
+                        'voucher_image'      => $voucherImage,
+                        'instruction_token'  => $instructionToken,
+                        'claimed_at'         => date('Y-m-d H:i:s')
+                    ];
+
+                    // Queue post-claim WhatsApp notification AFTER commit
+                    dispatch_birthday_claim_whatsapp($pdo, $rewardData, $student, $personIdentity);
+                } else {
+                    $pdo->rollBack();
+                    $alreadyClaimed = true;
+                    $rewardData = get_birthday_claim_by_identity($pdo, $personIdentity, $todayStr);
+                }
             }
         }
     } catch (Exception $e) {
@@ -243,7 +274,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
                 radial-gradient(ellipse 60% 50% at 80% 80%, rgba(245,158,11,0.12) 0%, transparent 55%);
         }
         .card {
-            max-width: 460px; width: 100%;
+            max-width: 480px; width: 100%;
             background: rgba(255,255,255,0.04);
             backdrop-filter: blur(20px);
             border: 1px solid rgba(255,255,255,0.08);
@@ -269,8 +300,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
         .coupon-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 2px; color: rgba(255,255,255,0.7); margin-bottom: 8px; position: relative; }
         .coupon-code {
             font-size: 1.8rem; font-weight: 800; color: #fff; letter-spacing: 4px; position: relative;
-            font-family: 'Courier New', monospace;
+            font-family: 'Courier New', monospace; margin-bottom: 10px;
         }
+        .copy-btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+            padding: 6px 16px; border-radius: 50px;
+            border: 1px solid rgba(255,255,255,0.3);
+            background: rgba(255,255,255,0.2);
+            color: #fff; font-size: 0.78rem; font-weight: 700;
+            cursor: pointer; transition: all 0.2s ease;
+            position: relative;
+        }
+        .copy-btn:hover { background: rgba(255,255,255,0.35); transform: translateY(-1px); }
+        .copy-btn.copied { background: #10b981; border-color: #10b981; }
+
         .claim-btn {
             display: inline-flex; align-items: center; gap: 8px;
             padding: 14px 32px; border: none; border-radius: 50px;
@@ -280,16 +323,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
         }
         .claim-btn:hover { transform: translateY(-2px); box-shadow: 0 12px 32px rgba(245,158,11,0.4); }
         .claim-btn:active { transform: translateY(0); }
+
+        .instructions-cta-btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+            width: 100%; padding: 12px 20px; border-radius: 12px;
+            background: linear-gradient(135deg, #7c3aed, #9333ea);
+            color: #fff; font-weight: 700; font-size: 0.88rem; text-decoration: none;
+            margin: 16px 0; transition: all 0.2s; box-shadow: 0 6px 20px rgba(124,58,237,0.35);
+        }
+        .instructions-cta-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 25px rgba(124,58,237,0.45); }
+
         .claimed-badge {
             display: inline-flex; align-items: center; gap: 8px;
             padding: 10px 24px; border-radius: 50px;
             background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.3);
             color: #4ade80; font-weight: 600; font-size: 0.85rem;
         }
-        .instructions { text-align: left; margin-top: 20px; padding: 16px; background: rgba(255,255,255,0.05); border-radius: 12px; }
+        .instructions { text-align: left; margin-top: 16px; padding: 16px; background: rgba(255,255,255,0.05); border-radius: 12px; }
         .instructions h3 { font-size: 0.82rem; color: #c4b5fd; margin-bottom: 8px; }
         .instructions p, .instructions li { font-size: 0.78rem; color: rgba(255,255,255,0.6); line-height: 1.6; }
-        .terms { font-size: 0.68rem; color: rgba(255,255,255,0.35); margin-top: 16px; line-height: 1.5; }
+        .terms { font-size: 0.68rem; color: rgba(255,255,255,0.35); margin-top: 16px; line-height: 1.5; text-align: left; }
         .error-icon { font-size: 2.5rem; color: #ef4444; margin-bottom: 16px; }
         .error-text { color: rgba(255,255,255,0.7); font-size: 0.9rem; }
         .pepp-logo { max-width: 100px; margin-bottom: 16px; opacity: 0.8; }
@@ -321,14 +374,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
             <h1>Happy Birthday!</h1>
             <p class="student-name"><?php echo htmlspecialchars($studentName); ?></p>
 
-            <?php if (!empty($rewardData['settings']['reward_voucher_image'])): ?>
-                <img class="voucher-image" src="/<?php echo ltrim(htmlspecialchars($rewardData['settings']['reward_voucher_image']), '/'); ?>" alt="Birthday Voucher">
+            <?php
+            $voucherImg = $rewardData['voucher_image'] ?? ($rewardData['settings']['reward_voucher_image'] ?? '');
+            if (!empty($voucherImg)): ?>
+                <img class="voucher-image" src="/<?php echo ltrim(htmlspecialchars($voucherImg), '/'); ?>" alt="Birthday Voucher">
             <?php endif; ?>
 
             <?php if (!empty($rewardData['coupon_code'])): ?>
                 <div class="coupon-box">
                     <div class="coupon-label">Your Coupon Code</div>
-                    <div class="coupon-code"><?php echo htmlspecialchars($rewardData['coupon_code']); ?></div>
+                    <div class="coupon-code" id="coupon-code-text"><?php echo htmlspecialchars($rewardData['coupon_code']); ?></div>
+                    <button type="button" class="copy-btn" id="copy-btn" onclick="copyCouponCode()">
+                        <i class="fas fa-copy"></i> <span id="copy-btn-label">Copy Code</span>
+                    </button>
                 </div>
             <?php endif; ?>
 
@@ -341,23 +399,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
                 <?php endif; ?>
             </div>
 
-            <?php if (!empty($rewardData['settings']['claim_message'])): ?>
-                <p class="description" style="margin-top:16px;"><?php echo nl2br(htmlspecialchars($rewardData['settings']['claim_message'])); ?></p>
-            <?php endif; ?>
-
-            <?php if (!empty($rewardData['settings']['instructions'])): ?>
-                <div class="instructions">
-                    <h3><i class="fas fa-info-circle"></i> How to Redeem</h3>
-                    <p><?php echo nl2br(htmlspecialchars($rewardData['settings']['instructions'])); ?></p>
+            <?php if (!empty($rewardData['is_legacy'])): ?>
+                <div style="background:rgba(255,255,255,0.06); border:1px dashed rgba(255,255,255,0.2); border-radius:12px; padding:14px; margin-top:16px; font-size:0.82rem; color:rgba(255,255,255,0.7); text-align:left;">
+                    <div style="font-weight:700; color:#fbbf24; margin-bottom:4px;"><i class="fas fa-history"></i> Legacy Claim Record</div>
+                    <p style="margin:0 0 6px 0;">This reward was claimed on <?php echo date('d M Y \a\t h:i A', strtotime($rewardData['claimed_at'])); ?> prior to the Phase 2 snapshot system.</p>
+                    <p style="margin:0; font-size:0.75rem; color:rgba(255,255,255,0.5);">Historical voucher terms and instruction snapshots are preserved as originally recorded. To redeem or verify this reward, please contact PEPP Admissions directly with your student ID: <strong><?php echo htmlspecialchars($studentId); ?></strong>.</p>
                 </div>
-            <?php endif; ?>
+            <?php else: ?>
+                <?php if (!empty($rewardData['instruction_token'])): ?>
+                    <a href="/admissions/birthday-instructions.php/<?php echo urlencode($rewardData['instruction_token']); ?>" class="instructions-cta-btn" target="_blank">
+                        <i class="fas fa-book-open"></i> Read Full Reward Instructions &amp; T&amp;C
+                    </a>
+                <?php endif; ?>
 
-            <?php if (!empty($rewardData['settings']['terms'])): ?>
-                <p class="terms"><?php echo nl2br(htmlspecialchars($rewardData['settings']['terms'])); ?></p>
-            <?php endif; ?>
+                <?php
+                $claimMsg = !empty($rewardData['claim_message']) ? $rewardData['claim_message'] : null;
+                if (!empty($claimMsg)): ?>
+                    <div class="description" style="margin-top:16px;"><?php echo sanitize_reward_html($claimMsg); ?></div>
+                <?php endif; ?>
 
-            <?php if (!empty($rewardData['settings']['valid_till'])): ?>
-                <p class="terms" style="margin-top:8px;">Valid until: <?php echo date('d M Y', strtotime($rewardData['settings']['valid_till'])); ?></p>
+                <?php
+                $instrContent = !empty($rewardData['instructions']) ? $rewardData['instructions'] : null;
+                if (!empty($instrContent)): ?>
+                    <div class="instructions">
+                        <h3><i class="fas fa-info-circle"></i> How to Redeem</h3>
+                        <div><?php echo sanitize_reward_html($instrContent); ?></div>
+                    </div>
+                <?php endif; ?>
+
+                <?php
+                $termsContent = !empty($rewardData['terms']) ? $rewardData['terms'] : null;
+                if (!empty($termsContent)): ?>
+                    <div class="terms"><?php echo sanitize_reward_html($termsContent); ?></div>
+                <?php endif; ?>
+
+                <?php
+                $validTill = !empty($rewardData['coupon_valid_till']) ? $rewardData['coupon_valid_till'] : null;
+                if (!empty($validTill)): ?>
+                    <p class="terms" style="margin-top:8px;">Valid until: <?php echo date('d M Y', strtotime($validTill)); ?></p>
+                <?php endif; ?>
             <?php endif; ?>
 
         <?php else: ?>
@@ -392,7 +472,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
         <?php endif; ?>
     </div>
 
-    <script>
     // Prevent double-submit
     const form = document.getElementById('claim-form');
     if (form) {
@@ -401,6 +480,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$error && !$alreadyClaimed && $set
             btn.disabled = true;
             btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Claiming...';
         });
+    }
+
+    function copyCouponCode() {
+        const codeText = document.getElementById('coupon-code-text')?.innerText.trim();
+        if (!codeText) return;
+
+        const btn = document.getElementById('copy-btn');
+        const label = document.getElementById('copy-btn-label');
+
+        const onSuccess = () => {
+            if (btn && label) {
+                btn.classList.add('copied');
+                label.innerHTML = '<i class="fas fa-check"></i> Copied!';
+                setTimeout(() => {
+                    btn.classList.remove('copied');
+                    label.innerHTML = 'Copy Code';
+                }, 2200);
+            }
+        };
+
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(codeText)
+                .then(onSuccess)
+                .catch(() => fallbackCopy(codeText, onSuccess));
+        } else {
+            fallbackCopy(codeText, onSuccess);
+        }
+    }
+
+    function fallbackCopy(text, cb) {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.top = '-9999px';
+        textArea.style.left = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            cb();
+        } catch (e) {
+            alert('Coupon Code: ' + text);
+        }
+        document.body.removeChild(textArea);
     }
     </script>
 </body>

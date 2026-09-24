@@ -682,13 +682,41 @@ if ($is_local_dev) {
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS birthday_reward_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                version_number INTEGER NOT NULL,
+                reward_title TEXT NOT NULL DEFAULT 'Birthday Reward',
+                coupon_code TEXT DEFAULT NULL,
+                valid_till TEXT DEFAULT NULL,
+                reward_description TEXT DEFAULT NULL,
+                instructions TEXT DEFAULT NULL,
+                terms TEXT DEFAULT NULL,
+                claim_message TEXT DEFAULT NULL,
+                birthday_header_image TEXT DEFAULT NULL,
+                reward_voucher_image TEXT DEFAULT NULL,
+                is_active INTEGER NOT NULL DEFAULT 0,
+                created_by TEXT NOT NULL DEFAULT 'system',
+                change_notes TEXT DEFAULT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
             CREATE TABLE IF NOT EXISTS birthday_reward_claims (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 person_identity TEXT NOT NULL,
                 student_id TEXT NOT NULL,
                 birthday_date TEXT NOT NULL,
                 reward_setting_id INTEGER DEFAULT NULL,
+                reward_version_id INTEGER DEFAULT NULL,
                 coupon_code TEXT DEFAULT NULL,
+                coupon_valid_till TEXT DEFAULT NULL,
+                reward_title TEXT DEFAULT NULL,
+                reward_description TEXT DEFAULT NULL,
+                instructions TEXT DEFAULT NULL,
+                terms TEXT DEFAULT NULL,
+                claim_message TEXT DEFAULT NULL,
+                voucher_image TEXT DEFAULT NULL,
+                instruction_token TEXT DEFAULT NULL UNIQUE,
+                claim_whatsapp_queue_id INTEGER DEFAULT NULL,
+                claim_whatsapp_status TEXT DEFAULT 'not_queued',
                 claimed_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(person_identity, birthday_date)
@@ -714,7 +742,9 @@ if ($is_local_dev) {
             "CREATE INDEX IF NOT EXISTS idx_mentor_calls_admin ON mentor_call_logs (admin_id, student_user_id)",
             "CREATE INDEX IF NOT EXISTS idx_mentor_remarks_admin ON mentor_remarks (admin_id, student_user_id)",
             "CREATE INDEX IF NOT EXISTS idx_study_plan_activities_plan ON study_plan_activities (study_plan_id, is_deleted, day_number, sort_order)",
-            "CREATE INDEX IF NOT EXISTS idx_study_plan_analytics_lookup ON study_plan_analytics (student_email, study_plan_id, action_type, completion_status)"
+            "CREATE INDEX IF NOT EXISTS idx_study_plan_analytics_lookup ON study_plan_analytics (student_email, study_plan_id, action_type, completion_status)",
+            "CREATE INDEX IF NOT EXISTS idx_brv_version ON birthday_reward_versions (version_number)",
+            "CREATE INDEX IF NOT EXISTS idx_brc_instruction_token ON birthday_reward_claims (instruction_token)"
         ];
         foreach ($perf_indexes as $idx_sql) {
             try {
@@ -727,7 +757,18 @@ if ($is_local_dev) {
             "ALTER TABLE users ADD COLUMN applied_coupon TEXT DEFAULT NULL",
             "ALTER TABLE users ADD COLUMN coupon_discount REAL DEFAULT 0.00",
             "ALTER TABLE admins ADD COLUMN phone TEXT DEFAULT NULL",
-            "ALTER TABLE leads ADD COLUMN converted_by TEXT DEFAULT NULL"
+            "ALTER TABLE leads ADD COLUMN converted_by TEXT DEFAULT NULL",
+            "ALTER TABLE birthday_reward_claims ADD COLUMN reward_version_id INTEGER DEFAULT NULL",
+            "ALTER TABLE birthday_reward_claims ADD COLUMN instruction_token TEXT DEFAULT NULL",
+            "ALTER TABLE birthday_reward_claims ADD COLUMN coupon_valid_till TEXT DEFAULT NULL",
+            "ALTER TABLE birthday_reward_claims ADD COLUMN reward_title TEXT DEFAULT NULL",
+            "ALTER TABLE birthday_reward_claims ADD COLUMN reward_description TEXT DEFAULT NULL",
+            "ALTER TABLE birthday_reward_claims ADD COLUMN instructions TEXT DEFAULT NULL",
+            "ALTER TABLE birthday_reward_claims ADD COLUMN terms TEXT DEFAULT NULL",
+            "ALTER TABLE birthday_reward_claims ADD COLUMN claim_message TEXT DEFAULT NULL",
+            "ALTER TABLE birthday_reward_claims ADD COLUMN voucher_image TEXT DEFAULT NULL",
+            "ALTER TABLE birthday_reward_claims ADD COLUMN claim_whatsapp_queue_id INTEGER DEFAULT NULL",
+            "ALTER TABLE birthday_reward_claims ADD COLUMN claim_whatsapp_status TEXT DEFAULT 'not_queued'"
         ];
         foreach ($sqlite_extra_cols as $alt_sql) {
             try { $pdo->exec($alt_sql); } catch (Throwable $e) {}

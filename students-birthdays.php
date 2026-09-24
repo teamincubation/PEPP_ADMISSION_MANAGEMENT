@@ -192,6 +192,93 @@ if (isset($_POST['ajax_action']) && in_array($_POST['ajax_action'], ['manual_bir
     exit;
 }
 
+// ── AJAX: Manual Claim WhatsApp Resend ──────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_POST['ajax_action'] === 'manual_claim_whatsapp_resend') {
+    header('Content-Type: application/json');
+    if (!csrf_verify()) {
+        echo json_encode(['error' => 'Security token expired. Please refresh and try again.']);
+        exit;
+    }
+    if (!is_super_admin()) {
+        echo json_encode(['error' => 'Unauthorized. Super Admin access required.']);
+        exit;
+    }
+
+    $studentId = trim($_POST['student_id'] ?? '');
+    if (empty($studentId)) {
+        echo json_encode(['error' => 'Invalid student ID.']);
+        exit;
+    }
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT user_id, name, date_of_birth, whatsapp_number, whatsapp_country_code,
+                   mobile_number, email, status, student_status
+            FROM users
+            WHERE user_id = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$studentId]);
+        $student = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$student) {
+            echo json_encode(['error' => 'Student record not found.']);
+            exit;
+        }
+
+        $personIdentity = resolve_person_identity($student);
+        if (!$personIdentity) {
+            echo json_encode(['error' => 'Could not resolve person identity.']);
+            exit;
+        }
+
+        // Look up claim record (latest for this student)
+        $claimStmt = $pdo->prepare("
+            SELECT c.*, q.status AS queue_status
+            FROM birthday_reward_claims c
+            LEFT JOIN communication_queue q ON c.claim_whatsapp_queue_id = q.id
+            WHERE c.person_identity = ? OR c.student_id = ?
+            ORDER BY c.id DESC LIMIT 1
+        ");
+        $claimStmt->execute([$personIdentity, $studentId]);
+        $claim = $claimStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$claim) {
+            echo json_encode(['error' => 'No reward claim found for this student.']);
+            exit;
+        }
+
+        // Check if already sent or in-flight (Item 17: Successful claim WhatsApp cannot be resent unnecessarily)
+        $qs = $claim['queue_status'] ?? '';
+        if ($claim['claim_whatsapp_status'] === 'sent' || in_array($qs, ['sent', 'delivered', 'read'], true)) {
+            echo json_encode(['error' => 'Claim WhatsApp confirmation has already been successfully sent to this student.']);
+            exit;
+        }
+        if (in_array($qs, ['pending', 'processing', 'scheduled'], true)) {
+            echo json_encode(['error' => 'Claim WhatsApp confirmation is currently queued/sending.']);
+            exit;
+        }
+
+        // Block legacy claims lacking verifiable instruction snapshot
+        if (empty($claim['instruction_token'])) {
+            echo json_encode(['error' => 'This is a legacy claim recorded prior to Phase 2. Detailed instructions cannot be fabricated without a historical snapshot.']);
+            exit;
+        }
+
+        // Dispatch post-claim WhatsApp notification using immutable snapshot
+        $queueId = dispatch_birthday_claim_whatsapp($pdo, $claim, $student, $personIdentity);
+
+        if ($queueId) {
+            echo json_encode(['success' => true, 'message' => 'Claim WhatsApp confirmation requeued.', 'queue_id' => $queueId]);
+        } else {
+            echo json_encode(['error' => 'Failed to requeue claim WhatsApp. Check template mapping or recipient phone.']);
+        }
+    } catch (Exception $e) {
+        echo json_encode(['error' => 'Server error: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
 // ── POST: Save reward settings ──────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_birthday_settings'])) {
     if (!csrf_verify()) {
@@ -203,9 +290,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_birthday_setting
         $rewardDesc    = trim($_POST['reward_description'] ?? '');
         $couponCode    = trim($_POST['coupon_code'] ?? '');
         $validTill     = trim($_POST['valid_till'] ?? '');
-        $instructions  = trim($_POST['instructions'] ?? '');
-        $terms         = trim($_POST['terms'] ?? '');
-        $claimMessage  = trim($_POST['claim_message'] ?? '');
+        $instructions  = sanitize_reward_html($_POST['instructions'] ?? '');
+        $terms         = sanitize_reward_html($_POST['terms'] ?? '');
+        $claimMessage  = sanitize_reward_html($_POST['claim_message'] ?? '');
         $isActive      = isset($_POST['is_active']) ? 1 : 0;
 
         // Fetch current settings for old image paths
@@ -218,6 +305,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_birthday_setting
         $voucherImage = handle_file_upload_with_replace('reward_voucher_image', 'birthday', $currentSettings['reward_voucher_image'] ?? null, ['jpg', 'jpeg', 'png', 'webp']);
 
         try {
+            // First record reward version if meaningful content changed
+            $newSettingsData = [
+                'reward_title'          => $rewardTitle,
+                'reward_description'    => $rewardDesc,
+                'coupon_code'           => $couponCode,
+                'valid_till'            => $validTill ?: null,
+                'instructions'          => $instructions,
+                'terms'                 => $terms,
+                'claim_message'         => $claimMessage,
+                'birthday_header_image' => $headerImage ?: ($currentSettings['birthday_header_image'] ?? null),
+                'reward_voucher_image'  => $voucherImage ?: ($currentSettings['reward_voucher_image'] ?? null),
+                'is_active'             => $isActive
+            ];
+            $adminUser = $_SESSION['admin_username'] ?? 'admin';
+            record_reward_version_if_changed($pdo, $newSettingsData, $adminUser);
+
             if ($currentSettings) {
                 $sql = "UPDATE birthday_reward_settings SET
                     reward_title = ?, reward_description = ?, coupon_code = ?, valid_till = ?,
@@ -265,6 +368,19 @@ try {
     $settings = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
 } catch (Exception $e) {}
 
+// Reward version history (all historical versions)
+$rewardVersions = [];
+try {
+    $vStmt = $pdo->query("
+        SELECT v.*, COUNT(c.id) AS claims_count
+        FROM birthday_reward_versions v
+        LEFT JOIN birthday_reward_claims c ON v.id = c.reward_version_id
+        GROUP BY v.id
+        ORDER BY v.version_number DESC
+    ");
+    $rewardVersions = $vStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+} catch (Exception $e) {}
+
 // Active academic year
 $activeYear = get_birthday_active_academic_year($pdo);
 
@@ -307,7 +423,14 @@ if ($activeYear) {
                 $sentMap[$row['person_identity']] = $row;
             }
 
-            $claimStmt = $pdo->prepare("SELECT person_identity, claimed_at FROM birthday_reward_claims WHERE birthday_date = ?");
+            $claimStmt = $pdo->prepare("
+                SELECT c.person_identity, c.claimed_at, c.coupon_code, c.coupon_valid_till,
+                       c.instruction_token, c.claim_whatsapp_queue_id, c.claim_whatsapp_status,
+                       q.status AS claim_queue_status, q.error_message AS claim_queue_error
+                FROM birthday_reward_claims c
+                LEFT JOIN communication_queue q ON c.claim_whatsapp_queue_id = q.id
+                WHERE c.birthday_date = ?
+            ");
             $claimStmt->execute([$todayStr]);
             $claimMap = [];
             while ($row = $claimStmt->fetch(PDO::FETCH_ASSOC)) {
@@ -321,7 +444,16 @@ if ($activeYear) {
                 $bday['queue_status'] = $sInfo['queue_status'] ?? null;
                 $bday['queue_id'] = $sInfo['queue_id'] ?? null;
                 $bday['error_message'] = $sInfo['error_message'] ?? null;
-                $bday['claimed_at'] = $claimMap[$pid]['claimed_at'] ?? null;
+
+                $cInfo = $claimMap[$pid] ?? null;
+                $bday['claimed_at'] = $cInfo['claimed_at'] ?? null;
+                $bday['coupon_code'] = $cInfo['coupon_code'] ?? null;
+                $bday['coupon_valid_till'] = $cInfo['coupon_valid_till'] ?? null;
+                $bday['instruction_token'] = $cInfo['instruction_token'] ?? null;
+                $bday['claim_whatsapp_status'] = $cInfo['claim_whatsapp_status'] ?? 'not_queued';
+                $bday['claim_whatsapp_queue_id'] = $cInfo['claim_whatsapp_queue_id'] ?? null;
+                $bday['claim_queue_status'] = $cInfo['claim_queue_status'] ?? null;
+                $bday['claim_queue_error'] = $cInfo['claim_queue_error'] ?? null;
             }
             unset($bday);
         }
@@ -370,6 +502,9 @@ $page_sub    = 'Birthday greetings & reward management';
 include 'includes/admin_nav.php';
 ?>
 
+<link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
+
 <style>
 .birthday-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 28px; }
 .bday-stat-card { background: var(--card-bg, #fff); border: 1px solid var(--border-color, #e2e8f0); border-radius: 14px; padding: 20px; display: flex; align-items: center; gap: 14px; }
@@ -390,6 +525,11 @@ include 'includes/admin_nav.php';
 .bday-badge-queued { background: rgba(234,179,8,0.12); color: #d97706; }
 .bday-badge-pending { background: rgba(148,163,184,0.12); color: #64748b; }
 .bday-badge-claimed { background: rgba(139,92,246,0.12); color: #8b5cf6; }
+.bday-coupon-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: 700; background: #ede9fe; color: #6d28d9; border: 1px solid #ddd6fe; font-family: monospace; }
+.view-reward-btn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 6px; font-size: 0.68rem; font-weight: 600; background: #f8fafc; color: #64748b; border: 1px solid #cbd5e1; text-decoration: none; transition: all 0.2s; }
+.view-reward-btn:hover { background: #8b5cf6; color: #fff; border-color: #8b5cf6; }
+.resend-claim-btn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 6px; font-size: 0.68rem; font-weight: 600; background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; cursor: pointer; transition: all 0.2s; }
+.resend-claim-btn:hover { background: #dc2626; color: #fff; border-color: #dc2626; }
 .send-btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 6px; font-size: 0.72rem; font-weight: 600; background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; cursor: pointer; transition: all 0.2s; }
 .send-btn:hover { background: #16a34a; color: #fff; border-color: #16a34a; }
 .resend-btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 6px; font-size: 0.72rem; font-weight: 600; background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; cursor: pointer; transition: all 0.2s; }
@@ -405,6 +545,9 @@ include 'includes/admin_nav.php';
 .form-group label { font-size: 0.8rem; font-weight: 600; color: var(--text-primary, #1e293b); }
 .form-group input, .form-group textarea, .form-group select { padding: 10px 12px; border: 1px solid var(--border-color, #d1d5db); border-radius: 8px; font-size: 0.85rem; background: var(--input-bg, #fff); color: var(--text-primary, #1e293b); }
 .form-group textarea { min-height: 80px; resize: vertical; }
+.quill-editor-container { min-height: 120px; background: #fff; border-radius: 0 0 8px 8px; font-family: inherit; font-size: 0.88rem; }
+.ql-toolbar.ql-snow { border-color: var(--border-color, #d1d5db); border-radius: 8px 8px 0 0; background: #f8fafc; }
+.ql-container.ql-snow { border-color: var(--border-color, #d1d5db); border-radius: 0 0 8px 8px; }
 /* Modern Accessible Toggle Banner */
 .reward-toggle-banner {
     display: flex;
@@ -714,7 +857,52 @@ include 'includes/admin_nav.php';
                         <?php endif; ?>
 
                         <?php if ($bday['claimed_at']): ?>
-                            <span class="bday-badge bday-badge-claimed"><i class="fas fa-gift"></i> Claimed <?php echo date('h:i A', strtotime($bday['claimed_at'])); ?></span>
+                            <div style="margin-top:6px; padding-top:6px; border-top:1px dashed #e2e8f0; width:100%;">
+                                <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                                    <span class="bday-badge bday-badge-claimed"><i class="fas fa-gift"></i> Claimed <?php echo date('h:i A', strtotime($bday['claimed_at'])); ?></span>
+                                    <?php if (!empty($bday['coupon_code'])): ?>
+                                        <span class="bday-coupon-pill" title="Claimed Coupon"><i class="fas fa-ticket"></i> <?php echo e($bday['coupon_code']); ?></span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($bday['coupon_valid_till'])): ?>
+                                        <span style="font-size:0.7rem; color:#64748b;">(Exp: <?php echo date('d M Y', strtotime($bday['coupon_valid_till'])); ?>)</span>
+                                    <?php endif; ?>
+                                </div>
+                                <div style="margin-top:5px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                                    <?php
+                                    $cws = $bday['claim_whatsapp_status'] ?? 'not_queued';
+                                    $cqs = $bday['claim_queue_status'] ?? '';
+                                    if ($cws === 'sent' || in_array($cqs, ['sent', 'delivered', 'read'], true)):
+                                    ?>
+                                        <span class="bday-badge bday-badge-sent" title="Post-claim WhatsApp delivered"><i class="fab fa-whatsapp"></i> Claim WA Sent</span>
+                                    <?php elseif ($cqs === 'processing'): ?>
+                                        <span class="bday-badge bday-badge-sending"><i class="fas fa-spinner fa-spin"></i> WA Sending</span>
+                                    <?php elseif ($cws === 'queued' || in_array($cqs, ['pending', 'scheduled', 'retrying'], true)): ?>
+                                        <span class="bday-badge bday-badge-queued"><i class="fas fa-clock"></i> Claim WA Queued</span>
+                                    <?php elseif ($cws === 'failed' || $cqs === 'failed'): ?>
+                                        <span class="bday-badge bday-badge-failed" title="<?php echo htmlspecialchars($bday['claim_queue_error'] ?? 'Claim WhatsApp delivery failed'); ?>"><i class="fas fa-times-circle"></i> Claim WA Failed</span>
+                                        <?php if (is_super_admin()): ?>
+                                            <button class="resend-claim-btn" onclick="resendClaimWhatsApp('<?php echo e($bday['user_id']); ?>', this)">
+                                                <i class="fas fa-redo"></i> Resend WA
+                                            </button>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <span class="bday-badge" style="background:#f1f5f9; color:#64748b;"><i class="fab fa-whatsapp"></i> WA Not Queued</span>
+                                        <?php if (is_super_admin()): ?>
+                                            <button class="resend-claim-btn" onclick="resendClaimWhatsApp('<?php echo e($bday['user_id']); ?>', this)">
+                                                <i class="fas fa-paper-plane"></i> Send WA
+                                            </button>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
+
+                                    <?php if (!empty($bday['instruction_token'])): ?>
+                                        <a href="birthday-instructions.php/<?php echo e($bday['instruction_token']); ?>" target="_blank" class="view-reward-btn" title="View permanent student reward instruction page">
+                                            <i class="fas fa-arrow-up-right-from-square"></i> View Reward
+                                        </a>
+                                    <?php else: ?>
+                                        <span class="bday-badge" style="background:#f1f5f9; color:#64748b;" title="Claim recorded prior to Phase 2 snapshot system"><i class="fas fa-history"></i> Legacy Claim</span>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -809,19 +997,22 @@ include 'includes/admin_nav.php';
                 </div>
             </div>
 
-            <div class="form-group" style="margin-bottom:16px;">
+            <div class="form-group" style="margin-bottom:20px;">
                 <label>Instructions (shown to student)</label>
-                <textarea name="instructions" placeholder="How to redeem the reward..."><?php echo e($settings['instructions'] ?? ''); ?></textarea>
+                <div id="instructions-editor" class="quill-editor-container"><?php echo $settings['instructions'] ?? ''; ?></div>
+                <input type="hidden" name="instructions" id="instructions-input">
             </div>
 
-            <div class="form-group" style="margin-bottom:16px;">
+            <div class="form-group" style="margin-bottom:20px;">
                 <label>Terms & Conditions</label>
-                <textarea name="terms" placeholder="Terms and conditions..."><?php echo e($settings['terms'] ?? ''); ?></textarea>
+                <div id="terms-editor" class="quill-editor-container"><?php echo $settings['terms'] ?? ''; ?></div>
+                <input type="hidden" name="terms" id="terms-input">
             </div>
 
-            <div class="form-group" style="margin-bottom:16px;">
+            <div class="form-group" style="margin-bottom:20px;">
                 <label>Custom Claim Success Message</label>
-                <textarea name="claim_message" placeholder="Shown after the student claims the reward..."><?php echo e($settings['claim_message'] ?? ''); ?></textarea>
+                <div id="claim_message-editor" class="quill-editor-container"><?php echo $settings['claim_message'] ?? ''; ?></div>
+                <input type="hidden" name="claim_message" id="claim_message-input">
             </div>
         </div>
 
@@ -848,6 +1039,77 @@ include 'includes/admin_nav.php';
             <button type="submit" class="btn-save" style="margin-top:12px;"><i class="fas fa-save"></i> Save Settings</button>
         </div>
     </form>
+
+    <!-- Reward Configuration History (Read-Only) -->
+    <div class="settings-section" style="margin-top:24px;">
+        <h3><i class="fas fa-history"></i> Reward Configuration History (Read-Only)</h3>
+        <p style="font-size:0.85rem; color:#64748b; margin-bottom:16px;">Historical record of all published reward configurations. Historical snapshots remain permanently immutable.</p>
+        <?php if (empty($rewardVersions)): ?>
+            <p style="color:#94a3b8; font-size:0.85rem; font-style:italic;">No historical versions recorded yet.</p>
+        <?php else: ?>
+            <div style="overflow-x:auto;">
+                <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+                    <thead>
+                        <tr style="border-bottom:2px solid #e2e8f0; text-align:left; color:#475569;">
+                            <th style="padding:10px 12px;">Version</th>
+                            <th style="padding:10px 12px;">Coupon Code</th>
+                            <th style="padding:10px 12px;">Valid Till</th>
+                            <th style="padding:10px 12px;">Created</th>
+                            <th style="padding:10px 12px;">Created By</th>
+                            <th style="padding:10px 12px;">Claims Count</th>
+                            <th style="padding:10px 12px;">Status</th>
+                            <th style="padding:10px 12px; text-align:right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php
+                        $first = true;
+                        foreach ($rewardVersions as $rv):
+                            $isCurrent = $first;
+                            $first = false;
+                        ?>
+                        <tr style="border-bottom:1px solid #f1f5f9;">
+                            <td style="padding:10px 12px; font-weight:700; color:#1e293b;">v<?php echo e($rv['version_number']); ?></td>
+                            <td style="padding:10px 12px;"><code style="background:#f1f5f9; padding:2px 6px; border-radius:4px; font-weight:700; color:#7c3aed;"><?php echo e($rv['coupon_code']); ?></code></td>
+                            <td style="padding:10px 12px;"><?php echo $rv['valid_till'] ? date('d M Y', strtotime($rv['valid_till'])) : '<span style="color:#94a3b8;">Permanent</span>'; ?></td>
+                            <td style="padding:10px 12px; color:#64748b;"><?php echo date('d M Y, h:i A', strtotime($rv['created_at'])); ?></td>
+                            <td style="padding:10px 12px; color:#64748b;"><?php echo e($rv['created_by'] ?? 'admin'); ?></td>
+                            <td style="padding:10px 12px; font-weight:600;"><?php echo (int)($rv['claims_count'] ?? 0); ?></td>
+                            <td style="padding:10px 12px;">
+                                <?php if ($isCurrent): ?>
+                                    <span style="background:rgba(16,185,129,0.12); color:#059669; padding:3px 10px; border-radius:12px; font-weight:700; font-size:0.75rem;"><i class="fas fa-check-circle"></i> Current</span>
+                                <?php else: ?>
+                                    <span style="background:#f1f5f9; color:#64748b; padding:3px 10px; border-radius:12px; font-weight:600; font-size:0.75rem;">Historical</span>
+                                <?php endif; ?>
+                            </td>
+                            <td style="padding:10px 12px; text-align:right;">
+                                <button type="button" class="btn-view-version" style="padding:5px 12px; font-size:0.75rem; background:#f8fafc; border:1px solid #cbd5e1; border-radius:6px; cursor:pointer; color:#475569;" onclick='showVersionModal(<?php echo json_encode($rv, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP); ?>)'>
+                                    <i class="fas fa-eye"></i> View Details
+                                </button>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php endif; ?>
+    </div>
+</div>
+
+<!-- Historical Version Details Modal -->
+<div id="versionModal" style="display:none; position:fixed; z-index:9999; inset:0; background:rgba(0,0,0,0.5); align-items:center; justify-content:center; padding:16px;">
+    <div style="background:#fff; width:100%; max-width:640px; border-radius:16px; padding:24px; max-height:90vh; overflow-y:auto; position:relative; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; border-bottom:1px solid #e2e8f0; padding-bottom:12px;">
+            <h3 id="modalVersionTitle" style="margin:0; font-size:1.1rem; color:#1e293b;"><i class="fas fa-clock-rotate-left"></i> Reward Version Details</h3>
+            <button type="button" onclick="closeVersionModal()" style="background:none; border:none; font-size:1.2rem; cursor:pointer; color:#94a3b8;"><i class="fas fa-times"></i></button>
+        </div>
+        <div id="modalVersionContent" style="font-size:0.88rem; color:#334155; line-height:1.5;">
+            <!-- Dynamic Content -->
+        </div>
+        <div style="margin-top:20px; text-align:right; border-top:1px solid #e2e8f0; padding-top:12px;">
+            <button type="button" onclick="closeVersionModal()" style="padding:8px 18px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:8px; font-weight:600; cursor:pointer;">Close</button>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -856,6 +1118,59 @@ function switchTab(tab) {
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
     document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
     document.getElementById('tab-' + tab).classList.add('active');
+}
+
+// Initialize Quill Editors for Instructions, Terms & Conditions, and Claim Message
+var quillToolbarOptions = [
+    ['bold', 'italic', 'underline'],
+    [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+    [{ 'header': [1, 2, 3, false] }],
+    ['link'],
+    ['clean']
+];
+
+var instructionsQuill = null;
+var termsQuill = null;
+var claimMessageQuill = null;
+
+if (document.getElementById('instructions-editor')) {
+    instructionsQuill = new Quill('#instructions-editor', {
+        theme: 'snow',
+        placeholder: 'How to redeem the reward...',
+        modules: { toolbar: quillToolbarOptions }
+    });
+}
+
+if (document.getElementById('terms-editor')) {
+    termsQuill = new Quill('#terms-editor', {
+        theme: 'snow',
+        placeholder: 'Terms and conditions...',
+        modules: { toolbar: quillToolbarOptions }
+    });
+}
+
+if (document.getElementById('claim_message-editor')) {
+    claimMessageQuill = new Quill('#claim_message-editor', {
+        theme: 'snow',
+        placeholder: 'Shown after the student claims the reward...',
+        modules: { toolbar: quillToolbarOptions }
+    });
+}
+
+// Synchronize Quill editor contents into hidden inputs on form submit
+var settingsForm = document.querySelector('form[method="POST"]');
+if (settingsForm) {
+    settingsForm.addEventListener('submit', function() {
+        if (instructionsQuill) {
+            document.getElementById('instructions-input').value = instructionsQuill.root.innerHTML;
+        }
+        if (termsQuill) {
+            document.getElementById('terms-input').value = termsQuill.root.innerHTML;
+        }
+        if (claimMessageQuill) {
+            document.getElementById('claim_message-input').value = claimMessageQuill.root.innerHTML;
+        }
+    });
 }
 
 function sendBirthdayManual(studentId, btn) {
@@ -909,6 +1224,74 @@ function resendBirthdayManual(studentId, btn) {
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-redo"></i> Resend';
         alert('Network error. Please try again.');
+    });
+}
+
+function resendClaimWhatsApp(studentId, btn) {
+    if (!confirm('Send post-claim reward WhatsApp confirmation to this student?')) return;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending...';
+
+    fetch('students-birthdays.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'ajax_action=manual_claim_whatsapp_resend&student_id=' + encodeURIComponent(studentId) + '&csrf_token=' + encodeURIComponent(document.querySelector('[name="csrf_token"]')?.value || '<?php echo csrf_token(); ?>')
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            btn.outerHTML = '<span class="bday-badge bday-badge-queued"><i class="fas fa-clock"></i> Claim WA Queued</span>';
+        } else {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-redo"></i> Resend WA';
+            alert(data.error || 'Failed to resend claim WhatsApp.');
+        }
+    })
+    .catch(() => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-redo"></i> Resend WA';
+        alert('Network error. Please try again.');
+    });
+}
+
+function showVersionModal(rv) {
+    document.getElementById('modalVersionTitle').innerHTML = '<i class="fas fa-clock-rotate-left"></i> Reward Configuration — Version ' + (rv.version_number || '1');
+    var html = `
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px; background:#f8fafc; padding:12px; border-radius:10px; border:1px solid #e2e8f0;">
+            <div><strong>Reward Title:</strong> <br>${escapeHtml(rv.reward_title || '-')}</div>
+            <div><strong>Coupon Code:</strong> <br><code style="background:#ede9fe; color:#6d28d9; padding:2px 6px; border-radius:4px; font-weight:700;">${escapeHtml(rv.coupon_code || '-')}</code></div>
+            <div><strong>Valid Till:</strong> <br>${rv.valid_till ? escapeHtml(rv.valid_till) : '<span style="color:#94a3b8;">Permanent</span>'}</div>
+            <div><strong>Created:</strong> <br>${escapeHtml(rv.created_at || '-')} by ${escapeHtml(rv.created_by || 'admin')}</div>
+        </div>
+        <div style="margin-bottom:12px;">
+            <div style="font-weight:700; color:#475569; margin-bottom:4px;">Description:</div>
+            <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px;">${escapeHtml(rv.reward_description || '-')}</div>
+        </div>
+        <div style="margin-bottom:12px;">
+            <div style="font-weight:700; color:#475569; margin-bottom:4px;">Instructions:</div>
+            <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; max-height:120px; overflow-y:auto;">${rv.instructions || '<span style="color:#94a3b8;">None</span>'}</div>
+        </div>
+        <div style="margin-bottom:12px;">
+            <div style="font-weight:700; color:#475569; margin-bottom:4px;">Terms & Conditions:</div>
+            <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; max-height:120px; overflow-y:auto;">${rv.terms || '<span style="color:#94a3b8;">None</span>'}</div>
+        </div>
+        <div style="margin-bottom:12px;">
+            <div style="font-weight:700; color:#475569; margin-bottom:4px;">Claim Success Message:</div>
+            <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; max-height:120px; overflow-y:auto;">${rv.claim_message || '<span style="color:#94a3b8;">None</span>'}</div>
+        </div>
+    `;
+    document.getElementById('modalVersionContent').innerHTML = html;
+    document.getElementById('versionModal').style.display = 'flex';
+}
+
+function closeVersionModal() {
+    document.getElementById('versionModal').style.display = 'none';
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/[&<>"']/g, function(m) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m];
     });
 }
 

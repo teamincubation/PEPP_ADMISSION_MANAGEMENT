@@ -641,6 +641,27 @@ class CommunicationHelper {
                 'description' => 'Secure HMAC-signed birthday reward redemption URL for the student',
                 'sample' => 'https://pepplearning.in/admissions/birthday-rewards.php/PEPP20268575?token=abc123xyz',
                 'is_financial' => false
+            ],
+            'coupon_code' => [
+                'label' => 'Reward Coupon Code',
+                'category' => 'Birthday / Rewards',
+                'description' => 'Claimed birthday reward voucher coupon code',
+                'sample' => 'PEPPBDAY26',
+                'is_financial' => false
+            ],
+            'valid_until' => [
+                'label' => 'Reward Valid Until',
+                'category' => 'Birthday / Rewards',
+                'description' => 'Expiration date of the claimed birthday reward coupon',
+                'sample' => '30 Jun 2027',
+                'is_financial' => false
+            ],
+            'instruction_url' => [
+                'label' => 'Reward Instruction URL',
+                'category' => 'Birthday / Rewards',
+                'description' => 'Permanent short URL to access reward instructions and voucher details',
+                'sample' => 'https://pepplearning.in/admissions/birthday-instructions.php/a1b2c3d4e5f6',
+                'is_financial' => false
             ]
         ];
     }

@@ -47,7 +47,7 @@ try {
     }
 
     // Seed default event mappings
-    $events = ['student_registration', 'student_approval', 'student_rejection', 'installment_reminder', 'payment_receipt', 'session_scheduled', 'payment_rejection', 'installment_overdue', 'course_migration_completed', 'alumni_verification_completed', 'alumni_referral_code_generated', 'referral_earning_credited', 'referral_payout_sent', 'birthday_greeting'];
+    $events = ['student_registration', 'student_approval', 'student_rejection', 'installment_reminder', 'payment_receipt', 'session_scheduled', 'payment_rejection', 'installment_overdue', 'course_migration_completed', 'alumni_verification_completed', 'alumni_referral_code_generated', 'referral_earning_credited', 'referral_payout_sent', 'birthday_greeting', 'birthday_reward_claimed'];
     $stmtSeed = $pdo->prepare("INSERT IGNORE INTO communication_event_mappings (event_name) VALUES (?)");
     foreach ($events as $ev) {
         $stmtSeed->execute([$ev]);
@@ -447,7 +447,8 @@ include 'includes/admin_nav.php';
         'alumni_referral_code_generated' => 'Triggered immediately after a new referral record and referral code are successfully created for an alumnus.',
         'referral_earning_credited' => 'Triggered after a referral earning is successfully credited to an alumnus wallet.',
         'referral_payout_sent' => 'Triggered after a referral payout is successfully recorded and paid to an alumnus.',
-        'birthday_greeting' => "Triggered daily on a student's birthday with a personalized greeting and claim link."
+        'birthday_greeting' => "Triggered daily on a student's birthday with a personalized greeting and claim link.",
+        'birthday_reward_claimed' => "Triggered after a student claims their birthday reward, sending coupon code, validity, and instructions link."
     ];
 
     // Build array of approved templates for JS
