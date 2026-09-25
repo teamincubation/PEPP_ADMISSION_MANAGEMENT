@@ -495,6 +495,7 @@ if ($plan_id > 0) {
 }
 
 // ── Load Student Rankings from Published Batches ────────────
+$selected_batch = null;
 try {
     $batch_ids = [];
     if ($course_id > 0) {
@@ -503,14 +504,14 @@ try {
         $course_name = $stmt_cn->fetchColumn();
 
         $stmt_batch = $pdo->prepare("
-            SELECT id FROM assessment_result_batches
+            SELECT * FROM assessment_result_batches
             WHERE activity_id = ? AND (course_id = ? OR (course_name = ? AND course_name != '')) AND status = 'published'
             ORDER BY version DESC LIMIT 1
         ");
         $stmt_batch->execute([$activity_id, $course_id, $course_name]);
-        $bid = $stmt_batch->fetchColumn();
-        if ($bid) {
-            $batch_ids[] = (int)$bid;
+        $selected_batch = $stmt_batch->fetch(PDO::FETCH_ASSOC);
+        if ($selected_batch) {
+            $batch_ids[] = (int)$selected_batch['id'];
         }
     }
 
@@ -519,7 +520,7 @@ try {
     // (Mega Tests are published across all assigned courses under course_id = 0 / 'All Courses')
     if (empty($batch_ids)) {
         $stmt_batches = $pdo->prepare("
-            SELECT id FROM assessment_result_batches
+            SELECT * FROM assessment_result_batches
             WHERE activity_id = ?
               AND (study_plan_id = ? OR ? = 0)
               AND (academic_year = ? OR ? = '')
@@ -527,18 +528,43 @@ try {
             ORDER BY version DESC
         ");
         $stmt_batches->execute([$activity_id, $plan_id, $plan_id, $year, $year]);
-        $batch_ids = $stmt_batches->fetchAll(PDO::FETCH_COLUMN);
+        $b_rows = $stmt_batches->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($b_rows as $b) {
+            $batch_ids[] = (int)$b['id'];
+            if (!$selected_batch) {
+                $selected_batch = $b;
+            }
+        }
     }
 
     // Secondary fallback: if still empty, check any published batch strictly for this verified activity_id
     if (empty($batch_ids)) {
         $stmt_any_batch = $pdo->prepare("
-            SELECT id FROM assessment_result_batches
+            SELECT * FROM assessment_result_batches
             WHERE activity_id = ? AND status = 'published'
             ORDER BY version DESC
         ");
         $stmt_any_batch->execute([$activity_id]);
-        $batch_ids = $stmt_any_batch->fetchAll(PDO::FETCH_COLUMN);
+        $b_rows = $stmt_any_batch->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($b_rows as $b) {
+            $batch_ids[] = (int)$b['id'];
+            if (!$selected_batch) {
+                $selected_batch = $b;
+            }
+        }
+    }
+
+    // Authoritative metadata fallback from selected test result batch
+    if ($selected_batch) {
+        if (empty($activity['chapter']) && !empty($selected_batch['chapter_snapshot'])) {
+            $activity['chapter'] = $selected_batch['chapter_snapshot'];
+        }
+        if (empty($activity['activity_date']) && !empty($selected_batch['activity_date_snapshot'])) {
+            $activity['activity_date'] = $selected_batch['activity_date_snapshot'];
+        }
+        if (empty($activity['activity_title']) && !empty($selected_batch['activity_title_snapshot'])) {
+            $activity['activity_title'] = $selected_batch['activity_title_snapshot'];
+        }
     }
 
     if (!empty($batch_ids)) {
@@ -548,6 +574,19 @@ try {
 } catch (Exception $e) {
     $error_message = 'Failed to load test ranking results: ' . $e->getMessage();
 }
+
+// Authoritative formatted metadata (timezone-immune)
+$raw_test_date = $activity['activity_date'] ?? '';
+$formatted_test_date = '';
+if (!empty($raw_test_date)) {
+    $ts = strtotime($raw_test_date);
+    if ($ts !== false) {
+        $formatted_test_date = date('j M Y', $ts);
+        $formatted_test_date = preg_replace('/\bSep\b/', 'Sept', $formatted_test_date);
+    }
+}
+$authoritative_chapter = $activity['chapter'] ?? '';
+$authoritative_day_num = (string)($activity['day_number'] ?? '');
 
 $fonts = [];
 try { $fonts = $pdo->query("SELECT * FROM custom_fonts ORDER BY font_name ASC")->fetchAll(); } catch (Exception $e) {}
@@ -1397,6 +1436,9 @@ function resolveBgUrl(url) {
 
 // Loaded database data
 const rankingList = <?php echo json_encode($ranking_list); ?>;
+const authoritativeChapter = <?php echo json_encode($authoritative_chapter); ?>;
+const authoritativeTestDate = <?php echo json_encode($formatted_test_date); ?>;
+const authoritativeDayNum = <?php echo json_encode($authoritative_day_num); ?>;
 function findStudentInList(uidOrEmail) {
     if (!uidOrEmail) return null;
     const target = String(uidOrEmail).trim().toLowerCase();
@@ -1530,6 +1572,110 @@ async function changeBackgroundTemplate(newTemplateId) {
         }
     } finally {
         if (loader) loader.style.display = 'none';
+    }
+}
+
+// ── Authoritative Data Binding Helper ────────────
+function bindAuthoritativeDataToElements(isNewCard) {
+    if (!Array.isArray(elements) || elements.length === 0) return;
+
+    // 1. Chapter Name
+    const chapterNameEl = elements.find(el => el.id === 'chapter_name' || el.id === 'test_chapter' || el.id === 'chapter');
+    if (chapterNameEl) {
+        const curText = String(chapterNameEl.textContent || '').trim().toLowerCase();
+        const isPlaceholder = isNewCard || !curText || ['chapter name', 'test chapter', 'chapter'].includes(curText);
+        if (isPlaceholder) {
+            if (authoritativeChapter) {
+                chapterNameEl.textContent = authoritativeChapter;
+                chapterNameEl.visible = true;
+            } else if (isNewCard) {
+                chapterNameEl.visible = false;
+            }
+        }
+    }
+
+    // 2. Test Date
+    const testDateEl = elements.find(el => el.id === 'test_date' || el.id === 'date');
+    if (testDateEl) {
+        const curText = String(testDateEl.textContent || '').trim().toLowerCase();
+        const isPlaceholder = isNewCard || !curText || ['test date', 'date'].includes(curText);
+        if (isPlaceholder) {
+            if (authoritativeTestDate) {
+                testDateEl.textContent = authoritativeTestDate;
+                testDateEl.visible = true;
+            } else if (isNewCard) {
+                testDateEl.visible = false;
+            }
+        }
+    }
+
+    // 3. Test Number / Day Number
+    const testNumEl = elements.find(el => el.id === 'test_number' || el.id === 'day_number');
+    if (testNumEl) {
+        const curText = String(testNumEl.textContent || '').trim().toLowerCase();
+        const isPlaceholder = isNewCard || !curText || ['test number', 'day number', '0', ''].includes(curText);
+        if (isPlaceholder && authoritativeDayNum) {
+            testNumEl.textContent = authoritativeDayNum;
+            testNumEl.visible = true;
+        }
+    }
+
+    // 4. Student Rankings (Ranks 1 to 5)
+    for (let rankNum = 1; rankNum <= 5; rankNum++) {
+        const photoElId = 'rank_photo_' + rankNum;
+        let mapping = studentRankMappings[photoElId];
+        let student = null;
+        if (mapping && mapping.student_uid) {
+            student = findStudentInList(mapping.student_uid);
+        }
+        if (!student && rankingList.length >= rankNum) {
+            student = rankingList[rankNum - 1];
+            if (!studentRankMappings[photoElId]) {
+                studentRankMappings[photoElId] = {
+                    student_uid: student.user_id || student.student_email,
+                    zoom: 100,
+                    panX: 0,
+                    panY: 0,
+                    photo_override: null
+                };
+            }
+        }
+
+        if (student) {
+            // Badge text & color
+            const badgeEl = elements.find(el => el.id === 'rank_badge_' + rankNum);
+            if (badgeEl) {
+                const curText = String(badgeEl.textContent || '').trim().toLowerCase();
+                const isPlaceholder = isNewCard || !curText || ['rank', 'badge'].includes(curText);
+                if (isPlaceholder) {
+                    badgeEl.textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
+                }
+                const style = getRankBadgeStyle(student.computed_rank);
+                if (isNewCard || !badgeEl.markerColorManuallySet) {
+                    badgeEl.markerColor = style.markerColor;
+                }
+            }
+
+            // Student Name
+            const nameEl = elements.find(el => el.id === 'rank_name_' + rankNum);
+            if (nameEl) {
+                const curText = String(nameEl.textContent || '').trim().toLowerCase();
+                const isPlaceholder = isNewCard || !curText || ['student name', 'name'].includes(curText);
+                if (isPlaceholder && student.name) {
+                    nameEl.textContent = student.name;
+                }
+            }
+
+            // Student Institute / College
+            const instEl = elements.find(el => el.id === 'rank_institute_' + rankNum);
+            if (instEl) {
+                const curText = String(instEl.textContent || '').trim().toLowerCase();
+                const isPlaceholder = isNewCard || !curText || ['college name', 'institute name', 'college', 'institute'].includes(curText);
+                if (isPlaceholder && student.college_school) {
+                    instEl.textContent = student.college_school;
+                }
+            }
+        }
     }
 }
 
@@ -1790,69 +1936,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             });
         }
 
-        // Initial text data population from selected Mega Test DB data (ONLY for new cards)
-        if (!hasSavedElements) {
-            let chapterNameEl = elements.find(el => el.id === 'chapter_name' || el.id === 'test_chapter' || el.id === 'chapter');
-            if (chapterNameEl) {
-                const chapterVal = '<?php echo addslashes($activity['chapter'] ?? ''); ?>';
-                if (chapterVal) {
-                    chapterNameEl.textContent = chapterVal;
-                    chapterNameEl.visible = true;
-                } else {
-                    chapterNameEl.visible = false;
-                }
-            }
-
-            let testDateEl = elements.find(el => el.id === 'test_date' || el.id === 'date');
-            if (testDateEl) {
-                let formattedDate = '';
-                const rawDate = '<?php echo $activity['activity_date'] ?? ''; ?>';
-                if (rawDate) {
-                    const dObj = new Date(rawDate);
-                    if (!isNaN(dObj.getTime())) {
-                        formattedDate = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-                    }
-                }
-                if (formattedDate) {
-                    testDateEl.textContent = formattedDate;
-                    testDateEl.visible = true;
-                } else {
-                    testDateEl.visible = false;
-                }
-            }
-
-            let testNumEl = elements.find(el => el.id === 'test_number' || el.id === 'day_number');
-            if (testNumEl) {
-                const dayNum = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
-                if (dayNum) {
-                    testNumEl.textContent = dayNum;
-                    testNumEl.visible = true;
-                }
-            }
-
-            // Initialize student ranking text elements from ranking list
-            elements.forEach(function(el) {
-                const rankMatch = String(el.id || '').match(/^rank_(name|institute|badge)_(\d+)$/);
-                if (rankMatch) {
-                    const field = rankMatch[1];
-                    const rankNum = parseInt(rankMatch[2], 10);
-                    const photoElId = 'rank_photo_' + rankNum;
-                    let mapping = studentRankMappings[photoElId];
-                    let student = null;
-                    if (mapping && mapping.student_uid) {
-                        student = findStudentInList(mapping.student_uid);
-                    }
-                    if (!student && rankingList.length >= rankNum) {
-                        student = rankingList[rankNum - 1];
-                    }
-                    if (student) {
-                        if (field === 'name') el.textContent = student.name || '';
-                        else if (field === 'institute') el.textContent = student.college_school || '';
-                        else if (field === 'badge') el.textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
-                    }
-                }
-            });
-        }
+        // Authoritative data binding:
+        // For new cards: populates all fields from authoritative data.
+        // For saved cards: populates unpopulated/placeholder fields with authoritative data, while strictly preserving any admin edits.
+        bindAuthoritativeDataToElements(!hasSavedElements);
 
         // Hide test name safely (do not render as visible card content)
         let testNameEl = elements.find(el => el.id === 'test_name');
@@ -1877,9 +1964,13 @@ document.addEventListener('DOMContentLoaded', async function() {
                     if (r > maxSlot) maxSlot = r;
                 }
             });
+            if (rankingList.length >= 4 && maxSlot < 4) {
+                maxSlot = 4;
+            }
             if (maxSlot >= 3 && maxSlot <= 5) {
                 const ranksInput = document.getElementById('prop-ranks-count');
                 if (ranksInput) ranksInput.value = String(maxSlot);
+                changeRanksCount(maxSlot);
             }
         }
 
@@ -2029,8 +2120,28 @@ function drawElements() {
                 }
             }
 
-            if (student && field === 'photo') {
-                photoSrc = (mapping && mapping.photo_override) ? mapping.photo_override : (student.user_photo ? '../' + student.user_photo : null);
+            if (student) {
+                if (field === 'photo') {
+                    photoSrc = (mapping && mapping.photo_override) ? mapping.photo_override : (student.user_photo ? '../' + student.user_photo : null);
+                } else if (field === 'name') {
+                    const cur = String(textContent).trim().toLowerCase();
+                    if (!cur || ['student name', 'name'].includes(cur)) {
+                        textContent = student.name || '';
+                        el.textContent = textContent;
+                    }
+                } else if (field === 'institute') {
+                    const cur = String(textContent).trim().toLowerCase();
+                    if (!cur || ['college name', 'institute name', 'college', 'institute'].includes(cur)) {
+                        textContent = student.college_school || '';
+                        el.textContent = textContent;
+                    }
+                } else if (field === 'badge') {
+                    const cur = String(textContent).trim().toLowerCase();
+                    if (!cur || ['rank', 'badge'].includes(cur)) {
+                        textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
+                        el.textContent = textContent;
+                    }
+                }
             }
         }
 
@@ -2050,6 +2161,20 @@ function drawElements() {
                 if (!savedDesignId || !el.markerColorManuallySet) {
                     el.markerColor = style.markerColor;
                 }
+            }
+        }
+
+        if (el.id === 'chapter_name' || el.id === 'test_chapter') {
+            const cur = String(textContent).trim().toLowerCase();
+            if ((!cur || ['chapter name', 'test chapter'].includes(cur)) && authoritativeChapter) {
+                textContent = authoritativeChapter;
+                el.textContent = textContent;
+            }
+        } else if (el.id === 'test_date' || el.id === 'date') {
+            const cur = String(textContent).trim().toLowerCase();
+            if ((!cur || ['test date', 'date'].includes(cur)) && authoritativeTestDate) {
+                textContent = authoritativeTestDate;
+                el.textContent = textContent;
             }
         }
 
@@ -3044,7 +3169,7 @@ function updateStudentAssignOverride(studentUid) {
 // ── 7. Adding / Deleting Rank Block Groups ────────────
 function changeRanksCount(count) {
     if (count === 'custom') return;
-    const targetCount = parseInt(count);
+    const targetCount = parseInt(count, 10);
 
     // Hide/show default rank elements based on count
     for (let r = 1; r <= 5; r++) {
@@ -3057,6 +3182,8 @@ function changeRanksCount(count) {
             }
         });
     }
+    // Bind authoritative data to newly unhidden slots if they contain placeholders
+    bindAuthoritativeDataToElements(false);
     drawElements();
     saveHistoryState();
 }
@@ -3629,6 +3756,11 @@ function saveDesign(isExporting = false) {
 
                     if (student) {
                         if (field === 'badge') {
+                            const cur = String(textContent).trim().toLowerCase();
+                            if (!cur || ['rank', 'badge'].includes(cur)) {
+                                textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
+                                el.textContent = textContent;
+                            }
                             const style = getRankBadgeStyle(student.computed_rank);
                             if (!savedDesignId || !el.markerColorManuallySet) {
                                 el.markerColor = style.markerColor;
@@ -3637,6 +3769,34 @@ function saveDesign(isExporting = false) {
                         else if (field === 'photo') {
                             photoSrc = (mapping && mapping.photo_override) ? mapping.photo_override : (student.user_photo ? '../' + student.user_photo : null);
                         }
+                        else if (field === 'name') {
+                            const cur = String(textContent).trim().toLowerCase();
+                            if (!cur || ['student name', 'name'].includes(cur)) {
+                                textContent = student.name || '';
+                                el.textContent = textContent;
+                            }
+                        }
+                        else if (field === 'institute') {
+                            const cur = String(textContent).trim().toLowerCase();
+                            if (!cur || ['college name', 'institute name', 'college', 'institute'].includes(cur)) {
+                                textContent = student.college_school || '';
+                                el.textContent = textContent;
+                            }
+                        }
+                    }
+                }
+
+                if (el.id === 'chapter_name' || el.id === 'test_chapter') {
+                    const cur = String(textContent).trim().toLowerCase();
+                    if ((!cur || ['chapter name', 'test chapter'].includes(cur)) && authoritativeChapter) {
+                        textContent = authoritativeChapter;
+                        el.textContent = textContent;
+                    }
+                } else if (el.id === 'test_date' || el.id === 'date') {
+                    const cur = String(textContent).trim().toLowerCase();
+                    if ((!cur || ['test date', 'date'].includes(cur)) && authoritativeTestDate) {
+                        textContent = authoritativeTestDate;
+                        el.textContent = textContent;
                     }
                 }
 

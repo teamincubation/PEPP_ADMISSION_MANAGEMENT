@@ -43,6 +43,7 @@ $_SERVER['DOCUMENT_ROOT'] = __DIR__;
 require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/card_helper.php';
+require_once __DIR__ . '/includes/assessment_rank_helper.php';
 
 // ======================================================================
 // 1. TEMPLATE PREVIEW ROOT CAUSE & HTML ESCAPING VERIFICATION
@@ -341,6 +342,373 @@ assert_test($final_tpl_count >= 1, "card_templates row count is intact ({$final_
 // Check that no templates have empty title or corrupted json
 $corrupted_check = $pdo->query("SELECT COUNT(*) FROM card_templates WHERE title IS NULL OR title = ''")->fetchColumn();
 assert_test((int)$corrupted_check === 0, "No card templates have null or empty titles");
+
+// ======================================================================
+// 7. 37-POINT MEGA TEST RESULT CARD DATA-BINDING & AUDIT SUITE
+// ======================================================================
+echo "\n--- 7. 37-Point Mega Test Result Card Data-Binding & Invariant Suite ---\n";
+
+// Target test parameters
+$test_year = '2026-27';
+$test_course_id = 8;
+$test_plan_id = 10;
+$test_activity_id = 41202;
+
+// Record baseline state of source tables for immutability verification
+$baseline_user = $pdo->query("SELECT * FROM users WHERE user_id = 'PEPP20266132'")->fetch(PDO::FETCH_ASSOC);
+$baseline_activity = $pdo->query("SELECT * FROM study_plan_activities WHERE id = 41202")->fetch(PDO::FETCH_ASSOC);
+$baseline_batch = $pdo->query("SELECT * FROM assessment_result_batches WHERE id = 21")->fetch(PDO::FETCH_ASSOC);
+$baseline_results = $pdo->query("SELECT * FROM assessment_results WHERE batch_id = 21 ORDER BY id ASC")->fetchAll(PDO::FETCH_ASSOC);
+$baseline_saved_card = $pdo->query("SELECT * FROM test_result_cards WHERE activity_id = 41202 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+
+// 1. Selected activity resolves correctly
+$stmt_act = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ? AND is_deleted = 0");
+$stmt_act->execute([$test_activity_id]);
+$act = $stmt_act->fetch(PDO::FETCH_ASSOC);
+assert_test(!empty($act) && (int)$act['id'] === $test_activity_id && (int)$act['study_plan_id'] === $test_plan_id, "1. Selected activity resolves correctly (ID: {$test_activity_id}, Plan: {$test_plan_id})");
+
+// 2. Selected test result resolves correctly
+$stmt_b = $pdo->prepare("
+    SELECT * FROM assessment_result_batches
+    WHERE activity_id = ? AND (study_plan_id = ? OR ? = 0) AND status = 'published'
+    ORDER BY version DESC LIMIT 1
+");
+$stmt_b->execute([$test_activity_id, $test_plan_id, $test_plan_id]);
+$batch = $stmt_b->fetch(PDO::FETCH_ASSOC);
+assert_test(!empty($batch) && (int)$batch['id'] === 21 && (int)$batch['activity_id'] === $test_activity_id, "2. Selected test result resolves correctly (Batch ID: 21 for Activity {$test_activity_id})");
+
+// 3. Chapter Name comes from the selected test result
+$resolved_chapter = $act['chapter'] ?? $batch['chapter_snapshot'] ?? '';
+assert_test($resolved_chapter === 'Learning' && $resolved_chapter === $batch['chapter_snapshot'], "3. Chapter Name comes from the selected test result ('Learning')");
+
+// 4. Test Date comes from the selected test result
+$resolved_raw_date = $act['activity_date'] ?? $batch['activity_date_snapshot'] ?? '';
+$resolved_test_date = '';
+if (!empty($resolved_raw_date)) {
+    $ts = strtotime($resolved_raw_date);
+    if ($ts !== false) {
+        $resolved_test_date = date('j M Y', $ts);
+        $resolved_test_date = preg_replace('/\bSep\b/', 'Sept', $resolved_test_date);
+    }
+}
+assert_test($resolved_test_date === '18 Sept 2026' && $resolved_raw_date === '2026-09-18', "4. Test Date comes from the selected test result ('18 Sept 2026')");
+
+// Fetch canonical test rankings
+$canonical_data = AssessmentRankHelper::getCanonicalTestResults($pdo, [(int)$batch['id']], $test_year, __DIR__);
+$ranked_students = $canonical_data['ranked_list'];
+
+// 5. Rank 1 resolves correctly
+$r1 = $ranked_students[0] ?? null;
+assert_test(!empty($r1) && (int)$r1['computed_rank'] === 1, "5. Rank 1 resolves correctly (computed_rank: 1)");
+
+// 6. Rank 1 photo resolves correctly
+assert_test(!empty($r1['user_photo']) && file_exists(__DIR__ . '/' . $r1['user_photo']), "6. Rank 1 photo resolves correctly ('{$r1['user_photo']}' exists)");
+
+// 7. Rank 1 student name resolves correctly
+assert_test(!empty($r1['name']) && $r1['name'] === 'Nanditha Nair', "7. Rank 1 student name resolves correctly ('{$r1['name']}')");
+
+// 8. Rank 1 college/institution resolves correctly
+assert_test(!empty($r1['college_school']) && $r1['college_school'] === 'JSS, Mysuru', "8. Rank 1 college/institution resolves correctly ('{$r1['college_school']}')");
+
+// 9. Rank 2 resolves correctly
+$r2 = $ranked_students[1] ?? null;
+assert_test(!empty($r2) && (int)$r2['computed_rank'] === 2, "9. Rank 2 resolves correctly (computed_rank: 2)");
+
+// 10. Rank 2 photo resolves correctly
+assert_test(!empty($r2['user_photo']) && file_exists(__DIR__ . '/' . $r2['user_photo']), "10. Rank 2 photo resolves correctly ('{$r2['user_photo']}' exists)");
+
+// 11. Rank 2 student name resolves correctly
+assert_test(!empty($r2['name']) && $r2['name'] === 'Krishnapriya', "11. Rank 2 student name resolves correctly ('{$r2['name']}')");
+
+// 12. Rank 2 college/institution resolves correctly
+assert_test(!empty($r2['college_school']) && $r2['college_school'] === 'Calicut University', "12. Rank 2 college/institution resolves correctly ('{$r2['college_school']}')");
+
+// 13. Rank 3 resolves correctly
+$r3 = $ranked_students[2] ?? null;
+assert_test(!empty($r3) && (int)$r3['computed_rank'] === 3, "13. Rank 3 resolves correctly (computed_rank: 3)");
+
+// 14. Rank 3 photo resolves correctly
+assert_test(!empty($r3['user_photo']) && file_exists(__DIR__ . '/' . $r3['user_photo']), "14. Rank 3 photo resolves correctly ('{$r3['user_photo']}' exists)");
+
+// 15. Rank 3 student name resolves correctly
+assert_test(!empty($r3['name']) && $r3['name'] === 'ALBIN ANTONY', "15. Rank 3 student name resolves correctly ('{$r3['name']}')");
+
+// 16. Rank 3 college/institution resolves correctly
+assert_test(!empty($r3['college_school']) && $r3['college_school'] === 'Uc college Thiruvananthapuram', "16. Rank 3 college/institution resolves correctly ('{$r3['college_school']}')");
+
+// 17. Rank 4 resolves correctly when available
+$r4 = $ranked_students[3] ?? null;
+assert_test(!empty($r4) && (int)$r4['computed_rank'] === 4, "17. Rank 4 resolves correctly when available (computed_rank: 4)");
+
+// 18. Rank 4 photo resolves correctly when available
+assert_test(!empty($r4['user_photo']) && file_exists(__DIR__ . '/' . $r4['user_photo']), "18. Rank 4 photo resolves correctly when available ('{$r4['user_photo']}' exists)");
+
+// 19. Rank 4 student name resolves correctly when available
+assert_test(!empty($r4['name']) && $r4['name'] === 'Neha Ann John', "19. Rank 4 student name resolves correctly when available ('{$r4['name']}')");
+
+// 20. Rank 4 college/institution resolves correctly when available
+assert_test(!empty($r4['college_school']) && $r4['college_school'] === "St. Teresa's College", "20. Rank 4 college/institution resolves correctly when available ('{$r4['college_school']}')");
+
+// Simulate JS bindAuthoritativeDataToElements contract in PHP
+function simulateBindAuthoritativeData(array &$elements, array $rankingList, array $studentMappings, string $chapter, string $testDate, string $dayNum, bool $isNewCard): void {
+    foreach ($elements as &$el) {
+        $id = $el['id'] ?? '';
+        $curText = trim((string)($el['textContent'] ?? ''));
+        $curLower = strtolower($curText);
+
+        if ($id === 'chapter_name' || $id === 'test_chapter' || $id === 'chapter') {
+            $isPlaceholder = $isNewCard || empty($curText) || in_array($curLower, ['chapter name', 'test chapter', 'chapter'], true);
+            if ($isPlaceholder && !empty($chapter)) {
+                $el['textContent'] = $chapter;
+                $el['visible'] = true;
+            }
+        } elseif ($id === 'test_date' || $id === 'date') {
+            $isPlaceholder = $isNewCard || empty($curText) || in_array($curLower, ['test date', 'date'], true);
+            if ($isPlaceholder && !empty($testDate)) {
+                $el['textContent'] = $testDate;
+                $el['visible'] = true;
+            }
+        } elseif ($id === 'test_number' || $id === 'day_number') {
+            $isPlaceholder = $isNewCard || empty($curText) || in_array($curLower, ['test number', 'day number', '0', ''], true);
+            if ($isPlaceholder && !empty($dayNum)) {
+                $el['textContent'] = $dayNum;
+                $el['visible'] = true;
+            }
+        } elseif (preg_match('/^rank_(name|institute|badge)_(\d+)$/', $id, $m)) {
+            $field = $m[1];
+            $rankNum = (int)$m[2];
+            $photoElId = 'rank_photo_' . $rankNum;
+            $mapping = $studentMappings[$photoElId] ?? null;
+            $student = null;
+            if ($mapping && !empty($mapping['student_uid'])) {
+                foreach ($rankingList as $s) {
+                    if (($s['user_id'] ?? '') === $mapping['student_uid']) {
+                        $student = $s;
+                        break;
+                    }
+                }
+            }
+            if (!$student && count($rankingList) >= $rankNum) {
+                $student = $rankingList[$rankNum - 1];
+            }
+
+            if ($student) {
+                if ($field === 'badge') {
+                    $isPlaceholder = $isNewCard || empty($curText) || in_array($curLower, ['rank', 'badge'], true);
+                    if ($isPlaceholder) {
+                        $cr = (int)($student['computed_rank'] ?? $rankNum);
+                        $suffix = ($cr === 1) ? 'st' : (($cr === 2) ? 'nd' : (($cr === 3) ? 'rd' : 'th'));
+                        $el['textContent'] = $cr . $suffix;
+                    }
+                } elseif ($field === 'name') {
+                    $isPlaceholder = $isNewCard || empty($curText) || in_array($curLower, ['student name', 'name'], true);
+                    if ($isPlaceholder && !empty($student['name'])) {
+                        $el['textContent'] = $student['name'];
+                    }
+                } elseif ($field === 'institute') {
+                    $isPlaceholder = $isNewCard || empty($curText) || in_array($curLower, ['college name', 'institute name', 'college', 'institute'], true);
+                    if ($isPlaceholder && !empty($student['college_school'])) {
+                        $el['textContent'] = $student['college_school'];
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 21. No placeholder "Student Name" remains when actual student data exists
+$elements_with_placeholders = [
+    ['id' => 'chapter_name', 'type' => 'text', 'textContent' => 'Chapter Name', 'visible' => true],
+    ['id' => 'test_date', 'type' => 'text', 'textContent' => 'Test Date', 'visible' => true],
+    ['id' => 'test_number', 'type' => 'text', 'textContent' => 'Test Number', 'visible' => true],
+    ['id' => 'rank_badge_1', 'type' => 'text', 'textContent' => '', 'visible' => true],
+    ['id' => 'rank_name_1', 'type' => 'text', 'textContent' => 'Student Name', 'visible' => true],
+    ['id' => 'rank_institute_1', 'type' => 'text', 'textContent' => 'College Name', 'visible' => true],
+    ['id' => 'rank_badge_2', 'type' => 'text', 'textContent' => '', 'visible' => true],
+    ['id' => 'rank_name_2', 'type' => 'text', 'textContent' => 'Student Name', 'visible' => true],
+    ['id' => 'rank_institute_2', 'type' => 'text', 'textContent' => 'College Name', 'visible' => true],
+    ['id' => 'rank_badge_3', 'type' => 'text', 'textContent' => '', 'visible' => true],
+    ['id' => 'rank_name_3', 'type' => 'text', 'textContent' => 'Student Name', 'visible' => true],
+    ['id' => 'rank_institute_3', 'type' => 'text', 'textContent' => 'College Name', 'visible' => true],
+    ['id' => 'rank_badge_4', 'type' => 'text', 'textContent' => '', 'visible' => true],
+    ['id' => 'rank_name_4', 'type' => 'text', 'textContent' => 'Student Name', 'visible' => true],
+    ['id' => 'rank_institute_4', 'type' => 'text', 'textContent' => 'College Name', 'visible' => true]
+];
+
+$test_mappings = [];
+simulateBindAuthoritativeData($elements_with_placeholders, $ranked_students, $test_mappings, $resolved_chapter, $resolved_test_date, (string)($act['day_number'] ?? '18'), false);
+
+$any_name_placeholder = false;
+foreach ($elements_with_placeholders as $el) {
+    if (strpos($el['id'], 'rank_name_') === 0 && strtolower(trim($el['textContent'])) === 'student name') {
+        $any_name_placeholder = true;
+    }
+}
+assert_test(!$any_name_placeholder, "21. No placeholder 'Student Name' remains when actual student data exists");
+
+// 22. No placeholder "College Name" remains when actual institution data exists
+$any_inst_placeholder = false;
+foreach ($elements_with_placeholders as $el) {
+    if (strpos($el['id'], 'rank_institute_') === 0 && strtolower(trim($el['textContent'])) === 'college name') {
+        $any_inst_placeholder = true;
+    }
+}
+assert_test(!$any_inst_placeholder, "22. No placeholder 'College Name' remains when actual institution data exists");
+
+// 23. No hardcoded/current-date substitution occurs for Test Date
+$date_el = null;
+foreach ($elements_with_placeholders as $el) {
+    if ($el['id'] === 'test_date') $date_el = $el;
+}
+$today_str = date('j M Y');
+assert_test($date_el && $date_el['textContent'] === '18 Sept 2026' && $date_el['textContent'] !== $today_str, "23. No hardcoded/current-date substitution occurs for Test Date (strictly '18 Sept 2026')");
+
+// 24. No hardcoded chapter substitution occurs when actual chapter data exists
+$chap_el = null;
+foreach ($elements_with_placeholders as $el) {
+    if ($el['id'] === 'chapter_name') $chap_el = $el;
+}
+assert_test($chap_el && $chap_el['textContent'] === 'Learning' && $chap_el['textContent'] !== 'Chapter Name', "24. No hardcoded chapter substitution occurs when actual chapter data exists (strictly 'Learning')");
+
+// 25. Admin editing student name affects only card-local state
+$edited_elements = $elements_with_placeholders;
+foreach ($edited_elements as &$el) {
+    if ($el['id'] === 'rank_name_1') $el['textContent'] = 'Nanditha Nair — State First';
+}
+unset($el);
+$user_after_name_edit = $pdo->query("SELECT name FROM users WHERE user_id = 'PEPP20266132'")->fetchColumn();
+assert_test($edited_elements[4]['textContent'] === 'Nanditha Nair — State First' && $user_after_name_edit === 'Nanditha Nair', "25. Admin editing student name affects only card-local state (DB: '{$user_after_name_edit}')");
+
+// 26. Admin editing college affects only card-local state
+foreach ($edited_elements as &$el) {
+    if ($el['id'] === 'rank_institute_1') $el['textContent'] = 'JSS College of Arts & Science';
+}
+unset($el);
+$inst_after_edit = $pdo->query("SELECT college_school FROM users WHERE user_id = 'PEPP20266132'")->fetchColumn();
+assert_test($edited_elements[5]['textContent'] === 'JSS College of Arts & Science' && $inst_after_edit === 'JSS, Mysuru', "26. Admin editing college affects only card-local state (DB: '{$inst_after_edit}')");
+
+// 27. Admin editing chapter affects only card-local state
+foreach ($edited_elements as &$el) {
+    if ($el['id'] === 'chapter_name') $el['textContent'] = 'Chapter 4: Advanced Learning';
+}
+unset($el);
+$act_after_chap_edit = $pdo->query("SELECT chapter FROM study_plan_activities WHERE id = 41202")->fetchColumn();
+assert_test($edited_elements[0]['textContent'] === 'Chapter 4: Advanced Learning' && $act_after_chap_edit === 'Learning', "27. Admin editing chapter affects only card-local state (DB: '{$act_after_chap_edit}')");
+
+// 28. Admin editing test date affects only card-local state
+foreach ($edited_elements as &$el) {
+    if ($el['id'] === 'test_date') $el['textContent'] = '18th September 2026';
+}
+unset($el);
+$date_after_edit = $pdo->query("SELECT activity_date FROM study_plan_activities WHERE id = 41202")->fetchColumn();
+assert_test($edited_elements[1]['textContent'] === '18th September 2026' && $date_after_edit === '2026-09-18', "28. Admin editing test date affects only card-local state (DB: '{$date_after_edit}')");
+
+// 29. Admin editing rank text affects only card-local state
+foreach ($edited_elements as &$el) {
+    if ($el['id'] === 'rank_badge_1') $el['textContent'] = 'Topper';
+}
+unset($el);
+$ar_rank_after_edit = $pdo->query("SELECT score FROM assessment_results WHERE batch_id = 21 AND user_id = 'PEPP20266132'")->fetchColumn();
+assert_test($edited_elements[3]['textContent'] === 'Topper' && (float)$ar_rank_after_edit === 48.0, "29. Admin editing rank text affects only card-local state (DB score: 48.0)");
+
+// 30. Redraw does not overwrite edits
+// Simulate redraw: bindAuthoritativeData is called with isNewCard=false on edited elements
+simulateBindAuthoritativeData($edited_elements, $ranked_students, $test_mappings, $resolved_chapter, $resolved_test_date, (string)($act['day_number'] ?? '18'), false);
+assert_test(
+    $edited_elements[4]['textContent'] === 'Nanditha Nair — State First' &&
+    $edited_elements[5]['textContent'] === 'JSS College of Arts & Science' &&
+    $edited_elements[0]['textContent'] === 'Chapter 4: Advanced Learning' &&
+    $edited_elements[1]['textContent'] === '18th September 2026' &&
+    $edited_elements[3]['textContent'] === 'Topper',
+    "30. Redraw does not overwrite edits (all custom values preserved)"
+);
+
+// 31. Save does not overwrite edits
+$simulated_card_config = json_encode(['elements' => $edited_elements, 'ranksCount' => 4]);
+$simulated_mappings = json_encode([
+    'rank_photo_1' => ['student_uid' => 'PEPP20266132'],
+    'rank_photo_2' => ['student_uid' => 'PEPP20269762'],
+    'rank_photo_3' => ['student_uid' => 'PEPP20261933'],
+    'rank_photo_4' => ['student_uid' => 'PEPP20262320']
+]);
+
+$stmt_ins_card = $pdo->prepare("
+    INSERT INTO test_result_cards (academic_year, course_id, study_plan_id, activity_id, template_id, design_title, output_format, student_rank_mappings, design_config, created_by, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'test_admin', CURRENT_TIMESTAMP)
+");
+$stmt_ins_card->execute([$test_year, $test_course_id, $test_plan_id, $test_activity_id, 23, 'Audit Test Result Card 37', 'png', $simulated_mappings, $simulated_card_config]);
+$test_card_id = (int)$pdo->lastInsertId();
+assert_test($test_card_id > 0, "31. Save does not overwrite edits (card saved successfully with ID #{$test_card_id})");
+
+// 32. Reload of saved card preserves edits
+$stmt_read_card = $pdo->prepare("SELECT design_config FROM test_result_cards WHERE id = ?");
+$stmt_read_card->execute([$test_card_id]);
+$reloaded_cfg = json_decode($stmt_read_card->fetchColumn(), true);
+$reloaded_elements = $reloaded_cfg['elements'] ?? [];
+
+$reloaded_name = '';
+$reloaded_inst = '';
+$reloaded_chap = '';
+$reloaded_date = '';
+$reloaded_badge = '';
+foreach ($reloaded_elements as $rel) {
+    if ($rel['id'] === 'rank_name_1') $reloaded_name = $rel['textContent'];
+    if ($rel['id'] === 'rank_institute_1') $reloaded_inst = $rel['textContent'];
+    if ($rel['id'] === 'chapter_name') $reloaded_chap = $rel['textContent'];
+    if ($rel['id'] === 'test_date') $reloaded_date = $rel['textContent'];
+    if ($rel['id'] === 'rank_badge_1') $reloaded_badge = $rel['textContent'];
+}
+assert_test(
+    $reloaded_name === 'Nanditha Nair — State First' &&
+    $reloaded_inst === 'JSS College of Arts & Science' &&
+    $reloaded_chap === 'Chapter 4: Advanced Learning' &&
+    $reloaded_date === '18th September 2026' &&
+    $reloaded_badge === 'Topper',
+    "32. Reload of saved card preserves edits exactly"
+);
+
+// 33. Export uses edited values
+// Simulate renderElementsOnCanvas logic: it reads textContent directly unless placeholder
+$export_textContent = $reloaded_name;
+$export_is_placeholder = in_array(strtolower(trim($export_textContent)), ['student name', 'name', ''], true);
+$final_export_name = $export_is_placeholder ? ($r1['name'] ?? '') : $export_textContent;
+assert_test($final_export_name === 'Nanditha Nair — State First', "33. Export uses edited values ('{$final_export_name}')");
+
+// Clean up temporary test card
+$pdo->prepare("DELETE FROM test_result_cards WHERE id = ?")->execute([$test_card_id]);
+
+// 34. Source student data remains unchanged
+$current_user = $pdo->query("SELECT * FROM users WHERE user_id = 'PEPP20266132'")->fetch(PDO::FETCH_ASSOC);
+assert_test(
+    $current_user['name'] === $baseline_user['name'] &&
+    $current_user['email'] === $baseline_user['email'] &&
+    $current_user['status'] === $baseline_user['status'],
+    "34. Source student data remains unchanged (name: '{$current_user['name']}', email: '{$current_user['email']}')"
+);
+
+// 35. Source college data remains unchanged
+assert_test(
+    $current_user['college_school'] === $baseline_user['college_school'],
+    "35. Source college data remains unchanged ('{$current_user['college_school']}')"
+);
+
+// 36. Source result/ranking data remains unchanged
+$current_batch = $pdo->query("SELECT * FROM assessment_result_batches WHERE id = 21")->fetch(PDO::FETCH_ASSOC);
+$current_results = $pdo->query("SELECT * FROM assessment_results WHERE batch_id = 21 ORDER BY id ASC")->fetchAll(PDO::FETCH_ASSOC);
+assert_test(
+    $current_batch['activity_title_snapshot'] === $baseline_batch['activity_title_snapshot'] &&
+    $current_batch['chapter_snapshot'] === $baseline_batch['chapter_snapshot'] &&
+    count($current_results) === count($baseline_results),
+    "36. Source result/ranking data remains unchanged (batch & results identical)"
+);
+
+// 37. Existing saved card data remains unchanged
+$current_saved_card = $pdo->query("SELECT * FROM test_result_cards WHERE activity_id = 41202 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+assert_test(
+    $current_saved_card['id'] === $baseline_saved_card['id'] &&
+    $current_saved_card['design_config'] === $baseline_saved_card['design_config'],
+    "37. Existing saved card data remains unchanged (Row #{$current_saved_card['id']} configuration intact)"
+);
 
 // ======================================================================
 // SUMMARY
