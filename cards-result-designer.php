@@ -56,6 +56,26 @@ if ($saved_id && !$explicit_template) {
     } catch (Exception $e) {}
 }
 
+// Fallback: If no explicit template_id and no saved design, auto-resolve default active result template
+if (!$template_id) {
+    try {
+        $stmt_pref = $pdo->query("
+            SELECT id FROM card_templates
+            WHERE status = 'active'
+              AND (category = 'test_results' OR title LIKE '%Mega Test%' OR title LIKE '%Result%')
+            ORDER BY
+              CASE WHEN category = 'test_results' THEN 0 ELSE 1 END,
+              id ASC
+            LIMIT 1
+        ");
+        $pref_id = $stmt_pref->fetchColumn();
+        if ($pref_id) {
+            $template_id = (int)$pref_id;
+        }
+    } catch (Exception $e) {}
+}
+
+
 $chk_tpl_id = $template_id;
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['template_id'])) {
     $chk_tpl_id = (int)$_POST['template_id'];
@@ -351,38 +371,76 @@ if (!$has_current && $tpl) {
     ];
 }
 
-// ── Load Test/Activity snapshot ────────────
+// ── Load Test/Activity snapshot & validate context ────────────
 try {
-    $stmt = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ?");
+    $stmt = $pdo->prepare("SELECT * FROM study_plan_activities WHERE id = ? AND is_deleted = 0");
     $stmt->execute([$activity_id]);
-    $activity = $stmt->fetch();
+    $activity = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
 if (!$activity) {
-    // Fallback: load snapshot from assessment_result_batches
+    // Security: Check if the activity was explicitly deleted in study_plan_activities
+    $is_explicitly_deleted = false;
+    try {
+        $stmt_del = $pdo->prepare("SELECT is_deleted FROM study_plan_activities WHERE id = ?");
+        $stmt_del->execute([$activity_id]);
+        $del_val = $stmt_del->fetchColumn();
+        if ($del_val !== false && (int)$del_val === 1) {
+            $is_explicitly_deleted = true;
+        }
+    } catch (Exception $e) {}
+
+    if ($is_explicitly_deleted) {
+        // Deleted activity cannot regain access via snapshot
+        header('Location: cards.php?tab=test_results');
+        exit;
+    }
+
+    // Fallback: load snapshot from assessment_result_batches only for valid/non-deleted activities
     try {
         $stmt_snap = $pdo->prepare("
             SELECT
+                activity_id AS id,
+                study_plan_id,
+                academic_year,
                 activity_title_snapshot AS activity_title,
                 activity_type_snapshot AS activity_type,
                 activity_date_snapshot AS activity_date,
                 chapter_snapshot AS chapter
             FROM assessment_result_batches
             WHERE activity_id = ? AND status = 'published'
+            ORDER BY version DESC
             LIMIT 1
         ");
         $stmt_snap->execute([$activity_id]);
         $snap = $stmt_snap->fetch(PDO::FETCH_ASSOC);
         if ($snap) {
-            $activity = [
-                'id' => $activity_id,
-                'study_plan_id' => $plan_id,
-                'activity_title' => $snap['activity_title'],
-                'activity_type' => $snap['activity_type'],
-                'activity_date' => $snap['activity_date'],
-                'chapter' => $snap['chapter'],
-                'day_number' => null
-            ];
+            // Verify parent study plan is not deleted if present
+            $snap_plan_id = (int)($snap['study_plan_id'] ?? 0);
+            $plan_is_deleted = false;
+            if ($snap_plan_id > 0) {
+                $stmt_chk_p = $pdo->prepare("SELECT is_deleted FROM study_plans WHERE id = ?");
+                $stmt_chk_p->execute([$snap_plan_id]);
+                $p_del = $stmt_chk_p->fetchColumn();
+                if ($p_del !== false && (int)$p_del === 1) {
+                    $plan_is_deleted = true;
+                }
+            }
+
+            if (!$plan_is_deleted) {
+                $activity = [
+                    'id' => $activity_id,
+                    'study_plan_id' => $snap['study_plan_id'],
+                    'activity_title' => $snap['activity_title'],
+                    'activity_type' => $snap['activity_type'],
+                    'activity_date' => $snap['activity_date'],
+                    'chapter' => $snap['chapter'],
+                    'day_number' => null
+                ];
+                if (empty($year) && !empty($snap['academic_year'])) {
+                    $year = $snap['academic_year'];
+                }
+            }
         }
     } catch (Exception $e) {}
 }
@@ -390,6 +448,36 @@ if (!$activity) {
 if (!$activity) {
     header('Location: cards.php?tab=test_results');
     exit;
+}
+
+
+// Security: Validate activity belongs to the selected study plan & academic year
+$act_plan_id = (int)($activity['study_plan_id'] ?? 0);
+if ($plan_id > 0 && $act_plan_id > 0 && $plan_id !== $act_plan_id) {
+    // Activity does not belong to the requested study plan
+    header('Location: cards.php?tab=test_results');
+    exit;
+}
+if (!$plan_id && $act_plan_id > 0) {
+    $plan_id = $act_plan_id;
+}
+
+if ($plan_id > 0) {
+    try {
+        $stmt_p_yr = $pdo->prepare("SELECT academic_year FROM study_plans WHERE id = ? AND is_deleted = 0");
+        $stmt_p_yr->execute([$plan_id]);
+        $p_yr = $stmt_p_yr->fetchColumn();
+        if ($p_yr) {
+            if (!empty($year) && $year !== $p_yr) {
+                // Year mismatch with plan
+                header('Location: cards.php?tab=test_results');
+                exit;
+            }
+            if (empty($year)) {
+                $year = $p_yr;
+            }
+        }
+    } catch (Exception $e) {}
 }
 
 // ── Load Student Rankings from Published Batches ────────────
@@ -410,20 +498,34 @@ try {
         if ($bid) {
             $batch_ids[] = (int)$bid;
         }
-    } else {
-        // Merged mode - Load all published batches for the activity
+    }
+
+    // If no course-specific batch found or in merged mode (course_id == 0):
+    // Fallback: load published batch for this activity scoped to study plan and academic year
+    // (Mega Tests are published across all assigned courses under course_id = 0 / 'All Courses')
+    if (empty($batch_ids)) {
         $stmt_batches = $pdo->prepare("
             SELECT id FROM assessment_result_batches
             WHERE activity_id = ?
-              AND study_plan_id = ?
-              AND academic_year = ?
+              AND (study_plan_id = ? OR ? = 0)
+              AND (academic_year = ? OR ? = '')
               AND status = 'published'
+            ORDER BY version DESC
         ");
-        $stmt_batches->execute([$activity_id, $plan_id, $year]);
+        $stmt_batches->execute([$activity_id, $plan_id, $plan_id, $year, $year]);
         $batch_ids = $stmt_batches->fetchAll(PDO::FETCH_COLUMN);
     }
 
-    // Fallback removed to enforce strict study plan activity scoping
+    // Secondary fallback: if still empty, check any published batch strictly for this verified activity_id
+    if (empty($batch_ids)) {
+        $stmt_any_batch = $pdo->prepare("
+            SELECT id FROM assessment_result_batches
+            WHERE activity_id = ? AND status = 'published'
+            ORDER BY version DESC
+        ");
+        $stmt_any_batch->execute([$activity_id]);
+        $batch_ids = $stmt_any_batch->fetchAll(PDO::FETCH_COLUMN);
+    }
 
     if (!empty($batch_ids)) {
         $canonical_res = AssessmentRankHelper::getCanonicalTestResults($pdo, $batch_ids, $year, __DIR__);
@@ -1654,18 +1756,18 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
 
         // Unconditional authoritative text elements overwrite (for both new and saved designs)
-        let chapterNameEl = elements.find(el => el.id === 'chapter_name');
+        let chapterNameEl = elements.find(el => el.id === 'chapter_name' || el.id === 'test_chapter' || el.id === 'chapter');
         if (chapterNameEl) {
             const chapterVal = '<?php echo addslashes($activity['chapter'] ?? ''); ?>';
-            chapterNameEl.textContent = chapterVal;
-            if (!chapterVal) {
-                chapterNameEl.visible = false;
-            } else {
+            if (chapterVal) {
+                chapterNameEl.textContent = chapterVal;
                 chapterNameEl.visible = true;
+            } else {
+                chapterNameEl.visible = false;
             }
         }
 
-        let testDateEl = elements.find(el => el.id === 'test_date');
+        let testDateEl = elements.find(el => el.id === 'test_date' || el.id === 'date');
         if (testDateEl) {
             let formattedDate = '';
             const rawDate = '<?php echo $activity['activity_date'] ?? ''; ?>';
@@ -1675,19 +1777,22 @@ document.addEventListener('DOMContentLoaded', async function() {
                     formattedDate = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
                 }
             }
-            testDateEl.textContent = formattedDate;
-            if (!formattedDate) {
-                testDateEl.visible = false;
-            } else {
+            if (formattedDate) {
+                testDateEl.textContent = formattedDate;
                 testDateEl.visible = true;
+            } else {
+                testDateEl.visible = false;
             }
         }
 
         // Overwrite and restore Test Number element unconditionally, ensuring it remains visible
-        let testNumEl = elements.find(el => el.id === 'test_number');
+        let testNumEl = elements.find(el => el.id === 'test_number' || el.id === 'day_number');
         if (testNumEl) {
-            testNumEl.textContent = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
-            testNumEl.visible = true;
+            const dayNum = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
+            if (dayNum) {
+                testNumEl.textContent = dayNum;
+                testNumEl.visible = true;
+            }
         }
 
         // Hide test name safely (do not render as visible card content)
@@ -1699,12 +1804,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Fallback mapping assignment for legacy/empty card configs
         const hasUsableMappings = Object.keys(studentRankMappings).length > 0 && Object.values(studentRankMappings).some(m => {
             if (!m) return false;
-            if (typeof m === 'object') {
-                return !!m.student_uid;
-            }
-            return String(m).trim() !== '';
+            const uid = (typeof m === 'object') ? m.student_uid : m;
+            return !!uid && (!rankingList.length || !!findStudentInList(uid));
         });
-        if (!hasUsableMappings) {
+        if (!hasUsableMappings && rankingList.length > 0) {
             studentRankMappings = {};
             rankingList.forEach(function(student, index) {
                 const slotNum = index + 1;
@@ -1717,6 +1820,22 @@ document.addEventListener('DOMContentLoaded', async function() {
                     photo_override: null
                 };
             });
+        }
+
+        // Synchronize Ranks Count selector with the template's active rank slots
+        if (!savedConfig || !savedConfig.ranksCount) {
+            let maxSlot = 0;
+            elements.forEach(function(el) {
+                const m = String(el.id || '').match(/^rank_photo_(\d+)$/);
+                if (m && el.visible !== false) {
+                    const r = parseInt(m[1], 10);
+                    if (r > maxSlot) maxSlot = r;
+                }
+            });
+            if (maxSlot >= 3 && maxSlot <= 5) {
+                const ranksInput = document.getElementById('prop-ranks-count');
+                if (ranksInput) ranksInput.value = String(maxSlot);
+            }
         }
 
         // Initialize size and register resize listener
@@ -1846,17 +1965,31 @@ function drawElements() {
 
             // Find student mapped to this rank block photo
             const photoElId = 'rank_photo_' + rankNum;
-            const mapping = studentRankMappings[photoElId];
+            let mapping = studentRankMappings[photoElId];
 
+            let student = null;
             if (mapping && mapping.student_uid) {
-                const student = findStudentInList(mapping.student_uid);
-                if (student) {
-                    if (field === 'name') textContent = student.name;
-                    else if (field === 'institute') textContent = student.college_school;
-                    else if (field === 'badge') textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
-                    else if (field === 'photo') {
-                        photoSrc = mapping.photo_override || (student.user_photo ? '../' + student.user_photo : null);
-                    }
+                student = findStudentInList(mapping.student_uid);
+            }
+            if (!student && rankingList.length >= rankNum) {
+                student = rankingList[rankNum - 1];
+                if (!studentRankMappings[photoElId]) {
+                    studentRankMappings[photoElId] = {
+                        student_uid: student.user_id || student.student_email,
+                        zoom: 100,
+                        panX: 0,
+                        panY: 0,
+                        photo_override: null
+                    };
+                }
+            }
+
+            if (student) {
+                if (field === 'name') textContent = student.name;
+                else if (field === 'institute') textContent = student.college_school || '';
+                else if (field === 'badge') textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
+                else if (field === 'photo') {
+                    photoSrc = (mapping && mapping.photo_override) ? mapping.photo_override : (student.user_photo ? '../' + student.user_photo : null);
                 }
             }
         }
@@ -1864,16 +1997,37 @@ function drawElements() {
         if (el.id && el.id.startsWith('rank_badge_')) {
             const slotNum = parseInt(el.id.replace('rank_badge_', ''));
             const photoElId = 'rank_photo_' + slotNum;
-            const mapping = studentRankMappings[photoElId];
+            let mapping = studentRankMappings[photoElId];
+            let student = null;
             if (mapping && mapping.student_uid) {
-                const student = findStudentInList(mapping.student_uid);
-                if (student) {
-                    const style = getRankBadgeStyle(student.computed_rank);
-                    if (!savedDesignId || !el.markerColorManuallySet) {
-                        el.markerColor = style.markerColor;
-                    }
+                student = findStudentInList(mapping.student_uid);
+            }
+            if (!student && rankingList.length >= slotNum) {
+                student = rankingList[slotNum - 1];
+            }
+            if (student) {
+                const style = getRankBadgeStyle(student.computed_rank);
+                if (!savedDesignId || !el.markerColorManuallySet) {
+                    el.markerColor = style.markerColor;
                 }
             }
+        }
+
+        // Authoritative test metadata dynamic replacements
+        if (el.id === 'chapter_name' || el.id === 'test_chapter' || el.id === 'chapter') {
+            const chap = '<?php echo addslashes($activity['chapter'] ?? ''); ?>';
+            if (chap) textContent = chap;
+        } else if (el.id === 'test_date' || el.id === 'date') {
+            const rawDate = '<?php echo $activity['activity_date'] ?? ''; ?>';
+            if (rawDate) {
+                const dObj = new Date(rawDate);
+                if (!isNaN(dObj.getTime())) {
+                    textContent = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                }
+            }
+        } else if (el.id === 'test_number' || el.id === 'day_number') {
+            const dnum = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
+            if (dnum) textContent = dnum;
         }
 
         const div = document.createElement('div');
@@ -3416,24 +3570,47 @@ function saveDesign(isExporting = false) {
                     const field = rankMatch[1];
                     const rankNum = parseInt(rankMatch[2]);
                     const photoElId = 'rank_photo_' + rankNum;
-                    const mapping = studentRankMappings[photoElId];
+                    let mapping = studentRankMappings[photoElId];
+
+                    let student = null;
                     if (mapping && mapping.student_uid) {
-                        const student = findStudentInList(mapping.student_uid);
-                        if (student) {
-                            if (field === 'name') textContent = student.name;
-                            else if (field === 'institute') textContent = student.college_school;
-                            else if (field === 'badge') {
-                                textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
-                                const style = getRankBadgeStyle(student.computed_rank);
-                                if (!savedDesignId || !el.markerColorManuallySet) {
-                                    el.markerColor = style.markerColor;
-                                }
-                            }
-                            else if (field === 'photo') {
-                                photoSrc = mapping.photo_override || (student.user_photo ? '../' + student.user_photo : null);
+                        student = findStudentInList(mapping.student_uid);
+                    }
+                    if (!student && rankingList.length >= rankNum) {
+                        student = rankingList[rankNum - 1];
+                    }
+
+                    if (student) {
+                        if (field === 'name') textContent = student.name;
+                        else if (field === 'institute') textContent = student.college_school || '';
+                        else if (field === 'badge') {
+                            textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
+                            const style = getRankBadgeStyle(student.computed_rank);
+                            if (!savedDesignId || !el.markerColorManuallySet) {
+                                el.markerColor = style.markerColor;
                             }
                         }
+                        else if (field === 'photo') {
+                            photoSrc = (mapping && mapping.photo_override) ? mapping.photo_override : (student.user_photo ? '../' + student.user_photo : null);
+                        }
                     }
+                }
+
+                // Authoritative text for test metadata elements during card generation
+                if (el.id === 'chapter_name' || el.id === 'test_chapter' || el.id === 'chapter') {
+                    const chap = '<?php echo addslashes($activity['chapter'] ?? ''); ?>';
+                    if (chap) textContent = chap;
+                } else if (el.id === 'test_date' || el.id === 'date') {
+                    const rawDate = '<?php echo $activity['activity_date'] ?? ''; ?>';
+                    if (rawDate) {
+                        const dObj = new Date(rawDate);
+                        if (!isNaN(dObj.getTime())) {
+                            textContent = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                        }
+                    }
+                } else if (el.id === 'test_number' || el.id === 'day_number') {
+                    const dnum = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
+                    if (dnum) textContent = dnum;
                 }
 
                 if (el.type === 'text') {
