@@ -62,7 +62,7 @@ if (!$template_id) {
         $stmt_pref = $pdo->query("
             SELECT id FROM card_templates
             WHERE status = 'active'
-              AND (category = 'test_results' OR title LIKE '%Mega Test%' OR title LIKE '%Result%')
+              AND is_mega_test_card = 1
             ORDER BY
               CASE WHEN category = 'test_results' THEN 0 ELSE 1 END,
               id ASC
@@ -71,6 +71,20 @@ if (!$template_id) {
         $pref_id = $stmt_pref->fetchColumn();
         if ($pref_id) {
             $template_id = (int)$pref_id;
+        } else {
+            $stmt_pref2 = $pdo->query("
+                SELECT id FROM card_templates
+                WHERE status = 'active'
+                  AND (category = 'test_results' OR title LIKE '%Mega Test%' OR title LIKE '%Result%')
+                ORDER BY
+                  CASE WHEN category = 'test_results' THEN 0 ELSE 1 END,
+                  id ASC
+                LIMIT 1
+            ");
+            $pref_id2 = $stmt_pref2->fetchColumn();
+            if ($pref_id2) {
+                $template_id = (int)$pref_id2;
+            }
         }
     } catch (Exception $e) {}
 }
@@ -344,7 +358,7 @@ if (!$tpl) {
 // ── Load all active card templates for template selector ────────────
 $all_templates = [];
 try {
-    $stmt_all_tpl = $pdo->query("SELECT id, title, category, bg_image, canvas_width, canvas_height FROM card_templates WHERE status = 'active' ORDER BY title ASC");
+    $stmt_all_tpl = $pdo->query("SELECT id, title, category, bg_image, canvas_width, canvas_height FROM card_templates WHERE status = 'active' AND is_mega_test_card = 1 ORDER BY title ASC");
     $raw_templates = $stmt_all_tpl->fetchAll(PDO::FETCH_ASSOC);
     foreach ($raw_templates as $t) {
         if (has_template_access($pdo, $admin_username, (int)$t['id'])) {
@@ -1692,7 +1706,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 }
             }
 
-            // ─── DYNAMICALLY POPULATE TEST DETAILS ───
+            // ─── DYNAMICALLY POPULATE TEST DETAILS (NEW CARD ONLY) ───
             // For new designs, make sure chapter_name and test_date are present by default, aligned left and styled, and test_name is removed.
             if (!hasSavedElements) {
                 elements = elements.filter(el => el.id !== 'test_name');
@@ -1745,7 +1759,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                     elements.push(testDateEl);
                 }
 
-                // Unconditionally align test date directly under chapter name left-aligned with a +55px vertical offset
+                // Align test date directly under chapter name left-aligned with a +55px vertical offset
                 if (testDateEl && chapterNameEl) {
                     testDateEl.left = chapterNameEl.left;
                     testDateEl.top = chapterNameEl.top + 55;
@@ -1753,52 +1767,6 @@ document.addEventListener('DOMContentLoaded', async function() {
                 }
             }
 
-        }
-
-        // Unconditional authoritative text elements overwrite (for both new and saved designs)
-        let chapterNameEl = elements.find(el => el.id === 'chapter_name' || el.id === 'test_chapter' || el.id === 'chapter');
-        if (chapterNameEl) {
-            const chapterVal = '<?php echo addslashes($activity['chapter'] ?? ''); ?>';
-            if (chapterVal) {
-                chapterNameEl.textContent = chapterVal;
-                chapterNameEl.visible = true;
-            } else {
-                chapterNameEl.visible = false;
-            }
-        }
-
-        let testDateEl = elements.find(el => el.id === 'test_date' || el.id === 'date');
-        if (testDateEl) {
-            let formattedDate = '';
-            const rawDate = '<?php echo $activity['activity_date'] ?? ''; ?>';
-            if (rawDate) {
-                const dObj = new Date(rawDate);
-                if (!isNaN(dObj.getTime())) {
-                    formattedDate = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-                }
-            }
-            if (formattedDate) {
-                testDateEl.textContent = formattedDate;
-                testDateEl.visible = true;
-            } else {
-                testDateEl.visible = false;
-            }
-        }
-
-        // Overwrite and restore Test Number element unconditionally, ensuring it remains visible
-        let testNumEl = elements.find(el => el.id === 'test_number' || el.id === 'day_number');
-        if (testNumEl) {
-            const dayNum = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
-            if (dayNum) {
-                testNumEl.textContent = dayNum;
-                testNumEl.visible = true;
-            }
-        }
-
-        // Hide test name safely (do not render as visible card content)
-        let testNameEl = elements.find(el => el.id === 'test_name');
-        if (testNameEl) {
-            testNameEl.visible = false;
         }
 
         // Fallback mapping assignment for legacy/empty card configs
@@ -1821,6 +1789,83 @@ document.addEventListener('DOMContentLoaded', async function() {
                 };
             });
         }
+
+        // Initial text data population from selected Mega Test DB data (ONLY for new cards)
+        if (!hasSavedElements) {
+            let chapterNameEl = elements.find(el => el.id === 'chapter_name' || el.id === 'test_chapter' || el.id === 'chapter');
+            if (chapterNameEl) {
+                const chapterVal = '<?php echo addslashes($activity['chapter'] ?? ''); ?>';
+                if (chapterVal) {
+                    chapterNameEl.textContent = chapterVal;
+                    chapterNameEl.visible = true;
+                } else {
+                    chapterNameEl.visible = false;
+                }
+            }
+
+            let testDateEl = elements.find(el => el.id === 'test_date' || el.id === 'date');
+            if (testDateEl) {
+                let formattedDate = '';
+                const rawDate = '<?php echo $activity['activity_date'] ?? ''; ?>';
+                if (rawDate) {
+                    const dObj = new Date(rawDate);
+                    if (!isNaN(dObj.getTime())) {
+                        formattedDate = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                    }
+                }
+                if (formattedDate) {
+                    testDateEl.textContent = formattedDate;
+                    testDateEl.visible = true;
+                } else {
+                    testDateEl.visible = false;
+                }
+            }
+
+            let testNumEl = elements.find(el => el.id === 'test_number' || el.id === 'day_number');
+            if (testNumEl) {
+                const dayNum = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
+                if (dayNum) {
+                    testNumEl.textContent = dayNum;
+                    testNumEl.visible = true;
+                }
+            }
+
+            // Initialize student ranking text elements from ranking list
+            elements.forEach(function(el) {
+                const rankMatch = String(el.id || '').match(/^rank_(name|institute|badge)_(\d+)$/);
+                if (rankMatch) {
+                    const field = rankMatch[1];
+                    const rankNum = parseInt(rankMatch[2], 10);
+                    const photoElId = 'rank_photo_' + rankNum;
+                    let mapping = studentRankMappings[photoElId];
+                    let student = null;
+                    if (mapping && mapping.student_uid) {
+                        student = findStudentInList(mapping.student_uid);
+                    }
+                    if (!student && rankingList.length >= rankNum) {
+                        student = rankingList[rankNum - 1];
+                    }
+                    if (student) {
+                        if (field === 'name') el.textContent = student.name || '';
+                        else if (field === 'institute') el.textContent = student.college_school || '';
+                        else if (field === 'badge') el.textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
+                    }
+                }
+            });
+        }
+
+        // Hide test name safely (do not render as visible card content)
+        let testNameEl = elements.find(el => el.id === 'test_name');
+        if (testNameEl) {
+            testNameEl.visible = false;
+        }
+
+        // Ensure every text element has a valid string textContent
+        elements.forEach(function(el) {
+            if (el.type === 'text' && (el.textContent === undefined || el.textContent === null)) {
+                el.textContent = '';
+            }
+        });
 
         // Synchronize Ranks Count selector with the template's active rank slots
         if (!savedConfig || !savedConfig.ranksCount) {
@@ -1984,13 +2029,8 @@ function drawElements() {
                 }
             }
 
-            if (student) {
-                if (field === 'name') textContent = student.name;
-                else if (field === 'institute') textContent = student.college_school || '';
-                else if (field === 'badge') textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
-                else if (field === 'photo') {
-                    photoSrc = (mapping && mapping.photo_override) ? mapping.photo_override : (student.user_photo ? '../' + student.user_photo : null);
-                }
+            if (student && field === 'photo') {
+                photoSrc = (mapping && mapping.photo_override) ? mapping.photo_override : (student.user_photo ? '../' + student.user_photo : null);
             }
         }
 
@@ -2011,23 +2051,6 @@ function drawElements() {
                     el.markerColor = style.markerColor;
                 }
             }
-        }
-
-        // Authoritative test metadata dynamic replacements
-        if (el.id === 'chapter_name' || el.id === 'test_chapter' || el.id === 'chapter') {
-            const chap = '<?php echo addslashes($activity['chapter'] ?? ''); ?>';
-            if (chap) textContent = chap;
-        } else if (el.id === 'test_date' || el.id === 'date') {
-            const rawDate = '<?php echo $activity['activity_date'] ?? ''; ?>';
-            if (rawDate) {
-                const dObj = new Date(rawDate);
-                if (!isNaN(dObj.getTime())) {
-                    textContent = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-                }
-            }
-        } else if (el.id === 'test_number' || el.id === 'day_number') {
-            const dnum = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
-            if (dnum) textContent = dnum;
         }
 
         const div = document.createElement('div');
@@ -2997,11 +3020,16 @@ function updateStudentAssignOverride(studentUid) {
 
     const rankMatch = String(activeId).match(/^rank_photo_(\d+)$/);
     if (rankMatch) {
-        const slotNum = parseInt(rankMatch[1]);
-        const badgeEl = elements.find(el => el.id === 'rank_badge_' + slotNum);
-        if (badgeEl) {
-            const student = findStudentInList(studentUid);
-            if (student) {
+        const slotNum = parseInt(rankMatch[1], 10);
+        const student = findStudentInList(studentUid);
+        if (student) {
+            const nameEl = elements.find(el => el.id === 'rank_name_' + slotNum);
+            if (nameEl) nameEl.textContent = student.name || '';
+            const instEl = elements.find(el => el.id === 'rank_institute_' + slotNum);
+            if (instEl) instEl.textContent = student.college_school || '';
+            const badgeEl = elements.find(el => el.id === 'rank_badge_' + slotNum);
+            if (badgeEl) {
+                badgeEl.textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
                 const style = getRankBadgeStyle(student.computed_rank);
                 badgeEl.markerColor = style.markerColor;
             }
@@ -3009,6 +3037,7 @@ function updateStudentAssignOverride(studentUid) {
     }
 
     drawElements();
+    updatePropertiesPanel();
     saveHistoryState();
 }
 
@@ -3041,14 +3070,32 @@ function addNewStudentRankBlock() {
     const yOffset = 470 + (nextRank - 1) * 200;
 
     const markerColors = {1: '#eab308', 2: '#94a3b8', 3: '#cd7f32', 4: '#64748b'};
-    const markerColor = markerColors[nextRank] || '#64748b';
+    let markerColor = markerColors[nextRank] || '#64748b';
+
+    const student = (rankingList.length >= nextRank) ? rankingList[nextRank - 1] : null;
+    if (student) {
+        if (!studentRankMappings["rank_photo_" + nextRank]) {
+            studentRankMappings["rank_photo_" + nextRank] = {
+                student_uid: student.user_id || student.student_email,
+                zoom: 100,
+                panX: 0,
+                panY: 0,
+                photo_override: null
+            };
+        }
+        const style = getRankBadgeStyle(student.computed_rank);
+        if (style && style.markerColor) markerColor = style.markerColor;
+    }
+    const studentName = student ? (student.name || 'Student Name') : 'Student Name';
+    const studentInst = student ? (student.college_school || 'College Name') : 'College Name';
+    const badgeText = student ? (student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')))) : (nextRank + suffix);
 
     const newItems = [
         {
             "id": "rank_badge_" + nextRank,
             "name": "Rank " + nextRank + " Badge",
             "type": "text",
-            "textContent": nextRank + suffix,
+            "textContent": badgeText,
             "left": 125,
             "top": yOffset + 40,
             "width": 90,
@@ -3083,7 +3130,7 @@ function addNewStudentRankBlock() {
             "id": "rank_name_" + nextRank,
             "name": "Rank " + nextRank + " Student Name",
             "type": "text",
-            "textContent": "Student Name",
+            "textContent": studentName,
             "left": 480,
             "top": yOffset + 25,
             "width": 800,
@@ -3102,7 +3149,7 @@ function addNewStudentRankBlock() {
             "id": "rank_institute_" + nextRank,
             "name": "Rank " + nextRank + " Institute",
             "type": "text",
-            "textContent": "College Name",
+            "textContent": studentInst,
             "left": 480,
             "top": yOffset + 85,
             "width": 800,
@@ -3581,10 +3628,7 @@ function saveDesign(isExporting = false) {
                     }
 
                     if (student) {
-                        if (field === 'name') textContent = student.name;
-                        else if (field === 'institute') textContent = student.college_school || '';
-                        else if (field === 'badge') {
-                            textContent = student.computed_rank + (student.computed_rank === 1 ? 'st' : (student.computed_rank === 2 ? 'nd' : (student.computed_rank === 3 ? 'rd' : 'th')));
+                        if (field === 'badge') {
                             const style = getRankBadgeStyle(student.computed_rank);
                             if (!savedDesignId || !el.markerColorManuallySet) {
                                 el.markerColor = style.markerColor;
@@ -3594,23 +3638,6 @@ function saveDesign(isExporting = false) {
                             photoSrc = (mapping && mapping.photo_override) ? mapping.photo_override : (student.user_photo ? '../' + student.user_photo : null);
                         }
                     }
-                }
-
-                // Authoritative text for test metadata elements during card generation
-                if (el.id === 'chapter_name' || el.id === 'test_chapter' || el.id === 'chapter') {
-                    const chap = '<?php echo addslashes($activity['chapter'] ?? ''); ?>';
-                    if (chap) textContent = chap;
-                } else if (el.id === 'test_date' || el.id === 'date') {
-                    const rawDate = '<?php echo $activity['activity_date'] ?? ''; ?>';
-                    if (rawDate) {
-                        const dObj = new Date(rawDate);
-                        if (!isNaN(dObj.getTime())) {
-                            textContent = dObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-                        }
-                    }
-                } else if (el.id === 'test_number' || el.id === 'day_number') {
-                    const dnum = '<?php echo addslashes($activity['day_number'] ?: '1'); ?>';
-                    if (dnum) textContent = dnum;
                 }
 
                 if (el.type === 'text') {

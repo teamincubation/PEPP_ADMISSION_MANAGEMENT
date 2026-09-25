@@ -255,6 +255,7 @@ if ($is_local_dev) {
                 resolution_dpi INTEGER DEFAULT 72,
                 aspect_ratio TEXT,
                 status TEXT DEFAULT 'active',
+                is_mega_test_card INTEGER NOT NULL DEFAULT 0,
                 elements_json TEXT,
                 created_by TEXT,
                 created_at TEXT
@@ -849,6 +850,7 @@ if ($is_local_dev) {
             'system', DATETIME('now'));
 SQL_SEED
         );
+
         return;
     } catch (Throwable $e) {
         // In testing mode, continue if test harness defined custom mock tables
@@ -1305,6 +1307,7 @@ $conn = $pdo;
                 `resolution_dpi` INT NOT NULL DEFAULT 72,
                 `aspect_ratio` VARCHAR(50) NOT NULL,
                 `status` ENUM('active','inactive') NOT NULL DEFAULT 'active',
+                `is_mega_test_card` TINYINT(1) NOT NULL DEFAULT 0,
                 `elements_json` LONGTEXT NOT NULL,
                 `created_by` VARCHAR(100) NOT NULL,
                 `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

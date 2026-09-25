@@ -280,8 +280,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         $insert_stmt = $pdo->prepare("
                             INSERT INTO card_templates
-                            (title, category, description, bg_image, canvas_width, canvas_height, resolution_dpi, aspect_ratio, status, elements_json, created_by)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            (title, category, description, bg_image, canvas_width, canvas_height, resolution_dpi, aspect_ratio, status, is_mega_test_card, elements_json, created_by)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ");
                         $insert_stmt->execute([
                             $new_title,
@@ -293,6 +293,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $orig['resolution_dpi'] ?? 72,
                             $orig['aspect_ratio'],
                             $orig['status'] ?? 'active',
+                            $orig['is_mega_test_card'] ?? 0,
                             $orig['elements_json'],
                             $admin_username
                         ]);
@@ -300,6 +301,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 } catch (Exception $e) {
                     $error_message = "Failed to clone template: " . $e->getMessage();
+                }
+            }
+        }
+    } elseif ($action === 'toggle_mega_test_card') {
+        $is_ajax = (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)
+                || (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest');
+        if (!csrf_verify()) {
+            if ($is_ajax) {
+                header('Content-Type: application/json');
+                echo json_encode(['success' => false, 'message' => 'Security token mismatch.']);
+                exit;
+            }
+            $error_message = 'Security token mismatch.';
+        } elseif (!can_access('card-templates')) {
+            if ($is_ajax) {
+                header('Content-Type: application/json');
+                echo json_encode(['success' => false, 'message' => 'Permission denied.']);
+                exit;
+            }
+            $error_message = 'Permission denied.';
+        } else {
+            $tid = (int)($_POST['template_id'] ?? 0);
+            if (!$tid) {
+                if ($is_ajax) {
+                    header('Content-Type: application/json');
+                    echo json_encode(['success' => false, 'message' => 'Invalid template specified.']);
+                    exit;
+                }
+                $error_message = 'Invalid template specified.';
+            } else {
+                try {
+                    $stmt = $pdo->prepare("SELECT id, is_mega_test_card FROM card_templates WHERE id = ?");
+                    $stmt->execute([$tid]);
+                    $tpl_row = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if (!$tpl_row) {
+                        if ($is_ajax) {
+                            header('Content-Type: application/json');
+                            echo json_encode(['success' => false, 'message' => 'Template not found.']);
+                            exit;
+                        }
+                        $error_message = 'Template not found.';
+                    } else {
+                        $is_mega = isset($_POST['is_mega_test_card']) ? ((int)$_POST['is_mega_test_card'] ? 1 : 0) : ($tpl_row['is_mega_test_card'] ? 0 : 1);
+                        $stmt_upd = $pdo->prepare("UPDATE card_templates SET is_mega_test_card = ? WHERE id = ?");
+                        $stmt_upd->execute([$is_mega, $tid]);
+                        if ($is_ajax) {
+                            header('Content-Type: application/json');
+                            echo json_encode(['success' => true, 'is_mega_test_card' => $is_mega]);
+                            exit;
+                        }
+                        $success_message = "Template Mega Test status updated successfully.";
+                    }
+                } catch (Exception $e) {
+                    if ($is_ajax) {
+                        header('Content-Type: application/json');
+                        echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+                        exit;
+                    }
+                    $error_message = 'Failed to update template: ' . $e->getMessage();
                 }
             }
         }
@@ -445,7 +505,7 @@ if ($active_tab === 'test_results') {
         $academic_years = $pdo->query("SELECT year FROM academic_years ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN);
     } catch(Exception $e){}
     try {
-        $result_templates = $pdo->query("SELECT id, title, category FROM card_templates WHERE status = 'active' ORDER BY title ASC")->fetchAll();
+        $result_templates = $pdo->query("SELECT id, title, category FROM card_templates WHERE status = 'active' AND is_mega_test_card = 1 ORDER BY title ASC")->fetchAll();
     } catch(Exception $e){}
     try {
         $saved_cards = $pdo->query("
@@ -1289,7 +1349,7 @@ include 'includes/admin_nav.php';
                         }
                     ?>
                         <div class="tpl-card" style="<?php echo !$has_access ? 'opacity: 0.85;' : ''; ?>">
-                            <div class="tpl-preview" style="<?php echo $bg_css; ?>">
+                            <div class="tpl-preview" style="<?php echo htmlspecialchars($bg_css, ENT_QUOTES, 'UTF-8'); ?>">
                                 <span class="tpl-badge"><?php echo htmlspecialchars($categories[$tpl['category']] ?? $tpl['category']); ?></span>
                                 <?php if (!$has_access): ?>
                                     <span class="tpl-badge" style="background: #ef4444; color: #fff; left: auto; right: 10px;"><i class="fas fa-lock"></i> Restricted</span>
@@ -1521,7 +1581,7 @@ include 'includes/admin_nav.php';
                         $bg_css = get_card_bg_css_style($tpl['bg_image']);
                     ?>
                         <div class="tpl-card">
-                            <div class="tpl-preview" style="<?php echo $bg_css; ?>">
+                            <div class="tpl-preview" style="<?php echo htmlspecialchars($bg_css, ENT_QUOTES, 'UTF-8'); ?>">
                                 <span class="tpl-badge"><?php echo htmlspecialchars($categories[$tpl['category']] ?? $tpl['category']); ?></span>
                                 <span style="position:absolute; bottom:10px; right:10px;" class="badge <?php echo $tpl['status'] === 'active' ? 'green' : 'gray'; ?>">
                                     <?php echo ucfirst($tpl['status']); ?>
@@ -1531,6 +1591,24 @@ include 'includes/admin_nav.php';
                                 <div>
                                     <h3 class="tpl-title"><?php echo htmlspecialchars($tpl['title']); ?></h3>
                                     <p class="tpl-desc"><?php echo htmlspecialchars($tpl['description'] ?: 'Personalized card design.'); ?></p>
+                                </div>
+                                <div style="margin: 8px 0 10px; padding: 6px 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; display: flex; align-items: center; justify-content: space-between;">
+                                    <label for="mega-toggle-<?php echo (int)$tpl['id']; ?>" style="display:flex; align-items:center; gap:6px; margin:0; cursor:pointer;">
+                                        <i class="fas fa-trophy" id="mega-trophy-<?php echo (int)$tpl['id']; ?>" style="color: <?php echo !empty($tpl['is_mega_test_card']) ? '#f59e0b' : '#94a3b8'; ?>; font-size: 0.8rem;"></i>
+                                        <span style="font-size: 0.73rem; font-weight: 600; color: #475569;">Mega Test Card</span>
+                                    </label>
+                                    <?php if (can_access('card-templates')): ?>
+                                        <label for="mega-toggle-<?php echo (int)$tpl['id']; ?>" class="switch-toggle" style="position:relative; display:inline-block; width:34px; height:18px; margin:0; cursor:pointer;">
+                                            <input type="checkbox" id="mega-toggle-<?php echo (int)$tpl['id']; ?>" onchange="toggleMegaTestCard(<?php echo (int)$tpl['id']; ?>, this.checked, this)" <?php echo !empty($tpl['is_mega_test_card']) ? 'checked' : ''; ?> style="position:absolute; width:100%; height:100%; opacity:0; cursor:pointer; margin:0; z-index:2;">
+                                            <span class="slider round" id="mega-slider-<?php echo (int)$tpl['id']; ?>" style="position:absolute; top:0; left:0; right:0; bottom:0; background-color:<?php echo !empty($tpl['is_mega_test_card']) ? '#8b5cf6' : '#cbd5e1'; ?>; transition:.2s; border-radius:18px; pointer-events:none;">
+                                                <span id="mega-knob-<?php echo (int)$tpl['id']; ?>" style="position:absolute; height:14px; width:14px; left:<?php echo !empty($tpl['is_mega_test_card']) ? '17px' : '3px'; ?>; bottom:2px; background-color:white; transition:.2s; border-radius:50%; box-shadow:0 1px 2px rgba(0,0,0,0.2);"></span>
+                                            </span>
+                                        </label>
+                                    <?php else: ?>
+                                        <span class="badge <?php echo !empty($tpl['is_mega_test_card']) ? 'green' : 'gray'; ?>" style="font-size:0.65rem;">
+                                            <?php echo !empty($tpl['is_mega_test_card']) ? 'ON' : 'OFF'; ?>
+                                        </span>
+                                    <?php endif; ?>
                                 </div>
                                 <div style="display:flex; gap:6px; align-items:center; font-size:0.75rem;">
                                     <?php if (can_access('card-templates')): ?>
@@ -1725,6 +1803,52 @@ function openCloneModal(id, currentTitle) {
             input.select();
         }
     }, 100);
+}
+
+function toggleMegaTestCard(templateId, isChecked, inputEl) {
+    const slider = document.getElementById('mega-slider-' + templateId);
+    const knob = document.getElementById('mega-knob-' + templateId);
+    const trophy = document.getElementById('mega-trophy-' + templateId);
+    const token = '<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>';
+
+    const fd = new FormData();
+    fd.append('action', 'toggle_mega_test_card');
+    fd.append('template_id', templateId);
+    fd.append('is_mega_test_card', isChecked ? '1' : '0');
+    fd.append('csrf_token', token);
+
+    fetch('cards.php', {
+        method: 'POST',
+        body: fd,
+        headers: {
+            'Accept': 'application/json',
+            'X-CSRF-Token': token
+        }
+    })
+    .then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    })
+    .then(data => {
+        if (data.success) {
+            if (slider) slider.style.backgroundColor = data.is_mega_test_card ? '#8b5cf6' : '#cbd5e1';
+            if (knob) knob.style.left = data.is_mega_test_card ? '17px' : '3px';
+            if (trophy) trophy.style.color = data.is_mega_test_card ? '#f59e0b' : '#94a3b8';
+        } else {
+            alert('Failed to update Mega Test status: ' + (data.message || 'Unknown error'));
+            inputEl.checked = !isChecked;
+            if (slider) slider.style.backgroundColor = !isChecked ? '#8b5cf6' : '#cbd5e1';
+            if (knob) knob.style.left = !isChecked ? '17px' : '3px';
+            if (trophy) trophy.style.color = !isChecked ? '#f59e0b' : '#94a3b8';
+        }
+    })
+    .catch(err => {
+        alert('Network or server error updating Mega Test status.');
+        inputEl.checked = !isChecked;
+        if (slider) slider.style.backgroundColor = !isChecked ? '#8b5cf6' : '#cbd5e1';
+        if (knob) knob.style.left = !isChecked ? '17px' : '3px';
+        if (trophy) trophy.style.color = !isChecked ? '#f59e0b' : '#94a3b8';
+    });
 }
 </script>
 
