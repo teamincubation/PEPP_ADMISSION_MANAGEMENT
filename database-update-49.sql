@@ -36,7 +36,7 @@ END //
 DELIMITER ;
 
 CALL MigrateAddMegaTestCardColumn();
-DROP PROCEDURE IF EXISTS MigrateAddMegaTestCardColumn();
+DROP PROCEDURE IF EXISTS MigrateAddMegaTestCardColumn;
 
 -- Deterministically enable active Mega Test result templates on production (PG: 17, MCP: 23)
 UPDATE `card_templates`
