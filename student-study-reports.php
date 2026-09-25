@@ -1781,7 +1781,7 @@ if ($source === 'courses' || $source === 'mentoring') {
 
 $page_title = 'Performance & Analytics Intelligence';
 $page_sub = 'Enterprise analytics, performance dashboards, and activities tracking portal';
-$active_page = 'students';
+$active_page = 'student-study-reports';
 $extra_head = '
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>

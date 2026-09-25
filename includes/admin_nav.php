@@ -452,7 +452,7 @@ function render_nav_item($key, $active_page, $nav_data) {
             echo '<a class="nav-item ' . nav_active('studyplans', $active_page) . '" href="studyplans.php"><i class="fas fa-calendar-days"></i> Study Plans</a>';
             break;
         case 'student-study-reports':
-            echo '<a class="nav-item ' . nav_active('student-study-reports', $active_page) . '" href="student-study-reports.php"><i class="fas fa-chart-line"></i> Student Reports</a>';
+            echo '<a class="nav-item ' . nav_active('student-study-reports', $active_page) . '" href="student-study-reports.php?source=courses"><i class="fas fa-chart-line"></i> Student Reports</a>';
             break;
         case 'mentor-reports':
             if (is_super_admin()) {
