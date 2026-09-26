@@ -336,7 +336,7 @@ try {
         echo "STAGE 7: PRODUCTION FEATURE SMOKE TEST (READ-ONLY)\n";
         echo "----------------------------------------------------------------------\n";
 
-        $stmt = $pdo->query("SELECT id, employee_code, full_name, application_for, designation, status FROM employees LIMIT 5");
+        $stmt = $pdo->query("SELECT id, employee_id, full_name, application_for, designation, status FROM employees LIMIT 5");
         $sample_emps = $stmt->fetchAll();
         $stmt->closeCursor();
         echo "A. Employee Management query       : SUCCESS (" . count($sample_emps) . " sample records retrieved)\n";
@@ -347,7 +347,7 @@ try {
         echo "B. Registration Requests query     : SUCCESS (" . count($sample_reqs) . " sample records retrieved)\n";
 
         $stmt = $pdo->query("
-            SELECT e.id, e.employee_code, e.full_name, e.academic_year, e.rate_live, e.rate_qpd, e.rate_recorded, e.rate_offline, f.id AS linked_faculty_id
+            SELECT e.id, e.employee_id, e.full_name, e.academic_year, e.rate_live, e.rate_qpd, e.rate_recorded, e.rate_offline, f.id AS linked_faculty_id
             FROM employees e
             LEFT JOIN faculties f ON f.employee_management_faculty_id = e.id
             WHERE e.application_for = 'faculty' AND e.status = 'approved'
@@ -358,7 +358,7 @@ try {
         echo "C. Faculty Candidate Query         : SUCCESS (" . count($candidate_facs) . " approved candidates available)\n";
 
         $stmt = $pdo->query("
-            SELECT f.id, f.name, f.mobile, f.status, f.employee_management_faculty_id, e.employee_code AS emp_code, e.full_name AS emp_name
+            SELECT f.id, f.name, f.mobile, f.status, f.employee_management_faculty_id, e.employee_id AS emp_code, e.full_name AS emp_name
             FROM faculties f
             LEFT JOIN employees e ON e.id = f.employee_management_faculty_id
             ORDER BY f.id DESC LIMIT 5

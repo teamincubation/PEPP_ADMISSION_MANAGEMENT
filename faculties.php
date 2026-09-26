@@ -298,7 +298,7 @@ try {
 try {
     if ($has_emp_link_col) {
         $faculties = $pdo->query("
-            SELECT f.*, e.employee_code AS emp_code, e.full_name AS emp_name
+            SELECT f.*, e.employee_id AS emp_code, e.full_name AS emp_name
             FROM faculties f
             LEFT JOIN employees e ON e.id = f.employee_management_faculty_id
             ORDER BY f.status='active' DESC, f.name ASC
@@ -311,7 +311,7 @@ try {
 
     if ($has_emp_link_col) {
         $emp_faculties = $pdo->query("
-            SELECT e.id, e.employee_code, e.full_name, e.mobile_number, e.email, e.academic_year,
+            SELECT e.id, e.employee_id, e.employee_id AS employee_code, e.full_name, e.mobile_number, e.email, e.academic_year,
                    e.rate_live, e.rate_qpd, e.rate_recorded, e.rate_offline,
                    f.id AS linked_faculty_id, f.name AS linked_faculty_name
             FROM employees e
@@ -321,7 +321,7 @@ try {
         ")->fetchAll(PDO::FETCH_ASSOC);
     } else {
         $emp_faculties = $pdo->query("
-            SELECT e.id, e.employee_code, e.full_name, e.mobile_number, e.email, e.academic_year,
+            SELECT e.id, e.employee_id, e.employee_id AS employee_code, e.full_name, e.mobile_number, e.email, e.academic_year,
                    e.rate_live, e.rate_qpd, e.rate_recorded, e.rate_offline,
                    NULL AS linked_faculty_id, NULL AS linked_faculty_name
             FROM employees e
