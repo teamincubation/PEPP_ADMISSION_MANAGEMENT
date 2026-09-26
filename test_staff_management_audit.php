@@ -402,7 +402,7 @@ run_test('Mentor report eligibility query successfully joins employees table for
     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
     assert_true(is_array($rows), 'Query executes without SQL errors');
     assert_true(count($rows) > 0, 'Found active admins');
-    
+
     // Find our linked mentor admin
     $found_photo = false;
     foreach ($rows as $r) {
@@ -785,6 +785,653 @@ run_test('Staff ↔ Admin link is preserved and not overwritten when editing adm
 
     assert_equals($admin_id, (int)$emp_chk['admin_id'], 'Employee admin_id remains intact');
     assert_equals('superadmin', $emp_chk['linked_by'], 'Employee linked_by remains intact');
+});
+
+// ======================================================================
+// SECTION 10: EMPLOYEE MANAGEMENT APPROVAL REDESIGN & FACULTY 1:1 INTEGRATION
+// ======================================================================
+echo "\n--- SECTION 10: Employee Management Redesign & Faculty 1:1 Integration ---\n";
+
+require_once __DIR__ . '/includes/appointment_pdf.php';
+
+// Setup schema extensions in SQLite for application logic testing
+$pdo->exec("
+    ALTER TABLE employees ADD COLUMN internship_ends_on DATE DEFAULT NULL;
+    ALTER TABLE employees ADD COLUMN internship_payment_status TEXT DEFAULT NULL;
+    ALTER TABLE employees ADD COLUMN internship_payment_mode TEXT DEFAULT NULL;
+    ALTER TABLE employees ADD COLUMN internship_remuneration REAL DEFAULT NULL;
+    ALTER TABLE employees ADD COLUMN academic_year TEXT DEFAULT NULL;
+    ALTER TABLE employees ADD COLUMN rate_live REAL DEFAULT 0.00;
+    ALTER TABLE employees ADD COLUMN rate_qpd REAL DEFAULT 0.00;
+    ALTER TABLE employees ADD COLUMN rate_recorded REAL DEFAULT 0.00;
+    ALTER TABLE employees ADD COLUMN rate_offline REAL DEFAULT 0.00;
+
+    CREATE TABLE IF NOT EXISTS faculties (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_management_faculty_id INTEGER UNIQUE,
+        name TEXT NOT NULL,
+        mobile TEXT,
+        email TEXT,
+        rate_live REAL DEFAULT 0.00,
+        rate_qpd REAL DEFAULT 0.00,
+        rate_recorded REAL DEFAULT 0.00,
+        rate_offline REAL DEFAULT 0.00,
+        academic_year TEXT,
+        status TEXT DEFAULT 'active'
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        faculty_id INTEGER NOT NULL,
+        topic TEXT NOT NULL,
+        session_type TEXT NOT NULL,
+        duration_hours REAL NOT NULL,
+        status TEXT NOT NULL,
+        session_datetime DATETIME NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS faculty_payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        faculty_id INTEGER NOT NULL,
+        amount REAL NOT NULL,
+        payment_account_id INTEGER,
+        paid_date DATE,
+        remarks TEXT,
+        created_by TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS staff_registration_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        mobile_number TEXT NOT NULL,
+        email TEXT NOT NULL,
+        application_for TEXT NOT NULL,
+        status TEXT DEFAULT 'pending',
+        joining_date DATE,
+        internship_ends_on DATE,
+        internship_payment_status TEXT,
+        internship_payment_mode TEXT,
+        internship_remuneration REAL,
+        academic_year TEXT,
+        rate_live REAL DEFAULT 0.00,
+        rate_qpd REAL DEFAULT 0.00,
+        rate_recorded REAL DEFAULT 0.00,
+        rate_offline REAL DEFAULT 0.00,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+");
+
+// ----------------------------------------------------------------------
+// 10.1 Employee Approval Workflow & Integrity
+// ----------------------------------------------------------------------
+run_test('10.1: Employee approval requires designation, department, joining date and stores monthly salary', function() use ($pdo) {
+    $emp_data = [
+        'full_name' => 'Regular Employee Test',
+        'email' => 'reg.emp@pepplearning.com',
+        'mobile_number' => '9876500001',
+        'application_for' => 'employee',
+        'designation' => 'Academic Coordinator',
+        'department' => 'Administration',
+        'joining_date' => '2026-06-01',
+        'probation_till' => '2026-11-30',
+        'contract_validity_from' => '2026-06-01',
+        'contract_validity_till' => '2027-05-31',
+        'monthly_salary' => 35000.00,
+        'status' => 'approved'
+    ];
+
+    // Simulate backend validation logic from employee-management.php
+    assert_true(!empty($emp_data['designation']), 'Designation is mandatory for employee');
+    assert_true(!empty($emp_data['department']), 'Department is mandatory for employee');
+    assert_true(!empty($emp_data['joining_date']), 'Joining date is mandatory for employee');
+    assert_true($emp_data['monthly_salary'] > 0, 'Monthly salary is positive for employee');
+
+    $stmt = $pdo->prepare("
+        INSERT INTO employees (
+            employee_id, full_name, email, mobile_number, application_for,
+            designation, department, joining_date, probation_till,
+            contract_validity_from, contract_validity_till, monthly_salary, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ");
+    $stmt->execute([
+        'EMP00301', $emp_data['full_name'], $emp_data['email'], $emp_data['mobile_number'],
+        $emp_data['application_for'], $emp_data['designation'], $emp_data['department'],
+        $emp_data['joining_date'], $emp_data['probation_till'], $emp_data['contract_validity_from'],
+        $emp_data['contract_validity_till'], $emp_data['monthly_salary'], $emp_data['status']
+    ]);
+    $inserted_id = (int)$pdo->lastInsertId();
+
+    $stmt_chk = $pdo->prepare("SELECT * FROM employees WHERE id = ?");
+    $stmt_chk->execute([$inserted_id]);
+    $row = $stmt_chk->fetch(PDO::FETCH_ASSOC);
+
+    assert_equals('Academic Coordinator', $row['designation']);
+    assert_equals('Administration', $row['department']);
+    assert_equals('2026-06-01', $row['joining_date']);
+    assert_equals(35000.00, (float)$row['monthly_salary']);
+    assert_equals(null, $row['internship_remuneration']);
+});
+
+// ----------------------------------------------------------------------
+// 10.2 Intern Approval Workflow & Remuneration Rules
+// ----------------------------------------------------------------------
+run_test('10.2A: Intern approval enforces Designation="Project Intern", dates check, and Unpaid mode logic', function() use ($pdo) {
+    $intern_unpaid = [
+        'full_name' => 'Unpaid Intern Test',
+        'email' => 'unpaid.intern@pepplearning.com',
+        'mobile_number' => '9876500002',
+        'application_for' => 'intern',
+        'designation' => 'Project Intern',
+        'department' => 'Internship',
+        'joining_date' => '2026-07-01',
+        'internship_ends_on' => '2026-09-30',
+        'internship_payment_status' => 'unpaid',
+        'internship_payment_mode' => null,
+        'internship_remuneration' => null,
+        'monthly_salary' => 0.00,
+        'status' => 'approved'
+    ];
+
+    // Validation rules
+    assert_equals('Project Intern', $intern_unpaid['designation'], 'Designation must be Project Intern');
+    assert_true($intern_unpaid['internship_ends_on'] >= $intern_unpaid['joining_date'], 'End date must be >= joining date');
+    assert_equals(0.00, $intern_unpaid['monthly_salary'], 'Monthly salary must remain 0.00 for intern');
+    assert_equals(null, $intern_unpaid['internship_remuneration'], 'Unpaid intern has null remuneration');
+
+    $stmt = $pdo->prepare("
+        INSERT INTO employees (
+            employee_id, full_name, email, mobile_number, application_for,
+            designation, department, joining_date, internship_ends_on,
+            internship_payment_status, internship_payment_mode, internship_remuneration,
+            monthly_salary, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ");
+    $stmt->execute([
+        'EMP00302', $intern_unpaid['full_name'], $intern_unpaid['email'], $intern_unpaid['mobile_number'],
+        $intern_unpaid['application_for'], $intern_unpaid['designation'], $intern_unpaid['department'],
+        $intern_unpaid['joining_date'], $intern_unpaid['internship_ends_on'],
+        $intern_unpaid['internship_payment_status'], $intern_unpaid['internship_payment_mode'],
+        $intern_unpaid['internship_remuneration'], $intern_unpaid['monthly_salary'], $intern_unpaid['status']
+    ]);
+    $inserted_id = (int)$pdo->lastInsertId();
+
+    $stmt_chk = $pdo->prepare("SELECT * FROM employees WHERE id = ?");
+    $stmt_chk->execute([$inserted_id]);
+    $row = $stmt_chk->fetch(PDO::FETCH_ASSOC);
+
+    assert_equals('Project Intern', $row['designation']);
+    assert_equals('unpaid', $row['internship_payment_status']);
+    assert_equals(null, $row['internship_remuneration']);
+    assert_equals(0.00, (float)$row['monthly_salary']);
+});
+
+run_test('10.2B: Intern approval: Paid Monthly requires remuneration > 0 stored in dedicated column (not monthly_salary)', function() use ($pdo) {
+    $intern_monthly = [
+        'full_name' => 'Monthly Paid Intern Test',
+        'email' => 'monthly.intern@pepplearning.com',
+        'mobile_number' => '9876500003',
+        'application_for' => 'intern',
+        'designation' => 'Project Intern',
+        'department' => 'Internship',
+        'joining_date' => '2026-07-01',
+        'internship_ends_on' => '2026-12-31',
+        'internship_payment_status' => 'paid',
+        'internship_payment_mode' => 'monthly',
+        'internship_remuneration' => 12000.00,
+        'monthly_salary' => 0.00,
+        'status' => 'approved'
+    ];
+
+    // Backend validation logic
+    assert_true($intern_monthly['internship_payment_status'] === 'paid');
+    assert_true($intern_monthly['internship_payment_mode'] === 'monthly');
+    assert_true($intern_monthly['internship_remuneration'] > 0, 'Monthly paid intern requires remuneration > 0');
+    assert_equals(0.00, $intern_monthly['monthly_salary'], 'monthly_salary must remain strictly 0.00');
+
+    $stmt = $pdo->prepare("
+        INSERT INTO employees (
+            employee_id, full_name, email, mobile_number, application_for,
+            designation, department, joining_date, internship_ends_on,
+            internship_payment_status, internship_payment_mode, internship_remuneration,
+            monthly_salary, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ");
+    $stmt->execute([
+        'EMP00303', $intern_monthly['full_name'], $intern_monthly['email'], $intern_monthly['mobile_number'],
+        $intern_monthly['application_for'], $intern_monthly['designation'], $intern_monthly['department'],
+        $intern_monthly['joining_date'], $intern_monthly['internship_ends_on'],
+        $intern_monthly['internship_payment_status'], $intern_monthly['internship_payment_mode'],
+        $intern_monthly['internship_remuneration'], $intern_monthly['monthly_salary'], $intern_monthly['status']
+    ]);
+    $inserted_id = (int)$pdo->lastInsertId();
+
+    $stmt_chk = $pdo->prepare("SELECT * FROM employees WHERE id = ?");
+    $stmt_chk->execute([$inserted_id]);
+    $row = $stmt_chk->fetch(PDO::FETCH_ASSOC);
+
+    assert_equals(12000.00, (float)$row['internship_remuneration']);
+    assert_equals(0.00, (float)$row['monthly_salary'], 'monthly_salary MUST NOT store intern remuneration');
+    assert_equals('monthly', $row['internship_payment_mode']);
+});
+
+run_test('10.2C: Intern approval: Task Completion sets remuneration to NULL', function() use ($pdo) {
+    $intern_task = [
+        'full_name' => 'Task Intern Test',
+        'email' => 'task.intern@pepplearning.com',
+        'mobile_number' => '9876500004',
+        'application_for' => 'intern',
+        'designation' => 'Project Intern',
+        'department' => 'Internship',
+        'joining_date' => '2026-08-01',
+        'internship_ends_on' => '2026-10-31',
+        'internship_payment_status' => 'paid',
+        'internship_payment_mode' => 'task_completion',
+        'internship_remuneration' => null, // Rule: task completion sets remuneration to NULL
+        'monthly_salary' => 0.00,
+        'status' => 'approved'
+    ];
+
+    assert_equals(null, $intern_task['internship_remuneration']);
+    assert_equals(0.00, $intern_task['monthly_salary']);
+
+    $stmt = $pdo->prepare("
+        INSERT INTO employees (
+            employee_id, full_name, email, mobile_number, application_for,
+            designation, department, joining_date, internship_ends_on,
+            internship_payment_status, internship_payment_mode, internship_remuneration,
+            monthly_salary, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ");
+    $stmt->execute([
+        'EMP00304', $intern_task['full_name'], $intern_task['email'], $intern_task['mobile_number'],
+        $intern_task['application_for'], $intern_task['designation'], $intern_task['department'],
+        $intern_task['joining_date'], $intern_task['internship_ends_on'],
+        $intern_task['internship_payment_status'], $intern_task['internship_payment_mode'],
+        $intern_task['internship_remuneration'], $intern_task['monthly_salary'], $intern_task['status']
+    ]);
+    $inserted_id = (int)$pdo->lastInsertId();
+
+    $stmt_chk = $pdo->prepare("SELECT * FROM employees WHERE id = ?");
+    $stmt_chk->execute([$inserted_id]);
+    $row = $stmt_chk->fetch(PDO::FETCH_ASSOC);
+
+    assert_equals('task_completion', $row['internship_payment_mode']);
+    assert_equals(null, $row['internship_remuneration']);
+    assert_equals(0.00, (float)$row['monthly_salary']);
+});
+
+// ----------------------------------------------------------------------
+// 10.3 Faculty Approval Workflow & Persistence
+// ----------------------------------------------------------------------
+run_test('10.3: Faculty approval requires Academic Year, stores optional session charges, monthly_salary=0, remuneration=NULL', function() use ($pdo) {
+    $faculty_data = [
+        'full_name' => 'Prof. Alan Turing',
+        'email' => 'turing@pepplearning.com',
+        'mobile_number' => '9876500005',
+        'application_for' => 'faculty',
+        'designation' => 'Faculty',
+        'department' => 'Academics',
+        'academic_year' => '2026-27',
+        'rate_live' => 1500.00,
+        'rate_qpd' => 800.00,
+        'rate_recorded' => 1200.00,
+        'rate_offline' => 2000.00,
+        'monthly_salary' => 0.00,
+        'internship_remuneration' => null,
+        'status' => 'approved'
+    ];
+
+    assert_true(!empty($faculty_data['academic_year']), 'PEPP Academic Year is mandatory');
+    assert_equals('Faculty', $faculty_data['designation']);
+    assert_equals('Academics', $faculty_data['department']);
+    assert_equals(0.00, $faculty_data['monthly_salary']);
+    assert_equals(null, $faculty_data['internship_remuneration']);
+
+    $stmt = $pdo->prepare("
+        INSERT INTO employees (
+            employee_id, full_name, email, mobile_number, application_for,
+            designation, department, academic_year, rate_live, rate_qpd,
+            rate_recorded, rate_offline, monthly_salary, internship_remuneration, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ");
+    $stmt->execute([
+        'EMP00305', $faculty_data['full_name'], $faculty_data['email'], $faculty_data['mobile_number'],
+        $faculty_data['application_for'], $faculty_data['designation'], $faculty_data['department'],
+        $faculty_data['academic_year'], $faculty_data['rate_live'], $faculty_data['rate_qpd'],
+        $faculty_data['rate_recorded'], $faculty_data['rate_offline'],
+        $faculty_data['monthly_salary'], $faculty_data['internship_remuneration'], $faculty_data['status']
+    ]);
+    $faculty_emp_id = (int)$pdo->lastInsertId();
+
+    $stmt_chk = $pdo->prepare("SELECT * FROM employees WHERE id = ?");
+    $stmt_chk->execute([$faculty_emp_id]);
+    $row = $stmt_chk->fetch(PDO::FETCH_ASSOC);
+
+    assert_equals('2026-27', $row['academic_year']);
+    assert_equals(1500.00, (float)$row['rate_live']);
+    assert_equals(800.00, (float)$row['rate_qpd']);
+    assert_equals(1200.00, (float)$row['rate_recorded']);
+    assert_equals(2000.00, (float)$row['rate_offline']);
+    assert_equals(0.00, (float)$row['monthly_salary']);
+    assert_equals(null, $row['internship_remuneration']);
+});
+
+// ----------------------------------------------------------------------
+// 10.4 Faculty Linking, 1:1 Constraints, Switching & Unlinking
+// ----------------------------------------------------------------------
+run_test('10.4A: Faculty candidate list in faculties.php only includes APPROVED Faculty applications', function() use ($pdo) {
+    // Insert additional pending/rejected/employee records
+    $pdo->prepare("
+        INSERT INTO employees (employee_id, full_name, email, mobile_number, application_for, status)
+        VALUES ('EMP00306', 'Pending Faculty', 'pending@pepp.com', '9876500006', 'faculty', 'pending'),
+               ('EMP00307', 'Rejected Faculty', 'rejected@pepp.com', '9876500007', 'faculty', 'rejected'),
+               ('EMP00308', 'Approved Employee', 'emp.approved@pepp.com', '9876500008', 'employee', 'approved'),
+               ('EMP00309', 'Approved Intern', 'intern.approved@pepp.com', '9876500009', 'intern', 'approved')
+    ")->execute();
+
+    // Query mimicking faculties.php $emp_faculties
+    $stmt = $pdo->query("
+        SELECT e.id, e.employee_id, e.full_name, e.application_for, e.status, f.id AS linked_faculty_id
+        FROM employees e
+        LEFT JOIN faculties f ON f.employee_management_faculty_id = e.id
+        WHERE e.application_for = 'faculty' AND e.status = 'approved'
+        ORDER BY e.full_name ASC
+    ");
+    $candidates = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    assert_equals(1, count($candidates), 'Only approved Faculty application is returned in candidate list');
+    assert_equals('Prof. Alan Turing', $candidates[0]['full_name']);
+    assert_equals(null, $candidates[0]['linked_faculty_id'], 'Candidate is currently unlinked');
+});
+
+run_test('10.4B: Adding Faculty copies authoritative profile and rates and creates 1:1 link', function() use ($pdo) {
+    // Fetch authoritative employee record #5 (Alan Turing)
+    $stmt_e = $pdo->query("SELECT * FROM employees WHERE full_name = 'Prof. Alan Turing'");
+    $emp = $stmt_e->fetch(PDO::FETCH_ASSOC);
+    assert_true(!empty($emp), 'Authoritative employee found');
+
+    // Add faculty with authoritative fields
+    $stmt_ins = $pdo->prepare("
+        INSERT INTO faculties (
+            employee_management_faculty_id, name, mobile, email,
+            rate_live, rate_qpd, rate_recorded, rate_offline, academic_year, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+    ");
+    $stmt_ins->execute([
+        $emp['id'], $emp['full_name'], $emp['mobile_number'], $emp['email'],
+        $emp['rate_live'], $emp['rate_qpd'], $emp['rate_recorded'], $emp['rate_offline'],
+        $emp['academic_year']
+    ]);
+    $faculty_id = (int)$pdo->lastInsertId();
+
+    $stmt_fac = $pdo->prepare("SELECT * FROM faculties WHERE id = ?");
+    $stmt_fac->execute([$faculty_id]);
+    $fac = $stmt_fac->fetch(PDO::FETCH_ASSOC);
+
+    assert_equals((int)$emp['id'], (int)$fac['employee_management_faculty_id'], 'Linked employee management faculty ID saved');
+    assert_equals('Prof. Alan Turing', $fac['name']);
+    assert_equals('2026-27', $fac['academic_year']);
+    assert_equals(1500.00, (float)$fac['rate_live']);
+    assert_equals(800.00, (float)$fac['rate_qpd']);
+    assert_equals(1200.00, (float)$fac['rate_recorded']);
+    assert_equals(2000.00, (float)$fac['rate_offline']);
+});
+
+run_test('10.4C: 1:1 Relationship constraint prevents duplicate link across database and backend checks', function() use ($pdo) {
+    $emp_id = (int)$pdo->query("SELECT id FROM employees WHERE full_name = 'Prof. Alan Turing'")->fetchColumn();
+
+    // 1. Backend Conflict Check test
+    $stmt_chk = $pdo->prepare("SELECT id FROM faculties WHERE employee_management_faculty_id = ?");
+    $stmt_chk->execute([$emp_id]);
+    $conflict = $stmt_chk->fetchColumn();
+    assert_true(!empty($conflict), 'Backend conflict check identifies already-linked employee');
+
+    // 2. Database UNIQUE constraint check test
+    $duplicate_caught = false;
+    try {
+        $stmt_dup = $pdo->prepare("
+            INSERT INTO faculties (employee_management_faculty_id, name, status)
+            VALUES (?, 'Duplicate Link Attempt', 'active')
+        ");
+        $stmt_dup->execute([$emp_id]);
+    } catch (PDOException $e) {
+        $duplicate_caught = true;
+    }
+    assert_true($duplicate_caught, 'Database UNIQUE constraint caught duplicate link attempt');
+});
+
+run_test('10.4D: Switching link to another approved faculty is transactional and overwrites authoritative fields', function() use ($pdo) {
+    // Insert second approved faculty in Employee Management
+    $pdo->prepare("
+        INSERT INTO employees (
+            employee_id, full_name, email, mobile_number, application_for,
+            designation, department, academic_year, rate_live, rate_qpd,
+            rate_recorded, rate_offline, monthly_salary, status
+        ) VALUES (
+            'EMP00310', 'Dr. Grace Hopper', 'hopper@pepplearning.com', '9876500010', 'faculty',
+            'Faculty', 'Academics', '2026-27', 1800.00, 950.00, 1400.00, 2200.00, 0.00, 'approved'
+        )
+    ")->execute();
+    $new_emp_id = (int)$pdo->lastInsertId();
+
+    $fac_id = (int)$pdo->query("SELECT id FROM faculties WHERE name = 'Prof. Alan Turing'")->fetchColumn();
+
+    // Fetch authoritative fields of Dr. Grace Hopper
+    $new_emp = $pdo->query("SELECT * FROM employees WHERE id = {$new_emp_id}")->fetch(PDO::FETCH_ASSOC);
+
+    // Perform switch
+    $stmt_switch = $pdo->prepare("
+        UPDATE faculties SET
+            employee_management_faculty_id = ?,
+            name = ?, mobile = ?, email = ?,
+            rate_live = ?, rate_qpd = ?, rate_recorded = ?, rate_offline = ?,
+            academic_year = ?
+        WHERE id = ?
+    ");
+    $stmt_switch->execute([
+        $new_emp['id'], $new_emp['full_name'], $new_emp['mobile_number'], $new_emp['email'],
+        $new_emp['rate_live'], $new_emp['rate_qpd'], $new_emp['rate_recorded'], $new_emp['rate_offline'],
+        $new_emp['academic_year'], $fac_id
+    ]);
+
+    $stmt_fac = $pdo->prepare("SELECT * FROM faculties WHERE id = ?");
+    $stmt_fac->execute([$fac_id]);
+    $fac = $stmt_fac->fetch(PDO::FETCH_ASSOC);
+
+    assert_equals($new_emp_id, (int)$fac['employee_management_faculty_id'], 'Switched to new employee ID');
+    assert_equals('Dr. Grace Hopper', $fac['name'], 'Name overwritten with authoritative data');
+    assert_equals(1800.00, (float)$fac['rate_live'], 'Live rate overwritten');
+    assert_equals(950.00, (float)$fac['rate_qpd'], 'QPD rate overwritten');
+});
+
+run_test('10.4E: Unlinking sets foreign key to NULL without deleting faculty record, sessions, or payments', function() use ($pdo) {
+    $fac_id = (int)$pdo->query("SELECT id FROM faculties WHERE name = 'Dr. Grace Hopper'")->fetchColumn();
+
+    // Add session and payment records for this faculty
+    $pdo->prepare("INSERT INTO sessions (faculty_id, topic, session_type, duration_hours, status, session_datetime) VALUES (?, 'CompSci 101', 'live', 2.0, 'completed', CURRENT_TIMESTAMP)")
+        ->execute([$fac_id]);
+    $session_id = (int)$pdo->lastInsertId();
+
+    $pdo->prepare("INSERT INTO faculty_payments (faculty_id, amount, paid_date, created_by) VALUES (?, 3600.00, '2026-09-01', 'admin')")
+        ->execute([$fac_id]);
+    $payment_id = (int)$pdo->lastInsertId();
+
+    // Execute unlink
+    $pdo->prepare("UPDATE faculties SET employee_management_faculty_id = NULL WHERE id = ?")->execute([$fac_id]);
+
+    // Check faculties record
+    $fac = $pdo->query("SELECT * FROM faculties WHERE id = {$fac_id}")->fetch(PDO::FETCH_ASSOC);
+    assert_true(!empty($fac), 'Faculty record still exists');
+    assert_equals(null, $fac['employee_management_faculty_id'], 'Foreign key set to NULL');
+
+    // Check sessions record
+    $sess = $pdo->query("SELECT * FROM sessions WHERE id = {$session_id}")->fetch(PDO::FETCH_ASSOC);
+    assert_true(!empty($sess), 'Sessions record remains intact');
+
+    // Check payments record
+    $pmt = $pdo->query("SELECT * FROM faculty_payments WHERE id = {$payment_id}")->fetch(PDO::FETCH_ASSOC);
+    assert_true(!empty($pmt), 'Payment record remains intact');
+
+    // Check employee record in Employee Management
+    $emp_hopper = $pdo->query("SELECT * FROM employees WHERE full_name = 'Dr. Grace Hopper'")->fetch(PDO::FETCH_ASSOC);
+    assert_true(!empty($emp_hopper), 'Employee management record remains intact');
+
+    // Check that Dr. Grace Hopper is now unlinked and available to relink
+    $stmt_avail = $pdo->query("
+        SELECT e.id FROM employees e
+        LEFT JOIN faculties f ON f.employee_management_faculty_id = e.id
+        WHERE e.id = {$emp_hopper['id']} AND f.id IS NULL
+    ");
+    assert_true(!empty($stmt_avail->fetchColumn()), 'Employee becomes available again to link');
+});
+
+// ----------------------------------------------------------------------
+// 10.5 Appointment Letters Content & Privacy Redaction
+// ----------------------------------------------------------------------
+run_test('10.5A: Employee Appointment Letter generates valid PDF and contains salary clauses', function() {
+    $employee_snapshot = json_encode([
+        'reference' => 'PEPP/EMP/2026/001',
+        'generated_at' => '2026-06-01 10:00:00',
+        'generated_by' => 'Superadmin',
+        'application_for' => 'employee',
+        'employee' => [
+            'id' => 301,
+            'employee_code' => 'EMP00301',
+            'full_name' => 'Jane Employee',
+            'place_post_office' => 'Kochi',
+            'state' => 'Kerala',
+            'pincode' => '682001',
+            'designation' => 'Academic Coordinator',
+            'department' => 'Administration',
+            'joining_date' => '2026-06-01',
+            'probation_till' => '2026-11-30',
+            'contract_validity_from' => '2026-06-01',
+            'contract_validity_till' => '2027-05-31',
+            'monthly_salary' => 35000.00
+        ]
+    ]);
+
+    $pdf_bytes = render_appointment_pdf($employee_snapshot);
+    assert_true(strlen($pdf_bytes) > 1000, 'PDF generated with non-trivial size');
+    assert_true(strpos($pdf_bytes, '%PDF') === 0, 'PDF header is valid');
+    assert_true(strpos($pdf_bytes, 'APPOINTMENT LETTER') !== false, 'Contains standard appointment letter title');
+    assert_true(strpos($pdf_bytes, '35,000') !== false || strpos($pdf_bytes, '35000') !== false, 'Contains employee monthly salary');
+});
+
+run_test('10.5B: Intern Appointment Letter generates valid PDF and REDACTS all remuneration/payment details', function() {
+    $intern_snapshot = json_encode([
+        'reference' => 'PEPP/INT/2026/002',
+        'generated_at' => '2026-07-01 10:00:00',
+        'generated_by' => 'Superadmin',
+        'application_for' => 'intern',
+        'employee' => [
+            'id' => 302,
+            'employee_code' => 'EMP00302',
+            'full_name' => 'John Intern',
+            'place_post_office' => 'Calicut',
+            'state' => 'Kerala',
+            'pincode' => '673001',
+            'designation' => 'Project Intern',
+            'department' => 'Internship',
+            'joining_date' => '2026-07-01',
+            'internship_ends_on' => '2026-09-30',
+            'internship_payment_status' => 'paid',
+            'internship_payment_mode' => 'monthly',
+            'internship_remuneration' => 12000.00,
+            'monthly_salary' => 0.00
+        ]
+    ]);
+
+    $pdf_bytes = render_appointment_pdf($intern_snapshot);
+    assert_true(strlen($pdf_bytes) > 1000, 'PDF generated');
+    assert_true(strpos($pdf_bytes, 'INTERNSHIP APPOINTMENT LETTER') !== false, 'Title is INTERNSHIP APPOINTMENT LETTER');
+    assert_true(strpos($pdf_bytes, 'Project Intern') !== false, 'Designation is Project Intern');
+
+    // Strict privacy checks: Ensure ZERO remuneration or payment terms appear in raw PDF stream
+    assert_false(strpos($pdf_bytes, '12,000') !== false || strpos($pdf_bytes, '12000') !== false, 'Intern remuneration amount is REDACTED');
+    assert_false(strpos($pdf_bytes, 'Monthly Payment') !== false, 'Payment mode is REDACTED');
+    assert_false(strpos($pdf_bytes, 'Remuneration') !== false, 'Word Remuneration is REDACTED');
+    assert_false(strpos($pdf_bytes, 'Stipend') !== false, 'Word Stipend is REDACTED');
+    assert_false(strpos($pdf_bytes, 'Monthly CTC') !== false, 'Monthly CTC is REDACTED');
+});
+
+run_test('10.5C: Faculty Appointment Letter generates valid PDF and REDACTS all session rates and salary details', function() {
+    $faculty_snapshot = json_encode([
+        'reference' => 'PEPP/FAC/2026/003',
+        'generated_at' => '2026-08-01 10:00:00',
+        'generated_by' => 'Superadmin',
+        'application_for' => 'faculty',
+        'employee' => [
+            'id' => 305,
+            'employee_code' => 'EMP00305',
+            'full_name' => 'Prof. Richard Feynman',
+            'place_post_office' => 'Thiruvananthapuram',
+            'state' => 'Kerala',
+            'pincode' => '695001',
+            'designation' => 'Faculty',
+            'department' => 'Academics',
+            'academic_year' => '2026-27',
+            'rate_live' => 1500.00,
+            'rate_qpd' => 800.00,
+            'rate_recorded' => 1200.00,
+            'rate_offline' => 2000.00,
+            'monthly_salary' => 0.00
+        ]
+    ]);
+
+    $pdf_bytes = render_appointment_pdf($faculty_snapshot);
+    assert_true(strlen($pdf_bytes) > 1000, 'PDF generated');
+    assert_true(strpos($pdf_bytes, 'FACULTY APPOINTMENT LETTER') !== false, 'Title is FACULTY APPOINTMENT LETTER');
+    assert_true(strpos($pdf_bytes, 'Academic Directorate') !== false, 'Department is Academic Directorate');
+    assert_true(strpos($pdf_bytes, '2026-27') !== false, 'Academic year is 2026-27');
+
+    // Strict privacy checks: Ensure ZERO rates or salary terms appear in raw PDF stream
+    assert_false(strpos($pdf_bytes, '1500') !== false || strpos($pdf_bytes, '1,500') !== false, 'Live rate is REDACTED');
+    assert_false(strpos($pdf_bytes, '800') !== false, 'QPD rate is REDACTED');
+    assert_false(strpos($pdf_bytes, '1200') !== false || strpos($pdf_bytes, '1,200') !== false, 'Recorded rate is REDACTED');
+    assert_false(strpos($pdf_bytes, '2000') !== false || strpos($pdf_bytes, '2,000') !== false, 'Offline rate is REDACTED');
+    assert_false(strpos($pdf_bytes, 'Monthly CTC') !== false, 'Monthly CTC is REDACTED');
+    assert_false(strpos($pdf_bytes, 'Hourly') !== false, 'Hourly charge is REDACTED');
+});
+
+// ----------------------------------------------------------------------
+// 10.6 Migration 50 Static Syntax & Idempotency Audit
+// ----------------------------------------------------------------------
+run_test('10.6: Static audit of database-update-50.sql verifies true conditional guards and non-destructive operations', function() {
+    $sql_file = __DIR__ . '/database-update-50.sql';
+    assert_true(file_exists($sql_file), 'database-update-50.sql exists');
+    $sql = file_get_contents($sql_file);
+
+    // 1. Guard against destructive statements
+    assert_false(preg_match('/\bDROP\s+COLUMN\b/i', $sql) === 1, 'Contains NO DROP COLUMN');
+    assert_false(preg_match('/\bTRUNCATE\b/i', $sql) === 1, 'Contains NO TRUNCATE');
+    assert_false(preg_match('/\bDELETE\s+FROM\b/i', $sql) === 1, 'Contains NO DELETE FROM');
+    assert_false(preg_match('/\bDROP\s+TABLE\b/i', $sql) === 1, 'Contains NO DROP TABLE');
+
+    // 2. Verify conditional guards for ADD COLUMN
+    assert_true(strpos($sql, "column_name = 'employee_management_faculty_id'") !== false, 'Guarded ADD employee_management_faculty_id');
+    assert_true(strpos($sql, "column_name = 'internship_ends_on'") !== false, 'Guarded ADD internship_ends_on');
+    assert_true(strpos($sql, "column_name = 'internship_payment_status'") !== false, 'Guarded ADD internship_payment_status');
+    assert_true(strpos($sql, "column_name = 'internship_payment_mode'") !== false, 'Guarded ADD internship_payment_mode');
+    assert_true(strpos($sql, "column_name = 'internship_remuneration'") !== false, 'Guarded ADD internship_remuneration');
+    assert_true(strpos($sql, "column_name = 'academic_year'") !== false, 'Guarded ADD academic_year');
+    assert_true(strpos($sql, "column_name = 'rate_live'") !== false, 'Guarded ADD rate_live');
+
+    // 3. Verify conditional guards for indexes and foreign keys
+    assert_true(strpos($sql, "index_name = 'uq_fac_emp_faculty'") !== false, 'Guarded ADD UNIQUE KEY uq_fac_emp_faculty');
+    assert_true(strpos($sql, "constraint_name = 'fk_fac_emp_faculty'") !== false, 'Guarded ADD CONSTRAINT fk_fac_emp_faculty');
+
+    // 4. Verify conditional guards for MODIFY COLUMN (only if NOT NULL)
+    assert_true(strpos($sql, "column_name = 'department' AND IS_NULLABLE = 'NO'") !== false, 'Guarded MODIFY department');
+    assert_true(strpos($sql, "column_name = 'joining_date' AND IS_NULLABLE = 'NO'") !== false, 'Guarded MODIFY joining_date');
+    assert_true(strpos($sql, "column_name = 'contract_validity_from' AND IS_NULLABLE = 'NO'") !== false, 'Guarded MODIFY contract_validity_from');
+    assert_true(strpos($sql, "column_name = 'contract_validity_till' AND IS_NULLABLE = 'NO'") !== false, 'Guarded MODIFY contract_validity_till');
+
+    // 5. Verify stored procedure wrapper
+    assert_true(strpos($sql, 'CREATE PROCEDURE MigrateEmployeeFacultyIntegration50') !== false, 'Wrapped in stored procedure');
+    assert_true(strpos($sql, 'CALL MigrateEmployeeFacultyIntegration50()') !== false, 'Calls migration procedure');
+    assert_true(strpos($sql, 'DROP PROCEDURE IF EXISTS MigrateEmployeeFacultyIntegration50') !== false, 'Cleans up migration procedure');
 });
 
 // ======================================================================

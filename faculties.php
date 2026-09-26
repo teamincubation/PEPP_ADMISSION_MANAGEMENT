@@ -34,74 +34,174 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $action = $_POST['action'] ?? '';
         try {
-            if ($action === 'add_faculty' || $action === 'edit_faculty') {
-                $name = trim($_POST['name'] ?? '');
-                $email = trim($_POST['email'] ?? '');
-                $mobile = trim($_POST['mobile'] ?? '');
-                
-                if ($action === 'edit_faculty' && is_credential_restricted('faculties')) {
-                    $fid = (int)($_POST['faculty_id'] ?? 0);
-                    $stmt = $pdo->prepare("SELECT mobile, email FROM faculties WHERE id = ?");
-                    $stmt->execute([$fid]);
-                    $orig = $stmt->fetch();
-                    if ($orig) {
-                        if (strpos($mobile, '*') !== false || preg_match('/^[x\s@.]+$/i', $mobile) || strpos($mobile, '<span') !== false) {
-                            $mobile = $orig['mobile'];
+            if ($action === 'add_faculty') {
+                $emp_id = (int)($_POST['employee_management_faculty_id'] ?? 0);
+                if (!$emp_id) {
+                    $error_message = 'Please select an approved Faculty record from Employee Management.';
+                } else {
+                    $pdo->beginTransaction();
+                    $stmt = $pdo->prepare("SELECT * FROM employees WHERE id = ? AND application_for = 'faculty' FOR UPDATE");
+                    $stmt->execute([$emp_id]);
+                    $emp = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if (!$emp) {
+                        $pdo->rollBack();
+                        $error_message = 'The selected record is not an approved Faculty in Employee Management.';
+                    } else {
+                        // Check if employee_management_faculty_id column exists
+                        $has_col = false;
+                        try {
+                            $has_col = (bool)$pdo->query("SHOW COLUMNS FROM faculties LIKE 'employee_management_faculty_id'")->fetchColumn();
+                        } catch (Exception $e) {}
+
+                        if ($has_col) {
+                            $stmt_conflict = $pdo->prepare("SELECT id, name FROM faculties WHERE employee_management_faculty_id = ? FOR UPDATE");
+                            $stmt_conflict->execute([$emp_id]);
+                            $conflict = $stmt_conflict->fetch(PDO::FETCH_ASSOC);
+                            if ($conflict) {
+                                $pdo->rollBack();
+                                throw new Exception("This Faculty is already linked to faculty #{$conflict['id']} ({$conflict['name']}).");
+                            }
                         }
-                        if (strpos($email, '*') !== false || preg_match('/^[x\s@.]+$/i', $email) || strpos($email, '<span') !== false) {
-                            $email = $orig['email'];
+
+                        $name = trim($emp['full_name']);
+                        $mobile = trim($emp['mobile_number']);
+                        $email = trim($emp['email']) ?: null;
+                        $rate_live = (float)($emp['rate_live'] ?? 0);
+                        $rate_qpd = (float)($emp['rate_qpd'] ?? 0);
+                        $rate_recorded = (float)($emp['rate_recorded'] ?? 0);
+                        $rate_offline = (float)($emp['rate_offline'] ?? 0);
+                        $academic_year = trim($emp['academic_year'] ?? '') ?: null;
+                        $status = in_array($_POST['status'] ?? '', ['active', 'inactive'], true) ? $_POST['status'] : 'active';
+
+                        if ($has_col) {
+                            $stmt_ins = $pdo->prepare("INSERT INTO faculties (employee_management_faculty_id, name, mobile, email, rate_live, rate_qpd, rate_recorded, rate_offline, academic_year, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())");
+                            $stmt_ins->execute([$emp_id, $name, $mobile, $email, $rate_live, $rate_qpd, $rate_recorded, $rate_offline, $academic_year, $status, $admin_username]);
+                        } else {
+                            $stmt_ins = $pdo->prepare("INSERT INTO faculties (name, mobile, email, rate_live, rate_qpd, rate_recorded, rate_offline, academic_year, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,NOW())");
+                            $stmt_ins->execute([$name, $mobile, $email, $rate_live, $rate_qpd, $rate_recorded, $rate_offline, $academic_year, $status, $admin_username]);
                         }
+
+                        $new_id = (int)$pdo->lastInsertId();
+                        $pdo->commit();
+                        log_admin_activity($pdo, $admin_username, 'faculty_added', "Added faculty #{$new_id} ({$name}) linked to Employee {$emp['employee_id']}");
+                        $success_message = 'Faculty added and linked successfully.';
                     }
                 }
-                
-                if ($name === '') {
-                    $error_message = 'Faculty name is required.';
-                } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                    $error_message = 'Please enter a valid email address (or leave blank).';
+            } elseif ($action === 'edit_faculty') {
+                $id = (int)($_POST['faculty_id'] ?? 0);
+                $link_emp_id = !empty($_POST['employee_management_faculty_id']) ? (int)$_POST['employee_management_faculty_id'] : null;
+
+                $pdo->beginTransaction();
+                $stmt = $pdo->prepare("SELECT * FROM faculties WHERE id = ? FOR UPDATE");
+                $stmt->execute([$id]);
+                $orig_fac = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$orig_fac) {
+                    $pdo->rollBack();
+                    $error_message = 'Faculty record not found.';
                 } else {
+                    $has_col = false;
+                    try {
+                        $has_col = (bool)$pdo->query("SHOW COLUMNS FROM faculties LIKE 'employee_management_faculty_id'")->fetchColumn();
+                    } catch (Exception $e) {}
+
+                    $name = trim($_POST['name'] ?? '');
+                    $email = trim($_POST['email'] ?? '');
+                    $mobile = trim($_POST['mobile'] ?? '');
+                    $academic_year = trim($_POST['academic_year'] ?? '') ?: null;
                     $rate_live = (float)($_POST['rate_live'] ?? 0);
                     $rate_qpd = (float)($_POST['rate_qpd'] ?? 0);
                     $rate_recorded = (float)($_POST['rate_recorded'] ?? 0);
                     $rate_offline = (float)($_POST['rate_offline'] ?? 0);
+                    $status = in_array($_POST['status'] ?? '', ['active', 'inactive'], true) ? $_POST['status'] : 'active';
 
-                    if (is_credential_restricted('financials')) {
-                        if ($action === 'edit_faculty') {
-                            $fid = (int)($_POST['faculty_id'] ?? 0);
-                            $stmt = $pdo->prepare("SELECT rate_live, rate_qpd, rate_recorded, rate_offline FROM faculties WHERE id = ?");
-                            $stmt->execute([$fid]);
-                            $orig_rates = $stmt->fetch();
-                            if ($orig_rates) {
-                                $rate_live = (float)$orig_rates['rate_live'];
-                                $rate_qpd = (float)$orig_rates['rate_qpd'];
-                                $rate_recorded = (float)$orig_rates['rate_recorded'];
-                                $rate_offline = (float)$orig_rates['rate_offline'];
+                    // Check if linking or switching
+                    if ($link_emp_id) {
+                        if ($has_col) {
+                            $stmt_conflict = $pdo->prepare("SELECT id, name FROM faculties WHERE employee_management_faculty_id = ? AND id != ? FOR UPDATE");
+                            $stmt_conflict->execute([$link_emp_id, $id]);
+                            $conflict = $stmt_conflict->fetch(PDO::FETCH_ASSOC);
+                            if ($conflict) {
+                                $pdo->rollBack();
+                                throw new Exception("The selected Faculty is already linked to faculty #{$conflict['id']} ({$conflict['name']}).");
                             }
-                        } else {
-                            $rate_live = 0;
-                            $rate_qpd = 0;
-                            $rate_recorded = 0;
-                            $rate_offline = 0;
+                        }
+
+                        // If newly linking or switching, enforce authoritative data overwrite
+                        if (empty($orig_fac['employee_management_faculty_id']) || (int)$orig_fac['employee_management_faculty_id'] !== $link_emp_id) {
+                            $stmt_emp = $pdo->prepare("SELECT * FROM employees WHERE id = ? AND application_for = 'faculty' FOR UPDATE");
+                            $stmt_emp->execute([$link_emp_id]);
+                            $emp = $stmt_emp->fetch(PDO::FETCH_ASSOC);
+                            if (!$emp) {
+                                $pdo->rollBack();
+                                throw new Exception("Selected record is not an approved Faculty in Employee Management.");
+                            }
+                            $name = trim($emp['full_name']);
+                            $mobile = trim($emp['mobile_number']);
+                            $email = trim($emp['email']) ?: null;
+                            $academic_year = trim($emp['academic_year'] ?? '') ?: null;
+                            $rate_live = (float)($emp['rate_live'] ?? 0);
+                            $rate_qpd = (float)($emp['rate_qpd'] ?? 0);
+                            $rate_recorded = (float)($emp['rate_recorded'] ?? 0);
+                            $rate_offline = (float)($emp['rate_offline'] ?? 0);
                         }
                     }
 
-                    $vals = [
-                        $name, $mobile, $email ?: null,
-                        $rate_live, $rate_qpd, $rate_recorded, $rate_offline,
-                        trim($_POST['academic_year'] ?? '') ?: null,
-                        in_array($_POST['status'] ?? '', ['active', 'inactive'], true) ? $_POST['status'] : 'active',
-                    ];
-                    if ($action === 'add_faculty') {
-                        $stmt = $pdo->prepare("INSERT INTO faculties (name, mobile, email, rate_live, rate_qpd, rate_recorded, rate_offline, academic_year, status, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,NOW())");
-                        $stmt->execute(array_merge($vals, [$admin_username]));
-                        log_admin_activity($pdo, $admin_username, 'faculty_added', "Added faculty: {$name}");
-                        $success_message = 'Faculty added.';
+                    if (is_credential_restricted('faculties')) {
+                        if (strpos($mobile, '*') !== false || preg_match('/^[x\s@.]+$/i', $mobile) || strpos($mobile, '<span') !== false) {
+                            $mobile = $orig_fac['mobile'];
+                        }
+                        if (strpos($email, '*') !== false || preg_match('/^[x\s@.]+$/i', $email) || strpos($email, '<span') !== false) {
+                            $email = $orig_fac['email'];
+                        }
+                    }
+
+                    if (is_credential_restricted('financials') && (!$link_emp_id || (int)($orig_fac['employee_management_faculty_id'] ?? 0) === $link_emp_id)) {
+                        $rate_live = (float)$orig_fac['rate_live'];
+                        $rate_qpd = (float)$orig_fac['rate_qpd'];
+                        $rate_recorded = (float)$orig_fac['rate_recorded'];
+                        $rate_offline = (float)$orig_fac['rate_offline'];
+                    }
+
+                    if ($name === '') {
+                        $pdo->rollBack();
+                        $error_message = 'Faculty name is required.';
+                    } elseif ($email !== '' && $email !== null && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                        $pdo->rollBack();
+                        $error_message = 'Please enter a valid email address (or leave blank).';
                     } else {
-                        $id = (int)($_POST['faculty_id'] ?? 0);
-                        $stmt = $pdo->prepare("UPDATE faculties SET name=?, mobile=?, email=?, rate_live=?, rate_qpd=?, rate_recorded=?, rate_offline=?, academic_year=?, status=? WHERE id=?");
-                        $stmt->execute(array_merge($vals, [$id]));
-                        log_admin_activity($pdo, $admin_username, 'faculty_updated', "Updated faculty #{$id}: {$name}");
+                        if ($has_col) {
+                            $stmt_upd = $pdo->prepare("UPDATE faculties SET employee_management_faculty_id=?, name=?, mobile=?, email=?, rate_live=?, rate_qpd=?, rate_recorded=?, rate_offline=?, academic_year=?, status=? WHERE id=?");
+                            $stmt_upd->execute([$link_emp_id, $name, $mobile, $email ?: null, $rate_live, $rate_qpd, $rate_recorded, $rate_offline, $academic_year, $status, $id]);
+                        } else {
+                            $stmt_upd = $pdo->prepare("UPDATE faculties SET name=?, mobile=?, email=?, rate_live=?, rate_qpd=?, rate_recorded=?, rate_offline=?, academic_year=?, status=? WHERE id=?");
+                            $stmt_upd->execute([$name, $mobile, $email ?: null, $rate_live, $rate_qpd, $rate_recorded, $rate_offline, $academic_year, $status, $id]);
+                        }
+
+                        $pdo->commit();
+                        log_admin_activity($pdo, $admin_username, 'faculty_updated', "Updated faculty #{$id}: {$name}" . ($link_emp_id ? " (Linked to EMP #{$link_emp_id})" : ""));
                         $success_message = 'Faculty updated.';
                     }
+                }
+            } elseif ($action === 'unlink_faculty') {
+                $id = (int)($_POST['faculty_id'] ?? 0);
+                $pdo->beginTransaction();
+                $stmt = $pdo->prepare("SELECT * FROM faculties WHERE id = ? FOR UPDATE");
+                $stmt->execute([$id]);
+                $fac = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$fac) {
+                    $pdo->rollBack();
+                    $error_message = 'Faculty record not found.';
+                } else {
+                    $has_col = false;
+                    try {
+                        $has_col = (bool)$pdo->query("SHOW COLUMNS FROM faculties LIKE 'employee_management_faculty_id'")->fetchColumn();
+                    } catch (Exception $e) {}
+                    if ($has_col) {
+                        $pdo->prepare("UPDATE faculties SET employee_management_faculty_id = NULL WHERE id = ?")->execute([$id]);
+                    }
+                    $pdo->commit();
+                    log_admin_activity($pdo, $admin_username, 'faculty_unlinked', "Unlinked faculty #{$id} ({$fac['name']}) from Employee Management");
+                    $success_message = 'Faculty unlinked from Employee Management. All sessions, payment history, and faculty data remain intact.';
                 }
             } elseif ($action === 'add_payment') {
                 $fid = (int)($_POST['faculty_id'] ?? 0);
@@ -126,8 +226,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
         } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
             error_log('Faculties: ' . $e->getMessage());
-            $error_message = 'Database error while saving.';
+            $error_message = 'Error: ' . $e->getMessage();
         }
     }
 }
@@ -181,10 +282,53 @@ if ($view_id) {
 $faculties = [];
 $payment_accounts = [];
 $academic_years = [];
+$emp_faculties = [];
+$has_emp_link_col = false;
 try {
-    $faculties = $pdo->query("SELECT * FROM faculties ORDER BY status='active' DESC, name ASC")->fetchAll();
+    $has_emp_link_col = (bool)$pdo->query("SHOW COLUMNS FROM faculties LIKE 'employee_management_faculty_id'")->fetchColumn();
+} catch (Exception $e) {
+    try {
+        $pdo->query("SELECT employee_management_faculty_id FROM faculties LIMIT 1");
+        $has_emp_link_col = true;
+    } catch (Exception $e2) {
+        $has_emp_link_col = false;
+    }
+}
+
+try {
+    if ($has_emp_link_col) {
+        $faculties = $pdo->query("
+            SELECT f.*, e.employee_code AS emp_code, e.full_name AS emp_name
+            FROM faculties f
+            LEFT JOIN employees e ON e.id = f.employee_management_faculty_id
+            ORDER BY f.status='active' DESC, f.name ASC
+        ")->fetchAll();
+    } else {
+        $faculties = $pdo->query("SELECT f.*, NULL AS emp_code, NULL AS emp_name FROM faculties f ORDER BY f.status='active' DESC, f.name ASC")->fetchAll();
+    }
     $payment_accounts = $pdo->query("SELECT * FROM payment_accounts WHERE status='active' ORDER BY account_name")->fetchAll();
     $academic_years = $pdo->query("SELECT year FROM academic_years ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN);
+
+    if ($has_emp_link_col) {
+        $emp_faculties = $pdo->query("
+            SELECT e.id, e.employee_code, e.full_name, e.mobile_number, e.email, e.academic_year,
+                   e.rate_live, e.rate_qpd, e.rate_recorded, e.rate_offline,
+                   f.id AS linked_faculty_id, f.name AS linked_faculty_name
+            FROM employees e
+            LEFT JOIN faculties f ON f.employee_management_faculty_id = e.id
+            WHERE e.application_for = 'faculty' AND e.status = 'approved'
+            ORDER BY e.full_name ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+    } else {
+        $emp_faculties = $pdo->query("
+            SELECT e.id, e.employee_code, e.full_name, e.mobile_number, e.email, e.academic_year,
+                   e.rate_live, e.rate_qpd, e.rate_recorded, e.rate_offline,
+                   NULL AS linked_faculty_id, NULL AS linked_faculty_name
+            FROM employees e
+            WHERE e.application_for = 'faculty' AND e.status = 'approved'
+            ORDER BY e.full_name ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+    }
 } catch (Exception $e) { error_log('Faculties list: ' . $e->getMessage()); }
 
 $active_page = 'faculties';
@@ -279,7 +423,7 @@ include 'includes/admin_nav.php';
             <div class="empty-state"><i class="fas fa-chalkboard-user"></i><p>No faculties yet. Add your first faculty member.</p></div>
         <?php else: ?>
         <table class="data-table">
-            <thead><tr><th>Faculty</th><th>Rates (Live/QPD/Rec/Off)</th><th>Year</th><th>Earned</th><th>Paid</th><th>Due</th><th>Status</th><th style="text-align:right;">Actions</th></tr></thead>
+            <thead><tr><th>Faculty</th><th>Linked Employee</th><th>Rates (Live/QPD/Rec/Off)</th><th>Year</th><th>Earned</th><th>Paid</th><th>Due</th><th>Status</th><th style="text-align:right;">Actions</th></tr></thead>
             <tbody>
             <?php foreach ($faculties as $f):
                 $calc = faculty_earned($pdo, $f, $sessions_ready, $TYPE_RATE);
@@ -288,6 +432,13 @@ include 'includes/admin_nav.php';
             ?>
                 <tr>
                     <td><div class="cell-main"><?php echo e($f['name']); ?></div><div class="cell-sub"><?php echo format_credential($f['mobile'], 'phone', 'faculties') ?: '-'; ?><?php echo $f['email'] ? ' · ' . format_credential($f['email'], 'email', 'faculties') : ''; ?></div></td>
+                    <td>
+                        <?php if (!empty($f['employee_management_faculty_id'])): ?>
+                            <span class="badge blue" title="Linked to Employee Management"><i class="fas fa-link"></i> <?php echo e($f['emp_code'] ?: ('EMP #' . $f['employee_management_faculty_id'])); ?></span>
+                        <?php else: ?>
+                            <span class="badge gray"><i class="fas fa-link-slash"></i> Unlinked</span>
+                        <?php endif; ?>
+                    </td>
                     <td class="cell-sub">
                         <?php if (is_credential_restricted('financials')): ?>
                             *** / *** / *** / ***
@@ -308,6 +459,9 @@ include 'includes/admin_nav.php';
                             "email"=>(string)format_credential_text($f["email"], "email", "faculties"),
                             "rate_live"=>$f["rate_live"],"rate_qpd"=>$f["rate_qpd"],"rate_recorded"=>$f["rate_recorded"],"rate_offline"=>$f["rate_offline"],
                             "academic_year"=>(string)$f["academic_year"],"status"=>$f["status"],
+                            "employee_management_faculty_id"=>$f["employee_management_faculty_id"] ?? null,
+                            "emp_code"=>$f["emp_code"] ?? null,
+                            "emp_name"=>$f["emp_name"] ?? null,
                         ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
                         <?php if (can_delete()): ?>
                         <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this faculty and their payment records?');">
@@ -324,21 +478,132 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
-<!-- ADD/EDIT MODAL -->
-<div class="modal-backdrop" id="fac-modal">
+<!-- ADD FACULTY MODAL (Registered in Employee Management) -->
+<div class="modal-backdrop" id="fac-add-modal">
     <div class="modal" style="max-width:640px;">
-        <div class="modal-head"><h3 id="fac-modal-title"><i class="fas fa-chalkboard-user" style="color:var(--accent);"></i> Add Faculty</h3><button class="modal-close" onclick="closeModal('fac-modal')"><i class="fas fa-xmark"></i></button></div>
+        <div class="modal-head">
+            <h3><i class="fas fa-user-plus" style="color:var(--accent);"></i> Add Faculty from Employee Management</h3>
+            <button class="modal-close" onclick="closeModal('fac-add-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
         <form method="POST">
             <?php echo csrf_field(); ?>
-            <input type="hidden" name="action" id="fac-action" value="add_faculty">
-            <input type="hidden" name="faculty_id" id="fac-id">
+            <input type="hidden" name="action" value="add_faculty">
             <div class="modal-body">
+                <div class="alert alert-info" style="margin-bottom:14px; font-size:13px;">
+                    <i class="fas fa-info-circle"></i>
+                    <span>Faculty members must first be approved in <strong>Employee Management</strong>. Select an approved record to create and link this faculty. Authoritative details and rates will be populated automatically.</span>
+                </div>
+
+                <?php
+                $unlinked_emp_count = count(array_filter($emp_faculties, function($ef) { return empty($ef['linked_faculty_id']); }));
+                if ($unlinked_emp_count === 0):
+                ?>
+                    <div class="alert alert-warning" style="margin-bottom:14px; font-size:13px;">
+                        <i class="fas fa-triangle-exclamation"></i>
+                        <span>No unlinked approved faculty found. Please approve faculty applications in <a href="employee-management.php" target="_blank" style="text-decoration:underline; font-weight:700;">Employee Management</a> first.</span>
+                    </div>
+                <?php endif; ?>
+
+                <div class="field" style="margin-bottom:14px;">
+                    <label>Select Registered Faculty <span class="req">*</span></label>
+                    <select name="employee_management_faculty_id" id="fac-add-select" required onchange="onAddFacultySelected(this.value)">
+                        <option value="">-- Select Approved Registered Faculty --</option>
+                        <?php foreach ($emp_faculties as $ef):
+                            $is_linked = !empty($ef['linked_faculty_id']);
+                        ?>
+                            <option value="<?php echo (int)$ef['id']; ?>" <?php echo $is_linked ? 'disabled' : ''; ?>>
+                                <?php echo e($ef['full_name']); ?> (<?php echo e($ef['employee_code']); ?><?php echo !empty($ef['academic_year']) ? ' - ' . e($ef['academic_year']) : ''; ?>)<?php echo $is_linked ? ' [Already Linked to ' . e($ef['linked_faculty_name']) . ']' : ''; ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <!-- Preview of Authoritative Data -->
+                <div id="fac-add-preview" style="display:none; background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px; padding:14px; margin-bottom:14px;">
+                    <div style="font-weight:700; font-size:12px; color:#475569; text-transform:uppercase; margin-bottom:8px;"><i class="fas fa-id-card"></i> Authoritative Profile Details</div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:13px; margin-bottom:12px;">
+                        <div><strong>Name:</strong> <span id="fac-add-prev-name">-</span></div>
+                        <div><strong>Mobile:</strong> <span id="fac-add-prev-mobile">-</span></div>
+                        <div><strong>Email:</strong> <span id="fac-add-prev-email">-</span></div>
+                        <div><strong>Academic Year:</strong> <span id="fac-add-prev-year">-</span></div>
+                    </div>
+                    <div style="font-weight:700; font-size:12px; color:#475569; text-transform:uppercase; margin-bottom:6px;"><i class="fas fa-indian-rupee-sign"></i> Hourly Session Charges</div>
+                    <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; font-size:12px; background:#fff; border:1px solid #e2e8f0; border-radius:6px; padding:8px; text-align:center;">
+                        <div><span style="color:#64748b; display:block;">Live</span><strong id="fac-add-prev-live">₹0</strong></div>
+                        <div><span style="color:#64748b; display:block;">QPD</span><strong id="fac-add-prev-qpd">₹0</strong></div>
+                        <div><span style="color:#64748b; display:block;">Recorded</span><strong id="fac-add-prev-rec">₹0</strong></div>
+                        <div><span style="color:#64748b; display:block;">Offline</span><strong id="fac-add-prev-off">₹0</strong></div>
+                    </div>
+                </div>
+
+                <div class="field">
+                    <label>Initial Status</label>
+                    <select name="status" id="fac-add-status">
+                        <option value="active" selected>Active</option>
+                        <option value="inactive">Inactive</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('fac-add-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="fac-add-submit-btn" <?php echo $unlinked_emp_count === 0 ? 'disabled' : ''; ?>><i class="fas fa-link"></i> Add & Link Faculty</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- EDIT FACULTY MODAL -->
+<div class="modal-backdrop" id="fac-edit-modal">
+    <div class="modal" style="max-width:680px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-pen" style="color:var(--accent);"></i> Edit Faculty</h3>
+            <button class="modal-close" onclick="closeModal('fac-edit-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST" id="fac-edit-form">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="edit_faculty">
+            <input type="hidden" name="faculty_id" id="fac-edit-id">
+            <input type="hidden" name="link_employee_management_faculty_id" id="fac-edit-link-emp-id" value="">
+            <div class="modal-body">
+
+                <!-- LINKED / UNLINKED STATUS CARD -->
+                <div id="fac-edit-linked-box" class="alert alert-info" style="display:none; margin-bottom:14px; padding:10px 14px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
+                        <div>
+                            <i class="fas fa-link" style="color:var(--accent);"></i>
+                            <span>Linked Record: <strong id="fac-edit-linked-name"></strong> (<span id="fac-edit-linked-code"></span>)</span>
+                        </div>
+                        <div style="display:flex; gap:6px;">
+                            <button type="button" class="btn btn-sm btn-soft-blue" onclick="toggleSwitchFacultyUI()"><i class="fas fa-arrows-rotate"></i> Switch Link</button>
+                            <button type="button" class="btn btn-sm btn-soft-red" onclick="triggerUnlinkFaculty()"><i class="fas fa-link-slash"></i> Unlink</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="fac-edit-switch-box" style="display:none; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:8px; padding:12px; margin-bottom:14px;">
+                    <label style="font-weight:700; font-size:12px; display:block; margin-bottom:4px; color:#334155;">Switch to Another Registered Faculty</label>
+                    <select id="fac-edit-switch-select" onchange="onEditSwitchSelected(this.value)" style="width:100%; margin-bottom:4px;">
+                        <option value="">-- Select New Faculty to Switch Link --</option>
+                    </select>
+                    <div style="font-size:11px; color:#64748b;">Switching will overwrite Name, Mobile, Email, Academic Year, and Session Rates with authoritative data from the newly selected record.</div>
+                </div>
+
+                <div id="fac-edit-unlinked-box" class="alert alert-warning" style="display:none; margin-bottom:14px;">
+                    <div style="margin-bottom:8px;"><i class="fas fa-link-slash"></i> <span>This faculty is currently <strong>not linked</strong> to any Employee Management record.</span></div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <label style="font-weight:600; font-size:12px; white-space:nowrap;">Link Registered Faculty:</label>
+                        <select id="fac-edit-link-select" onchange="onEditLinkSelected(this.value)" style="flex:1;">
+                            <option value="">-- Select Registered Faculty to Link --</option>
+                        </select>
+                    </div>
+                </div>
+
                 <div class="form-grid">
-                    <div class="field"><label>Faculty Name <span class="req">*</span></label><input type="text" name="name" id="fac-name" required></div>
-                    <div class="field"><label>Mobile Number</label><input type="text" name="mobile" id="fac-mobile"></div>
-                    <div class="field"><label>Email ID</label><input type="email" name="email" id="fac-email"></div>
+                    <div class="field"><label>Faculty Name <span class="req">*</span></label><input type="text" name="name" id="fac-edit-name" required></div>
+                    <div class="field"><label>Mobile Number</label><input type="text" name="mobile" id="fac-edit-mobile"></div>
+                    <div class="field"><label>Email ID</label><input type="email" name="email" id="fac-edit-email"></div>
                     <div class="field"><label>PEPP Academic Year</label>
-                        <select name="academic_year" id="fac-year"><option value="">-</option><?php foreach ($academic_years as $y): ?><option value="<?php echo e($y); ?>"><?php echo e($y); ?></option><?php endforeach; ?></select></div>
+                        <select name="academic_year" id="fac-edit-year"><option value="">-</option><?php foreach ($academic_years as $y): ?><option value="<?php echo e($y); ?>"><?php echo e($y); ?></option><?php endforeach; ?></select></div>
                 </div>
                 <div class="cell-sub" style="font-weight:700; margin:14px 0 6px;">Charge / hour by session type</div>
                 <div class="form-grid">
@@ -348,45 +613,181 @@ include 'includes/admin_nav.php';
                         <div class="field"><label>Recorded (₹/hr)</label><input type="text" disabled value="***" style="background:#f1f5f9; cursor:not-allowed;"></div>
                         <div class="field"><label>Offline Session (₹/hr)</label><input type="text" disabled value="***" style="background:#f1f5f9; cursor:not-allowed;"></div>
                     <?php else: ?>
-                        <div class="field"><label>Live Session (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_live" id="fac-rate_live" value="0"></div>
-                        <div class="field"><label>QPD (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_qpd" id="fac-rate_qpd" value="0"></div>
-                        <div class="field"><label>Recorded (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_recorded" id="fac-rate_recorded" value="0"></div>
-                        <div class="field"><label>Offline Session (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_offline" id="fac-rate_offline" value="0"></div>
+                        <div class="field"><label>Live Session (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_live" id="fac-edit-rate_live" value="0"></div>
+                        <div class="field"><label>QPD (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_qpd" id="fac-edit-rate_qpd" value="0"></div>
+                        <div class="field"><label>Recorded (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_recorded" id="fac-edit-rate_recorded" value="0"></div>
+                        <div class="field"><label>Offline Session (₹/hr)</label><input type="number" step="0.01" min="0" name="rate_offline" id="fac-edit-rate_offline" value="0"></div>
                     <?php endif; ?>
-                    <div class="field"><label>Status</label><select name="status" id="fac-status"><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
+                    <div class="field"><label>Status</label><select name="status" id="fac-edit-status"><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
                 </div>
             </div>
-            <div class="modal-foot"><button type="button" class="btn btn-outline" onclick="closeModal('fac-modal')">Cancel</button><button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save Faculty</button></div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('fac-edit-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save Faculty</button>
+            </div>
         </form>
     </div>
 </div>
 
+<!-- HIDDEN UNLINK FORM -->
+<form method="POST" id="unlink-faculty-form" style="display:none;">
+    <?php echo csrf_field(); ?>
+    <input type="hidden" name="action" value="unlink_faculty">
+    <input type="hidden" name="faculty_id" id="unlink-fac-id">
+</form>
+
 <?php
 $extra_scripts = "<script>
+var registeredFacultiesData = " . json_encode($emp_faculties ?: [], JSON_HEX_APOS|JSON_HEX_QUOT) . ";
+
 function openFacModal() {
-    document.getElementById('fac-action').value = 'add_faculty';
-    document.getElementById('fac-modal-title').innerHTML = '<i class=\\\"fas fa-chalkboard-user\\\" style=\\\"color:var(--accent)\\\"></i> Add Faculty';
-    ['id','name','mobile','email','year'].forEach(function(k){ var el=document.getElementById('fac-'+k); if(el) el.value=''; });
-    ['rate_live','rate_qpd','rate_recorded','rate_offline'].forEach(function(k){ var el = document.getElementById('fac-'+k); if (el) el.value='0'; });
-    document.getElementById('fac-status').value='active';
-    openModal('fac-modal');
+    var sel = document.getElementById('fac-add-select');
+    if (sel) sel.value = '';
+    var prev = document.getElementById('fac-add-preview');
+    if (prev) prev.style.display = 'none';
+    var st = document.getElementById('fac-add-status');
+    if (st) st.value = 'active';
+    openModal('fac-add-modal');
 }
+
+function onAddFacultySelected(empId) {
+    var preview = document.getElementById('fac-add-preview');
+    if (!empId) {
+        if (preview) preview.style.display = 'none';
+        return;
+    }
+    var emp = registeredFacultiesData.find(function(item) { return item.id == empId; });
+    if (!emp) {
+        if (preview) preview.style.display = 'none';
+        return;
+    }
+    document.getElementById('fac-add-prev-name').innerText = emp.full_name || '-';
+    document.getElementById('fac-add-prev-mobile').innerText = emp.mobile_number || '-';
+    document.getElementById('fac-add-prev-email').innerText = emp.email || '-';
+    document.getElementById('fac-add-prev-year').innerText = emp.academic_year || '-';
+    document.getElementById('fac-add-prev-live').innerText = '₹' + parseFloat(emp.rate_live || 0).toFixed(0);
+    document.getElementById('fac-add-prev-qpd').innerText = '₹' + parseFloat(emp.rate_qpd || 0).toFixed(0);
+    document.getElementById('fac-add-prev-rec').innerText = '₹' + parseFloat(emp.rate_recorded || 0).toFixed(0);
+    document.getElementById('fac-add-prev-off').innerText = '₹' + parseFloat(emp.rate_offline || 0).toFixed(0);
+    if (preview) preview.style.display = 'block';
+}
+
 function editFac(f) {
-    document.getElementById('fac-action').value = 'edit_faculty';
-    document.getElementById('fac-modal-title').innerHTML = '<i class=\\\"fas fa-pen\\\" style=\\\"color:var(--accent)\\\"></i> Edit Faculty';
-    document.getElementById('fac-id').value = f.id;
-    document.getElementById('fac-name').value = f.name || '';
-    document.getElementById('fac-mobile').value = f.mobile || '';
-    document.getElementById('fac-email').value = f.email || '';
-    document.getElementById('fac-year').value = f.academic_year || '';
-    var rLive = document.getElementById('fac-rate_live'); if (rLive) rLive.value = f.rate_live;
-    var rQpd = document.getElementById('fac-rate_qpd'); if (rQpd) rQpd.value = f.rate_qpd;
-    var rRec = document.getElementById('fac-rate_recorded'); if (rRec) rRec.value = f.rate_recorded;
-    var rOff = document.getElementById('fac-rate_offline'); if (rOff) rOff.value = f.rate_offline;
-    document.getElementById('fac-status').value = f.status;
-    openModal('fac-modal');
+    document.getElementById('fac-edit-id').value = f.id;
+    document.getElementById('fac-edit-name').value = f.name || '';
+    document.getElementById('fac-edit-mobile').value = f.mobile || '';
+    document.getElementById('fac-edit-email').value = f.email || '';
+    document.getElementById('fac-edit-year').value = f.academic_year || '';
+    var rLive = document.getElementById('fac-edit-rate_live'); if (rLive) rLive.value = f.rate_live;
+    var rQpd = document.getElementById('fac-edit-rate_qpd'); if (rQpd) rQpd.value = f.rate_qpd;
+    var rRec = document.getElementById('fac-edit-rate_recorded'); if (rRec) rRec.value = f.rate_recorded;
+    var rOff = document.getElementById('fac-edit-rate_offline'); if (rOff) rOff.value = f.rate_offline;
+    document.getElementById('fac-edit-status').value = f.status || 'active';
+    document.getElementById('fac-edit-link-emp-id').value = '';
+
+    var linkedBox = document.getElementById('fac-edit-linked-box');
+    var unlinkedBox = document.getElementById('fac-edit-unlinked-box');
+    var switchBox = document.getElementById('fac-edit-switch-box');
+    if (switchBox) switchBox.style.display = 'none';
+
+    if (f.employee_management_faculty_id && parseInt(f.employee_management_faculty_id) > 0) {
+        if (linkedBox) linkedBox.style.display = 'block';
+        if (unlinkedBox) unlinkedBox.style.display = 'none';
+        document.getElementById('fac-edit-linked-name').innerText = f.emp_name || f.name;
+        document.getElementById('fac-edit-linked-code').innerText = f.emp_code || ('EMP #' + f.employee_management_faculty_id);
+
+        var switchSel = document.getElementById('fac-edit-switch-select');
+        if (switchSel) {
+            switchSel.innerHTML = '<option value=\"\">-- Select New Faculty to Switch Link --</option>';
+            registeredFacultiesData.forEach(function(ef) {
+                if (!ef.linked_faculty_id || ef.id == f.employee_management_faculty_id) {
+                    var opt = document.createElement('option');
+                    opt.value = ef.id;
+                    opt.textContent = ef.full_name + ' (' + ef.employee_code + (ef.academic_year ? ' - ' + ef.academic_year : '') + ')' + (ef.id == f.employee_management_faculty_id ? ' [Current]' : '');
+                    if (ef.id == f.employee_management_faculty_id) opt.disabled = true;
+                    switchSel.appendChild(opt);
+                }
+            });
+        }
+    } else {
+        if (linkedBox) linkedBox.style.display = 'none';
+        if (unlinkedBox) unlinkedBox.style.display = 'block';
+
+        var linkSel = document.getElementById('fac-edit-link-select');
+        if (linkSel) {
+            linkSel.innerHTML = '<option value=\"\">-- Select Registered Faculty to Link --</option>';
+            registeredFacultiesData.forEach(function(ef) {
+                if (!ef.linked_faculty_id) {
+                    var opt = document.createElement('option');
+                    opt.value = ef.id;
+                    opt.textContent = ef.full_name + ' (' + ef.employee_code + (ef.academic_year ? ' - ' + ef.academic_year : '') + ')';
+                    linkSel.appendChild(opt);
+                }
+            });
+        }
+    }
+
+    openModal('fac-edit-modal');
 }
-</script>";
+
+function toggleSwitchFacultyUI() {
+    var box = document.getElementById('fac-edit-switch-box');
+    if (!box) return;
+    box.style.display = (box.style.display === 'none' || box.style.display === '') ? 'block' : 'none';
+}
+
+function onEditLinkSelected(empId) {
+    if (!empId) return;
+    var emp = registeredFacultiesData.find(function(item) { return item.id == empId; });
+    if (!emp) return;
+
+    if (!confirm('Link with ' + emp.full_name + ' (' + emp.employee_code + ')?\\n\\nThis will overwrite Name, Mobile, Email, Academic Year, and Session Rates with authoritative data from Employee Management.')) {
+        document.getElementById('fac-edit-link-select').value = '';
+        return;
+    }
+
+    document.getElementById('fac-edit-link-emp-id').value = emp.id;
+    document.getElementById('fac-edit-name').value = emp.full_name || '';
+    document.getElementById('fac-edit-mobile').value = emp.mobile_number || '';
+    document.getElementById('fac-edit-email').value = emp.email || '';
+    document.getElementById('fac-edit-year').value = emp.academic_year || '';
+    var rLive = document.getElementById('fac-edit-rate_live'); if (rLive) rLive.value = emp.rate_live || 0;
+    var rQpd = document.getElementById('fac-edit-rate_qpd'); if (rQpd) rQpd.value = emp.rate_qpd || 0;
+    var rRec = document.getElementById('fac-edit-rate_recorded'); if (rRec) rRec.value = emp.rate_recorded || 0;
+    var rOff = document.getElementById('fac-edit-rate_offline'); if (rOff) rOff.value = emp.rate_offline || 0;
+}
+
+function onEditSwitchSelected(empId) {
+    if (!empId) return;
+    var emp = registeredFacultiesData.find(function(item) { return item.id == empId; });
+    if (!emp) return;
+
+    if (!confirm('Switch linked faculty to ' + emp.full_name + ' (' + emp.employee_code + ')?\\n\\nThis will overwrite Name, Mobile, Email, Academic Year, and Session Rates with authoritative data from the new record.')) {
+        document.getElementById('fac-edit-switch-select').value = '';
+        return;
+    }
+
+    document.getElementById('fac-edit-link-emp-id').value = emp.id;
+    document.getElementById('fac-edit-name').value = emp.full_name || '';
+    document.getElementById('fac-edit-mobile').value = emp.mobile_number || '';
+    document.getElementById('fac-edit-email').value = emp.email || '';
+    document.getElementById('fac-edit-year').value = emp.academic_year || '';
+    var rLive = document.getElementById('fac-edit-rate_live'); if (rLive) rLive.value = emp.rate_live || 0;
+    var rQpd = document.getElementById('fac-edit-rate_qpd'); if (rQpd) rQpd.value = emp.rate_qpd || 0;
+    var rRec = document.getElementById('fac-edit-rate_recorded'); if (rRec) rRec.value = emp.rate_recorded || 0;
+    var rOff = document.getElementById('fac-edit-rate_offline'); if (rOff) rOff.value = emp.rate_offline || 0;
+}
+
+function triggerUnlinkFaculty() {
+    var facId = document.getElementById('fac-edit-id').value;
+    if (!facId) return;
+    if (!confirm('Are you sure you want to unlink this faculty from Employee Management?\\n\\nExisting faculty data, schedules, and payment history will remain intact. The Employee Management record will become available to link again.')) {
+        return;
+    }
+    document.getElementById('unlink-fac-id').value = facId;
+    document.getElementById('unlink-faculty-form').submit();
+}
+</script>\n";
 include 'includes/admin_footer.php';
 ?>
 <?php endif; ?>
