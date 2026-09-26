@@ -208,44 +208,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $mediaFilename = null;
             $caption = null;
             $replyToId = $msg['context']['id'] ?? $msg['context']['message_id'] ?? null;
+            $convSnippet = '';
             
             $buttonPayload = '';
             if ($type === 'text') {
                 $text = $msg['text']['body'] ?? '';
+                $convSnippet = $text;
+            } elseif ($type === 'reaction') {
+                $replyToId = $msg['reaction']['message_id'] ?? $replyToId;
+                $emoji = $msg['reaction']['emoji'] ?? '';
+                $text = !empty($emoji) ? "Reacted {$emoji}" : "Removed reaction";
+                $convSnippet = $text;
             } elseif ($type === 'button') {
                 $btnText = $msg['button']['text'] ?? '';
                 $text = "Student clicked button: \"{$btnText}\"";
                 $buttonPayload = $msg['button']['payload'] ?? '';
+                $convSnippet = $text;
             } elseif ($type === 'interactive') {
                 $intType = $msg['interactive']['type'] ?? '';
                 if ($intType === 'button_reply') {
                     $btnText = $msg['interactive']['button_reply']['title'] ?? '';
                     $text = "Student clicked interactive button: \"{$btnText}\"";
                     $buttonPayload = $msg['interactive']['button_reply']['id'] ?? '';
+                    $convSnippet = $text;
                 } elseif ($intType === 'list_reply') {
                     $text = $msg['interactive']['list_reply']['title'] ?? '';
+                    $buttonPayload = $msg['interactive']['list_reply']['id'] ?? '';
+                    $convSnippet = "Student selected: \"{$text}\"";
                 }
             } elseif ($type === 'image') {
                 $mediaId = $msg['image']['id'] ?? '';
                 $mediaMime = $msg['image']['mime_type'] ?? '';
                 $caption = $msg['image']['caption'] ?? '';
-                $text = '[Image]';
+                $text = !empty($caption) ? $caption : '[Image]';
+                $convSnippet = !empty($caption) ? "📷 {$caption}" : "📷 Photo";
             } elseif ($type === 'document') {
                 $mediaId = $msg['document']['id'] ?? '';
                 $mediaMime = $msg['document']['mime_type'] ?? '';
                 $mediaFilename = $msg['document']['filename'] ?? '';
                 $caption = $msg['document']['caption'] ?? '';
-                $text = '[Document]';
+                $text = !empty($mediaFilename) ? $mediaFilename : '[Document]';
+                $convSnippet = !empty($mediaFilename) ? "📄 {$mediaFilename}" : "📄 Document";
             } elseif ($type === 'audio') {
                 $mediaId = $msg['audio']['id'] ?? '';
-                $mediaMime = $msg['audio']['mime_type'] ?? '';
-                $text = '[Audio]';
+                $mediaMime = $msg['audio']['mime_type'] ?? 'audio/ogg';
+                $text = '[Voice message]';
+                $convSnippet = "🎙️ Voice message";
             } elseif ($type === 'video') {
                 $mediaId = $msg['video']['id'] ?? '';
-                $mediaMime = $msg['video']['mime_type'] ?? '';
-                $text = '[Video]';
+                $mediaMime = $msg['video']['mime_type'] ?? 'video/mp4';
+                $caption = $msg['video']['caption'] ?? '';
+                $text = !empty($caption) ? $caption : '[Video]';
+                $convSnippet = !empty($caption) ? "🎥 {$caption}" : "🎥 Video";
+            } elseif ($type === 'sticker') {
+                $mediaId = $msg['sticker']['id'] ?? '';
+                $mediaMime = $msg['sticker']['mime_type'] ?? 'image/webp';
+                $text = '[Sticker]';
+                $convSnippet = "🏷️ Sticker";
+            } elseif ($type === 'location') {
+                $loc = $msg['location'] ?? [];
+                $lat = $loc['latitude'] ?? '';
+                $lng = $loc['longitude'] ?? '';
+                $locName = $loc['name'] ?? '';
+                $locAddr = $loc['address'] ?? '';
+                $text = $locName ?: ($locAddr ?: "Location ({$lat}, {$lng})");
+                $convSnippet = "📍 {$text}";
+            } elseif ($type === 'contacts') {
+                $c = $msg['contacts'][0] ?? [];
+                $cName = $c['name']['formatted_name'] ?? $c['name']['first_name'] ?? 'Contact';
+                $text = "Contact: {$cName}";
+                $convSnippet = "👤 {$text}";
             } else {
                 $text = "[Unsupported message type: {$type}]";
+                $convSnippet = "[{$type}]";
             }
 
             // Student matching by sender phone number (normalization logic)
@@ -292,7 +327,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         INSERT INTO whatsapp_conversations (wa_phone_number, student_uid, student_user_id, contact_name, last_message_text, last_message_at, last_inbound_at, unread_count, status, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, NOW(), NOW(), 1, 'open', NOW(), NOW())
                     ");
-                    $insConv->execute([$cleanFrom, $studentUid, $studentUserId, $contactName, $text]);
+                    $insConv->execute([$cleanFrom, $studentUid, $studentUserId, $contactName, $convSnippet ?: $text]);
                     $convId = (int)$pdo->lastInsertId();
                 } else {
                     $updConv = $pdo->prepare("
@@ -307,7 +342,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             updated_at = NOW() 
                         WHERE id = ?
                     ");
-                    $updConv->execute([$studentUid, $studentUserId, $contactName, $text, $convId]);
+                    $updConv->execute([$studentUid, $studentUserId, $contactName, $convSnippet ?: $text, $convId]);
                 }
 
                 // Insert inbound message record
@@ -325,7 +360,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $mediaFilename,
                     $caption,
                     $replyToId,
-$rawPayload
+                    json_encode($msg)
                 ]);
 
                 $pdo->commit();

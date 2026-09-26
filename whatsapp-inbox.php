@@ -320,11 +320,32 @@ function switchTab(filter, btn) {
 function loadConversations(isBackground = false) {
     const search = document.getElementById('search-input').value;
     fetch(`api/v1/communication/fetch-conversations.php?filter=${currentFilter}&search=${encodeURIComponent(search)}`)
-        .then(r => r.json())
+        .then(async r => {
+            const isJson = (r.headers.get('content-type') || '').includes('application/json');
+            const data = isJson ? await r.json() : null;
+            if (!r.ok) {
+                throw new Error((data && data.error) ? data.error : `HTTP ${r.status}: Failed to load conversations`);
+            }
+            return data;
+        })
         .then(res => {
-            if (res.success) {
+            if (res && res.success) {
                 conversationsData = res.conversations;
                 renderConversations(isBackground);
+            } else {
+                throw new Error(res && res.error ? res.error : 'Failed to load conversations.');
+            }
+        })
+        .catch(err => {
+            if (!isBackground) {
+                const container = document.getElementById('convs-list');
+                container.innerHTML = `
+                    <div style="padding: 30px 16px; text-align: center; color: #ef4444; font-size: 0.82rem;">
+                        <i class="fas fa-circle-exclamation" style="font-size: 1.6rem; margin-bottom: 8px; display: block;"></i>
+                        <div style="font-weight: 700; margin-bottom: 4px;">Unable to load conversations</div>
+                        <div style="color: #64748b; font-size: 0.75rem;">${escapeHtml(err.message)}</div>
+                    </div>
+                `;
             }
         });
 }
@@ -393,11 +414,32 @@ function selectConversation(id, studentUid, waPhone) {
 function loadMessages(id, isBackground = false) {
     const markRead = isBackground ? 0 : 1;
     fetch(`api/v1/communication/fetch-messages.php?conversation_id=${id}&mark_read=${markRead}`)
-        .then(r => r.json())
+        .then(async r => {
+            const isJson = (r.headers.get('content-type') || '').includes('application/json');
+            const data = isJson ? await r.json() : null;
+            if (!r.ok) {
+                throw new Error((data && data.error) ? data.error : `HTTP ${r.status}: Failed to load messages`);
+            }
+            return data;
+        })
         .then(res => {
-            if (res.success) {
+            if (res && res.success) {
                 renderMessages(res.messages, isBackground);
                 updateWindowPolicies();
+            } else {
+                throw new Error(res && res.error ? res.error : 'Failed to load messages.');
+            }
+        })
+        .catch(err => {
+            if (!isBackground) {
+                const container = document.getElementById('messages-body');
+                container.innerHTML = `
+                    <div style="margin: auto; padding: 30px 20px; text-align: center; color: #ef4444; font-size: 0.85rem;">
+                        <i class="fas fa-circle-exclamation" style="font-size: 1.8rem; margin-bottom: 8px; display: block;"></i>
+                        <div style="font-weight: 700; margin-bottom: 4px;">Failed to load messages</div>
+                        <div style="color: #64748b; font-size: 0.78rem;">${escapeHtml(err.message)}</div>
+                    </div>
+                `;
             }
         });
 }
@@ -440,16 +482,29 @@ function renderMessages(messages, isBackground) {
         const timeStr = dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
         const dateTimeStr = dateStr + ', ' + timeStr;
 
+        // Quoted Reply Context Banner
+        let replyContextHtml = '';
+        if (m.reply_context && m.reply_context.snippet) {
+            replyContextHtml = `
+                <div style="background: rgba(0,0,0,0.04); border-left: 3px solid #6366f1; padding: 4px 8px; border-radius: 4px; margin-bottom: 6px; font-size: 0.72rem;">
+                    <div style="font-weight: 700; color: #4338ca;">${escapeHtml(m.reply_context.sender)}</div>
+                    <div style="color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(m.reply_context.snippet)}</div>
+                </div>
+            `;
+        }
+
         let interactiveBtnHtml = '';
         if (m.message_type === 'interactive' || (m.raw_payload && m.raw_payload.includes('interactive_button_text'))) {
             try {
                 const payloadObj = typeof m.raw_payload === 'string' ? JSON.parse(m.raw_payload) : m.raw_payload;
                 const btnText = payloadObj.interactive_button_text || 'Message Here';
-                const btnUrl = payloadObj.interactive_button_url || 'https://wa.me/917025000444';
+                const rawBtnUrl = String(payloadObj.interactive_button_url || 'https://wa.me/917025000444');
+                const isSafeProtocol = /^(https?:\/\/|tel:|mailto:)/i.test(rawBtnUrl);
+                const safeBtnUrl = isSafeProtocol ? rawBtnUrl : '#';
 
                 interactiveBtnHtml = `
                     <div style="margin-top: 8px; border-top: 1px dashed rgba(0,0,0,0.1); padding-top: 6px;">
-                        <a href="${escapeHtml(btnUrl)}" target="_blank" style="font-size:0.75rem; padding:4px 10px; border-radius:6px; background:#ffffff; display:inline-flex; align-items:center; gap:6px; border:1px solid #cbd5e1; color:#0f172a; text-decoration:none; font-weight:600; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                        <a href="${escapeHtml(safeBtnUrl)}" target="_blank" rel="noopener noreferrer" style="font-size:0.75rem; padding:4px 10px; border-radius:6px; background:#ffffff; display:inline-flex; align-items:center; gap:6px; border:1px solid #cbd5e1; color:#0f172a; text-decoration:none; font-weight:600; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
                             <i class="fas fa-arrow-up-right-from-square" style="font-size:0.7rem; color:#2563eb;"></i> ${escapeHtml(btnText)}
                         </a>
                     </div>
@@ -458,17 +513,58 @@ function renderMessages(messages, isBackground) {
         }
 
         let messageContentHtml = `<div style="white-space: pre-wrap;">${escapeHtml(m.message_text)}</div>`;
-        if (isFailed) {
-            messageContentHtml += `
-                <div style="font-size: 0.72rem; color: #b91c1c; background: #fff1f2; border: 1px solid #fda4af; padding: 6px 10px; border-radius: 6px; margin-top: 6px; font-weight: 500; text-align: left;">
-                    <strong style="color: #991b1b; display: block; font-weight: 700; margin-bottom: 2px;"><i class="fas fa-circle-exclamation"></i> 🔴 DELIVERY FAILED</strong>
-                    Meta: ${escapeHtml(m.failure_reason || 'This message was not delivered to maintain healthy ecosystem engagement.')}
+
+        // 1. REACTION
+        if (m.message_type === 'reaction') {
+            const emoji = m.reaction_emoji;
+            const targetSnippet = m.reaction_target_snippet;
+            if (emoji) {
+                messageContentHtml = `
+                    <div style="display: inline-flex; align-items: center; gap: 8px; font-size: 0.82rem;">
+                        <span style="font-size: 1.4rem; line-height: 1;">${escapeHtml(emoji)}</span>
+                        <div>
+                            <div style="font-weight: 600; color: #1e293b;">Reacted to message</div>
+                            ${targetSnippet ? `<div style="font-size: 0.72rem; color: #64748b; font-style: italic; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">"${escapeHtml(targetSnippet)}"</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            } else {
+                messageContentHtml = `
+                    <div style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; color: #64748b;">
+                        <i class="fas fa-face-frown" style="font-size: 0.85rem;"></i>
+                        <span>Removed reaction</span>
+                    </div>
+                `;
+            }
+        }
+
+        // 2. AUDIO / VOICE
+        else if (m.message_type === 'audio' && (m.media_id || m.media_url)) {
+            const mediaUrl = m.media_url || `api/v1/communication/media.php?id=${m.id}`;
+            const downloadUrl = m.media_download_url || `api/v1/communication/media.php?id=${m.id}&download=1`;
+            messageContentHtml = `
+                <div style="display: flex; flex-direction: column; gap: 6px; min-width: 230px; max-width: 280px;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 2px;">
+                        <i class="fas fa-microphone" style="color: #10b981; font-size: 0.9rem;"></i>
+                        <span style="font-size: 0.75rem; font-weight: 700; color: #334155;">Voice Message</span>
+                    </div>
+                    <audio controls preload="none" style="width: 100%; height: 36px; border-radius: 20px; outline: none;">
+                        <source src="${mediaUrl}" type="${escapeHtml(m.media_mime_type || 'audio/ogg')}">
+                        Your browser does not support audio playback.
+                    </audio>
+                    <div style="display: flex; justify-content: flex-end; font-size: 0.7rem;">
+                        <a href="${downloadUrl}" target="_blank" style="color: #6366f1; text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                            <i class="fas fa-download"></i> Download audio
+                        </a>
+                    </div>
                 </div>
             `;
         }
-        if (m.message_type === 'image' && m.media_id) {
-            const mediaUrl = `api/v1/communication/media.php?id=${m.id}`;
-            const downloadUrl = `api/v1/communication/media.php?id=${m.id}&download=1`;
+
+        // 3. IMAGE
+        else if (m.message_type === 'image' && (m.media_id || m.media_url)) {
+            const mediaUrl = m.media_url || `api/v1/communication/media.php?id=${m.id}`;
+            const downloadUrl = m.media_download_url || `api/v1/communication/media.php?id=${m.id}&download=1`;
             const captionHtml = m.caption ? `<div style="font-size: 0.8rem; margin-top: 6px; white-space: pre-wrap; color: #334155;">${escapeHtml(m.caption)}</div>` : '';
             messageContentHtml = `
                 <div style="display: flex; flex-direction: column; gap: 6px; max-width: 250px;">
@@ -483,8 +579,156 @@ function renderMessages(messages, isBackground) {
             `;
         }
 
+        // 4. VIDEO
+        else if (m.message_type === 'video' && (m.media_id || m.media_url)) {
+            const mediaUrl = m.media_url || `api/v1/communication/media.php?id=${m.id}`;
+            const downloadUrl = m.media_download_url || `api/v1/communication/media.php?id=${m.id}&download=1`;
+            const captionHtml = m.caption ? `<div style="font-size: 0.8rem; margin-top: 6px; white-space: pre-wrap; color: #334155;">${escapeHtml(m.caption)}</div>` : '';
+            messageContentHtml = `
+                <div style="display: flex; flex-direction: column; gap: 6px; max-width: 280px;">
+                    <video controls preload="metadata" style="width: 100%; max-height: 220px; border-radius: 8px; background: #0f172a; border: 1px solid #cbd5e1;">
+                        <source src="${mediaUrl}" type="${escapeHtml(m.media_mime_type || 'video/mp4')}">
+                        Your browser does not support video playback.
+                    </video>
+                    ${captionHtml}
+                    <div style="display: flex; justify-content: flex-end; font-size: 0.7rem; border-top: 1px dashed rgba(0,0,0,0.08); padding-top: 4px;">
+                        <a href="${downloadUrl}" target="_blank" style="color: #6366f1; text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                            <i class="fas fa-download"></i> Download Video
+                        </a>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 5. DOCUMENT
+        else if (m.message_type === 'document' && (m.media_id || m.media_url)) {
+            const mediaUrl = m.media_url || `api/v1/communication/media.php?id=${m.id}`;
+            const downloadUrl = m.media_download_url || `api/v1/communication/media.php?id=${m.id}&download=1`;
+            const docName = m.media_filename || 'Document';
+            const captionHtml = m.caption ? `<div style="font-size: 0.78rem; margin-top: 4px; white-space: pre-wrap; color: #334155;">${escapeHtml(m.caption)}</div>` : '';
+            messageContentHtml = `
+                <div style="display: flex; flex-direction: column; gap: 6px; min-width: 220px; max-width: 280px;">
+                    <div style="display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.08); border-radius: 8px; padding: 10px;">
+                        <div style="width: 36px; height: 36px; border-radius: 8px; background: #fee2e2; color: #dc2626; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0;">
+                            <i class="fas fa-file-pdf"></i>
+                        </div>
+                        <div style="flex: 1; min-width: 0;">
+                            <div style="font-weight: 700; font-size: 0.8rem; color: #1e293b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(docName)}">${escapeHtml(docName)}</div>
+                            <div style="font-size: 0.68rem; color: #64748b;">${escapeHtml(m.media_mime_type || 'Document')}</div>
+                        </div>
+                    </div>
+                    ${captionHtml}
+                    <div style="display: flex; gap: 8px; justify-content: flex-end; font-size: 0.72rem; padding-top: 2px;">
+                        <a href="${mediaUrl}" target="_blank" style="color: #6366f1; text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;"><i class="fas fa-arrow-up-right-from-square"></i> Open</a>
+                        <span style="color: #cbd5e1;">|</span>
+                        <a href="${downloadUrl}" target="_blank" style="color: #6366f1; text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;"><i class="fas fa-download"></i> Download</a>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 6. STICKER
+        else if (m.message_type === 'sticker' && (m.media_id || m.media_url)) {
+            const mediaUrl = m.media_url || `api/v1/communication/media.php?id=${m.id}`;
+            messageContentHtml = `
+                <div style="padding: 2px;">
+                    <img src="${mediaUrl}" alt="Sticker" style="width: 120px; height: 120px; object-fit: contain;" onerror="this.onerror=null; this.parentNode.innerHTML='<div style=\'padding:6px; color:#64748b; font-size:0.75rem;\'><i class=\'fas fa-note-sticky\'></i> Sticker</div>';">
+                </div>
+            `;
+        }
+
+        // 7. LOCATION
+        else if (m.message_type === 'location' || m.location_data) {
+            const loc = m.location_data || {};
+            const lat = loc.latitude || '';
+            const lng = loc.longitude || '';
+            const locName = loc.name || '';
+            const locAddr = loc.address || '';
+            const mapUrl = loc.map_url || (lat && lng ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}` : '');
+            messageContentHtml = `
+                <div style="display: flex; flex-direction: column; gap: 6px; min-width: 220px; max-width: 280px;">
+                    <div style="display: flex; align-items: flex-start; gap: 10px; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.08); border-radius: 8px; padding: 10px;">
+                        <div style="width: 34px; height: 34px; border-radius: 8px; background: #dbeafe; color: #2563eb; display: flex; align-items: center; justify-content: center; font-size: 1rem; flex-shrink: 0;">
+                            <i class="fas fa-location-dot"></i>
+                        </div>
+                        <div style="flex: 1; min-width: 0;">
+                            <div style="font-weight: 700; font-size: 0.82rem; color: #1e293b;">${escapeHtml(locName || 'Shared Location')}</div>
+                            ${locAddr ? `<div style="font-size: 0.72rem; color: #475569; margin-top: 2px;">${escapeHtml(locAddr)}</div>` : ''}
+                            ${lat && lng ? `<div style="font-size: 0.65rem; color: #94a3b8; margin-top: 2px;">${escapeHtml(lat)}, ${escapeHtml(lng)}</div>` : ''}
+                        </div>
+                    </div>
+                    ${mapUrl ? `
+                        <div style="display: flex; justify-content: flex-end; font-size: 0.72rem;">
+                            <a href="${escapeHtml(mapUrl)}" target="_blank" rel="noopener noreferrer" style="color: #2563eb; text-decoration: none; font-weight: 700; display: inline-flex; align-items: center; gap: 4px;">
+                                <i class="fas fa-map-location-dot"></i> View on Google Maps
+                            </a>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+
+        // 8. CONTACTS
+        else if (m.message_type === 'contacts' || m.contacts_data) {
+            const contacts = m.contacts_data || [];
+            if (contacts.length > 0) {
+                let contactCards = '';
+                contacts.forEach(c => {
+                    let phonesHtml = '';
+                    if (c.phones && c.phones.length > 0) {
+                        c.phones.forEach(p => {
+                            const cleanP = (p.phone || '').replace(/\D/g, '');
+                            phonesHtml += `
+                                <div style="font-size: 0.72rem; margin-top: 2px; display: flex; align-items: center; gap: 6px;">
+                                    <span style="color: #64748b;">${escapeHtml(p.type || 'PHONE')}:</span>
+                                    <a href="tel:${escapeHtml(p.phone)}" style="color: #2563eb; font-weight: 600; text-decoration: none;">${escapeHtml(p.phone)}</a>
+                                    ${cleanP ? `<a href="https://wa.me/${cleanP}" target="_blank" style="color: #10b981; margin-left: 4px;" title="Chat on WhatsApp"><i class="fab fa-whatsapp"></i></a>` : ''}
+                                </div>
+                            `;
+                        });
+                    }
+                    contactCards += `
+                        <div style="display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.08); border-radius: 8px; padding: 10px; margin-bottom: 4px;">
+                            <div style="width: 36px; height: 36px; border-radius: 50%; background: #e0e7ff; color: #4338ca; display: flex; align-items: center; justify-content: center; font-size: 0.95rem; font-weight: 700; flex-shrink: 0;">
+                                <i class="fas fa-user"></i>
+                            </div>
+                            <div style="flex: 1; min-width: 0;">
+                                <div style="font-weight: 700; font-size: 0.82rem; color: #1e293b;">${escapeHtml(c.name)}</div>
+                                ${phonesHtml}
+                            </div>
+                        </div>
+                    `;
+                });
+                messageContentHtml = `<div style="min-width: 220px; max-width: 280px;">${contactCards}</div>`;
+            } else {
+                messageContentHtml = `<div style="white-space: pre-wrap;"><i class="fas fa-address-card" style="color: #6366f1; margin-right: 4px;"></i> ${escapeHtml(m.message_text)}</div>`;
+            }
+        }
+
+        // 9. INTERACTIVE / BUTTON
+        else if (m.interactive_data) {
+            const title = m.interactive_data.title || m.message_text;
+            messageContentHtml = `
+                <div style="display: inline-flex; align-items: center; gap: 6px; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 6px; padding: 6px 10px; font-size: 0.8rem; color: #1e293b;">
+                    <i class="fas fa-hand-pointer" style="color: #6366f1; font-size: 0.85rem;"></i>
+                    <span><strong>Selected:</strong> "${escapeHtml(title)}"</span>
+                </div>
+            `;
+        }
+
+        // Delivery Failure Reason
+        if (isFailed) {
+            messageContentHtml += `
+                <div style="font-size: 0.72rem; color: #b91c1c; background: #fff1f2; border: 1px solid #fda4af; padding: 6px 10px; border-radius: 6px; margin-top: 6px; font-weight: 500; text-align: left;">
+                    <strong style="color: #991b1b; display: block; font-weight: 700; margin-bottom: 2px;"><i class="fas fa-circle-exclamation"></i> 🔴 DELIVERY FAILED</strong>
+                    Meta: ${escapeHtml(m.failure_reason || 'This message was not delivered to maintain healthy ecosystem engagement.')}
+                </div>
+            `;
+        }
+
         html += `
             <div class="bubble ${bubbleClass}">
+                ${replyContextHtml}
                 ${messageContentHtml}
                 ${interactiveBtnHtml}
                 <div style="display: flex; justify-content: flex-end; align-items: center; font-size: 0.65rem; color: #64748b; margin-top: 4px;">

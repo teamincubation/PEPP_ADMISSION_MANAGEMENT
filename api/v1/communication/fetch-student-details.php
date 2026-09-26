@@ -1,7 +1,11 @@
 <?php
 require_once '../../../includes/auth.php';
 require_once '../../../config/database.php';
-require_permission('communication');
+if (!can_access('whatsapp-inbox') && !can_access('communication')) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'error' => 'Access Denied: WhatsApp Inbox permission required.']);
+    exit;
+}
 
 header('Content-Type: application/json');
 

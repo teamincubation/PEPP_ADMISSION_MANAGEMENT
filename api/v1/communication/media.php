@@ -40,35 +40,25 @@ if (empty($msg['media_id'])) {
     exit;
 }
 
-// 4. Verify conversation authorization for non-superadmins
-if (!is_super_admin()) {
-    $adminId = $_SESSION['admin_id'] ?? 0;
-    if (!empty($msg['student_uid'])) {
-        // Fetch the student's assigned course
-        $stmtStu = $pdo->prepare("SELECT pepp_course FROM users WHERE user_id = ? LIMIT 1");
-        $stmtStu->execute([$msg['student_uid']]);
-        $studentCourse = $stmtStu->fetchColumn();
-        
-        if ($studentCourse) {
-            // Verify if this admin is explicitly assigned to this course
-            $stmtAuth = $pdo->prepare("SELECT COUNT(*) FROM mentor_course_assignments WHERE admin_id = ? AND LOWER(TRIM(course_name)) = LOWER(TRIM(?))");
-            $stmtAuth->execute([$adminId, $studentCourse]);
-            $isAssigned = ($stmtAuth->fetchColumn() > 0);
-            
-            if (!$isAssigned) {
-                http_response_code(403);
-                echo "Access Denied: You are not assigned to this student's course.";
-                exit;
-            }
-        }
-    }
-}
-
 $mediaId = $msg['media_id'];
 $mimeType = $msg['media_mime_type'] ?: 'image/jpeg';
-$filename = $msg['media_filename'] ?: ($mediaId . '.jpg');
 
-// 5. Check cache directory and serve if cached
+// Determine default file extension based on message_type and MIME
+$defaultExt = '.jpg';
+$mType = $msg['message_type'] ?? '';
+if ($mType === 'audio' || strpos($mimeType, 'audio/') === 0) {
+    $defaultExt = (strpos($mimeType, 'ogg') !== false) ? '.ogg' : ((strpos($mimeType, 'mp4') !== false) ? '.m4a' : '.mp3');
+} elseif ($mType === 'video' || strpos($mimeType, 'video/') === 0) {
+    $defaultExt = '.mp4';
+} elseif ($mType === 'document' || strpos($mimeType, 'pdf') !== false) {
+    $defaultExt = '.pdf';
+} elseif ($mType === 'sticker' || strpos($mimeType, 'webp') !== false) {
+    $defaultExt = '.webp';
+}
+
+$filename = $msg['media_filename'] ?: ($mediaId . $defaultExt);
+
+// 4. Check cache directory and serve if cached
 $cacheDir = __DIR__ . '/../../../uploads/whatsapp_media';
 if (!file_exists($cacheDir)) {
     mkdir($cacheDir, 0755, true);
@@ -82,39 +72,43 @@ $cacheFile = $cacheDir . '/' . preg_replace('/[^a-zA-Z0-9_-]/', '', $mediaId);
 if (file_exists($cacheFile)) {
     $data = file_get_contents($cacheFile);
 } else {
-    // 6. Download from Meta API using provider
+    // 5. Download from Meta API using provider
     try {
         require_once __DIR__ . '/../../../includes/communication/CommunicationEngine.php';
         $engine = CommunicationEngine::getInstance($pdo);
         $provider = $engine->getProvider('whatsapp');
-        
+
         $res = $provider->downloadMedia($mediaId);
         if (!$res) {
             http_response_code(502);
-            echo "Image unavailable";
+            echo "Media unavailable";
             exit;
         }
-        
+
         $data = $res['data'];
         $mimeType = $res['mime_type'];
         // Save to cache
         file_put_contents($cacheFile, $data);
     } catch (Exception $e) {
         http_response_code(500);
-        echo "Image unavailable";
+        echo "Media unavailable";
         exit;
     }
 }
 
-// 7. Output image
-header('Content-Type: ' . $mimeType);
+// 6. Output media
+$safeMime = preg_replace('/[^\w\/\-\+\.\;= ]/', '', $mimeType) ?: 'application/octet-stream';
+$safeFilename = str_replace(['"', "\r", "\n"], '', basename($filename));
+
+header('Content-Type: ' . $safeMime);
 header('Content-Length: ' . strlen($data));
+header('X-Content-Type-Options: nosniff');
 // Allow browser caching to prevent repeated download during polling
 header('Cache-Control: private, max-age=86400');
 
 $isDownload = isset($_GET['download']) && $_GET['download'] === '1';
 if ($isDownload) {
-    header('Content-Disposition: attachment; filename="' . basename($filename) . '"');
+    header('Content-Disposition: attachment; filename="' . $safeFilename . '"');
 }
 
 echo $data;

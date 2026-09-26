@@ -1,7 +1,11 @@
 <?php
 require_once '../../../includes/auth.php';
 require_once '../../../config/database.php';
-require_permission('communication');
+if (!can_access('whatsapp-inbox') && !can_access('communication')) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'error' => 'Access Denied: WhatsApp Inbox permission required.']);
+    exit;
+}
 
 header('Content-Type: application/json');
 
@@ -91,6 +95,33 @@ try {
                             }
                         }
                     }
+                }
+            }
+        } elseif (strpos($c['last_message_text'] ?? '', '[Unsupported message type:') === 0) {
+            $stmtLastMsg = $pdo->prepare("SELECT message_type, raw_payload, caption, media_filename FROM whatsapp_messages WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT 1");
+            $stmtLastMsg->execute([$c['id']]);
+            $lastMsg = $stmtLastMsg->fetch(PDO::FETCH_ASSOC);
+            if ($lastMsg) {
+                $mType = $lastMsg['message_type'] ?? '';
+                if ($mType === 'reaction') {
+                    $rawP = json_decode($lastMsg['raw_payload'] ?? '', true);
+                    $rx = $rawP['entry'][0]['changes'][0]['value']['messages'][0]['reaction'] ?? $rawP['reaction'] ?? null;
+                    $emoji = $rx['emoji'] ?? '';
+                    $c['last_message_text'] = !empty($emoji) ? "Reacted {$emoji}" : "Removed reaction";
+                } elseif ($mType === 'image') {
+                    $c['last_message_text'] = !empty($lastMsg['caption']) ? "📷 " . $lastMsg['caption'] : "📷 Photo";
+                } elseif ($mType === 'audio') {
+                    $c['last_message_text'] = "🎙️ Voice message";
+                } elseif ($mType === 'video') {
+                    $c['last_message_text'] = !empty($lastMsg['caption']) ? "🎥 " . $lastMsg['caption'] : "🎥 Video";
+                } elseif ($mType === 'document') {
+                    $c['last_message_text'] = !empty($lastMsg['media_filename']) ? "📄 " . $lastMsg['media_filename'] : "📄 Document";
+                } elseif ($mType === 'sticker') {
+                    $c['last_message_text'] = "🏷️ Sticker";
+                } elseif ($mType === 'location') {
+                    $c['last_message_text'] = "📍 Location";
+                } elseif ($mType === 'contacts') {
+                    $c['last_message_text'] = "👤 Contact";
                 }
             }
         }
