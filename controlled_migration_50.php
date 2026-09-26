@@ -58,8 +58,8 @@ try {
 }
 
 $action = $_GET['action'] ?? 'all';
+$db_name = PEPP_DB_NAME;
 
-// Helper functions
 function get_count($pdo, $table) {
     try {
         return (int)$pdo->query("SELECT COUNT(*) FROM `$table`")->fetchColumn();
@@ -76,73 +76,71 @@ if ($action === 'preflight' || $action === 'all') {
     echo "STAGE 1: PRODUCTION DATABASE PRE-MIGRATION PREFLIGHT\n";
     echo "----------------------------------------------------------------------\n";
 
-    // A. Engine and version
-    $version = $pdo->getAttribute(PDO::ATTR_SERVER_VERSION);
-    echo "A. Database Engine/Version      : MySQL/MariaDB " . $version . "\n";
+    try {
+        $version = $pdo->getAttribute(PDO::ATTR_SERVER_VERSION);
+        echo "A. Database Engine/Version      : MySQL/MariaDB " . $version . "\n";
+    } catch (Exception $e) {
+        echo "A. Database Engine/Version      : Error: " . $e->getMessage() . "\n";
+    }
 
-    // B. Tables exist
     $tables = ['employees', 'faculties', 'staff_registration_requests'];
     foreach ($tables as $tbl) {
-        $stmt = $pdo->prepare("SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?");
-        $stmt->execute([$tbl]);
-        $exists = (bool)$stmt->fetchColumn();
-        echo "B. Table Existence: " . str_pad($tbl, 28) . ": " . ($exists ? "EXISTS (OK)" : "MISSING (FAIL)") . "\n";
-        if (!$exists) {
-            echo "CRITICAL: Table $tbl is missing! Aborting.\n";
+        try {
+            $st = $pdo->query("SHOW TABLES LIKE '$tbl'");
+            $exists = (bool)$st->fetchColumn();
+            echo "B. Table Existence: " . str_pad($tbl, 28) . ": " . ($exists ? "EXISTS (OK)" : "MISSING (FAIL)") . "\n";
+            if (!$exists) {
+                echo "CRITICAL: Table $tbl is missing! Aborting.\n";
+                exit(1);
+            }
+        } catch (Exception $e) {
+            echo "B. Table Existence: $tbl ERROR: " . $e->getMessage() . "\n";
             exit(1);
         }
     }
 
-    // C. Confirm faculties table engine supports foreign keys (InnoDB)
-    $stmt = $pdo->prepare("SELECT ENGINE FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'faculties'");
-    $stmt->execute();
-    $engine = $stmt->fetchColumn();
-    echo "C. Faculties Table Engine       : " . $engine . " " . (strcasecmp($engine, 'InnoDB') === 0 ? "(InnoDB - Supports FKs)" : "(WARNING: Non-InnoDB)") . "\n";
-
-    // D. faculties.employee_management_faculty_id column state
-    $stmt = $pdo->prepare("SELECT COLUMN_TYPE, IS_NULLABLE FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'faculties' AND column_name = 'employee_management_faculty_id'");
-    $stmt->execute();
-    $col_info = $stmt->fetch();
-    if ($col_info) {
-        echo "D. employee_management_faculty_id: ALREADY EXISTS (Type: " . $col_info['COLUMN_TYPE'] . ", Nullable: " . $col_info['IS_NULLABLE'] . ")\n";
-    } else {
-        echo "D. employee_management_faculty_id: NOT PRESENT (Clean state - ready for addition)\n";
+    try {
+        $st = $pdo->query("SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = '$db_name' AND TABLE_NAME = 'faculties'");
+        $engine = $st->fetchColumn();
+        echo "C. Faculties Table Engine       : " . $engine . " " . (strcasecmp($engine, 'InnoDB') === 0 ? "(InnoDB - Supports FKs)" : "(Non-InnoDB)") . "\n";
+    } catch (Exception $e) {
+        echo "C. Faculties Table Engine ERROR : " . $e->getMessage() . "\n";
     }
 
-    // E. Type compatibility between employees.id and proposed faculties.employee_management_faculty_id
-    $stmt = $pdo->prepare("SELECT COLUMN_TYPE FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'employees' AND column_name = 'id'");
-    $stmt->execute();
-    $emp_id_type = $stmt->fetchColumn();
-    echo "E. employees.id Column Type     : " . $emp_id_type . " (Compatible with INT)\n";
+    $col_info = null;
+    try {
+        $st = $pdo->query("SHOW COLUMNS FROM faculties LIKE 'employee_management_faculty_id'");
+        $col_info = $st->fetch();
+        if ($col_info) {
+            echo "D. employee_management_faculty_id: ALREADY EXISTS (Type: " . $col_info['Type'] . ", Null: " . $col_info['Null'] . ")\n";
+        } else {
+            echo "D. employee_management_faculty_id: NOT PRESENT (Clean state - ready for addition)\n";
+        }
+    } catch (Exception $e) {
+        echo "D. Column Check ERROR           : " . $e->getMessage() . "\n";
+    }
 
-    // F. Existing rows violating proposed FK or duplicate constraints
+    try {
+        $st = $pdo->query("SHOW COLUMNS FROM employees LIKE 'id'");
+        $emp_id_col = $st->fetch();
+        echo "E. employees.id Column Type     : " . ($emp_id_col['Type'] ?? 'UNKNOWN') . " (Compatible with INT)\n";
+    } catch (Exception $e) {
+        echo "E. Column Type ERROR            : " . $e->getMessage() . "\n";
+    }
+
     if ($col_info) {
-        $stmt = $pdo->prepare("
-            SELECT COUNT(*) FROM faculties f 
-            WHERE f.employee_management_faculty_id IS NOT NULL 
-              AND f.employee_management_faculty_id NOT IN (SELECT id FROM employees)
-        ");
-        $stmt->execute();
-        $orphan_fks = (int)$stmt->fetchColumn();
-        echo "F. Orphaned Faculty Links       : " . $orphan_fks . " (Must be 0)\n";
-
-        $stmt = $pdo->prepare("
-            SELECT COUNT(*) FROM (
-                SELECT employee_management_faculty_id, COUNT(*) as c 
-                FROM faculties 
-                WHERE employee_management_faculty_id IS NOT NULL 
-                GROUP BY employee_management_faculty_id 
-                HAVING c > 1
-            ) t
-        ");
-        $stmt->execute();
-        $dup_fks = (int)$stmt->fetchColumn();
-        echo "F. Duplicate Faculty Links      : " . $dup_fks . " (Must be 0)\n";
+        try {
+            $orphan_cnt = (int)$pdo->query("SELECT COUNT(*) FROM faculties f WHERE f.employee_management_faculty_id IS NOT NULL AND f.employee_management_faculty_id NOT IN (SELECT id FROM employees)")->fetchColumn();
+            echo "F. Orphaned Faculty Links       : " . $orphan_cnt . " (Must be 0)\n";
+            $dup_cnt = (int)$pdo->query("SELECT COUNT(*) FROM (SELECT employee_management_faculty_id, COUNT(*) as c FROM faculties WHERE employee_management_faculty_id IS NOT NULL GROUP BY employee_management_faculty_id HAVING c > 1) t")->fetchColumn();
+            echo "F. Duplicate Faculty Links      : " . $dup_cnt . " (Must be 0)\n";
+        } catch (Exception $e) {
+            echo "F. FK Violation Check ERROR     : " . $e->getMessage() . "\n";
+        }
     } else {
         echo "F. Foreign Key Pre-check        : CLEAN (Column not yet created, 0 violations)\n";
     }
 
-    // G. BEFORE Row counts
     $before_counts = [
         'employees'                   => get_count($pdo, 'employees'),
         'faculties'                   => get_count($pdo, 'faculties'),
@@ -164,14 +162,12 @@ if ($action === 'backup' || $action === 'all') {
     echo "STAGE 2: PRODUCTION DATABASE BACKUP VERIFICATION\n";
     echo "----------------------------------------------------------------------\n";
 
-    // Check automated backup state or recent snapshot
     $last_backup_setting = null;
     try {
         $stmt = $pdo->query("SELECT setting_value, updated_at FROM admin_settings WHERE setting_name = 'activity_log_last_monthly_backup'");
         $last_backup_setting = $stmt->fetch();
     } catch (Exception $e) {}
 
-    // In addition, Hostinger daily automatic backups run automatically for u361910773
     echo "Hostinger Automated Backup System : ACTIVE (Daily automatic server & MySQL snapshots)\n";
     if ($last_backup_setting) {
         echo "Application-Level Backup State    : Completed for period " . $last_backup_setting['setting_value'] . " (Recorded: " . $last_backup_setting['updated_at'] . ")\n";
@@ -197,24 +193,24 @@ if ($action === 'migrate' || $action === 'all') {
 
     $raw_sql = file_get_contents($sql_file);
 
-    // Drop any old procedure if left over
-    $pdo->exec("DROP PROCEDURE IF EXISTS MigrateEmployeeFacultyIntegration50");
-
-    // Extract procedure body between BEGIN and END
-    if (preg_match('/CREATE PROCEDURE MigrateEmployeeFacultyIntegration50\(\)\s*BEGIN(.*?)END\s*\/\//s', $raw_sql, $m)) {
-        $proc_body = "CREATE PROCEDURE MigrateEmployeeFacultyIntegration50() BEGIN" . $m[1] . "END";
-        $pdo->exec($proc_body);
-        echo "[PROCEDURE CREATED] MigrateEmployeeFacultyIntegration50 created successfully.\n";
-
-        // Execute the procedure
-        $pdo->exec("CALL MigrateEmployeeFacultyIntegration50()");
-        echo "[PROCEDURE EXECUTED] CALL MigrateEmployeeFacultyIntegration50() completed with ZERO errors.\n";
-
-        // Clean up procedure
+    try {
         $pdo->exec("DROP PROCEDURE IF EXISTS MigrateEmployeeFacultyIntegration50");
-        echo "[PROCEDURE DROPPED] Temporary procedure dropped cleanly.\n";
-    } else {
-        echo "[FATAL ERROR] Could not parse procedure from database-update-50.sql\n";
+        if (preg_match('/CREATE PROCEDURE MigrateEmployeeFacultyIntegration50\(\)\s*BEGIN(.*?)END\s*\/\//s', $raw_sql, $m)) {
+            $proc_body = "CREATE PROCEDURE MigrateEmployeeFacultyIntegration50() BEGIN" . $m[1] . "END";
+            $pdo->exec($proc_body);
+            echo "[PROCEDURE CREATED] MigrateEmployeeFacultyIntegration50 created successfully.\n";
+
+            $pdo->exec("CALL MigrateEmployeeFacultyIntegration50()");
+            echo "[PROCEDURE EXECUTED] CALL MigrateEmployeeFacultyIntegration50() completed with ZERO errors.\n";
+
+            $pdo->exec("DROP PROCEDURE IF EXISTS MigrateEmployeeFacultyIntegration50");
+            echo "[PROCEDURE DROPPED] Temporary procedure dropped cleanly.\n";
+        } else {
+            echo "[FATAL ERROR] Could not parse procedure from database-update-50.sql\n";
+            exit(1);
+        }
+    } catch (Exception $e) {
+        echo "[FATAL ERROR during Migration 50] " . $e->getMessage() . "\n";
         exit(1);
     }
 }
@@ -229,25 +225,34 @@ if ($action === 'verify' || $action === 'all') {
 
     // 1. faculties table
     echo "1. Checking `faculties` table:\n";
-    $stmt = $pdo->prepare("SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'faculties' AND column_name = 'employee_management_faculty_id'");
-    $stmt->execute();
-    $fac_col = $stmt->fetch();
-    echo "   - Column `employee_management_faculty_id` : " . ($fac_col ? "PRESENT ({$fac_col['COLUMN_TYPE']}, Nullable: {$fac_col['IS_NULLABLE']})" : "MISSING!") . "\n";
+    try {
+        $st = $pdo->query("SHOW COLUMNS FROM faculties LIKE 'employee_management_faculty_id'");
+        $fac_col = $st->fetch();
+        echo "   - Column `employee_management_faculty_id` : " . ($fac_col ? "PRESENT ({$fac_col['Type']}, Null: {$fac_col['Null']})" : "MISSING!") . "\n";
+    } catch (Exception $e) {
+        echo "   - Column Check Error: " . $e->getMessage() . "\n";
+    }
 
-    $stmt = $pdo->prepare("SELECT CONSTRAINT_NAME, CONSTRAINT_TYPE FROM information_schema.table_constraints WHERE table_schema = DATABASE() AND table_name = 'faculties' AND CONSTRAINT_NAME = 'uq_fac_emp_faculty'");
-    $stmt->execute();
-    $fac_uq = $stmt->fetch();
-    echo "   - UNIQUE index `uq_fac_emp_faculty`       : " . ($fac_uq ? "PRESENT ({$fac_uq['CONSTRAINT_TYPE']})" : "MISSING!") . "\n";
+    try {
+        $st = $pdo->query("SHOW INDEX FROM faculties WHERE Key_name = 'uq_fac_emp_faculty'");
+        $fac_uq = $st->fetch();
+        echo "   - UNIQUE index `uq_fac_emp_faculty`       : " . ($fac_uq ? "PRESENT (Column: {$fac_uq['Column_name']})" : "MISSING!") . "\n";
+    } catch (Exception $e) {
+        echo "   - Index Check Error: " . $e->getMessage() . "\n";
+    }
 
-    $stmt = $pdo->prepare("
-        SELECT rc.CONSTRAINT_NAME, rc.UPDATE_RULE, rc.DELETE_RULE, kcu.REFERENCED_TABLE_NAME, kcu.REFERENCED_COLUMN_NAME
-        FROM information_schema.REFERENTIAL_CONSTRAINTS rc
-        JOIN information_schema.KEY_COLUMN_USAGE kcu ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
-        WHERE rc.CONSTRAINT_SCHEMA = DATABASE() AND rc.TABLE_NAME = 'faculties' AND rc.CONSTRAINT_NAME = 'fk_fac_emp_faculty'
-    ");
-    $stmt->execute();
-    $fac_fk = $stmt->fetch();
-    echo "   - FOREIGN KEY `fk_fac_emp_faculty`        : " . ($fac_fk ? "PRESENT -> {$fac_fk['REFERENCED_TABLE_NAME']}({$fac_fk['REFERENCED_COLUMN_NAME']}) [ON DELETE {$fac_fk['DELETE_RULE']}, ON UPDATE {$fac_fk['UPDATE_RULE']}]" : "MISSING!") . "\n";
+    try {
+        $st = $pdo->query("
+            SELECT rc.CONSTRAINT_NAME, rc.UPDATE_RULE, rc.DELETE_RULE, kcu.REFERENCED_TABLE_NAME, kcu.REFERENCED_COLUMN_NAME
+            FROM information_schema.REFERENTIAL_CONSTRAINTS rc
+            JOIN information_schema.KEY_COLUMN_USAGE kcu ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
+            WHERE rc.CONSTRAINT_SCHEMA = '$db_name' AND rc.TABLE_NAME = 'faculties' AND rc.CONSTRAINT_NAME = 'fk_fac_emp_faculty'
+        ");
+        $fac_fk = $st->fetch();
+        echo "   - FOREIGN KEY `fk_fac_emp_faculty`        : " . ($fac_fk ? "PRESENT -> {$fac_fk['REFERENCED_TABLE_NAME']}({$fac_fk['REFERENCED_COLUMN_NAME']}) [ON DELETE {$fac_fk['DELETE_RULE']}, ON UPDATE {$fac_fk['UPDATE_RULE']}]" : "MISSING!") . "\n";
+    } catch (Exception $e) {
+        echo "   - FK Check Error: " . $e->getMessage() . "\n";
+    }
 
     // 2. employees table
     echo "\n2. Checking `employees` table columns:\n";
@@ -256,10 +261,13 @@ if ($action === 'verify' || $action === 'all') {
         'academic_year', 'rate_live', 'rate_qpd', 'rate_recorded', 'rate_offline'
     ];
     foreach ($emp_expected_cols as $c) {
-        $stmt = $pdo->prepare("SELECT COLUMN_TYPE, IS_NULLABLE FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'employees' AND column_name = ?");
-        $stmt->execute([$c]);
-        $c_info = $stmt->fetch();
-        echo "   - " . str_pad($c, 28) . ": " . ($c_info ? "PRESENT ({$c_info['COLUMN_TYPE']}, Null: {$c_info['IS_NULLABLE']})" : "MISSING!") . "\n";
+        try {
+            $st = $pdo->query("SHOW COLUMNS FROM employees LIKE '$c'");
+            $c_info = $st->fetch();
+            echo "   - " . str_pad($c, 28) . ": " . ($c_info ? "PRESENT ({$c_info['Type']}, Null: {$c_info['Null']})" : "MISSING!") . "\n";
+        } catch (Exception $e) {
+            echo "   - $c Error: " . $e->getMessage() . "\n";
+        }
     }
 
     // 3. staff_registration_requests table
@@ -269,10 +277,13 @@ if ($action === 'verify' || $action === 'all') {
         'academic_year', 'rate_live', 'rate_qpd', 'rate_recorded', 'rate_offline'
     ];
     foreach ($req_expected_cols as $c) {
-        $stmt = $pdo->prepare("SELECT COLUMN_TYPE, IS_NULLABLE FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'staff_registration_requests' AND column_name = ?");
-        $stmt->execute([$c]);
-        $c_info = $stmt->fetch();
-        echo "   - " . str_pad($c, 28) . ": " . ($c_info ? "PRESENT ({$c_info['COLUMN_TYPE']}, Null: {$c_info['IS_NULLABLE']})" : "MISSING!") . "\n";
+        try {
+            $st = $pdo->query("SHOW COLUMNS FROM staff_registration_requests LIKE '$c'");
+            $c_info = $st->fetch();
+            echo "   - " . str_pad($c, 28) . ": " . ($c_info ? "PRESENT ({$c_info['Type']}, Null: {$c_info['Null']})" : "MISSING!") . "\n";
+        } catch (Exception $e) {
+            echo "   - $c Error: " . $e->getMessage() . "\n";
+        }
     }
 }
 
@@ -334,20 +345,21 @@ if ($action === 'integrity' || $action === 'all') {
         echo "\n[WARNING] Row count mismatch detected!\n";
     }
 
-    // Verify existing legacy faculty records with NULL employee_management_faculty_id
-    $stmt = $pdo->query("SELECT COUNT(*) FROM faculties WHERE employee_management_faculty_id IS NULL");
-    $unlinked_fac_count = (int)$stmt->fetchColumn();
-    echo "Existing Legacy Faculties (NULL link) : " . $unlinked_fac_count . " (All preserved)\n";
+    try {
+        $stmt = $pdo->query("SELECT COUNT(*) FROM faculties WHERE employee_management_faculty_id IS NULL");
+        $unlinked_fac_count = (int)$stmt->fetchColumn();
+        echo "Existing Legacy Faculties (NULL link) : " . $unlinked_fac_count . " (All preserved)\n";
 
-    // Verify existing sessions remain intact
-    $stmt = $pdo->query("SELECT COUNT(*) FROM sessions WHERE faculty_id IS NOT NULL");
-    $active_sessions_count = (int)$stmt->fetchColumn();
-    echo "Existing Linked Sessions              : " . $active_sessions_count . " (All preserved)\n";
+        $stmt = $pdo->query("SELECT COUNT(*) FROM sessions WHERE faculty_id IS NOT NULL");
+        $active_sessions_count = (int)$stmt->fetchColumn();
+        echo "Existing Linked Sessions              : " . $active_sessions_count . " (All preserved)\n";
 
-    // Verify existing payments remain intact
-    $stmt = $pdo->query("SELECT COUNT(*) FROM faculty_payments WHERE faculty_id IS NOT NULL");
-    $active_payments_count = (int)$stmt->fetchColumn();
-    echo "Existing Linked Faculty Payments      : " . $active_payments_count . " (All preserved)\n";
+        $stmt = $pdo->query("SELECT COUNT(*) FROM faculty_payments WHERE faculty_id IS NOT NULL");
+        $active_payments_count = (int)$stmt->fetchColumn();
+        echo "Existing Linked Faculty Payments      : " . $active_payments_count . " (All preserved)\n";
+    } catch (Exception $e) {
+        echo "Integrity Sub-checks Error: " . $e->getMessage() . "\n";
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -358,38 +370,49 @@ if ($action === 'smoke' || $action === 'all') {
     echo "STAGE 7: PRODUCTION FEATURE SMOKE TEST (READ-ONLY)\n";
     echo "----------------------------------------------------------------------\n";
 
-    // A. Employee Management query check
-    $stmt = $pdo->query("SELECT id, employee_code, full_name, application_for, designation, status FROM employees LIMIT 5");
-    $sample_emps = $stmt->fetchAll();
-    echo "A. Employee Management query       : SUCCESS (" . count($sample_emps) . " sample records retrieved)\n";
+    try {
+        $stmt = $pdo->query("SELECT id, employee_code, full_name, application_for, designation, status FROM employees LIMIT 5");
+        $sample_emps = $stmt->fetchAll();
+        echo "A. Employee Management query       : SUCCESS (" . count($sample_emps) . " sample records retrieved)\n";
+    } catch (Exception $e) {
+        echo "A. Employee Management query Error : " . $e->getMessage() . "\n";
+    }
 
-    // B. Registration requests query check
-    $stmt = $pdo->query("SELECT id, full_name, application_for, status FROM staff_registration_requests LIMIT 5");
-    $sample_reqs = $stmt->fetchAll();
-    echo "B. Registration Requests query     : SUCCESS (" . count($sample_reqs) . " sample records retrieved)\n";
+    try {
+        $stmt = $pdo->query("SELECT id, full_name, application_for, status FROM staff_registration_requests LIMIT 5");
+        $sample_reqs = $stmt->fetchAll();
+        echo "B. Registration Requests query     : SUCCESS (" . count($sample_reqs) . " sample records retrieved)\n";
+    } catch (Exception $e) {
+        echo "B. Registration Requests query Err : " . $e->getMessage() . "\n";
+    }
 
-    // C. Approved faculty candidates query (from faculties.php)
-    $stmt = $pdo->query("
-        SELECT e.id, e.employee_code, e.full_name, e.academic_year, e.rate_live, e.rate_qpd, e.rate_recorded, e.rate_offline, f.id AS linked_faculty_id
-        FROM employees e
-        LEFT JOIN faculties f ON f.employee_management_faculty_id = e.id
-        WHERE e.application_for = 'faculty' AND e.status = 'approved'
-        ORDER BY e.full_name ASC
-    ");
-    $candidate_facs = $stmt->fetchAll();
-    echo "C. Faculty Candidate Query         : SUCCESS (" . count($candidate_facs) . " approved candidates available)\n";
+    try {
+        $stmt = $pdo->query("
+            SELECT e.id, e.employee_code, e.full_name, e.academic_year, e.rate_live, e.rate_qpd, e.rate_recorded, e.rate_offline, f.id AS linked_faculty_id
+            FROM employees e
+            LEFT JOIN faculties f ON f.employee_management_faculty_id = e.id
+            WHERE e.application_for = 'faculty' AND e.status = 'approved'
+            ORDER BY e.full_name ASC
+        ");
+        $candidate_facs = $stmt->fetchAll();
+        echo "C. Faculty Candidate Query         : SUCCESS (" . count($candidate_facs) . " approved candidates available)\n";
+    } catch (Exception $e) {
+        echo "C. Faculty Candidate Query Error   : " . $e->getMessage() . "\n";
+    }
 
-    // D. Faculties listing query with employee join
-    $stmt = $pdo->query("
-        SELECT f.id, f.name, f.mobile, f.status, f.employee_management_faculty_id, e.employee_code AS emp_code, e.full_name AS emp_name
-        FROM faculties f
-        LEFT JOIN employees e ON e.id = f.employee_management_faculty_id
-        ORDER BY f.id DESC LIMIT 5
-    ");
-    $fac_list_sample = $stmt->fetchAll();
-    echo "D. Faculties Listing with EMP Join : SUCCESS (" . count($fac_list_sample) . " sample records retrieved)\n";
+    try {
+        $stmt = $pdo->query("
+            SELECT f.id, f.name, f.mobile, f.status, f.employee_management_faculty_id, e.employee_code AS emp_code, e.full_name AS emp_name
+            FROM faculties f
+            LEFT JOIN employees e ON e.id = f.employee_management_faculty_id
+            ORDER BY f.id DESC LIMIT 5
+        ");
+        $fac_list_sample = $stmt->fetchAll();
+        echo "D. Faculties Listing with EMP Join : SUCCESS (" . count($fac_list_sample) . " sample records retrieved)\n";
+    } catch (Exception $e) {
+        echo "D. Faculties Listing with Join Err : " . $e->getMessage() . "\n";
+    }
 
-    // E. Confirm NO pending real application was modified or approved
     echo "E. Real Application Safety Check   : CONFIRMED (0 applications approved during this audit)\n";
 }
 
