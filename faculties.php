@@ -89,7 +89,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             } elseif ($action === 'edit_faculty') {
                 $id = (int)($_POST['faculty_id'] ?? 0);
-                $link_emp_id = !empty($_POST['employee_management_faculty_id']) ? (int)$_POST['employee_management_faculty_id'] : null;
+                $new_link_emp_id = !empty($_POST['employee_management_faculty_id']) ? (int)$_POST['employee_management_faculty_id'] : null;
 
                 $pdo->beginTransaction();
                 $stmt = $pdo->prepare("SELECT * FROM faculties WHERE id = ? FOR UPDATE");
@@ -103,6 +103,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     try {
                         $has_col = (bool)$pdo->query("SHOW COLUMNS FROM faculties LIKE 'employee_management_faculty_id'")->fetchColumn();
                     } catch (Exception $e) {}
+
+                    // Fallback to existing link if no new link was requested during edit
+                    $link_emp_id = $new_link_emp_id ?: (!empty($orig_fac['employee_management_faculty_id']) ? (int)$orig_fac['employee_management_faculty_id'] : null);
 
                     $name = trim($_POST['name'] ?? '');
                     $email = trim($_POST['email'] ?? '');
@@ -316,7 +319,7 @@ try {
                    f.id AS linked_faculty_id, f.name AS linked_faculty_name
             FROM employees e
             LEFT JOIN faculties f ON f.employee_management_faculty_id = e.id
-            WHERE e.application_for = 'faculty' AND e.status = 'approved'
+            WHERE e.application_for = 'faculty' AND e.status = 'active'
             ORDER BY e.full_name ASC
         ")->fetchAll(PDO::FETCH_ASSOC);
     } else {
@@ -325,7 +328,7 @@ try {
                    e.rate_live, e.rate_qpd, e.rate_recorded, e.rate_offline,
                    NULL AS linked_faculty_id, NULL AS linked_faculty_name
             FROM employees e
-            WHERE e.application_for = 'faculty' AND e.status = 'approved'
+            WHERE e.application_for = 'faculty' AND e.status = 'active'
             ORDER BY e.full_name ASC
         ")->fetchAll(PDO::FETCH_ASSOC);
     }
@@ -563,7 +566,7 @@ include 'includes/admin_nav.php';
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="edit_faculty">
             <input type="hidden" name="faculty_id" id="fac-edit-id">
-            <input type="hidden" name="link_employee_management_faculty_id" id="fac-edit-link-emp-id" value="">
+            <input type="hidden" name="employee_management_faculty_id" id="fac-edit-link-emp-id" value="">
             <div class="modal-body">
 
                 <!-- LINKED / UNLINKED STATUS CARD -->

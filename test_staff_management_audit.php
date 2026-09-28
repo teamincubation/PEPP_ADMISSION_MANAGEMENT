@@ -1079,7 +1079,7 @@ run_test('10.3: Faculty approval requires Academic Year, stores optional session
         'rate_offline' => 2000.00,
         'monthly_salary' => 0.00,
         'internship_remuneration' => null,
-        'status' => 'approved'
+        'status' => 'active'
     ];
 
     assert_true(!empty($faculty_data['academic_year']), 'PEPP Academic Year is mandatory');
@@ -1118,16 +1118,17 @@ run_test('10.3: Faculty approval requires Academic Year, stores optional session
 });
 
 // ----------------------------------------------------------------------
-// 10.4 Faculty Linking, 1:1 Constraints, Switching & Unlinking
+// 10.4 Faculty Linking, 1:1 Constraints, Switching, Unlinking & Preservation
 // ----------------------------------------------------------------------
-run_test('10.4A: Faculty candidate list in faculties.php only includes APPROVED Faculty applications', function() use ($pdo) {
-    // Insert additional pending/rejected/employee records
+run_test('10.4A: Faculty candidate query returns ACTIVE Faculty employees with application_for=faculty and no status=approved requirement', function() use ($pdo) {
+    // Insert additional test records: inactive, probation, legacy, other roles
     $pdo->prepare("
         INSERT INTO employees (employee_id, full_name, email, mobile_number, application_for, status)
-        VALUES ('EMP00306', 'Pending Faculty', 'pending@pepp.com', '9876500006', 'faculty', 'pending'),
-               ('EMP00307', 'Rejected Faculty', 'rejected@pepp.com', '9876500007', 'faculty', 'rejected'),
-               ('EMP00308', 'Approved Employee', 'emp.approved@pepp.com', '9876500008', 'employee', 'approved'),
-               ('EMP00309', 'Approved Intern', 'intern.approved@pepp.com', '9876500009', 'intern', 'approved')
+        VALUES ('EMP00306', 'Inactive Faculty', 'inactive@pepp.com', '9876500006', 'faculty', 'inactive'),
+               ('EMP00307', 'Probation Faculty', 'probation@pepp.com', '9876500007', 'faculty', 'probation'),
+               ('EMP00308', 'Legacy Approved Faculty (Obsolete)', 'legacy.approved@pepp.com', '9876500008', 'faculty', 'approved'),
+               ('EMP00309', 'Active Employee', 'emp.active@pepp.com', '9876500009', 'employee', 'active'),
+               ('EMP00310', 'Active Intern', 'intern.active@pepp.com', '9876500010', 'intern', 'active')
     ")->execute();
 
     // Query mimicking faculties.php $emp_faculties
@@ -1135,23 +1136,32 @@ run_test('10.4A: Faculty candidate list in faculties.php only includes APPROVED 
         SELECT e.id, e.employee_id, e.full_name, e.application_for, e.status, f.id AS linked_faculty_id
         FROM employees e
         LEFT JOIN faculties f ON f.employee_management_faculty_id = e.id
-        WHERE e.application_for = 'faculty' AND e.status = 'approved'
+        WHERE e.application_for = 'faculty' AND e.status = 'active'
         ORDER BY e.full_name ASC
     ");
     $candidates = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    assert_equals(1, count($candidates), 'Only approved Faculty application is returned in candidate list');
+    // Only active Faculty employee (Alan Turing) should be returned
+    assert_equals(1, count($candidates), 'Only active Faculty employee is returned in candidate list');
     assert_equals('Prof. Alan Turing', $candidates[0]['full_name']);
+    assert_equals('active', $candidates[0]['status'], 'Status is active');
+    assert_equals('faculty', $candidates[0]['application_for'], 'application_for is faculty');
     assert_equals(null, $candidates[0]['linked_faculty_id'], 'Candidate is currently unlinked');
+
+    // Static verification: faculties.php candidate queries must use status='active' and never status='approved' or application_type
+    $fac_code = file_get_contents(__DIR__ . '/faculties.php');
+    assert_false(strpos($fac_code, "e.application_for = 'faculty' AND e.status = 'approved'") !== false, 'Candidate query does not require employees.status=approved');
+    assert_true(strpos($fac_code, "e.application_for = 'faculty' AND e.status = 'active'") !== false, 'Candidate query requires employees.status=active');
+    assert_false(strpos($fac_code, 'application_type') !== false, 'faculties.php does not use application_type');
 });
 
-run_test('10.4B: Adding Faculty copies authoritative profile and rates and creates 1:1 link', function() use ($pdo) {
+run_test('10.4B: Adding Faculty copies authoritative profile and rates and creates 1:1 link via stable employees.id', function() use ($pdo) {
     // Fetch authoritative employee record #5 (Alan Turing)
     $stmt_e = $pdo->query("SELECT * FROM employees WHERE full_name = 'Prof. Alan Turing'");
     $emp = $stmt_e->fetch(PDO::FETCH_ASSOC);
     assert_true(!empty($emp), 'Authoritative employee found');
 
-    // Add faculty with authoritative fields
+    // Add faculty with authoritative fields using stable employees.id
     $stmt_ins = $pdo->prepare("
         INSERT INTO faculties (
             employee_management_faculty_id, name, mobile, email,
@@ -1169,7 +1179,7 @@ run_test('10.4B: Adding Faculty copies authoritative profile and rates and creat
     $stmt_fac->execute([$faculty_id]);
     $fac = $stmt_fac->fetch(PDO::FETCH_ASSOC);
 
-    assert_equals((int)$emp['id'], (int)$fac['employee_management_faculty_id'], 'Linked employee management faculty ID saved');
+    assert_equals((int)$emp['id'], (int)$fac['employee_management_faculty_id'], 'Linked employee management faculty ID saved using stable employees.id');
     assert_equals('Prof. Alan Turing', $fac['name']);
     assert_equals('2026-27', $fac['academic_year']);
     assert_equals(1500.00, (float)$fac['rate_live']);
@@ -1178,16 +1188,27 @@ run_test('10.4B: Adding Faculty copies authoritative profile and rates and creat
     assert_equals(2000.00, (float)$fac['rate_offline']);
 });
 
-run_test('10.4C: 1:1 Relationship constraint prevents duplicate link across database and backend checks', function() use ($pdo) {
+run_test('10.4C: Already-linked Faculty employees are excluded from candidate selection & 1:1 duplicate linking protection works', function() use ($pdo) {
     $emp_id = (int)$pdo->query("SELECT id FROM employees WHERE full_name = 'Prof. Alan Turing'")->fetchColumn();
 
-    // 1. Backend Conflict Check test
+    // 1. Candidate query check: Alan Turing is now linked
+    $stmt = $pdo->query("
+        SELECT e.id, e.full_name, f.id AS linked_faculty_id
+        FROM employees e
+        LEFT JOIN faculties f ON f.employee_management_faculty_id = e.id
+        WHERE e.application_for = 'faculty' AND e.status = 'active'
+    ");
+    $candidates = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $unlinked_candidates = array_filter($candidates, function($c) { return empty($c['linked_faculty_id']); });
+    assert_equals(0, count($unlinked_candidates), 'Already-linked Faculty employee is excluded from unlinked candidate selection');
+
+    // 2. Backend Conflict Check test
     $stmt_chk = $pdo->prepare("SELECT id FROM faculties WHERE employee_management_faculty_id = ?");
     $stmt_chk->execute([$emp_id]);
     $conflict = $stmt_chk->fetchColumn();
     assert_true(!empty($conflict), 'Backend conflict check identifies already-linked employee');
 
-    // 2. Database UNIQUE constraint check test
+    // 3. Database UNIQUE constraint check test
     $duplicate_caught = false;
     try {
         $stmt_dup = $pdo->prepare("
@@ -1201,26 +1222,36 @@ run_test('10.4C: 1:1 Relationship constraint prevents duplicate link across data
     assert_true($duplicate_caught, 'Database UNIQUE constraint caught duplicate link attempt');
 });
 
-run_test('10.4D: Switching link to another approved faculty is transactional and overwrites authoritative fields', function() use ($pdo) {
-    // Insert second approved faculty in Employee Management
+run_test('10.4D: Edit Faculty submits canonical employee_management_faculty_id and switches link using stable employees.id', function() use ($pdo) {
+    // Verify Edit Faculty hidden field uses canonical employee_management_faculty_id
+    $fac_code = file_get_contents(__DIR__ . '/faculties.php');
+    assert_true(strpos($fac_code, 'name="employee_management_faculty_id" id="fac-edit-link-emp-id"') !== false, 'Edit Faculty modal form uses canonical parameter name employee_management_faculty_id');
+    assert_false(strpos($fac_code, 'name="link_employee_management_faculty_id"') !== false, 'Obsolete name link_employee_management_faculty_id removed');
+
+    // Insert second active faculty in Employee Management
     $pdo->prepare("
         INSERT INTO employees (
             employee_id, full_name, email, mobile_number, application_for,
             designation, department, academic_year, rate_live, rate_qpd,
             rate_recorded, rate_offline, monthly_salary, status
         ) VALUES (
-            'EMP00310', 'Dr. Grace Hopper', 'hopper@pepplearning.com', '9876500010', 'faculty',
-            'Faculty', 'Academics', '2026-27', 1800.00, 950.00, 1400.00, 2200.00, 0.00, 'approved'
+            'EMP00311', 'Dr. Grace Hopper', 'hopper@pepplearning.com', '9876500011', 'faculty',
+            'Faculty', 'Academics', '2026-27', 1800.00, 950.00, 1400.00, 2200.00, 0.00, 'active'
         )
     ")->execute();
     $new_emp_id = (int)$pdo->lastInsertId();
 
     $fac_id = (int)$pdo->query("SELECT id FROM faculties WHERE name = 'Prof. Alan Turing'")->fetchColumn();
 
-    // Fetch authoritative fields of Dr. Grace Hopper
-    $new_emp = $pdo->query("SELECT * FROM employees WHERE id = {$new_emp_id}")->fetch(PDO::FETCH_ASSOC);
+    // Fetch authoritative fields of Dr. Grace Hopper using stable employees.id
+    $new_emp = $pdo->query("SELECT * FROM employees WHERE id = {$new_emp_id} AND application_for = 'faculty'")->fetch(PDO::FETCH_ASSOC);
+    assert_true(!empty($new_emp), 'Grace Hopper found via stable employees.id');
 
-    // Perform switch
+    // Perform switch via simulated edit_faculty submission with employee_management_faculty_id
+    $orig_fac = $pdo->query("SELECT * FROM faculties WHERE id = {$fac_id}")->fetch(PDO::FETCH_ASSOC);
+    $new_link_emp_id = $new_emp_id;
+    $link_emp_id = $new_link_emp_id ?: (!empty($orig_fac['employee_management_faculty_id']) ? (int)$orig_fac['employee_management_faculty_id'] : null);
+
     $stmt_switch = $pdo->prepare("
         UPDATE faculties SET
             employee_management_faculty_id = ?,
@@ -1230,7 +1261,7 @@ run_test('10.4D: Switching link to another approved faculty is transactional and
         WHERE id = ?
     ");
     $stmt_switch->execute([
-        $new_emp['id'], $new_emp['full_name'], $new_emp['mobile_number'], $new_emp['email'],
+        $link_emp_id, $new_emp['full_name'], $new_emp['mobile_number'], $new_emp['email'],
         $new_emp['rate_live'], $new_emp['rate_qpd'], $new_emp['rate_recorded'], $new_emp['rate_offline'],
         $new_emp['academic_year'], $fac_id
     ]);
@@ -1239,13 +1270,35 @@ run_test('10.4D: Switching link to another approved faculty is transactional and
     $stmt_fac->execute([$fac_id]);
     $fac = $stmt_fac->fetch(PDO::FETCH_ASSOC);
 
-    assert_equals($new_emp_id, (int)$fac['employee_management_faculty_id'], 'Switched to new employee ID');
+    assert_equals($new_emp_id, (int)$fac['employee_management_faculty_id'], 'Switched to new employee ID using stable ID');
     assert_equals('Dr. Grace Hopper', $fac['name'], 'Name overwritten with authoritative data');
     assert_equals(1800.00, (float)$fac['rate_live'], 'Live rate overwritten');
     assert_equals(950.00, (float)$fac['rate_qpd'], 'QPD rate overwritten');
 });
 
-run_test('10.4E: Unlinking sets foreign key to NULL without deleting faculty record, sessions, or payments', function() use ($pdo) {
+run_test('10.4E: Existing link is preserved during normal Faculty edit when no link change is requested', function() use ($pdo) {
+    $fac_id = (int)$pdo->query("SELECT id FROM faculties WHERE name = 'Dr. Grace Hopper'")->fetchColumn();
+    $orig_fac = $pdo->query("SELECT * FROM faculties WHERE id = {$fac_id}")->fetch(PDO::FETCH_ASSOC);
+    assert_true(!empty($orig_fac['employee_management_faculty_id']), 'Faculty is currently linked');
+    $linked_emp_id = (int)$orig_fac['employee_management_faculty_id'];
+
+    // Simulate normal edit where user updates phone/rate without changing link ($_POST['employee_management_faculty_id'] is empty)
+    $posted_link_emp_id = null; // empty hidden field
+    $new_link_emp_id = !empty($posted_link_emp_id) ? (int)$posted_link_emp_id : null;
+    $link_emp_id = $new_link_emp_id ?: (!empty($orig_fac['employee_management_faculty_id']) ? (int)$orig_fac['employee_management_faculty_id'] : null);
+
+    assert_equals($linked_emp_id, $link_emp_id, 'Fallback preserves existing linked employee ID');
+
+    // Execute update with preserved link
+    $stmt_upd = $pdo->prepare("UPDATE faculties SET employee_management_faculty_id = ?, mobile = ? WHERE id = ?");
+    $stmt_upd->execute([$link_emp_id, '9876599999', $fac_id]);
+
+    $fac_after = $pdo->query("SELECT * FROM faculties WHERE id = {$fac_id}")->fetch(PDO::FETCH_ASSOC);
+    assert_equals($linked_emp_id, (int)$fac_after['employee_management_faculty_id'], 'Existing link remains intact after normal edit');
+    assert_equals('9876599999', $fac_after['mobile'], 'Edited mobile updated');
+});
+
+run_test('10.4F: Explicit unlink_faculty still unlinks correctly without deleting faculty record, sessions, or payments', function() use ($pdo) {
     $fac_id = (int)$pdo->query("SELECT id FROM faculties WHERE name = 'Dr. Grace Hopper'")->fetchColumn();
 
     // Add session and payment records for this faculty
@@ -1257,7 +1310,7 @@ run_test('10.4E: Unlinking sets foreign key to NULL without deleting faculty rec
         ->execute([$fac_id]);
     $payment_id = (int)$pdo->lastInsertId();
 
-    // Execute unlink
+    // Execute explicit unlink action
     $pdo->prepare("UPDATE faculties SET employee_management_faculty_id = NULL WHERE id = ?")->execute([$fac_id]);
 
     // Check faculties record
@@ -1284,6 +1337,56 @@ run_test('10.4E: Unlinking sets foreign key to NULL without deleting faculty rec
         WHERE e.id = {$emp_hopper['id']} AND f.id IS NULL
     ");
     assert_true(!empty($stmt_avail->fetchColumn()), 'Employee becomes available again to link');
+});
+
+run_test('10.4G: Legacy NULL-linked Faculty remains editable and linkable to active registered Faculty', function() use ($pdo) {
+    // 1. Create legacy unlinked faculty
+    $stmt_leg = $pdo->prepare("
+        INSERT INTO faculties (name, mobile, email, rate_live, rate_qpd, rate_recorded, rate_offline, academic_year, status)
+        VALUES ('Legacy Unlinked Faculty', '9123456780', 'legacy@pepp.com', 1000, 500, 800, 1500, '2025-26', 'active')
+    ");
+    $stmt_leg->execute();
+    $leg_id = (int)$pdo->lastInsertId();
+
+    $orig_leg = $pdo->query("SELECT * FROM faculties WHERE id = {$leg_id}")->fetch(PDO::FETCH_ASSOC);
+    assert_equals(null, $orig_leg['employee_management_faculty_id'], 'Legacy faculty starts with NULL link');
+
+    // 2. Normal edit with no link requested preserves NULL link and updates details
+    $new_link_emp_id = null;
+    $link_emp_id = $new_link_emp_id ?: (!empty($orig_leg['employee_management_faculty_id']) ? (int)$orig_leg['employee_management_faculty_id'] : null);
+    assert_equals(null, $link_emp_id, 'No link selected keeps link NULL');
+
+    $pdo->prepare("UPDATE faculties SET employee_management_faculty_id = ?, mobile = '9123456789' WHERE id = ?")
+        ->execute([$link_emp_id, $leg_id]);
+    $leg_after = $pdo->query("SELECT * FROM faculties WHERE id = {$leg_id}")->fetch(PDO::FETCH_ASSOC);
+    assert_equals(null, $leg_after['employee_management_faculty_id'], 'Legacy faculty remains unlinked');
+    assert_equals('9123456789', $leg_after['mobile'], 'Legacy faculty details updated');
+
+    // 3. User selects active registered faculty (Dr. Grace Hopper, who is unlinked) to link
+    $emp_hopper = $pdo->query("SELECT * FROM employees WHERE full_name = 'Dr. Grace Hopper'")->fetch(PDO::FETCH_ASSOC);
+    $selected_link_emp_id = (int)$emp_hopper['id'];
+
+    $link_emp_id = $selected_link_emp_id ?: (!empty($leg_after['employee_management_faculty_id']) ? (int)$leg_after['employee_management_faculty_id'] : null);
+    assert_equals($selected_link_emp_id, $link_emp_id, 'New link ID resolved');
+
+    // Update with authoritative overwrite
+    $pdo->prepare("
+        UPDATE faculties SET
+            employee_management_faculty_id = ?,
+            name = ?, mobile = ?, email = ?,
+            rate_live = ?, rate_qpd = ?, rate_recorded = ?, rate_offline = ?,
+            academic_year = ?
+        WHERE id = ?
+    ")->execute([
+        $link_emp_id, $emp_hopper['full_name'], $emp_hopper['mobile_number'], $emp_hopper['email'],
+        $emp_hopper['rate_live'], $emp_hopper['rate_qpd'], $emp_hopper['rate_recorded'], $emp_hopper['rate_offline'],
+        $emp_hopper['academic_year'], $leg_id
+    ]);
+
+    $leg_linked = $pdo->query("SELECT * FROM faculties WHERE id = {$leg_id}")->fetch(PDO::FETCH_ASSOC);
+    assert_equals($selected_link_emp_id, (int)$leg_linked['employee_management_faculty_id'], 'Legacy faculty successfully linked to active employee');
+    assert_equals('Dr. Grace Hopper', $leg_linked['name'], 'Name updated with authoritative data');
+    assert_equals(1800.00, (float)$leg_linked['rate_live'], 'Rate updated');
 });
 
 // ----------------------------------------------------------------------
