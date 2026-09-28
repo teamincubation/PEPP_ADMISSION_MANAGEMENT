@@ -84,6 +84,31 @@ if (emp_tables_exist($pdo) && !defined('PEPP_DB_SCHEMA_VERSION')) {
     } catch (Exception $e) {}
 }
 
+function get_table_columns_safe($pdo, string $table): array {
+    try {
+        return $pdo->query("SHOW COLUMNS FROM {$table}")->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Exception $e) {
+        try {
+            $cols = [];
+            $rows = $pdo->query("PRAGMA table_info({$table})")->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as $r) {
+                if (isset($r['name'])) $cols[] = $r['name'];
+            }
+            return $cols;
+        } catch (Exception $e2) {
+            return [];
+        }
+    }
+}
+
+$academic_years = [];
+try {
+    $academic_years = $pdo->query("SELECT year FROM academic_years ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN);
+    if (empty($academic_years)) $academic_years = ['2026-27', '2025-26', '2024-25'];
+} catch (Exception $e) {
+    $academic_years = ['2026-27', '2025-26', '2024-25'];
+}
+
 // ── Download appointment PDF ──────────────────────────────────────────
 if (isset($_GET['action']) && $_GET['action'] === 'appointment_pdf' && isset($_GET['id'])) {
     $table = ($_GET['source'] ?? '') === 'employee' ? 'employees' : 'staff_registration_requests';
@@ -129,17 +154,48 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_employee_details' && isse
     header('Pragma: no-cache');
     if (!emp_tables_exist($pdo)) { echo json_encode(['error' => 'Tables not ready']); exit; }
     try {
-        $stmt = $pdo->prepare("
-            SELECT e.*,
-                   a.username AS linked_admin_username,
-                   a.full_name AS linked_admin_name,
-                   a.email AS linked_admin_email,
-                   a.phone AS linked_admin_phone,
-                   a.role AS linked_admin_role
-            FROM employees e
-            LEFT JOIN admins a ON e.admin_id = a.id
-            WHERE e.id = ? LIMIT 1
-        ");
+        $has_fac_link = false;
+        try {
+            $has_fac_link = (bool)$pdo->query("SHOW COLUMNS FROM faculties LIKE 'employee_management_faculty_id'")->fetchColumn();
+        } catch (Exception $e) {
+            try {
+                $pdo->query("SELECT employee_management_faculty_id FROM faculties LIMIT 1");
+                $has_fac_link = true;
+            } catch (Exception $e2) {
+                $has_fac_link = false;
+            }
+        }
+
+        if ($has_fac_link) {
+            $stmt = $pdo->prepare("
+                SELECT e.*,
+                       a.username AS linked_admin_username,
+                       a.full_name AS linked_admin_name,
+                       a.email AS linked_admin_email,
+                       a.phone AS linked_admin_phone,
+                       a.role AS linked_admin_role,
+                       f.id AS linked_faculty_id,
+                       f.name AS linked_faculty_name
+                FROM employees e
+                LEFT JOIN admins a ON e.admin_id = a.id
+                LEFT JOIN faculties f ON f.employee_management_faculty_id = e.id
+                WHERE e.id = ? LIMIT 1
+            ");
+        } else {
+            $stmt = $pdo->prepare("
+                SELECT e.*,
+                       a.username AS linked_admin_username,
+                       a.full_name AS linked_admin_name,
+                       a.email AS linked_admin_email,
+                       a.phone AS linked_admin_phone,
+                       a.role AS linked_admin_role,
+                       NULL AS linked_faculty_id,
+                       NULL AS linked_faculty_name
+                FROM employees e
+                LEFT JOIN admins a ON e.admin_id = a.id
+                WHERE e.id = ? LIMIT 1
+            ");
+        }
         $stmt->execute([(int)$_GET['id']]);
         $emp = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$emp) { echo json_encode(['error' => 'Employee record not found.']); exit; }
@@ -677,191 +733,344 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
     // ═══ UPDATE EMPLOYEE PROFILE ═══
     elseif ($action === 'update_employee_profile') {
         $emp_id = (int)($_POST['emp_id'] ?? 0);
-        $stmt = $pdo->prepare("SELECT * FROM employees WHERE id = ? LIMIT 1");
-        $stmt->execute([$emp_id]);
-        $current_emp = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if (!$current_emp) {
-            $error_message = 'Employee record not found.';
+        if ($emp_id <= 0) {
+            $error_message = 'Invalid staff record ID.';
         } else {
-            $full_name = trim($_POST['full_name'] ?? '');
-            $gender = $_POST['gender'] ?? '';
-            $dob = trim($_POST['date_of_birth'] ?? '');
-            $blood_group = $_POST['blood_group'] ?? '';
-            $mobile_cc = trim($_POST['mobile_country_code'] ?? '+91');
-            $mobile = preg_replace('/\D/', '', trim($_POST['mobile_number'] ?? ''));
-            $email = strtolower(trim($_POST['email'] ?? ''));
-            $emergency_cc = trim($_POST['emergency_country_code'] ?? '+91');
-            $emergency = preg_replace('/\D/', '', trim($_POST['emergency_contact'] ?? ''));
-            $address = trim($_POST['address'] ?? '');
-            $pincode = preg_replace('/\D/', '', trim($_POST['pincode'] ?? ''));
-            $country = trim($_POST['country'] ?? 'India');
-            $state = trim($_POST['state'] ?? '');
-            $place = trim($_POST['place_post_office'] ?? '');
-            $application_for = $_POST['application_for'] ?? 'employee';
-            $designation = trim($_POST['designation'] ?? '');
-            $department = trim($_POST['department'] ?? '');
-            $joining_date = trim($_POST['joining_date'] ?? '');
-            $probation_till = trim($_POST['probation_till'] ?? '') ?: null;
-            $contract_from = trim($_POST['contract_validity_from'] ?? '') ?: null;
-            $contract_till = trim($_POST['contract_validity_till'] ?? '') ?: null;
-            $monthly_salary = (float)($_POST['monthly_salary'] ?? 0);
-            $status = trim($_POST['status'] ?? 'active');
+            try {
+                $pdo->beginTransaction();
+                $stmt = $pdo->prepare("SELECT * FROM employees WHERE id = ? FOR UPDATE");
+                $stmt->execute([$emp_id]);
+                $current_emp = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            $bank_name = trim($_POST['bank_name'] ?? '');
-            $ifsc = strtoupper(trim($_POST['ifsc_code'] ?? ''));
-            $upi_id = trim($_POST['upi_id'] ?? '') ?: null;
+                if (!$current_emp) {
+                    $pdo->rollBack();
+                    $error_message = 'Employee record not found.';
+                } else {
+                    $full_name = trim($_POST['full_name'] ?? '');
+                    $gender = $_POST['gender'] ?? '';
+                    $dob = trim($_POST['date_of_birth'] ?? '');
+                    $blood_group = $_POST['blood_group'] ?? '';
+                    $mobile_cc = trim($_POST['mobile_country_code'] ?? '+91');
+                    $mobile = preg_replace('/\D/', '', trim($_POST['mobile_number'] ?? ''));
+                    $email = strtolower(trim($_POST['email'] ?? ''));
+                    $emergency_cc = trim($_POST['emergency_country_code'] ?? '+91');
+                    $emergency = preg_replace('/\D/', '', trim($_POST['emergency_contact'] ?? ''));
+                    $address = trim($_POST['address'] ?? '');
+                    $pincode = preg_replace('/\D/', '', trim($_POST['pincode'] ?? ''));
+                    $country = trim($_POST['country'] ?? 'India');
+                    $state = trim($_POST['state'] ?? '');
+                    $place = trim($_POST['place_post_office'] ?? '');
 
-            // Server-side validation
-            $val_errors = [];
-            if (strlen($full_name) < 2) $val_errors[] = 'Full name is required.';
-            if (!in_array($gender, ['Male','Female','Other','Prefer not to say'], true)) $val_errors[] = 'Select a valid gender.';
-            if (!$dob || !strtotime($dob)) $val_errors[] = 'Valid date of birth is required.';
-            if (!in_array($blood_group, ['A+','A-','B+','B-','AB+','AB-','O+','O-'], true)) $val_errors[] = 'Select a valid blood group.';
-            if (strlen($mobile) < 10) $val_errors[] = 'Valid 10-digit mobile number is required.';
-            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) $val_errors[] = 'Valid email address is required.';
-            if (strlen($emergency) < 10) $val_errors[] = 'Valid emergency contact number is required.';
-            if (strlen($address) < 5) $val_errors[] = 'Full address is required.';
-            if (strlen($pincode) !== 6) $val_errors[] = 'Valid 6-digit PIN code is required.';
-            if (!$designation) $val_errors[] = 'Designation is required.';
-            if (!$department && $application_for !== 'intern') $val_errors[] = 'Department is required.';
-            if (!$joining_date && $application_for !== 'faculty') $val_errors[] = 'Joining date is required.';
-            if (!array_key_exists($status, $CANONICAL_STAFF_STATUSES)) $val_errors[] = 'Invalid employment status.';
+                    // Authoritative immutable role track from database record
+                    $application_for = strtolower(trim((string)($current_emp['application_for'] ?? 'employee')));
+                    $status = trim($_POST['status'] ?? 'active');
 
-            if (!empty($val_errors)) {
-                $error_message = implode(' ', $val_errors);
-            } else {
-                try {
-                    // Photo Upload Handling with safe replacement & validation
-                    $photo_path = $current_emp['photo'];
-                    if (isset($_FILES['photo_file']) && !empty($_FILES['photo_file']['name'])) {
-                        if ($_FILES['photo_file']['error'] === UPLOAD_ERR_OK) {
-                            $new_photo = handle_file_upload_with_replace('photo_file', 'photos', $photo_path ?: null, ['jpg', 'jpeg', 'png', 'webp']);
-                            if ($new_photo) {
-                                $photo_path = $new_photo;
-                            } else {
-                                throw new Exception('Invalid photo file. Allowed formats: JPG, PNG, WEBP under 5MB.');
-                            }
-                        }
-                    }
+                    $bank_name = trim($_POST['bank_name'] ?? '');
+                    $ifsc = strtoupper(trim($_POST['ifsc_code'] ?? ''));
+                    $upi_id = trim($_POST['upi_id'] ?? '') ?: null;
 
-                    // Sensitive KYC Aadhaar Update (Only if unmasked value entered)
-                    $aadhaar_encrypted = $current_emp['aadhaar_encrypted'];
-                    $aadhaar_masked = $current_emp['aadhaar_masked'];
-                    $raw_aadhaar_input = preg_replace('/\D/', '', trim($_POST['aadhaar_number'] ?? ''));
-                    if (strlen($raw_aadhaar_input) === 12 && strpos(trim($_POST['aadhaar_number'] ?? ''), 'X') === false) {
-                        $aadhaar_encrypted = pepp_encrypt($raw_aadhaar_input);
-                        $aadhaar_masked = mask_aadhaar($raw_aadhaar_input);
-                    }
+                    // Common Personal Validations
+                    $val_errors = [];
+                    if (strlen($full_name) < 2) $val_errors[] = 'Full name is required.';
+                    if (!in_array($gender, ['Male','Female','Other','Prefer not to say'], true)) $val_errors[] = 'Select a valid gender.';
+                    if (!$dob || !strtotime($dob)) $val_errors[] = 'Valid date of birth is required.';
+                    if (!in_array($blood_group, ['A+','A-','B+','B-','AB+','AB-','O+','O-'], true)) $val_errors[] = 'Select a valid blood group.';
+                    if (strlen($mobile) < 10) $val_errors[] = 'Valid 10-digit mobile number is required.';
+                    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) $val_errors[] = 'Valid email address is required.';
+                    if (strlen($emergency) < 10) $val_errors[] = 'Valid emergency contact number is required.';
+                    if (strlen($address) < 5) $val_errors[] = 'Full address is required.';
+                    if (strlen($pincode) !== 6) $val_errors[] = 'Valid 6-digit PIN code is required.';
+                    if (!array_key_exists($status, $CANONICAL_STAFF_STATUSES)) $val_errors[] = 'Invalid employment status.';
 
-                    // Sensitive Bank Account Update (Only if unmasked value entered)
-                    $bank_acc_encrypted = $current_emp['bank_account_encrypted'];
-                    $bank_acc_masked = $current_emp['bank_account_masked'];
-                    $raw_bank_input = preg_replace('/\s/', '', trim($_POST['bank_account_number'] ?? ''));
-                    if (strlen($raw_bank_input) >= 6 && strpos(trim($_POST['bank_account_number'] ?? ''), 'X') === false) {
-                        $bank_acc_encrypted = pepp_encrypt($raw_bank_input);
-                        $bank_acc_masked = mask_bank_account($raw_bank_input);
-                    }
-
-                    $upd_cols = [
-                        'photo = ?', 'full_name = ?', 'gender = ?', 'blood_group = ?', 'date_of_birth = ?',
-                        'mobile_country_code = ?', 'mobile_number = ?', 'email = ?', 'emergency_country_code = ?', 'emergency_contact = ?',
-                        'address = ?', 'pincode = ?', 'country = ?', 'state = ?', 'place_post_office = ?',
-                        'application_for = ?', 'designation = ?', 'department = ?',
-                        'joining_date = ?', 'probation_till = ?', 'contract_validity_from = ?', 'contract_validity_till = ?',
-                        'monthly_salary = ?', 'status = ?',
-                        'aadhaar_encrypted = ?', 'aadhaar_masked = ?',
-                        'bank_name = ?', 'bank_account_encrypted = ?', 'bank_account_masked = ?',
-                        'ifsc_code = ?', 'upi_id = ?'
-                    ];
-                    $upd_vals = [
-                        $photo_path, $full_name, $gender, $blood_group, $dob,
-                        $mobile_cc, $mobile, $email, $emergency_cc, $emergency,
-                        $address, $pincode, $country, $state, $place,
-                        $application_for, $designation, $department,
-                        $joining_date, $probation_till, $contract_from, $contract_till,
-                        $monthly_salary, $status,
-                        $aadhaar_encrypted, $aadhaar_masked,
-                        $bank_name, $bank_acc_encrypted, $bank_acc_masked,
-                        $ifsc, $upi_id
-                    ];
-
-                    $emp_table_cols = [];
-                    try {
-                        $emp_table_cols = $pdo->query("SHOW COLUMNS FROM employees")->fetchAll(PDO::FETCH_COLUMN);
-                    } catch (Exception $e) {}
+                    // Role-Specific Field Extraction and Validation
+                    $designation = '';
+                    $department = null;
+                    $joining_date = null;
+                    $probation_till = null;
+                    $contract_from = null;
+                    $contract_till = null;
+                    $monthly_salary = 0.00;
+                    $internship_ends_on = null;
+                    $internship_payment_status = null;
+                    $internship_payment_mode = null;
+                    $internship_remuneration = null;
+                    $academic_year = null;
+                    $rate_live = 0.00;
+                    $rate_qpd = 0.00;
+                    $rate_recorded = 0.00;
+                    $rate_offline = 0.00;
 
                     if ($application_for === 'intern') {
-                        if (in_array('internship_ends_on', $emp_table_cols, true)) {
-                            $upd_cols[] = 'internship_ends_on = ?';
-                            $upd_vals[] = trim($_POST['internship_ends_on'] ?? '') ?: null;
-                        }
-                        if (in_array('internship_payment_status', $emp_table_cols, true)) {
-                            $upd_cols[] = 'internship_payment_status = ?';
-                            $upd_vals[] = trim($_POST['internship_payment_status'] ?? '') ?: null;
-                        }
-                        if (in_array('internship_payment_mode', $emp_table_cols, true)) {
-                            $upd_cols[] = 'internship_payment_mode = ?';
-                            $upd_vals[] = trim($_POST['internship_payment_mode'] ?? '') ?: null;
-                        }
-                        if (in_array('internship_remuneration', $emp_table_cols, true)) {
-                            $upd_cols[] = 'internship_remuneration = ?';
-                            $upd_vals[] = isset($_POST['internship_remuneration']) && $_POST['internship_remuneration'] !== '' ? (float)$_POST['internship_remuneration'] : null;
-                        }
-                    } elseif ($application_for === 'faculty') {
-                        if (in_array('academic_year', $emp_table_cols, true)) {
-                            $upd_cols[] = 'academic_year = ?';
-                            $upd_vals[] = trim($_POST['academic_year'] ?? '') ?: null;
-                        }
-                        if (in_array('rate_live', $emp_table_cols, true)) {
-                            $upd_cols[] = 'rate_live = ?';
-                            $upd_vals[] = max(0, (float)($_POST['rate_live'] ?? 0));
-                        }
-                        if (in_array('rate_qpd', $emp_table_cols, true)) {
-                            $upd_cols[] = 'rate_qpd = ?';
-                            $upd_vals[] = max(0, (float)($_POST['rate_qpd'] ?? 0));
-                        }
-                        if (in_array('rate_recorded', $emp_table_cols, true)) {
-                            $upd_cols[] = 'rate_recorded = ?';
-                            $upd_vals[] = max(0, (float)($_POST['rate_recorded'] ?? 0));
-                        }
-                        if (in_array('rate_offline', $emp_table_cols, true)) {
-                            $upd_cols[] = 'rate_offline = ?';
-                            $upd_vals[] = max(0, (float)($_POST['rate_offline'] ?? 0));
-                        }
-                    }
+                        // Intern rules
+                        $designation = 'Project Intern'; // business rule: forced
+                        $department = null;
+                        $joining_date = trim($_POST['intern_joining_date'] ?? $_POST['joining_date'] ?? '');
+                        $internship_ends_on = trim($_POST['internship_ends_on'] ?? '');
+                        $contract_from = $joining_date ?: null;
+                        $contract_till = $internship_ends_on ?: null;
+                        $probation_till = null;
+                        $monthly_salary = 0.00; // never repurpose monthly_salary for intern
 
-                    $upd_vals[] = $emp_id;
-                    $sql_upd = "UPDATE employees SET " . implode(', ', $upd_cols) . ", updated_at = NOW() WHERE id = ?";
-                    $stmt_upd = $pdo->prepare($sql_upd);
-                    $stmt_upd->execute($upd_vals);
+                        if (!$joining_date || !strtotime($joining_date)) {
+                            $val_errors[] = 'Valid joining date is required for Intern.';
+                        }
+                        if (!$internship_ends_on || !strtotime($internship_ends_on)) {
+                            $val_errors[] = 'Valid internship end date is required for Intern.';
+                        }
+                        if ($joining_date && $internship_ends_on && strtotime($internship_ends_on) < strtotime($joining_date)) {
+                            $val_errors[] = 'Internship end date must be on or after joining date.';
+                        }
 
-                    // Update custom field values
-                    if (isset($_POST['custom_fields']) && is_array($_POST['custom_fields'])) {
-                        $valid_fids = $pdo->query("SELECT id FROM employee_custom_fields")->fetchAll(PDO::FETCH_COLUMN);
-                        $stmt_upsert_cf = $pdo->prepare("
-                            INSERT INTO employee_custom_values (employee_id, field_id, field_value)
-                            VALUES (?, ?, ?)
-                            ON DUPLICATE KEY UPDATE field_value = VALUES(field_value)
-                        ");
-                        foreach ($_POST['custom_fields'] as $cf_id_key => $cf_val) {
-                            $cf_id_int = (int)$cf_id_key;
-                            if (in_array($cf_id_int, $valid_fids, true)) {
-                                $stmt_upsert_cf->execute([$emp_id, $cf_id_int, (string)$cf_val]);
+                        $p_status = trim($_POST['internship_payment_status'] ?? '');
+                        if (!in_array($p_status, ['paid', 'unpaid'], true)) {
+                            $val_errors[] = 'Please select Paid or Unpaid for the internship.';
+                        }
+                        $internship_payment_status = $p_status;
+
+                        if ($p_status === 'unpaid') {
+                            $internship_payment_mode = null;
+                            $internship_remuneration = null;
+                        } else {
+                            $p_mode = trim($_POST['internship_payment_mode'] ?? '');
+                            if (!in_array($p_mode, ['task_completion', 'monthly', 'one_time'], true)) {
+                                $val_errors[] = 'Please select a valid payment mode for paid internship.';
+                            }
+                            $internship_payment_mode = $p_mode;
+
+                            if ($p_mode === 'task_completion') {
+                                $internship_remuneration = null;
+                            } else {
+                                $remun = (float)($_POST['internship_remuneration'] ?? 0);
+                                if ($remun <= 0) {
+                                    $val_errors[] = 'Remuneration amount must be greater than 0 for ' . ($p_mode === 'monthly' ? 'Monthly' : 'One-time') . ' payment.';
+                                }
+                                $internship_remuneration = $remun;
                             }
                         }
+
+                    } elseif ($application_for === 'faculty') {
+                        // Faculty rules
+                        $designation = 'Faculty'; // business rule: forced
+                        $department = 'Academics'; // business rule: forced
+                        $joining_date = trim($_POST['faculty_joining_date'] ?? $_POST['joining_date'] ?? '') ?: ($current_emp['joining_date'] ?: date('Y-m-d'));
+                        $probation_till = null;
+                        $contract_from = $joining_date;
+                        $contract_till = trim($_POST['contract_validity_till'] ?? '') ?: ($current_emp['contract_validity_till'] ?: date('Y-12-31'));
+                        $monthly_salary = 0.00;
+                        $internship_remuneration = null;
+
+                        $academic_year = trim($_POST['academic_year'] ?? '');
+                        if (!$academic_year) {
+                            $val_errors[] = 'PEPP Academic Year is required for Faculty.';
+                        }
+
+                        $rate_live = max(0, (float)($_POST['rate_live'] ?? 0));
+                        $rate_qpd = max(0, (float)($_POST['rate_qpd'] ?? 0));
+                        $rate_recorded = max(0, (float)($_POST['rate_recorded'] ?? 0));
+                        $rate_offline = max(0, (float)($_POST['rate_offline'] ?? 0));
+
+                    } else {
+                        // Employee rules (unchanged)
+                        $designation = trim($_POST['designation'] ?? '');
+                        $department = trim($_POST['department'] ?? '');
+                        $joining_date = trim($_POST['joining_date'] ?? '');
+                        $probation_till = trim($_POST['probation_till'] ?? '') ?: null;
+                        $contract_from = trim($_POST['contract_validity_from'] ?? '');
+                        $contract_till = trim($_POST['contract_validity_till'] ?? '');
+                        $monthly_salary = (float)($_POST['monthly_salary'] ?? 0);
+
+                        if (!$designation) $val_errors[] = 'Designation is required.';
+                        if (!$department) $val_errors[] = 'Department is required.';
+                        if (!$joining_date || !strtotime($joining_date)) $val_errors[] = 'Valid joining date is required.';
+                        if (!$contract_from || !strtotime($contract_from)) $val_errors[] = 'Valid contract from date is required.';
+                        if (!$contract_till || !strtotime($contract_till)) $val_errors[] = 'Valid contract till date is required.';
+                        if ($contract_from && $contract_till && strtotime($contract_till) < strtotime($contract_from)) {
+                            $val_errors[] = 'Contract till date must be on or after contract from date.';
+                        }
+                        if ($probation_till && strtotime($probation_till) < strtotime($joining_date)) {
+                            $val_errors[] = 'Probation till date must be on or after joining date.';
+                        }
+                        if ($monthly_salary <= 0) {
+                            $val_errors[] = 'Monthly salary must be greater than 0 for Employee.';
+                        }
                     }
 
-                    // Audit Logs
-                    log_admin_activity($pdo, $admin_username, 'staff_profile_update', "Updated profile for staff {$full_name} ({$current_emp['employee_id']})");
-                    if ($current_emp['status'] !== $status) {
-                        log_admin_activity($pdo, $admin_username, 'staff_status_change', "Changed status of staff {$full_name} ({$current_emp['employee_id']}) from {$current_emp['status']} to {$status}");
-                    }
+                    if (!empty($val_errors)) {
+                        $pdo->rollBack();
+                        $error_message = implode(' ', $val_errors);
+                    } else {
+                        // Photo Upload Handling with safe replacement & validation
+                        $photo_path = $current_emp['photo'];
+                        if (isset($_FILES['photo_file']) && !empty($_FILES['photo_file']['name'])) {
+                            if ($_FILES['photo_file']['error'] === UPLOAD_ERR_OK) {
+                                $new_photo = handle_file_upload_with_replace('photo_file', 'photos', $photo_path ?: null, ['jpg', 'jpeg', 'png', 'webp']);
+                                if ($new_photo) {
+                                    $photo_path = $new_photo;
+                                } else {
+                                    throw new Exception('Invalid photo file. Allowed formats: JPG, PNG, WEBP under 5MB.');
+                                }
+                            }
+                        }
 
-                    $success_message = "Staff profile \"{$full_name}\" ({$current_emp['employee_id']}) updated successfully.";
-                } catch (Exception $e) {
-                    $error_message = 'Failed to update staff profile: ' . $e->getMessage();
+                        // Sensitive KYC Aadhaar Update (Only if unmasked value entered)
+                        $aadhaar_encrypted = $current_emp['aadhaar_encrypted'];
+                        $aadhaar_masked = $current_emp['aadhaar_masked'];
+                        $raw_aadhaar_input = preg_replace('/\D/', '', trim($_POST['aadhaar_number'] ?? ''));
+                        if (strlen($raw_aadhaar_input) === 12 && strpos(trim($_POST['aadhaar_number'] ?? ''), 'X') === false) {
+                            $aadhaar_encrypted = pepp_encrypt($raw_aadhaar_input);
+                            $aadhaar_masked = mask_aadhaar($raw_aadhaar_input);
+                        }
+
+                        // Sensitive Bank Account Update (Only if unmasked value entered)
+                        $bank_acc_encrypted = $current_emp['bank_account_encrypted'];
+                        $bank_acc_masked = $current_emp['bank_account_masked'];
+                        $raw_bank_input = preg_replace('/\s/', '', trim($_POST['bank_account_number'] ?? ''));
+                        if (strlen($raw_bank_input) >= 6 && strpos(trim($_POST['bank_account_number'] ?? ''), 'X') === false) {
+                            $bank_acc_encrypted = pepp_encrypt($raw_bank_input);
+                            $bank_acc_masked = mask_bank_account($raw_bank_input);
+                        }
+
+                        $upd_cols = [
+                            'photo = ?', 'full_name = ?', 'gender = ?', 'blood_group = ?', 'date_of_birth = ?',
+                            'mobile_country_code = ?', 'mobile_number = ?', 'email = ?', 'emergency_country_code = ?', 'emergency_contact = ?',
+                            'address = ?', 'pincode = ?', 'country = ?', 'state = ?', 'place_post_office = ?',
+                            'application_for = ?', 'designation = ?', 'department = ?',
+                            'joining_date = ?', 'probation_till = ?', 'contract_validity_from = ?', 'contract_validity_till = ?',
+                            'monthly_salary = ?', 'status = ?',
+                            'aadhaar_encrypted = ?', 'aadhaar_masked = ?',
+                            'bank_name = ?', 'bank_account_encrypted = ?', 'bank_account_masked = ?',
+                            'ifsc_code = ?', 'upi_id = ?'
+                        ];
+                        $upd_vals = [
+                            $photo_path, $full_name, $gender, $blood_group, $dob,
+                            $mobile_cc, $mobile, $email, $emergency_cc, $emergency,
+                            $address, $pincode, $country, $state, $place,
+                            $application_for, $designation, $department,
+                            $joining_date, $probation_till, $contract_from, $contract_till,
+                            $monthly_salary, $status,
+                            $aadhaar_encrypted, $aadhaar_masked,
+                            $bank_name, $bank_acc_encrypted, $bank_acc_masked,
+                            $ifsc, $upi_id
+                        ];
+
+                        $emp_table_cols = get_table_columns_safe($pdo, 'employees');
+
+                        if ($application_for === 'intern') {
+                            if (in_array('internship_ends_on', $emp_table_cols, true)) {
+                                $upd_cols[] = 'internship_ends_on = ?';
+                                $upd_vals[] = $internship_ends_on;
+                            }
+                            if (in_array('internship_payment_status', $emp_table_cols, true)) {
+                                $upd_cols[] = 'internship_payment_status = ?';
+                                $upd_vals[] = $internship_payment_status;
+                            }
+                            if (in_array('internship_payment_mode', $emp_table_cols, true)) {
+                                $upd_cols[] = 'internship_payment_mode = ?';
+                                $upd_vals[] = $internship_payment_mode;
+                            }
+                            if (in_array('internship_remuneration', $emp_table_cols, true)) {
+                                $upd_cols[] = 'internship_remuneration = ?';
+                                $upd_vals[] = $internship_remuneration;
+                            }
+                        } elseif ($application_for === 'faculty') {
+                            if (in_array('academic_year', $emp_table_cols, true)) {
+                                $upd_cols[] = 'academic_year = ?';
+                                $upd_vals[] = $academic_year;
+                            }
+                            if (in_array('rate_live', $emp_table_cols, true)) {
+                                $upd_cols[] = 'rate_live = ?';
+                                $upd_vals[] = $rate_live;
+                            }
+                            if (in_array('rate_qpd', $emp_table_cols, true)) {
+                                $upd_cols[] = 'rate_qpd = ?';
+                                $upd_vals[] = $rate_qpd;
+                            }
+                            if (in_array('rate_recorded', $emp_table_cols, true)) {
+                                $upd_cols[] = 'rate_recorded = ?';
+                                $upd_vals[] = $rate_recorded;
+                            }
+                            if (in_array('rate_offline', $emp_table_cols, true)) {
+                                $upd_cols[] = 'rate_offline = ?';
+                                $upd_vals[] = $rate_offline;
+                            }
+                        }
+
+                        $upd_vals[] = $emp_id;
+                        $sql_upd = "UPDATE employees SET " . implode(', ', $upd_cols) . ", updated_at = NOW() WHERE id = ?";
+                        $stmt_upd = $pdo->prepare($sql_upd);
+                        $stmt_upd->execute($upd_vals);
+
+                        // Synchronize linked Faculty record if application_for === 'faculty'
+                        if ($application_for === 'faculty') {
+                            $has_fac_link_col = false;
+                            try {
+                                $has_fac_link_col = (bool)$pdo->query("SHOW COLUMNS FROM faculties LIKE 'employee_management_faculty_id'")->fetchColumn();
+                            } catch (Exception $e) {
+                                try {
+                                    $pdo->query("SELECT employee_management_faculty_id FROM faculties LIMIT 1");
+                                    $has_fac_link_col = true;
+                                } catch (Exception $e2) {
+                                    $has_fac_link_col = false;
+                                }
+                            }
+
+                            if ($has_fac_link_col) {
+                                $stmt_fac = $pdo->prepare("SELECT id, name FROM faculties WHERE employee_management_faculty_id = ? FOR UPDATE");
+                                $stmt_fac->execute([$emp_id]);
+                                $linked_fac = $stmt_fac->fetch(PDO::FETCH_ASSOC);
+                                if ($linked_fac) {
+                                    $stmt_sync = $pdo->prepare("
+                                        UPDATE faculties
+                                        SET name = ?, email = ?, mobile = ?, academic_year = ?,
+                                            rate_live = ?, rate_qpd = ?, rate_recorded = ?, rate_offline = ?
+                                        WHERE employee_management_faculty_id = ?
+                                    ");
+                                    $stmt_sync->execute([
+                                        $full_name,
+                                        $email ?: null,
+                                        $mobile,
+                                        $academic_year ?: null,
+                                        $rate_live,
+                                        $rate_qpd,
+                                        $rate_recorded,
+                                        $rate_offline,
+                                        $emp_id
+                                    ]);
+                                    log_admin_activity($pdo, $admin_username, 'faculty_synced',
+                                        "Synchronized authoritative faculty details for faculty #{$linked_fac['id']} ({$full_name}) from Employee {$current_emp['employee_id']}");
+                                }
+                            }
+                        }
+
+                        // Update custom field values
+                        if (isset($_POST['custom_fields']) && is_array($_POST['custom_fields'])) {
+                            $valid_fids = $pdo->query("SELECT id FROM employee_custom_fields")->fetchAll(PDO::FETCH_COLUMN);
+                            $stmt_upsert_cf = $pdo->prepare("
+                                INSERT INTO employee_custom_values (employee_id, field_id, field_value)
+                                VALUES (?, ?, ?)
+                                ON DUPLICATE KEY UPDATE field_value = VALUES(field_value)
+                            ");
+                            foreach ($_POST['custom_fields'] as $cf_id_key => $cf_val) {
+                                $cf_id_int = (int)$cf_id_key;
+                                if (in_array($cf_id_int, $valid_fids, true)) {
+                                    $stmt_upsert_cf->execute([$emp_id, $cf_id_int, (string)$cf_val]);
+                                }
+                            }
+                        }
+
+                        // Audit Logs
+                        log_admin_activity($pdo, $admin_username, 'staff_profile_update', "Updated profile for staff {$full_name} ({$current_emp['employee_id']})");
+                        if ($current_emp['status'] !== $status) {
+                            log_admin_activity($pdo, $admin_username, 'staff_status_change', "Changed status of staff {$full_name} ({$current_emp['employee_id']}) from {$current_emp['status']} to {$status}");
+                        }
+
+                        $pdo->commit();
+                        $success_message = "Staff profile \"{$full_name}\" ({$current_emp['employee_id']}) updated successfully.";
+                    }
                 }
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                $error_message = 'Failed to update staff profile: ' . $e->getMessage();
             }
         }
     }
@@ -1500,64 +1709,161 @@ include 'includes/admin_nav.php';
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
                     <div>
                         <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Employee ID (Immutable)</label>
-                        <input type="text" id="semEmployeeId" readonly style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:#f1f5f9; font-weight:700; color:var(--text);">
+                        <input type="text" id="semEmployeeId" readonly style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:#f1f5f9; font-weight:700; color:var(--text); cursor:not-allowed;">
                     </div>
                     <div>
-                        <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Staff Type *</label>
-                        <select name="application_for" id="semAppFor" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
-                            <option value="employee">Employee</option>
-                            <option value="faculty">Faculty</option>
-                            <option value="intern">Intern</option>
-                        </select>
+                        <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Staff Type (Immutable)</label>
+                        <input type="text" id="semAppForDisplay" readonly style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:#f1f5f9; font-weight:700; color:var(--text); cursor:not-allowed;">
+                        <input type="hidden" name="application_for" id="semAppFor">
                     </div>
                 </div>
 
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
-                    <div>
-                        <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Designation *</label>
-                        <input type="text" name="designation" id="semDesignation" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                <!-- ════ ROLE SECTION 1: EMPLOYEE ════ -->
+                <div id="semFieldsEmployee">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+                        <div>
+                            <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Designation *</label>
+                            <input type="text" name="designation" id="semDesignation" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        </div>
+                        <div>
+                            <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Department *</label>
+                            <input type="text" name="department" id="semDepartment" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        </div>
                     </div>
-                    <div>
-                        <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Department *</label>
-                        <input type="text" name="department" id="semDepartment" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
-                    </div>
-                </div>
 
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
-                    <div>
-                        <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Joining Date *</label>
-                        <input type="date" name="joining_date" id="semJoiningDate" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+                        <div>
+                            <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Joining Date *</label>
+                            <input type="date" name="joining_date" id="semJoiningDate" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        </div>
+                        <div>
+                            <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Probation Till</label>
+                            <input type="date" name="probation_till" id="semProbationTill" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        </div>
                     </div>
-                    <div>
-                        <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Probation Till</label>
-                        <input type="date" name="probation_till" id="semProbationTill" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
-                    </div>
-                </div>
 
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
-                    <div>
-                        <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Contract From</label>
-                        <input type="date" name="contract_validity_from" id="semContractFrom" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+                        <div>
+                            <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Contract From *</label>
+                            <input type="date" name="contract_validity_from" id="semContractFrom" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        </div>
+                        <div>
+                            <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Contract Till *</label>
+                            <input type="date" name="contract_validity_till" id="semContractTill" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        </div>
                     </div>
-                    <div>
-                        <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Contract Till</label>
-                        <input type="date" name="contract_validity_till" id="semContractTill" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
-                    </div>
-                </div>
 
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
-                    <div>
+                    <div style="margin-bottom:12px;">
                         <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Monthly Salary (₹) *</label>
-                        <input type="number" step="0.01" min="0" name="monthly_salary" id="semMonthlySalary" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        <input type="number" step="0.01" min="0" name="monthly_salary" id="semMonthlySalary" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
                     </div>
-                    <div>
-                        <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Employment Status *</label>
-                        <select name="status" id="semStatus" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card); font-weight:700;">
-                            <?php foreach ($CANONICAL_STAFF_STATUSES as $stk => $stv): ?>
-                                <option value="<?= $stk ?>"><?= $stv['label'] ?></option>
-                            <?php endforeach; ?>
+                </div>
+
+                <!-- ════ ROLE SECTION 2: INTERN ════ -->
+                <div id="semFieldsIntern" style="display:none;">
+                    <div style="margin-bottom:12px;">
+                        <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Designation</label>
+                        <input type="text" value="Project Intern" readonly style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:#f1f5f9; color:var(--text); cursor:not-allowed; font-weight:600;">
+                    </div>
+
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+                        <div>
+                            <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Joining Date *</label>
+                            <input type="date" name="intern_joining_date" id="semInternJoiningDate" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        </div>
+                        <div>
+                            <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Internship Ends On *</label>
+                            <input type="date" name="internship_ends_on" id="semInternEndsOn" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:12px;">
+                        <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Internship Type *</label>
+                        <select name="internship_payment_status" id="semInternPaymentStatus" onchange="toggleInternEditPaymentUI()" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                            <option value="unpaid">Unpaid Internship</option>
+                            <option value="paid">Paid Internship</option>
                         </select>
                     </div>
+
+                    <div id="semInternPaymentModeWrap" style="display:none; margin-bottom:12px;">
+                        <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Payment Mode *</label>
+                        <select name="internship_payment_mode" id="semInternPaymentMode" onchange="toggleInternEditModeUI()" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                            <option value="task_completion">Based on task completion</option>
+                            <option value="monthly">Monthly Payment</option>
+                            <option value="one_time">One-time Payment</option>
+                        </select>
+                    </div>
+
+                    <div id="semInternRemunerationWrap" style="display:none; margin-bottom:12px;">
+                        <label id="semInternRemunLabel" style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Internship Remuneration (₹) *</label>
+                        <input type="number" name="internship_remuneration" id="semInternRemuneration" min="0.01" step="0.01" placeholder="Enter amount" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        <div style="font-size:0.7rem; color:var(--text-muted); margin-top:3px;">Tracked separately as intern remuneration (never stored as monthly salary).</div>
+                    </div>
+                </div>
+
+                <!-- ════ ROLE SECTION 3: FACULTY ════ -->
+                <div id="semFieldsFaculty" style="display:none;">
+                    <div id="semFacultyLinkedBanner" class="alert alert-info" style="display:none; margin-bottom:12px; font-size:12px; padding:10px 12px;">
+                        <i class="fas fa-link" style="color:var(--accent);"></i>
+                        <span id="semFacultyLinkedText">Linked to Faculty Management. Updates to Faculty profile and session charges here will automatically synchronize with Faculty Management.</span>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+                        <div>
+                            <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Designation</label>
+                            <input type="text" value="Faculty" readonly style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:#f1f5f9; color:var(--text); cursor:not-allowed; font-weight:600;">
+                        </div>
+                        <div>
+                            <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Department</label>
+                            <input type="text" value="Academics" readonly style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:#f1f5f9; color:var(--text); cursor:not-allowed; font-weight:600;">
+                        </div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+                        <div>
+                            <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Joining Date</label>
+                            <input type="date" name="faculty_joining_date" id="semFacultyJoiningDate" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        </div>
+                        <div>
+                            <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">PEPP Academic Year *</label>
+                            <select name="academic_year" id="semFacultyAcademicYear" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                                <option value="">— Select Academic Year —</option>
+                                <?php foreach ($academic_years as $y): ?>
+                                    <option value="<?php echo e($y); ?>"><?php echo e($y); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="font-size:0.8rem; font-weight:700; margin:14px 0 6px; color:var(--text-muted);"><i class="fas fa-indian-rupee-sign"></i> Session Charges (₹/Hour) — Optional</div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+                        <div>
+                            <label style="display:block; font-size:0.75rem; font-weight:600; margin-bottom:4px;">Live Session (₹/hr)</label>
+                            <input type="number" step="0.01" min="0" name="rate_live" id="semRateLive" value="0.00" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        </div>
+                        <div>
+                            <label style="display:block; font-size:0.75rem; font-weight:600; margin-bottom:4px;">QPD (₹/hr)</label>
+                            <input type="number" step="0.01" min="0" name="rate_qpd" id="semRateQpd" value="0.00" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        </div>
+                        <div>
+                            <label style="display:block; font-size:0.75rem; font-weight:600; margin-bottom:4px;">Recorded (₹/hr)</label>
+                            <input type="number" step="0.01" min="0" name="rate_recorded" id="semRateRecorded" value="0.00" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        </div>
+                        <div>
+                            <label style="display:block; font-size:0.75rem; font-weight:600; margin-bottom:4px;">Offline Session (₹/hr)</label>
+                            <input type="number" step="0.01" min="0" name="rate_offline" id="semRateOffline" value="0.00" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Common Employment Status (All tracks) -->
+                <div style="margin-top:12px; margin-bottom:12px;">
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Employment Status *</label>
+                    <select name="status" id="semStatus" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card); font-weight:700;">
+                        <?php foreach ($CANONICAL_STAFF_STATUSES as $stk => $stv): ?>
+                            <option value="<?= $stk ?>"><?= $stv['label'] ?></option>
+                        <?php endforeach; ?>
+                    </select>
                 </div>
 
                 <!-- Custom Fields Container -->
@@ -2024,15 +2330,8 @@ function openStaffEditModal(empId) {
 
             // Employment
             document.getElementById('semEmployeeId').value = emp.employee_id || '';
-            document.getElementById('semAppFor').value = emp.application_for || 'employee';
-            document.getElementById('semDesignation').value = emp.designation || '';
-            document.getElementById('semDepartment').value = emp.department || '';
-            document.getElementById('semJoiningDate').value = emp.joining_date || '';
-            document.getElementById('semProbationTill').value = emp.probation_till || '';
-            document.getElementById('semContractFrom').value = emp.contract_validity_from || '';
-            document.getElementById('semContractTill').value = emp.contract_validity_till || '';
-            document.getElementById('semMonthlySalary').value = emp.monthly_salary || 0;
             document.getElementById('semStatus').value = emp.status || 'active';
+            setupStaffEditFormForRole(emp);
 
             // Masked KYC & Bank Initial state
             document.getElementById('semAadhaarDisplay').value = emp.aadhaar_masked || 'XXXX XXXX 1234';
@@ -2078,6 +2377,194 @@ function openStaffEditModal(empId) {
             closeModal('staffEditModal');
         });
 }
+
+function setupStaffEditFormForRole(emp) {
+    const role = (emp.application_for || 'employee').toLowerCase();
+    const appForInput = document.getElementById('semAppFor');
+    if (appForInput) appForInput.value = role;
+    const appForDisplay = document.getElementById('semAppForDisplay');
+    if (appForDisplay) appForDisplay.value = role.toUpperCase();
+
+    const empSec = document.getElementById('semFieldsEmployee');
+    const intSec = document.getElementById('semFieldsIntern');
+    const facSec = document.getElementById('semFieldsFaculty');
+
+    // Hide all role sections initially
+    if (empSec) {
+        empSec.style.display = 'none';
+        empSec.querySelectorAll('input, select').forEach(el => el.disabled = true);
+    }
+    if (intSec) {
+        intSec.style.display = 'none';
+        intSec.querySelectorAll('input, select').forEach(el => el.disabled = true);
+    }
+    if (facSec) {
+        facSec.style.display = 'none';
+        facSec.querySelectorAll('input, select').forEach(el => el.disabled = true);
+    }
+
+    if (role === 'intern') {
+        if (intSec) {
+            intSec.style.display = 'block';
+            intSec.querySelectorAll('input, select').forEach(el => el.disabled = false);
+        }
+        document.getElementById('semInternJoiningDate').value = emp.joining_date || '';
+        document.getElementById('semInternEndsOn').value = emp.internship_ends_on || '';
+        document.getElementById('semInternPaymentStatus').value = emp.internship_payment_status || 'unpaid';
+        document.getElementById('semInternPaymentMode').value = emp.internship_payment_mode || 'task_completion';
+        document.getElementById('semInternRemuneration').value = (emp.internship_remuneration !== undefined && emp.internship_remuneration !== null) ? emp.internship_remuneration : '';
+        toggleInternEditPaymentUI();
+
+    } else if (role === 'faculty') {
+        if (facSec) {
+            facSec.style.display = 'block';
+            facSec.querySelectorAll('input, select').forEach(el => el.disabled = false);
+        }
+        document.getElementById('semFacultyJoiningDate').value = emp.joining_date || '';
+        document.getElementById('semFacultyAcademicYear').value = emp.academic_year || '';
+        document.getElementById('semRateLive').value = (emp.rate_live !== undefined && emp.rate_live !== null) ? emp.rate_live : '0.00';
+        document.getElementById('semRateQpd').value = (emp.rate_qpd !== undefined && emp.rate_qpd !== null) ? emp.rate_qpd : '0.00';
+        document.getElementById('semRateRecorded').value = (emp.rate_recorded !== undefined && emp.rate_recorded !== null) ? emp.rate_recorded : '0.00';
+        document.getElementById('semRateOffline').value = (emp.rate_offline !== undefined && emp.rate_offline !== null) ? emp.rate_offline : '0.00';
+
+        const banner = document.getElementById('semFacultyLinkedBanner');
+        const text = document.getElementById('semFacultyLinkedText');
+        if (emp.linked_faculty_id) {
+            banner.style.display = 'block';
+            text.textContent = 'Linked to Faculty Management (#' + emp.linked_faculty_id + (emp.linked_faculty_name ? ' - ' + emp.linked_faculty_name : '') + '). Updates to Faculty profile and session charges here will automatically synchronize with Faculty Management.';
+        } else {
+            banner.style.display = 'none';
+        }
+
+    } else {
+        // Standard Employee
+        if (empSec) {
+            empSec.style.display = 'block';
+            empSec.querySelectorAll('input, select').forEach(el => el.disabled = false);
+        }
+        document.getElementById('semDesignation').value = emp.designation || '';
+        document.getElementById('semDepartment').value = emp.department || '';
+        document.getElementById('semJoiningDate').value = emp.joining_date || '';
+        document.getElementById('semProbationTill').value = emp.probation_till || '';
+        document.getElementById('semContractFrom').value = emp.contract_validity_from || '';
+        document.getElementById('semContractTill').value = emp.contract_validity_till || '';
+        document.getElementById('semMonthlySalary').value = emp.monthly_salary || '';
+    }
+}
+
+function toggleInternEditPaymentUI() {
+    const statusEl = document.getElementById('semInternPaymentStatus');
+    if (!statusEl) return;
+    const status = statusEl.value;
+    const modeWrap = document.getElementById('semInternPaymentModeWrap');
+    const remunWrap = document.getElementById('semInternRemunerationWrap');
+    const remunInput = document.getElementById('semInternRemuneration');
+    if (status === 'paid') {
+        if (modeWrap) modeWrap.style.display = 'block';
+        toggleInternEditModeUI();
+    } else {
+        if (modeWrap) modeWrap.style.display = 'none';
+        if (remunWrap) remunWrap.style.display = 'none';
+        if (remunInput) {
+            remunInput.value = '';
+            remunInput.required = false;
+        }
+    }
+}
+
+function toggleInternEditModeUI() {
+    const statusEl = document.getElementById('semInternPaymentStatus');
+    const modeEl = document.getElementById('semInternPaymentMode');
+    if (!statusEl || !modeEl) return;
+    const status = statusEl.value;
+    const mode = modeEl.value;
+    const remunWrap = document.getElementById('semInternRemunerationWrap');
+    const remunInput = document.getElementById('semInternRemuneration');
+    const label = document.getElementById('semInternRemunLabel');
+
+    if (status === 'paid' && (mode === 'monthly' || mode === 'one_time')) {
+        if (remunWrap) remunWrap.style.display = 'block';
+        if (remunInput) remunInput.required = true;
+        if (label) label.textContent = (mode === 'monthly' ? 'Monthly Remuneration (₹) *' : 'One-time Remuneration (₹) *');
+    } else {
+        if (remunWrap) remunWrap.style.display = 'none';
+        if (remunInput) {
+            remunInput.required = false;
+            remunInput.value = '';
+        }
+    }
+}
+
+// Client-side form validation before submitting staffEditForm
+document.addEventListener('DOMContentLoaded', function() {
+    const editForm = document.getElementById('staffEditForm');
+    if (editForm) {
+        editForm.addEventListener('submit', function(e) {
+            const role = (document.getElementById('semAppFor').value || 'employee').toLowerCase();
+            if (role === 'intern') {
+                const jd = document.getElementById('semInternJoiningDate').value;
+                const ed = document.getElementById('semInternEndsOn').value;
+                if (!jd) {
+                    alert('Joining date is required for Intern.');
+                    switchSemTab('employment');
+                    e.preventDefault();
+                    return false;
+                }
+                if (!ed) {
+                    alert('Internship end date is required for Intern.');
+                    switchSemTab('employment');
+                    e.preventDefault();
+                    return false;
+                }
+                if (ed < jd) {
+                    alert('Internship end date must be on or after joining date.');
+                    switchSemTab('employment');
+                    e.preventDefault();
+                    return false;
+                }
+                const status = document.getElementById('semInternPaymentStatus').value;
+                const mode = document.getElementById('semInternPaymentMode').value;
+                if (status === 'paid' && (mode === 'monthly' || mode === 'one_time')) {
+                    const val = parseFloat(document.getElementById('semInternRemuneration').value || '0');
+                    if (isNaN(val) || val <= 0) {
+                        alert('Please enter a remuneration amount greater than zero.');
+                        switchSemTab('employment');
+                        e.preventDefault();
+                        return false;
+                    }
+                }
+            } else if (role === 'faculty') {
+                const ay = document.getElementById('semFacultyAcademicYear').value;
+                if (!ay) {
+                    alert('PEPP Academic Year is required for Faculty.');
+                    switchSemTab('employment');
+                    e.preventDefault();
+                    return false;
+                }
+            } else {
+                const des = document.getElementById('semDesignation').value.trim();
+                const dep = document.getElementById('semDepartment').value.trim();
+                const jd = document.getElementById('semJoiningDate').value;
+                const cf = document.getElementById('semContractFrom').value;
+                const ct = document.getElementById('semContractTill').value;
+                const sal = parseFloat(document.getElementById('semMonthlySalary').value || '0');
+
+                if (!des || !dep || !jd || !cf || !ct || isNaN(sal) || sal <= 0) {
+                    alert('All required Employment fields (Designation, Department, Joining Date, Contract Validity, Monthly Salary > 0) must be filled.');
+                    switchSemTab('employment');
+                    e.preventDefault();
+                    return false;
+                }
+                if (ct < cf) {
+                    alert('Contract till date must be on or after contract from date.');
+                    switchSemTab('employment');
+                    e.preventDefault();
+                    return false;
+                }
+            }
+        });
+    }
+});
 
 function revealField(field) {
     const empId = document.getElementById('semEmpId').value;

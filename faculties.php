@@ -105,19 +105,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } catch (Exception $e) {}
 
                     // Fallback to existing link if no new link was requested during edit
-                    $link_emp_id = $new_link_emp_id ?: (!empty($orig_fac['employee_management_faculty_id']) ? (int)$orig_fac['employee_management_faculty_id'] : null);
+                    $orig_link_emp_id = (!empty($orig_fac['employee_management_faculty_id'])) ? (int)$orig_fac['employee_management_faculty_id'] : null;
+                    $link_emp_id = $new_link_emp_id ?: $orig_link_emp_id;
 
-                    $name = trim($_POST['name'] ?? '');
-                    $email = trim($_POST['email'] ?? '');
-                    $mobile = trim($_POST['mobile'] ?? '');
-                    $academic_year = trim($_POST['academic_year'] ?? '') ?: null;
-                    $rate_live = (float)($_POST['rate_live'] ?? 0);
-                    $rate_qpd = (float)($_POST['rate_qpd'] ?? 0);
-                    $rate_recorded = (float)($_POST['rate_recorded'] ?? 0);
-                    $rate_offline = (float)($_POST['rate_offline'] ?? 0);
                     $status = in_array($_POST['status'] ?? '', ['active', 'inactive'], true) ? $_POST['status'] : 'active';
 
-                    // Check if linking or switching
+                    // PHASE 6 BACKEND PROTECTION:
+                    // If the Faculty is linked (already linked or newly linking/switching):
+                    // Authoritative values from employees MUST be used.
+                    // Any incoming POST values for name, email, mobile, academic_year, rate_live, rate_qpd, rate_recorded, rate_offline
+                    // are ignored to prevent direct POST / tampering from modifying authoritative Faculty fields.
                     if ($link_emp_id) {
                         if ($has_col) {
                             $stmt_conflict = $pdo->prepare("SELECT id, name FROM faculties WHERE employee_management_faculty_id = ? AND id != ? FOR UPDATE");
@@ -129,40 +126,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             }
                         }
 
-                        // If newly linking or switching, enforce authoritative data overwrite
-                        if (empty($orig_fac['employee_management_faculty_id']) || (int)$orig_fac['employee_management_faculty_id'] !== $link_emp_id) {
-                            $stmt_emp = $pdo->prepare("SELECT * FROM employees WHERE id = ? AND application_for = 'faculty' FOR UPDATE");
-                            $stmt_emp->execute([$link_emp_id]);
-                            $emp = $stmt_emp->fetch(PDO::FETCH_ASSOC);
-                            if (!$emp) {
-                                $pdo->rollBack();
-                                throw new Exception("Selected record is not an approved Faculty in Employee Management.");
+                        $stmt_emp = $pdo->prepare("SELECT * FROM employees WHERE id = ? AND application_for = 'faculty' FOR UPDATE");
+                        $stmt_emp->execute([$link_emp_id]);
+                        $emp = $stmt_emp->fetch(PDO::FETCH_ASSOC);
+                        if (!$emp) {
+                            $pdo->rollBack();
+                            throw new Exception("Linked or selected record is not an approved Faculty in Employee Management.");
+                        }
+
+                        $name = trim($emp['full_name']);
+                        $mobile = trim($emp['mobile_number']);
+                        $email = trim($emp['email']) ?: null;
+                        $academic_year = trim($emp['academic_year'] ?? '') ?: null;
+                        $rate_live = max(0, (float)($emp['rate_live'] ?? 0));
+                        $rate_qpd = max(0, (float)($emp['rate_qpd'] ?? 0));
+                        $rate_recorded = max(0, (float)($emp['rate_recorded'] ?? 0));
+                        $rate_offline = max(0, (float)($emp['rate_offline'] ?? 0));
+                    } else {
+                        // Legacy / Unlinked Faculty: retain manual editing behavior
+                        $name = trim($_POST['name'] ?? '');
+                        $email = trim($_POST['email'] ?? '') ?: null;
+                        $mobile = trim($_POST['mobile'] ?? '');
+                        $academic_year = trim($_POST['academic_year'] ?? '') ?: null;
+                        $rate_live = max(0, (float)($_POST['rate_live'] ?? 0));
+                        $rate_qpd = max(0, (float)($_POST['rate_qpd'] ?? 0));
+                        $rate_recorded = max(0, (float)($_POST['rate_recorded'] ?? 0));
+                        $rate_offline = max(0, (float)($_POST['rate_offline'] ?? 0));
+
+                        if (is_credential_restricted('faculties')) {
+                            if (strpos($mobile, '*') !== false || preg_match('/^[x\s@.]+$/i', $mobile) || strpos($mobile, '<span') !== false) {
+                                $mobile = $orig_fac['mobile'];
                             }
-                            $name = trim($emp['full_name']);
-                            $mobile = trim($emp['mobile_number']);
-                            $email = trim($emp['email']) ?: null;
-                            $academic_year = trim($emp['academic_year'] ?? '') ?: null;
-                            $rate_live = (float)($emp['rate_live'] ?? 0);
-                            $rate_qpd = (float)($emp['rate_qpd'] ?? 0);
-                            $rate_recorded = (float)($emp['rate_recorded'] ?? 0);
-                            $rate_offline = (float)($emp['rate_offline'] ?? 0);
+                            if ($email && (strpos($email, '*') !== false || preg_match('/^[x\s@.]+$/i', $email) || strpos($email, '<span') !== false)) {
+                                $email = $orig_fac['email'];
+                            }
                         }
-                    }
 
-                    if (is_credential_restricted('faculties')) {
-                        if (strpos($mobile, '*') !== false || preg_match('/^[x\s@.]+$/i', $mobile) || strpos($mobile, '<span') !== false) {
-                            $mobile = $orig_fac['mobile'];
+                        if (is_credential_restricted('financials')) {
+                            $rate_live = (float)$orig_fac['rate_live'];
+                            $rate_qpd = (float)$orig_fac['rate_qpd'];
+                            $rate_recorded = (float)$orig_fac['rate_recorded'];
+                            $rate_offline = (float)$orig_fac['rate_offline'];
                         }
-                        if (strpos($email, '*') !== false || preg_match('/^[x\s@.]+$/i', $email) || strpos($email, '<span') !== false) {
-                            $email = $orig_fac['email'];
-                        }
-                    }
-
-                    if (is_credential_restricted('financials') && (!$link_emp_id || (int)($orig_fac['employee_management_faculty_id'] ?? 0) === $link_emp_id)) {
-                        $rate_live = (float)$orig_fac['rate_live'];
-                        $rate_qpd = (float)$orig_fac['rate_qpd'];
-                        $rate_recorded = (float)$orig_fac['rate_recorded'];
-                        $rate_offline = (float)$orig_fac['rate_offline'];
                     }
 
                     if ($name === '') {
@@ -570,13 +575,19 @@ include 'includes/admin_nav.php';
             <div class="modal-body">
 
                 <!-- LINKED / UNLINKED STATUS CARD -->
-                <div id="fac-edit-linked-box" class="alert alert-info" style="display:none; margin-bottom:14px; padding:10px 14px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
+                <div id="fac-edit-linked-box" class="alert alert-info" style="display:none; margin-bottom:14px; padding:12px 14px;">
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start; width:100%; gap:10px;">
                         <div>
-                            <i class="fas fa-link" style="color:var(--accent);"></i>
-                            <span>Linked Record: <strong id="fac-edit-linked-name"></strong> (<span id="fac-edit-linked-code"></span>)</span>
+                            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                                <i class="fas fa-link" style="color:var(--accent);"></i>
+                                <span>Linked Record: <strong id="fac-edit-linked-name"></strong> (<span id="fac-edit-linked-code"></span>)</span>
+                                <span class="badge" style="background:#0284c7; color:#fff; font-size:11px; padding:3px 8px; border-radius:12px; font-weight:600;"><i class="fas fa-lock"></i> Managed from Employee Management</span>
+                            </div>
+                            <div style="font-size:11.5px; color:#475569; margin-top:6px;">
+                                <i class="fas fa-info-circle"></i> Personal details and session charges are managed from Employee Management. To modify these values, edit the linked record in Employee Management.
+                            </div>
                         </div>
-                        <div style="display:flex; gap:6px;">
+                        <div style="display:flex; gap:6px; flex-shrink:0;">
                             <button type="button" class="btn btn-sm btn-soft-blue" onclick="toggleSwitchFacultyUI()"><i class="fas fa-arrows-rotate"></i> Switch Link</button>
                             <button type="button" class="btn btn-sm btn-soft-red" onclick="triggerUnlinkFaculty()"><i class="fas fa-link-slash"></i> Unlink</button>
                         </div>
@@ -602,13 +613,27 @@ include 'includes/admin_nav.php';
                 </div>
 
                 <div class="form-grid">
-                    <div class="field"><label>Faculty Name <span class="req">*</span></label><input type="text" name="name" id="fac-edit-name" required></div>
-                    <div class="field"><label>Mobile Number</label><input type="text" name="mobile" id="fac-edit-mobile"></div>
-                    <div class="field"><label>Email ID</label><input type="email" name="email" id="fac-edit-email"></div>
-                    <div class="field"><label>PEPP Academic Year</label>
-                        <select name="academic_year" id="fac-edit-year"><option value="">-</option><?php foreach ($academic_years as $y): ?><option value="<?php echo e($y); ?>"><?php echo e($y); ?></option><?php endforeach; ?></select></div>
+                    <div class="field">
+                        <label>Faculty Name <span class="req">*</span> <span class="fac-linked-field-badge" style="display:none; font-size:10px; color:#0284c7; font-weight:600; margin-left:4px;"><i class="fas fa-lock"></i> Managed</span></label>
+                        <input type="text" name="name" id="fac-edit-name" required>
+                    </div>
+                    <div class="field">
+                        <label>Mobile Number <span class="fac-linked-field-badge" style="display:none; font-size:10px; color:#0284c7; font-weight:600; margin-left:4px;"><i class="fas fa-lock"></i> Managed</span></label>
+                        <input type="text" name="mobile" id="fac-edit-mobile">
+                    </div>
+                    <div class="field">
+                        <label>Email ID <span class="fac-linked-field-badge" style="display:none; font-size:10px; color:#0284c7; font-weight:600; margin-left:4px;"><i class="fas fa-lock"></i> Managed</span></label>
+                        <input type="email" name="email" id="fac-edit-email">
+                    </div>
+                    <div class="field">
+                        <label>PEPP Academic Year <span class="fac-linked-field-badge" style="display:none; font-size:10px; color:#0284c7; font-weight:600; margin-left:4px;"><i class="fas fa-lock"></i> Managed</span></label>
+                        <select name="academic_year" id="fac-edit-year"><option value="">-</option><?php foreach ($academic_years as $y): ?><option value="<?php echo e($y); ?>"><?php echo e($y); ?></option><?php endforeach; ?></select>
+                    </div>
                 </div>
-                <div class="cell-sub" style="font-weight:700; margin:14px 0 6px;">Charge / hour by session type</div>
+                <div class="cell-sub" style="font-weight:700; margin:14px 0 6px;">
+                    Charge / hour by session type
+                    <span class="fac-linked-field-badge" style="display:none; font-size:10px; color:#0284c7; font-weight:600; margin-left:4px;"><i class="fas fa-lock"></i> Managed from Employee Management</span>
+                </div>
                 <div class="form-grid">
                     <?php if (is_credential_restricted('financials')): ?>
                         <div class="field"><label>Live Session (₹/hr)</label><input type="text" disabled value="***" style="background:#f1f5f9; cursor:not-allowed;"></div>
@@ -642,6 +667,30 @@ include 'includes/admin_nav.php';
 <?php
 $extra_scripts = "<script>
 var registeredFacultiesData = " . json_encode($emp_faculties ?: [], JSON_HEX_APOS|JSON_HEX_QUOT) . ";
+
+function setFacEditFieldReadonly(isLinked) {
+    var fieldIds = ['fac-edit-name', 'fac-edit-mobile', 'fac-edit-email', 'fac-edit-rate_live', 'fac-edit-rate_qpd', 'fac-edit-rate_recorded', 'fac-edit-rate_offline'];
+    fieldIds.forEach(function(fid) {
+        var el = document.getElementById(fid);
+        if (el) {
+            el.readOnly = isLinked;
+            el.style.backgroundColor = isLinked ? '#f1f5f9' : '';
+            el.style.cursor = isLinked ? 'not-allowed' : '';
+        }
+    });
+
+    var yr = document.getElementById('fac-edit-year');
+    if (yr) {
+        yr.style.pointerEvents = isLinked ? 'none' : '';
+        yr.style.backgroundColor = isLinked ? '#f1f5f9' : '';
+        yr.style.cursor = isLinked ? 'not-allowed' : '';
+        yr.tabIndex = isLinked ? -1 : 0;
+    }
+
+    document.querySelectorAll('.fac-linked-field-badge').forEach(function(badge) {
+        badge.style.display = isLinked ? 'inline-block' : 'none';
+    });
+}
 
 function openFacModal() {
     var sel = document.getElementById('fac-add-select');
@@ -693,7 +742,10 @@ function editFac(f) {
     var switchBox = document.getElementById('fac-edit-switch-box');
     if (switchBox) switchBox.style.display = 'none';
 
-    if (f.employee_management_faculty_id && parseInt(f.employee_management_faculty_id) > 0) {
+    var isLinked = (f.employee_management_faculty_id && parseInt(f.employee_management_faculty_id) > 0);
+    setFacEditFieldReadonly(isLinked);
+
+    if (isLinked) {
         if (linkedBox) linkedBox.style.display = 'block';
         if (unlinkedBox) unlinkedBox.style.display = 'none';
         document.getElementById('fac-edit-linked-name').innerText = f.emp_name || f.name;
@@ -758,6 +810,7 @@ function onEditLinkSelected(empId) {
     var rQpd = document.getElementById('fac-edit-rate_qpd'); if (rQpd) rQpd.value = emp.rate_qpd || 0;
     var rRec = document.getElementById('fac-edit-rate_recorded'); if (rRec) rRec.value = emp.rate_recorded || 0;
     var rOff = document.getElementById('fac-edit-rate_offline'); if (rOff) rOff.value = emp.rate_offline || 0;
+    setFacEditFieldReadonly(true);
 }
 
 function onEditSwitchSelected(empId) {
@@ -779,6 +832,7 @@ function onEditSwitchSelected(empId) {
     var rQpd = document.getElementById('fac-edit-rate_qpd'); if (rQpd) rQpd.value = emp.rate_qpd || 0;
     var rRec = document.getElementById('fac-edit-rate_recorded'); if (rRec) rRec.value = emp.rate_recorded || 0;
     var rOff = document.getElementById('fac-edit-rate_offline'); if (rOff) rOff.value = emp.rate_offline || 0;
+    setFacEditFieldReadonly(true);
 }
 
 function triggerUnlinkFaculty() {
