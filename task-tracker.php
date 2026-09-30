@@ -29,6 +29,7 @@ if (!$me) {
     ];
 }
 $is_intern = is_ld_intern_user();
+$can_view_financials = is_super_admin() || (!$is_intern && can_access('ld-work-report'));
 
 
 // Audit logger helper
@@ -121,10 +122,16 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_qa_items') {
     $stmt->execute([$repId]);
     $aiRep = $stmt->fetch(PDO::FETCH_ASSOC);
 
+    if (!$can_view_financials) {
+        unset($rep['hourly_rate_snapshot']);
+        unset($rep['calculated_charge']);
+    }
+
     echo json_encode([
         'success' => true,
         'report' => $rep,
         'items' => $items,
+        'can_view_financials' => $can_view_financials,
         'ai_report' => $aiRep ? [
             'overall_grade' => $aiRep['overall_grade'],
             'summary' => $aiRep['summary'],
@@ -196,16 +203,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ];
 
                 if ($isAjax) {
-                    echo json_encode([
+                    $clientStats = $valRes['stats'] ?? null;
+                    if ($clientStats && !$can_view_financials) {
+                        unset($clientStats['hourly_rate']);
+                        unset($clientStats['calculated_charge']);
+                    }
+
+                    $respData = [
                         'success' => true,
                         'valid' => $valRes['valid'],
                         'errors' => $valRes['errors'],
                         'errors_by_category' => $valRes['errors_by_category'] ?? null,
                         'warnings' => $valRes['warnings'],
-                        'stats' => $valRes['stats'] ?? null,
-                        'hourly_rate' => $hourly_rate,
-                        'temp_token' => $tempToken
-                    ]);
+                        'stats' => $clientStats,
+                        'temp_token' => $tempToken,
+                        'can_view_financials' => $can_view_financials
+                    ];
+                    if ($can_view_financials) {
+                        $respData['hourly_rate'] = $hourly_rate;
+                    }
+                    echo json_encode($respData);
                     exit();
                 }
             }
@@ -261,8 +278,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     $aiStatus = $outcome['ai_status'] ?? 'pending';
                     $aiMsg = ($aiStatus === 'completed') ? 'Assessment submitted successfully. AI analysis completed.' : 'Assessment submitted successfully. AI analysis could not be completed.';
-                    $msg = $aiMsg . " (" . $outcome['report_reference'] . ", " .
-                        $outcome['stats']['total_lectures'] . " lectures recorded, " . number_format((float)$outcome['stats']['total_assessment_hours'], 2) . " Hours, ₹" . number_format((float)$outcome['stats']['calculated_charge'], 2) . ").";
+                    if ($can_view_financials) {
+                        $msg = $aiMsg . " (" . $outcome['report_reference'] . ", " .
+                            $outcome['stats']['total_lectures'] . " lectures recorded, " . number_format((float)$outcome['stats']['total_assessment_hours'], 2) . " Hours, ₹" . number_format((float)$outcome['stats']['calculated_charge'], 2) . ").";
+                    } else {
+                        $msg = $aiMsg . " (" . $outcome['report_reference'] . ", " .
+                            $outcome['stats']['total_lectures'] . " lectures recorded, " . number_format((float)$outcome['stats']['total_assessment_hours'], 2) . " Hours).";
+                    }
 
                     if ($isAjax) {
                         echo json_encode([
@@ -686,7 +708,7 @@ $active_modes = $pdo->query("SELECT * FROM ld_work_modes WHERE status = 'active'
 // Fetch Logged-in User's Active Tasks with Topics
 $my_tasks = [];
 try {
-    $charge_field_sql = $is_intern ? "NULL AS charge_per_quantity_snapshot" : "t.charge_per_quantity_snapshot";
+    $charge_field_sql = !$can_view_financials ? "NULL AS charge_per_quantity_snapshot" : "t.charge_per_quantity_snapshot";
     $stmt = $pdo->prepare("
         SELECT t.id, t.admin_id, t.admin_username, t.admin_name, t.admin_role, t.course_id, t.course_name, t.mode_id, t.mode_name, t.latitude, t.longitude, t.maps_url, t.ip_address, t.user_agent, t.status, t.created_at, t.updated_at, t.quantity_label_snapshot, t.mode_name_snapshot, $charge_field_sql
         FROM ld_tasks t
@@ -699,7 +721,7 @@ try {
     if (!empty($my_tasks)) {
         $task_ids = array_map(function($x) { return (int)$x['id']; }, $my_tasks);
         $in_clause = implode(',', $task_ids);
-        $calc_charge_field_sql = $is_intern ? "NULL AS calculated_charge" : "calculated_charge";
+        $calc_charge_field_sql = !$can_view_financials ? "NULL AS calculated_charge" : "calculated_charge";
         $topics_rows = $pdo->query("SELECT id, task_id, topic_name, quantity, $calc_charge_field_sql FROM ld_task_topics WHERE task_id IN ($in_clause) ORDER BY id ASC")->fetchAll();
 
         $topics_by_task = [];
@@ -717,6 +739,10 @@ try {
                     $qa_rows = $pdo->query("SELECT * FROM ld_quality_assessment_reports WHERE task_id IN ($in_clause) ORDER BY id DESC")->fetchAll(PDO::FETCH_ASSOC);
                 }
                 foreach ($qa_rows as $qar) {
+                    if (!$can_view_financials) {
+                        unset($qar['hourly_rate_snapshot']);
+                        unset($qar['calculated_charge']);
+                    }
                     if (!isset($qa_reports_by_task[$qar['task_id']])) {
                         $qa_reports_by_task[$qar['task_id']] = $qar;
                     }
@@ -766,7 +792,7 @@ foreach ($active_modes as $m) {
         'is_charging' => ($m['charge_per_quantity'] !== null),
         'is_qa' => $is_qa,
         'rate_configured' => $is_rate_configured,
-        'charge_per_quantity' => !$is_intern && $m['charge_per_quantity'] !== null ? (float)$m['charge_per_quantity'] : null
+        'charge_per_quantity' => $can_view_financials && $m['charge_per_quantity'] !== null ? (float)$m['charge_per_quantity'] : null
     ];
 }
 ?>
@@ -1169,7 +1195,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                         <div style="font-size:0.85rem; font-weight:700; color:var(--primary); margin-top:4px;">
                                             <?php echo number_format((float)$rep['total_assessment_hours'], 2); ?> Hours
                                         </div>
-                                        <?php if (!$is_intern && $t['charge_per_quantity_snapshot'] !== null): ?>
+                                        <?php if ($can_view_financials && $t['charge_per_quantity_snapshot'] !== null && isset($rep['calculated_charge'])): ?>
                                             <div style="font-size:0.85rem; font-weight:700; color:var(--success); margin-top:2px;">₹<?php echo number_format((float)$rep['calculated_charge'], 2); ?></div>
                                         <?php endif; ?>
                                     </div>
@@ -1250,7 +1276,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                     </div>
                                     <div style="text-align:right;">
                                         <span class="badge blue"><?php echo count($t['topics']); ?> topics</span>
-                                        <?php if (!$is_intern && !$has_incomplete && $t['charge_per_quantity_snapshot'] !== null): ?>
+                                        <?php if ($can_view_financials && !$has_incomplete && $t['charge_per_quantity_snapshot'] !== null): ?>
                                             <div style="font-size:0.8rem; font-weight:700; color:var(--success); margin-top:4px;">₹<?php echo number_format($total_task_charge, 2); ?></div>
                                         <?php endif; ?>
                                     </div>
@@ -1272,7 +1298,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                                 <?php echo e($tp['topic_name']); ?>
                                                 <?php if ($tp['quantity'] !== null): ?>
                                                     <span style="font-weight:600; color:var(--text-muted);">
-                                                        (<?php echo (float)$tp['quantity']; ?> <?php echo e($t['quantity_label_snapshot'] ?? 'units'); ?><?php if (!$is_intern && $t['charge_per_quantity_snapshot'] !== null): ?> @ ₹<?php echo number_format((float)$t['charge_per_quantity_snapshot'], 2); ?>/unit = ₹<?php echo number_format((float)$tp['calculated_charge'], 2); ?><?php endif; ?>)
+                                                        (<?php echo (float)$tp['quantity']; ?> <?php echo e($t['quantity_label_snapshot'] ?? 'units'); ?><?php if ($can_view_financials && $t['charge_per_quantity_snapshot'] !== null && isset($tp['calculated_charge'])): ?> @ ₹<?php echo number_format((float)$t['charge_per_quantity_snapshot'], 2); ?>/unit = ₹<?php echo number_format((float)$tp['calculated_charge'], 2); ?><?php endif; ?>)
                                                     </span>
                                                 <?php else: ?>
                                                     <span style="font-weight:600; color:var(--destructive);">
@@ -2005,8 +2031,10 @@ function validateQaUpload() {
         succHtml += '<div style="background:#fff; border:1px solid #dcfce7; border-radius:8px; padding:10px; text-align:center;"><div style="font-size:0.75rem; color:#15803d; font-weight:600;">Lectures Assessed</div><div style="font-size:1.25rem; font-weight:800; color:#166534;">' + stats.total_lectures + '</div></div>';
         succHtml += '<div style="background:#fff; border:1px solid #dcfce7; border-radius:8px; padding:10px; text-align:center;"><div style="font-size:0.75rem; color:#15803d; font-weight:600;">Total Assessment Time</div><div style="font-size:1.25rem; font-weight:800; color:#166534;">' + stats.total_assessment_minutes + ' min</div></div>';
         succHtml += '<div style="background:#fff; border:1px solid #dcfce7; border-radius:8px; padding:10px; text-align:center;"><div style="font-size:0.75rem; color:#15803d; font-weight:600;">Assessment Hours</div><div style="font-size:1.25rem; font-weight:800; color:#166534;">' + stats.total_assessment_hours.toFixed(2) + ' Hrs</div></div>';
-        succHtml += '<div style="background:#fff; border:1px solid #dcfce7; border-radius:8px; padding:10px; text-align:center;"><div style="font-size:0.75rem; color:#15803d; font-weight:600;">Hourly Rate</div><div style="font-size:1.25rem; font-weight:800; color:#166534;">₹' + data.hourly_rate.toFixed(2) + '</div></div>';
-        succHtml += '<div style="background:#fff; border:1px solid #dcfce7; border-radius:8px; padding:10px; text-align:center;"><div style="font-size:0.75rem; color:#15803d; font-weight:600;">Calculated Charge</div><div style="font-size:1.25rem; font-weight:800; color:#166534;">₹' + stats.calculated_charge.toFixed(2) + '</div></div>';
+        if (data.can_view_financials && data.hourly_rate !== undefined && stats.calculated_charge !== undefined) {
+            succHtml += '<div style="background:#fff; border:1px solid #dcfce7; border-radius:8px; padding:10px; text-align:center;"><div style="font-size:0.75rem; color:#15803d; font-weight:600;">Hourly Rate</div><div style="font-size:1.25rem; font-weight:800; color:#166534;">₹' + Number(data.hourly_rate).toFixed(2) + '</div></div>';
+            succHtml += '<div style="background:#fff; border:1px solid #dcfce7; border-radius:8px; padding:10px; text-align:center;"><div style="font-size:0.75rem; color:#15803d; font-weight:600;">Calculated Charge</div><div style="font-size:1.25rem; font-weight:800; color:#166534;">₹' + Number(stats.calculated_charge).toFixed(2) + '</div></div>';
+        }
         succHtml += '</div>';
 
         if (val.warnings && val.warnings.length > 0) {
@@ -2156,7 +2184,11 @@ function validateReplaceQaUpload() {
         // Passed
         var stats = val.stats;
         var succHtml = '<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:14px;">';
-        succHtml += '<div style="font-weight:700; color:#166534; margin-bottom:8px;"><i class="fas fa-circle-check"></i> Validation Passed: ' + stats.total_lectures + ' lectures (' + stats.total_assessment_hours.toFixed(2) + ' Hrs, ₹' + stats.calculated_charge.toFixed(2) + ')</div>';
+        var passDetails = stats.total_assessment_hours.toFixed(2) + ' Hrs';
+        if (data.can_view_financials && stats.calculated_charge !== undefined) {
+            passDetails += ', ₹' + Number(stats.calculated_charge).toFixed(2);
+        }
+        succHtml += '<div style="font-weight:700; color:#166534; margin-bottom:8px;"><i class="fas fa-circle-check"></i> Validation Passed: ' + stats.total_lectures + ' lectures (' + passDetails + ')</div>';
         succHtml += '<button type="button" class="btn btn-warning" style="width:100%; padding:10px; font-weight:700;" onclick="confirmReplaceQa(\'' + data.temp_token + '\', ' + taskId + ')">';
         succHtml += '<i class="fas fa-rotate"></i> Confirm &amp; Save Replacement Report';
         succHtml += '</button></div>';
@@ -2239,8 +2271,12 @@ function openViewQaModal(reportId) {
         html += '<div><span style="font-size:0.75rem; color:var(--text-muted); display:block;">Course</span><strong>' + (rep.course_name_snapshot || '') + '</strong></div>';
         html += '<div><span style="font-size:0.75rem; color:var(--text-muted); display:block;">Lectures</span><strong>' + rep.row_count + '</strong></div>';
         html += '<div><span style="font-size:0.75rem; color:var(--text-muted); display:block;">Assessment Time</span><strong>' + (parseFloat(rep.total_assessment_hours).toFixed(2)) + ' Hours</strong></div>';
-        html += '<div><span style="font-size:0.75rem; color:var(--text-muted); display:block;">Hourly Rate</span><strong>₹' + (parseFloat(rep.hourly_rate_snapshot).toFixed(2)) + '</strong></div>';
-        html += '<div><span style="font-size:0.75rem; color:var(--text-muted); display:block;">Charge</span><strong style="color:var(--success);">₹' + (parseFloat(rep.calculated_charge).toFixed(2)) + '</strong></div>';
+        if (rep.hourly_rate_snapshot !== undefined && rep.hourly_rate_snapshot !== null) {
+            html += '<div><span style="font-size:0.75rem; color:var(--text-muted); display:block;">Hourly Rate</span><strong>₹' + (parseFloat(rep.hourly_rate_snapshot).toFixed(2)) + '</strong></div>';
+        }
+        if (rep.calculated_charge !== undefined && rep.calculated_charge !== null) {
+            html += '<div><span style="font-size:0.75rem; color:var(--text-muted); display:block;">Charge</span><strong style="color:var(--success);">₹' + (parseFloat(rep.calculated_charge).toFixed(2)) + '</strong></div>';
+        }
         html += '</div>';
 
         // Tabs
