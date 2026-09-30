@@ -20,6 +20,105 @@ if (!ld_tables_exist($pdo)) {
 }
 
 require_once 'includes/pdf_invoice.php'; // MiniPDF + helpers
+require_once 'includes/ld_quality_assessment_helper.php';
+require_once 'includes/ld_quality_assessment_pdf.php';
+
+// Handle QA Original File Download
+if (isset($_GET['action']) && $_GET['action'] === 'download_qa_file') {
+    $repId = (int)($_GET['report_id'] ?? 0);
+    $stmt = $pdo->prepare("SELECT * FROM ld_quality_assessment_reports WHERE id = ?");
+    $stmt->execute([$repId]);
+    $rep = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$rep) {
+        die('Assessment report not found.');
+    }
+    if (!is_super_admin() && !can_access('ld-work-report') && $rep['admin_username'] !== $admin_username) {
+        die('Access denied.');
+    }
+
+    $baseUploadDir = realpath(dirname(__DIR__) . '/uploads/ld_quality_assessments');
+    $realFullPath = realpath(dirname(__DIR__) . '/' . $rep['stored_path']);
+    if (!$realFullPath || !$baseUploadDir || strpos($realFullPath, $baseUploadDir) !== 0 || !file_exists($realFullPath)) {
+        die('Stored file not found on server.');
+    }
+
+    $ctype = $rep['file_type'] === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv';
+    header('Content-Type: ' . $ctype);
+    header('Content-Disposition: attachment; filename="' . basename($rep['original_filename']) . '"');
+    header('Content-Length: ' . filesize($realFullPath));
+    readfile($realFullPath);
+    exit();
+}
+
+// Handle QA AI PDF Download / View
+if (isset($_GET['action']) && $_GET['action'] === 'download_qa_pdf') {
+    $repId = (int)($_GET['report_id'] ?? 0);
+    $disposition = ($_GET['mode'] ?? 'attachment') === 'inline' ? 'inline' : 'attachment';
+
+    if (!is_super_admin() && !can_access('ld-work-report')) {
+        die('Access denied.');
+    }
+
+    $stmt = $pdo->prepare("SELECT ai_status, report_reference FROM ld_quality_assessment_reports WHERE id = ?");
+    $stmt->execute([$repId]);
+    $repRow = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$repRow) {
+        die('Assessment report not found.');
+    }
+
+    // STRICT BUSINESS RULE: Only available when AI status is completed
+    if (($repRow['ai_status'] ?? '') !== 'completed') {
+        http_response_code(400);
+        die('AI report not available yet.');
+    }
+
+    $pdfContent = generate_ld_qa_pdf($pdo, $repId);
+    $ref = $repRow['report_reference'] ?: 'Report';
+
+    header('Content-Type: application/pdf');
+    header('Content-Disposition: ' . $disposition . '; filename="' . $ref . '_Quality_Assessment.pdf"');
+    header('Content-Length: ' . strlen($pdfContent));
+    echo $pdfContent;
+    exit();
+}
+
+// Handle QA Items fetch for AJAX view modal
+if (isset($_GET['action']) && $_GET['action'] === 'get_qa_items') {
+    header('Content-Type: application/json');
+    $repId = (int)($_GET['report_id'] ?? 0);
+    $stmt = $pdo->prepare("SELECT * FROM ld_quality_assessment_reports WHERE id = ?");
+    $stmt->execute([$repId]);
+    $rep = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$rep || (!is_super_admin() && !can_access('ld-work-report') && $rep['admin_username'] !== $admin_username)) {
+        echo json_encode(['success' => false, 'error' => 'Access denied or report not found']);
+        exit();
+    }
+
+    $stmt = $pdo->prepare("SELECT * FROM ld_quality_assessment_items WHERE report_id = ? ORDER BY source_row_number ASC");
+    $stmt->execute([$repId]);
+    $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $stmt = $pdo->prepare("SELECT * FROM ld_quality_assessment_ai_reports WHERE report_id = ? AND status = 'completed' ORDER BY id DESC LIMIT 1");
+    $stmt->execute([$repId]);
+    $aiRep = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    echo json_encode([
+        'success' => true,
+        'report' => $rep,
+        'items' => $items,
+        'ai_report' => $aiRep ? [
+            'overall_grade' => $aiRep['overall_grade'],
+            'summary' => $aiRep['summary'],
+            'aspect_analysis' => json_decode($aiRep['aspect_analysis_json'] ?? '[]', true),
+            'recommendations' => json_decode($aiRep['recommendations_json'] ?? '[]', true),
+            'reverification_items' => json_decode($aiRep['reverification_items_json'] ?? '[]', true)
+        ] : null
+    ]);
+    exit();
+}
 
 // Set time zone
 date_default_timezone_set('Asia/Kolkata');
@@ -47,7 +146,7 @@ if (!empty($_GET['paid'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!csrf_verify()) {
         $action = $_POST['action'] ?? '';
-        if ($action === 'update_task' || $action === 'delete_task') {
+        if ($action === 'update_task' || $action === 'delete_task' || $action === 'review_qa_assessment') {
             header('Content-Type: application/json');
             echo json_encode(['success' => false, 'message' => 'Security token mismatch. Please retry.']);
             exit();
@@ -55,6 +154,85 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error_message = 'Security token mismatch. Please retry.';
     } else {
         $action = $_POST['action'] ?? '';
+
+        if ($action === 'review_qa_assessment') {
+            header('Content-Type: application/json');
+            if (!is_super_admin() && !can_access('ld-work-report')) {
+                echo json_encode(['success' => false, 'message' => 'Access denied.']);
+                exit();
+            }
+
+            $repId = (int)($_POST['report_id'] ?? 0);
+            $reviewStatus = trim($_POST['admin_review_status'] ?? '');
+            $finalGrade = (int)($_POST['admin_final_grade'] ?? 0);
+            $notes = trim($_POST['admin_review_notes'] ?? '');
+
+            $allowedStatuses = ['verified', 'needs_action', 'needs_reassessment', 'rejected', 'pending'];
+            if (!in_array($reviewStatus, $allowedStatuses, true)) {
+                echo json_encode(['success' => false, 'message' => 'Invalid review status.']);
+                exit();
+            }
+
+            if ($finalGrade !== 0 && !in_array($finalGrade, [1, 2, 3], true)) {
+                echo json_encode(['success' => false, 'message' => 'Admin final grade must be 1 (Good), 2 (Okay), or 3 (To be improved).']);
+                exit();
+            }
+
+            $stmt = $pdo->prepare("SELECT * FROM ld_quality_assessment_reports WHERE id = ?");
+            $stmt->execute([$repId]);
+            $oldRep = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$oldRep) {
+                echo json_encode(['success' => false, 'message' => 'Quality assessment report not found.']);
+                exit();
+            }
+
+            $stmt = $pdo->prepare("
+                UPDATE ld_quality_assessment_reports
+                SET admin_review_status = ?,
+                    admin_final_grade = ?,
+                    admin_review_notes = ?,
+                    reviewed_by = ?,
+                    reviewed_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([
+                $reviewStatus,
+                $finalGrade ?: null,
+                $notes ?: null,
+                $admin_username,
+                $repId
+            ]);
+
+            // Log audit trail
+            $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+            $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+            $auditStmt = $pdo->prepare("
+                INSERT INTO ld_task_audit (task_id, admin_id, admin_username, action, previous_values, new_values, ip_address, user_agent, created_at)
+                VALUES (?, ?, ?, 'REVIEW_QA', ?, ?, ?, ?, NOW())
+            ");
+            $auditStmt->execute([
+                $oldRep['task_id'],
+                $_SESSION['admin_id'] ?? 0,
+                $admin_username,
+                json_encode([
+                    'status' => $oldRep['admin_review_status'],
+                    'grade' => $oldRep['admin_final_grade'],
+                    'notes' => $oldRep['admin_review_notes']
+                ]),
+                json_encode([
+                    'status' => $reviewStatus,
+                    'grade' => $finalGrade ?: null,
+                    'notes' => $notes
+                ]),
+                $ip,
+                $ua
+            ]);
+
+            echo json_encode(['success' => true, 'message' => 'Assessment review saved successfully.']);
+            exit();
+        }
 
         if ($action === 'update_task') {
             header('Content-Type: application/json');
@@ -1197,8 +1375,25 @@ try {
             $topics_by_task[$row['task_id']][] = $row;
         }
 
+        $qa_reports_by_task = [];
+        try {
+            $hasQaReportsTable = (bool)$pdo->query("SELECT 1 FROM ld_quality_assessment_reports LIMIT 1");
+            if ($hasQaReportsTable && !empty($task_ids)) {
+                $qa_rows = $pdo->query("SELECT * FROM ld_quality_assessment_reports WHERE task_id IN ($in_clause) AND is_active = 1 ORDER BY version DESC")->fetchAll(PDO::FETCH_ASSOC);
+                if (empty($qa_rows)) {
+                    $qa_rows = $pdo->query("SELECT * FROM ld_quality_assessment_reports WHERE task_id IN ($in_clause) ORDER BY id DESC")->fetchAll(PDO::FETCH_ASSOC);
+                }
+                foreach ($qa_rows as $qar) {
+                    if (!isset($qa_reports_by_task[$qar['task_id']])) {
+                        $qa_reports_by_task[$qar['task_id']] = $qar;
+                    }
+                }
+            }
+        } catch (Exception $e) {}
+
         foreach ($detail_rows as &$t) {
             $t['topics'] = $topics_by_task[$t['id']] ?? [];
+            $t['qa_report'] = $qa_reports_by_task[$t['id']] ?? null;
         }
         unset($t);
     }
@@ -1681,25 +1876,88 @@ include 'includes/admin_nav.php';
                                     <div class="cell-sub">Role: <?php echo ucfirst(e($row['admin_role'])); ?></div>
                                 </td>
                                 <td><?php echo e($row['course_name']); ?></td>
-                                <td><?php echo e($display_mode_name); ?></td>
                                 <td>
-                                    <ul style="padding-left: 14px; list-style-type: disc; font-size: 0.8rem; margin: 0;">
-                                        <?php foreach ($row['topics'] as $tp): ?>
-                                            <li>
-                                                <strong><?php echo e($tp['topic_name']); ?></strong>
-                                                <?php if ($tp['quantity'] !== null): ?>
-                                                    <span style="color:var(--text-muted); font-size:0.75rem;">
-                                                        (<?php echo (float)$tp['quantity']; ?> <?php echo e($row['quantity_label_snapshot'] ?? 'units'); ?>
-                                                        <?php if ($row['charge_per_quantity_snapshot'] !== null): ?>
-                                                            @ ₹<?php echo number_format((float)$row['charge_per_quantity_snapshot'], 2); ?>
-                                                        <?php endif; ?>)
-                                                    </span>
+                                    <?php if (!empty($row['qa_report'])): ?>
+                                        <span class="badge blue" style="font-size:0.75rem; margin-bottom:4px; display:inline-block;"><i class="fas fa-video"></i> QA System Mode</span>
+                                    <?php endif; ?>
+                                    <div><?php echo e($display_mode_name); ?></div>
+                                </td>
+                                <td>
+                                    <?php if (!empty($row['qa_report'])): 
+                                        $rep = $row['qa_report'];
+                                        $aiGrade = $rep['ai_overall_grade'] ?: 'Good';
+                                        $aiClass = strtolower($aiGrade) === 'good' ? 'green' : (strtolower($aiGrade) === 'okay' ? 'amber' : 'red');
+                                        $rev = $rep['admin_review_status'] ?? 'pending';
+                                    ?>
+                                        <div style="font-size:0.82rem; line-height:1.4;">
+                                            <div>
+                                                <strong>Ref:</strong> <span style="font-family:monospace;"><?php echo e($rep['report_reference']); ?></span>
+                                                <span class="badge blue" style="font-size:0.68rem; padding:1px 5px;">v<?php echo (int)($rep['version'] ?? 1); ?></span> &bull; 
+                                                <strong><?php echo (int)$rep['row_count']; ?></strong> lectures (<?php echo number_format((float)$rep['total_assessment_hours'], 2); ?> Hours)
+                                            </div>
+                                            <div style="display:flex; gap:6px; flex-wrap:wrap; margin:6px 0; align-items:center;">
+                                                <?php if ($rep['ai_status'] === 'completed'): ?>
+                                                    <span class="badge <?php echo $aiClass; ?>" style="font-size:0.7rem; padding:2px 6px;"><i class="fas fa-brain"></i> AI: <?php echo e(ucwords($aiGrade)); ?></span>
+                                                <?php elseif ($rep['ai_status'] === 'pending_config'): ?>
+                                                    <span class="badge yellow" style="font-size:0.7rem; padding:2px 6px;"><i class="fas fa-brain"></i> AI: Pending Config</span>
+                                                <?php elseif ($rep['ai_status'] === 'failed'): ?>
+                                                    <span class="badge red" style="font-size:0.7rem; padding:2px 6px;"><i class="fas fa-triangle-exclamation"></i> AI: Failed</span>
                                                 <?php else: ?>
-                                                    <span style="color:var(--destructive); font-size:0.75rem;">(Quantity not added)</span>
+                                                    <span class="badge blue" style="font-size:0.7rem; padding:2px 6px;"><i class="fas fa-spinner fa-spin"></i> AI: In Progress</span>
                                                 <?php endif; ?>
-                                            </li>
-                                        <?php endforeach; ?>
-                                    </ul>
+
+                                                <?php if ($rev === 'verified'): ?>
+                                                    <span class="badge green" style="font-size:0.7rem; padding:2px 6px;"><i class="fas fa-circle-check"></i> Admin: Verified</span>
+                                                <?php elseif ($rev === 'needs_action'): ?>
+                                                    <span class="badge amber" style="font-size:0.7rem; padding:2px 6px;"><i class="fas fa-triangle-exclamation"></i> Admin: Needs Action</span>
+                                                <?php elseif ($rev === 'needs_reassessment'): ?>
+                                                    <span class="badge red" style="font-size:0.7rem; padding:2px 6px;"><i class="fas fa-rotate"></i> Admin: Needs Reassessment</span>
+                                                <?php elseif ($rev === 'rejected'): ?>
+                                                    <span class="badge red" style="font-size:0.7rem; padding:2px 6px;"><i class="fas fa-ban"></i> Admin: Rejected</span>
+                                                <?php else: ?>
+                                                    <span class="badge gray" style="font-size:0.7rem; padding:2px 6px;"><i class="fas fa-clock"></i> Admin: Pending Review</span>
+                                                <?php endif; ?>
+                                            </div>
+                                            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:6px;">
+                                                <button type="button" class="btn btn-sm btn-outline" style="padding:2px 7px; font-size:0.72rem;" onclick="openViewQaModal(<?php echo (int)$rep['id']; ?>)">
+                                                    <i class="fas fa-eye"></i> View
+                                                </button>
+                                                <a href="ld-work-report.php?action=download_qa_file&report_id=<?php echo (int)$rep['id']; ?>" class="btn btn-sm btn-soft-violet" style="padding:2px 7px; font-size:0.72rem;" title="Download original spreadsheet">
+                                                    <i class="fas fa-file-excel"></i> File
+                                                </a>
+                                                <?php if ($rep['ai_status'] === 'completed'): ?>
+                                                    <a href="ld-work-report.php?action=download_qa_pdf&report_id=<?php echo (int)$rep['id']; ?>" class="btn btn-sm btn-soft-red" style="padding:2px 7px; font-size:0.72rem;" title="Download AI Quality Assessment PDF" target="_blank">
+                                                        <i class="fas fa-file-pdf"></i> Download AI PDF
+                                                    </a>
+                                                <?php else: ?>
+                                                    <span class="text-muted" style="font-size:0.72rem; font-style:italic;" title="AI PDF report is available once analysis is completed">
+                                                        <i class="fas fa-clock"></i> AI report not available yet.
+                                                    </span>
+                                                <?php endif; ?>
+                                                <button type="button" class="btn btn-sm btn-soft-blue" style="padding:2px 7px; font-size:0.72rem;" onclick='openReviewQaModal(<?php echo (int)$rep["id"]; ?>, "<?php echo e($rep["report_reference"]); ?>", "<?php echo e($rep["admin_review_status"] ?? "pending"); ?>", <?php echo (int)($rep["admin_final_grade"] ?? 0); ?>, <?php echo json_encode($rep["admin_review_notes"] ?? ""); ?>)'>
+                                                    <i class="fas fa-clipboard-check"></i> Review
+                                                </button>
+                                            </div>
+                                        </div>
+                                    <?php else: ?>
+                                        <ul style="padding-left: 14px; list-style-type: disc; font-size: 0.8rem; margin: 0;">
+                                            <?php foreach ($row['topics'] as $tp): ?>
+                                                <li>
+                                                    <strong><?php echo e($tp['topic_name']); ?></strong>
+                                                    <?php if ($tp['quantity'] !== null): ?>
+                                                        <span style="color:var(--text-muted); font-size:0.75rem;">
+                                                            (<?php echo (float)$tp['quantity']; ?> <?php echo e($row['quantity_label_snapshot'] ?? 'units'); ?>
+                                                            <?php if ($row['charge_per_quantity_snapshot'] !== null): ?>
+                                                                @ ₹<?php echo number_format((float)$row['charge_per_quantity_snapshot'], 2); ?>
+                                                            <?php endif; ?>)
+                                                        </span>
+                                                    <?php else: ?>
+                                                        <span style="color:var(--destructive); font-size:0.75rem;">(Quantity not added)</span>
+                                                    <?php endif; ?>
+                                                </li>
+                                            <?php endforeach; ?>
+                                        </ul>
+                                    <?php endif; ?>
                                 </td>
                                 <td style="font-weight:700; color:var(--success);">
                                     <?php if ($has_incomplete): ?>
@@ -1730,6 +1988,10 @@ include 'includes/admin_nav.php';
                                             </span>
                                         <?php elseif ($row['status'] === 'deleted'): ?>
                                             <span style="color:var(--text-muted); font-size:0.8rem;">No Actions</span>
+                                        <?php elseif (!empty($row['qa_report'])): ?>
+                                            <button class="btn btn-sm btn-soft-red" onclick="openDeleteTaskModal(<?php echo (int)$row['id']; ?>)">
+                                                <i class="fas fa-trash"></i> Delete
+                                            </button>
                                         <?php else: ?>
                                             <button class="btn btn-sm btn-soft-amber" onclick='openEditTaskModal(<?php echo json_encode([
                                                 "id" => (int)$row["id"],
@@ -1800,23 +2062,59 @@ include 'includes/admin_nav.php';
                             <div><strong>Course:</strong> <?php echo e($row['course_name']); ?></div>
                             <div><strong>Mode:</strong> <?php echo e($display_mode_name); ?></div>
                         </div>
-                        <ul style="margin-top:6px; padding-left:14px; list-style-type:disc; font-size:0.8rem;">
-                            <?php foreach ($row['topics'] as $tp): ?>
-                                <li>
-                                    <?php echo e($tp['topic_name']); ?>
-                                    <?php if ($tp['quantity'] !== null): ?>
-                                        <span style="color:var(--text-muted); font-size:0.75rem;">
-                                            (<?php echo (float)$tp['quantity']; ?> <?php echo e($row['quantity_label_snapshot'] ?? 'units'); ?>
-                                            <?php if ($row['charge_per_quantity_snapshot'] !== null): ?>
-                                                @ ₹<?php echo number_format((float)$row['charge_per_quantity_snapshot'], 2); ?>
-                                            <?php endif; ?>)
-                                        </span>
+                        <?php if (!empty($row['qa_report'])): 
+                            $rep = $row['qa_report'];
+                            $aiGrade = $rep['ai_overall_grade'] ?: 'Good';
+                            $aiClass = strtolower($aiGrade) === 'good' ? 'green' : (strtolower($aiGrade) === 'okay' ? 'amber' : 'red');
+                            $rev = $rep['admin_review_status'] ?? 'pending';
+                        ?>
+                            <div style="margin-top:8px; font-size:0.82rem;">
+                                <div><strong>Ref:</strong> <?php echo e($rep['report_reference']); ?> <span class="badge blue" style="font-size:0.65rem; padding:1px 4px;">v<?php echo (int)($rep['version'] ?? 1); ?></span> &bull; <strong><?php echo (int)$rep['row_count']; ?></strong> lectures (<?php echo number_format((float)$rep['total_assessment_hours'], 2); ?> Hours)</div>
+                                <div style="display:flex; gap:6px; flex-wrap:wrap; margin:6px 0;">
+                                    <?php if ($rep['ai_status'] === 'completed'): ?>
+                                        <span class="badge <?php echo $aiClass; ?>" style="font-size:0.7rem; padding:1px 5px;"><i class="fas fa-brain"></i> AI: <?php echo e(ucwords($aiGrade)); ?></span>
                                     <?php else: ?>
-                                        <span style="color:var(--destructive); font-size:0.75rem;">(Quantity not added)</span>
+                                        <span class="badge yellow" style="font-size:0.7rem; padding:1px 5px;"><i class="fas fa-brain"></i> AI: <?php echo e($rep['ai_status']); ?></span>
                                     <?php endif; ?>
-                                </li>
-                            <?php endforeach; ?>
-                        </ul>
+
+                                    <?php if ($rev === 'verified'): ?>
+                                        <span class="badge green" style="font-size:0.7rem; padding:1px 5px;"><i class="fas fa-circle-check"></i> Verified</span>
+                                    <?php elseif ($rev === 'needs_action'): ?>
+                                        <span class="badge amber" style="font-size:0.7rem; padding:1px 5px;"><i class="fas fa-triangle-exclamation"></i> Action</span>
+                                    <?php else: ?>
+                                        <span class="badge gray" style="font-size:0.7rem; padding:1px 5px;"><i class="fas fa-clock"></i> <?php echo ucfirst($rev); ?></span>
+                                    <?php endif; ?>
+                                </div>
+                                <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; align-items:center;">
+                                    <button type="button" class="btn btn-sm btn-outline" style="padding:2px 6px; font-size:0.72rem;" onclick="openViewQaModal(<?php echo (int)$rep['id']; ?>)">View</button>
+                                    <a href="ld-work-report.php?action=download_qa_file&report_id=<?php echo (int)$rep['id']; ?>" class="btn btn-sm btn-soft-violet" style="padding:2px 6px; font-size:0.72rem;">File</a>
+                                    <?php if ($rep['ai_status'] === 'completed'): ?>
+                                        <a href="ld-work-report.php?action=download_qa_pdf&report_id=<?php echo (int)$rep['id']; ?>" class="btn btn-sm btn-soft-red" style="padding:2px 6px; font-size:0.72rem;" target="_blank">PDF</a>
+                                    <?php else: ?>
+                                        <span class="text-muted" style="font-size:0.70rem; font-style:italic;">AI report not available yet.</span>
+                                    <?php endif; ?>
+                                    <button type="button" class="btn btn-sm btn-soft-blue" style="padding:2px 6px; font-size:0.72rem;" onclick='openReviewQaModal(<?php echo (int)$rep["id"]; ?>, "<?php echo e($rep["report_reference"]); ?>", "<?php echo e($rep["admin_review_status"] ?? "pending"); ?>", <?php echo (int)($rep["admin_final_grade"] ?? 0); ?>, <?php echo json_encode($rep["admin_review_notes"] ?? ""); ?>)'>Review</button>
+                                </div>
+                            </div>
+                        <?php else: ?>
+                            <ul style="margin-top:6px; padding-left:14px; list-style-type:disc; font-size:0.8rem;">
+                                <?php foreach ($row['topics'] as $tp): ?>
+                                    <li>
+                                        <?php echo e($tp['topic_name']); ?>
+                                        <?php if ($tp['quantity'] !== null): ?>
+                                            <span style="color:var(--text-muted); font-size:0.75rem;">
+                                                (<?php echo (float)$tp['quantity']; ?> <?php echo e($row['quantity_label_snapshot'] ?? 'units'); ?>
+                                                <?php if ($row['charge_per_quantity_snapshot'] !== null): ?>
+                                                    @ ₹<?php echo number_format((float)$row['charge_per_quantity_snapshot'], 2); ?>
+                                                <?php endif; ?>)
+                                            </span>
+                                        <?php else: ?>
+                                            <span style="color:var(--destructive); font-size:0.75rem;">(Quantity not added)</span>
+                                        <?php endif; ?>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        <?php endif; ?>
                         <div style="margin-top:10px; font-size:0.75rem; border-top:1px solid rgba(22, 78, 99, 0.05); padding-top:8px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
                             <div><i class="fas fa-clock"></i> <?php echo date('d M Y, h:i A', strtotime($row['created_at'])); ?></div>
                             <div style="display:flex; gap:6px; align-items:center;">
@@ -1828,21 +2126,25 @@ include 'includes/admin_nav.php';
                                     ?>
                                         <span style="font-weight:700; color:var(--text-muted); font-size:0.72rem; display:inline-flex; align-items:center; gap:2px;"><i class="fas fa-lock" style="color:var(--success-ink);"></i> Locked (Paid)</span>
                                     <?php elseif ($row['status'] !== 'deleted'): ?>
-                                        <button type="button" class="btn btn-sm btn-soft-amber" style="padding:2px 8px; font-size:0.72rem;" onclick='openEditTaskModal(<?php echo json_encode([
-                                            "id" => (int)$row["id"],
-                                            "date" => date("d M Y, h:i A", strtotime($row["created_at"])),
-                                            "staff" => $row["admin_name"],
-                                            "course" => $row["course_name"],
-                                            "mode" => $display_mode_name,
-                                            "qty_label" => $row["quantity_label_snapshot"],
-                                            "topics" => array_map(function($tp) {
-                                                return [
-                                                    "name" => $tp["topic_name"],
-                                                    "qty" => $tp["quantity"] !== null ? (float)$tp["quantity"] : ""
-                                                ];
-                                            }, $row["topics"])
-                                        ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i> Edit</button>
-                                        <button type="button" class="btn btn-sm btn-soft-red" style="padding:2px 8px; font-size:0.72rem;" onclick="openDeleteTaskModal(<?php echo (int)$row['id']; ?>)"><i class="fas fa-trash"></i> Delete</button>
+                                        <?php if (!empty($row['qa_report'])): ?>
+                                            <button type="button" class="btn btn-sm btn-soft-red" style="padding:2px 8px; font-size:0.72rem;" onclick="openDeleteTaskModal(<?php echo (int)$row['id']; ?>)"><i class="fas fa-trash"></i> Delete</button>
+                                        <?php else: ?>
+                                            <button type="button" class="btn btn-sm btn-soft-amber" style="padding:2px 8px; font-size:0.72rem;" onclick='openEditTaskModal(<?php echo json_encode([
+                                                "id" => (int)$row["id"],
+                                                "date" => date("d M Y, h:i A", strtotime($row["created_at"])),
+                                                "staff" => $row["admin_name"],
+                                                "course" => $row["course_name"],
+                                                "mode" => $display_mode_name,
+                                                "qty_label" => $row["quantity_label_snapshot"],
+                                                "topics" => array_map(function($tp) {
+                                                    return [
+                                                        "name" => $tp["topic_name"],
+                                                        "qty" => $tp["quantity"] !== null ? (float)$tp["quantity"] : ""
+                                                    ];
+                                                }, $row["topics"])
+                                            ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i> Edit</button>
+                                            <button type="button" class="btn btn-sm btn-soft-red" style="padding:2px 8px; font-size:0.72rem;" onclick="openDeleteTaskModal(<?php echo (int)$row['id']; ?>)"><i class="fas fa-trash"></i> Delete</button>
+                                        <?php endif; ?>
                                     <?php endif; ?>
                                 <?php endif; ?>
                             </div>
@@ -2477,6 +2779,79 @@ function updateDistributionChart(type) {
         </div>
     </div>
 
+    <!-- ── VIEW QUALITY ASSESSMENT MODAL ── -->
+    <div class="modal-backdrop" id="view-qa-modal">
+        <div class="modal" style="max-width:960px; width:95%;">
+            <div class="modal-head">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="background:var(--primary); color:#fff; width:28px; height:28px; border-radius:6px; display:inline-flex; align-items:center; justify-content:center; font-size:0.9rem;"><i class="fas fa-video"></i></span>
+                    <h3 style="margin:0;">Lecture Quality Assessment Report</h3>
+                </div>
+                <button class="modal-close" onclick="closeModal('view-qa-modal')"><i class="fas fa-xmark"></i></button>
+            </div>
+            <div class="modal-body" id="view-qa-modal-content" style="max-height:75vh; overflow-y:auto; padding:18px;">
+                <!-- Loaded dynamically via AJAX -->
+            </div>
+            <div class="modal-foot" style="justify-content:flex-end;">
+                <button type="button" class="btn btn-outline" onclick="closeModal('view-qa-modal')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── REVIEW QUALITY ASSESSMENT MODAL ── -->
+    <div class="modal-backdrop" id="review-qa-modal">
+        <div class="modal" style="max-width:550px; width:95%;">
+            <div class="modal-head">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="background:var(--primary); color:#fff; width:28px; height:28px; border-radius:6px; display:inline-flex; align-items:center; justify-content:center; font-size:0.9rem;"><i class="fas fa-clipboard-check"></i></span>
+                    <h3 style="margin:0;">Review Quality Assessment</h3>
+                </div>
+                <button class="modal-close" onclick="closeModal('review-qa-modal')"><i class="fas fa-xmark"></i></button>
+            </div>
+            <form id="review-qa-form" method="POST" onsubmit="return submitQaReview(event)">
+                <?php echo csrf_field(); ?>
+                <input type="hidden" name="action" value="review_qa_assessment">
+                <input type="hidden" name="report_id" id="review-report-id">
+                <div class="modal-body">
+                    <div id="review-modal-alert-container" style="display:none; margin-bottom:12px;"></div>
+                    <div style="background:var(--bg-muted); padding:12px; border-radius:8px; margin-bottom:15px; border:1px solid var(--border); font-size:0.88rem;">
+                        <div><strong>Report Reference:</strong> <span id="review-report-ref-display" style="color:var(--primary); font-weight:700;"></span></div>
+                    </div>
+
+                    <div class="field" style="margin-bottom:12px;">
+                        <label>Admin Review Status <span class="req">*</span></label>
+                        <select name="admin_review_status" id="review-status-select" required style="width:100%;">
+                            <option value="verified">Verified (Approved)</option>
+                            <option value="needs_action">Needs Action (Defects found)</option>
+                            <option value="needs_reassessment">Needs Reassessment (Intern rework needed)</option>
+                            <option value="rejected">Rejected</option>
+                            <option value="pending">Pending Review</option>
+                        </select>
+                    </div>
+
+                    <div class="field" style="margin-bottom:12px;">
+                        <label>Admin Final Quality Classification</label>
+                        <select name="admin_final_grade" id="review-final-grade-select" style="width:100%;">
+                            <option value="0">- Select Final Grade (Optional) -</option>
+                            <option value="1">1 - Good (Production ready)</option>
+                            <option value="2">2 - Okay (Minor issues)</option>
+                            <option value="3">3 - To be improved (Major defects / Re-recording)</option>
+                        </select>
+                    </div>
+
+                    <div class="field" style="margin-bottom:12px;">
+                        <label>Admin Review Notes</label>
+                        <textarea name="admin_review_notes" id="review-notes-textarea" rows="3" style="width:100%;" placeholder="Provide feedback or notes on lecture assessment accuracy and defects..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-foot">
+                    <button type="button" class="btn btn-outline" onclick="closeModal('review-qa-modal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="btn-submit-review"><i class="fas fa-check"></i> Save Review</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- JS for Edit/Delete Controls -->
     <script>
     function onDeleteConfirmInput(el) {
@@ -2724,6 +3099,197 @@ function updateDistributionChart(type) {
             updatePdfExportUrl();
         }
     })();
+
+    // ── Quality Assessment UI Handlers ──
+    function openViewQaModal(reportId) {
+        openModal('view-qa-modal');
+        var bodyEl = document.getElementById('view-qa-modal-content');
+        bodyEl.innerHTML = '<div style="text-align:center; padding:30px;"><i class="fas fa-spinner fa-spin" style="font-size:1.8rem; color:var(--primary);"></i><p style="margin-top:10px;">Loading assessment data...</p></div>';
+
+        fetch('ld-work-report.php?action=get_qa_items&report_id=' + reportId)
+        .then(function(r) { return r.json(); })
+        .then(function(res) {
+            if (!res.success) {
+                bodyEl.innerHTML = '<div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i> ' + (res.error || 'Failed to load report') + '</div>';
+                return;
+            }
+
+            var rep = res.report;
+            var items = res.items || [];
+            var ai = res.ai_report;
+
+            var html = '';
+            // Context banner
+            html += '<div style="font-size:0.78rem; color:#475569; margin-bottom:12px; background:#f1f5f9; padding:8px 12px; border-radius:6px; border:1px solid #e2e8f0;">';
+            html += '<i class="fas fa-circle-info" style="color:var(--primary);"></i> Assessment submitted by L&amp;D Intern for the selected course <strong>' + (rep.course_name_snapshot || '') + '</strong>. Original File: <em>' + (rep.original_filename || '') + '</em>';
+            html += '</div>';
+
+            // Statistics strip
+            html += '<div style="margin-bottom:8px; font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;"><i class="fas fa-calculator"></i> System-Generated Assessment Statistics (Authoritative Spreadsheet Metrics)</div>';
+            html += '<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:10px; margin-bottom:16px; background:#f8fafc; padding:12px; border-radius:10px; border:1px solid var(--border);">';
+            html += '<div><span style="font-size:0.75rem; color:var(--text-muted); display:block;">Reference</span><strong>' + (rep.report_reference || '') + '</strong> <span class="badge blue" style="font-size:0.65rem; padding:1px 4px;">v' + (rep.version || 1) + '</span></div>';
+            html += '<div><span style="font-size:0.75rem; color:var(--text-muted); display:block;">Course</span><strong>' + (rep.course_name_snapshot || '') + '</strong></div>';
+            html += '<div><span style="font-size:0.75rem; color:var(--text-muted); display:block;">Lectures</span><strong>' + rep.row_count + '</strong></div>';
+            html += '<div><span style="font-size:0.75rem; color:var(--text-muted); display:block;">Assessment Time</span><strong>' + (parseFloat(rep.total_assessment_hours).toFixed(2)) + ' Hours</strong></div>';
+            html += '<div><span style="font-size:0.75rem; color:var(--text-muted); display:block;">Hourly Rate</span><strong>₹' + (parseFloat(rep.hourly_rate_snapshot).toFixed(2)) + '</strong></div>';
+            html += '<div><span style="font-size:0.75rem; color:var(--text-muted); display:block;">Charge</span><strong style="color:var(--success);">₹' + (parseFloat(rep.calculated_charge).toFixed(2)) + '</strong></div>';
+            html += '</div>';
+
+            // Tabs
+            html += '<div style="display:flex; gap:10px; border-bottom:2px solid var(--border); margin-bottom:14px;">';
+            html += '<button type="button" class="btn btn-sm btn-primary" id="qa-tab-btn-items" onclick="switchQaModalTab(\'items\')"><i class="fas fa-table-list"></i> Assessed Lectures (' + items.length + ')</button>';
+            html += '<button type="button" class="btn btn-sm btn-outline" id="qa-tab-btn-ai" onclick="switchQaModalTab(\'ai\')"><i class="fas fa-brain"></i> AI Quality Insights</button>';
+            html += '</div>';
+
+            // Tab Content 1: Items table
+            html += '<div id="qa-tab-content-items" style="display:block; max-height:420px; overflow-y:auto; overflow-x:auto;">';
+            html += '<table class="table" style="font-size:0.8rem; width:100%;">';
+            html += '<thead><tr><th>#</th><th>Chapter</th><th>Lecture Title</th><th>Lang</th><th>Faculty</th><th>Dur.</th><th>Content</th><th>Video</th><th>Audio</th><th>Slide</th><th>Assessed</th></tr></thead><tbody>';
+
+            var gradeBadge = function(g, r) {
+                var cls = g == 1 ? 'green' : (g == 2 ? 'amber' : 'red');
+                var txt = g == 1 ? '1 - Good' : (g == 2 ? '2 - Okay' : '3 - Improve');
+                var out = '<span class="badge ' + cls + '" style="font-size:0.7rem; padding:2px 5px;">' + txt + '</span>';
+                if (r) {
+                    out += '<div style="font-size:0.72rem; color:var(--text-muted); margin-top:2px; max-width:140px; word-break:break-word;">' + r + '</div>';
+                }
+                return out;
+            };
+
+            items.forEach(function(it) {
+                html += '<tr>';
+                html += '<td>' + it.source_row_number + '</td>';
+                html += '<td><strong>' + it.chapter + '</strong></td>';
+                html += '<td>' + it.lecture_title + '</td>';
+                html += '<td><span class="badge blue">' + it.language + '</span></td>';
+                html += '<td>' + it.faculty_name + '</td>';
+                html += '<td>' + it.lecture_duration_minutes + 'm</td>';
+                html += '<td>' + gradeBadge(it.content_grade, it.content_remark) + '</td>';
+                html += '<td>' + gradeBadge(it.video_grade, it.video_remark) + '</td>';
+                html += '<td>' + gradeBadge(it.audio_grade, it.audio_remark) + '</td>';
+                html += '<td>' + gradeBadge(it.slide_grade, it.slide_remark) + '</td>';
+                html += '<td><strong>' + it.assessment_minutes + 'm</strong></td>';
+                html += '</tr>';
+            });
+            html += '</tbody></table></div>';
+
+            // Tab Content 2: AI Insights
+            html += '<div id="qa-tab-content-ai" style="display:none; max-height:420px; overflow-y:auto;">';
+            if (ai && rep.ai_status === 'completed') {
+                html += '<div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:12px; margin-bottom:12px;">';
+                html += '<div style="font-weight:700; color:#1e40af; margin-bottom:4px;"><i class="fas fa-brain"></i> Executive Summary &bull; Overall: ' + (ai.overall_grade || 'Completed') + '</div>';
+                html += '<p style="margin:0; font-size:0.85rem; color:#1e3a8a; line-height:1.5;">' + (ai.summary || 'Summary not available.') + '</p>';
+                html += '</div>';
+
+                if (ai.recommendations && ai.recommendations.length > 0) {
+                    html += '<div style="margin-bottom:12px;"><strong>Key Recommendations:</strong><ul style="margin:4px 0 0 0; padding-left:18px; font-size:0.85rem;">';
+                    ai.recommendations.forEach(function(rc) { html += '<li>' + rc + '</li>'; });
+                    html += '</ul></div>';
+                }
+
+                if (ai.reverification_items && ai.reverification_items.length > 0) {
+                    html += '<div style="margin-bottom:12px; background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; padding:10px;">';
+                    html += '<strong style="color:#9a3412; font-size:0.85rem;"><i class="fas fa-magnifying-glass"></i> Lectures Recommended for Manual Reverification:</strong>';
+                    html += '<ul style="margin:4px 0 0 0; padding-left:18px; font-size:0.82rem; color:#9a3412;">';
+                    ai.reverification_items.forEach(function(rv) { 
+                        html += '<li>Row ' + rv.row + ' (' + (rv.title || '') + '): ' + (rv.reason || '') + '</li>'; 
+                    });
+                    html += '</ul></div>';
+                }
+            } else {
+                var aiMsg = 'AI report not available yet.';
+                if (rep.ai_status === 'failed') {
+                    aiMsg = 'AI analysis could not be completed for this report (AI status: Failed). The intern task and financial totals remain valid and intact.';
+                } else if (rep.ai_status === 'pending_config') {
+                    aiMsg = 'AI report not available yet (AI provider credentials are not yet configured on this server).';
+                } else {
+                    aiMsg = 'AI report not available yet (AI analysis is currently queued or in progress).';
+                }
+                html += '<div class="alert alert-info"><i class="fas fa-info-circle"></i> ' + aiMsg + '</div>';
+            }
+            html += '</div>';
+
+            bodyEl.innerHTML = html;
+        })
+        .catch(function(err) {
+            bodyEl.innerHTML = '<div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i> Error loading assessment details.</div>';
+        });
+    }
+
+    function switchQaModalTab(tab) {
+        var tabItems = document.getElementById('qa-tab-content-items');
+        var tabAi = document.getElementById('qa-tab-content-ai');
+        var btnItems = document.getElementById('qa-tab-btn-items');
+        var btnAi = document.getElementById('qa-tab-btn-ai');
+
+        if (tab === 'items') {
+            if (tabItems) tabItems.style.display = 'block';
+            if (tabAi) tabAi.style.display = 'none';
+            if (btnItems) { btnItems.className = 'btn btn-sm btn-primary'; }
+            if (btnAi) { btnAi.className = 'btn btn-sm btn-outline'; }
+        } else {
+            if (tabItems) tabItems.style.display = 'none';
+            if (tabAi) tabAi.style.display = 'block';
+            if (btnItems) { btnItems.className = 'btn btn-sm btn-outline'; }
+            if (btnAi) { btnAi.className = 'btn btn-sm btn-primary'; }
+        }
+    }
+
+    function openReviewQaModal(reportId, ref, currentStatus, currentGrade, currentNotes) {
+        document.getElementById('review-report-id').value = reportId;
+        document.getElementById('review-report-ref-display').textContent = ref;
+        document.getElementById('review-status-select').value = currentStatus || 'pending';
+        document.getElementById('review-final-grade-select').value = currentGrade || '0';
+        document.getElementById('review-notes-textarea').value = currentNotes || '';
+
+        var alertBox = document.getElementById('review-modal-alert-container');
+        if (alertBox) {
+            alertBox.style.display = 'none';
+            alertBox.innerHTML = '';
+        }
+
+        openModal('review-qa-modal');
+    }
+
+    function submitQaReview(e) {
+        e.preventDefault();
+        var form = document.getElementById('review-qa-form');
+        var alertBox = document.getElementById('review-modal-alert-container');
+        var btn = document.getElementById('btn-submit-review');
+        var oldBtnHtml = btn.innerHTML;
+
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+
+        var formData = new FormData(form);
+
+        fetch('ld-work-report.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            btn.innerHTML = oldBtnHtml;
+            if (data.success) {
+                alert(data.message || 'Review saved successfully.');
+                window.location.reload();
+            } else {
+                alertBox.className = 'alert alert-error';
+                alertBox.style.display = 'block';
+                alertBox.innerHTML = '<i class="fas fa-triangle-exclamation"></i> ' + (data.message || 'Failed to save review.');
+            }
+        })
+        .catch(function(err) {
+            btn.disabled = false;
+            btn.innerHTML = oldBtnHtml;
+            alertBox.className = 'alert alert-error';
+            alertBox.style.display = 'block';
+            alertBox.innerHTML = '<i class="fas fa-triangle-exclamation"></i> Network error while saving review.';
+        });
+
+        return false;
+    }
     </script>
 
 <?php include 'includes/admin_footer.php'; ?>

@@ -2,7 +2,46 @@
 require_once 'includes/auth.php';
 require_once 'config/database.php';
 require_once 'includes/reminders_helper.php';
+require_once 'includes/ld_quality_assessment_helper.php';
 require_permission('settings');
+
+// Check and seed permanent System Work Mode: Lectures: Quality Assessment
+try {
+    if (ld_tables_exist($pdo)) {
+        $hasKeyCol = false;
+        try {
+            $pdo->query("SELECT mode_key FROM ld_work_modes LIMIT 1");
+            $hasKeyCol = true;
+        } catch (Exception $e) {}
+
+        $qaMode = null;
+        if ($hasKeyCol) {
+            $stmt = $pdo->prepare("SELECT * FROM ld_work_modes WHERE mode_key = ? LIMIT 1");
+            $stmt->execute([LD_QA_SYSTEM_KEY]);
+            $qaMode = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+        if (!$qaMode) {
+            $stmt = $pdo->prepare("SELECT * FROM ld_work_modes WHERE mode_name = ? LIMIT 1");
+            $stmt->execute([LD_QA_MODE_NAME]);
+            $qaMode = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+
+        if (!$qaMode) {
+            if ($hasKeyCol) {
+                $pdo->prepare("INSERT INTO ld_work_modes (mode_name, mode_key, is_system, quantity_label, charge_per_quantity, status, sort_order) VALUES (?, ?, 1, ?, 0.00, 'active', 0)")
+                    ->execute([LD_QA_MODE_NAME, LD_QA_SYSTEM_KEY, LD_QA_QUANTITY_LABEL]);
+            } else {
+                $pdo->prepare("INSERT INTO ld_work_modes (mode_name, quantity_label, charge_per_quantity, status, sort_order) VALUES (?, ?, 0.00, 'active', 0)")
+                    ->execute([LD_QA_MODE_NAME, LD_QA_QUANTITY_LABEL]);
+            }
+        } elseif ($hasKeyCol && (empty($qaMode['is_system']) || empty($qaMode['mode_key']))) {
+            $pdo->prepare("UPDATE ld_work_modes SET mode_name = ?, mode_key = ?, is_system = 1, quantity_label = ?, status = 'active' WHERE id = ?")
+                ->execute([LD_QA_MODE_NAME, LD_QA_SYSTEM_KEY, LD_QA_QUANTITY_LABEL, $qaMode['id']]);
+        }
+    }
+} catch (Exception $e) {
+    error_log("Seed QA system mode: " . $e->getMessage());
+}
 
 // Self-healing database check for payment_accounts new columns
 try {
@@ -274,6 +313,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     if ($name === '') {
                         $error_message = 'Work Mode name is required.';
+                    } elseif (is_ld_quality_assessment_mode($name)) {
+                        $error_message = 'Cannot create another mode with the permanent system mode name.';
                     } elseif ($qty_label === '') {
                         $error_message = 'Quantity label is required.';
                     } elseif (!is_numeric($charge) || (float)$charge < 0) {
@@ -296,8 +337,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $order = (int)($_POST['sort_order'] ?? 0);
                     $status = in_array($_POST['status'] ?? '', ['active','inactive'], true) ? $_POST['status'] : 'active';
 
-                    if ($id <= 0) {
+                    // Fetch existing mode to enforce system mode guards
+                    $stmt = $pdo->prepare("SELECT * FROM ld_work_modes WHERE id = ?");
+                    $stmt->execute([$id]);
+                    $existingMode = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                    if (!$existingMode) {
                         $error_message = 'Invalid L&D Work Mode ID.';
+                    } elseif (is_ld_quality_assessment_mode($existingMode)) {
+                        // Permanent System Work Mode Guardrails:
+                        // - Mode name cannot be renamed
+                        // - Quantity label cannot be changed
+                        // - Status cannot be deactivated
+                        // - Cannot be deleted
+                        // - ONLY hourly charge may be changed by Super Admin
+                        if (!is_super_admin()) {
+                            $error_message = 'Only Super Admin is authorized to change the hourly rate for System Work Modes.';
+                        } elseif (!is_numeric($charge) || (float)$charge < 0) {
+                            $error_message = 'Hourly charge must be a non-negative number.';
+                        } else {
+                            try {
+                                $pdo->prepare("UPDATE ld_work_modes SET charge_per_quantity = ?, sort_order = ?, status = 'active', quantity_label = ? WHERE id = ?")
+                                    ->execute([(float)$charge, $order, LD_QA_QUANTITY_LABEL, $id]);
+                                $success_message = "Hourly charge for System Work Mode updated to ₹" . number_format((float)$charge, 2) . ".";
+                            } catch (Exception $e) {
+                                $error_message = 'Failed to update System Work Mode.';
+                            }
+                        }
                     } elseif ($name === '') {
                         $error_message = 'Work Mode name is required.';
                     } elseif ($qty_label === '') {
@@ -316,8 +382,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $error_message = 'L&D database tables are not installed yet. Please run database-update-21.sql first.';
                 } else {
                     $id = (int)($_POST['mode_id'] ?? 0);
-                    $pdo->prepare("UPDATE ld_work_modes SET status = IF(status='active','inactive','active') WHERE id = ?")->execute([$id]);
-                    $success_message = 'L&D Work Mode status updated.';
+                    $stmt = $pdo->prepare("SELECT * FROM ld_work_modes WHERE id = ?");
+                    $stmt->execute([$id]);
+                    $existingMode = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                    if ($existingMode && is_ld_quality_assessment_mode($existingMode)) {
+                        $error_message = 'System Work Mode is permanent and cannot be deactivated.';
+                    } else {
+                        $pdo->prepare("UPDATE ld_work_modes SET status = IF(status='active','inactive','active') WHERE id = ?")->execute([$id]);
+                        $success_message = 'L&D Work Mode status updated.';
+                    }
                 }
             } elseif ($action === 'delete_ld_mode') {
                 if (!ld_tables_exist($pdo)) {
@@ -325,18 +399,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } else {
                     if (is_super_admin()) {
                         $id = (int)($_POST['mode_id'] ?? 0);
-
-                        // Check if there are active tasks using this mode
-                        $stmt = $pdo->prepare("SELECT COUNT(*) FROM ld_tasks WHERE mode_id = ?");
+                        $stmt = $pdo->prepare("SELECT * FROM ld_work_modes WHERE id = ?");
                         $stmt->execute([$id]);
-                        $task_count = (int)$stmt->fetchColumn();
+                        $existingMode = $stmt->fetch(PDO::FETCH_ASSOC);
 
-                        if ($task_count > 0) {
-                            $pdo->prepare("UPDATE ld_work_modes SET status = 'inactive' WHERE id = ?")->execute([$id]);
-                            $success_message = "This Work Mode has {$task_count} task(s) completed by L&D Interns. It cannot be permanently deleted because historical work records depend on it. It will be archived instead.";
+                        if ($existingMode && is_ld_quality_assessment_mode($existingMode)) {
+                            $error_message = 'System Work Mode is permanent and cannot be deleted.';
                         } else {
-                            $pdo->prepare("DELETE FROM ld_work_modes WHERE id = ?")->execute([$id]);
-                            $success_message = 'L&D Work Mode deleted.';
+                            // Check if there are active tasks using this mode
+                            $stmt = $pdo->prepare("SELECT COUNT(*) FROM ld_tasks WHERE mode_id = ?");
+                            $stmt->execute([$id]);
+                            $task_count = (int)$stmt->fetchColumn();
+
+                            if ($task_count > 0) {
+                                $pdo->prepare("UPDATE ld_work_modes SET status = 'inactive' WHERE id = ?")->execute([$id]);
+                                $success_message = "This Work Mode has {$task_count} task(s) completed by L&D Interns. It cannot be permanently deleted because historical work records depend on it. It will be archived instead.";
+                            } else {
+                                $pdo->prepare("DELETE FROM ld_work_modes WHERE id = ?")->execute([$id]);
+                                $success_message = 'L&D Work Mode deleted.';
+                            }
                         }
                     }
                 }
@@ -875,24 +956,46 @@ include 'includes/admin_nav.php';
                 </tr>
             </thead>
             <tbody>
-            <?php foreach ($ld_modes as $m): ?>
-                <tr>
-                    <td class="cell-main"><?php echo e($m['mode_name']); ?></td>
-                    <td><?php echo e($m['quantity_label'] ?: 'N/A'); ?></td>
-                    <td style="font-weight:600;">₹<?php echo number_format((float)($m['charge_per_quantity'] ?? 0), 2); ?></td>
+            <?php foreach ($ld_modes as $m):
+                $is_sys = is_ld_quality_assessment_mode($m);
+            ?>
+                <tr <?php if ($is_sys): ?>style="background:rgba(2, 132, 199, 0.03);"<?php endif; ?>>
+                    <td class="cell-main">
+                        <strong><?php echo e($m['mode_name']); ?></strong>
+                        <?php if ($is_sys): ?>
+                            <div style="display:flex; gap:6px; margin-top:4px; flex-wrap:wrap;">
+                                <span class="badge blue" style="font-size:0.7rem; padding:2px 6px;"><i class="fas fa-lock"></i> System Work Mode</span>
+                                <span class="badge purple" style="font-size:0.7rem; padding:2px 6px;">Permanent</span>
+                                <span class="badge green" style="font-size:0.7rem; padding:2px 6px;">Hourly Charge configurable</span>
+                            </div>
+                        <?php endif; ?>
+                    </td>
+                    <td><?php echo e($m['quantity_label'] ?: ($is_sys ? 'Hour' : 'N/A')); ?></td>
+                    <td style="font-weight:600;">₹<?php echo number_format((float)($m['charge_per_quantity'] ?? 0), 2); ?> <?php echo $is_sys ? '/ Hour' : ''; ?></td>
                     <td><?php echo (int)$m['sort_order']; ?></td>
-                    <td><span class="badge <?php echo $m['status'] === 'active' ? 'green' : 'gray'; ?>"><?php echo ucfirst($m['status']); ?></span></td>
+                    <td>
+                        <?php if ($is_sys): ?>
+                            <span class="badge green">Active (Permanent)</span>
+                        <?php else: ?>
+                            <span class="badge <?php echo $m['status'] === 'active' ? 'green' : 'gray'; ?>"><?php echo ucfirst($m['status']); ?></span>
+                        <?php endif; ?>
+                    </td>
                     <td style="text-align:right; white-space:nowrap;">
-                        <button type="button" class="btn btn-sm btn-outline" onclick='openEditLdMode(<?php echo json_encode([
+                        <button type="button" class="btn btn-sm btn-outline" title="<?php echo $is_sys ? 'Configure Hourly Charge' : 'Edit Mode'; ?>" onclick='openEditLdMode(<?php echo json_encode([
                             "id" => (int)$m["id"],
                             "mode_name" => $m["mode_name"],
-                            "quantity_label" => $m["quantity_label"] ?? "",
+                            "quantity_label" => $m["quantity_label"] ?? ($is_sys ? "Hour" : ""),
                             "charge_per_quantity" => (float)($m["charge_per_quantity"] ?? 0),
                             "sort_order" => (int)$m["sort_order"],
-                            "status" => $m["status"]
-                        ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
-                        <form method="POST" style="display:inline;"><?php echo csrf_field(); ?><input type="hidden" name="action" value="toggle_ld_mode"><input type="hidden" name="mode_id" value="<?php echo (int)$m['id']; ?>"><button type="submit" class="btn btn-sm btn-soft-amber" title="Toggle status"><i class="fas fa-power-off"></i></button></form>
-                        <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this L&D work mode?');"><?php echo csrf_field(); ?><input type="hidden" name="action" value="delete_ld_mode"><input type="hidden" name="mode_id" value="<?php echo (int)$m['id']; ?>"><button type="submit" class="btn btn-sm btn-soft-red" title="Delete"><i class="fas fa-trash"></i></button></form>
+                            "status" => $m["status"],
+                            "is_system" => $is_sys ? 1 : 0
+                        ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i><?php if ($is_sys): ?> Hourly Rate<?php endif; ?></button>
+                        <?php if (!$is_sys): ?>
+                            <form method="POST" style="display:inline;"><?php echo csrf_field(); ?><input type="hidden" name="action" value="toggle_ld_mode"><input type="hidden" name="mode_id" value="<?php echo (int)$m['id']; ?>"><button type="submit" class="btn btn-sm btn-soft-amber" title="Toggle status"><i class="fas fa-power-off"></i></button></form>
+                            <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this L&D work mode?');"><?php echo csrf_field(); ?><input type="hidden" name="action" value="delete_ld_mode"><input type="hidden" name="mode_id" value="<?php echo (int)$m['id']; ?>"><button type="submit" class="btn btn-sm btn-soft-red" title="Delete"><i class="fas fa-trash"></i></button></form>
+                        <?php else: ?>
+                            <span class="badge gray" style="font-size:0.75rem; opacity:0.8;" title="System work modes cannot be deactivated or deleted"><i class="fas fa-shield"></i> Protected</span>
+                        <?php endif; ?>
                     </td>
                 </tr>
             <?php endforeach; ?>
@@ -1476,12 +1579,16 @@ document.addEventListener('DOMContentLoaded', function() {
             <input type="hidden" name="action" value="edit_ld_mode">
             <input type="hidden" name="mode_id" id="edit-ld-mode-id">
             <div class="modal-body">
+                <div id="edit-ld-mode-system-notice" class="alert alert-info" style="display:none; margin-bottom:14px; font-size:0.8rem; background:rgba(2, 132, 199, 0.08); border-color:rgba(2, 132, 199, 0.3);">
+                    <i class="fas fa-circle-info" style="color:var(--blue-ink);"></i>
+                    <span><strong>Permanent System Work Mode:</strong> Mode Name, Quantity Label ("Hour"), and Status are permanent and locked. Only the <strong>Hourly Charge (₹)</strong> may be configured by Super Admin.</span>
+                </div>
                 <div class="form-grid" style="grid-template-columns:1fr;">
                     <div class="field"><label>Mode Name <span class="req">*</span></label><input type="text" name="mode_name" id="edit-ld-mode-name" required></div>
                     <div class="field"><label>Quantity Label <span class="req">*</span></label><input type="text" name="quantity_label" id="edit-ld-mode-qty-label" placeholder="e.g. Page, MCQ, Video" required></div>
-                    <div class="field"><label>Charge Per Quantity (₹) <span class="req">*</span></label><input type="number" step="0.01" min="0" name="charge_per_quantity" id="edit-ld-mode-charge" required></div>
+                    <div class="field"><label id="edit-ld-mode-charge-label">Charge Per Quantity (₹) <span class="req">*</span></label><input type="number" step="0.01" min="0" name="charge_per_quantity" id="edit-ld-mode-charge" required></div>
                     <div class="field"><label>Sort Order <span class="req">*</span></label><input type="number" name="sort_order" id="edit-ld-mode-order" required></div>
-                    <div class="field"><label>Status</label>
+                    <div class="field" id="edit-ld-mode-status-container"><label>Status</label>
                         <select name="status" id="edit-ld-mode-status">
                             <option value="active">Active</option>
                             <option value="inactive">Inactive</option>
@@ -1637,6 +1744,31 @@ function openEditLdMode(data) {
     document.getElementById('edit-ld-mode-charge').value = data.charge_per_quantity || 0;
     document.getElementById('edit-ld-mode-order').value = data.sort_order;
     document.getElementById('edit-ld-mode-status').value = data.status;
+
+    var isSys = !!data.is_system;
+    var notice = document.getElementById('edit-ld-mode-system-notice');
+    var nameInput = document.getElementById('edit-ld-mode-name');
+    var qtyInput = document.getElementById('edit-ld-mode-qty-label');
+    var statusSelect = document.getElementById('edit-ld-mode-status');
+    var chargeLabel = document.getElementById('edit-ld-mode-charge-label');
+
+    if (notice) notice.style.display = isSys ? 'flex' : 'none';
+    if (nameInput) {
+        nameInput.readOnly = isSys;
+        nameInput.style.backgroundColor = isSys ? '#f1f5f9' : '';
+    }
+    if (qtyInput) {
+        qtyInput.readOnly = isSys;
+        qtyInput.style.backgroundColor = isSys ? '#f1f5f9' : '';
+    }
+    if (statusSelect) {
+        statusSelect.disabled = isSys;
+        statusSelect.style.backgroundColor = isSys ? '#f1f5f9' : '';
+    }
+    if (chargeLabel) {
+        chargeLabel.innerHTML = isSys ? 'Hourly Charge (₹) <span class="req">*</span> <small style="color:var(--primary); font-weight:normal;">(Configurable by Super Admin)</small>' : 'Charge Per Quantity (₹) <span class="req">*</span>';
+    }
+
     openModal('edit-ld-mode-modal');
 }
 
