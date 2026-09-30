@@ -886,14 +886,98 @@ if (isset($_GET['action'])) {
 
         try {
             require_once __DIR__ . '/includes/ai/StudentMentorAiService.php';
+            require_once __DIR__ . '/includes/ai/StudentMentorReportTranslator.php';
             $service = new StudentMentorAiService($pdo);
             $result = $service->analyzeStudentStudyPlan($pdo, $student_id ?: $email, $plan_id, $cur_admin_id, $is_super);
+            if (!empty($result['success'])) {
+                $result['language'] = 'en';
+                $result['labels'] = StudentMentorReportTranslator::getUiLabels('en');
+                if (session_status() === PHP_SESSION_ACTIVE) {
+                    $uid = $result['data']['student_profile']['user_id'] ?? ($student_id ?: $email);
+                    $_SESSION['mentor_ai_canonical_' . $uid . '_' . $plan_id] = $result;
+                }
+            }
             echo json_encode($result);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
         }
         exit;
     }
+
+    // 3.5.1. On-Demand Multilingual Student Mentor AI Report Translation
+    if ($_GET['action'] === 'get_student_ai_translation') {
+        $student_id = trim($_REQUEST['student_id'] ?? $_REQUEST['user_id'] ?? '');
+        $email = trim($_REQUEST['email'] ?? '');
+        $plan_id = (int)($_REQUEST['plan_id'] ?? $_REQUEST['study_plan_id'] ?? 0);
+        $lang = strtolower(trim((string)($_REQUEST['lang'] ?? 'en')));
+        $cur_admin_id = $admin_row['id'] ?? 0;
+        $is_super = is_super_admin();
+
+        if ($plan_id <= 0) {
+            echo json_encode(['success' => false, 'error' => 'Invalid or missing study plan ID.']);
+            exit;
+        }
+
+        if (!in_array($lang, ['en', 'ml', 'manglish'], true)) {
+            $lang = 'en';
+        }
+
+        try {
+            require_once __DIR__ . '/includes/ai/StudentMentorAiService.php';
+            require_once __DIR__ . '/includes/ai/StudentMentorReportTranslator.php';
+
+            // 1. Resolve student strictly server-side from database
+            $stmt = $pdo->prepare("
+                SELECT user_id, name, email, student_status
+                FROM users
+                WHERE (user_id = ? OR LOWER(email) = LOWER(?)) AND status = 'approved'
+                LIMIT 1
+            ");
+            $stmt->execute([$student_id, $email ?: $student_id]);
+            $student = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$student) {
+                echo json_encode(['success' => false, 'error' => 'Student record not found or not approved.']);
+                exit;
+            }
+
+            $st_status = strtolower(trim((string)($student['student_status'] ?? 'active'))) ?: 'unknown';
+            if (in_array($st_status, ['dropout', 'completed'], true)) {
+                echo json_encode(['success' => false, 'error' => 'Access Denied: Student account is inactive.']);
+                exit;
+            }
+
+            if (!$is_super && function_exists('is_student_assigned_to_mentor')) {
+                if (!is_student_assigned_to_mentor($pdo, $student['user_id'], $cur_admin_id)) {
+                    echo json_encode(['success' => false, 'error' => 'Access Denied: Student is not actively assigned to you.']);
+                    exit;
+                }
+            }
+
+            // 2. Retrieve canonical report from session or generate fresh
+            $cacheSessionKey = 'mentor_ai_canonical_' . $student['user_id'] . '_' . $plan_id;
+            $canonicalReport = null;
+            if (session_status() === PHP_SESSION_ACTIVE && isset($_SESSION[$cacheSessionKey])) {
+                $canonicalReport = $_SESSION[$cacheSessionKey];
+            }
+
+            if (!$canonicalReport || !is_array($canonicalReport) || empty($canonicalReport['analysis'])) {
+                $service = new StudentMentorAiService($pdo);
+                $canonicalReport = $service->analyzeStudentStudyPlan($pdo, $student['user_id'], $plan_id, $cur_admin_id, $is_super);
+                if (!empty($canonicalReport['success']) && session_status() === PHP_SESSION_ACTIVE) {
+                    $_SESSION[$cacheSessionKey] = $canonicalReport;
+                }
+            }
+
+            // 3. Translate report
+            $translated = StudentMentorReportTranslator::translateReport($canonicalReport, $lang, null, $pdo);
+            echo json_encode($translated);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        exit;
+    }
+
 
     // 3.6. Send Student AI Report via WhatsApp
     if ($_GET['action'] === 'send_student_ai_wa_report') {
@@ -3596,7 +3680,18 @@ include 'includes/admin_nav.php';
                 </h4>
                 <p id="ai-modal-subtitle" style="margin:3px 0 0 0; font-size:0.75rem; color:#cbd5e1;"></p>
             </div>
-            <div style="display:flex; gap:8px; align-items:center;">
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <!-- Multilingual Language Selector -->
+                <div style="display:inline-flex; align-items:center; gap:6px; background:rgba(255,255,255,0.08); padding:3px 8px; border-radius:8px; border:1px solid rgba(255,255,255,0.2);">
+                    <label for="ai-report-lang-select" style="font-size:0.75rem; color:#cbd5e1; margin:0; font-weight:700; white-space:nowrap;">
+                        <i class="fas fa-language" style="color:#a78bfa;"></i> Language:
+                    </label>
+                    <select id="ai-report-lang-select" style="background:#0f172a; color:#ffffff; border:1px solid rgba(255,255,255,0.3); border-radius:6px; padding:3px 8px; font-size:0.78rem; font-weight:600; cursor:pointer; outline:none;" onchange="changeAiReportLanguage(this.value)">
+                        <option value="en" selected>English</option>
+                        <option value="ml">മലയാളം (Malayalam)</option>
+                        <option value="manglish">Manglish</option>
+                    </select>
+                </div>
                 <button type="button" class="btn btn-sm btn-outline" id="ai-copy-wa-btn" style="background:rgba(255,255,255,0.12); color:#fff; border-color:rgba(255,255,255,0.25); padding:6px 12px; font-size:0.8rem;" onclick="copyAiReportWaText()">
                     <i class="fas fa-copy"></i> 📋 Copy WhatsApp Text
                 </button>
@@ -4518,6 +4613,14 @@ include 'includes/admin_nav.php';
             return;
         }
 
+        // Reset language selector and cache for new student/plan
+        const langSelect = document.getElementById('ai-report-lang-select');
+        if (langSelect) {
+            langSelect.value = 'en';
+            langSelect.disabled = false;
+        }
+        window.aiReportLangCache = {};
+
         const subtitleEl = document.getElementById('ai-modal-subtitle');
         if (subtitleEl) {
             subtitleEl.innerHTML = `Student: <strong>${r_esc_js(currentSelectedStudentName || studentId)}</strong> &nbsp;|&nbsp; Plan: <strong>${r_esc_js(planTitle)}</strong>`;
@@ -4607,6 +4710,8 @@ include 'includes/admin_nav.php';
                 }
 
                 window.currentStudentAiReportData = data;
+                if (!window.aiReportLangCache) window.aiReportLangCache = {};
+                window.aiReportLangCache['en'] = data;
                 renderAiAnalysisModal(data);
             })
             .catch(err => {
@@ -4625,14 +4730,142 @@ include 'includes/admin_nav.php';
             });
     }
 
+    function changeAiReportLanguage(lang) {
+        if (!window.currentStudentAiReportData) return;
+
+        if (!window.aiReportLangCache) {
+            window.aiReportLangCache = {};
+        }
+
+        // Cache English baseline if not present
+        if (!window.aiReportLangCache['en'] && window.currentStudentAiReportData) {
+            if (window.currentStudentAiReportData.language === 'en' || !window.currentStudentAiReportData.language) {
+                window.aiReportLangCache['en'] = window.currentStudentAiReportData;
+            }
+        }
+
+        // 1. Instant switch if language is 'en'
+        if (lang === 'en') {
+            const enData = window.aiReportLangCache['en'];
+            if (enData) {
+                window.currentStudentAiReportData = enData;
+                renderAiAnalysisModal(enData);
+                return;
+            }
+        }
+
+        // 2. Instant switch if already cached client-side
+        if (window.aiReportLangCache[lang]) {
+            const cachedData = window.aiReportLangCache[lang];
+            window.currentStudentAiReportData = cachedData;
+            renderAiAnalysisModal(cachedData);
+            return;
+        }
+
+        // 3. Show non-blocking translation status banner
+        const bodyContent = document.getElementById('ai-modal-body-content');
+        const langBanner = document.createElement('div');
+        langBanner.id = 'ai-lang-loading-indicator';
+        langBanner.style.cssText = 'position:sticky; top:0; z-index:100; background:linear-gradient(135deg, #eef2ff, #f5f3ff); border:1px solid #c7d2fe; border-radius:12px; padding:10px 16px; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; box-shadow:0 4px 12px rgba(99,102,241,0.12);';
+        langBanner.innerHTML = `
+            <div style="display:flex; align-items:center; gap:10px;">
+                <i class="fas fa-spinner fa-spin" style="color:#6366f1; font-size:1.15rem;"></i>
+                <span style="font-size:0.85rem; font-weight:700; color:#312e81;">
+                    ${lang === 'ml' ? 'റിപ്പോർട്ട് മലയാളത്തിൽ തയ്യാറാക്കുന്നു...' : 'Report Manglish-il prepare cheyyunnu...'}
+                </span>
+            </div>
+            <span style="font-size:0.75rem; color:#6366f1; font-weight:600;"><i class="fas fa-shield-halved"></i> Preserving factual data</span>
+        `;
+        if (bodyContent) {
+            bodyContent.prepend(langBanner);
+        }
+
+        const select = document.getElementById('ai-report-lang-select');
+        if (select) select.disabled = true;
+
+        const timelineBackdrop = document.getElementById('student-task-modal-backdrop');
+        const planId = timelineBackdrop ? (timelineBackdrop.dataset.planId || '') : (window.currentPlanAnalyticsPayload ? window.currentPlanAnalyticsPayload.analytics.study_plan_id : '');
+        const studentId = currentSelectedStudentId || (timelineBackdrop ? timelineBackdrop.dataset.studentId : '');
+        const email = currentSelectedStudentEmail || (timelineBackdrop ? timelineBackdrop.dataset.email : '');
+
+        let url = `?action=get_student_ai_translation&plan_id=${encodeURIComponent(planId)}&lang=${encodeURIComponent(lang)}`;
+        if (studentId) url += `&student_id=${encodeURIComponent(studentId)}`;
+        if (email) url += `&email=${encodeURIComponent(email)}`;
+
+        fetch(url)
+            .then(res => res.json())
+            .then(tData => {
+                if (select) select.disabled = false;
+                const banner = document.getElementById('ai-lang-loading-indicator');
+                if (banner) banner.remove();
+
+                if (!tData || !tData.success || !tData.analysis) {
+                    alert('Translation unavailable at this moment. Showing English report.');
+                    if (select) select.value = 'en';
+                    const enData = window.aiReportLangCache['en'];
+                    if (enData) {
+                        window.currentStudentAiReportData = enData;
+                        renderAiAnalysisModal(enData);
+                    }
+                    return;
+                }
+
+                // Cache translated result
+                window.aiReportLangCache[lang] = tData;
+                window.currentStudentAiReportData = tData;
+                renderAiAnalysisModal(tData);
+            })
+            .catch(err => {
+                if (select) select.disabled = false;
+                const banner = document.getElementById('ai-lang-loading-indicator');
+                if (banner) banner.remove();
+                alert('Translation notice: Connection interrupted. Showing English report.');
+                if (select) select.value = 'en';
+                const enData = window.aiReportLangCache['en'];
+                if (enData) {
+                    window.currentStudentAiReportData = enData;
+                    renderAiAnalysisModal(enData);
+                }
+            });
+    }
+
     function renderAiAnalysisModal(data) {
         const bodyContent = document.getElementById('ai-modal-body-content');
         if (!bodyContent) return;
 
         const a = data.analysis || {};
         const snap = a.snapshot || {};
+        const labels = data.labels || {
+            assessment_title: "Academic Performance Assessment",
+            ai_verified: "AI Verified",
+            kpi_checklist: "Checklist",
+            kpi_completed: "Completed",
+            kpi_pending: "Pending",
+            kpi_overdue: "Overdue",
+            kpi_streak: "Active Streak",
+            kpi_consistency: "Consistency",
+            sec_strengths: "Academic Strengths",
+            sec_mega_tests: "Mega Test Insights",
+            sec_appreciation: "Student Appreciation",
+            sec_attention: "Areas Needing Attention",
+            sec_live_sessions: "Live Session Insights",
+            sec_warnings: "Important Warnings",
+            sec_health_check: "Health Check",
+            sec_ranking: "Cohort Standing & Ranking",
+            sec_actions: "Strategic Mentor Recommended Actions",
+            sec_mentor_note: "Mentor Personalized Guidance Note",
+            sec_wa_preview: "WhatsApp Direct Chat Preview"
+        };
 
-        const statusClass = (a.overall_status === 'Elite Performer' || a.overall_status === 'Strong Performer') ? 'green' : ((a.overall_status === 'Needs Attention' || a.overall_status === 'Critical') ? 'red' : 'blue');
+        const langSelect = document.getElementById('ai-report-lang-select');
+        if (langSelect && data.language) {
+            langSelect.value = data.language;
+        }
+
+        const st = String(a.overall_status || '');
+        const isPositive = st.includes('Elite') || st.includes('Strong') || st.includes('Good') || st.includes('മികച്ച') || st.includes('ഉന്നത') || st.includes('നല്ല');
+        const isAttention = st.includes('Needs Attention') || st.includes('Critical') || st.includes('ശ്രദ്ധ') || st.includes('അടിയന്തര') || st.includes('shraddha');
+        const statusClass = isPositive ? 'green' : (isAttention ? 'red' : 'blue');
 
         function renderListItems(arr, fallbackText = 'None recorded.') {
             if (!arr || !Array.isArray(arr) || arr.length === 0) {
@@ -4645,16 +4878,16 @@ include 'includes/admin_nav.php';
             <!-- Top Status Banner -->
             <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; padding:1.25rem; margin-bottom:1.25rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; box-shadow:0 2px 8px rgba(0,0,0,0.02);">
                 <div>
-                    <span style="font-size:0.7rem; font-weight:800; text-transform:uppercase; color:#64748b; letter-spacing:0.5px; display:block; margin-bottom:4px;">Academic Performance Assessment</span>
+                    <span style="font-size:0.7rem; font-weight:800; text-transform:uppercase; color:#64748b; letter-spacing:0.5px; display:block; margin-bottom:4px;">${r_esc_js(labels.assessment_title)}</span>
                     <h3 style="font-family:var(--header-font); font-weight:800; font-size:1.35rem; color:#1e293b; margin:0; display:flex; align-items:center; gap:8px;">
                         <span>${r_esc_js(a.overall_status || 'Evaluated')}</span>
-                        <span class="badge ${statusClass}" style="font-size:0.75rem; text-transform:uppercase;">AI Verified</span>
+                        <span class="badge ${statusClass}" style="font-size:0.75rem; text-transform:uppercase;">${r_esc_js(labels.ai_verified)}</span>
                     </h3>
                     <p style="font-size:0.85rem; color:#475569; margin:4px 0 0 0; line-height:1.4;">${r_esc_js(a.status_summary || '')}</p>
                 </div>
                 <div>
                     <span style="font-size:0.72rem; color:#64748b; background:#f1f5f9; padding:4px 10px; border-radius:20px; font-weight:700;">
-                        <i class="fas fa-brain" style="color:#6366f1;"></i> ${r_esc_js(data.model_used || 'Gemini 3.5 Flash')}
+                        <i class="fas fa-brain" style="color:#6366f1;"></i> ${r_esc_js(data.model || data.model_used || 'Gemini 3.5 Flash')}
                     </span>
                 </div>
             </div>
@@ -4662,27 +4895,27 @@ include 'includes/admin_nav.php';
             <!-- KPI Quick Snapshot Grid -->
             <div class="ai-kpi-grid">
                 <div class="ai-kpi-card">
-                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">Checklist</div>
+                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">${r_esc_js(labels.kpi_checklist)}</div>
                     <strong style="font-size:1.2rem; color:#1e293b; display:block; margin-top:3px;">${snap.checklist_pct ?? 0}%</strong>
                 </div>
                 <div class="ai-kpi-card">
-                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">Completed</div>
+                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">${r_esc_js(labels.kpi_completed)}</div>
                     <strong style="font-size:1.2rem; color:#10b981; display:block; margin-top:3px;">${snap.completed ?? 0}</strong>
                 </div>
                 <div class="ai-kpi-card">
-                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">Pending</div>
+                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">${r_esc_js(labels.kpi_pending)}</div>
                     <strong style="font-size:1.2rem; color:#f59e0b; display:block; margin-top:3px;">${snap.pending ?? 0}</strong>
                 </div>
                 <div class="ai-kpi-card">
-                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">Overdue</div>
+                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">${r_esc_js(labels.kpi_overdue)}</div>
                     <strong style="font-size:1.2rem; color:${(snap.overdue ?? 0) > 0 ? '#ef4444' : '#10b981'}; display:block; margin-top:3px;">${snap.overdue ?? 0}</strong>
                 </div>
                 <div class="ai-kpi-card">
-                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">Active Streak</div>
+                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">${r_esc_js(labels.kpi_streak)}</div>
                     <strong style="font-size:1.2rem; color:#b45309; display:block; margin-top:3px;">🔥 ${snap.streak ?? 0}d</strong>
                 </div>
                 <div class="ai-kpi-card">
-                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">Consistency</div>
+                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">${r_esc_js(labels.kpi_consistency)}</div>
                     <strong style="font-size:1.2rem; color:#6366f1; display:block; margin-top:3px;">${snap.consistency_pct ?? 0}%</strong>
                 </div>
             </div>
@@ -4692,21 +4925,21 @@ include 'includes/admin_nav.php';
                 <!-- Column 1: Strengths & Appreciation -->
                 <div>
                     <div class="ai-card-section">
-                        <div class="ai-section-title"><i class="fas fa-circle-check" style="color:#10b981;"></i> Academic Strengths</div>
+                        <div class="ai-section-title"><i class="fas fa-circle-check" style="color:#10b981;"></i> ${r_esc_js(labels.sec_strengths)}</div>
                         <ul style="padding-left:18px; margin:0; font-size:0.85rem; color:#334155;">
                             ${renderListItems(a.academic_strengths, 'Consistent task engagement')}
                         </ul>
                     </div>
 
                     <div class="ai-card-section">
-                        <div class="ai-section-title"><i class="fas fa-file-pen" style="color:#6366f1;"></i> Mega Test Insights</div>
+                        <div class="ai-section-title"><i class="fas fa-file-pen" style="color:#6366f1;"></i> ${r_esc_js(labels.sec_mega_tests)}</div>
                         <ul style="padding-left:18px; margin:0; font-size:0.85rem; color:#334155;">
                             ${renderListItems(a.mega_test_insights, 'No published mega tests for this study plan.')}
                         </ul>
                     </div>
 
                     <div class="ai-card-section" style="background:#f0fdf4; border-color:#bbf7d0;">
-                        <div class="ai-section-title" style="color:#166534;"><i class="fas fa-award" style="color:#16a34a;"></i> Student Appreciation</div>
+                        <div class="ai-section-title" style="color:#166534;"><i class="fas fa-award" style="color:#16a34a;"></i> ${r_esc_js(labels.sec_appreciation)}</div>
                         <ul style="padding-left:18px; margin:0; font-size:0.85rem; color:#14532d;">
                             ${renderListItems(a.appreciation, 'Commendable adherence to academic routine.')}
                         </ul>
@@ -4716,14 +4949,14 @@ include 'includes/admin_nav.php';
                 <!-- Column 2: Weaknesses & Guidance -->
                 <div>
                     <div class="ai-card-section">
-                        <div class="ai-section-title"><i class="fas fa-circle-exclamation" style="color:#f59e0b;"></i> Areas Needing Attention</div>
+                        <div class="ai-section-title"><i class="fas fa-circle-exclamation" style="color:#f59e0b;"></i> ${r_esc_js(labels.sec_attention)}</div>
                         <ul style="padding-left:18px; margin:0; font-size:0.85rem; color:#334155;">
                             ${renderListItems(a.academic_weaknesses, 'None flagged at this time.')}
                         </ul>
                     </div>
 
                     <div class="ai-card-section">
-                        <div class="ai-section-title"><i class="fas fa-video" style="color:#06b6d4;"></i> Live Session Insights</div>
+                        <div class="ai-section-title"><i class="fas fa-video" style="color:#06b6d4;"></i> ${r_esc_js(labels.sec_live_sessions)}</div>
                         <ul style="padding-left:18px; margin:0; font-size:0.85rem; color:#334155;">
                             ${renderListItems(a.live_session_insights, 'Live sessions not recorded for this study plan.')}
                         </ul>
@@ -4731,14 +4964,14 @@ include 'includes/admin_nav.php';
 
                     ${(a.warnings && a.warnings.length > 0) ? `
                     <div class="ai-card-section" style="background:#fef2f2; border-color:#fecaca;">
-                        <div class="ai-section-title" style="color:#991b1b;"><i class="fas fa-triangle-exclamation" style="color:#dc2626;"></i> Important Warnings</div>
+                        <div class="ai-section-title" style="color:#991b1b;"><i class="fas fa-triangle-exclamation" style="color:#dc2626;"></i> ${r_esc_js(labels.sec_warnings)}</div>
                         <ul style="padding-left:18px; margin:0; font-size:0.85rem; color:#7f1d1d;">
                             ${renderListItems(a.warnings)}
                         </ul>
                     </div>
                     ` : `
                     <div class="ai-card-section" style="background:#f8fafc; border-color:#e2e8f0;">
-                        <div class="ai-section-title" style="color:#64748b;"><i class="fas fa-shield-check" style="color:#10b981;"></i> Health Check</div>
+                        <div class="ai-section-title" style="color:#64748b;"><i class="fas fa-shield-check" style="color:#10b981;"></i> ${r_esc_js(labels.sec_health_check)}</div>
                         <p style="font-size:0.85rem; color:#64748b; margin:0; font-style:italic;">No critical warning indicators detected.</p>
                     </div>
                     `}
@@ -4747,14 +4980,14 @@ include 'includes/admin_nav.php';
 
             <!-- Full-width: Cohort Ranking & Strategic Actions -->
             <div class="ai-card-section">
-                <div class="ai-section-title"><i class="fas fa-ranking-star" style="color:#eab308;"></i> Cohort Standing & Ranking</div>
+                <div class="ai-section-title"><i class="fas fa-ranking-star" style="color:#eab308;"></i> ${r_esc_js(labels.sec_ranking)}</div>
                 <ul style="padding-left:18px; margin:0 0 10px 0; font-size:0.85rem; color:#334155;">
                     ${renderListItems(a.ranking_insights, 'Ranking data unavailable.')}
                 </ul>
             </div>
 
             <div class="ai-card-section">
-                <div class="ai-section-title"><i class="fas fa-compass" style="color:#4f46e5;"></i> Strategic Mentor Recommended Actions</div>
+                <div class="ai-section-title"><i class="fas fa-compass" style="color:#4f46e5;"></i> ${r_esc_js(labels.sec_actions)}</div>
                 <ol style="padding-left:20px; margin:0; font-size:0.85rem; color:#334155;">
                     ${(a.recommendations && a.recommendations.length > 0) ?
                         a.recommendations.map(r => `<li style="margin-bottom:6px; line-height:1.45; font-weight:600;">${r_esc_js(r)}</li>`).join('') :
@@ -4765,14 +4998,14 @@ include 'includes/admin_nav.php';
 
             <!-- Personalized Mentor Note -->
             <div class="ai-card-section" style="background:linear-gradient(135deg, #eef2ff 0%, #faf5ff 100%); border-color:#c7d2fe;">
-                <div class="ai-section-title" style="color:#3730a3;"><i class="fas fa-lightbulb" style="color:#6366f1;"></i> Mentor Personalized Guidance Note</div>
+                <div class="ai-section-title" style="color:#3730a3;"><i class="fas fa-lightbulb" style="color:#6366f1;"></i> ${r_esc_js(labels.sec_mentor_note)}</div>
                 <p style="font-size:0.9rem; color:#312e81; margin:0; font-weight:600; line-height:1.5;">${r_esc_js(a.mentor_note || 'Maintain your focus and continue working through the curriculum steadily.')}</p>
             </div>
 
             <!-- Collapsible WhatsApp Direct Chat Preview -->
             <div class="ai-card-section" style="margin-top:1.5rem; background:#ffffff;">
                 <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e2e8f0; padding-bottom:8px; margin-bottom:10px;">
-                    <div class="ai-section-title" style="margin:0;"><i class="fab fa-whatsapp" style="color:#25d366;"></i> WhatsApp Direct Chat Preview</div>
+                    <div class="ai-section-title" style="margin:0;"><i class="fab fa-whatsapp" style="color:#25d366;"></i> ${r_esc_js(labels.sec_wa_preview)}</div>
                     <div style="display:flex; gap:8px;">
                         <button type="button" class="btn btn-sm btn-outline" style="padding:4px 8px; font-size:0.75rem;" onclick="copyAiReportWaText()"><i class="fas fa-copy"></i> Copy</button>
                         <button type="button" class="btn btn-sm" id="ai-preview-send-btn" style="background:#25d366; color:#fff; padding:4px 10px; font-size:0.75rem; font-weight:700;" onclick="sendStudentAiReportWa()"><i class="fab fa-whatsapp"></i> 📱 Send to WhatsApp</button>
