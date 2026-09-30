@@ -23,13 +23,24 @@ class GeminiAiProvider implements AiProviderInterface {
     }
 
     public static function resolveApiKey(?PDO $pdo = null): ?string {
-        // 1. Check environment variable
+        // 1. Check application secret constant (config/secrets.php pattern)
+        if (defined('GEMINI_API_KEY')) {
+            $constKey = constant('GEMINI_API_KEY');
+            if (!empty($constKey) && is_string($constKey)) {
+                return trim($constKey);
+            }
+        }
+
+        // 2. Check environment variable
         $envKey = getenv('GEMINI_API_KEY');
+        if (empty($envKey)) {
+            $envKey = $_ENV['GEMINI_API_KEY'] ?? ($_SERVER['GEMINI_API_KEY'] ?? null);
+        }
         if (!empty($envKey) && is_string($envKey)) {
             return trim($envKey);
         }
 
-        // 2. Check admin_settings if PDO available
+        // 3. Check admin_settings if PDO available (backward compatibility fallback)
         if ($pdo instanceof PDO) {
             try {
                 $stmt = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'gemini_api_key' LIMIT 1");
@@ -45,6 +56,7 @@ class GeminiAiProvider implements AiProviderInterface {
 
         return null;
     }
+
 
     public function isConfigured(): bool {
         return !empty($this->apiKey);

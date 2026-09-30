@@ -1555,13 +1555,7 @@ function store_ld_quality_assessment(
     $aiStatus = 'pending';
     $aiResult = null;
     try {
-        $hasKey = false;
-        try {
-            $s = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'gemini_api_key' LIMIT 1");
-            $s->execute();
-            $k = $s->fetchColumn();
-            $hasKey = !empty($k) && trim((string)$k) !== '';
-        } catch (Exception $e) {}
+        $hasKey = GeminiAiProvider::resolveApiKey($pdo) !== null;
 
         if ($aiService !== null || $hasKey) {
             $service = $aiService ?: new QualityAssessmentAiService($pdo);
@@ -1855,13 +1849,7 @@ function replace_ld_quality_assessment(
     $aiStatus = 'pending';
     $aiResult = null;
     try {
-        $hasKey = false;
-        try {
-            $s = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'gemini_api_key' LIMIT 1");
-            $s->execute();
-            $k = $s->fetchColumn();
-            $hasKey = !empty($k) && trim((string)$k) !== '';
-        } catch (Exception $e) {}
+        $hasKey = GeminiAiProvider::resolveApiKey($pdo) !== null;
 
         if ($aiService !== null || $hasKey) {
             $service = $aiService ?: new QualityAssessmentAiService($pdo);
