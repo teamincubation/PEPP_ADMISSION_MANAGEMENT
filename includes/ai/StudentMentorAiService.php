@@ -65,7 +65,8 @@ class StudentMentorAiService {
         // 1. Resolve student record
         $stmt = $pdo->prepare("
             SELECT user_id, name, email, phone, whatsapp_number, whatsapp_country_code,
-                   pepp_course, pepp_academic_year, student_status, user_photo, status
+                   pepp_course, pepp_academic_year, student_status, user_photo, status,
+                   joined_date, approval_date, created_at
             FROM users
             WHERE (user_id = ? OR LOWER(email) = LOWER(?)) AND status = 'approved'
             LIMIT 1
@@ -160,20 +161,86 @@ class StudentMentorAiService {
         }
 
         // 8. Live Session performance
-        $liveSessionsTotal = 0;
-        $liveSessionsAttended = 0;
-        if (!empty($planAnalytics['learning_highlights']) && is_array($planAnalytics['learning_highlights'])) {
-            foreach ($planAnalytics['learning_highlights'] as $lh) {
-                if (($lh['type_category'] ?? '') === 'live_session') {
-                    $liveSessionsTotal++;
-                    if (!empty($lh['is_completed'])) {
-                        $liveSessionsAttended++;
-                    }
+        $liveData = $planAnalytics['live_sessions'] ?? null;
+        if (!empty($liveData) && is_array($liveData) && isset($liveData['has_data'])) {
+            $hasLiveSessions = (bool)$liveData['has_data'];
+            $liveScheduled = (int)($liveData['scheduled_sessions'] ?? $liveData['total_sessions'] ?? 0);
+            $liveEligible = (int)($liveData['eligible_sessions'] ?? $liveScheduled);
+            $liveAttended = (int)($liveData['attended_sessions'] ?? 0);
+            $liveMissed = (int)($liveData['missed_sessions'] ?? 0);
+            $livePending = (int)($liveData['pending_sessions'] ?? 0);
+            $livePreAdmission = (int)($liveData['pre_admission_sessions'] ?? 0);
+            $liveAttendancePct = $liveData['attendance_percentage'] ?? null;
+            $sessionsBreakdown = [];
+            if (!empty($liveData['sessions']) && is_array($liveData['sessions'])) {
+                foreach ($liveData['sessions'] as $s) {
+                    $sessionsBreakdown[] = [
+                        'title' => $s['title'] ?? 'Live Session',
+                        'date' => $s['date'] ?? null,
+                        'status' => $s['status'] ?? 'Pending',
+                        'is_completed' => !empty($s['is_completed']),
+                        'is_pre_admission' => !empty($s['is_pre_admission'])
+                    ];
                 }
             }
+        } else {
+            // Defensive fallback using learning_highlights['all_activities']
+            $allActs = $planAnalytics['learning_highlights']['all_activities'] ?? [];
+            $liveScheduled = 0;
+            $liveEligible = 0;
+            $liveAttended = 0;
+            $liveMissed = 0;
+            $livePending = 0;
+            $livePreAdmission = 0;
+            $sessionsBreakdown = [];
+            foreach ($allActs as $act) {
+                if (($act['type_category'] ?? '') === 'live_session') {
+                    $liveScheduled++;
+                    $isComp = !empty($act['is_completed']);
+                    $isPre = !empty($act['is_pre_admission']);
+                    $isOver = !empty($act['is_overdue']);
+
+                    if ($isPre) {
+                        $livePreAdmission++;
+                        $status = $isComp ? 'Attended' : 'Pre-admission';
+                    } else {
+                        $liveEligible++;
+                        if ($isComp) {
+                            $liveAttended++;
+                            $status = 'Attended';
+                        } elseif ($isOver) {
+                            $liveMissed++;
+                            $status = 'Missed';
+                        } else {
+                            $livePending++;
+                            $status = 'Pending';
+                        }
+                    }
+
+                    $sessionsBreakdown[] = [
+                        'title' => $act['activity_title'] ?? $act['topic'] ?? 'Live Session',
+                        'date' => $act['activity_date'] ?? null,
+                        'status' => $status,
+                        'is_completed' => $isComp,
+                        'is_pre_admission' => $isPre
+                    ];
+                }
+            }
+            $hasLiveSessions = ($liveScheduled > 0);
+            $liveAttendancePct = ($liveEligible > 0) ? (int)round(($liveAttended / $liveEligible) * 100) : null;
         }
-        $hasLiveSessions = ($liveSessionsTotal > 0);
-        $liveAttendancePct = $hasLiveSessions ? (int)round(($liveSessionsAttended / $liveSessionsTotal) * 100) : null;
+
+        $canonicalLiveSessions = [
+            'has_data' => $hasLiveSessions,
+            'scheduled_sessions' => $liveScheduled,
+            'eligible_sessions' => $liveEligible,
+            'attended_sessions' => $liveAttended,
+            'missed_sessions' => $liveMissed,
+            'pending_sessions' => $livePending,
+            'pre_admission_sessions' => $livePreAdmission,
+            'attendance_percentage' => $liveAttendancePct,
+            'sessions_breakdown' => $sessionsBreakdown
+        ];
 
         // 9. Cohort & Ranking
         $cohortRanking = $planAnalytics['cohort_ranking'] ?? null;
@@ -182,6 +249,19 @@ class StudentMentorAiService {
         $cohortSize = $currRankStudent['cohort_size'] ?? ($cohortRanking['cohort_size'] ?? null);
         $percentileText = $currRankStudent['percentile_text'] ?? null;
         $standingBadge = $currRankStudent['badge'] ?? null;
+
+        $enrollmentContext = $planAnalytics['enrollment_context'] ?? [
+            'has_data' => false,
+            'joined_date' => null,
+            'plan_start_date' => null,
+            'plan_end_date' => null,
+            'report_end_date' => null,
+            'total_plan_days' => $calendarDays,
+            'days_enrolled_in_plan' => $calendarDays,
+            'is_partial_period_participant' => false,
+            'participation_tenure_category' => 'FULL_PERIOD',
+            'tenure_summary' => 'Enrolled for the full study-plan period.'
+        ];
 
         return [
             'student_profile' => [
@@ -193,12 +273,22 @@ class StudentMentorAiService {
                 'study_plan_id' => $studyPlanId,
                 'status' => $student['student_status'] ?: 'Active'
             ],
+            'enrollment_context' => $enrollmentContext,
             'checklist_audit' => [
                 'total_tasks' => $totalTasks,
                 'completed_tasks' => $completedTasks,
                 'pending_tasks' => $pendingTasks,
                 'overdue_tasks' => $overdueTasks,
                 'completion_percentage' => $completionPct,
+                'raw_total_tasks' => (int)($planAnalytics['raw_total_tasks'] ?? $totalTasks),
+                'raw_completed_tasks' => (int)($planAnalytics['raw_completed_tasks'] ?? $completedTasks),
+                'raw_pending_tasks' => (int)($planAnalytics['raw_pending_tasks'] ?? $pendingTasks),
+                'raw_overdue_tasks' => (int)($planAnalytics['raw_overdue_tasks'] ?? $overdueTasks),
+                'eligible_tasks_since_joining' => (int)($planAnalytics['eligible_tasks_since_joining'] ?? $totalTasks),
+                'completed_eligible_tasks' => (int)($planAnalytics['completed_eligible_tasks'] ?? $completedTasks),
+                'pending_eligible_tasks' => (int)($planAnalytics['pending_eligible_tasks'] ?? $pendingTasks),
+                'overdue_eligible_tasks' => (int)($planAnalytics['overdue_eligible_tasks'] ?? $overdueTasks),
+                'pre_admission_tasks_count' => (int)($planAnalytics['pre_admission_tasks_count'] ?? 0),
                 'current_streak' => $activeStreak,
                 'longest_streak' => $longestStreak,
                 'active_study_days' => $activeDays,
@@ -212,16 +302,12 @@ class StudentMentorAiService {
                 'has_data' => $hasMegaTests,
                 'eligible_tests' => $totalMegaTests,
                 'attended_tests' => $attendedMegaTests,
+                'pre_admission_tests' => (int)($planAnalytics['pre_admission_mega_tests'] ?? 0),
                 'attendance_percentage' => $megaAttendanceRate,
                 'average_score_percentage' => $megaTestAvgScore,
                 'tests_breakdown' => array_slice($chapterAssessments, 0, 5)
             ],
-            'live_sessions' => [
-                'has_data' => $hasLiveSessions,
-                'eligible_sessions' => $liveSessionsTotal,
-                'attended_sessions' => $liveSessionsAttended,
-                'attendance_percentage' => $liveAttendancePct
-            ],
+            'live_sessions' => $canonicalLiveSessions,
             'cohort_ranking' => [
                 'has_data' => ($studyPlanRank !== null && $cohortSize !== null),
                 'study_plan_rank' => $studyPlanRank,
@@ -230,6 +316,31 @@ class StudentMentorAiService {
                 'standing_badge' => $standingBadge
             ]
         ];
+    }
+
+    /**
+     * Sanitizes long dashes (EM DASH U+2014, EN DASH U+2013, HORIZONTAL BAR U+2015) to ASCII hyphen.
+     * Prevents any em dash characters from appearing in WhatsApp or AI outputs.
+     */
+    public static function sanitizeDashes(string $text): string {
+        return str_replace(["\xE2\x80\x94", "\xE2\x80\x93", "\xE2\x80\x95", '—', '–', '―'], '-', $text);
+    }
+
+    /**
+     * Recursively sanitizes dashes across arrays and strings.
+     */
+    public static function sanitizeDashesDeep($val) {
+        if (is_string($val)) {
+            return self::sanitizeDashes($val);
+        }
+        if (is_array($val)) {
+            $cleaned = [];
+            foreach ($val as $k => $v) {
+                $cleaned[$k] = self::sanitizeDashesDeep($v);
+            }
+            return $cleaned;
+        }
+        return $val;
     }
 
     /**
@@ -248,17 +359,43 @@ CRITICAL SAFETY & TRUTH IN REPORTING RULES:
 2. Never invent test scores, attendance numbers, streaks, rankings, or dates.
 3. Never claim you watched lectures or videos, or independently verified classroom attendance.
 4. Never alter deterministic values (e.g. if completed tasks is 97, use exactly 97).
-5. If Mega Test data is absent or has_data is false, state clearly: "No published mega tests for this study plan".
-6. If Live Session data is absent or has_data is false, state clearly: "Live sessions not recorded for this study plan".
-7. If ranking data is unavailable, state clearly: "Ranking data unavailable". Do NOT estimate or infer a rank.
-8. Output length: 500 to 900 words maximum. Be concise, highly readable, and mentor-friendly.
+5. ABSOLUTE FORMATTING RULE: NEVER use an em dash character ("—") or en dash ("–") anywhere in your output. Always use a standard hyphen ("-") with spaces if separating thoughts.
+6. ENROLLMENT TENURE AWARENESS:
+   - Check the `enrollment_context` object.
+   - If `is_partial_period_participant` is true:
+     - The student enrolled after the study plan start date.
+     - Never describe pre-admission activities as missed student obligations, overdue items, or student deficits.
+     - Evaluate checklist tasks and consistency in the context of their actual enrolled participation window.
+     - Do NOT display technical category names like "PARTIAL_PERIOD" to the student; use natural mentor-facing wording (e.g. "Joined on [date], actively participating for [X] days").
+7. LIVE SESSION RULES:
+   - Never claim a student missed a session that occurred before admission. Pre-admission sessions (marked 'Pre-admission' or `is_pre_admission = true`) are excluded from attendance denominator and missed session count.
+   - Distinguish carefully:
+     A. If `has_data` is false or no records exist: state "No live-session records are available for this study plan."
+     B. If sessions exist but attendance data is unavailable: state "Live sessions are recorded in the study plan, but attendance data is unavailable."
+     C. If sessions exist and attendance is recorded: show Attendance percentage, Attended, Missed, and Pending.
+8. MEGA TESTS:
+   - If `has_data` is false: state "No published mega tests for this study plan".
+   - If tests occurred before admission, they are not treated as student missed tests.
+9. COHORT RANKING / STANDING:
+   - Do NOT invent or infer standing titles like "Elite Performer" or "Top Performer" unless explicitly given in `standing_badge`.
+   - If ranking is available without a specific badge, report "Cohort Rank: #[rank] / [cohort_size]". If unavailable, state "Ranking data unavailable".
+10. RECOMMENDATION CONTRADICTION PROTECTION (CRITICAL):
+   - If `pending_tasks` == 0: NEVER recommend completing pending tasks.
+   - If `overdue_tasks` == 0: NEVER recommend clearing overdue tasks or include overdue warnings.
+   - If `missed_sessions` == 0: NEVER recommend improving live-session attendance.
+   - If no live-session data exists: DO NOT imply poor attendance.
+   - If no Mega Test data exists: DO NOT imply test weakness.
+   - If student has a strong streak (>= 5 days): DO NOT give generic "build a streak" advice; encourage keeping the active streak going.
+   - If student has high completion (>= 90% or pending == 0): recommendations must focus on the next meaningful improvement (revision, notes synthesis, preparing for upcoming assessments).
+   - No generic template recommendation may contradict the KPI snapshot!
+11. Output length: 500 to 900 words maximum. Be concise, highly readable, and mentor-friendly.
 
 OUTPUT REQUIREMENTS:
 You MUST respond with a single, valid raw JSON object matching this exact schema:
 {
-  "overall_status": "Elite Performer"|"Strong Performer"|"Good"|"Average"|"Needs Attention"|"Critical",
+  "overall_status": "Strong Performer"|"Good"|"Average"|"Needs Attention"|"Critical",
   "status_summary": "One clear sentence classifying the student's status strictly from the data.",
-  "wa_text": "The complete WhatsApp report formatted with emojis, bold (*text*), italic (_text_), bullet points (•), and line breaks. Must follow the 10-section structure below.",
+  "wa_text": "The complete WhatsApp report formatted with emojis, bold (*text*), italic (_text_), bullet points (•), and line breaks. Must follow the structure below.",
   "snapshot": {
     "checklist_pct": number,
     "completed": number,
@@ -274,12 +411,11 @@ You MUST respond with a single, valid raw JSON object matching this exact schema
   "ranking_insights": ["string"],
   "appreciation": ["1 to 3 data-supported appreciation points"],
   "warnings": ["0 to 3 data-supported warnings, empty if none"],
-  "recommendations": ["3 to 5 concise, prioritized, practical actions"],
-  "mentor_note": "One short personalized, data-supported sentence."
+  "recommendations": ["3 to 5 concise, prioritized, non-contradictory actions"],
+  "mentor_note": "One short personalized, data-supported sentence without em dash."
 }
 
 STRUCTURE FOR `wa_text` (Must follow this exact 10-section layout):
-
 1. Header:
 🎓 *STUDENT PERFORMANCE AI ANALYSIS*
 
@@ -288,7 +424,10 @@ STRUCTURE FOR `wa_text` (Must follow this exact 10-section layout):
 📅 *Study Plan:* [Selected Study Plan]
 📊 *Overall Status:* [Overall Status]
 
-2. Quick Performance Snapshot:
+2. Enrollment Context (Include ONLY when student joined after plan start date):
+📅 *Enrollment Context:* Joined on [Date] ([X] days enrolled in plan window). Evaluated against eligible activities since joining.
+
+3. Quick Performance Snapshot:
 📌 *Checklist:* [XX]%
 ✅ Completed: [X]
 ⏳ Pending: [X]
@@ -296,49 +435,50 @@ STRUCTURE FOR `wa_text` (Must follow this exact 10-section layout):
 🔥 Streak: [X] days
 📅 Consistency: [XX]%
 
-3. Academic / Study Plan Analysis:
-🟢 *What is going well*
+4. Key Strengths:
+🟢 *Key Strengths*
 • [Data-backed strength]
 • [Data-backed strength]
 
-🟠 *Needs attention*
-• [Data-backed area needing attention or "None flagged"]
+5. Areas to Watch:
+🟠 *Areas to Watch*
+• [Data-backed area needing attention or "All scheduled tasks completed on track"]
 
-4. Mega Test Performance:
+6. Mega Test Performance:
 📝 *MEGA TESTS*
-• Attendance: [XX]% (or "Not scheduled/attended")
+• Attendance: [XX]% (or "No published mega tests for this study plan")
 • Average Score: [XX]% (or "No assessment scores recorded")
 • Study Plan Rank: [Rank or "Ranking data unavailable"]
-• Key note: [Brief data-supported note]
 
-5. Live Session Attendance:
+7. Live Session Attendance:
 🎥 *LIVE SESSIONS*
-• Attendance: [XX]% (or "Live sessions not recorded for this plan")
-• Attended: [X / Y] (or "N/A")
-• Note: [Data-backed advice]
+• Attendance: [XX]% (or "No live-session records are available for this study plan" or "Live sessions are recorded in the study plan, but attendance data is unavailable")
+• Attended: [X / Y] (or omit if no records)
+• Missed / Pending: [X missed, Y pending] (omit if 0 missed and 0 pending)
+• Note: [Data-backed note if applicable]
 
-6. Cohort / Overall Ranking:
+8. Cohort / Overall Ranking:
 🏆 *RANKING*
 • Study Plan Rank: [#X / Y or "Ranking data unavailable"]
 • Standing: [Standing or percentile]
 
-7. Appreciation:
+9. Appreciation:
 🌟 *APPRECIATION*
 • [1-3 specific data-supported points]
 
-8. Important Warnings:
+10. Important Warnings:
 ⚠️ *IMPORTANT*
-• [Only include if actual overdue tasks, low attendance, or low consistency exist. If none, write "• No critical warnings at this time."]
+• [Only include if genuine overdue tasks, low attendance, or low consistency exist. If none, write "• No critical warnings at this time."]
 
-9. Mentor Recommendations:
+11. Mentor Recommendations:
 🎯 *RECOMMENDED ACTIONS*
 1. [Action 1]
 2. [Action 2]
 3. [Action 3]
 
-10. Closing:
+12. Mentor Note:
 💡 *Mentor Note:*
-[One short personalized, encouraging sentence.]
+[One short personalized, encouraging sentence without any em dash.]
 PROMPT;
 
         return [
@@ -383,6 +523,7 @@ PROMPT;
                 // If using MockAiProvider, handle custom mock response
                 $mockRes = $this->provider->analyzeAssessment($canonicalData['checklist_audit'], $canonicalData['student_profile']);
                 if (isset($mockRes['wa_text'])) {
+                    $mockRes = self::sanitizeDashesDeep($mockRes);
                     return array_merge($canonicalData, $mockRes);
                 }
                 return self::buildFallbackResponse($canonicalData, "Mock provider response generated.");
@@ -406,11 +547,67 @@ PROMPT;
                 return self::buildFallbackResponse($canonicalData, "AI output failed format validation.");
             }
 
+            // Contradiction prevention post-check on AI-generated recommendations and warnings
+            $chk = $canonicalData['checklist_audit'];
+            $live = $canonicalData['live_sessions'];
+            $pendingCount = $chk['pending_eligible_tasks'] ?? $chk['pending_tasks'];
+            $overdueCount = $chk['overdue_eligible_tasks'] ?? $chk['overdue_tasks'];
+            $missedLive = $live['missed_sessions'] ?? 0;
+
+            if (isset($parsed['recommendations']) && is_array($parsed['recommendations'])) {
+                $filteredRecs = [];
+                foreach ($parsed['recommendations'] as $rec) {
+                    $recLower = strtolower($rec);
+                    if ($pendingCount === 0 && (str_contains($recLower, 'pending') || str_contains($recLower, 'complete pending') || str_contains($recLower, 'checklist item'))) {
+                        continue;
+                    }
+                    if ($overdueCount === 0 && (str_contains($recLower, 'overdue') || str_contains($recLower, 'clear overdue') || str_contains($recLower, 'backlog'))) {
+                        continue;
+                    }
+                    if ($missedLive === 0 && (str_contains($recLower, 'missed live') || str_contains($recLower, 'improve live') || str_contains($recLower, 'missed session'))) {
+                        continue;
+                    }
+                    if (($chk['current_streak'] >= 5) && (str_contains($recLower, 'build a streak') || str_contains($recLower, 'start a streak') || str_contains($recLower, 'begin a daily streak'))) {
+                        continue;
+                    }
+                    $filteredRecs[] = $rec;
+                }
+                if (empty($filteredRecs)) {
+                    if ($chk['completion_percentage'] >= 90 || $pendingCount === 0) {
+                        $filteredRecs[] = "Focus on comprehensive topic revision, notes consolidation, and exam preparation.";
+                        $filteredRecs[] = "Review chapter summaries and attempt additional practice assessments.";
+                    } else {
+                        $filteredRecs[] = "Continue following your structured study plan and maintain daily learning habits.";
+                    }
+                }
+                $parsed['recommendations'] = $filteredRecs;
+            }
+
+            if (isset($parsed['warnings']) && is_array($parsed['warnings'])) {
+                $filteredWarns = [];
+                foreach ($parsed['warnings'] as $w) {
+                    $wLower = strtolower($w);
+                    if ($overdueCount === 0 && str_contains($wLower, 'overdue')) {
+                        continue;
+                    }
+                    if ($missedLive === 0 && str_contains($wLower, 'missed')) {
+                        continue;
+                    }
+                    $filteredWarns[] = $w;
+                }
+                $parsed['warnings'] = !empty($filteredWarns) ? $filteredWarns : ["No critical warnings at this time."];
+            }
+
+            // Strict em dash sanitization across entire parsed response
+            $parsed = self::sanitizeDashesDeep($parsed);
+            $waText = self::sanitizeDashes(trim((string)$parsed['wa_text']));
+            $parsed['wa_text'] = $waText;
+
             return [
                 'success' => true,
                 'data' => $canonicalData,
                 'analysis' => $parsed,
-                'wa_text' => trim((string)$parsed['wa_text']),
+                'wa_text' => $waText,
                 'model' => $this->provider->getModelName(),
                 'provider' => $this->provider->getProviderName(),
                 'generated_at' => date('d M Y h:i A')
@@ -427,6 +624,7 @@ PROMPT;
      */
     public static function buildFallbackResponse(array $canonicalData, string $reason): array {
         $p = $canonicalData['student_profile'];
+        $ec = $canonicalData['enrollment_context'] ?? [];
         $c = $canonicalData['checklist_audit'];
         $m = $canonicalData['mega_tests'];
         $l = $canonicalData['live_sessions'];
@@ -437,53 +635,175 @@ PROMPT;
         $megaAttText = $m['has_data'] && $m['attendance_percentage'] !== null ? "{$m['attendance_percentage']}%" : 'Not scheduled/attended';
         $megaScoreText = $m['has_data'] && $m['average_score_percentage'] !== null ? "{$m['average_score_percentage']}%" : 'No assessment scores recorded';
         $rankText = $r['has_data'] ? "#{$r['study_plan_rank']} / {$r['cohort_size']}" : 'Ranking data unavailable';
-        $liveText = $l['has_data'] ? "{$l['attended_sessions']}/{$l['eligible_sessions']} ({$l['attendance_percentage']}%)" : 'Live sessions not recorded for this plan';
+
+        // Live Sessions Section
+        if ($l['has_data'] && $l['scheduled_sessions'] > 0) {
+            $liveLines = [
+                "• Attendance: {$l['attended_sessions']}/{$l['eligible_sessions']} ({$l['attendance_percentage']}%)",
+                "• Attended: {$l['attended_sessions']}",
+                "• Missed: {$l['missed_sessions']}",
+                "• Pending: {$l['pending_sessions']}"
+            ];
+            if (!empty($l['pre_admission_sessions']) && $l['pre_admission_sessions'] > 0) {
+                $liveLines[] = "• Pre-admission: {$l['pre_admission_sessions']} session(s) excluded from attendance calculation";
+            }
+            $unattendedSessions = [];
+            if (!empty($l['sessions_breakdown']) && is_array($l['sessions_breakdown'])) {
+                foreach ($l['sessions_breakdown'] as $sb) {
+                    if (empty($sb['is_completed']) && empty($sb['is_pre_admission']) && ($sb['status'] ?? '') === 'Missed') {
+                        $dtStr = !empty($sb['date']) ? " ({$sb['date']})" : '';
+                        $unattendedSessions[] = "  - {$sb['title']}{$dtStr} [Missed]";
+                    }
+                }
+            }
+            if (!empty($unattendedSessions)) {
+                $liveLines[] = "• Attention required on:\n" . implode("\n", array_slice($unattendedSessions, 0, 4));
+            }
+            $liveSectionText = implode("\n", $liveLines);
+        } elseif ($l['has_data'] && $l['scheduled_sessions'] === 0) {
+            $liveSectionText = "• Status: Live sessions are recorded in the study plan, but attendance data is unavailable.";
+        } else {
+            $liveSectionText = "• Status: No live-session records are available for this study plan.";
+        }
+
+        // Enrollment Context line (included only when student is partial-period or recently joined)
+        $isPartial = !empty($ec['is_partial_period_participant']);
+        $enrollmentContextLine = "";
+        if ($isPartial && !empty($ec['joined_date'])) {
+            $enrollmentContextLine = "📅 *Enrollment Context:* Joined on {$ec['joined_date']} ({$ec['days_enrolled_in_plan']} days enrolled in plan window). Evaluated against eligible activities since joining.\n\n";
+        }
+
+        // Key Strengths
+        $strengthsList = [];
+        $compEligible = $c['completed_eligible_tasks'] ?? $c['completed_tasks'];
+        $eligibleTasks = $c['eligible_tasks_since_joining'] ?? $c['total_tasks'];
+        if ($compEligible > 0) {
+            $strengthsList[] = "• Completed {$compEligible} out of {$eligibleTasks} eligible prescribed tasks.";
+        }
+        if ($c['current_streak'] > 0) {
+            $strengthsList[] = "• Maintained an active {$c['current_streak']}-day learning streak.";
+        }
+        if (empty($strengthsList)) {
+            $strengthsList[] = "• Enrolled in {$p['selected_study_plan']} and ready to progress.";
+        }
+
+        // Areas to Watch
+        $overdueCount = $c['overdue_eligible_tasks'] ?? $c['overdue_tasks'];
+        $pendingCount = $c['pending_eligible_tasks'] ?? $c['pending_tasks'];
+        $areasToWatch = [];
+        if ($overdueCount > 0) {
+            $areasToWatch[] = "• {$overdueCount} overdue task(s) require immediate clearance.";
+        } elseif ($pendingCount > 0) {
+            $areasToWatch[] = "• {$pendingCount} task(s) remaining to be completed in the study plan.";
+        } else {
+            $areasToWatch[] = "• All scheduled study plan tasks completed on track.";
+        }
+
+        // Important Notes / Warnings
+        $warnings = [];
+        if ($overdueCount > 0) {
+            $warnings[] = "• Clear {$overdueCount} overdue checklist item(s) to avoid study plan backlog.";
+        }
+        if ($l['has_data'] && $l['missed_sessions'] > 0) {
+            $warnings[] = "• {$l['missed_sessions']} live session(s) missed - review recordings.";
+        }
+        if (empty($warnings)) {
+            $warnings[] = "• No critical warnings at this time.";
+        }
+
+        // Recommendations (STRICT CONTRADICTION PROTECTION)
+        $recommendations = [];
+        if ($pendingCount > 0) {
+            $recommendations[] = "Complete remaining {$pendingCount} checklist item(s) in chronological sequence.";
+        }
+        if ($overdueCount > 0) {
+            $recommendations[] = "Clear {$overdueCount} overdue task(s) promptly to stay aligned with the syllabus.";
+        }
+        if ($l['has_data'] && $l['missed_sessions'] > 0) {
+            $recommendations[] = "Watch recordings for the {$l['missed_sessions']} missed live session(s) and attend upcoming sessions.";
+        }
+        if ($c['current_streak'] >= 5) {
+            $recommendations[] = "Maintain your strong {$c['current_streak']}-day study streak across the upcoming study plan weeks.";
+        } elseif ($c['consistency_percentage'] < 50 || $c['current_streak'] < 3) {
+            $recommendations[] = "Establish a regular daily study habit to improve consistency.";
+        }
+        if ($c['completion_percentage'] >= 90 || $pendingCount === 0) {
+            $recommendations[] = "Engage in comprehensive topic revision, notes consolidation, and exam preparation.";
+            $recommendations[] = "Review chapter summaries and attempt additional practice assessments.";
+        }
+        if (empty($recommendations)) {
+            $recommendations[] = "Continue daily structured study and track progress regularly.";
+            $recommendations[] = "Review completed chapters and reinforce core concepts.";
+        }
+
+        // Limit to 3-4 distinct recommendations
+        $recommendations = array_slice(array_unique($recommendations), 0, 4);
+
+        $recLines = [];
+        foreach ($recommendations as $idx => $rItem) {
+            $num = $idx + 1;
+            $recLines[] = "{$num}. {$rItem}";
+        }
+
+        $megaLines = [];
+        if ($m['has_data']) {
+            $megaLines[] = "• Attendance: {$megaAttText}";
+            $megaLines[] = "• Average Score: {$megaScoreText}";
+            $megaLines[] = "• Study Plan Rank: {$rankText}";
+            if (!empty($m['pre_admission_tests']) && $m['pre_admission_tests'] > 0) {
+                $megaLines[] = "• Note: {$m['pre_admission_tests']} pre-admission test(s) excluded from attendance calculation";
+            }
+        } else {
+            $megaLines[] = "• Status: No published mega tests for this study plan";
+        }
+        $megaSectionText = implode("\n", $megaLines);
 
         $waText = "🎓 *STUDENT PERFORMANCE AI ANALYSIS*\n\n"
             . "👤 *Student:* {$p['name']}\n"
             . "📚 *Course:* {$p['course']}\n"
             . "📅 *Study Plan:* {$p['selected_study_plan']}\n"
             . "📊 *Overall Status:* {$overallStatus}\n\n"
+            . $enrollmentContextLine
             . "📌 *Checklist:* {$c['completion_percentage']}%\n"
             . "✅ Completed: {$c['completed_tasks']}\n"
             . "⏳ Pending: {$c['pending_tasks']}\n"
             . "⚠️ Overdue: {$c['overdue_tasks']}\n"
             . "🔥 Streak: {$c['current_streak']} days\n"
             . "📅 Consistency: {$c['consistency_percentage']}%\n\n"
-            . "🟢 *What is going well*\n"
-            . "• Completed {$c['completed_tasks']} out of {$c['total_tasks']} prescribed tasks.\n"
-            . "• Maintained a {$c['current_streak']}-day active learning streak.\n\n"
-            . "🟠 *Needs attention*\n"
-            . ($c['overdue_tasks'] > 0 ? "• {$c['overdue_tasks']} overdue tasks require immediate clearance.\n" : "• Maintain continuous daily study habit.\n")
-            . "\n📝 *MEGA TESTS*\n"
-            . "• Attendance: {$megaAttText}\n"
-            . "• Average Score: {$megaScoreText}\n"
-            . "• Study Plan Rank: {$rankText}\n\n"
+            . "🟢 *Key Strengths*\n"
+            . implode("\n", $strengthsList) . "\n\n"
+            . "🟠 *Areas to Watch*\n"
+            . implode("\n", $areasToWatch) . "\n\n"
+            . "📝 *MEGA TESTS*\n"
+            . $megaSectionText . "\n\n"
             . "🎥 *LIVE SESSIONS*\n"
-            . "• Status: {$liveText}\n\n"
+            . "{$liveSectionText}\n\n"
             . "🏆 *RANKING*\n"
             . "• Study Plan Rank: {$rankText}\n"
             . ($r['has_data'] && !empty($r['standing_badge']) ? "• Standing: {$r['standing_badge']}\n" : "")
             . "\n🌟 *APPRECIATION*\n"
-            . "• Consistent participation in active study-plan activities.\n"
-            . "• Dedicated effort demonstrated in {$p['selected_study_plan']}.\n\n"
-            . "⚠️ *IMPORTANT*\n"
-            . ($c['overdue_tasks'] > 0 ? "• Clear {$c['overdue_tasks']} overdue checklist item(s) to avoid study plan backlog.\n" : "• No critical warnings at this time.\n")
-            . "\n🎯 *RECOMMENDED ACTIONS*\n"
-            . "1. Complete pending checklist items in chronological sequence.\n"
-            . "2. Maintain daily study streak to improve consistency score.\n"
-            . "3. Participate actively in upcoming assessments and live sessions.\n\n"
+            . "• Dedicated effort demonstrated in {$p['selected_study_plan']}.\n"
+            . ($c['current_streak'] >= 3 ? "• Active learning streak maintained with discipline.\n" : "• Ongoing commitment to structured learning.\n")
+            . "\n⚠️ *IMPORTANT*\n"
+            . implode("\n", $warnings) . "\n\n"
+            . "🎯 *RECOMMENDED ACTIONS*\n"
+            . implode("\n", $recLines) . "\n\n"
             . "💡 *Mentor Note:*\n"
-            . "Stay focused and disciplined—steady daily effort is the key to academic excellence!";
+            . "Stay focused and disciplined - steady daily effort is the key to academic excellence!";
+
+        // Final deterministic dash sanitization
+        $waText = self::sanitizeDashes($waText);
+        $cleanRecs = array_map([self::class, 'sanitizeDashes'], $recommendations);
+        $cleanWarnings = array_map([self::class, 'sanitizeDashes'], $warnings);
 
         return [
             'success' => true,
             'is_fallback' => true,
-            'fallback_reason' => $reason,
+            'fallback_reason' => self::sanitizeDashes($reason),
             'data' => $canonicalData,
             'analysis' => [
                 'overall_status' => $overallStatus,
-                'status_summary' => "Student has completed {$c['completed_tasks']}/{$c['total_tasks']} tasks ({$c['completion_percentage']}%) with a {$c['current_streak']}-day streak.",
+                'status_summary' => self::sanitizeDashes("Student has completed {$c['completed_tasks']}/{$c['total_tasks']} tasks ({$c['completion_percentage']}%) with a {$c['current_streak']}-day streak."),
                 'wa_text' => $waText,
                 'snapshot' => [
                     'checklist_pct' => $c['completion_percentage'],
@@ -493,24 +813,17 @@ PROMPT;
                     'streak' => $c['current_streak'],
                     'consistency_pct' => $c['consistency_percentage']
                 ],
-                'academic_strengths' => [
-                    "Completed {$c['completed_tasks']} tasks in {$p['selected_study_plan']}",
-                    "Active study streak of {$c['current_streak']} days"
-                ],
-                'academic_weaknesses' => $c['overdue_tasks'] > 0 ? ["{$c['overdue_tasks']} overdue tasks pending completion"] : ["Maintain continuous momentum"],
-                'mega_test_insights' => [$megaAttText !== 'Not scheduled/attended' ? "Mega test attendance at {$megaAttText}" : "No mega tests recorded"],
-                'live_session_insights' => [$liveText],
+                'academic_strengths' => array_map([self::class, 'sanitizeDashes'], $strengthsList),
+                'academic_weaknesses' => array_map([self::class, 'sanitizeDashes'], $areasToWatch),
+                'mega_test_insights' => [$m['has_data'] ? ($megaAttText !== 'Not scheduled/attended' ? "Mega test attendance at {$megaAttText}" : "No mega tests recorded") : "No published mega tests for this study plan"],
+                'live_session_insights' => [$l['has_data'] ? "Attended {$l['attended_sessions']}/{$l['eligible_sessions']} live sessions ({$l['attendance_percentage']}%)" : "No live-session records are available for this study plan"],
                 'ranking_insights' => [$rankText],
                 'appreciation' => [
                     "Consistent engagement with {$p['selected_study_plan']}",
-                    "Active learning streak maintained"
+                    "Active learning progress maintained"
                 ],
-                'warnings' => $c['overdue_tasks'] > 0 ? ["{$c['overdue_tasks']} overdue items pending"] : ["No critical warnings"],
-                'recommendations' => [
-                    "Clear pending checklist items",
-                    "Maintain continuous daily study streak",
-                    "Participate in upcoming assessments"
-                ],
+                'warnings' => $cleanWarnings,
+                'recommendations' => $cleanRecs,
                 'mentor_note' => "Steady daily effort is the key to academic excellence!"
             ],
             'wa_text' => $waText,

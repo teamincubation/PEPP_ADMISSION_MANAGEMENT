@@ -137,7 +137,8 @@ class StudentStudyPlanAnalytics {
 
         // 1. Resolve student details (Strongest student identity rule)
         $stmt_user = $pdo->prepare("
-            SELECT user_id, email, name, pepp_course, pepp_academic_year, user_photo, student_status
+            SELECT user_id, email, name, pepp_course, pepp_academic_year, user_photo, student_status,
+                   joined_date, approval_date, created_at
             FROM users
             WHERE (user_id = ? OR LOWER(email) = LOWER(?)) AND status = 'approved'
             LIMIT 1
@@ -149,6 +150,23 @@ class StudentStudyPlanAnalytics {
         }
         $email = $user['email'];
         $user_id = $user['user_id'];
+
+        // Resolve canonical effective joined date: 1. joined_date, 2. DATE(approval_date), 3. DATE(created_at)
+        $raw_joined = !empty($user['joined_date']) ? trim((string)$user['joined_date']) : '';
+        $raw_approval = !empty($user['approval_date']) ? trim((string)$user['approval_date']) : '';
+        $raw_created = !empty($user['created_at']) ? trim((string)$user['created_at']) : '';
+
+        $effective_joined_date = null;
+        if ($raw_joined !== '' && $raw_joined !== '0000-00-00') {
+            $effective_joined_date = substr($raw_joined, 0, 10);
+        } elseif ($raw_approval !== '' && $raw_approval !== '0000-00-00') {
+            $effective_joined_date = substr($raw_approval, 0, 10);
+        } elseif ($raw_created !== '' && $raw_created !== '0000-00-00') {
+            $effective_joined_date = substr($raw_created, 0, 10);
+        }
+        if ($effective_joined_date && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $effective_joined_date)) {
+            $effective_joined_date = null;
+        }
 
         $canonicalEmailKey = strtolower(trim((string)$email)) . '_' . (int)$study_plan_id;
         $canonicalUserIdKey = strtolower(trim((string)$user_id)) . '_' . (int)$study_plan_id;
@@ -196,7 +214,58 @@ class StudentStudyPlanAnalytics {
         $plan_info = $stmt_plan_info->fetch(PDO::FETCH_ASSOC);
         $plan_type = $plan_info['plan_type'] ?? 'date_wise';
         $plan_title = $plan_info['title'] ?? ('Study Plan #' . $study_plan_id);
-        $total_plan_calendar_days = self::calculatePlanCalendarDays($plan_info['start_date'] ?? null, $plan_info['end_date'] ?? null);
+
+        $plan_start = (!empty($plan_info['start_date']) && $plan_info['start_date'] !== '0000-00-00') ? $plan_info['start_date'] : null;
+        $plan_end = (!empty($plan_info['end_date']) && $plan_info['end_date'] !== '0000-00-00') ? $plan_info['end_date'] : null;
+        $total_plan_calendar_days = self::calculatePlanCalendarDays($plan_start, $plan_end);
+        $report_end_date = $plan_end ? ($today < $plan_end ? $today : $plan_end) : $today;
+
+        $days_enrolled_in_plan = $total_plan_calendar_days;
+        $is_partial_period_participant = false;
+        $participation_tenure_category = 'FULL_PERIOD';
+
+        if ($effective_joined_date) {
+            if ($plan_start && $effective_joined_date > $plan_start) {
+                $is_partial_period_participant = true;
+                if ($effective_joined_date > $report_end_date) {
+                    $days_enrolled_in_plan = 0;
+                } else {
+                    $days_enrolled_in_plan = self::calculatePlanCalendarDays($effective_joined_date, $report_end_date);
+                }
+
+                if ($days_enrolled_in_plan <= 7) {
+                    $participation_tenure_category = 'RECENTLY_JOINED';
+                } else {
+                    $participation_tenure_category = 'PARTIAL_PERIOD';
+                }
+            } else {
+                $is_partial_period_participant = false;
+                $participation_tenure_category = 'FULL_PERIOD';
+                $days_enrolled_in_plan = $total_plan_calendar_days;
+            }
+        }
+
+        $tenure_summary = "Enrolled for the full study-plan period.";
+        if ($participation_tenure_category === 'PARTIAL_PERIOD') {
+            $joined_fmt = date('d M Y', strtotime($effective_joined_date));
+            $tenure_summary = "Enrolled on {$joined_fmt} ({$days_enrolled_in_plan} of {$total_plan_calendar_days} plan days active)";
+        } elseif ($participation_tenure_category === 'RECENTLY_JOINED') {
+            $joined_fmt = date('d M Y', strtotime($effective_joined_date));
+            $tenure_summary = "Joined recently on {$joined_fmt} ({$days_enrolled_in_plan} days active in plan)";
+        }
+
+        $enrollment_context = [
+            'has_data' => ($effective_joined_date !== null),
+            'joined_date' => $effective_joined_date,
+            'plan_start_date' => $plan_start,
+            'plan_end_date' => $plan_end,
+            'report_end_date' => $report_end_date,
+            'total_plan_days' => $total_plan_calendar_days,
+            'days_enrolled_in_plan' => $days_enrolled_in_plan,
+            'is_partial_period_participant' => $is_partial_period_participant,
+            'participation_tenure_category' => $participation_tenure_category,
+            'tenure_summary' => $tenure_summary
+        ];
 
         // Fetch all active study plan activities strictly scoped to this study plan
         if ($plan_type === 'date_wise' && !empty($plan_info['start_date']) && !empty($plan_info['end_date'])) {
@@ -226,6 +295,7 @@ class StudentStudyPlanAnalytics {
             $res['eligible_plan_calendar_days'] = $total_plan_calendar_days;
             $res['study_plan_id'] = $study_plan_id;
             $res['study_plan_title'] = $plan_title;
+            $res['enrollment_context'] = $enrollment_context;
             self::$planAnalyticsCache[$inputKey] = $res;
             self::$planAnalyticsCache[$canonicalEmailKey] = $res;
             self::$planAnalyticsCache[$canonicalUserIdKey] = $res;
@@ -264,13 +334,39 @@ class StudentStudyPlanAnalytics {
 
         $pending_tasks = max(0, $total_tasks - $completed_tasks);
 
-        // Calculate overdue tasks (incomplete, past schedule date, date-wise plans only)
+        // Calculate raw overdue tasks and tenure-aware eligible task metrics
         $overdue_tasks = 0;
+        $eligible_tasks_since_joining = 0;
+        $completed_eligible_tasks = 0;
+        $pending_eligible_tasks = 0;
+        $overdue_eligible_tasks = 0;
+        $pre_admission_tasks_count = 0;
+
         foreach ($activities as $act) {
-            if (!isset($completed_map[$act['id']])) {
+            $act_is_completed = isset($completed_map[$act['id']]);
+            $is_pre_adm = ($effective_joined_date && !empty($act['activity_date']) && $act['activity_date'] < $effective_joined_date);
+
+            // Raw overdue calculation
+            if (!$act_is_completed) {
                 if ($plan_type === 'date_wise' && !empty($act['activity_date'])) {
                     if ($act['activity_date'] < $today) {
                         $overdue_tasks++;
+                    }
+                }
+            }
+
+            // Tenure-aware eligible task metrics
+            if ($is_pre_adm) {
+                $pre_admission_tasks_count++;
+                // Exclude all pre-admission activities from eligible participation metrics regardless of completion
+            } else {
+                $eligible_tasks_since_joining++;
+                if ($act_is_completed) {
+                    $completed_eligible_tasks++;
+                } else {
+                    $pending_eligible_tasks++;
+                    if ($plan_type === 'date_wise' && !empty($act['activity_date']) && $act['activity_date'] < $today) {
+                        $overdue_eligible_tasks++;
                     }
                 }
             }
@@ -303,8 +399,8 @@ class StudentStudyPlanAnalytics {
         // Fetch real attendance and performance from assessment results linked to this plan (Strictly matching by registered email)
         $stmt_att = $pdo->prepare("
             SELECT ar.batch_id, ar.attendance_status, ar.score, ar.total_score,
-                   arb.id as batch_table_id, arb.activity_id, arb.chapter_snapshot, act.chapter as act_chapter,
-                   act.activity_title, act.activity_type
+                   arb.id as batch_table_id, arb.activity_id, arb.chapter_snapshot, arb.activity_date_snapshot,
+                   act.chapter as act_chapter, act.activity_title, act.activity_type, act.activity_date
             FROM assessment_results ar
             JOIN assessment_result_batches arb ON ar.batch_id = arb.id
             LEFT JOIN study_plan_activities act ON arb.activity_id = act.id
@@ -368,14 +464,27 @@ class StudentStudyPlanAnalytics {
             }
         }
 
-        // De-duplicate results by batch_id
+        // De-duplicate results by batch_id with tenure-awareness
         $unique_att = [];
         $unique_perf = [];
         $chap_assess_map = [];
+        $pre_admission_mega_tests_count = 0;
 
         foreach ($att_records as $rec) {
             $bid = $rec['batch_id'];
-            $unique_att[$bid] = $rec['attendance_status'];
+            $test_date = !empty($rec['activity_date_snapshot']) ? $rec['activity_date_snapshot'] : (!empty($rec['activity_date']) ? $rec['activity_date'] : null);
+            $is_pre_adm_test = ($effective_joined_date && $test_date && $test_date < $effective_joined_date);
+
+            if ($is_pre_adm_test) {
+                $pre_admission_mega_tests_count++;
+                if ($rec['attendance_status'] === 'attended') {
+                    $unique_att[$bid] = 'pre_admission_attended';
+                } else {
+                    $unique_att[$bid] = 'pre_admission';
+                }
+            } else {
+                $unique_att[$bid] = $rec['attendance_status'];
+            }
 
             $cname = trim((string)($rec['chapter_snapshot'] ?? ''));
             if ($cname === '') {
@@ -396,16 +505,22 @@ class StudentStudyPlanAnalytics {
             }
             $chap_assess_map[$cname]['batch_ids'][] = $bid;
 
-            if ($rec['attendance_status'] === 'attended' || $rec['attendance_status'] === 'not_attended') {
-                $chap_assess_map[$cname]['published_assessments']++;
+            if ($rec['attendance_status'] === 'attended' || ($rec['attendance_status'] === 'not_attended' && !$is_pre_adm_test)) {
+                if (!$is_pre_adm_test) {
+                    $chap_assess_map[$cname]['published_assessments']++;
+                    if ($rec['attendance_status'] === 'attended') {
+                        $chap_assess_map[$cname]['attended_assessments']++;
+                    }
+                }
                 if ($rec['attendance_status'] === 'attended') {
-                    $chap_assess_map[$cname]['attended_assessments']++;
                     if ($rec['score'] !== null && (float)$rec['total_score'] > 0) {
                         $score = (float)$rec['score'];
                         $total = (float)$rec['total_score'];
                         if ($score >= 0 && $score <= $total) {
                             $pct_score = ($score / $total) * 100;
-                            $unique_perf[$bid] = $pct_score;
+                            if (!$is_pre_adm_test) {
+                                $unique_perf[$bid] = $pct_score;
+                            }
                             $chap_assess_map[$cname]['scores'][] = $pct_score;
                         }
                     }
@@ -577,8 +692,11 @@ class StudentStudyPlanAnalytics {
             $raw_type_lower = strtolower($raw_type);
 
             // Canonical Activity Whitelist: ONLY Live Sessions & Mega Tests
-            $is_live = in_array($raw_type_lower, ['watch live sessions', 'watch live session', 'live session', 'live sessions'], true);
-            $is_mega_test = in_array($raw_type_lower, ['attend mega test', 'mega test', 'mega tests'], true);
+            $clean_type = str_replace('_', ' ', $raw_type_lower);
+            $is_live = in_array($clean_type, ['watch live sessions', 'watch live session', 'live session', 'live sessions'], true)
+                || in_array($raw_type_lower, ['watch live sessions', 'watch live session', 'live session', 'live sessions'], true);
+            $is_mega_test = in_array($clean_type, ['attend mega test', 'mega test', 'mega tests'], true)
+                || in_array($raw_type_lower, ['attend mega test', 'mega test', 'mega tests'], true);
 
             if (!$is_live && !$is_mega_test) {
                 // Strictly exclude Recorded Session, Study Material, Read Material, Assignment, generic Assessment, etc.
@@ -622,7 +740,8 @@ class StudentStudyPlanAnalytics {
             }
 
             $is_completed = isset($completed_map[$act_id]);
-            $is_overdue = ($plan_type === 'date_wise' && !empty($act['activity_date']) && $act['activity_date'] < $today && !$is_completed);
+            $is_pre_admission = ($effective_joined_date && !empty($act['activity_date']) && $act['activity_date'] < $effective_joined_date);
+            $is_overdue = ($plan_type === 'date_wise' && !empty($act['activity_date']) && $act['activity_date'] < $today && !$is_completed && !$is_pre_admission);
             $assess_info = $activity_assessment_map[$act_id] ?? null;
 
             $score_pct = null;
@@ -640,17 +759,37 @@ class StudentStudyPlanAnalytics {
                     }
                     $status_label = 'Completed';
                 } elseif ($assess_info && $assess_info['attendance_status'] === 'not_attended') {
-                    $performance_display = 'Not Attempted';
-                    $status_label = 'Not Attempted';
+                    if ($is_pre_admission) {
+                        $performance_display = 'Pre-admission';
+                        $status_label = 'Pre-admission';
+                    } else {
+                        $performance_display = 'Not Attempted';
+                        $status_label = 'Not Attempted';
+                    }
                 } else {
-                    $performance_display = 'Pending Mega Test Result';
-                    $status_label = $is_overdue ? 'Overdue' : 'Pending';
+                    if ($is_pre_admission) {
+                        $performance_display = 'Pre-admission';
+                        $status_label = 'Pre-admission';
+                    } else {
+                        $performance_display = 'Pending Mega Test Result';
+                        $status_label = $is_overdue ? 'Overdue' : 'Pending';
+                    }
                 }
             } else {
                 // Live Session
-                $score_pct = $is_completed ? 100 : 0;
-                $performance_display = $is_completed ? '100%' : ($is_overdue ? 'Overdue' : 'Pending');
-                $status_label = $is_completed ? 'Completed' : ($is_overdue ? 'Overdue' : 'Pending');
+                if ($is_completed) {
+                    $score_pct = 100;
+                    $performance_display = '100%';
+                    $status_label = 'Completed';
+                } elseif ($is_pre_admission) {
+                    $score_pct = null;
+                    $performance_display = 'Pre-admission';
+                    $status_label = 'Pre-admission';
+                } else {
+                    $score_pct = 0;
+                    $performance_display = $is_overdue ? 'Overdue' : 'Pending';
+                    $status_label = $is_overdue ? 'Overdue' : 'Pending';
+                }
             }
 
             $all_highlights[] = [
@@ -659,12 +798,15 @@ class StudentStudyPlanAnalytics {
                 'activity_topic' => $display_topic,
                 'topic' => $raw_topic !== '' ? $raw_topic : $display_topic,
                 'activity_type' => $raw_type,
+                'activity_date' => $act['activity_date'] ?? null,
+                'start_time' => $act['start_time'] ?? null,
                 'type_label' => $type_label,
                 'type_category' => $type_category,
                 'type_badge_class' => $type_badge_class,
                 'chapter' => trim($act['chapter'] ?? 'General'),
                 'is_completed' => $is_completed,
                 'is_overdue' => $is_overdue,
+                'is_pre_admission' => $is_pre_admission,
                 'score_pct' => $score_pct,
                 'performance_display' => $performance_display,
                 'status_label' => $status_label,
@@ -675,6 +817,9 @@ class StudentStudyPlanAnalytics {
         // Strongest Activities: High scores (>= 70%) or Completed live sessions
         $strongest_candidates = [];
         foreach ($all_highlights as $item) {
+            if (!empty($item['is_pre_admission'])) {
+                continue; // Only post-admission performance in current highlights
+            }
             if ($item['score_pct'] !== null && $item['score_pct'] >= 70) {
                 $strongest_candidates[] = $item;
             } elseif ($item['is_completed'] && $item['type_category'] === 'live_session') {
@@ -692,9 +837,12 @@ class StudentStudyPlanAnalytics {
         $strongest_activities = array_slice($strongest_candidates, 0, 5);
 
         // Activities Needing Attention: Low scores (<60%) or Overdue or Incomplete Live Sessions
-        // Critical: Do NOT add mega tests/assessments merely because of missing data. Only overdue or scored < 60%.
+        // Critical: Do NOT add pre-admission activities or missing data. Only genuine overdue or scored < 60%.
         $attention_candidates = [];
         foreach ($all_highlights as $item) {
+            if (!empty($item['is_pre_admission'])) {
+                continue; // Pre-admission activities must NEVER enter attention candidates
+            }
             if ($item['score_pct'] !== null && $item['score_pct'] < 60) {
                 $attention_candidates[] = $item;
             } elseif ($item['is_overdue']) {
@@ -720,6 +868,66 @@ class StudentStudyPlanAnalytics {
             'strongest_activities' => $strongest_activities,
             'needs_attention_activities' => $needs_attention_activities,
             'all_activities' => $all_highlights
+        ];
+
+        // 5.1 AUTHORITATIVE LIVE SESSION ANALYTICS (TENURE-AWARE)
+        $live_scheduled_count = 0;
+        $live_eligible_count = 0;
+        $live_attended_count = 0;
+        $live_missed_count = 0;
+        $live_pending_count = 0;
+        $live_pre_admission_count = 0;
+        $live_sessions_list = [];
+
+        foreach ($all_highlights as $h_item) {
+            if (($h_item['type_category'] ?? '') === 'live_session') {
+                $live_scheduled_count++;
+                $is_comp = !empty($h_item['is_completed']);
+                $is_pre = !empty($h_item['is_pre_admission']);
+                $is_over = !empty($h_item['is_overdue']);
+
+                if ($is_pre) {
+                    $live_pre_admission_count++;
+                    $sess_status = $is_comp ? 'Attended' : 'Pre-admission';
+                } else {
+                    $live_eligible_count++;
+                    if ($is_comp) {
+                        $live_attended_count++;
+                        $sess_status = 'Attended';
+                    } elseif ($is_over) {
+                        $live_missed_count++;
+                        $sess_status = 'Missed';
+                    } else {
+                        $live_pending_count++;
+                        $sess_status = 'Pending';
+                    }
+                }
+
+                $live_sessions_list[] = [
+                    'id' => (int)$h_item['activity_id'],
+                    'title' => $h_item['activity_title'],
+                    'date' => $h_item['activity_date'] ?? null,
+                    'status' => $sess_status,
+                    'is_completed' => $is_comp,
+                    'is_pre_admission' => $is_pre
+                ];
+            }
+        }
+
+        $has_live_data = ($live_scheduled_count > 0);
+        $live_att_percentage = ($live_eligible_count > 0) ? (int)round(($live_attended_count / $live_eligible_count) * 100) : null;
+
+        $live_sessions_analytics = [
+            'has_data' => $has_live_data,
+            'scheduled_sessions' => $live_scheduled_count,
+            'eligible_sessions' => $live_eligible_count,
+            'total_sessions' => $live_scheduled_count,
+            'attended_sessions' => $live_attended_count,
+            'missed_sessions' => $live_missed_count,
+            'pending_sessions' => $live_pending_count,
+            'pre_admission_sessions' => $live_pre_admission_count,
+            'attendance_percentage' => $live_att_percentage,
+            'sessions' => $live_sessions_list
         ];
 
         // 6. TOPIC ANALYSIS (Retained for backwards compatibility)
@@ -873,6 +1081,18 @@ class StudentStudyPlanAnalytics {
             'student_profile' => $student_profile,
             'student_info' => $student_profile,
 
+            'enrollment_context' => $enrollment_context,
+            'raw_total_tasks' => $total_tasks,
+            'raw_completed_tasks' => $completed_tasks,
+            'raw_pending_tasks' => $pending_tasks,
+            'raw_overdue_tasks' => $overdue_tasks,
+            'eligible_tasks_since_joining' => $eligible_tasks_since_joining,
+            'completed_eligible_tasks' => $completed_eligible_tasks,
+            'pending_eligible_tasks' => $pending_eligible_tasks,
+            'overdue_eligible_tasks' => $overdue_eligible_tasks,
+            'pre_admission_tasks_count' => $pre_admission_tasks_count,
+            'pre_admission_mega_tests' => $pre_admission_mega_tests_count,
+
             'total_tasks' => $total_tasks,
             'total_activities' => $total_tasks,
             'completed_tasks' => $completed_tasks,
@@ -906,6 +1126,7 @@ class StudentStudyPlanAnalytics {
             'chapters' => $chapters,
             'chapter_assessments' => $chapter_assessments,
             'learning_highlights' => $learning_highlights,
+            'live_sessions' => $live_sessions_analytics,
             'strongest_activities' => $strongest_activities,
             'needs_attention_activities' => $needs_attention_activities,
             'topics' => $topics,
@@ -1855,6 +2076,29 @@ class StudentStudyPlanAnalytics {
                 'status' => 'inactive',
                 'study_plan' => ''
             ],
+            'enrollment_context' => [
+                'has_data' => false,
+                'joined_date' => null,
+                'plan_start_date' => null,
+                'plan_end_date' => null,
+                'report_end_date' => null,
+                'total_plan_days' => 0,
+                'days_enrolled_in_plan' => 0,
+                'is_partial_period_participant' => false,
+                'participation_tenure_category' => 'FULL_PERIOD',
+                'tenure_summary' => 'Enrolled for the full study-plan period.'
+            ],
+            'raw_total_tasks' => 0,
+            'raw_completed_tasks' => 0,
+            'raw_pending_tasks' => 0,
+            'raw_overdue_tasks' => 0,
+            'eligible_tasks_since_joining' => 0,
+            'completed_eligible_tasks' => 0,
+            'pending_eligible_tasks' => 0,
+            'overdue_eligible_tasks' => 0,
+            'pre_admission_tasks_count' => 0,
+            'pre_admission_mega_tests' => 0,
+
             'total_tasks' => 0,
             'total_activities' => 0,
             'completed_tasks' => 0,
@@ -1891,6 +2135,18 @@ class StudentStudyPlanAnalytics {
                 'strongest_activities' => [],
                 'needs_attention_activities' => [],
                 'all_activities' => []
+            ],
+            'live_sessions' => [
+                'has_data' => false,
+                'scheduled_sessions' => 0,
+                'eligible_sessions' => 0,
+                'total_sessions' => 0,
+                'attended_sessions' => 0,
+                'missed_sessions' => 0,
+                'pending_sessions' => 0,
+                'pre_admission_sessions' => 0,
+                'attendance_percentage' => null,
+                'sessions' => []
             ],
             'strongest_activities' => [],
             'needs_attention_activities' => [],

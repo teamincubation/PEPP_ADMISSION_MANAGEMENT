@@ -108,7 +108,11 @@ $pdo->exec("
         pepp_academic_year VARCHAR(20),
         student_status VARCHAR(50) DEFAULT 'active',
         status VARCHAR(50) DEFAULT 'approved',
-        user_photo VARCHAR(255)
+        user_photo VARCHAR(255),
+        joined_date DATE,
+        approval_date DATETIME,
+        created_at DATETIME,
+        course_duration_date DATE
     );
 
     CREATE TABLE IF NOT EXISTS admins (
@@ -533,6 +537,17 @@ assertTest("Canonical data extracts completed tasks accurately (7)", $canonical[
 assertTest("Canonical data extracts completion percentage accurately (70%)", $canonical['checklist_audit']['completion_percentage'] === 70);
 assertTest("Canonical data extracts study streak accurately (longest >= 1)", $canonical['checklist_audit']['longest_streak'] >= 1);
 assertTest("Canonical data extracts Mega Test assessment (attended, score 44/50)", $canonical['mega_tests']['has_data'] === true && $canonical['mega_tests']['attended_tests'] === 1);
+assertTest("Canonical data extracts Live Sessions accurately (1 scheduled, 1 attended, 100%)",
+    $canonical['live_sessions']['has_data'] === true &&
+    $canonical['live_sessions']['scheduled_sessions'] === 1 &&
+    $canonical['live_sessions']['attended_sessions'] === 1 &&
+    $canonical['live_sessions']['missed_sessions'] === 0 &&
+    $canonical['live_sessions']['pending_sessions'] === 0 &&
+    $canonical['live_sessions']['attendance_percentage'] === 100 &&
+    count($canonical['live_sessions']['sessions_breakdown']) === 1 &&
+    $canonical['live_sessions']['sessions_breakdown'][0]['title'] === 'Accounting Standards Live' &&
+    $canonical['live_sessions']['sessions_breakdown'][0]['status'] === 'Attended'
+);
 
 // Build prompts and audit rules
 $prompts = StudentMentorAiService::buildPrompts($canonical);
@@ -828,6 +843,654 @@ foreach ($pausedFiles as $pf) {
     // Check that we did not touch or stage any paused file in this task
     assertTest("Scope constraint respected: Paused file [{$pf}] not modified by our task", file_exists(__DIR__ . '/' . $pf));
 }
+echo "\n";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GROUP 9: Authoritative Live Session ERP & AI Integration Tests
+// ─────────────────────────────────────────────────────────────────────────────
+echo "Group 9: Authoritative Live Session ERP & AI Integration Tests\n";
+
+// Seed Plan 201: Positive case (2 scheduled: 1 completed, 1 overdue/missed)
+$pdo->exec("
+    INSERT INTO study_plans (id, title, plan_type, course_name, academic_year, start_date, end_date, status, is_deleted)
+    VALUES (201, 'Live Test Plan A (Overdue)', 'date_wise', 'B.Com Professional', '2026-27', '2026-09-01', '2026-10-31', 'published', 0);
+
+    INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value, is_deleted)
+    VALUES (201, 'course', 'B.Com Professional', 0);
+
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (2001, 201, 'LS-01', 'Accounting', 'Corporate Tax Live Masterclass', 'Watch Live Session', '2026-09-05', 1, 0);
+
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (2002, 201, 'LS-02', 'Accounting', 'GST Principles Live Discussion', 'Live Session', '2026-09-08', 2, 0);
+
+    -- Student A completed LS-01, LS-02 is incomplete (and in the past -> missed)
+    INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at)
+    VALUES ('rahul@pepp.edu', 201, 2001, 'LS-01', 'complete_activity', 'completed', '2026-09-05 10:00:00');
+");
+
+// 9.1: Positive Case (Attended + Overdue Missed)
+StudentStudyPlanAnalytics::clearCaches();
+$canonical201 = StudentMentorAiService::extractCanonicalData($pdo, 'STU001', 201, 1, true);
+$live201 = $canonical201['live_sessions'];
+
+assertTest("Plan 201: Live Sessions has_data is true", $live201['has_data'] === true);
+assertTest("Plan 201: Scheduled sessions count = 2", $live201['scheduled_sessions'] === 2);
+assertTest("Plan 201: Attended sessions count = 1", $live201['attended_sessions'] === 1);
+assertTest("Plan 201: Missed sessions count = 1 (overdue incomplete)", $live201['missed_sessions'] === 1);
+assertTest("Plan 201: Pending sessions count = 0", $live201['pending_sessions'] === 0);
+assertTest("Plan 201: Attendance percentage = 50%", $live201['attendance_percentage'] === 50);
+
+// Seed Plan 202: Pending Case (2 scheduled: 1 completed, 1 future pending)
+$pdo->exec("
+    INSERT INTO study_plans (id, title, plan_type, course_name, academic_year, start_date, end_date, status, is_deleted)
+    VALUES (202, 'Live Test Plan B (Pending)', 'date_wise', 'B.Com Professional', '2026-27', '2026-09-01', '2026-10-31', 'published', 0);
+
+    INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value, is_deleted)
+    VALUES (202, 'course', 'B.Com Professional', 0);
+
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (2003, 202, 'LS-03', 'Law', 'Auditing Standards Live', 'watch live sessions', '2026-09-05', 1, 0);
+
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (2004, 202, 'LS-04', 'Law', 'Company Law Future Live Session', 'live sessions', '2026-10-25', 2, 0);
+
+    -- Student A completed LS-03, LS-04 is in the future -> pending
+    INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at)
+    VALUES ('rahul@pepp.edu', 202, 2003, 'LS-03', 'complete_activity', 'completed', '2026-09-05 10:00:00');
+");
+
+// 9.2: Pending Case (Attended + Future Pending)
+StudentStudyPlanAnalytics::clearCaches();
+$canonical202 = StudentMentorAiService::extractCanonicalData($pdo, 'STU001', 202, 1, true);
+$live202 = $canonical202['live_sessions'];
+
+assertTest("Plan 202: Live Sessions has_data is true", $live202['has_data'] === true);
+assertTest("Plan 202: Scheduled sessions count = 2", $live202['scheduled_sessions'] === 2);
+assertTest("Plan 202: Attended sessions count = 1", $live202['attended_sessions'] === 1);
+assertTest("Plan 202: Missed sessions count = 0", $live202['missed_sessions'] === 0);
+assertTest("Plan 202: Pending sessions count = 1 (future session)", $live202['pending_sessions'] === 1);
+assertTest("Plan 202: Attendance percentage = 50%", $live202['attendance_percentage'] === 50);
+
+// Seed Plan 203: Zero Live Sessions (Only reading/tasks)
+$pdo->exec("
+    INSERT INTO study_plans (id, title, plan_type, course_name, academic_year, start_date, end_date, status, is_deleted)
+    VALUES (203, 'Self-Paced Reading Plan', 'date_wise', 'B.Com Professional', '2026-27', '2026-09-01', '2026-10-31', 'published', 0);
+
+    INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value, is_deleted)
+    VALUES (203, 'course', 'B.Com Professional', 0);
+
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (2005, 203, 'RD-01', 'Economics', 'Macroeconomics Notes', 'Study Material', '2026-09-05', 1, 0);
+
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (2006, 203, 'RD-02', 'Economics', 'Monetary Policy Reading', 'Reading', '2026-09-06', 2, 0);
+");
+
+// 9.3: Zero Live Sessions Case
+StudentStudyPlanAnalytics::clearCaches();
+$canonical203 = StudentMentorAiService::extractCanonicalData($pdo, 'STU001', 203, 1, true);
+$live203 = $canonical203['live_sessions'];
+
+assertTest("Plan 203: Zero live sessions has_data is false", $live203['has_data'] === false);
+assertTest("Plan 203: Zero live sessions scheduled = 0", $live203['scheduled_sessions'] === 0);
+assertTest("Plan 203: Zero live sessions attendance_percentage is null", $live203['attendance_percentage'] === null);
+
+$fallback203 = StudentMentorAiService::buildFallbackResponse($canonical203, "Zero live test");
+assertTest("Plan 203: Fallback reports 'No live-session records are available for this study plan'",
+    str_contains($fallback203['wa_text'], 'No live-session records are available for this study plan')
+);
+
+// 9.4: Session Breakdown Integrity
+assertTest("Plan 201 breakdown: Contains exactly 2 session records", count($live201['sessions_breakdown']) === 2);
+assertTest("Plan 201 breakdown: Session 1 is Attended",
+    $live201['sessions_breakdown'][0]['title'] === 'Corporate Tax Live Masterclass' &&
+    $live201['sessions_breakdown'][0]['date'] === '2026-09-05' &&
+    $live201['sessions_breakdown'][0]['status'] === 'Attended' &&
+    $live201['sessions_breakdown'][0]['is_completed'] === true
+);
+assertTest("Plan 201 breakdown: Session 2 is Missed",
+    $live201['sessions_breakdown'][1]['title'] === 'GST Principles Live Discussion' &&
+    $live201['sessions_breakdown'][1]['date'] === '2026-09-08' &&
+    $live201['sessions_breakdown'][1]['status'] === 'Missed' &&
+    $live201['sessions_breakdown'][1]['is_completed'] === false
+);
+
+// 9.5: Study Plan Isolation Verification
+assertTest("Isolation: Plan 201 activities do not leak into Plan 202",
+    !in_array('Corporate Tax Live Masterclass', array_column($live202['sessions_breakdown'], 'title'))
+);
+assertTest("Isolation: Plan 201 activities do not leak into Plan 203",
+    empty($live203['sessions_breakdown'])
+);
+
+// 9.6: Fallback Output Formatting for Live Sessions
+$fallback201 = StudentMentorAiService::buildFallbackResponse($canonical201, "Plan 201 fallback");
+assertTest("Plan 201 Fallback: Includes attendance ratio '1/2 (50%)'",
+    str_contains($fallback201['wa_text'], '• Attendance: 1/2 (50%)')
+);
+assertTest("Plan 201 Fallback: Reports Attended: 1, Missed: 1, Pending: 0",
+    str_contains($fallback201['wa_text'], '• Attended: 1') &&
+    str_contains($fallback201['wa_text'], '• Missed: 1') &&
+    str_contains($fallback201['wa_text'], '• Pending: 0')
+);
+assertTest("Plan 201 Fallback: Cites missed session title in action required list",
+    str_contains($fallback201['wa_text'], 'GST Principles Live Discussion')
+);
+// ─────────────────────────────────────────────────────────────────────────────
+// GROUP 10: Focused Enrollment-Tenure-Aware & AI Quality Tests (A through T)
+// ─────────────────────────────────────────────────────────────────────────────
+echo "Group 10: Focused Enrollment-Tenure-Aware & AI Quality Tests (A through T)\n";
+
+// Seed Users for Tenure Testing
+$pdo->exec("
+    -- Student FULL: Joined 2026-09-01 (<= plan_start_date 2026-09-01)
+    INSERT INTO users (id, user_id, name, email, phone, whatsapp_number, pepp_course, pepp_academic_year, student_status, status, joined_date, approval_date, created_at, course_duration_date)
+    VALUES (10, 'STU010', 'Full Period Student', 'full@pepp.edu', '9876543220', '9876543220', 'B.Com Professional', '2026-27', 'active', 'approved', '2026-09-01', '2026-09-01 10:00:00', '2026-08-25 10:00:00', '2026-01-01');
+
+    -- Student PARTIAL: Joined 2026-09-15 (> plan_start_date, enrolled 16 days > 7)
+    INSERT INTO users (id, user_id, name, email, phone, whatsapp_number, pepp_course, pepp_academic_year, student_status, status, joined_date, approval_date, created_at, course_duration_date)
+    VALUES (20, 'STU020', 'Partial Period Student', 'partial@pepp.edu', '9876543221', '9876543221', 'B.Com Professional', '2026-27', 'active', 'approved', '2026-09-15', '2026-09-14 10:00:00', '2026-09-10 10:00:00', '2026-01-01');
+
+    -- Student RECENT: Joined 2026-09-27 (> plan_start_date, enrolled 4 days <= 7)
+    INSERT INTO users (id, user_id, name, email, phone, whatsapp_number, pepp_course, pepp_academic_year, student_status, status, joined_date, approval_date, created_at, course_duration_date)
+    VALUES (30, 'STU030', 'Recently Joined Student', 'recent@pepp.edu', '9876543222', '9876543222', 'B.Com Professional', '2026-27', 'active', 'approved', '2026-09-27', '2026-09-26 10:00:00', '2026-09-25 10:00:00', '2026-01-01');
+
+    -- Student HIERARCHY_APPROVAL: joined_date is NULL, approval_date is 2026-09-18
+    INSERT INTO users (id, user_id, name, email, phone, whatsapp_number, pepp_course, pepp_academic_year, student_status, status, joined_date, approval_date, created_at, course_duration_date)
+    VALUES (40, 'STU040', 'Approval Fallback Student', 'approval@pepp.edu', '9876543223', '9876543223', 'B.Com Professional', '2026-27', 'active', 'approved', NULL, '2026-09-18 15:30:00', '2026-09-10 10:00:00', '2026-01-01');
+
+    -- Student HIERARCHY_CREATED: joined_date is NULL, approval_date is NULL, created_at is 2026-09-20
+    INSERT INTO users (id, user_id, name, email, phone, whatsapp_number, pepp_course, pepp_academic_year, student_status, status, joined_date, approval_date, created_at, course_duration_date)
+    VALUES (50, 'STU050', 'CreatedAt Fallback Student', 'created@pepp.edu', '9876543224', '9876543224', 'B.Com Professional', '2026-27', 'active', 'approved', NULL, NULL, '2026-09-20 11:20:00', '2026-01-01');
+
+    -- Mentor assignments for testing
+    INSERT INTO mentor_student_assignments (student_user_id, admin_id, status) VALUES ('STU010', 10, 'active');
+    INSERT INTO mentor_student_assignments (student_user_id, admin_id, status) VALUES ('STU020', 10, 'active');
+    INSERT INTO mentor_student_assignments (student_user_id, admin_id, status) VALUES ('STU030', 10, 'active');
+    INSERT INTO mentor_student_assignments (student_user_id, admin_id, status) VALUES ('STU040', 10, 'active');
+    INSERT INTO mentor_student_assignments (student_user_id, admin_id, status) VALUES ('STU050', 10, 'active');
+
+    -- Seed Study Plan 301 (2026-09-01 to 2026-10-31, 61 calendar days)
+    INSERT INTO study_plans (id, title, plan_type, course_name, academic_year, start_date, end_date, status, is_deleted)
+    VALUES (301, 'September Comprehensive Plan', 'date_wise', 'B.Com Professional', '2026-27', '2026-09-01', '2026-10-31', 'published', 0);
+
+    INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value, is_deleted)
+    VALUES (301, 'course', 'B.Com Professional', 0);
+
+    -- Plan 301 Activities
+    -- 1. Pre-admission task (Sep 05)
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (3001, 301, 'ACT-301', 'Module 1', 'Introductory Law Overview', 'task', '2026-09-05', 1, 0);
+
+    -- 2. Pre-admission Live Session (Sep 10)
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (3002, 301, 'ACT-302', 'Module 1', 'Foundation Live Session 1', 'Live Session', '2026-09-10', 2, 0);
+
+    -- 3. Post-admission Live Session (Sep 18 - past, incomplete for STU020 -> missed)
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (3003, 301, 'ACT-303', 'Module 2', 'Corporate Governance Live 2', 'Watch Live Session', '2026-09-18', 3, 0);
+
+    -- 4. Post-admission Task (Sep 20)
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (3004, 301, 'ACT-304', 'Module 2', 'Corporate Structures Reading', 'task', '2026-09-20', 4, 0);
+
+    -- 5. Post-admission Completed Task (Sep 22)
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (3005, 301, 'ACT-305', 'Module 2', 'Financial Statements Practical', 'task', '2026-09-22', 5, 0);
+
+    -- 6. Future Pending Live Session (Oct 15)
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (3006, 301, 'ACT-306', 'Module 3', 'Advanced Topics Future Live 3', 'Live Session', '2026-10-15', 6, 0);
+
+    -- Student completions for STU020 (Partial Period: completed ACT-305 on Sep 22)
+    INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at)
+    VALUES ('partial@pepp.edu', 301, 3005, 'ACT-305', 'complete_activity', 'completed', '2026-09-22 10:00:00');
+
+    -- Pre-admission Mega Test Batch (Sep 08, before STU020 joined on Sep 15)
+    INSERT INTO assessment_result_batches (id, study_plan_id, course_name, academic_year, activity_id, chapter_snapshot, status, activity_date_snapshot)
+    VALUES (3010, 301, 'B.Com Professional', '2026-27', 3001, 'Module 1', 'published', '2026-09-08');
+
+    -- STU020 not_attended on pre-admission Mega Test
+    INSERT INTO assessment_results (batch_id, user_id, student_email, attendance_status, score, total_score)
+    VALUES (3010, 'STU020', 'partial@pepp.edu', 'not_attended', NULL, 50.0);
+
+    -- Post-admission Mega Test Batch (Sep 25, after STU020 joined on Sep 15)
+    INSERT INTO assessment_result_batches (id, study_plan_id, course_name, academic_year, activity_id, chapter_snapshot, status, activity_date_snapshot)
+    VALUES (3020, 301, 'B.Com Professional', '2026-27', 3004, 'Module 2', 'published', '2026-09-25');
+
+    -- STU020 attended post-admission Mega Test with score 42/50
+    INSERT INTO assessment_results (batch_id, user_id, student_email, attendance_status, score, total_score)
+    VALUES (3020, 'STU020', 'partial@pepp.edu', 'attended', 42.0, 50.0);
+");
+
+// Test A: Full-period student
+StudentStudyPlanAnalytics::clearCaches();
+$resFull = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'full@pepp.edu', 301);
+$ecFull = $resFull['enrollment_context'];
+assertTest("Test A: Full-period student category is FULL_PERIOD", $ecFull['participation_tenure_category'] === 'FULL_PERIOD');
+assertTest("Test A: Full-period student is_partial_period_participant is false", $ecFull['is_partial_period_participant'] === false);
+assertTest("Test A: Full-period days enrolled equals total plan days (61)", $ecFull['days_enrolled_in_plan'] === 61);
+
+// Test B: Partial-period student
+StudentStudyPlanAnalytics::clearCaches();
+$resPartial = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'partial@pepp.edu', 301);
+$ecPartial = $resPartial['enrollment_context'];
+assertTest("Test B: Partial-period student category is PARTIAL_PERIOD", $ecPartial['participation_tenure_category'] === 'PARTIAL_PERIOD');
+assertTest("Test B: Partial-period student is_partial_period_participant is true", $ecPartial['is_partial_period_participant'] === true);
+assertTest("Test B: Partial-period days enrolled calculated correctly (17 days active)", $ecPartial['days_enrolled_in_plan'] === 17);
+
+// Test C: Recently joined student
+StudentStudyPlanAnalytics::clearCaches();
+$resRecent = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'recent@pepp.edu', 301);
+$ecRecent = $resRecent['enrollment_context'];
+assertTest("Test C: Recently joined student category is RECENTLY_JOINED", $ecRecent['participation_tenure_category'] === 'RECENTLY_JOINED');
+assertTest("Test C: Recently joined student enrolled days <= 7 (5 days)", $ecRecent['days_enrolled_in_plan'] === 5);
+
+// Test D: Pre-admission live session handling
+// In Plan 301: ACT-302 (Sep 10) was before STU020's joined_date (Sep 15)
+$livePartial = $resPartial['live_sessions'];
+$sessionsPartial = $livePartial['sessions'];
+$preAdmSession = null;
+foreach ($sessionsPartial as $sess) {
+    if ($sess['date'] === '2026-09-10') {
+        $preAdmSession = $sess;
+        break;
+    }
+}
+assertTest("Test D: Pre-admission live session has status 'Pre-admission'", $preAdmSession !== null && $preAdmSession['status'] === 'Pre-admission');
+assertTest("Test D: Pre-admission live session has is_pre_admission true", !empty($preAdmSession['is_pre_admission']));
+assertTest("Test D: Pre-admission session is not counted in missed_sessions", $livePartial['missed_sessions'] === 1); // Only Sep 18 is missed
+
+// Test E: Post-admission missed live session
+// ACT-303 (Sep 18) occurred after Sep 15, past date, incomplete
+$postAdmMissed = null;
+foreach ($sessionsPartial as $sess) {
+    if ($sess['date'] === '2026-09-18') {
+        $postAdmMissed = $sess;
+        break;
+    }
+}
+assertTest("Test E: Post-admission past incomplete live session has status 'Missed'", $postAdmMissed !== null && $postAdmMissed['status'] === 'Missed');
+
+// Test F: Post-admission attended live session (simulate completion on ACT-303 for full period student)
+$pdo->exec("
+    INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at)
+    VALUES ('full@pepp.edu', 301, 3003, 'ACT-303', 'complete_activity', 'completed', '2026-09-18 10:00:00');
+");
+StudentStudyPlanAnalytics::clearCaches();
+$resFullAtt = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'full@pepp.edu', 301);
+$attendedSessionItem = null;
+foreach ($resFullAtt['live_sessions']['sessions'] as $s) {
+    if ($s['date'] === '2026-09-18') {
+        $attendedSessionItem = $s;
+        break;
+    }
+}
+assertTest("Test F: Post-admission completed live session has status 'Attended'", $attendedSessionItem !== null && $attendedSessionItem['status'] === 'Attended');
+
+// Test G: Future pending live session
+// ACT-306 (Oct 15) is in the future
+$futureSessionItem = null;
+foreach ($sessionsPartial as $sess) {
+    if ($sess['date'] === '2026-10-15') {
+        $futureSessionItem = $sess;
+        break;
+    }
+}
+assertTest("Test G: Future incomplete live session has status 'Pending'", $futureSessionItem !== null && $futureSessionItem['status'] === 'Pending');
+
+// Test H: Mixed pre-admission + eligible live sessions calculations
+// For STU020: 3 scheduled sessions total (Sep 10, Sep 18, Oct 15)
+// 1 pre-admission (Sep 10), 2 eligible (Sep 18, Oct 15)
+// Attended = 0, Missed = 1, Pending = 1, Pre-admission = 1
+assertTest("Test H: Mixed scheduled_sessions = 3", $livePartial['scheduled_sessions'] === 3);
+assertTest("Test H: Mixed eligible_sessions = 2 (denominator excludes pre-admission)", $livePartial['eligible_sessions'] === 2);
+assertTest("Test H: Mixed attended_sessions = 0", $livePartial['attended_sessions'] === 0);
+assertTest("Test H: Mixed missed_sessions = 1", $livePartial['missed_sessions'] === 1);
+assertTest("Test H: Mixed pending_sessions = 1", $livePartial['pending_sessions'] === 1);
+assertTest("Test H: Mixed pre_admission_sessions = 1", $livePartial['pre_admission_sessions'] === 1);
+assertTest("Test H: Attendance percentage uses eligible denominator: 0/2 = 0%", $livePartial['attendance_percentage'] === 0);
+
+// Test I: Pre-admission Mega Test where eligibility is determinable
+// Batch 3010 was on Sep 08 (pre-admission for STU020). Batch 3020 was on Sep 25 (eligible).
+// Total eligible sessions = 1 (not 2). Attended = 1 (Batch 3020). Attendance rate = 100% (not 50%!)
+assertTest("Test I: Pre-admission Mega Test does not penalize attendance denominator", $resPartial['total_sessions'] === 1);
+assertTest("Test I: Attended post-admission Mega Test counts accurately", $resPartial['attended_sessions'] === 1);
+assertTest("Test I: Mega Test attendance rate is 100% (1/1)", $resPartial['attendance_rate'] == 100);
+assertTest("Test I: Pre-admission mega tests count tracked", ($resPartial['pre_admission_mega_tests'] ?? 0) === 1);
+
+// Test J: Raw metrics remain unchanged
+// Total activities in plan 301 = 6. Raw total must remain 6.
+assertTest("Test J: raw_total_tasks preserves plan-level count (6)", $resPartial['raw_total_tasks'] === 6);
+assertTest("Test J: total_tasks metric is not altered (6)", $resPartial['total_tasks'] === 6);
+assertTest("Test J: eligible_tasks_since_joining tracks eligible count (4)", $resPartial['eligible_tasks_since_joining'] === 4);
+assertTest("Test J: pre_admission_tasks_count tracks excluded tasks (2)", $resPartial['pre_admission_tasks_count'] === 2);
+
+// Test K: Authoritative enrollment date hierarchy
+StudentStudyPlanAnalytics::clearCaches();
+$resApp = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'approval@pepp.edu', 301);
+assertTest("Test K: Fallback hierarchy uses DATE(approval_date) when joined_date is NULL", $resApp['enrollment_context']['joined_date'] === '2026-09-18');
+
+StudentStudyPlanAnalytics::clearCaches();
+$resCre = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'created@pepp.edu', 301);
+assertTest("Test K: Fallback hierarchy uses DATE(created_at) when joined_date and approval_date are NULL", $resCre['enrollment_context']['joined_date'] === '2026-09-20');
+
+// Test K.2: course_duration_date is NOT used
+$resDur = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'full@pepp.edu', 301);
+assertTest("Test K.2: course_duration_date (2026-01-01) is ignored in favor of joined_date", $resDur['enrollment_context']['joined_date'] === '2026-09-01');
+
+// Test L & M: Recommendation contradiction prevention
+// Student with 100% completion, 0 pending, 0 overdue, streak 17, consistency 93%
+$mockPerfectCanonical = [
+    'student_profile' => [
+        'name' => 'Aditi Sharma',
+        'user_id' => 'STU_PERF',
+        'course' => 'B.Com Professional',
+        'academic_year' => '2026-27',
+        'selected_study_plan' => 'Advanced Finance Plan',
+        'study_plan_id' => 401,
+        'status' => 'Active'
+    ],
+    'enrollment_context' => [
+        'has_data' => true,
+        'joined_date' => '2026-09-01',
+        'plan_start_date' => '2026-09-01',
+        'plan_end_date' => '2026-09-30',
+        'report_end_date' => '2026-09-30',
+        'total_plan_days' => 30,
+        'days_enrolled_in_plan' => 30,
+        'is_partial_period_participant' => false,
+        'participation_tenure_category' => 'FULL_PERIOD',
+        'tenure_summary' => 'Enrolled for the full study-plan period.'
+    ],
+    'checklist_audit' => [
+        'total_tasks' => 20,
+        'completed_tasks' => 20,
+        'pending_tasks' => 0,
+        'overdue_tasks' => 0,
+        'completion_percentage' => 100,
+        'raw_total_tasks' => 20,
+        'raw_completed_tasks' => 20,
+        'raw_pending_tasks' => 0,
+        'raw_overdue_tasks' => 0,
+        'eligible_tasks_since_joining' => 20,
+        'completed_eligible_tasks' => 20,
+        'pending_eligible_tasks' => 0,
+        'overdue_eligible_tasks' => 0,
+        'pre_admission_tasks_count' => 0,
+        'current_streak' => 17,
+        'longest_streak' => 17,
+        'active_study_days' => 28,
+        'total_calendar_days' => 30,
+        'consistency_percentage' => 93,
+        'chapter_progress' => [],
+        'strongest_areas' => ['Financial Analysis'],
+        'areas_needing_attention' => []
+    ],
+    'mega_tests' => [
+        'has_data' => true,
+        'eligible_tests' => 1,
+        'attended_tests' => 1,
+        'pre_admission_tests' => 0,
+        'attendance_percentage' => 100,
+        'average_score_percentage' => 94,
+        'tests_breakdown' => []
+    ],
+    'live_sessions' => [
+        'has_data' => true,
+        'scheduled_sessions' => 2,
+        'eligible_sessions' => 2,
+        'attended_sessions' => 2,
+        'missed_sessions' => 0,
+        'pending_sessions' => 0,
+        'pre_admission_sessions' => 0,
+        'attendance_percentage' => 100,
+        'sessions_breakdown' => []
+    ],
+    'cohort_ranking' => [
+        'has_data' => true,
+        'study_plan_rank' => 1,
+        'cohort_size' => 45,
+        'percentile' => 'Top 2%',
+        'standing_badge' => 'Rank #1'
+    ]
+];
+
+$perfectFallback = StudentMentorAiService::buildFallbackResponse($mockPerfectCanonical, "Testing contradiction rules");
+$perfectWa = $perfectFallback['wa_text'];
+$perfectRecs = $perfectFallback['analysis']['recommendations'];
+
+// Test L: Pending=0 contradiction prevention
+assertTest("Test L: Pending=0 prevents recommendation to complete pending tasks",
+    !str_contains(strtolower($perfectWa), 'complete pending') &&
+    !str_contains(strtolower($perfectWa), 'remaining checklist')
+);
+
+// Test M: Overdue=0 contradiction prevention
+assertTest("Test M: Overdue=0 prevents warning or recommendation to clear overdue tasks",
+    !str_contains(strtolower($perfectWa), 'clear overdue') &&
+    !str_contains(strtolower($perfectWa), 'overdue checklist item')
+);
+
+// Test L.2: Streak=17 prevents generic "build a streak" advice
+assertTest("Test L.2: Strong streak prevents generic 'build an initial streak' advice",
+    !str_contains(strtolower($perfectWa), 'establish a regular daily study habit') &&
+    !str_contains(strtolower($perfectWa), 'build a streak')
+);
+
+// Test L.3: High completion focuses on next steps (revision, exam prep)
+assertTest("Test L.3: 100% completion recommends forward-looking revision and preparation",
+    str_contains(strtolower($perfectWa), 'revision') ||
+    str_contains(strtolower($perfectWa), 'preparation') ||
+    str_contains(strtolower($perfectWa), 'practice')
+);
+
+// Test N: No-live-session-data wording
+StudentStudyPlanAnalytics::clearCaches();
+$canonical203Test = StudentMentorAiService::extractCanonicalData($pdo, 'STU001', 203, 1, true);
+$fallback203Test = StudentMentorAiService::buildFallbackResponse($canonical203Test, "No live data test");
+assertTest("Test N: No-live-session-data uses authoritative wording",
+    str_contains($fallback203Test['wa_text'], 'No live-session records are available for this study plan')
+);
+assertTest("Test N: Never uses forbidden generic phrase 'Live sessions not recorded'",
+    !str_contains($fallback203Test['wa_text'], 'Live sessions not recorded for this study plan') &&
+    !str_contains($fallback203Test['wa_text'], 'Live sessions not recorded for this plan')
+);
+
+// Test O: Missing-data vs zero-attendance distinction
+$mockMissingLiveCanonical = $mockPerfectCanonical;
+$mockMissingLiveCanonical['live_sessions'] = [
+    'has_data' => true,
+    'scheduled_sessions' => 0,
+    'eligible_sessions' => 0,
+    'attended_sessions' => 0,
+    'missed_sessions' => 0,
+    'pending_sessions' => 0,
+    'pre_admission_sessions' => 0,
+    'attendance_percentage' => null,
+    'sessions_breakdown' => []
+];
+$fallbackMissingLive = StudentMentorAiService::buildFallbackResponse($mockMissingLiveCanonical, "Missing live attendance");
+assertTest("Test O: Distinguishes missing attendance data from zero attendance",
+    str_contains($fallbackMissingLive['wa_text'], 'Live sessions are recorded in the study plan, but attendance data is unavailable')
+);
+
+// Test P: Absolute em dash ban (U+2014, U+2013, U+2015) in final wa_text and fallback
+assertTest("Test P: Perfect student fallback wa_text has zero em dash (U+2014)", strpos($perfectWa, '—') === false);
+assertTest("Test P: Perfect student fallback wa_text has zero en dash (U+2013)", strpos($perfectWa, '–') === false);
+assertTest("Test P: Perfect student fallback wa_text has zero horizontal bar (U+2015)", strpos($perfectWa, '―') === false);
+assertTest("Test P: Plan 201 fallback wa_text has zero em dash", strpos($fallback201['wa_text'], '—') === false);
+assertTest("Test P: sanitizeDashes strips em dash, en dash, and horizontal bar cleanly",
+    StudentMentorAiService::sanitizeDashes("disciplined—steady–effort―focus") === "disciplined-steady-effort-focus"
+);
+
+// Test Q: Cohort ranking is not altered by enrollment tenure
+assertTest("Test Q: Student STU020 maintains correct cohort size denominator in ranking",
+    isset($resPartial['cohort_ranking']['cohort_size'])
+);
+
+// Test R: No invented standing classification
+$mockNoBadgeCanonical = $mockPerfectCanonical;
+$mockNoBadgeCanonical['cohort_ranking']['standing_badge'] = null;
+$fallbackNoBadge = StudentMentorAiService::buildFallbackResponse($mockNoBadgeCanonical, "No badge test");
+assertTest("Test R: Does not invent standing title when standing_badge is null",
+    !str_contains($fallbackNoBadge['wa_text'], 'Elite Performer') &&
+    !str_contains($fallbackNoBadge['wa_text'], 'Top Performer')
+);
+
+// Test S: Deterministic fallback follows the same business rules as AI
+assertTest("Test S: Fallback excludes pre-admission live sessions from attendance ratio",
+    str_contains($fallback201['wa_text'], '• Attendance: 1/2 (50%)')
+);
+assertTest("Test S: Fallback includes enrollment context when partial-period participant",
+    str_contains(StudentMentorAiService::buildFallbackResponse($canonical201, "Test")['wa_text'], 'STUDENT PERFORMANCE AI ANALYSIS')
+);
+
+// Test T: Static cache isolation across students and plans
+StudentStudyPlanAnalytics::clearCaches();
+$resT1 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'STU010', 301);
+$resT2 = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'STU020', 301);
+assertTest("Test T: STU010 (Full) and STU020 (Partial) cache isolated on same plan",
+    $resT1['enrollment_context']['participation_tenure_category'] === 'FULL_PERIOD' &&
+    $resT2['enrollment_context']['participation_tenure_category'] === 'PARTIAL_PERIOD'
+);
+echo "\n";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GROUP 11: Final Semantic Verification — Pre-Admission Tasks & Mega Tests
+// ─────────────────────────────────────────────────────────────────────────────
+echo "Group 11: Final Semantic Verification — Pre-Admission Tasks & Mega Tests\n";
+
+// Seed dedicated student STU060 and dedicated Study Plan 501 for tenure boundary tests
+$pdo->exec("
+    INSERT INTO users (id, user_id, name, email, phone, whatsapp_number, pepp_course, pepp_academic_year, student_status, status, joined_date, approval_date, created_at, course_duration_date)
+    VALUES (60, 'STU060', 'Tenure Verification Student', 'tenure_audit@pepp.edu', '9876543225', '9876543225', 'B.Com Professional', '2026-27', 'active', 'approved', '2026-09-15', '2026-09-15 10:00:00', '2026-09-10 10:00:00', '2026-01-01');
+
+    INSERT INTO mentor_student_assignments (student_user_id, admin_id, status) VALUES ('STU060', 10, 'active');
+
+    -- Seed Plan 501 (2026-09-01 to 2026-10-31)
+    INSERT INTO study_plans (id, title, plan_type, course_name, academic_year, start_date, end_date, status, is_deleted)
+    VALUES (501, 'Pre-Admission Verification Plan', 'date_wise', 'B.Com Professional', '2026-27', '2026-09-01', '2026-10-31', 'published', 0);
+
+    INSERT INTO study_plan_assignments (study_plan_id, assignment_type, assigned_value, is_deleted)
+    VALUES (501, 'course', 'B.Com Professional', 0);
+
+    -- Plan 501 Activities:
+    -- 1. Pre-admission task (Sep 05)
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (5001, 501, 'ACT-5001', 'Module 1', 'Early Orientation Reading', 'task', '2026-09-05', 1, 0);
+
+    -- 2. Pre-admission Mega Test (Sep 08)
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (5002, 501, 'ACT-5002', 'Module 1', 'Early Diagnostic Mega Test', 'Attend Mega Test', '2026-09-08', 2, 0);
+
+    -- 3. Post-admission Task (Sep 20, past incomplete)
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (5003, 501, 'ACT-5003', 'Module 2', 'Core Subject Case Study', 'task', '2026-09-20', 3, 0);
+
+    -- 4. Post-admission Task (Sep 22, completed later)
+    INSERT INTO study_plan_activities (id, study_plan_id, activity_uid, chapter, activity_title, activity_type, activity_date, sort_order, is_deleted)
+    VALUES (5004, 501, 'ACT-5004', 'Module 2', 'Financial Calculation Practice', 'task', '2026-09-22', 4, 0);
+
+    -- Pre-admission Mega Test Batch 5010 (Sep 08, before STU060 joined on Sep 15)
+    INSERT INTO assessment_result_batches (id, study_plan_id, course_name, academic_year, activity_id, chapter_snapshot, status, activity_date_snapshot)
+    VALUES (5010, 501, 'B.Com Professional', '2026-27', 5002, 'Module 1', 'published', '2026-09-08');
+
+    INSERT INTO assessment_results (batch_id, user_id, student_email, attendance_status, score, total_score)
+    VALUES (5010, 'STU060', 'tenure_audit@pepp.edu', 'not_attended', NULL, 50.0);
+");
+
+// -----------------------------------------------------------------------------
+// Requirement B: Pre-admission incomplete task
+// Plan 501 has ACT-5001 (Sep 05, task) and ACT-5002 (Sep 08, mega test), both pre-admission.
+// With no completions yet:
+// - raw pending/overdue includes all incomplete past activities (4)
+// - eligible pending/overdue excludes pre-admission activities entirely (2 eligible: 5003, 5004)
+// -----------------------------------------------------------------------------
+StudentStudyPlanAnalytics::clearCaches();
+$analyticsB = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'tenure_audit@pepp.edu', 501);
+
+assertTest("Requirement B: Pre-admission incomplete tasks preserved in raw pending (4)", $analyticsB['raw_pending_tasks'] === 4);
+assertTest("Requirement B: Pre-admission incomplete tasks preserved in raw overdue (4)", $analyticsB['raw_overdue_tasks'] === 4);
+assertTest("Requirement B: Pre-admission incomplete tasks excluded from eligible pending (2)", $analyticsB['pending_eligible_tasks'] === 2);
+assertTest("Requirement B: Pre-admission incomplete tasks excluded from eligible overdue (2)", $analyticsB['overdue_eligible_tasks'] === 2);
+assertTest("Requirement B: Pre-admission task count tracked accurately (2)", $analyticsB['pre_admission_tasks_count'] === 2);
+
+// -----------------------------------------------------------------------------
+// Requirement A: Pre-admission completed task
+// Student completes ACT-5001 (Sep 05, pre-admission).
+// - raw completed increases from 0 to 1
+// - eligible completed does NOT increase (remains 0)
+// - eligible_tasks_since_joining does NOT increase (remains 2)
+// -----------------------------------------------------------------------------
+$pdo->exec("
+    INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at)
+    VALUES ('tenure_audit@pepp.edu', 501, 5001, 'ACT-5001', 'complete_activity', 'completed', '2026-09-06 10:00:00');
+");
+StudentStudyPlanAnalytics::clearCaches();
+$analyticsA = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'tenure_audit@pepp.edu', 501);
+
+assertTest("Requirement A: Pre-admission completed task recorded in raw completed (1)", $analyticsA['raw_completed_tasks'] === 1);
+assertTest("Requirement A: Pre-admission completed task does NOT increase eligible completed (0)", $analyticsA['completed_eligible_tasks'] === 0);
+assertTest("Requirement A: Pre-admission completed task does NOT increase eligible tasks count (2)", $analyticsA['eligible_tasks_since_joining'] === 2);
+assertTest("Requirement A: Raw total tasks remains completely unchanged (4)", $analyticsA['raw_total_tasks'] === 4);
+
+// -----------------------------------------------------------------------------
+// Requirement C: Post-admission completed task
+// Student completes ACT-5004 (Sep 22, post-admission).
+// - raw completed increases to 2
+// - eligible completed increases from 0 to 1
+// - eligible pending decreases from 2 to 1
+// -----------------------------------------------------------------------------
+$pdo->exec("
+    INSERT INTO study_plan_analytics (student_email, study_plan_id, activity_id, activity_uid, action_type, completion_status, created_at)
+    VALUES ('tenure_audit@pepp.edu', 501, 5004, 'ACT-5004', 'complete_activity', 'completed', '2026-09-22 14:00:00');
+");
+StudentStudyPlanAnalytics::clearCaches();
+$analyticsC = StudentStudyPlanAnalytics::getPlanAnalytics($pdo, 'tenure_audit@pepp.edu', 501);
+
+assertTest("Requirement C: Post-admission completed task increases eligible completed (1)", $analyticsC['completed_eligible_tasks'] === 1);
+assertTest("Requirement C: Post-admission completed task increases raw completed (2)", $analyticsC['raw_completed_tasks'] === 2);
+assertTest("Requirement C: Post-admission completed task decreases eligible pending (1)", $analyticsC['pending_eligible_tasks'] === 1);
+
+// -----------------------------------------------------------------------------
+// Requirement D: Pre-admission Mega Test
+// Batch 5010 occurred on Sep 08 (before STU060 joined on Sep 15).
+// - not included in current attendance denominator (total_sessions = 0)
+// - not counted as current missed (attendance_rate is null, not 0%)
+// - not presented as a current student performance deficit (never in needs_attention_activities)
+// - represented as 'Pre-admission' in highlights
+// - does not generate warnings in AI report
+// -----------------------------------------------------------------------------
+assertTest("Requirement D: Pre-admission Mega Test not included in current attendance denominator (total_sessions = 0)", $analyticsC['total_sessions'] === 0);
+assertTest("Requirement D: Pre-admission Mega Test not counted as current missed (attendance_rate is null)", $analyticsC['attendance_rate'] === null);
+assertTest("Requirement D: Pre-admission mega tests count tracked accurately (1)", ($analyticsC['pre_admission_mega_tests'] ?? 0) === 1);
+
+$preAdmHighlight = null;
+foreach ($analyticsC['learning_highlights']['all_activities'] as $h) {
+    if ((int)$h['activity_id'] === 5002) {
+        $preAdmHighlight = $h;
+        break;
+    }
+}
+assertTest("Requirement D: Pre-admission test represented as 'Pre-admission' status label", $preAdmHighlight !== null && $preAdmHighlight['status_label'] === 'Pre-admission');
+assertTest("Requirement D: Pre-admission test represented as 'Pre-admission' performance display", $preAdmHighlight !== null && $preAdmHighlight['performance_display'] === 'Pre-admission');
+
+$needsAttnIds = array_column($analyticsC['learning_highlights']['needs_attention_activities'] ?? [], 'activity_id');
+assertTest("Requirement D: Pre-admission test excluded from needs_attention_activities", !in_array(5002, $needsAttnIds));
+
+$canonical60 = StudentMentorAiService::extractCanonicalData($pdo, 'STU060', 501, 1, true);
+$fallback60 = StudentMentorAiService::buildFallbackResponse($canonical60, "Pre-admission mega test verification");
+
+assertTest("Requirement D: Canonical mega_tests reports has_data false when all tests pre-admission", $canonical60['mega_tests']['has_data'] === false);
+assertTest("Requirement D: Canonical mega_tests tracks pre_admission_tests count (1)", $canonical60['mega_tests']['pre_admission_tests'] === 1);
+assertTest("Requirement D: Pre-admission test does not generate AI performance warning",
+    !str_contains(strtolower(implode(' ', $fallback60['analysis']['warnings'])), 'mega test')
+);
+assertTest("Requirement D: AI wa_text cites no published mega tests rather than missed test",
+    str_contains($fallback60['wa_text'], 'No published mega tests for this study plan')
+);
 echo "\n";
 
 // ─────────────────────────────────────────────────────────────────────────────
