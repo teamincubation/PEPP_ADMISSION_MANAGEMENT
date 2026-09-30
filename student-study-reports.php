@@ -871,6 +871,130 @@ if (isset($_GET['action'])) {
         exit;
     }
 
+    // 3.5. On-Demand Student Mentor AI Analysis
+    if ($_GET['action'] === 'get_student_ai_analysis') {
+        $student_id = trim($_REQUEST['student_id'] ?? $_REQUEST['user_id'] ?? '');
+        $email = trim($_REQUEST['email'] ?? '');
+        $plan_id = (int)($_REQUEST['plan_id'] ?? $_REQUEST['study_plan_id'] ?? 0);
+        $cur_admin_id = $admin_row['id'] ?? 0;
+        $is_super = is_super_admin();
+
+        if ($plan_id <= 0) {
+            echo json_encode(['success' => false, 'error' => 'Invalid or missing study plan ID.']);
+            exit;
+        }
+
+        try {
+            require_once __DIR__ . '/includes/ai/StudentMentorAiService.php';
+            $service = new StudentMentorAiService($pdo);
+            $result = $service->analyzeStudentStudyPlan($pdo, $student_id ?: $email, $plan_id, $cur_admin_id, $is_super);
+            echo json_encode($result);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // 3.6. Send Student AI Report via WhatsApp
+    if ($_GET['action'] === 'send_student_ai_wa_report') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !csrf_verify()) {
+            echo json_encode(['success' => false, 'error' => 'Security token mismatch. Please reload and try again.']);
+            exit;
+        }
+
+        if (!can_admin_whatsapp_chat()) {
+            echo json_encode(['success' => false, 'error' => 'Access Denied: You do not have permission to initiate WhatsApp messages.']);
+            exit;
+        }
+
+        $student_id = trim($_POST['student_id'] ?? $_POST['user_id'] ?? '');
+        $email = trim($_POST['email'] ?? '');
+        $plan_id = (int)($_POST['plan_id'] ?? 0);
+        $wa_text = trim($_POST['wa_text'] ?? '');
+
+        if ($wa_text === '') {
+            echo json_encode(['success' => false, 'error' => 'Report text is empty.']);
+            exit;
+        }
+
+        try {
+            // Resolve student strictly server-side from database
+            $stmt = $pdo->prepare("
+                SELECT user_id, name, email, phone, whatsapp_number, whatsapp_country_code, student_status
+                FROM users
+                WHERE (user_id = ? OR LOWER(email) = LOWER(?)) AND status = 'approved'
+                LIMIT 1
+            ");
+            $stmt->execute([$student_id, $email ?: $student_id]);
+            $student = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$student) {
+                echo json_encode(['success' => false, 'error' => 'Student not found.']);
+                exit;
+            }
+
+            $st_status = strtolower(trim((string)($student['student_status'] ?? 'active'))) ?: 'unknown';
+            if (in_array($st_status, ['dropout', 'completed'], true)) {
+                echo json_encode(['success' => false, 'error' => 'Access Denied: Student account is not active.']);
+                exit;
+            }
+
+            $cur_admin_id = $admin_row['id'] ?? 0;
+            if (!is_super_admin() && function_exists('is_student_assigned_to_mentor')) {
+                if (!is_student_assigned_to_mentor($pdo, $student['user_id'], $cur_admin_id)) {
+                    echo json_encode(['success' => false, 'error' => 'Access Denied: Student is not actively assigned to you.']);
+                    exit;
+                }
+            }
+
+            // Resolve student WhatsApp number strictly server-side reusing student-mentoring.php logic
+            $raw_wa = trim((string)($student['whatsapp_number'] ?? ''));
+            if ($raw_wa === '') {
+                $raw_wa = trim((string)($student['phone'] ?? ''));
+            }
+
+            $digits_only = preg_replace('/\D/', '', $raw_wa);
+            if (empty($digits_only) || strlen($digits_only) < 10) {
+                echo json_encode(['success' => false, 'error' => 'Student WhatsApp number is not available.']);
+                exit;
+            }
+
+            // Normalization matching student-mentoring.php: ($s['whatsapp_country_code'] ?: '+91') . $s['whatsapp_number']
+            $country_code = trim((string)($student['whatsapp_country_code'] ?? '')) ?: '+91';
+            $clean_code = preg_replace('/\D/', '', $country_code) ?: '91';
+
+            if (strlen($digits_only) === 10) {
+                $clean_phone = $clean_code . $digits_only;
+            } elseif (strlen($digits_only) > 10 && str_starts_with($digits_only, $clean_code)) {
+                $clean_phone = $digits_only;
+            } else {
+                $clean_phone = preg_replace('/\D/', '', $country_code . $raw_wa);
+            }
+
+            if (empty($clean_phone) || strlen($clean_phone) < 10) {
+                echo json_encode(['success' => false, 'error' => 'Student WhatsApp number is not available.']);
+                exit;
+            }
+
+            // Construct safe prefilled wa.me URL with exact formatted report text
+            // Reuses student-mentoring.php direct-chat mechanism (https://wa.me/<student_number>)
+            // Does NOT call Meta WhatsApp Cloud API, Business API, queue, or templates.
+            $wa_url = 'https://wa.me/' . $clean_phone . '?text=' . rawurlencode($wa_text);
+
+            echo json_encode([
+                'success' => true,
+                'status' => 'ready',
+                'student_name' => $student['name'],
+                'masked_phone' => format_credential_text($raw_wa, 'phone', 'students'),
+                'wa_url' => $wa_url,
+                'message' => 'WhatsApp chat opened with the report ready to send.'
+            ]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => 'Failed to prepare WhatsApp chat: ' . $e->getMessage()]);
+        }
+        exit;
+    }
+
     // 4. Course Analytics KPIs & Dashboard data
     if ($_GET['action'] === 'get_course_analytics') {
         $course_name = trim($_GET['course_name'] ?? '');
@@ -1687,7 +1811,9 @@ $isMentoringReport = ($source === 'mentoring');
 $kpis = [];
 $assigned_courses = [];
 
-if ($source === 'courses' || $source === 'mentoring') {
+// Global KPIs & Course filters are only needed for the courses workspace view.
+// In mentoring student-report mode, bypass all 20+ heavy database queries for instant response.
+if ($source === 'courses' && !$isMentoringReport) {
     $assigned_plans_subquery = "
         EXISTS (
             SELECT 1 FROM study_plan_assignments sa
@@ -2567,6 +2693,244 @@ include 'includes/admin_nav.php';
             page-break-inside: avoid;
             margin-bottom: 15px !important;
         }
+        #ai-student-analysis-modal-backdrop {
+            display: none !important;
+        }
+    }
+
+    /* Mentoring Performance Skeleton & Percentage Progress Loader */
+    .mentoring-loader-card {
+        background: var(--card-bg, #ffffff);
+        border: 1px solid var(--border, #e2e8f0);
+        border-radius: 16px;
+        padding: 1.5rem 2rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.04);
+        position: relative;
+        overflow: hidden;
+    }
+    .mentoring-progress-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.75rem;
+    }
+    .mentoring-progress-title {
+        font-family: var(--header-font, sans-serif);
+        font-weight: 800;
+        font-size: 1.05rem;
+        color: var(--text-main, #1e293b);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .mentoring-progress-badge {
+        background: linear-gradient(135deg, #4f46e5, #7c3aed);
+        color: #ffffff;
+        font-weight: 800;
+        font-size: 0.85rem;
+        padding: 4px 12px;
+        border-radius: 20px;
+        letter-spacing: 0.5px;
+        box-shadow: 0 2px 8px rgba(79, 70, 229, 0.25);
+    }
+    .mentoring-progress-track {
+        width: 100%;
+        height: 10px;
+        background: #f1f5f9;
+        border-radius: 10px;
+        overflow: hidden;
+        position: relative;
+    }
+    .mentoring-progress-fill {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #4f46e5 0%, #06b6d4 100%);
+        border-radius: 10px;
+        transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+        position: relative;
+    }
+    .mentoring-progress-fill::after {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+        animation: progressShimmer 1.5s infinite;
+    }
+    @keyframes progressShimmer {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
+    }
+    .mentoring-milestones {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 0.75rem;
+        font-size: 0.72rem;
+        color: var(--text-muted, #64748b);
+        font-weight: 600;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .mentoring-milestones span.active-step {
+        color: #4f46e5;
+        font-weight: 800;
+    }
+    .mentoring-status-msg {
+        font-size: 0.82rem;
+        color: var(--text-muted, #64748b);
+        margin-top: 0.6rem;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    /* Skeleton Shimmer Blocks */
+    .skeleton-box {
+        background: #f1f5f9;
+        border-radius: 12px;
+        position: relative;
+        overflow: hidden;
+    }
+    .skeleton-box::after {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
+        animation: progressShimmer 1.5s infinite;
+    }
+
+    /* AI Analysis Button */
+    .btn-ai-analysis {
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%);
+        color: #ffffff !important;
+        border: none;
+        border-radius: 8px;
+        box-shadow: 0 3px 12px rgba(99, 102, 241, 0.35);
+        transition: all 0.25s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .btn-ai-analysis:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 5px 18px rgba(99, 102, 241, 0.5);
+        color: #ffffff !important;
+    }
+    .btn-ai-analysis:disabled {
+        opacity: 0.7;
+        transform: none;
+        cursor: not-allowed;
+    }
+
+    /* AI Analysis Modal */
+    .ai-modal-backdrop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(15, 23, 42, 0.7);
+        backdrop-filter: blur(4px);
+        z-index: 1050;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        overflow-y: auto;
+    }
+    .ai-modal-backdrop.show {
+        display: flex;
+    }
+    .ai-modal {
+        background: #ffffff;
+        border-radius: 20px;
+        width: 100%;
+        max-width: 950px;
+        max-height: 90vh;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        animation: aiModalZoom 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes aiModalZoom {
+        from { opacity: 0; transform: scale(0.96); }
+        to { opacity: 1; transform: scale(1); }
+    }
+    .ai-modal-header {
+        padding: 1.25rem 1.75rem;
+        background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+        color: #ffffff;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    .ai-modal-body {
+        padding: 1.5rem 1.75rem;
+        overflow-y: auto;
+        flex: 1;
+        background: #f8fafc;
+    }
+    .ai-kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+        gap: 10px;
+        margin-bottom: 1.25rem;
+    }
+    .ai-kpi-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 10px 12px;
+        text-align: center;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+    }
+    .ai-card-section {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 1.25rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+    }
+    .ai-section-title {
+        font-family: var(--header-font, sans-serif);
+        font-weight: 800;
+        font-size: 0.92rem;
+        color: #1e293b;
+        margin-bottom: 0.75rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .ai-stage-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border-radius: 10px;
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        margin-bottom: 8px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #475569;
+        transition: all 0.3s ease;
+    }
+    .ai-stage-item.stage-active {
+        background: #eef2ff;
+        border-color: #6366f1;
+        color: #4338ca;
+        box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15);
+    }
+    .ai-stage-item.stage-done {
+        background: #f0fdf4;
+        border-color: #86efac;
+        color: #15803d;
     }
 </style>
 
@@ -2728,7 +3092,46 @@ include 'includes/admin_nav.php';
         <?php endif; ?>
 
         <!-- DYNAMIC WORKSPACE (Student Intelligence Dashboard populated here via JS) -->
+        <?php if ($isMentoringReport): ?>
+        <div id="student-workspace" style="display:block; margin-bottom:2rem;">
+            <!-- Instant Performance Skeleton & Animated Percentage Loader -->
+            <div class="mentoring-loader-card" id="mentoring-progress-card">
+                <div class="mentoring-progress-header">
+                    <div class="mentoring-progress-title">
+                        <i class="fas fa-microchip" style="color:var(--accent, #4f46e5);"></i>
+                        <span>PEPP Intelligence Engine: Synthesizing Student Report</span>
+                    </div>
+                    <div class="mentoring-progress-badge" id="mentoring-pct-badge">0%</div>
+                </div>
+                <div class="mentoring-progress-track">
+                    <div class="mentoring-progress-fill" id="mentoring-progress-bar" style="width: 0%;"></div>
+                </div>
+                <div class="mentoring-milestones">
+                    <span id="milestone-15">✓ Access & Identity (15%)</span>
+                    <span id="milestone-30">✓ Canonical Profile (30%)</span>
+                    <span id="milestone-50">✓ Plan Analytics & Streaks (50%)</span>
+                    <span id="milestone-70">✓ Checklist Audit (70%)</span>
+                    <span id="milestone-85">✓ Mega Test & Live Data (85%)</span>
+                    <span id="milestone-100">✓ Ready (100%)</span>
+                </div>
+                <div class="mentoring-status-msg" id="mentoring-status-text">
+                    <i class="fas fa-circle-notch fa-spin" style="color:var(--accent, #4f46e5);"></i>
+                    <span>Connecting to student academic intelligence registry...</span>
+                </div>
+            </div>
+
+            <!-- Instant Skeleton UI Shell -->
+            <div style="display:grid; grid-template-columns: 330px 1fr; gap:1.5rem; align-items:start;" id="mentoring-skeleton-shell">
+                <div class="skeleton-box" style="height: 480px; padding: 1.5rem; border-radius: 16px;"></div>
+                <div style="display:flex; flex-direction:column; gap:1.2rem;">
+                    <div class="skeleton-box" style="height: 140px; border-radius: 16px;"></div>
+                    <div class="skeleton-box" style="height: 320px; border-radius: 16px;"></div>
+                </div>
+            </div>
+        </div>
+        <?php else: ?>
         <div id="student-workspace" style="display:none; margin-bottom:2rem;"></div>
+        <?php endif; ?>
 
         <?php if (!$isMentoringReport): ?>
         <!-- COURSE ANALYTICS MODULE -->
@@ -3028,6 +3431,7 @@ include 'includes/admin_nav.php';
 
             <!-- Quick Actions -->
             <div style="display:flex; gap:8px; align-items:center;">
+                <button type="button" class="btn btn-sm btn-ai-analysis" id="st-modal-ai-btn" style="padding: 6px 14px; font-size: 0.8rem; font-weight: 700;" onclick="openStudentAiAnalysis()"><i class="fas fa-wand-magic-sparkles"></i> ✨ Show AI Analysis</button>
                 <button type="button" class="btn btn-sm btn-outline" id="st-modal-print-btn" style="padding: 6px 12px; font-size: 0.8rem;" onclick="printStudentLearningAnalyticsReport()"><i class="fas fa-print"></i> Print Report</button>
                 <button type="button" class="btn btn-sm btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" onclick="exportTimelineExcel()"><i class="fas fa-file-excel"></i> Excel</button>
                 <button type="button" class="btn btn-sm btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" onclick="exportTimelineCSV()"><i class="fas fa-file-csv"></i> CSV</button>
@@ -3176,6 +3580,38 @@ include 'includes/admin_nav.php';
                 </div>
             </div>
 
+        </div>
+    </div>
+</div>
+
+<!-- ── ON-DEMAND AI STUDENT MENTOR ANALYSIS MODAL ── -->
+<div class="ai-modal-backdrop" id="ai-student-analysis-modal-backdrop" onclick="closeStudentAiAnalysis()">
+    <div class="ai-modal" onclick="event.stopPropagation()">
+        <!-- Modal Header -->
+        <div class="ai-modal-header">
+            <div>
+                <h4 style="margin:0; font-family:var(--header-font); font-weight:800; font-size:1.15rem; color:#ffffff; display:flex; align-items:center; gap:8px;">
+                    <i class="fas fa-wand-magic-sparkles" style="color:#a78bfa;"></i>
+                    <span>AI Academic Mentor Analysis & Guidance</span>
+                </h4>
+                <p id="ai-modal-subtitle" style="margin:3px 0 0 0; font-size:0.75rem; color:#cbd5e1;"></p>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+                <button type="button" class="btn btn-sm btn-outline" id="ai-copy-wa-btn" style="background:rgba(255,255,255,0.12); color:#fff; border-color:rgba(255,255,255,0.25); padding:6px 12px; font-size:0.8rem;" onclick="copyAiReportWaText()">
+                    <i class="fas fa-copy"></i> 📋 Copy WhatsApp Text
+                </button>
+                <button type="button" class="btn btn-sm" id="ai-send-wa-btn" style="background:#25d366; color:#ffffff; border:none; padding:6px 14px; font-size:0.8rem; font-weight:700; box-shadow:0 2px 8px rgba(37,211,102,0.3);" onclick="sendStudentAiReportWa()">
+                    <i class="fab fa-whatsapp"></i> 📱 Send to WhatsApp
+                </button>
+                <button type="button" class="btn btn-sm btn-soft-red" style="padding:6px 12px; margin-left:6px;" onclick="closeStudentAiAnalysis()">
+                    <i class="fas fa-xmark"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Modal Body -->
+        <div class="ai-modal-body" id="ai-modal-body-content">
+            <!-- Populated via JS: Loading animation or Structured Report -->
         </div>
     </div>
 </div>
@@ -3505,14 +3941,73 @@ include 'includes/admin_nav.php';
         }
     }
 
+    // ── MENTORING SKELETON & PROGRESS LOADER HELPERS ──
+    function setMentoringProgress(pct, statusText, milestoneId = '') {
+        const bar = document.getElementById('mentoring-progress-bar');
+        const badge = document.getElementById('mentoring-pct-badge');
+        const txt = document.getElementById('mentoring-status-text');
+        if (bar) bar.style.width = pct + '%';
+        if (badge) badge.textContent = pct + '%';
+        if (txt) {
+            txt.innerHTML = `<i class="fas ${pct >= 100 ? 'fa-circle-check' : 'fa-circle-notch fa-spin'}" style="color:${pct >= 100 ? '#10b981' : 'var(--accent, #4f46e5)'};"></i> <span>${statusText}</span>`;
+        }
+        if (milestoneId) {
+            const m = document.getElementById(milestoneId);
+            if (m) m.classList.add('active-step');
+        }
+    }
+
+    function renderMentoringProgressLoader(container) {
+        container.innerHTML = `
+            <div class="mentoring-loader-card" id="mentoring-progress-card">
+                <div class="mentoring-progress-header">
+                    <div class="mentoring-progress-title">
+                        <i class="fas fa-microchip" style="color:var(--accent, #4f46e5);"></i>
+                        <span>PEPP Intelligence Engine: Synthesizing Student Report</span>
+                    </div>
+                    <div class="mentoring-progress-badge" id="mentoring-pct-badge">15%</div>
+                </div>
+                <div class="mentoring-progress-track">
+                    <div class="mentoring-progress-fill" id="mentoring-progress-bar" style="width: 15%;"></div>
+                </div>
+                <div class="mentoring-milestones">
+                    <span id="milestone-15" class="active-step">✓ Access & Identity (15%)</span>
+                    <span id="milestone-30">✓ Canonical Profile (30%)</span>
+                    <span id="milestone-50">✓ Plan Analytics & Streaks (50%)</span>
+                    <span id="milestone-70">✓ Checklist Audit (70%)</span>
+                    <span id="milestone-85">✓ Mega Test & Live Data (85%)</span>
+                    <span id="milestone-100">✓ Ready (100%)</span>
+                </div>
+                <div class="mentoring-status-msg" id="mentoring-status-text">
+                    <i class="fas fa-circle-notch fa-spin" style="color:var(--accent, #4f46e5);"></i>
+                    <span>Verifying student access & identity credentials...</span>
+                </div>
+            </div>
+
+            <!-- Instant Skeleton UI Shell -->
+            <div style="display:grid; grid-template-columns: 330px 1fr; gap:1.5rem; align-items:start;" id="mentoring-skeleton-shell">
+                <div class="skeleton-box" style="height: 480px; padding: 1.5rem; border-radius: 16px;"></div>
+                <div style="display:flex; flex-direction:column; gap:1.2rem;">
+                    <div class="skeleton-box" style="height: 140px; border-radius: 16px;"></div>
+                    <div class="skeleton-box" style="height: 320px; border-radius: 16px;"></div>
+                </div>
+            </div>
+        `;
+    }
+
     // ── LOAD INTEL DASHBOARD ──
     function loadStudentIntelligenceDashboard(email, studentId = '') {
         currentSelectedStudentEmail = email;
         currentSelectedStudentId = studentId;
         hideAllViewportViews();
         const container = document.getElementById('student-workspace');
-        container.innerHTML = `<div class="chart-card" style="text-align:center; padding:4rem;"><i class="fas fa-spinner fa-spin" style="font-size:2rem; color:var(--accent);"></i><p>Gathering learning analytics indicators...</p></div>`;
         container.style.display = 'block';
+
+        if (!document.getElementById('mentoring-progress-card')) {
+            renderMentoringProgressLoader(container);
+        } else {
+            setMentoringProgress(15, 'Verifying student access & identity credentials...', 'milestone-15');
+        }
 
         let url = '?action=get_student_intelligence';
         if (studentId) {
@@ -3521,13 +4016,24 @@ include 'includes/admin_nav.php';
             url += '&email=' + encodeURIComponent(email);
         }
 
+        setTimeout(() => {
+            setMentoringProgress(30, 'Resolving student canonical profile & academic year...', 'milestone-30');
+        }, 80);
+        setTimeout(() => {
+            setMentoringProgress(50, 'Analyzing assigned study plans, streaks & consistency...', 'milestone-50');
+        }, 180);
+
         fetch(url)
             .then(res => res.json())
             .then(data => {
                 if (data.error) {
-                    container.innerHTML = `<div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i> <span>${data.error}</span></div>`;
+                    container.innerHTML = `<div class="alert alert-error" style="padding:1.5rem; border-radius:12px;"><i class="fas fa-triangle-exclamation"></i> <span>${data.error}</span></div>`;
                     return;
                 }
+
+                setMentoringProgress(70, 'Auditing checklist completions & overdue milestones...', 'milestone-70');
+                setMentoringProgress(85, 'Aggregating Mega Test scores & live session attendance...', 'milestone-85');
+                setMentoringProgress(100, 'Student Academic Intelligence Workspace Ready!', 'milestone-100');
 
                 const s = data.student;
                 currentSelectedStudentName = s.name;
@@ -3976,12 +4482,454 @@ include 'includes/admin_nav.php';
         if (backdrop) {
             backdrop.classList.remove('show');
         }
-        document.body.style.overflow = '';
+        const aiBackdrop = document.getElementById('ai-student-analysis-modal-backdrop');
+        if (!aiBackdrop || !aiBackdrop.classList.contains('show')) {
+            document.body.style.overflow = '';
+        }
+    }
+
+    // ── ON-DEMAND STUDENT MENTOR AI MODAL HANDLERS ──
+    let aiStageInterval = null;
+
+    function closeStudentAiAnalysis() {
+        if (aiStageInterval) {
+            clearInterval(aiStageInterval);
+            aiStageInterval = null;
+        }
+        const backdrop = document.getElementById('ai-student-analysis-modal-backdrop');
+        if (backdrop) {
+            backdrop.classList.remove('show');
+        }
+        const timelineBackdrop = document.getElementById('student-task-modal-backdrop');
+        if (!timelineBackdrop || !timelineBackdrop.classList.contains('show')) {
+            document.body.style.overflow = '';
+        }
+    }
+
+    function openStudentAiAnalysis() {
+        const timelineBackdrop = document.getElementById('student-task-modal-backdrop');
+        const planId = timelineBackdrop ? (timelineBackdrop.dataset.planId || '') : (window.currentPlanAnalyticsPayload ? window.currentPlanAnalyticsPayload.analytics.study_plan_id : '');
+        const studentId = currentSelectedStudentId || (timelineBackdrop ? timelineBackdrop.dataset.studentId : '');
+        const email = currentSelectedStudentEmail || (timelineBackdrop ? timelineBackdrop.dataset.email : '');
+        const planTitle = timelineBackdrop ? (timelineBackdrop.dataset.planTitle || 'Study Plan') : 'Study Plan';
+
+        if (!planId || parseInt(planId, 10) <= 0) {
+            alert('Please select and open a specific study plan before requesting AI mentor analysis.');
+            return;
+        }
+
+        const subtitleEl = document.getElementById('ai-modal-subtitle');
+        if (subtitleEl) {
+            subtitleEl.innerHTML = `Student: <strong>${r_esc_js(currentSelectedStudentName || studentId)}</strong> &nbsp;|&nbsp; Plan: <strong>${r_esc_js(planTitle)}</strong>`;
+        }
+
+        const modalBackdrop = document.getElementById('ai-student-analysis-modal-backdrop');
+        if (modalBackdrop) {
+            modalBackdrop.classList.add('show');
+            document.body.style.overflow = 'hidden';
+        }
+
+        const bodyContent = document.getElementById('ai-modal-body-content');
+        if (!bodyContent) return;
+
+        // Render 8-stage progress tracker
+        bodyContent.innerHTML = `
+            <div style="max-width: 650px; margin: 1.5rem auto; text-align: left;">
+                <div style="text-align: center; margin-bottom: 1.5rem;">
+                    <div style="width: 64px; height: 64px; border-radius: 50%; background: #eef2ff; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 12px; color: #6366f1; font-size: 1.8rem; box-shadow: 0 4px 15px rgba(99,102,241,0.2);">
+                        <i class="fas fa-wand-magic-sparkles fa-pulse"></i>
+                    </div>
+                    <h4 style="font-family:var(--header-font); font-weight: 800; color: #1e293b; margin: 0 0 6px 0; font-size: 1.25rem;">
+                        Synthesizing AI Academic Mentor Intelligence
+                    </h4>
+                    <p style="font-size: 0.85rem; color: #64748b; margin: 0;">
+                        Auditing canonical ERP metrics, study streaks, test results & cohort ranking via Gemini 3.5 Flash...
+                    </p>
+                </div>
+
+                <div id="ai-stages-container" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:16px; padding:1.25rem; box-shadow:0 4px 12px rgba(0,0,0,0.03);">
+                    <div class="ai-stage-item stage-active" id="ai-stage-1"><i class="fas fa-circle-notch fa-spin"></i> <span>1. Checklist Completion & Task Audit</span></div>
+                    <div class="ai-stage-item" id="ai-stage-2"><i class="far fa-circle"></i> <span>2. Overdue Task Pattern Analysis</span></div>
+                    <div class="ai-stage-item" id="ai-stage-3"><i class="far fa-circle"></i> <span>3. Chapter & Subject Progress Evaluation</span></div>
+                    <div class="ai-stage-item" id="ai-stage-4"><i class="far fa-circle"></i> <span>4. Mega Test Performance & Readiness</span></div>
+                    <div class="ai-stage-item" id="ai-stage-5"><i class="far fa-circle"></i> <span>5. Live Session Attendance & Engagement</span></div>
+                    <div class="ai-stage-item" id="ai-stage-6"><i class="far fa-circle"></i> <span>6. Cohort Percentile & Academic Ranking</span></div>
+                    <div class="ai-stage-item" id="ai-stage-7"><i class="far fa-circle"></i> <span>7. Key Learning Indicators & Trends</span></div>
+                    <div class="ai-stage-item" id="ai-stage-8"><i class="far fa-circle"></i> <span>8. Synthesizing Strategic Mentor Action Plan</span></div>
+                </div>
+            </div>
+        `;
+
+        let currentStage = 1;
+        if (aiStageInterval) clearInterval(aiStageInterval);
+        aiStageInterval = setInterval(() => {
+            if (currentStage <= 8) {
+                const prevEl = document.getElementById(`ai-stage-${currentStage}`);
+                if (prevEl) {
+                    prevEl.className = 'ai-stage-item stage-done';
+                    prevEl.innerHTML = `<i class="fas fa-check-circle" style="color:#10b981;"></i> <span>${prevEl.innerText.trim()}</span>`;
+                }
+                currentStage++;
+                if (currentStage <= 8) {
+                    const nextEl = document.getElementById(`ai-stage-${currentStage}`);
+                    if (nextEl) {
+                        nextEl.className = 'ai-stage-item stage-active';
+                        nextEl.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>${nextEl.innerText.trim()}</span>`;
+                    }
+                }
+            }
+        }, 700);
+
+        let url = `?action=get_student_ai_analysis&plan_id=${encodeURIComponent(planId)}`;
+        if (studentId) url += `&student_id=${encodeURIComponent(studentId)}`;
+        if (email) url += `&email=${encodeURIComponent(email)}`;
+
+        fetch(url)
+            .then(res => res.json())
+            .then(data => {
+                if (aiStageInterval) {
+                    clearInterval(aiStageInterval);
+                    aiStageInterval = null;
+                }
+
+                if (!data.success) {
+                    bodyContent.innerHTML = `
+                        <div style="max-width: 600px; margin: 2rem auto; text-align: center; background: #fff; border: 1px solid #fee2e2; border-radius: 16px; padding: 2rem; box-shadow: 0 4px 15px rgba(239,68,68,0.06);">
+                            <div style="width: 50px; height: 50px; border-radius: 50%; background: #fee2e2; display: inline-flex; align-items: center; justify-content: center; color: #dc2626; font-size: 1.5rem; margin-bottom: 12px;">
+                                <i class="fas fa-triangle-exclamation"></i>
+                            </div>
+                            <h4 style="font-weight: 800; color: #991b1b; margin-bottom: 8px;">AI Analysis Unavailable</h4>
+                            <p style="font-size: 0.88rem; color: #7f1d1d; margin-bottom: 1.5rem; line-height: 1.5;">${r_esc_js(data.error || 'Failed to complete AI mentor analysis.')}</p>
+                            <button class="btn btn-sm btn-primary" onclick="openStudentAiAnalysis()"><i class="fas fa-arrow-rotate-right"></i> Retry Analysis</button>
+                        </div>
+                    `;
+                    return;
+                }
+
+                window.currentStudentAiReportData = data;
+                renderAiAnalysisModal(data);
+            })
+            .catch(err => {
+                if (aiStageInterval) {
+                    clearInterval(aiStageInterval);
+                    aiStageInterval = null;
+                }
+                bodyContent.innerHTML = `
+                    <div style="max-width: 600px; margin: 2rem auto; text-align: center; background: #fff; border: 1px solid #fee2e2; border-radius: 16px; padding: 2rem;">
+                        <i class="fas fa-plug-circle-xmark" style="font-size: 2.5rem; color: #dc2626; margin-bottom: 12px;"></i>
+                        <h4 style="font-weight: 800; color: #991b1b;">Connection Error</h4>
+                        <p style="font-size: 0.88rem; color: #7f1d1d; margin-bottom: 1.5rem;">${r_esc_js(err.message)}</p>
+                        <button class="btn btn-sm btn-primary" onclick="openStudentAiAnalysis()"><i class="fas fa-arrow-rotate-right"></i> Retry</button>
+                    </div>
+                `;
+            });
+    }
+
+    function renderAiAnalysisModal(data) {
+        const bodyContent = document.getElementById('ai-modal-body-content');
+        if (!bodyContent) return;
+
+        const a = data.analysis || {};
+        const snap = a.snapshot || {};
+
+        const statusClass = (a.overall_status === 'Elite Performer' || a.overall_status === 'Strong Performer') ? 'green' : ((a.overall_status === 'Needs Attention' || a.overall_status === 'Critical') ? 'red' : 'blue');
+
+        function renderListItems(arr, fallbackText = 'None recorded.') {
+            if (!arr || !Array.isArray(arr) || arr.length === 0) {
+                return `<li style="color:#64748b; font-style:italic;">${fallbackText}</li>`;
+            }
+            return arr.map(item => `<li style="margin-bottom:6px; line-height:1.45;">${r_esc_js(item)}</li>`).join('');
+        }
+
+        let html = `
+            <!-- Top Status Banner -->
+            <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; padding:1.25rem; margin-bottom:1.25rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; box-shadow:0 2px 8px rgba(0,0,0,0.02);">
+                <div>
+                    <span style="font-size:0.7rem; font-weight:800; text-transform:uppercase; color:#64748b; letter-spacing:0.5px; display:block; margin-bottom:4px;">Academic Performance Assessment</span>
+                    <h3 style="font-family:var(--header-font); font-weight:800; font-size:1.35rem; color:#1e293b; margin:0; display:flex; align-items:center; gap:8px;">
+                        <span>${r_esc_js(a.overall_status || 'Evaluated')}</span>
+                        <span class="badge ${statusClass}" style="font-size:0.75rem; text-transform:uppercase;">AI Verified</span>
+                    </h3>
+                    <p style="font-size:0.85rem; color:#475569; margin:4px 0 0 0; line-height:1.4;">${r_esc_js(a.status_summary || '')}</p>
+                </div>
+                <div>
+                    <span style="font-size:0.72rem; color:#64748b; background:#f1f5f9; padding:4px 10px; border-radius:20px; font-weight:700;">
+                        <i class="fas fa-brain" style="color:#6366f1;"></i> ${r_esc_js(data.model_used || 'Gemini 3.5 Flash')}
+                    </span>
+                </div>
+            </div>
+
+            <!-- KPI Quick Snapshot Grid -->
+            <div class="ai-kpi-grid">
+                <div class="ai-kpi-card">
+                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">Checklist</div>
+                    <strong style="font-size:1.2rem; color:#1e293b; display:block; margin-top:3px;">${snap.checklist_pct ?? 0}%</strong>
+                </div>
+                <div class="ai-kpi-card">
+                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">Completed</div>
+                    <strong style="font-size:1.2rem; color:#10b981; display:block; margin-top:3px;">${snap.completed ?? 0}</strong>
+                </div>
+                <div class="ai-kpi-card">
+                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">Pending</div>
+                    <strong style="font-size:1.2rem; color:#f59e0b; display:block; margin-top:3px;">${snap.pending ?? 0}</strong>
+                </div>
+                <div class="ai-kpi-card">
+                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">Overdue</div>
+                    <strong style="font-size:1.2rem; color:${(snap.overdue ?? 0) > 0 ? '#ef4444' : '#10b981'}; display:block; margin-top:3px;">${snap.overdue ?? 0}</strong>
+                </div>
+                <div class="ai-kpi-card">
+                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">Active Streak</div>
+                    <strong style="font-size:1.2rem; color:#b45309; display:block; margin-top:3px;">🔥 ${snap.streak ?? 0}d</strong>
+                </div>
+                <div class="ai-kpi-card">
+                    <div style="font-size:0.68rem; font-weight:800; text-transform:uppercase; color:#64748b;">Consistency</div>
+                    <strong style="font-size:1.2rem; color:#6366f1; display:block; margin-top:3px;">${snap.consistency_pct ?? 0}%</strong>
+                </div>
+            </div>
+
+            <!-- Two-column Academic Detail Grid -->
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap:1.25rem; margin-bottom:1.25rem;">
+                <!-- Column 1: Strengths & Appreciation -->
+                <div>
+                    <div class="ai-card-section">
+                        <div class="ai-section-title"><i class="fas fa-circle-check" style="color:#10b981;"></i> Academic Strengths</div>
+                        <ul style="padding-left:18px; margin:0; font-size:0.85rem; color:#334155;">
+                            ${renderListItems(a.academic_strengths, 'Consistent task engagement')}
+                        </ul>
+                    </div>
+
+                    <div class="ai-card-section">
+                        <div class="ai-section-title"><i class="fas fa-file-pen" style="color:#6366f1;"></i> Mega Test Insights</div>
+                        <ul style="padding-left:18px; margin:0; font-size:0.85rem; color:#334155;">
+                            ${renderListItems(a.mega_test_insights, 'No published mega tests for this study plan.')}
+                        </ul>
+                    </div>
+
+                    <div class="ai-card-section" style="background:#f0fdf4; border-color:#bbf7d0;">
+                        <div class="ai-section-title" style="color:#166534;"><i class="fas fa-award" style="color:#16a34a;"></i> Student Appreciation</div>
+                        <ul style="padding-left:18px; margin:0; font-size:0.85rem; color:#14532d;">
+                            ${renderListItems(a.appreciation, 'Commendable adherence to academic routine.')}
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Column 2: Weaknesses & Guidance -->
+                <div>
+                    <div class="ai-card-section">
+                        <div class="ai-section-title"><i class="fas fa-circle-exclamation" style="color:#f59e0b;"></i> Areas Needing Attention</div>
+                        <ul style="padding-left:18px; margin:0; font-size:0.85rem; color:#334155;">
+                            ${renderListItems(a.academic_weaknesses, 'None flagged at this time.')}
+                        </ul>
+                    </div>
+
+                    <div class="ai-card-section">
+                        <div class="ai-section-title"><i class="fas fa-video" style="color:#06b6d4;"></i> Live Session Insights</div>
+                        <ul style="padding-left:18px; margin:0; font-size:0.85rem; color:#334155;">
+                            ${renderListItems(a.live_session_insights, 'Live sessions not recorded for this study plan.')}
+                        </ul>
+                    </div>
+
+                    ${(a.warnings && a.warnings.length > 0) ? `
+                    <div class="ai-card-section" style="background:#fef2f2; border-color:#fecaca;">
+                        <div class="ai-section-title" style="color:#991b1b;"><i class="fas fa-triangle-exclamation" style="color:#dc2626;"></i> Important Warnings</div>
+                        <ul style="padding-left:18px; margin:0; font-size:0.85rem; color:#7f1d1d;">
+                            ${renderListItems(a.warnings)}
+                        </ul>
+                    </div>
+                    ` : `
+                    <div class="ai-card-section" style="background:#f8fafc; border-color:#e2e8f0;">
+                        <div class="ai-section-title" style="color:#64748b;"><i class="fas fa-shield-check" style="color:#10b981;"></i> Health Check</div>
+                        <p style="font-size:0.85rem; color:#64748b; margin:0; font-style:italic;">No critical warning indicators detected.</p>
+                    </div>
+                    `}
+                </div>
+            </div>
+
+            <!-- Full-width: Cohort Ranking & Strategic Actions -->
+            <div class="ai-card-section">
+                <div class="ai-section-title"><i class="fas fa-ranking-star" style="color:#eab308;"></i> Cohort Standing & Ranking</div>
+                <ul style="padding-left:18px; margin:0 0 10px 0; font-size:0.85rem; color:#334155;">
+                    ${renderListItems(a.ranking_insights, 'Ranking data unavailable.')}
+                </ul>
+            </div>
+
+            <div class="ai-card-section">
+                <div class="ai-section-title"><i class="fas fa-compass" style="color:#4f46e5;"></i> Strategic Mentor Recommended Actions</div>
+                <ol style="padding-left:20px; margin:0; font-size:0.85rem; color:#334155;">
+                    ${(a.recommendations && a.recommendations.length > 0) ?
+                        a.recommendations.map(r => `<li style="margin-bottom:6px; line-height:1.45; font-weight:600;">${r_esc_js(r)}</li>`).join('') :
+                        '<li>Continue following the daily task schedule systematically.</li>'
+                    }
+                </ol>
+            </div>
+
+            <!-- Personalized Mentor Note -->
+            <div class="ai-card-section" style="background:linear-gradient(135deg, #eef2ff 0%, #faf5ff 100%); border-color:#c7d2fe;">
+                <div class="ai-section-title" style="color:#3730a3;"><i class="fas fa-lightbulb" style="color:#6366f1;"></i> Mentor Personalized Guidance Note</div>
+                <p style="font-size:0.9rem; color:#312e81; margin:0; font-weight:600; line-height:1.5;">${r_esc_js(a.mentor_note || 'Maintain your focus and continue working through the curriculum steadily.')}</p>
+            </div>
+
+            <!-- Collapsible WhatsApp Direct Chat Preview -->
+            <div class="ai-card-section" style="margin-top:1.5rem; background:#ffffff;">
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e2e8f0; padding-bottom:8px; margin-bottom:10px;">
+                    <div class="ai-section-title" style="margin:0;"><i class="fab fa-whatsapp" style="color:#25d366;"></i> WhatsApp Direct Chat Preview</div>
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" class="btn btn-sm btn-outline" style="padding:4px 8px; font-size:0.75rem;" onclick="copyAiReportWaText()"><i class="fas fa-copy"></i> Copy</button>
+                        <button type="button" class="btn btn-sm" id="ai-preview-send-btn" style="background:#25d366; color:#fff; padding:4px 10px; font-size:0.75rem; font-weight:700;" onclick="sendStudentAiReportWa()"><i class="fab fa-whatsapp"></i> 📱 Send to WhatsApp</button>
+                    </div>
+                </div>
+                <div id="ai-wa-dispatch-feedback" style="display:none; margin-bottom:10px;"></div>
+                <pre style="white-space:pre-wrap; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:1rem; font-size:0.8rem; color:#1e293b; max-height:280px; overflow-y:auto; font-family:monospace; line-height:1.5;">${r_esc_js(data.wa_text || '')}</pre>
+            </div>
+        `;
+
+        bodyContent.innerHTML = html;
+    }
+
+    function copyAiReportWaText() {
+        const data = window.currentStudentAiReportData;
+        if (!data || !data.wa_text) {
+            alert('Report text is not available to copy.');
+            return;
+        }
+
+        navigator.clipboard.writeText(data.wa_text).then(() => {
+            const btn = document.getElementById('ai-copy-wa-btn');
+            if (btn) {
+                const oldHtml = btn.innerHTML;
+                btn.innerHTML = '<i class="fas fa-check" style="color:#10b981;"></i> Copied!';
+                btn.style.borderColor = '#10b981';
+                setTimeout(() => {
+                    btn.innerHTML = oldHtml;
+                    btn.style.borderColor = '';
+                }, 2000);
+            }
+        }).catch(err => {
+            alert('Clipboard copy error: ' + err.message);
+        });
+    }
+
+    function sendStudentAiReportWa() {
+        const data = window.currentStudentAiReportData;
+        if (!data || !data.wa_text) {
+            alert('Please wait for the AI analysis to complete before dispatching to WhatsApp.');
+            return;
+        }
+
+        const timelineBackdrop = document.getElementById('student-task-modal-backdrop');
+        const planId = timelineBackdrop ? (timelineBackdrop.dataset.planId || '') : (data.canonical_data ? data.canonical_data.student_profile.study_plan_id : '');
+        const studentId = currentSelectedStudentId || (timelineBackdrop ? timelineBackdrop.dataset.studentId : '');
+        const email = currentSelectedStudentEmail || (timelineBackdrop ? timelineBackdrop.dataset.email : '');
+
+        const sendBtn = document.getElementById('ai-send-wa-btn');
+        const previewBtn = document.getElementById('ai-preview-send-btn');
+        [sendBtn, previewBtn].forEach(b => {
+            if (b) {
+                b.disabled = true;
+                b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Opening...';
+            }
+        });
+
+        const fd = new FormData();
+        fd.append('csrf_token', csrfToken);
+        fd.append('student_id', studentId);
+        fd.append('email', email);
+        fd.append('plan_id', planId);
+        fd.append('wa_text', data.wa_text);
+
+        fetch('?action=send_student_ai_wa_report', {
+            method: 'POST',
+            body: fd
+        })
+        .then(res => res.json())
+        .then(resData => {
+            [sendBtn, previewBtn].forEach(b => {
+                if (b) {
+                    b.disabled = false;
+                    b.innerHTML = '<i class="fab fa-whatsapp"></i> 📱 Send to WhatsApp';
+                }
+            });
+
+            if (!resData.success) {
+                const errMsg = resData.error || 'Student WhatsApp number is not available.';
+                showAiWaFeedback(errMsg, 'error');
+                alert(errMsg);
+                return;
+            }
+
+            if (resData.wa_url) {
+                let waWin = null;
+                try {
+                    waWin = window.open(resData.wa_url, '_blank');
+                } catch (e) {
+                    waWin = null;
+                }
+
+                if (!waWin || waWin.closed || typeof waWin.closed === 'undefined') {
+                    showAiWaFeedback('WhatsApp direct chat link prepared, but browser blocked opening automatically. Click below or copy the formatted report:', 'fallback', resData.wa_url);
+                } else {
+                    showAiWaFeedback('WhatsApp chat opened with the report ready to send.', 'success', resData.wa_url);
+                }
+            }
+        })
+        .catch(err => {
+            [sendBtn, previewBtn].forEach(b => {
+                if (b) {
+                    b.disabled = false;
+                    b.innerHTML = '<i class="fab fa-whatsapp"></i> 📱 Send to WhatsApp';
+                }
+            });
+            alert('Communication Error: ' + err.message);
+        });
+    }
+
+    function showAiWaFeedback(message, type = 'success', waUrl = '') {
+        const container = document.getElementById('ai-wa-dispatch-feedback');
+        if (!container) return;
+
+        if (type === 'success') {
+            container.innerHTML = `
+                <div style="background:#ecfdf5; border:1px solid #a7f3d0; border-radius:10px; padding:0.75rem 1rem; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                    <div style="display:flex; align-items:center; gap:8px; color:#065f46; font-size:0.85rem; font-weight:600;">
+                        <i class="fas fa-check-circle" style="color:#10b981; font-size:1.1rem;"></i>
+                        <span>${r_esc_js(message)} (Please click WhatsApp's Send button manually)</span>
+                    </div>
+                    ${waUrl ? `<a href="${waUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-sm" style="background:#25d366; color:#fff; font-size:0.75rem; text-decoration:none; white-space:nowrap; padding:4px 10px; border-radius:6px;"><i class="fab fa-whatsapp"></i> Re-open Chat</a>` : ''}
+                </div>
+            `;
+            container.style.display = 'block';
+        } else if (type === 'fallback') {
+            container.innerHTML = `
+                <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:0.85rem 1rem; margin-bottom:12px;">
+                    <div style="display:flex; align-items:center; gap:8px; color:#92400e; font-size:0.85rem; font-weight:700; margin-bottom:6px;">
+                        <i class="fas fa-triangle-exclamation" style="color:#f59e0b; font-size:1.1rem;"></i>
+                        <span>${r_esc_js(message)}</span>
+                    </div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+                        ${waUrl ? `<a href="${waUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-sm" style="background:#25d366; color:#fff; font-weight:700; text-decoration:none; padding:5px 12px; font-size:0.75rem; border-radius:6px;"><i class="fab fa-whatsapp"></i> Click to Open WhatsApp</a>` : ''}
+                        <button type="button" class="btn btn-sm btn-outline" onclick="copyAiReportWaText()" style="padding:5px 12px; font-size:0.75rem; border-radius:6px;"><i class="fas fa-copy"></i> Copy Formatted Report</button>
+                    </div>
+                </div>
+            `;
+            container.style.display = 'block';
+        } else {
+            container.innerHTML = `
+                <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:10px; padding:0.75rem 1rem; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                    <div style="display:flex; align-items:center; gap:8px; color:#991b1b; font-size:0.85rem; font-weight:600;">
+                        <i class="fas fa-circle-exclamation" style="color:#dc2626; font-size:1.1rem;"></i>
+                        <span>${r_esc_js(message)}</span>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline" onclick="copyAiReportWaText()" style="padding:4px 10px; font-size:0.75rem; border-radius:6px;"><i class="fas fa-copy"></i> Copy Report Instead</button>
+                </div>
+            `;
+            container.style.display = 'block';
+        }
     }
 
     // Global keyboard listener for Escape key to close modals safely
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape' || e.key === 'Esc') {
+            closeStudentAiAnalysis();
             closeTimelineModal();
             if (typeof closeLightbox === 'function') closeLightbox();
             if (typeof closeCardsConfigModal === 'function') closeCardsConfigModal();

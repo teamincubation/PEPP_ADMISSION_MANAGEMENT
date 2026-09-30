@@ -5,6 +5,18 @@
  * multi-plan trajectory, and study-plan based cohort ranking.
  */
 class StudentStudyPlanAnalytics {
+    private static array $planAnalyticsCache = [];
+    private static array $courseAnalyticsCache = [];
+    private static array $cohortStudentsCache = [];
+
+    /**
+     * Clear in-memory static caches (useful for unit test resets).
+     */
+    public static function clearCaches(): void {
+        self::$planAnalyticsCache = [];
+        self::$courseAnalyticsCache = [];
+        self::$cohortStudentsCache = [];
+    }
 
     /**
      * Calculate inclusive calendar days between start_date and end_date.
@@ -115,6 +127,11 @@ class StudentStudyPlanAnalytics {
      * assessment, consistency, timeline, and cohort ranking data.
      */
     public static function getPlanAnalytics($pdo, $student_id_or_email, $study_plan_id) {
+        $inputKey = strtolower(trim((string)$student_id_or_email)) . '_' . (int)$study_plan_id;
+        if (isset(self::$planAnalyticsCache[$inputKey])) {
+            return self::$planAnalyticsCache[$inputKey];
+        }
+
         $now = new DateTimeImmutable('now', new DateTimeZone('Asia/Kolkata'));
         $today = $now->format('Y-m-d');
 
@@ -128,10 +145,20 @@ class StudentStudyPlanAnalytics {
         $stmt_user->execute([$student_id_or_email, $student_id_or_email]);
         $user = $stmt_user->fetch(PDO::FETCH_ASSOC);
         if (!$user) {
-            return self::emptyAnalytics();
+            return self::$planAnalyticsCache[$inputKey] = self::emptyAnalytics();
         }
         $email = $user['email'];
         $user_id = $user['user_id'];
+
+        $canonicalEmailKey = strtolower(trim((string)$email)) . '_' . (int)$study_plan_id;
+        $canonicalUserIdKey = strtolower(trim((string)$user_id)) . '_' . (int)$study_plan_id;
+        if (isset(self::$planAnalyticsCache[$canonicalEmailKey])) {
+            return self::$planAnalyticsCache[$inputKey] = self::$planAnalyticsCache[$canonicalEmailKey];
+        }
+        if (isset(self::$planAnalyticsCache[$canonicalUserIdKey])) {
+            return self::$planAnalyticsCache[$inputKey] = self::$planAnalyticsCache[$canonicalUserIdKey];
+        }
+
         $academic_year = $user['pepp_academic_year'];
         $course_name = $user['pepp_course'];
         $user_photo_raw = !empty($user['user_photo']) ? trim((string)$user['user_photo']) : '';
@@ -156,7 +183,11 @@ class StudentStudyPlanAnalytics {
         ");
         $stmt_val->execute([$study_plan_id, $academic_year, $course_name, $academic_year, $user_id]);
         if ((int)$stmt_val->fetchColumn() === 0) {
-            return self::emptyAnalytics();
+            $empty = self::emptyAnalytics();
+            self::$planAnalyticsCache[$inputKey] = $empty;
+            self::$planAnalyticsCache[$canonicalEmailKey] = $empty;
+            self::$planAnalyticsCache[$canonicalUserIdKey] = $empty;
+            return $empty;
         }
 
         // Fetch plan info
@@ -195,6 +226,9 @@ class StudentStudyPlanAnalytics {
             $res['eligible_plan_calendar_days'] = $total_plan_calendar_days;
             $res['study_plan_id'] = $study_plan_id;
             $res['study_plan_title'] = $plan_title;
+            self::$planAnalyticsCache[$inputKey] = $res;
+            self::$planAnalyticsCache[$canonicalEmailKey] = $res;
+            self::$planAnalyticsCache[$canonicalUserIdKey] = $res;
             return $res;
         }
 
@@ -825,7 +859,7 @@ class StudentStudyPlanAnalytics {
             'study_plan' => $plan_title
         ];
 
-        return [
+        $finalRes = [
             'study_plan_id' => $study_plan_id,
             'study_plan_title' => $plan_title,
             'academic_year' => $academic_year,
@@ -881,6 +915,11 @@ class StudentStudyPlanAnalytics {
             'cohort_ranking' => $cohort_ranking,
             'mentor_insights' => $mentor_insights
         ];
+
+        self::$planAnalyticsCache[$inputKey] = $finalRes;
+        self::$planAnalyticsCache[$canonicalEmailKey] = $finalRes;
+        self::$planAnalyticsCache[$canonicalUserIdKey] = $finalRes;
+        return $finalRes;
     }
 
     /**
@@ -911,12 +950,17 @@ class StudentStudyPlanAnalytics {
             $academic_year = $stmt_p->fetchColumn() ?: '2026-27';
         }
 
+        $cohortCacheKey = $study_plan_id . '_' . strtolower(trim((string)$academic_year));
+        if (isset(self::$cohortStudentsCache[$cohortCacheKey])) {
+            return self::$cohortStudentsCache[$cohortCacheKey];
+        }
+
         $stmt_assign = $pdo->prepare("SELECT assignment_type, assigned_value FROM study_plan_assignments WHERE study_plan_id = ? AND is_deleted = 0");
         $stmt_assign->execute([$study_plan_id]);
         $assignments = $stmt_assign->fetchAll(PDO::FETCH_ASSOC);
 
         if (empty($assignments)) {
-            return [];
+            return self::$cohortStudentsCache[$cohortCacheKey] = [];
         }
 
         $is_all = false;
@@ -976,7 +1020,7 @@ class StudentStudyPlanAnalytics {
             }
         }
 
-        return $cohort_students_map;
+        return self::$cohortStudentsCache[$cohortCacheKey] = $cohort_students_map;
     }
 
     /**
@@ -1538,6 +1582,11 @@ class StudentStudyPlanAnalytics {
      * Get analytics aggregated across all study plans in a course.
      */
     public static function getCourseAnalytics($pdo, $student_id_or_email, $course_name) {
+        $inputCourseKey = strtolower(trim((string)$student_id_or_email)) . '_' . strtolower(trim((string)$course_name));
+        if (isset(self::$courseAnalyticsCache[$inputCourseKey])) {
+            return self::$courseAnalyticsCache[$inputCourseKey];
+        }
+
         $now = new DateTimeImmutable('now', new DateTimeZone('Asia/Kolkata'));
         $today = $now->format('Y-m-d');
 
@@ -1551,10 +1600,28 @@ class StudentStudyPlanAnalytics {
         $stmt_user->execute([$student_id_or_email, $student_id_or_email]);
         $user = $stmt_user->fetch(PDO::FETCH_ASSOC);
         if (!$user) {
-            return self::emptyAnalytics();
+            return self::$courseAnalyticsCache[$inputCourseKey] = self::emptyAnalytics();
         }
         $email = $user['email'];
         $user_id = $user['user_id'];
+
+        $canonicalCourseEmailKey = strtolower(trim((string)$email)) . '_' . strtolower(trim((string)$course_name));
+        $canonicalCourseUserIdKey = strtolower(trim((string)$user_id)) . '_' . strtolower(trim((string)$course_name));
+        if (isset(self::$courseAnalyticsCache[$canonicalCourseEmailKey])) {
+            return self::$courseAnalyticsCache[$inputCourseKey] = self::$courseAnalyticsCache[$canonicalCourseEmailKey];
+        }
+        if (isset(self::$courseAnalyticsCache[$canonicalCourseUserIdKey])) {
+            return self::$courseAnalyticsCache[$inputCourseKey] = self::$courseAnalyticsCache[$canonicalCourseUserIdKey];
+        }
+
+        // Validate that requested course matches student's enrolled course
+        if (!empty($course_name) && !empty($user['pepp_course']) && strcasecmp(trim((string)$user['pepp_course']), trim((string)$course_name)) !== 0) {
+            $empty = self::emptyAnalytics();
+            self::$courseAnalyticsCache[$inputCourseKey] = $empty;
+            self::$courseAnalyticsCache[$canonicalCourseEmailKey] = $empty;
+            self::$courseAnalyticsCache[$canonicalCourseUserIdKey] = $empty;
+            return $empty;
+        }
 
         // Find all assigned plans for this student in this course, strictly isolated by academic year
         $stmt_plans = $pdo->prepare("
@@ -1570,11 +1637,15 @@ class StudentStudyPlanAnalytics {
                 (sa.assignment_type = 'student' AND sa.assigned_value = ?)
             )
         ");
-        $stmt_plans->execute([$user['pepp_academic_year'], $user['pepp_course'], $user['pepp_academic_year'], $user_id]);
+        $stmt_plans->execute([$user['pepp_academic_year'], $course_name, $user['pepp_academic_year'], $user_id]);
         $plan_ids = $stmt_plans->fetchAll(PDO::FETCH_COLUMN);
 
         if (empty($plan_ids)) {
-            return self::emptyAnalytics();
+            $empty = self::emptyAnalytics();
+            self::$courseAnalyticsCache[$inputCourseKey] = $empty;
+            self::$courseAnalyticsCache[$canonicalCourseEmailKey] = $empty;
+            self::$courseAnalyticsCache[$canonicalCourseUserIdKey] = $empty;
+            return $empty;
         }
 
         $total_tasks = 0;
@@ -1720,7 +1791,7 @@ class StudentStudyPlanAnalytics {
             $performance_class = $status_mapping['class'];
         }
 
-        return [
+        $courseRes = [
             'total_tasks' => $total_tasks,
             'completed_tasks' => $completed_tasks,
             'pending_tasks' => $pending_tasks,
@@ -1746,6 +1817,10 @@ class StudentStudyPlanAnalytics {
             'first_activity' => !empty($completed_dates) ? min($completed_dates) : null,
             'last_activity' => !empty($completed_dates) ? max($completed_dates) : null
         ];
+        self::$courseAnalyticsCache[$inputCourseKey] = $courseRes;
+        self::$courseAnalyticsCache[$canonicalCourseEmailKey] = $courseRes;
+        self::$courseAnalyticsCache[$canonicalCourseUserIdKey] = $courseRes;
+        return $courseRes;
     }
 
     private static function emptyAnalytics() {

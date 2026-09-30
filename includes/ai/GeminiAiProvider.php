@@ -134,21 +134,62 @@ PROMPT;
             'assessment_sample_and_rows' => $assessmentRows
         ];
 
+        $candidateText = $this->generateContentRaw($systemPrompt, $userPayload, [
+            'temperature' => 0.2,
+            'responseMimeType' => 'application/json'
+        ]);
+
+        // Clean out any accidental markdown code fences
+        $cleanJson = trim($candidateText);
+        if (str_starts_with($cleanJson, '```json')) {
+            $cleanJson = substr($cleanJson, 7);
+        } elseif (str_starts_with($cleanJson, '```')) {
+            $cleanJson = substr($cleanJson, 3);
+        }
+        if (str_ends_with($cleanJson, '```')) {
+            $cleanJson = substr($cleanJson, 0, -3);
+        }
+        $cleanJson = trim($cleanJson);
+
+        $parsed = json_decode($cleanJson, true);
+        if (!is_array($parsed) || !isset($parsed['overall_grade']) || !isset($parsed['executive_summary'])) {
+            throw new RuntimeException("Gemini API response failed schema validation: " . substr($cleanJson, 0, 200));
+        }
+
+        return $parsed;
+    }
+
+    /**
+     * Reusable content generator executing with standard transient retries (503 / 429).
+     *
+     * @param string $systemPrompt System instructions and formatting constraints.
+     * @param array|string $userPayload Data payload sent to model.
+     * @param array $generationConfig Optional generation config (temperature, responseMimeType, etc.).
+     * @return string Raw candidate text response.
+     * @throws RuntimeException On missing credentials, connection error, or non-transient HTTP failure.
+     */
+    public function generateContentRaw(string $systemPrompt, $userPayload, array $generationConfig = []): string {
+        if (!$this->isConfigured()) {
+            throw new RuntimeException("Gemini API key is not configured.");
+        }
+
         $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . urlencode($this->model) . ':generateContent';
+
+        $payloadText = is_string($userPayload) ? $userPayload : json_encode($userPayload, JSON_UNESCAPED_SLASHES);
 
         $body = [
             'contents' => [
                 [
                     'role' => 'user',
                     'parts' => [
-                        ['text' => $systemPrompt . "\n\nINPUT DATA:\n" . json_encode($userPayload, JSON_UNESCAPED_SLASHES)]
+                        ['text' => $systemPrompt . "\n\nINPUT DATA:\n" . $payloadText]
                     ]
                 ]
             ],
-            'generationConfig' => [
+            'generationConfig' => array_merge([
                 'temperature' => 0.2,
                 'responseMimeType' => 'application/json'
-            ]
+            ], $generationConfig)
         ];
 
         $maxAttempts = 3;
@@ -211,23 +252,6 @@ PROMPT;
             throw new RuntimeException("Gemini API returned empty candidate response.");
         }
 
-        // Clean out any accidental markdown code fences
-        $cleanJson = trim($candidateText);
-        if (str_starts_with($cleanJson, '```json')) {
-            $cleanJson = substr($cleanJson, 7);
-        } elseif (str_starts_with($cleanJson, '```')) {
-            $cleanJson = substr($cleanJson, 3);
-        }
-        if (str_ends_with($cleanJson, '```')) {
-            $cleanJson = substr($cleanJson, 0, -3);
-        }
-        $cleanJson = trim($cleanJson);
-
-        $parsed = json_decode($cleanJson, true);
-        if (!is_array($parsed) || !isset($parsed['overall_grade']) || !isset($parsed['executive_summary'])) {
-            throw new RuntimeException("Gemini API response failed schema validation: " . substr($cleanJson, 0, 200));
-        }
-
-        return $parsed;
+        return $candidateText;
     }
 }
