@@ -17,7 +17,7 @@ class GeminiAiProvider implements AiProviderInterface {
     private ?string $apiKey;
     private string $model;
 
-    public function __construct(?string $apiKey = null, string $model = 'gemini-1.5-flash') {
+    public function __construct(?string $apiKey = null, string $model = 'gemini-3.5-flash') {
         $this->apiKey = $apiKey ?: self::resolveApiKey();
         $this->model = $model;
     }
