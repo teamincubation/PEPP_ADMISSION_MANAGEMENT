@@ -151,30 +151,58 @@ PROMPT;
             ]
         ];
 
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => json_encode($body),
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json',
-                'x-goog-api-key: ' . $this->apiKey
-            ],
-            CURLOPT_TIMEOUT => 60,
-            CURLOPT_SSL_VERIFYPEER => true
-        ]);
+        $maxAttempts = 3;
+        $retryDelays = [1 => 3, 2 => 5]; // Seconds to sleep after attempt 1 and attempt 2
+        $response = null;
+        $httpCode = 0;
+        $curlError = '';
+        $payloadJson = json_encode($body, JSON_UNESCAPED_SLASHES);
 
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlError = curl_error($ch);
-        curl_close($ch);
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $payloadJson,
+                CURLOPT_HTTPHEADER => [
+                    'Content-Type: application/json',
+                    'x-goog-api-key: ' . $this->apiKey
+                ],
+                CURLOPT_TIMEOUT => 35,
+                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_SSL_VERIFYPEER => true
+            ]);
+
+            $response = curl_exec($ch);
+            $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = (string)curl_error($ch);
+            curl_close($ch);
+
+            // If success, immediately stop retrying and proceed to parser
+            if ($httpCode === 200 && !empty($response)) {
+                break;
+            }
+
+            // Retry ONLY on transient HTTP status codes (503 Service Unavailable, 429 Too Many Requests)
+            $isTransient = ($httpCode === 503 || $httpCode === 429);
+            if ($isTransient && $attempt < $maxAttempts) {
+                $sleepSeconds = $retryDelays[$attempt] ?? 3;
+                sleep($sleepSeconds);
+                continue;
+            }
+
+            // Do NOT retry non-transient status codes (400, 401, 403, 404, etc.) or transport connection errors
+            break;
+        }
 
         if ($curlError) {
             throw new RuntimeException("Gemini API connection error: " . $curlError);
         }
 
         if ($httpCode !== 200 || !$response) {
-            throw new RuntimeException("Gemini API returned HTTP status {$httpCode}: " . substr((string)$response, 0, 300));
+            $safeSnippet = is_string($response) ? substr($response, 0, 300) : '';
+            $safeSnippet = preg_replace('/AIza[0-9A-Za-z_-]{20,}/', '[REDACTED]', $safeSnippet);
+            throw new RuntimeException("Gemini API returned HTTP status {$httpCode}: " . $safeSnippet);
         }
 
         $resJson = json_decode($response, true);
