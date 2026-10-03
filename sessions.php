@@ -39,17 +39,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $type = in_array($_POST['session_type'] ?? '', array_keys($TYPES), true) ? $_POST['session_type'] : 'live';
                 $courses = array_filter(array_map('trim', (array)($_POST['courses'] ?? [])));
                 $dur = (float)($_POST['duration_hours'] ?? 1);
+                $status = in_array($_POST['status'] ?? '', ['scheduled', 'completed', 'cancelled'], true) ? $_POST['status'] : 'scheduled';
+                $facultyId = ((int)($_POST['faculty_id'] ?? 0)) ?: null;
+                $venue = trim($_POST['venue'] ?? '') ?: null;
+                $meetLink = trim($_POST['meet_link'] ?? '') ?: null;
+
                 if ($topic === '' || !strtotime($dt)) {
                     $error_message = 'Topic and a valid date/time are required.';
                 } else {
-                    $vals = [
-                        $topic, ((int)($_POST['faculty_id'] ?? 0)) ?: null, date('Y-m-d H:i:s', strtotime($dt)),
-                        $dur, $type, trim($_POST['meet_link'] ?? '') ?: null, trim($_POST['venue'] ?? '') ?: null,
-                        implode(',', $courses) ?: null,
-                        in_array($_POST['status'] ?? '', ['scheduled', 'completed', 'cancelled'], true) ? $_POST['status'] : 'scheduled',
-                    ];
+                    $isGoogle = ($type === 'live' && !empty($_POST['google_integrated']));
+
                     if ($action === 'add_session') {
-                        $isGoogle = ($type === 'live' && !empty($_POST['google_integrated']));
+                        // When Google integration is enabled, manual Meet URL cannot override Google Meet URI
+                        $effMeetLink = $isGoogle ? null : $meetLink;
+                        $vals = [
+                            $topic, $facultyId, date('Y-m-d H:i:s', strtotime($dt)),
+                            $dur, $type, $effMeetLink, $venue,
+                            implode(',', $courses) ?: null,
+                            $status,
+                        ];
 
                         // Check if google_integrated column exists in sessions table
                         $hasGCol = false;
@@ -78,7 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             } else {
                                 $error_message = "Session created in ERP, but Google Meet provisioning encountered an issue: " . htmlspecialchars($gRes['error'] ?? 'Unknown error') . ". You can retry synchronization from the Actions column.";
                             }
-                            // Google Calendar handles learner invitations; suppress duplicate ERP emails.
+                            // Google Calendar handles learner invitations with sendUpdates=all; suppress duplicate ERP emails.
                         } else {
                             // Send automatic session scheduled email to enrolled learners asynchronously via queue
                             if (file_exists(__DIR__ . '/includes/session_mailer.php')) {
@@ -91,9 +99,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         $topic,
                                         $dt,
                                         $type,
-                                        trim($_POST['meet_link'] ?? ''),
-                                        trim($_POST['venue'] ?? ''),
-                                        (int)($_POST['faculty_id'] ?? 0),
+                                        $effMeetLink ?: '',
+                                        $venue ?: '',
+                                        $facultyId ?: 0,
                                         $admin_username
                                     );
                                 } catch (Exception $mailEx) {
@@ -103,11 +111,80 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $success_message = 'Session created.';
                         }
                     } else {
+                        // EDIT / UPDATE SESSION
                         $sid = (int)($_POST['session_id'] ?? 0);
-                        $stmt = $pdo->prepare("UPDATE sessions SET topic=?, faculty_id=?, session_datetime=?, duration_hours=?, session_type=?, meet_link=?, venue=?, course_csv=?, status=? WHERE id=?");
-                        $stmt->execute(array_merge($vals, [$sid]));
-                        log_admin_activity($pdo, $admin_username, 'session_updated', "Updated session #{$sid}");
-                        $success_message = 'Session updated.';
+                        $curStmt = $pdo->prepare("SELECT * FROM sessions WHERE id = ?");
+                        $curStmt->execute([$sid]);
+                        $curSess = $curStmt->fetch(PDO::FETCH_ASSOC);
+
+                        if (!$curSess) {
+                            $error_message = "Session #{$sid} not found.";
+                        } else {
+                            $wasGoogle = !empty($curSess['google_integrated']);
+
+                            if ($wasGoogle && $isGoogle) {
+                                // Existing Google session being updated: update Google Calendar event and ERP database
+                                require_once __DIR__ . '/includes/google/GoogleLiveSessionManager.php';
+                                $googleMgr = new GoogleLiveSessionManager($pdo);
+                                $upRes = $googleMgr->updateGoogleLiveSession($sid, [
+                                    'topic'            => $topic,
+                                    'session_datetime' => date('Y-m-d H:i:s', strtotime($dt)),
+                                    'duration_hours'   => $dur,
+                                    'faculty_id'       => $facultyId ?: 0,
+                                    'courses'          => $courses,
+                                    'venue'            => $venue,
+                                    'status'           => $status,
+                                ]);
+
+                                log_admin_activity($pdo, $admin_username, 'session_updated', "Updated Google-integrated session #{$sid}");
+
+                                if ($upRes['success']) {
+                                    $success_message = "Session and Google Calendar event updated. Google Calendar invitations sent to {$upRes['invited_count']} active student(s).";
+                                } else {
+                                    $error_message = "Session updated in ERP, but Google Calendar update encountered an issue: " . htmlspecialchars($upRes['error'] ?? 'Unknown error') . ". You can retry synchronization from the Actions column.";
+                                }
+                            } elseif (!$wasGoogle && $isGoogle) {
+                                // Converted standard session to Google Meet live session
+                                $stmt = $pdo->prepare("UPDATE sessions SET topic=?, faculty_id=?, session_datetime=?, duration_hours=?, session_type='live', meet_link=NULL, venue=?, course_csv=?, status=?, google_integrated=1, google_integration_status='pending' WHERE id=?");
+                                $stmt->execute([
+                                    $topic, $facultyId, date('Y-m-d H:i:s', strtotime($dt)),
+                                    $dur, $venue, implode(',', $courses) ?: null, $status, $sid
+                                ]);
+                                require_once __DIR__ . '/includes/google/GoogleLiveSessionManager.php';
+                                $googleMgr = new GoogleLiveSessionManager($pdo);
+                                $gRes = $googleMgr->provisionGoogleLiveSession($sid);
+
+                                log_admin_activity($pdo, $admin_username, 'session_updated', "Converted session #{$sid} to Google Meet");
+                                if ($gRes['success']) {
+                                    $success_message = "Session converted to Google Meet live session. Google Calendar invitations sent to {$gRes['invited_count']} active student(s).";
+                                } else {
+                                    $error_message = "Session updated in ERP, but Google Meet provisioning failed: " . htmlspecialchars($gRes['error'] ?? 'Unknown error');
+                                }
+                            } elseif ($wasGoogle && !$isGoogle) {
+                                // Converted from Google to manual/offline: cancel Google Calendar event
+                                if (!empty($curSess['google_calendar_event_id'])) {
+                                    require_once __DIR__ . '/includes/google/GoogleLiveSessionManager.php';
+                                    $googleMgr = new GoogleLiveSessionManager($pdo);
+                                    $googleMgr->getCalendarService()->deleteEvent((string)$curSess['google_calendar_event_id']);
+                                }
+                                $stmt = $pdo->prepare("UPDATE sessions SET topic=?, faculty_id=?, session_datetime=?, duration_hours=?, session_type=?, meet_link=?, venue=?, course_csv=?, status=?, google_integrated=0, google_calendar_event_id=NULL, google_integration_status='none' WHERE id=?");
+                                $stmt->execute([
+                                    $topic, $facultyId, date('Y-m-d H:i:s', strtotime($dt)),
+                                    $dur, $type, $meetLink, $venue, implode(',', $courses) ?: null, $status, $sid
+                                ]);
+                                log_admin_activity($pdo, $admin_username, 'session_updated', "Unlinked session #{$sid} from Google Calendar");
+                                $success_message = 'Session updated and unlinked from Google Calendar (Google event cancelled).';
+                            } else {
+                                // Standard manual session update
+                                $stmt = $pdo->prepare("UPDATE sessions SET topic=?, faculty_id=?, session_datetime=?, duration_hours=?, session_type=?, meet_link=?, venue=?, course_csv=?, status=? WHERE id=?");
+                                $stmt->execute([
+                                    $topic, $facultyId, date('Y-m-d H:i:s', strtotime($dt)),
+                                    $dur, $type, $meetLink, $venue, implode(',', $courses) ?: null, $status, $sid
+                                ]);
+                                log_admin_activity($pdo, $admin_username, 'session_updated', "Updated session #{$sid}");
+                                $success_message = 'Session updated.';
+                            }
+                        }
                     }
                 }
             } elseif ($action === 'retry_google_sync') {
@@ -159,13 +236,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     log_admin_activity($pdo, $admin_username, 'session_notified', "Manually notified {$res} learner(s) for session #{$sid}");
                 }
             } elseif ($action === 'delete_session') {
-                if (!can_delete()) { $error_message = 'Only the Super Admin can delete a session.'; }
-                else {
+                if (!can_delete()) {
+                    $error_message = 'Only the Super Admin can delete a session.';
+                } else {
                     $sid = (int)($_POST['session_id'] ?? 0);
-                    $pdo->prepare("DELETE FROM sessions WHERE id = ?")->execute([$sid]);
-                    $pdo->prepare("DELETE FROM session_notifications WHERE session_id = ?")->execute([$sid]);
-                    log_admin_activity($pdo, $admin_username, 'session_deleted', "Deleted session #{$sid}");
-                    $success_message = 'Session deleted.';
+                    $stmt = $pdo->prepare("SELECT * FROM sessions WHERE id = ?");
+                    $stmt->execute([$sid]);
+                    $sess = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                    if (!$sess) {
+                        $error_message = "Session #{$sid} not found.";
+                    } elseif (!empty($sess['google_integrated']) && !empty($sess['google_calendar_event_id'])) {
+                        // Google integrated session: cancel Google Calendar event with sendUpdates=all
+                        require_once __DIR__ . '/includes/google/GoogleLiveSessionManager.php';
+                        $googleMgr = new GoogleLiveSessionManager($pdo);
+                        $delRes = $googleMgr->deleteGoogleLiveSession($sid);
+
+                        if ($delRes['success']) {
+                            log_admin_activity($pdo, $admin_username, 'session_deleted', "Deleted Google-integrated session #{$sid}");
+                            $success_message = 'Session and Google Calendar event deleted (cancellation sent to guests).';
+                        } else {
+                            $error_message = "Failed to cancel Google Calendar event: " . htmlspecialchars($delRes['error'] ?? 'Unknown error') . ". Session was not deleted.";
+                        }
+                    } else {
+                        // Standard session deletion
+                        $pdo->prepare("DELETE FROM session_attendance WHERE session_id = ?")->execute([$sid]);
+                        $pdo->prepare("DELETE FROM session_google_artifacts WHERE session_id = ?")->execute([$sid]);
+                        $pdo->prepare("DELETE FROM session_notifications WHERE session_id = ?")->execute([$sid]);
+                        $pdo->prepare("DELETE FROM sessions WHERE id = ?")->execute([$sid]);
+                        log_admin_activity($pdo, $admin_username, 'session_deleted', "Deleted session #{$sid}");
+                        $success_message = 'Session deleted.';
+                    }
                 }
             }
         } catch (Exception $e) {
@@ -178,6 +279,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 if (isset($_GET['ajax']) && !empty($_GET['session_id'])) {
     $ajaxAction = $_GET['ajax'];
     $sessId = (int)$_GET['session_id'];
+    header('Content-Type: application/json; charset=utf-8');
+
+    if ($ajaxAction === 'session_details') {
+        try {
+            require_once __DIR__ . '/includes/google/GoogleLiveSessionManager.php';
+            $googleMgr = new GoogleLiveSessionManager($pdo);
+            $details = $googleMgr->getSessionDetails($sessId);
+            echo json_encode($details);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        exit();
+    }
     header('Content-Type: application/json; charset=utf-8');
 
     if ($ajaxAction === 'attendance') {
@@ -336,6 +450,12 @@ include 'includes/admin_nav.php';
                         <span class="badge <?php echo $stateBadge[$state] ?? 'gray'; ?>"><?php echo ucfirst($state); ?></span>
                     </td>
                     <td style="text-align:right; white-space:nowrap;">
+                        <?php if (!empty($s['google_integrated'])): ?>
+                            <?php if (!empty($s['google_meet_uri'])): ?>
+                                <button type="button" class="btn btn-sm btn-soft-blue" title="Copy Google Meet Link" onclick="copyMeetLink('<?php echo e(addslashes($s['google_meet_uri'])); ?>')"><i class="fas fa-copy"></i></button>
+                            <?php endif; ?>
+                            <button type="button" class="btn btn-sm btn-soft-violet" title="View Session Details" onclick="openSessionDetails(<?php echo (int)$s['id']; ?>, '<?php echo e(addslashes($s['topic'])); ?>')"><i class="fas fa-circle-info"></i></button>
+                        <?php endif; ?>
                         <?php if (!empty($s['google_integrated']) && ($s['google_integration_status'] ?? '') === 'failed'): ?>
                             <form method="POST" style="display:inline;">
                                 <?php echo csrf_field(); ?><input type="hidden" name="action" value="retry_google_sync"><input type="hidden" name="session_id" value="<?php echo (int)$s['id']; ?>">
@@ -351,7 +471,6 @@ include 'includes/admin_nav.php';
                                 <?php echo csrf_field(); ?><input type="hidden" name="action" value="sync_artifacts"><input type="hidden" name="session_id" value="<?php echo (int)$s['id']; ?>">
                                 <button type="submit" class="btn btn-sm btn-soft-violet" title="Sync Meet Recordings & Notes"><i class="fas fa-cloud-arrow-down"></i></button>
                             </form>
-                            <button type="button" class="btn btn-sm btn-soft-green" title="View Attendance & Artifacts" onclick="openSessionDetails(<?php echo (int)$s['id']; ?>, '<?php echo e(addslashes($s['topic'])); ?>')"><i class="fas fa-users-viewfinder"></i></button>
                         <?php endif; ?>
                         <?php if (empty($s['google_integrated']) && $s['status'] === 'scheduled' && $state !== 'ended' && in_array($s['session_type'], ['live','offline'], true)): ?>
                         <form method="POST" style="display:inline;" onsubmit="return confirm('Send a reminder email to all learners of the selected course(s)?');">
@@ -362,7 +481,8 @@ include 'includes/admin_nav.php';
                         <button class="btn btn-sm btn-outline" title="Edit" onclick='editSess(<?php echo json_encode([
                             "id"=>(int)$s["id"],"topic"=>$s["topic"],"faculty_id"=>(int)$s["faculty_id"],
                             "dt"=>date('Y-m-d\TH:i', strtotime($s["session_datetime"])),"dur"=>$s["duration_hours"],
-                            "type"=>$s["session_type"],"meet"=>(string)$s["meet_link"],"venue"=>(string)$s["venue"],
+                            "type"=>$s["session_type"],"meet"=>(string)($s["meet_link"] ?? $s["google_meet_uri"] ?? ''),
+                            "venue"=>(string)$s["venue"],
                             "courses"=>$s["course_csv"] ? explode(',', $s["course_csv"]) : [],"status"=>$s["status"],
                             "google"=>(int)($s["google_integrated"] ?? 0),
                         ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
@@ -373,7 +493,7 @@ include 'includes/admin_nav.php';
                         </form>
                         <?php endif; ?>
                         <?php if (can_delete()): ?>
-                        <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this session?');">
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this session? If scheduled with Google, the Google Calendar event and attendee invitations will be cancelled automatically.');">
                             <?php echo csrf_field(); ?><input type="hidden" name="action" value="delete_session"><input type="hidden" name="session_id" value="<?php echo (int)$s['id']; ?>">
                             <button type="submit" class="btn btn-sm btn-soft-red" title="Delete"><i class="fas fa-trash"></i></button>
                         </form>
@@ -398,6 +518,22 @@ include 'includes/admin_nav.php';
             <input type="hidden" name="action" id="sess-action" value="add_session">
             <input type="hidden" name="session_id" id="sess-id">
             <div class="modal-body">
+                <!-- Google Scheduling Toggle (Positioned Early at Top of Form) -->
+                <div class="field full" id="sess-google-wrap" style="margin-bottom:14px;">
+                    <label style="display:flex;align-items:flex-start;gap:12px;cursor:pointer;font-size:0.88rem;background:linear-gradient(135deg, rgba(66,133,244,0.06), rgba(52,168,83,0.04));border:1.5px solid rgba(66,133,244,0.3);border-radius:12px;padding:12px 16px;">
+                        <input type="checkbox" name="google_integrated" id="sess-google" value="1" checked onchange="googleToggle()" style="accent-color:#4285F4;width:19px;height:19px;margin-top:2px;">
+                        <div style="flex:1;">
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <strong style="color:var(--foreground,#0f172a);font-size:0.92rem;"><i class="fab fa-google" style="color:#4285F4;margin-right:2px;"></i> Schedule with Google Calendar &amp; Google Meet</strong>
+                                <span class="badge blue" style="font-size:0.68rem;padding:2px 6px;">Recommended</span>
+                            </div>
+                            <div style="color:var(--text-muted,#64748b);font-size:0.78rem;margin-top:3px;line-height:1.4;">
+                                Generates unique restricted Google Meet room, adds faculty as co-host, invites active students with private guest list, and configures auto-recording &amp; transcription.
+                            </div>
+                        </div>
+                    </label>
+                </div>
+
                 <div class="form-grid">
                     <div class="field full"><label>Session Topic <span class="req">*</span></label><input type="text" name="topic" id="sess-topic" required></div>
                     <div class="field"><label>Faculty</label><select name="faculty_id" id="sess-faculty"><option value="">-</option><?php foreach ($faculties as $f): ?><option value="<?php echo (int)$f['id']; ?>"><?php echo e($f['name']); ?></option><?php endforeach; ?></select></div>
@@ -406,26 +542,34 @@ include 'includes/admin_nav.php';
                         <select name="duration_hours" id="sess-dur"><?php foreach ($DURATIONS as $d): ?><option value="<?php echo $d; ?>"><?php echo $d; ?></option><?php endforeach; ?></select></div>
                     <div class="field"><label>Session Type</label>
                         <select name="session_type" id="sess-type" onchange="sessTypeToggle()"><?php foreach ($TYPES as $k => $v): ?><option value="<?php echo $k; ?>"><?php echo $v; ?></option><?php endforeach; ?></select></div>
-                    <div class="field" id="sess-meet-wrap"><label>Meet Link (live / custom)</label><input type="url" name="meet_link" id="sess-meet" placeholder="https://meet.google.com/..."></div>
+                    <div class="field" id="sess-meet-wrap">
+                        <label>Meet Link (live / custom)</label>
+                        <input type="url" name="meet_link" id="sess-meet" placeholder="https://meet.google.com/...">
+                        <div id="sess-meet-helper" style="font-size:0.75rem;color:var(--text-muted,#64748b);margin-top:4px;display:flex;align-items:center;gap:5px;">
+                            <i class="fab fa-google" style="color:#4285F4;"></i> <span>Google Meet link will be generated automatically.</span>
+                        </div>
+                    </div>
                     <div class="field" id="sess-venue-wrap" style="display:none;"><label>Venue (offline)</label><input type="text" name="venue" id="sess-venue"></div>
                     <div class="field"><label>Status</label><select name="status" id="sess-status"><option value="scheduled">Scheduled</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></div>
                 </div>
 
-                <div class="field full" id="sess-google-wrap" style="margin-top:6px;">
-                    <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:0.86rem;background:var(--bg-hover,#f8fafc);border:1px solid var(--border);border-radius:10px;padding:10px 14px;">
-                        <input type="checkbox" name="google_integrated" id="sess-google" value="1" checked style="accent-color:var(--accent);width:18px;height:18px;margin-top:2px;">
-                        <div>
-                            <strong style="color:var(--foreground,#0f172a);"><i class="fab fa-google" style="color:#4285F4;margin-right:4px;"></i> Schedule with Google Calendar &amp; Google Meet</strong>
-                            <div style="color:var(--text-muted,#64748b);font-size:0.78rem;margin-top:2px;">Generates unique restricted Google Meet room, adds faculty as co-host, invites active students with private guest list, and configures auto-recording &amp; transcription.</div>
+                <!-- Modern Scannable Multi-Course Selection Area -->
+                <div class="field full" style="margin-top:12px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                        <label style="margin:0;font-weight:600;">Courses (select one or more)</label>
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span id="course-selected-badge" class="badge gray" style="font-size:0.72rem;padding:2px 7px;">0 selected</span>
+                            <button type="button" class="btn btn-xs btn-outline" onclick="selectAllCourses(true)" style="padding:2px 8px;font-size:0.72rem;">Select All</button>
+                            <button type="button" class="btn btn-xs btn-outline" onclick="selectAllCourses(false)" style="padding:2px 8px;font-size:0.72rem;">Clear</button>
                         </div>
-                    </label>
-                </div>
-
-                <div class="field full" style="margin-top:8px;"><label>Courses (select one or more)</label>
-                    <div id="sess-courses" style="display:flex; flex-wrap:wrap; gap:7px; max-height:160px; overflow:auto; border:1px solid var(--border); border-radius:10px; padding:10px;">
+                    </div>
+                    <div style="margin-bottom:8px;">
+                        <input type="text" id="course-search-input" placeholder="Quick filter courses..." oninput="filterCourseList()" style="width:100%;padding:6px 12px;font-size:0.8rem;border:1px solid var(--border);border-radius:8px;background:var(--card,#ffffff);">
+                    </div>
+                    <div id="sess-courses" style="display:flex; flex-wrap:wrap; gap:7px; max-height:170px; overflow-y:auto; border:1px solid var(--border); border-radius:10px; padding:10px; background:var(--bg-hover,#f8fafc);">
                         <?php foreach ($courses as $c): ?>
-                            <label style="display:inline-flex;align-items:center;gap:6px;font-size:.8rem;font-weight:600;background:var(--card);border-radius:50px;padding:6px 12px;cursor:pointer;">
-                                <input type="checkbox" name="courses[]" value="<?php echo e($c); ?>" class="sess-course" style="accent-color:var(--accent);"> <?php echo e($c); ?>
+                            <label class="course-chip-label" data-course="<?php echo e(strtolower($c)); ?>" style="display:inline-flex;align-items:center;gap:6px;font-size:.8rem;font-weight:600;background:var(--card,#fff);border:1px solid var(--border);border-radius:50px;padding:6px 12px;cursor:pointer;transition:all 0.15s;">
+                                <input type="checkbox" name="courses[]" value="<?php echo e($c); ?>" class="sess-course" onchange="updateCourseCount()" style="accent-color:var(--accent);"> <?php echo e($c); ?>
                             </label>
                         <?php endforeach; ?>
                         <?php if (empty($courses)): ?><span class="cell-sub">No PEPP courses found.</span><?php endif; ?>
@@ -437,37 +581,79 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
-<!-- DETAILS MODAL (Attendance & Artifacts) -->
+<!-- DETAILS MODAL (Session Details, Faculty, Courses, Invited Students, Artifacts) -->
 <div class="modal-backdrop" id="sess-details-modal">
-    <div class="modal" style="max-width:760px;">
-        <div class="modal-head">
-            <h3 id="sess-details-title"><i class="fas fa-users-viewfinder" style="color:var(--accent);"></i> Session Attendance &amp; Artifacts</h3>
+    <div class="modal" style="max-width:820px;max-height:90vh;display:flex;flex-direction:column;">
+        <div class="modal-head" style="flex-shrink:0;">
+            <h3 id="sess-details-title"><i class="fas fa-circle-info" style="color:var(--accent);"></i> Session Details</h3>
             <button class="modal-close" onclick="closeModal('sess-details-modal')"><i class="fas fa-xmark"></i></button>
         </div>
-        <div class="modal-body" style="padding:16px 24px;">
+        <div class="modal-body" style="padding:16px 24px;overflow-y:auto;flex:1;">
             <div class="tabs" style="margin-bottom:16px; border-bottom:1px solid var(--border); padding-bottom:8px;">
-                <button type="button" class="btn btn-sm btn-outline active" id="tab-btn-att" onclick="switchDetailTab('att')"><i class="fas fa-clipboard-user"></i> Attendance</button>
+                <button type="button" class="btn btn-sm btn-outline active" id="tab-btn-overview" onclick="switchDetailTab('overview')"><i class="fas fa-list-check"></i> Overview &amp; Google</button>
+                <button type="button" class="btn btn-sm btn-outline" id="tab-btn-students" onclick="switchDetailTab('students')"><i class="fas fa-user-graduate"></i> Invited Students <span id="detail-student-count-badge" class="badge blue" style="font-size:0.68rem;padding:2px 6px;">0</span></button>
                 <button type="button" class="btn btn-sm btn-outline" id="tab-btn-art" onclick="switchDetailTab('art')"><i class="fas fa-file-video"></i> Recordings &amp; Notes</button>
             </div>
-            <div id="pane-detail-att">
-                <div id="att-content" style="max-height:360px; overflow-y:auto;">
-                    <div style="text-align:center; padding:24px; color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> Loading attendance...</div>
+
+            <!-- TAB 1: OVERVIEW & GOOGLE -->
+            <div id="pane-detail-overview">
+                <div id="overview-content">
+                    <div style="text-align:center; padding:24px; color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> Loading session details...</div>
                 </div>
             </div>
+
+            <!-- TAB 2: INVITED STUDENTS -->
+            <div id="pane-detail-students" style="display:none;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap;">
+                    <div style="font-size:0.85rem;color:var(--text-muted);">
+                        Active learners associated with this Google Calendar event:
+                    </div>
+                    <input type="text" id="detail-student-search" placeholder="Search learner name or course..." oninput="filterDetailStudents()" style="padding:6px 12px;font-size:0.8rem;border:1px solid var(--border);border-radius:8px;min-width:240px;">
+                </div>
+                <div id="students-content" style="max-height:360px; overflow-y:auto;">
+                    <div style="text-align:center; padding:24px; color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> Loading invited students...</div>
+                </div>
+            </div>
+
+            <!-- TAB 3: RECORDINGS & NOTES -->
             <div id="pane-detail-art" style="display:none;">
                 <div id="art-content" style="max-height:360px; overflow-y:auto;">
                     <div style="text-align:center; padding:24px; color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> Loading artifacts...</div>
                 </div>
             </div>
         </div>
-        <div class="modal-foot">
+        <div class="modal-foot" style="flex-shrink:0;">
             <button type="button" class="btn btn-outline" onclick="closeModal('sess-details-modal')">Close</button>
         </div>
     </div>
 </div>
 
+<!-- Non-blocking Toast Notification for Clipboard Copying -->
+<div id="sess-toast" style="position:fixed;bottom:24px;right:24px;z-index:99999;background:#0f172a;color:#ffffff;padding:12px 20px;border-radius:10px;box-shadow:0 10px 25px rgba(0,0,0,0.25);display:none;align-items:center;gap:10px;font-size:0.88rem;pointer-events:none;transition:opacity 0.3s ease;">
+    <i class="fas fa-circle-check" style="color:#10b981;font-size:1.1rem;"></i>
+    <span id="sess-toast-msg">Google Meet link copied.</span>
+</div>
+
 <?php
 $extra_scripts = "<script>
+// Toggle Google scheduling & Meet Link disable/enable
+function googleToggle() {
+    var isGoogle = document.getElementById('sess-google').checked;
+    var isLive = (document.getElementById('sess-type').value === 'live');
+    var meetInput = document.getElementById('sess-meet');
+    var meetHelper = document.getElementById('sess-meet-helper');
+
+    if (isGoogle && isLive) {
+        meetInput.disabled = true;
+        meetInput.placeholder = 'Generated automatically by Google Meet';
+        if (meetHelper) meetHelper.style.display = 'flex';
+    } else {
+        meetInput.disabled = false;
+        meetInput.placeholder = 'https://meet.google.com/...';
+        if (meetHelper) meetHelper.style.display = 'none';
+    }
+}
+
 function sessTypeToggle() {
     var t = document.getElementById('sess-type').value;
     var isLive = (t === 'live');
@@ -477,24 +663,31 @@ function sessTypeToggle() {
     if (!isLive) {
         document.getElementById('sess-google').checked = false;
     }
+    googleToggle();
 }
+
 function openSessModal() {
     document.getElementById('sess-action').value = 'add_session';
     document.getElementById('sess-modal-title').innerHTML = '<i class=\\\"fas fa-video\\\" style=\\\"color:var(--accent)\\\"></i> Add Session';
-    document.getElementById('sess-id').value='';
-    document.getElementById('sess-topic').value='';
-    document.getElementById('sess-faculty').value='';
-    document.getElementById('sess-dt').value='';
-    document.getElementById('sess-dur').value='1.00';
-    document.getElementById('sess-type').value='live';
-    document.getElementById('sess-meet').value='';
-    document.getElementById('sess-venue').value='';
-    document.getElementById('sess-status').value='scheduled';
-    document.getElementById('sess-google').checked = true;
-    document.querySelectorAll('.sess-course').forEach(function(c){c.checked=false;});
+    document.getElementById('sess-id').value = '';
+    document.getElementById('sess-topic').value = '';
+    document.getElementById('sess-faculty').value = '';
+    document.getElementById('sess-dt').value = '';
+    document.getElementById('sess-dur').value = '1.00';
+    document.getElementById('sess-type').value = 'live';
+    document.getElementById('sess-meet').value = '';
+    document.getElementById('sess-venue').value = '';
+    document.getElementById('sess-status').value = 'scheduled';
+    document.getElementById('sess-google').checked = true; // Default state: enabled/ticked
+    document.querySelectorAll('.sess-course').forEach(function(c){ c.checked = false; });
+    var searchIn = document.getElementById('course-search-input');
+    if (searchIn) searchIn.value = '';
+    filterCourseList();
+    updateCourseCount();
     sessTypeToggle();
     openModal('sess-modal');
 }
+
 function editSess(s) {
     document.getElementById('sess-action').value = 'edit_session';
     document.getElementById('sess-modal-title').innerHTML = '<i class=\\\"fas fa-pen\\\" style=\\\"color:var(--accent)\\\"></i> Edit Session';
@@ -508,76 +701,266 @@ function editSess(s) {
     document.getElementById('sess-venue').value = s.venue || '';
     document.getElementById('sess-status').value = s.status;
     document.getElementById('sess-google').checked = !!s.google;
-    var set = {}; (s.courses||[]).forEach(function(c){set[c]=true;});
-    document.querySelectorAll('.sess-course').forEach(function(c){c.checked=!!set[c.value];});
+    var set = {}; (s.courses || []).forEach(function(c){ set[c] = true; });
+    document.querySelectorAll('.sess-course').forEach(function(c){ c.checked = !!set[c.value]; });
+    var searchIn = document.getElementById('course-search-input');
+    if (searchIn) searchIn.value = '';
+    filterCourseList();
+    updateCourseCount();
     sessTypeToggle();
     openModal('sess-modal');
 }
 
-function switchDetailTab(tab) {
-    if (tab === 'att') {
-        document.getElementById('pane-detail-att').style.display = 'block';
-        document.getElementById('pane-detail-art').style.display = 'none';
-        document.getElementById('tab-btn-att').classList.add('active');
-        document.getElementById('tab-btn-art').classList.remove('active');
+// Copy Google Meet link action
+function copyMeetLink(url) {
+    if (!url || !url.startsWith('https://meet.google.com/')) {
+        showToast('Invalid Google Meet URL.', false);
+        return;
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(url).then(function() {
+            showToast('Google Meet link copied.', true);
+        }).catch(function() {
+            fallbackCopy(url);
+        });
     } else {
-        document.getElementById('pane-detail-att').style.display = 'none';
-        document.getElementById('pane-detail-art').style.display = 'block';
-        document.getElementById('tab-btn-att').classList.remove('active');
-        document.getElementById('tab-btn-art').classList.add('active');
+        fallbackCopy(url);
+    }
+}
+
+function fallbackCopy(text) {
+    var textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    try {
+        document.execCommand('copy');
+        showToast('Google Meet link copied.', true);
+    } catch (err) {
+        showToast('Failed to copy link to clipboard.', false);
+    }
+    document.body.removeChild(textarea);
+}
+
+function showToast(msg, isSuccess) {
+    var toast = document.getElementById('sess-toast');
+    var msgEl = document.getElementById('sess-toast-msg');
+    var icon = toast ? toast.querySelector('i') : null;
+    if (msgEl) msgEl.textContent = msg;
+    if (icon) {
+        icon.className = isSuccess ? 'fas fa-circle-check' : 'fas fa-circle-exclamation';
+        icon.style.color = isSuccess ? '#10b981' : '#ef4444';
+    }
+    if (toast) {
+        toast.style.display = 'flex';
+        toast.style.opacity = '1';
+        clearTimeout(toast._timer);
+        toast._timer = setTimeout(function() {
+            toast.style.opacity = '0';
+            setTimeout(function() { toast.style.display = 'none'; }, 300);
+        }, 2500);
+    }
+}
+
+// Course multi-select helpers
+function updateCourseCount() {
+    var checked = document.querySelectorAll('.sess-course:checked').length;
+    var badge = document.getElementById('course-selected-badge');
+    if (badge) {
+        badge.textContent = checked + (checked === 1 ? ' course selected' : ' courses selected');
+        badge.className = 'badge ' + (checked > 0 ? 'blue' : 'gray');
+    }
+}
+
+function selectAllCourses(check) {
+    var labels = document.querySelectorAll('.course-chip-label');
+    labels.forEach(function(l) {
+        if (l.style.display !== 'none') {
+            var cb = l.querySelector('.sess-course');
+            if (cb) cb.checked = check;
+        }
+    });
+    updateCourseCount();
+}
+
+function filterCourseList() {
+    var q = (document.getElementById('course-search-input').value || '').toLowerCase().trim();
+    var labels = document.querySelectorAll('.course-chip-label');
+    labels.forEach(function(l) {
+        var course = l.getAttribute('data-course') || '';
+        l.style.display = (q === '' || course.indexOf(q) !== -1) ? 'inline-flex' : 'none';
+    });
+}
+
+function switchDetailTab(tab) {
+    document.getElementById('pane-detail-overview').style.display = (tab === 'overview') ? 'block' : 'none';
+    document.getElementById('pane-detail-students').style.display = (tab === 'students') ? 'block' : 'none';
+    document.getElementById('pane-detail-art').style.display      = (tab === 'art') ? 'block' : 'none';
+
+    document.getElementById('tab-btn-overview').classList.toggle('active', tab === 'overview');
+    document.getElementById('tab-btn-students').classList.toggle('active', tab === 'students');
+    document.getElementById('tab-btn-art').classList.toggle('active', tab === 'art');
+}
+
+var currentInvitedStudents = [];
+
+function filterDetailStudents() {
+    var q = (document.getElementById('detail-student-search').value || '').toLowerCase().trim();
+    var tbody = document.getElementById('students-table-body');
+    if (!tbody) return;
+    var rows = tbody.querySelectorAll('tr');
+    var matchCount = 0;
+    rows.forEach(function(r) {
+        var txt = (r.getAttribute('data-search') || '').toLowerCase();
+        var match = (q === '' || txt.indexOf(q) !== -1);
+        r.style.display = match ? '' : 'none';
+        if (match) matchCount++;
+    });
+    var emptyEl = document.getElementById('students-search-empty');
+    if (emptyEl) {
+        emptyEl.style.display = (matchCount === 0) ? 'block' : 'none';
     }
 }
 
 function openSessionDetails(sessionId, topic) {
-    document.getElementById('sess-details-title').innerHTML = '<i class=\"fas fa-users-viewfinder\" style=\"color:var(--accent);\"></i> ' + topic;
-    switchDetailTab('att');
+    document.getElementById('sess-details-title').innerHTML = '<i class=\"fas fa-circle-info\" style=\"color:var(--accent);\"></i> ' + topic;
+    switchDetailTab('overview');
     openModal('sess-details-modal');
 
-    // Fetch attendance
-    var attEl = document.getElementById('att-content');
-    attEl.innerHTML = '<div style=\"text-align:center; padding:24px; color:var(--text-muted);\"><i class=\"fas fa-spinner fa-spin\"></i> Loading attendance...</div>';
-    fetch('sessions.php?ajax=attendance&session_id=' + sessionId)
+    var overviewEl = document.getElementById('overview-content');
+    var studentsEl = document.getElementById('students-content');
+    var artEl      = document.getElementById('art-content');
+
+    overviewEl.innerHTML = '<div style=\"text-align:center; padding:28px; color:var(--text-muted);\"><i class=\"fas fa-spinner fa-spin\"></i> Loading session details...</div>';
+    studentsEl.innerHTML = '<div style=\"text-align:center; padding:28px; color:var(--text-muted);\"><i class=\"fas fa-spinner fa-spin\"></i> Loading invited students...</div>';
+    artEl.innerHTML      = '<div style=\"text-align:center; padding:28px; color:var(--text-muted);\"><i class=\"fas fa-spinner fa-spin\"></i> Loading recordings &amp; notes...</div>';
+
+    // Fetch complete session details
+    fetch('sessions.php?ajax=session_details&session_id=' + sessionId)
         .then(function(r){ return r.json(); })
-        .then(function(data){
-            if (!data.success || !data.records || data.records.length === 0) {
-                attEl.innerHTML = '<div class=\"empty-state\" style=\"padding:20px;\"><p>No attendance records recorded yet. Click Sync Attendance after the meeting.</p></div>';
+        .then(function(res){
+            if (!res.success) {
+                overviewEl.innerHTML = '<div class=\"alert alert-error\">' + (res.error || 'Failed to load session details.') + '</div>';
                 return;
             }
-            var h = '<table class=\"data-table\" style=\"font-size:0.85rem;\"><thead><tr><th>Participant</th><th>First Join</th><th>Last Leave</th><th>Duration</th><th>Status</th></tr></thead><tbody>';
-            data.records.forEach(function(r){
-                var mins = Math.round(parseInt(r.total_duration_seconds || 0) / 60);
-                var stColor = {'full attendance':'green','partial attendance':'amber','joined':'blue','invited':'gray','absent':'red'}[r.attendance_status] || 'gray';
-                h += '<tr>';
-                h += '<td><strong>' + (r.google_participant_name || 'Participant') + '</strong></td>';
-                h += '<td>' + (r.first_join_time ? r.first_join_time.substring(11,16) : '-') + '</td>';
-                h += '<td>' + (r.last_leave_time ? r.last_leave_time.substring(11,16) : '-') + '</td>';
-                h += '<td>' + mins + ' min</td>';
-                h += '<td><span class=\"badge ' + stColor + '\">' + r.attendance_status + '</span></td>';
-                h += '</tr>';
-            });
-            h += '</tbody></table>';
-            attEl.innerHTML = h;
+
+            var s = res.session;
+            var f = res.faculty;
+            var c = res.courses;
+            var g = res.google;
+            var stList = res.invited_students || [];
+            currentInvitedStudents = stList;
+
+            var stBadge = document.getElementById('detail-student-count-badge');
+            if (stBadge) stBadge.textContent = stList.length;
+
+            // Render Overview
+            var ovHtml = '';
+            ovHtml += '<div style=\"display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px;\">';
+
+            // Section 1: Session Details
+            ovHtml += '<div style=\"background:var(--bg-hover,#f8fafc); border:1px solid var(--border); border-radius:12px; padding:16px;\">';
+            ovHtml += '<div style=\"font-weight:700; font-size:0.9rem; margin-bottom:10px; color:var(--foreground,#0f172a); display:flex; align-items:center; gap:8px;\"><i class=\"fas fa-video\" style=\"color:var(--accent);\"></i> Section 1 — Session Details</div>';
+            ovHtml += '<div style=\"display:flex; flex-direction:column; gap:6px; font-size:0.83rem;\">';
+            ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Topic:</span> <strong>' + (s.topic || '-') + '</strong></div>';
+            ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Date:</span> ' + (s.date || '-') + '</div>';
+            ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Time Window:</span> ' + (s.start_time || '-') + ' - ' + (s.end_time || '-') + ' (' + s.duration + ')</div>';
+            ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Session Type:</span> <span class=\"badge gray\">' + s.session_type + '</span></div>';
+            ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Session Status:</span> <span class=\"badge ' + (s.status === 'Scheduled' ? 'violet' : (s.status === 'Completed' ? 'green' : 'red')) + '\">' + s.status + '</span></div>';
+            ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Created By:</span> ' + s.created_by + '</div>';
+            ovHtml += '</div></div>';
+
+            // Section 2: Faculty
+            ovHtml += '<div style=\"background:var(--bg-hover,#f8fafc); border:1px solid var(--border); border-radius:12px; padding:16px;\">';
+            ovHtml += '<div style=\"font-weight:700; font-size:0.9rem; margin-bottom:10px; color:var(--foreground,#0f172a); display:flex; align-items:center; gap:8px;\"><i class=\"fas fa-chalkboard-user\" style=\"color:#3b82f6;\"></i> Section 2 — Faculty &amp; Co-host</div>';
+            ovHtml += '<div style=\"display:flex; flex-direction:column; gap:6px; font-size:0.83rem;\">';
+            ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Name:</span> <strong>' + (f.name || 'Not assigned') + '</strong></div>';
+            if (f.email) {
+                ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Faculty Email:</span> ' + f.email + '</div>';
+            }
+            ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Meet Co-host:</span> <span class=\"badge ' + (f.cohost_status.indexOf('Configured') !== -1 ? 'green' : 'gray') + '\">' + f.cohost_status + '</span></div>';
+            ovHtml += '</div></div>';
+
+            // Section 3: Courses
+            ovHtml += '<div style=\"background:var(--bg-hover,#f8fafc); border:1px solid var(--border); border-radius:12px; padding:16px;\">';
+            ovHtml += '<div style=\"font-weight:700; font-size:0.9rem; margin-bottom:10px; color:var(--foreground,#0f172a); display:flex; align-items:center; gap:8px;\"><i class=\"fas fa-graduation-cap\" style=\"color:#10b981;\"></i> Section 3 — Target Courses (' + c.count + ')</div>';
+            ovHtml += '<div style=\"display:flex; flex-wrap:wrap; gap:6px;\">';
+            if (c.list && c.list.length > 0) {
+                c.list.forEach(function(courseName){
+                    ovHtml += '<span class=\"badge blue\" style=\"font-size:0.75rem;\">' + courseName + '</span>';
+                });
+            } else {
+                ovHtml += '<span class=\"cell-sub\">No courses attached.</span>';
+            }
+            ovHtml += '</div></div>';
+
+            // Section 5: Google Details
+            ovHtml += '<div style=\"background:var(--bg-hover,#f8fafc); border:1px solid var(--border); border-radius:12px; padding:16px;\">';
+            ovHtml += '<div style=\"font-weight:700; font-size:0.9rem; margin-bottom:10px; color:var(--foreground,#0f172a); display:flex; align-items:center; gap:8px;\"><i class=\"fab fa-google\" style=\"color:#4285F4;\"></i> Section 5 — Google Workspace Integration</div>';
+            ovHtml += '<div style=\"display:flex; flex-direction:column; gap:6px; font-size:0.83rem;\">';
+            ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Integration:</span> ' + (g.is_integrated ? '<span class=\"badge blue\"><i class=\"fab fa-google\"></i> Enabled</span>' : '<span class=\"badge gray\">Disabled</span>') + '</div>';
+            if (g.meet_uri) {
+                ovHtml += '<div style=\"display:flex; align-items:center; gap:6px;\"><span style=\"color:var(--text-muted); width:110px;\">Meet Link:</span> <a href=\"' + g.meet_uri + '\" target=\"_blank\" style=\"font-weight:600; color:var(--primary); word-break:break-all;\">' + g.meet_uri + '</a> <button type=\"button\" class=\"btn btn-xs btn-outline\" onclick=\"copyMeetLink(\'' + g.meet_uri + '\')\"><i class=\"fas fa-copy\"></i></button></div>';
+            }
+            if (g.calendar_event_id) {
+                ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Calendar Event:</span> <span style=\"font-family:monospace; font-size:0.75rem; background:rgba(0,0,0,0.05); padding:2px 6px; border-radius:4px;\">' + g.calendar_event_id + '</span></div>';
+            }
+            if (g.meet_space_name) {
+                ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Meet Space:</span> <span style=\"font-family:monospace; font-size:0.75rem;\">' + g.meet_space_name + '</span></div>';
+            }
+            ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Sync Status:</span> <span class=\"badge ' + (g.integration_status === 'synced' ? 'green' : (g.integration_status === 'failed' ? 'red' : 'gray')) + '\">' + g.integration_status + '</span></div>';
+            if (g.last_sync_at) {
+                ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Last Sync:</span> ' + g.last_sync_at + '</div>';
+            }
+            if (g.error_message) {
+                ovHtml += '<div style=\"color:#ef4444; margin-top:4px;\"><i class=\"fas fa-triangle-exclamation\"></i> ' + g.error_message + '</div>';
+            }
+            ovHtml += '</div></div>';
+
+            ovHtml += '</div>';
+            overviewEl.innerHTML = ovHtml;
+
+            // Render Section 4: Invited Students
+            if (stList.length === 0) {
+                studentsEl.innerHTML = '<div class=\"empty-state\" style=\"padding:24px;\"><p>No active students recorded for this session yet.</p></div>';
+            } else {
+                var sHtml = '<table class=\"data-table\" style=\"font-size:0.83rem;\"><thead><tr><th style=\"width:35px;\">#</th><th>Learner Name</th><th>Course</th><th>Status</th><th style=\"text-align:right;\">Duration</th></tr></thead><tbody id=\"students-table-body\">';
+                stList.forEach(function(st, idx){
+                    var stColor = {'full attendance':'green','partial attendance':'amber','joined':'blue','invited':'gray','absent':'red'}[st.status] || 'gray';
+                    sHtml += '<tr data-search=\"' + (st.name + ' ' + st.course).replace(/\"/g, '') + '\">';
+                    sHtml += '<td style=\"color:var(--text-muted);\">' + (idx + 1) + '</td>';
+                    sHtml += '<td><strong>' + st.name + '</strong></td>';
+                    sHtml += '<td><span class=\"badge gray\" style=\"font-size:0.72rem;\">' + st.course + '</span></td>';
+                    sHtml += '<td><span class=\"badge ' + stColor + '\">' + st.status + '</span></td>';
+                    sHtml += '<td style=\"text-align:right;\">' + st.duration + '</td>';
+                    sHtml += '</tr>';
+                });
+                sHtml += '</tbody></table>';
+                sHtml += '<div id=\"students-search-empty\" style=\"display:none; text-align:center; padding:20px; color:var(--text-muted);\">No matching learners found.</div>';
+                studentsEl.innerHTML = sHtml;
+            }
         })
-        .catch(function(e){
-            attEl.innerHTML = '<div class=\"alert alert-error\">Failed to load attendance.</div>';
+        .catch(function(err){
+            overviewEl.innerHTML = '<div class=\"alert alert-error\">Failed to load session details.</div>';
         });
 
     // Fetch artifacts
-    var artEl = document.getElementById('art-content');
-    artEl.innerHTML = '<div style=\"text-align:center; padding:24px; color:var(--text-muted);\"><i class=\"fas fa-spinner fa-spin\"></i> Loading artifacts...</div>';
     fetch('sessions.php?ajax=artifacts&session_id=' + sessionId)
         .then(function(r){ return r.json(); })
         .then(function(data){
             if (!data.success || !data.records || data.records.length === 0) {
-                artEl.innerHTML = '<div class=\"empty-state\" style=\"padding:20px;\"><p>No recordings or transcripts linked yet. Click Sync Recordings & Notes after conference processing.</p></div>';
+                artEl.innerHTML = '<div class=\"empty-state\" style=\"padding:24px;\"><p>No recordings or transcripts linked yet. Google Drive links populate after conference processing.</p></div>';
                 return;
             }
-            var h = '<div style=\"display:flex;flex-direction:column;gap:10px;\">';
+            var h = '<div style=\"display:flex; flex-direction:column; gap:10px;\">';
             data.records.forEach(function(a){
                 var icon = a.artifact_type === 'recording' ? 'fa-video' : (a.artifact_type === 'transcript' ? 'fa-file-lines' : 'fa-brain');
                 var typeTitle = a.artifact_type.replace('_', ' ').toUpperCase();
-                h += '<div style=\"display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:var(--bg-hover,#f8fafc);border:1px solid var(--border);border-radius:10px;\">';
-                h += '<div style=\"display:flex;align-items:center;gap:10px;\"><i class=\"fas ' + icon + '\" style=\"font-size:1.2rem;color:var(--primary);\"></i><div><strong>' + typeTitle + '</strong><div style=\"font-size:0.75rem;color:var(--text-muted);\">Status: ' + a.artifact_state + '</div></div></div>';
+                h += '<div style=\"display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:var(--bg-hover,#f8fafc); border:1px solid var(--border); border-radius:10px;\">';
+                h += '<div style=\"display:flex; align-items:center; gap:10px;\"><i class=\"fas ' + icon + '\" style=\"font-size:1.2rem; color:var(--primary);\"></i><div><strong>' + typeTitle + '</strong><div style=\"font-size:0.75rem; color:var(--text-muted);\">Status: ' + a.artifact_state + '</div></div></div>';
                 if (a.artifact_url) {
                     h += '<a href=\"' + a.artifact_url + '\" target=\"_blank\" class=\"btn btn-sm btn-primary\"><i class=\"fas fa-arrow-up-right-from-square\"></i> Open in Google Drive</a>';
                 } else {

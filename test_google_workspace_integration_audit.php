@@ -166,6 +166,15 @@ $pdo->exec("
         UNIQUE(session_id, artifact_type, google_resource_name)
     );
 
+    CREATE TABLE IF NOT EXISTS session_notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL,
+        recipient_email VARCHAR(255) NOT NULL,
+        notification_type VARCHAR(50) NOT NULL,
+        status VARCHAR(50) NOT NULL DEFAULT 'sent',
+        sent_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS admin_settings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         setting_name VARCHAR(100) UNIQUE,
@@ -740,7 +749,412 @@ assertTest($legacySess['google_calendar_event_id'] === null, "Non-Google session
 require_once __DIR__ . '/includes/session_cron.php';
 assertTest(function_exists('sessions_dispatch_due'), "sessions_dispatch_due function exists and is callable");
 
-echo "\nSECTION 7: ISOLATION OF PAUSED WHATSAPP FILES\n";
+echo "\nSECTION 8: GOOGLE LIVE SESSION UX & CALENDAR LIFECYCLE ENHANCEMENTS\n";
+echo "------------------------------------------------------------------------\n";
+
+// 8.1 Inspection of sessions.php UX requirements
+$sessionsSrc = (string)file_get_contents(__DIR__ . '/sessions.php');
+
+assertTest(
+    str_contains($sessionsSrc, 'Schedule with Google Calendar &amp; Google Meet') || str_contains($sessionsSrc, 'Schedule with Google Calendar & Google Meet'),
+    "Scheduling modal contains exact label: 'Schedule with Google Calendar & Google Meet'"
+);
+
+assertTest(
+    str_contains($sessionsSrc, 'id="sess-google" value="1" checked'),
+    "Google scheduling toggle is checked by default in Add Session modal HTML"
+);
+
+assertTest(
+    str_contains($sessionsSrc, "document.getElementById('sess-google').checked = true;"),
+    "openSessModal() explicitly ensures Google scheduling is checked by default for new Live Sessions"
+);
+
+assertTest(
+    str_contains($sessionsSrc, 'Google Meet link will be generated automatically.'),
+    "Helper text indicates Meet link will be generated automatically when Google scheduling is enabled"
+);
+
+assertTest(
+    str_contains($sessionsSrc, 'meetInput.disabled = true;'),
+    "Manual Meet Link field is disabled when Google scheduling is enabled"
+);
+
+assertTest(
+    str_contains($sessionsSrc, 'meetInput.disabled = false;'),
+    "Manual Meet Link field is re-enabled when Google scheduling is disabled"
+);
+
+assertTest(
+    str_contains($sessionsSrc, "document.getElementById('sess-google').checked = false;"),
+    "sessTypeToggle() unchecks/disables Google scheduling for non-live session types"
+);
+
+assertTest(
+    str_contains($sessionsSrc, 'course-search-input'),
+    "Course selection area contains quick search filter input"
+);
+
+assertTest(
+    str_contains($sessionsSrc, 'selectAllCourses(true)') && str_contains($sessionsSrc, 'selectAllCourses(false)'),
+    "Course selection area provides Select All and Clear controls"
+);
+
+assertTest(
+    str_contains($sessionsSrc, 'course-selected-badge'),
+    "Course selection area displays dynamic selected courses count badge"
+);
+
+assertTest(
+    str_contains($sessionsSrc, 'copyMeetLink'),
+    "Session list table includes Copy Google Meet Link action"
+);
+
+assertTest(
+    str_contains($sessionsSrc, 'openSessionDetails'),
+    "Session list table includes View Session Details modal action"
+);
+
+// 8.2 Copy Meet Link Validation
+$testValidMeetUrl = 'https://meet.google.com/abc-defg-hij';
+$testInvalidCalendarUrl = 'https://calendar.google.com/calendar/event?id=12345';
+$testMeetingCodeOnly = 'abc-defg-hij';
+
+$validateMeetUrl = function(?string $url): bool {
+    return ($url !== null && str_starts_with($url, 'https://meet.google.com/'));
+};
+
+assertTest($validateMeetUrl($testValidMeetUrl), "Valid Google Meet URI starting with https://meet.google.com/ passes validation");
+assertTest(!$validateMeetUrl($testInvalidCalendarUrl), "Calendar event URL is rejected by copyMeetLink validation");
+assertTest(!$validateMeetUrl($testMeetingCodeOnly), "Meeting code alone without https://meet.google.com/ is rejected by copyMeetLink validation");
+
+// 8.3 Session Details Endpoint & Student Privacy
+// Seed additional faculty 6 and active student 10
+$pdo->exec("
+    INSERT OR IGNORE INTO faculties (id, name, email, status) VALUES
+    (6, 'Prof. Ada Lovelace', 'ada.lovelace@pepponline.in', 'active');
+");
+$pdo->exec("
+    INSERT OR IGNORE INTO users (user_id, name, email, status, student_status, pepp_course) VALUES
+    ('STU010', 'Ada Batch Student', 'ada.student@pepponline.in', 'approved', 'active', 'BBA Regular');
+");
+
+$detailsBefore = $liveMgr->getSessionDetails(201);
+assertTest($detailsBefore['success'], "getSessionDetails() returns successfully for session 201");
+assertTest(!empty($detailsBefore['session']['topic']), "Section 1: Session Details contains topic");
+assertTest(!empty($detailsBefore['session']['date']), "Section 1: Session Details contains date");
+assertTest(!empty($detailsBefore['session']['start_time']) && !empty($detailsBefore['session']['end_time']), "Section 1: Session Details contains time window");
+assertTest(!empty($detailsBefore['faculty']['name']), "Section 2: Faculty contains faculty name");
+assertTest(isset($detailsBefore['faculty']['cohost_status']), "Section 2: Faculty contains cohost_status");
+assertTest(count($detailsBefore['courses']['list']) >= 1, "Section 3: Courses contains selected course list and count");
+assertTest(count($detailsBefore['invited_students']) === 3, "Section 4: Sourced invited students list matches 3 attendees from session_attendance");
+
+// CRITICAL PRIVACY: Student email addresses must NOT be exposed
+$hasStudentEmailLeak = false;
+foreach ($detailsBefore['invited_students'] as $stItem) {
+    if (isset($stItem['email']) || isset($stItem['student_email'])) {
+        $hasStudentEmailLeak = true;
+        break;
+    }
+}
+assertTest(!$hasStudentEmailLeak, "CRITICAL: Student email addresses are NOT exposed in getSessionDetails() response");
+assertTest($detailsBefore['google']['is_integrated'] === true, "Section 5: Google details shows integration enabled");
+assertTest($detailsBefore['google']['meet_uri'] === 'https://meet.google.com/abc-defg-hij', "Section 5: Authoritative google_meet_uri is returned");
+assertTest($detailsBefore['google']['calendar_event_id'] === 'cal_event_12345', "Section 5: Authoritative calendar_event_id is returned");
+
+// 8.4 Update Lifecycle (Google-Aware Edit)
+GoogleWorkspaceClient::clearTokenCache();
+$capturedPatchUrl = null;
+$capturedPatchPayload = null;
+$capturedCohostSpace = null;
+$capturedCohostEmail = null;
+$createEventCalled = false;
+
+GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?string $payload, array $headers) use (
+    &$capturedPatchUrl,
+    &$capturedPatchPayload,
+    &$capturedCohostSpace,
+    &$capturedCohostEmail,
+    &$createEventCalled
+) {
+    if ($url === GoogleWorkspaceClient::TOKEN_ENDPOINT) {
+        return [
+            'status' => 200,
+            'body'   => json_encode(['access_token' => 'mock_token_lifecycle', 'expires_in' => 3600]),
+            'error'  => null,
+        ];
+    }
+
+    if ($method === 'POST' && str_contains($url, '/events')) {
+        $createEventCalled = true;
+        return [
+            'status' => 200,
+            'body'   => json_encode(['id' => 'unexpected_duplicate_event']),
+            'error'  => null,
+        ];
+    }
+
+    if ($method === 'PATCH' && str_contains($url, '/events/')) {
+        $capturedPatchUrl = $url;
+        $capturedPatchPayload = json_decode((string)$payload, true);
+        return [
+            'status' => 200,
+            'body'   => json_encode([
+                'id' => 'cal_event_12345',
+                'summary' => $capturedPatchPayload['summary'] ?? '',
+                'conferenceData' => [
+                    'entryPoints' => [
+                        ['entryPointType' => 'video', 'uri' => 'https://meet.google.com/abc-defg-hij']
+                    ],
+                    'conferenceId' => 'abc-defg-hij',
+                ],
+            ]),
+            'error'  => null,
+        ];
+    }
+
+    if ($method === 'POST' && str_contains($url, '/members')) {
+        $capturedCohostSpace = $url;
+        $body = json_decode((string)$payload, true);
+        $capturedCohostEmail = $body['email'] ?? '';
+        return [
+            'status' => 200,
+            'body'   => json_encode([
+                'name' => 'spaces/sPaCeId98765/members/mem_ada',
+                'role' => 'COHOST',
+                'email' => $capturedCohostEmail,
+            ]),
+            'error'  => null,
+        ];
+    }
+
+    return ['status' => 200, 'body' => '{}', 'error' => null];
+});
+
+// Update session 201: change topic, time, faculty (5 -> 6), and courses ('BBA Regular')
+$updateRes = $liveMgr->updateGoogleLiveSession(201, [
+    'topic' => 'Tax Law Masterclass - Advanced Corporate Tax',
+    'session_datetime' => '2026-10-21 15:30:00',
+    'duration_hours' => 1.50,
+    'faculty_id' => 6,
+    'courses' => ['BBA Regular'],
+    'status' => 'scheduled',
+]);
+
+assertTest($updateRes['success'], "updateGoogleLiveSession() succeeded");
+assertTest($createEventCalled === false, "Update does NOT create a second Calendar event (createEvent was NOT called)");
+assertTest($capturedPatchUrl !== null && str_contains($capturedPatchUrl, 'events/cal_event_12345'), "Google event update uses existing google_calendar_event_id");
+assertTest(str_contains($capturedPatchUrl ?? '', 'sendUpdates=all'), "Google event update sends sendUpdates=all in query parameter");
+assertTest($updateRes['calendar_event_id'] === 'cal_event_12345', "Returned calendar_event_id matches authoritative event ID");
+
+// Verify faculty change updated Google guest and cohost
+$patchAttendees = $capturedPatchPayload['attendees'] ?? [];
+$patchAttendeeEmails = array_column($patchAttendees, 'email');
+assertTest(in_array('ada.lovelace@pepponline.in', $patchAttendeeEmails, true), "New faculty Prof. Ada Lovelace is included in updated Calendar attendees");
+assertTest(!in_array('alan.turing@pepponline.in', $patchAttendeeEmails, true), "Previous faculty Prof. Alan Turing was replaced in Calendar attendees");
+assertTest($capturedCohostSpace !== null && str_contains($capturedCohostSpace, 'spaces/sPaCeId98765/members'), "Faculty change triggers cohost addition on existing Meet space");
+assertTest($capturedCohostEmail === 'ada.lovelace@pepponline.in', "New faculty email configured as COHOST on Meet space");
+
+// Verify attendee recalculation on course change
+assertTest(in_array('ada.student@pepponline.in', $patchAttendeeEmails, true), "Attendee list recalculation includes active student from new course 'BBA Regular'");
+$adaAttRow = $pdo->query("SELECT * FROM session_attendance WHERE session_id = 201 AND google_participant_email = 'ada.student@pepponline.in'")->fetch();
+assertTest($adaAttRow && $adaAttRow['attendance_status'] === 'invited', "Newly eligible student STU010 recorded in session_attendance with 'invited' status");
+
+// Verify privacy and reminders in update payload
+assertTest(($capturedPatchPayload['guestsCanSeeOtherGuests'] ?? true) === false, "Update preserves guestsCanSeeOtherGuests = false");
+assertTest(($capturedPatchPayload['guestsCanInviteOthers'] ?? true) === false, "Update preserves guestsCanInviteOthers = false");
+assertTest(($capturedPatchPayload['guestsCanModify'] ?? true) === false, "Update preserves guestsCanModify = false");
+assertTest(count($capturedPatchPayload['reminders']['overrides'] ?? []) === 5, "Update preserves all 5 reminder overrides (1440, 720, 60, 10, 0 min)");
+
+// Verify database row for session 201 remained unique and updated
+$sessUpdated = $pdo->query("SELECT * FROM sessions WHERE id = 201")->fetch();
+assertTest($sessUpdated['topic'] === 'Tax Law Masterclass - Advanced Corporate Tax', "Topic updated in database");
+assertTest((int)$sessUpdated['faculty_id'] === 6, "Faculty ID updated in database");
+assertTest($sessUpdated['google_calendar_event_id'] === 'cal_event_12345', "Authoritative google_calendar_event_id unchanged in database");
+assertTest($sessUpdated['google_meet_space_name'] === 'spaces/sPaCeId98765', "Authoritative google_meet_space_name unchanged in database");
+assertTest($sessUpdated['google_integration_status'] === 'synced', "google_integration_status is 'synced'");
+
+// 8.5 Compensating Error State Handling on Calendar Update Failure
+GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?string $payload, array $headers) {
+    if ($url === GoogleWorkspaceClient::TOKEN_ENDPOINT) {
+        return ['status' => 200, 'body' => json_encode(['access_token' => 'mock_token', 'expires_in' => 3600]), 'error' => null];
+    }
+    if ($method === 'PATCH') {
+        return ['status' => 500, 'body' => json_encode(['error' => ['message' => 'Backend calendar service unavailable']]), 'error' => 'HTTP 500: Backend calendar service unavailable'];
+    }
+    return ['status' => 200, 'body' => '{}', 'error' => null];
+});
+
+$failUpdateRes = $liveMgr->updateGoogleLiveSession(201, ['topic' => 'Should Fail Gracefully']);
+assertTest(!$failUpdateRes['success'], "updateGoogleLiveSession reports failure when Calendar API fails");
+$sessFailDb = $pdo->query("SELECT * FROM sessions WHERE id = 201")->fetch();
+assertTest($sessFailDb['google_integration_status'] === 'failed', "Compensating state records google_integration_status = 'failed'");
+assertTest(!empty($sessFailDb['google_error_message']), "Compensating state records google_error_message for admin visibility");
+
+// 8.6 Delete Lifecycle (Google-Aware Deletion)
+$capturedDeleteUrl = null;
+GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?string $payload, array $headers) use (&$capturedDeleteUrl) {
+    if ($url === GoogleWorkspaceClient::TOKEN_ENDPOINT) {
+        return ['status' => 200, 'body' => json_encode(['access_token' => 'mock_token', 'expires_in' => 3600]), 'error' => null];
+    }
+    if ($method === 'DELETE' && str_contains($url, '/events/')) {
+        $capturedDeleteUrl = $url;
+        return ['status' => 204, 'body' => '', 'error' => null];
+    }
+    return ['status' => 200, 'body' => '{}', 'error' => null];
+});
+
+$delRes = $liveMgr->deleteGoogleLiveSession(201);
+assertTest($delRes['success'], "deleteGoogleLiveSession() succeeded");
+assertTest($capturedDeleteUrl !== null && str_contains($capturedDeleteUrl, 'events/cal_event_12345'), "Google event delete uses existing google_calendar_event_id");
+assertTest(str_contains($capturedDeleteUrl ?? '', 'sendUpdates=all'), "Google event delete sends sendUpdates=all in query parameter");
+
+// Verify database records purged
+$sessAfterDel = $pdo->query("SELECT COUNT(*) FROM sessions WHERE id = 201")->fetchColumn();
+assertTest((int)$sessAfterDel === 0, "Session 201 removed from sessions table");
+$attAfterDel = $pdo->query("SELECT COUNT(*) FROM session_attendance WHERE session_id = 201")->fetchColumn();
+assertTest((int)$attAfterDel === 0, "Associated session_attendance rows cleanly removed");
+$artAfterDel = $pdo->query("SELECT COUNT(*) FROM session_google_artifacts WHERE session_id = 201")->fetchColumn();
+assertTest((int)$artAfterDel === 0, "Associated session_google_artifacts rows cleanly removed");
+
+// Verify no duplicate ERP email notifications were queued for Google session update or delete
+$notifCount = (int)$pdo->query("SELECT COUNT(*) FROM session_notifications WHERE session_id = 201")->fetchColumn();
+assertTest($notifCount === 0, "No duplicate ERP emails queued for Google-integrated session lifecycle actions");
+
+// 8.7 FORENSIC AUDIT: Course-Change Attendee Reconciliation in Both Directions
+// Scenario: Session 401 scheduled with Course A ('B.Com Honours') + Course B ('CA Final')
+$pdo->exec("
+    INSERT INTO sessions (id, topic, faculty_id, session_datetime, duration_hours, session_type, course_csv, google_integrated, google_calendar_event_id, google_meet_space_name, google_meet_uri, google_meet_code, google_integration_status, status)
+    VALUES (401, 'Forensic Reconciliation Masterclass', 5, '2026-10-28 10:00:00', 1.00, 'live', 'B.Com Honours,CA Final', 1, 'cal_event_401', 'spaces/sPaCe401', 'https://meet.google.com/xyz-uvwx-rst', 'xyz-uvwx-rst', 'synced', 'scheduled');
+
+    INSERT INTO session_attendance (session_id, user_id, google_participant_name, google_participant_email, attendance_status, sync_status) VALUES
+    (401, 'STU001', 'Active One', 'active1@pepponline.in', 'invited', 'synced'),
+    (401, 'STU002', 'Active Two', 'active2@pepponline.in', 'invited', 'synced'),
+    (401, 'STU003', 'Active Three', 'active3@pepponline.in', 'invited', 'synced');
+");
+
+$initialAttCount = (int)$pdo->query("SELECT COUNT(*) FROM session_attendance WHERE session_id = 401")->fetchColumn();
+assertTest($initialAttCount === 3, "Initial Course A + Course B invitation list contains 3 students (active1, active2, active3)");
+
+// Track Google Calendar PATCH and ensure no events.insert or conferenceData.createRequest occurs
+$forensicPatchUrl = null;
+$forensicPatchPayload = null;
+$forensicCreateEventCalled = false;
+$forensicMeetSpaceMutationCalled = false;
+
+GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?string $payload, array $headers) use (
+    &$forensicPatchUrl,
+    &$forensicPatchPayload,
+    &$forensicCreateEventCalled,
+    &$forensicMeetSpaceMutationCalled
+) {
+    if ($url === GoogleWorkspaceClient::TOKEN_ENDPOINT) {
+        return ['status' => 200, 'body' => json_encode(['access_token' => 'mock_token', 'expires_in' => 3600]), 'error' => null];
+    }
+    if ($method === 'POST' && str_contains($url, '/events')) {
+        $forensicCreateEventCalled = true;
+        return ['status' => 200, 'body' => json_encode(['id' => 'error_duplicate']), 'error' => null];
+    }
+    if (str_contains($url, 'meet.googleapis.com/v2/spaces') && in_array($method, ['POST', 'PATCH', 'DELETE'], true) && !str_contains($url, '/members')) {
+        $forensicMeetSpaceMutationCalled = true;
+    }
+    if ($method === 'PATCH' && str_contains($url, '/events/')) {
+        $forensicPatchUrl = $url;
+        $forensicPatchPayload = json_decode((string)$payload, true);
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'id' => 'cal_event_401',
+                'summary' => $forensicPatchPayload['summary'] ?? '',
+                'conferenceData' => [
+                    'entryPoints' => [['entryPointType' => 'video', 'uri' => 'https://meet.google.com/xyz-uvwx-rst']],
+                    'conferenceId' => 'xyz-uvwx-rst',
+                ],
+            ]),
+            'error' => null,
+        ];
+    }
+    return ['status' => 200, 'body' => '{}', 'error' => null];
+});
+
+// DIRECTION 1: Remove Course B ('CA Final') -> now Course A only ('B.Com Honours')
+$updateResRemoval = $liveMgr->updateGoogleLiveSession(401, [
+    'courses' => ['B.Com Honours'],
+]);
+
+assertTest($updateResRemoval['success'], "updateGoogleLiveSession succeeded when removing Course B");
+assertTest($forensicCreateEventCalled === false, "Forensic: No events.insert called during course removal update");
+assertTest($forensicMeetSpaceMutationCalled === false, "Forensic: No Meet space creation/mutation called during update (existing space preserved)");
+assertTest($forensicPatchUrl !== null && str_contains($forensicPatchUrl, 'events/cal_event_401'), "Forensic: Calendar PATCH targets existing event cal_event_401");
+assertTest(str_contains($forensicPatchUrl ?? '', 'sendUpdates=all'), "Forensic: Calendar PATCH sends sendUpdates=all so removed guest receives cancellation");
+
+// Verify that conferenceData.createRequest is NOT submitted in update
+assertTest(!isset($forensicPatchPayload['conferenceData']), "Forensic: conferenceData.createRequest is NOT submitted during update");
+
+// Verify Google Calendar attendee list after removing Course B
+$patch1Attendees = $forensicPatchPayload['attendees'] ?? [];
+$patch1Emails = array_column($patch1Attendees, 'email');
+assertTest(in_array('active1@pepponline.in', $patch1Emails, true), "Direction 1: Course A student active1 remains in Calendar attendees");
+assertTest(in_array('active2@pepponline.in', $patch1Emails, true), "Direction 1: Course A student active2 remains in Calendar attendees");
+assertTest(!in_array('active3@pepponline.in', $patch1Emails, true), "Direction 1 (CRITICAL): Removed Course B student active3 is REMOVED from Calendar attendees");
+assertTest(count($patch1Emails) === 3, "Direction 1: Calendar attendee count is exactly 3 (1 faculty + 2 active students)");
+
+// Verify session_attendance after removing Course B
+$attAfterRemoval = $pdo->query("SELECT * FROM session_attendance WHERE session_id = 401")->fetchAll();
+$attEmailsAfterRemoval = array_column($attAfterRemoval, 'google_participant_email');
+assertTest(in_array('active1@pepponline.in', $attEmailsAfterRemoval, true), "session_attendance retains active1");
+assertTest(in_array('active2@pepponline.in', $attEmailsAfterRemoval, true), "session_attendance retains active2");
+assertTest(!in_array('active3@pepponline.in', $attEmailsAfterRemoval, true), "session_attendance (CRITICAL): Stale invited record for active3 is PURGED");
+assertTest(count($attAfterRemoval) === 2, "session_attendance contains exactly 2 invited attendees");
+
+// Verify getSessionDetails() after removing Course B
+$detailsAfterRemoval = $liveMgr->getSessionDetails(401);
+assertTest(count($detailsAfterRemoval['invited_students']) === 2, "getSessionDetails() returns exactly 2 invited students after Course B removal");
+$detailsEmailsLeak = false;
+foreach ($detailsAfterRemoval['invited_students'] as $stRow) {
+    if (isset($stRow['email']) || isset($stRow['student_email'])) {
+        $detailsEmailsLeak = true;
+    }
+}
+assertTest(!$detailsEmailsLeak, "Zero student email leakage in getSessionDetails() after course removal");
+
+// DIRECTION 2: Add Course C ('BBA Regular') -> now ['B.Com Honours', 'BBA Regular']
+$updateResAddition = $liveMgr->updateGoogleLiveSession(401, [
+    'courses' => ['B.Com Honours', 'BBA Regular'],
+]);
+
+assertTest($updateResAddition['success'], "updateGoogleLiveSession succeeded when adding Course C");
+$patch2Attendees = $forensicPatchPayload['attendees'] ?? [];
+$patch2Emails = array_column($patch2Attendees, 'email');
+assertTest(in_array('ada.student@pepponline.in', $patch2Emails, true), "Direction 2 (CRITICAL): Newly eligible Course C student added to Calendar attendees");
+assertTest(in_array('active1@pepponline.in', $patch2Emails, true), "Direction 2: Course A student active1 remains in Calendar attendees");
+assertTest(in_array('active2@pepponline.in', $patch2Emails, true), "Direction 2: Course A student active2 remains in Calendar attendees");
+assertTest(!in_array('active3@pepponline.in', $patch2Emails, true), "Direction 2: Previously removed Course B student active3 remains excluded");
+assertTest(count($patch2Emails) === 4, "Direction 2: Calendar attendee count is exactly 4 (1 faculty + 3 active students)");
+
+$attAfterAddition = $pdo->query("SELECT * FROM session_attendance WHERE session_id = 401")->fetchAll();
+assertTest(count($attAfterAddition) === 3, "session_attendance now contains exactly 3 students after adding Course C");
+
+// 8.8 FORENSIC AUDIT: Default Google Toggle Behavior for NEW vs EXISTING Sessions
+// Verify that opening an existing manual/non-Google session for editing does NOT silently toggle Google ON
+assertTest(
+    str_contains($sessionsSrc, "document.getElementById('sess-google').checked = !!s.google;"),
+    "Forensic: editSess() strictly binds Google toggle to existing session's google_integrated status (!!s.google)"
+);
+assertTest(
+    str_contains($sessionsSrc, '"google"=>(int)($s["google_integrated"] ?? 0)'),
+    "Forensic: Edit button passes exact integer google_integrated flag from database row"
+);
+assertTest(
+    str_contains($sessionsSrc, "document.getElementById('sess-google').checked = true;"),
+    "Forensic: openSessModal() forces Google toggle ON only for NEW sessions"
+);
+
+// Clean up forensic test session 401
+$pdo->prepare("DELETE FROM session_attendance WHERE session_id = 401")->execute();
+$pdo->prepare("DELETE FROM sessions WHERE id = 401")->execute();
+
+echo "\nSECTION 9: ISOLATION OF PAUSED WHATSAPP FILES\n";
 echo "------------------------------------------------------------------------\n";
 
 $pausedFiles = [

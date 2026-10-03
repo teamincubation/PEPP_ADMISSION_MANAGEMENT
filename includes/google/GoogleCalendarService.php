@@ -294,6 +294,144 @@ class GoogleCalendarService {
     }
 
     /**
+     * Update an existing Google Calendar event.
+     * Preserves existing conferenceData (Meet link) while updating topic, times, description, and attendees.
+     * Enforces student guest privacy (guestsCanSeeOtherGuests = false, guestsCanInviteOthers = false, guestsCanModify = false).
+     * Sends sendUpdates=all to notify invited guests via Google Calendar.
+     *
+     * @param string $eventId Google Calendar event ID
+     * @param int $sessionId PEPP ERP session ID
+     * @param string $topic Session topic
+     * @param string $startDatetime ISO string or Y-m-d H:i:s
+     * @param float $durationHours Duration in hours
+     * @param array<int, array{email: string, name?: string}> $students Eligible active students
+     * @param string|null $facultyEmail Assigned faculty email
+     * @param string|null $facultyName Assigned faculty name
+     * @param array<string> $courses Selected course names
+     * @return array{
+     *     success: bool,
+     *     event_id: ?string,
+     *     calendar_id: string,
+     *     meet_uri: ?string,
+     *     meet_code: ?string,
+     *     attendees_count: int,
+     *     error: ?string,
+     *     raw: ?array<string, mixed>
+     * }
+     */
+    public function updateLiveSessionEvent(
+        string $eventId,
+        int $sessionId,
+        string $topic,
+        string $startDatetime,
+        float $durationHours,
+        array $students,
+        ?string $facultyEmail = null,
+        ?string $facultyName = null,
+        array $courses = []
+    ): array {
+        $startTime = strtotime($startDatetime);
+        if ($startTime === false) {
+            return [
+                'success'         => false,
+                'event_id'        => $eventId,
+                'calendar_id'     => $this->calendarId,
+                'meet_uri'        => null,
+                'meet_code'       => null,
+                'attendees_count' => 0,
+                'error'           => "Invalid session datetime: {$startDatetime}",
+                'raw'             => null,
+            ];
+        }
+
+        $durationSeconds = (int)round(max(0.25, $durationHours) * 3600);
+        $endTime = $startTime + $durationSeconds;
+
+        $startIso = date('Y-m-d\TH:i:s', $startTime);
+        $endIso   = date('Y-m-d\TH:i:s', $endTime);
+        $timeZone = 'Asia/Kolkata';
+
+        $courseStr = !empty($courses) ? implode(', ', $courses) : 'All Enrolled Batches';
+        $facStr    = !empty($facultyName) ? $facultyName : 'Assigned Faculty';
+
+        $description = implode("\n", [
+            "PEPP Learning Live Class Session",
+            "────────────────────────────────────────",
+            "Topic: " . $topic,
+            "Faculty: " . $facStr,
+            "Target Courses: " . $courseStr,
+            "Duration: " . rtrim(rtrim(number_format($durationHours, 2), '0'), '.') . " hour(s)",
+            "PEPP Session Reference: PEPP-SESS-" . $sessionId,
+            "────────────────────────────────────────",
+            "Please join promptly at the scheduled time. Host moderation and recording are enabled.",
+        ]);
+
+        $attendees = self::buildAttendeeList($students, $facultyEmail, $facultyName);
+
+        // Update Event Payload (using PATCH so existing conferenceData is untouched)
+        $eventPayload = [
+            'summary'     => '[PEPP Live Session] ' . $topic,
+            'description' => $description,
+            'start'       => [
+                'dateTime' => $startIso,
+                'timeZone' => $timeZone,
+            ],
+            'end'         => [
+                'dateTime' => $endIso,
+                'timeZone' => $timeZone,
+            ],
+            'attendees'   => $attendees,
+
+            // CRITICAL PRIVACY CONTROLS
+            'guestsCanSeeOtherGuests' => false,
+            'guestsCanInviteOthers'   => false,
+            'guestsCanModify'         => false,
+
+            // Organizer Reminders (5 overrides max)
+            'reminders'   => [
+                'useDefault' => false,
+                'overrides'  => [
+                    ['method' => 'popup', 'minutes' => 1440], // 24 hours
+                    ['method' => 'popup', 'minutes' => 720],  // 12 hours
+                    ['method' => 'popup', 'minutes' => 60],   // 1 hour
+                    ['method' => 'popup', 'minutes' => 10],   // 10 minutes
+                    ['method' => 'popup', 'minutes' => 0],    // At session start
+                ],
+            ],
+        ];
+
+        $url = 'https://www.googleapis.com/calendar/v3/calendars/' . rawurlencode($this->calendarId) . '/events/' . rawurlencode($eventId) . '?sendUpdates=all';
+        $res = $this->client->apiRequest('PATCH', $url, $eventPayload, [], [GoogleWorkspaceClient::SCOPE_CALENDAR]);
+
+        if (!$res['success'] || empty($res['data'])) {
+            return [
+                'success'         => false,
+                'event_id'        => $eventId,
+                'calendar_id'     => $this->calendarId,
+                'meet_uri'        => null,
+                'meet_code'       => null,
+                'attendees_count' => count($attendees),
+                'error'           => "Google Calendar event update failed: " . ($res['error'] ?: 'Unknown error'),
+                'raw'             => $res['data'],
+            ];
+        }
+
+        $eventData = $res['data'];
+        $confData = $this->extractConferenceData($eventData);
+
+        return [
+            'success'         => true,
+            'event_id'        => (string)($eventData['id'] ?? $eventId),
+            'calendar_id'     => $this->calendarId,
+            'meet_uri'        => $confData['meet_uri'],
+            'meet_code'       => $confData['meet_code'],
+            'attendees_count' => count($attendees),
+            'error'           => null,
+            'raw'             => $eventData,
+        ];
+    }
+
+    /**
      * Delete an existing Calendar event.
      *
      * @return array{success: bool, error: ?string}
