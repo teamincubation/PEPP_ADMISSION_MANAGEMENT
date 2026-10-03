@@ -16,6 +16,13 @@ uploads/photos/*
 
 # Sensitive secrets (encryption keys — never commit)
 config/secrets.php
+config/secrets/*.json
+google-secrets/
+*.pem
+*.key
+*serviceaccount*.json
+*gserviceaccount*.json
+pepp-*.json
 
 # Node dependencies
 node_modules/

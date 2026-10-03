@@ -42,6 +42,12 @@ function sessions_dispatch_due($pdo) {
         }
 
         foreach ($rows as $s) {
+            // Google-integrated live sessions use Google Calendar notifications & reminders directly;
+            // suppress duplicate ERP email queue reminders.
+            if (!empty($s['google_integrated'])) {
+                continue;
+            }
+
             $m = (int)$s['mins_to_start'];
             $windows = [];
             if ($m <= 780 && $m > 240)      $windows[] = '12h';   // 13h..4h  → 12h notice

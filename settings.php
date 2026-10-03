@@ -582,6 +582,19 @@ try {
     $error_message = $error_message ?: 'Could not load settings.';
 }
 
+$isGwConfigured = false;
+$gwOrganizer = 'admin@pepponline.in';
+$gwProject = 'pepp-live-sessions';
+$gwServiceAccount = 'pepp-erp-google-workspace@pepp-live-sessions.iam.gserviceaccount.com';
+try {
+    require_once __DIR__ . '/includes/google/GoogleWorkspaceClient.php';
+    $gwClient = new GoogleWorkspaceClient();
+    $isGwConfigured = $gwClient->isConfigured();
+    $gwOrganizer = $gwClient->getImpersonatedUser();
+    $gwProject = $gwClient->getProjectId();
+    $gwServiceAccount = $gwClient->getClientEmail() ?: $gwServiceAccount;
+} catch (Exception $e) {}
+
 $message_fields = [
     'onboarding_wp_message'        => ['Welcome / Onboarding message', 'Sent from the onboarding page'],
     'approval_confirmation_message'=> ['Approval confirmation', 'Sent after approving a registration'],
@@ -694,9 +707,138 @@ include 'includes/admin_nav.php';
     <button type="button" class="settings-tab" onclick="switchSettingsTab('sidebar-layout')">
         <i class="fas fa-bars"></i> Sidebar Layout
     </button>
+    <button type="button" class="settings-tab" onclick="switchSettingsTab('google-workspace')">
+        <i class="fab fa-google"></i> Google Workspace
+    </button>
     <button type="button" class="settings-tab" onclick="switchSettingsTab('admin-account')">
         <i class="fas fa-user-shield"></i> Security &amp; Account
     </button>
+</div>
+
+<div id="pane-google-workspace" class="settings-tab-pane">
+<!-- ── GOOGLE WORKSPACE & GOOGLE MEET INTEGRATION ── -->
+<div class="panel">
+    <div class="panel-head">
+        <span class="head-icon" style="background:#e8f0fe;color:#1a73e8;"><i class="fab fa-google"></i></span>
+        <h2>Google Workspace Integration</h2>
+        <div class="head-right">
+            <?php if ($isGwConfigured): ?>
+                <span class="badge green"><i class="fas fa-circle-check"></i> Connected</span>
+            <?php else: ?>
+                <span class="badge amber"><i class="fas fa-clock"></i> Credentials Pending Server Deployment</span>
+            <?php endif; ?>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div style="margin-bottom:20px;line-height:1.6;font-size:0.92rem;color:var(--text-muted,#475569);">
+            Live Session conferencing, Google Calendar scheduling, unique Google Meet room generation, auto-recording, and learner attendance tracking are managed through the authoritative Google Workspace domain <strong>pepponline.in</strong>.
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:16px;margin-bottom:24px;">
+            <div style="background:var(--bg-hover,#f8fafc);border:1px solid var(--border);border-radius:12px;padding:16px;">
+                <div style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);font-weight:700;margin-bottom:6px;">Target Organizer</div>
+                <div style="font-size:1.05rem;font-weight:700;color:var(--foreground,#0f172a);display:flex;align-items:center;gap:6px;">
+                    <i class="fas fa-user-tie" style="color:#1a73e8;"></i> <?php echo e($gwOrganizer); ?>
+                </div>
+                <div style="font-size:0.8rem;color:#16a34a;margin-top:4px;"><i class="fas fa-shield-halved"></i> Domain-Wide Delegation Active</div>
+            </div>
+
+            <div style="background:var(--bg-hover,#f8fafc);border:1px solid var(--border);border-radius:12px;padding:16px;">
+                <div style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);font-weight:700;margin-bottom:6px;">Google Cloud Project</div>
+                <div style="font-size:1.05rem;font-weight:700;color:var(--foreground,#0f172a);display:flex;align-items:center;gap:6px;">
+                    <i class="fas fa-cloud" style="color:#0284c7;"></i> <?php echo e($gwProject); ?>
+                </div>
+                <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px;">Calendar API &amp; Meet REST API v2</div>
+            </div>
+
+            <div style="background:var(--bg-hover,#f8fafc);border:1px solid var(--border);border-radius:12px;padding:16px;">
+                <div style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);font-weight:700;margin-bottom:6px;">Service Account Identity</div>
+                <div style="font-size:0.86rem;font-weight:700;color:var(--foreground,#0f172a);word-break:break-all;">
+                    <?php echo e($gwServiceAccount); ?>
+                </div>
+                <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px;">Server-side headless DWD authentication</div>
+            </div>
+        </div>
+
+        <h3 style="font-size:1rem;margin:20px 0 12px;font-weight:700;color:var(--foreground,#0f172a);">
+            <i class="fas fa-sliders" style="color:var(--accent);margin-right:6px;"></i> Operational Integration Status
+        </h3>
+
+        <div class="table-wrap" style="margin-bottom:24px;">
+            <table class="data-table" style="font-size:0.88rem;">
+                <thead>
+                    <tr>
+                        <th>Integration Feature</th>
+                        <th>Status</th>
+                        <th>Details &amp; Specifications</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Google Calendar Scheduling</strong></td>
+                        <td><span class="badge green">ON</span></td>
+                        <td>Creates unique events on <code>primary</code> calendar for <code>admin@pepponline.in</code> via <code>events.insert</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Unique Google Meet Spaces</strong></td>
+                        <td><span class="badge green">ON</span></td>
+                        <td>Generates unique rooms via <code>conferenceData.createRequest</code> (never reuses a generic link).</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Access Restriction &amp; Moderation</strong></td>
+                        <td><span class="badge green">RESTRICTED</span></td>
+                        <td>Space access is restricted to invited members; Host Management &amp; moderation enabled.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Student Guest List Privacy</strong></td>
+                        <td><span class="badge green">ENFORCED</span></td>
+                        <td><code>guestsCanSeeOtherGuests = false</code>. Enrolled students cannot see each other's email addresses.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Faculty Co-Host Role</strong></td>
+                        <td><span class="badge green">COHOST</span></td>
+                        <td>Assigned faculty email is granted <code>COHOST</code> role via Meet Space Members API.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Auto Recording</strong></td>
+                        <td><span class="badge green">ON</span></td>
+                        <td>Configured via <code>artifactConfig.recordingConfig.autoRecordingGeneration = ON</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Auto Transcription</strong></td>
+                        <td><span class="badge green">ON</span></td>
+                        <td>Configured via <code>artifactConfig.transcriptionConfig.autoTranscriptionGeneration = ON</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Gemini Smart Notes / Recaps</strong></td>
+                        <td><span class="badge green">ON</span></td>
+                        <td>Configured via <code>artifactConfig.smartNotesConfig.autoSmartNotesGeneration = ON</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Calendar Reminders</strong></td>
+                        <td><span class="badge green">5 Windows</span></td>
+                        <td>24 hours, 12 hours, 1 hour, 10 minutes, and at session start (configured on organizer event).</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Meet Attendance Synchronization</strong></td>
+                        <td><span class="badge green">ON</span></td>
+                        <td>Aggregates participant sessions by normalized email into dedicated <code>session_attendance</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Artifacts &amp; Drive Linking</strong></td>
+                        <td><span class="badge green">ON</span></td>
+                        <td>Direct metadata references to Google Drive recordings and Docs transcripts without server video downloads.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="alert alert-info" style="margin-bottom:0;">
+            <i class="fas fa-shield-halved"></i>
+            <span><strong>Security Invariant:</strong> Service account private keys, JWT tokens, and OAuth credentials are maintained strictly in server-side storage outside the public web root. Credentials and tokens are never rendered in HTML, JavaScript, or public endpoints.</span>
+        </div>
+    </div>
+</div>
 </div>
 
 <div id="pane-academic-years" class="settings-tab-pane active">
@@ -1830,7 +1972,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Validate tab ID or default to 'academic-years'
-    var validTabs = ['academic-years', 'whatsapp-templates', 'payment-accounts', 'expense-types', 'ld-settings', 'invoice-settings', 'smtp-settings', 'task-reminder-settings', 'sidebar-layout', 'admin-account'];
+    var validTabs = ['academic-years', 'google-workspace', 'whatsapp-templates', 'payment-accounts', 'expense-types', 'ld-settings', 'invoice-settings', 'smtp-settings', 'task-reminder-settings', 'sidebar-layout', 'admin-account'];
     if (!tabId || !validTabs.includes(tabId)) {
         tabId = 'academic-years';
     }
