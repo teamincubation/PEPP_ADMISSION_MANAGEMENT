@@ -323,7 +323,7 @@ class GoogleWorkspaceClient {
 
         $payload = null;
         if ($body !== null) {
-            if (is_array($body)) {
+            if (is_array($body) || is_object($body)) {
                 $payload = json_encode($body);
                 $headers[] = 'Content-Type: application/json';
             } else {

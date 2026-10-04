@@ -323,6 +323,7 @@ GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?s
                 'body'   => json_encode([
                     'id' => 'cal_event_12345',
                     'summary' => $capturedCalendarPayload['summary'] ?? '',
+                    'location' => $capturedCalendarPayload['location'] ?? 'https://meet.google.com/abc-defg-hij',
                     'conferenceData' => [
                         'conferenceId' => 'abc-defg-hij',
                         'entryPoints' => [
@@ -336,6 +337,28 @@ GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?s
                 'error' => null,
             ];
         }
+    }
+
+    if (str_contains($url, ':endActiveConference') && $method === 'POST') {
+        return ['status' => 200, 'body' => '{}', 'error' => null];
+    }
+
+    if (preg_match('#meet\.googleapis\.com/v2/spaces$#', $url) && $method === 'POST') {
+        $pData = json_decode((string)$payload, true);
+        $reqAccess = $pData['config']['accessType'] ?? 'OPEN';
+        return [
+            'status' => 200,
+            'body'   => json_encode([
+                'name' => 'spaces/sPaCeId98765',
+                'meetingCode' => 'abc-defg-hij',
+                'meetingUri' => 'https://meet.google.com/abc-defg-hij',
+                'config' => [
+                    'accessType' => $reqAccess,
+                    'entryPointAccess' => 'ALL',
+                ]
+            ]),
+            'error'  => null,
+        ];
     }
 
     if (str_contains($url, 'meet.googleapis.com/v2/spaces/abc-defg-hij')) {
@@ -359,13 +382,36 @@ GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?s
         ];
     }
 
-    if (str_contains($url, '/members') && $method === 'POST') {
-        $capturedMemberPayload = json_decode((string)$payload, true);
-        return [
-            'status' => 200,
-            'body'   => json_encode(['name' => 'spaces/sPaCeId98765/members/faculty_member_1']),
-            'error'  => null,
-        ];
+    if (str_contains($url, '/members')) {
+        if ($method === 'POST') {
+            $capturedMemberPayload = json_decode((string)$payload, true);
+            $memEmail = $capturedMemberPayload['email'] ?? 'faculty@pepponline.in';
+            return [
+                'status' => 200,
+                'body'   => json_encode([
+                    'name' => 'spaces/sPaCeId98765/members/faculty_member_1',
+                    'role' => 'COHOST',
+                    'email' => $memEmail,
+                ]),
+                'error'  => null,
+            ];
+        }
+        if ($method === 'GET') {
+            $memEmail = $capturedMemberPayload['email'] ?? 'faculty@pepponline.in';
+            return [
+                'status' => 200,
+                'body'   => json_encode([
+                    'members' => [
+                        [
+                            'name' => 'spaces/sPaCeId98765/members/faculty_member_1',
+                            'role' => 'COHOST',
+                            'email' => $memEmail,
+                        ]
+                    ]
+                ]),
+                'error'  => null,
+            ];
+        }
     }
 
     return ['status' => 404, 'body' => '{"error":{"message":"Not found"}}', 'error' => null];
@@ -434,12 +480,17 @@ assertTest($spaceRes['space_name'] === 'spaces/sPaCeId98765', "Authoritative res
 $lastClaims = end($capturedTokenClaims) ?: [];
 assertTest(str_contains($lastClaims['scope'] ?? '', 'meetings.space.readonly'), "resolveSpace explicitly requests meetings.space.readonly scope for Calendar-created spaces");
 
-// Space configuration test
+// Space configuration test (Default OPEN for new Live Sessions)
 $confRes = $meetService->configureSpace('spaces/sPaCeId98765');
 assertTest($confRes['success'], "Space configuration PATCH succeeded");
-assertTest(($capturedMeetPatchPayload['config']['accessType'] ?? '') === 'RESTRICTED', "Space accessType is RESTRICTED");
+assertTest(($capturedMeetPatchPayload['config']['accessType'] ?? '') === 'OPEN', "Space default accessType is OPEN for new Live Sessions");
 assertTest(($capturedMeetPatchPayload['config']['moderation'] ?? '') === 'ON', "Space moderation is ON");
 assertTest(($capturedMeetPatchPayload['config']['attendanceReportGenerationType'] ?? '') === 'GENERATE_REPORT', "attendanceReportGenerationType is GENERATE_REPORT");
+
+// Legacy Space configuration test
+$confResLegacy = $meetService->configureSpace('spaces/sPaCeId98765', 'RESTRICTED');
+assertTest($confResLegacy['success'], "Legacy space configuration PATCH succeeded");
+assertTest(($capturedMeetPatchPayload['config']['accessType'] ?? '') === 'RESTRICTED', "Legacy space accessType can be explicitly configured as RESTRICTED");
 
 // ArtifactConfig test
 $artConfig = $capturedMeetPatchPayload['config']['artifactConfig'] ?? [];
@@ -456,6 +507,25 @@ assertTest(($capturedMemberPayload['role'] ?? '') === 'COHOST', "Faculty member 
 
 $lastClaims = end($capturedTokenClaims) ?: [];
 assertTest(str_contains($lastClaims['scope'] ?? '', 'meetings.space.created'), "addFacultyCohost explicitly requests meetings.space.created scope for spaces.members.create");
+
+// Read-back verification test
+$verifyRes = $meetService->verifyFacultyCohost('spaces/sPaCeId98765', 'faculty@pepponline.in');
+assertTest($verifyRes['success'], "Faculty co-host read-back verification succeeds");
+assertTest($verifyRes['is_cohost'] === true, "verifyFacultyCohost confirms is_cohost is true");
+assertTest($verifyRes['role'] === 'COHOST', "verifyFacultyCohost confirms role is COHOST");
+
+// Native Meet space creation test via POST /v2/spaces (Default OPEN)
+$createSpaceRes = $meetService->createSpace('OPEN');
+assertTest($createSpaceRes['success'], "Native Meet space creation succeeds via POST /v2/spaces with OPEN access");
+assertTest($createSpaceRes['space_name'] === 'spaces/sPaCeId98765', "Native space name returned: spaces/sPaCeId98765");
+assertTest($createSpaceRes['meeting_uri'] === 'https://meet.google.com/abc-defg-hij', "Native meeting URI returned");
+
+$createLegacyRes = $meetService->createSpace('RESTRICTED');
+assertTest($createLegacyRes['success'], "Native Meet space creation supports legacy RESTRICTED access");
+
+// End active conference test via POST /v2/spaces/{space}:endActiveConference
+$endConfRes = $meetService->endActiveConference('spaces/sPaCeId98765');
+assertTest($endConfRes['success'], "endActiveConference succeeds via POST /v2/spaces/{space}:endActiveConference");
 
 echo "\nSECTION 4: ACTIVE STUDENT RESOLUTION & ORCHESTRATOR\n";
 echo "------------------------------------------------------------------------\n";
@@ -509,6 +579,9 @@ assertTest($provRes['success'], "Live session 201 provisioned with Google Meet")
 assertTest($provRes['calendar_event_id'] === 'cal_event_12345', "Calendar event ID recorded");
 assertTest($provRes['meet_uri'] === 'https://meet.google.com/abc-defg-hij', "Meet link recorded");
 assertTest($provRes['meet_space_name'] === 'spaces/sPaCeId98765', "Authoritative spaces/sPaCeId98765 recorded");
+assertTest($provRes['cohost_status'] === 'cohost_confirmed', "provisionGoogleLiveSession returns cohost_status = cohost_confirmed");
+assertTest(!isset($capturedCalendarPayload['conferenceData']['createRequest']), "Calendar event uses existing native Meet link WITHOUT createRequest");
+assertTest(($capturedCalendarPayload['location'] ?? '') === 'https://meet.google.com/abc-defg-hij', "Calendar event location is set to native Meet URI");
 
 // Verify sessions table was updated
 $sessDb = $pdo->query("SELECT * FROM sessions WHERE id = 201")->fetch();
@@ -748,6 +821,362 @@ assertTest($legacySess['google_calendar_event_id'] === null, "Non-Google session
 // Verify session_cron reminder check
 require_once __DIR__ . '/includes/session_cron.php';
 assertTest(function_exists('sessions_dispatch_due'), "sessions_dispatch_due function exists and is callable");
+
+echo "\nSECTION 7: NATIVE MEET SPACE OWNERSHIP, COHOST VERIFICATION & FAILURE RECOVERY\n";
+echo "------------------------------------------------------------------------\n";
+
+// Test A: COHOST assignment succeeds & read-back verification confirms role
+$pdo->exec("
+    INSERT INTO sessions (id, topic, faculty_id, session_datetime, duration_hours, session_type, course_csv, status)
+    VALUES (501, 'Financial Reporting Standards', 5, '2026-11-01 10:00:00', 1.00, 'live', 'B.Com Honours', 'scheduled');
+");
+
+$testASpaceCreated = false;
+$testACohostAdded = false;
+$testACohostVerified = false;
+$testACalendarCreated = false;
+
+GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?string $payload, array $headers) use (
+    &$testASpaceCreated, &$testACohostAdded, &$testACohostVerified, &$testACalendarCreated
+) {
+    if ($url === GoogleWorkspaceClient::TOKEN_ENDPOINT) {
+        return ['status' => 200, 'body' => json_encode(['access_token' => 'mock_token_7a', 'expires_in' => 3600]), 'error' => null];
+    }
+    if ($method === 'POST' && preg_match('#meet\.googleapis\.com/v2/spaces$#', $url)) {
+        $testASpaceCreated = true;
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'name' => 'spaces/sPaCe501',
+                'meetingCode' => 'xyz-frs-501',
+                'meetingUri' => 'https://meet.google.com/xyz-frs-501',
+            ]),
+            'error' => null,
+        ];
+    }
+    if ($method === 'PATCH' && str_contains($url, 'spaces/sPaCe501')) {
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/sPaCe501']), 'error' => null];
+    }
+    if ($method === 'POST' && str_contains($url, 'spaces/sPaCe501/members')) {
+        $testACohostAdded = true;
+        $body = json_decode((string)$payload, true);
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'name' => 'spaces/sPaCe501/members/mem_501',
+                'role' => $body['role'] ?? 'COHOST',
+                'email' => $body['email'] ?? '',
+            ]),
+            'error' => null,
+        ];
+    }
+    if ($method === 'GET' && str_contains($url, 'spaces/sPaCe501/members')) {
+        $testACohostVerified = true;
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'members' => [
+                    [
+                        'name' => 'spaces/sPaCe501/members/mem_501',
+                        'role' => 'COHOST',
+                        'email' => 'alan.turing@pepponline.in',
+                    ]
+                ]
+            ]),
+            'error' => null,
+        ];
+    }
+    if ($method === 'POST' && str_contains($url, '/calendar/v3/calendars/primary/events')) {
+        $testACalendarCreated = true;
+        return [
+            'status' => 200,
+            'body' => json_encode(['id' => 'cal_event_501', 'summary' => 'Financial Reporting Standards']),
+            'error' => null,
+        ];
+    }
+    return ['status' => 200, 'body' => '{}', 'error' => null];
+});
+
+$resA = $liveMgr->provisionGoogleLiveSession(501);
+assertTest($resA['success'] === true, "Scenario A: provisionGoogleLiveSession succeeds with native Meet space and verified co-host");
+assertTest($testASpaceCreated, "Scenario A: Native Meet space created via POST /v2/spaces");
+assertTest($testACohostAdded, "Scenario A: Faculty added via POST /v2/spaces/{space}/members with role=COHOST");
+assertTest($testACohostVerified, "Scenario A: Faculty verified via GET /v2/spaces/{space}/members");
+assertTest($testACalendarCreated, "Scenario A: Google Calendar event created using native Meet link");
+assertTest($resA['cohost_status'] === 'cohost_confirmed', "Scenario A: cohost_status is cohost_confirmed");
+
+$sessA = $pdo->query("SELECT * FROM sessions WHERE id = 501")->fetch();
+assertTest($sessA['google_integration_status'] === 'synced', "Scenario A: sessions.google_integration_status is 'synced'");
+assertTest($sessA['google_meet_space_name'] === 'spaces/sPaCe501', "Scenario A: Authoritative spaces/sPaCe501 stored");
+assertTest($sessA['google_calendar_event_id'] === 'cal_event_501', "Scenario A: Calendar event ID cal_event_501 stored");
+
+$detailsA = $liveMgr->getSessionDetails(501);
+assertTest($detailsA['faculty']['cohost_status'] === 'Co-host Confirmed', "Scenario A: getSessionDetails shows 'Co-host Confirmed'");
+assertTest($detailsA['google']['cohost_confirmed'] === true, "Scenario A: Google Setup Checklist confirms cohost_confirmed = true");
+assertTest($detailsA['google']['meet_space_created'] === true, "Scenario A: Google Setup Checklist confirms meet_space_created = true");
+assertTest($detailsA['google']['calendar_event_created'] === true, "Scenario A: Google Setup Checklist confirms calendar_event_created = true");
+
+// Test B: COHOST assignment returns 403 Forbidden
+$pdo->exec("
+    INSERT INTO sessions (id, topic, faculty_id, session_datetime, duration_hours, session_type, course_csv, status)
+    VALUES (502, 'Tax Audit Verification', 5, '2026-11-02 11:00:00', 1.00, 'live', 'B.Com Honours', 'scheduled');
+");
+
+$testBCalendarAttempted = false;
+GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?string $payload, array $headers) use (&$testBCalendarAttempted) {
+    if ($url === GoogleWorkspaceClient::TOKEN_ENDPOINT) {
+        return ['status' => 200, 'body' => json_encode(['access_token' => 'mock_token_7b', 'expires_in' => 3600]), 'error' => null];
+    }
+    if ($method === 'POST' && preg_match('#meet\.googleapis\.com/v2/spaces$#', $url)) {
+        return [
+            'status' => 200,
+            'body' => json_encode(['name' => 'spaces/sPaCe502', 'meetingCode' => 'xyz-tav-502', 'meetingUri' => 'https://meet.google.com/xyz-tav-502']),
+            'error' => null,
+        ];
+    }
+    if ($method === 'PATCH' && str_contains($url, 'spaces/sPaCe502')) {
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/sPaCe502']), 'error' => null];
+    }
+    if ($method === 'POST' && str_contains($url, 'spaces/sPaCe502/members')) {
+        return [
+            'status' => 403,
+            'body' => json_encode(['error' => ['code' => 403, 'message' => 'Permission denied on resource MeetingSpace', 'status' => 'PERMISSION_DENIED']]),
+            'error' => 'HTTP 403: Permission denied on resource MeetingSpace',
+        ];
+    }
+    if (str_contains($url, '/calendar/v3/calendars/primary/events')) {
+        $testBCalendarAttempted = true;
+        return ['status' => 200, 'body' => json_encode(['id' => 'unexpected_cal_502']), 'error' => null];
+    }
+    return ['status' => 200, 'body' => '{}', 'error' => null];
+});
+
+$resB = $liveMgr->provisionGoogleLiveSession(502);
+assertTest($resB['success'] === false, "Scenario B: provisionGoogleLiveSession reports failure when COHOST assignment returns 403");
+assertTest($resB['cohost_status'] === 'cohost_failed', "Scenario B: Returned cohost_status is cohost_failed");
+assertTest($testBCalendarAttempted === false, "Scenario B: Calendar event creation is aborted when COHOST assignment fails");
+
+$sessB = $pdo->query("SELECT * FROM sessions WHERE id = 502")->fetch();
+assertTest($sessB['google_integration_status'] === 'failed', "Scenario B: sessions.google_integration_status is 'failed' (NOT 'synced')");
+assertTest(str_contains($sessB['google_error_message'] ?? '', 'Co-Host setup failed'), "Scenario B: Safe diagnostic recorded in google_error_message");
+assertTest(empty($sessB['google_calendar_event_id']), "Scenario B: sessions.google_calendar_event_id remains NULL");
+
+$detailsB = $liveMgr->getSessionDetails(502);
+assertTest($detailsB['faculty']['cohost_status'] === 'Co-host Setup Failed', "Scenario B: getSessionDetails shows 'Co-host Setup Failed'");
+assertTest($detailsB['google']['cohost_confirmed'] === false, "Scenario B: Google Setup Checklist confirms cohost_confirmed = false");
+
+// Test C: COHOST assignment succeeds (200 OK) but verification does not find the faculty
+$pdo->exec("
+    INSERT INTO sessions (id, topic, faculty_id, session_datetime, duration_hours, session_type, course_csv, status)
+    VALUES (503, 'Corporate Finance Seminar', 5, '2026-11-03 14:00:00', 1.00, 'live', 'B.Com Honours', 'scheduled');
+");
+
+GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?string $payload, array $headers) {
+    if ($url === GoogleWorkspaceClient::TOKEN_ENDPOINT) {
+        return ['status' => 200, 'body' => json_encode(['access_token' => 'mock_token_7c', 'expires_in' => 3600]), 'error' => null];
+    }
+    if ($method === 'POST' && preg_match('#meet\.googleapis\.com/v2/spaces$#', $url)) {
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/sPaCe503', 'meetingCode' => 'xyz-cfs-503', 'meetingUri' => 'https://meet.google.com/xyz-cfs-503']), 'error' => null];
+    }
+    if ($method === 'PATCH' && str_contains($url, 'spaces/sPaCe503')) {
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/sPaCe503']), 'error' => null];
+    }
+    if ($method === 'POST' && str_contains($url, 'spaces/sPaCe503/members')) {
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/sPaCe503/members/mem_ghost', 'role' => 'COHOST']), 'error' => null];
+    }
+    if ($method === 'GET' && str_contains($url, 'spaces/sPaCe503/members')) {
+        return ['status' => 200, 'body' => json_encode(['members' => []]), 'error' => null];
+    }
+    return ['status' => 200, 'body' => '{}', 'error' => null];
+});
+
+$resC = $liveMgr->provisionGoogleLiveSession(503);
+assertTest($resC['success'] === false, "Scenario C: Provisioning fails when read-back verification cannot find faculty in members list");
+assertTest($resC['cohost_status'] === 'cohost_failed', "Scenario C: cohost_status is cohost_failed");
+$sessC = $pdo->query("SELECT * FROM sessions WHERE id = 503")->fetch();
+assertTest($sessC['google_integration_status'] === 'failed', "Scenario C: sessions.google_integration_status is 'failed' (NOT 'synced')");
+assertTest(str_contains($sessC['google_error_message'] ?? '', 'was not found in Meet space members'), "Scenario C: Safe diagnostic indicates member missing in space");
+
+// Test D: Faculty is returned as MEMBER instead of COHOST during read-back verification
+$pdo->exec("
+    INSERT INTO sessions (id, topic, faculty_id, session_datetime, duration_hours, session_type, course_csv, status)
+    VALUES (504, 'Cost Accounting Workshop', 5, '2026-11-04 15:00:00', 1.00, 'live', 'B.Com Honours', 'scheduled');
+");
+
+GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?string $payload, array $headers) {
+    if ($url === GoogleWorkspaceClient::TOKEN_ENDPOINT) {
+        return ['status' => 200, 'body' => json_encode(['access_token' => 'mock_token_7d', 'expires_in' => 3600]), 'error' => null];
+    }
+    if ($method === 'POST' && preg_match('#meet\.googleapis\.com/v2/spaces$#', $url)) {
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/sPaCe504', 'meetingCode' => 'xyz-caw-504', 'meetingUri' => 'https://meet.google.com/xyz-caw-504']), 'error' => null];
+    }
+    if ($method === 'PATCH' && str_contains($url, 'spaces/sPaCe504')) {
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/sPaCe504']), 'error' => null];
+    }
+    if ($method === 'POST' && str_contains($url, 'spaces/sPaCe504/members')) {
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/sPaCe504/members/mem_reg', 'role' => 'MEMBER']), 'error' => null];
+    }
+    if ($method === 'GET' && str_contains($url, 'spaces/sPaCe504/members')) {
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'members' => [
+                    [
+                        'name' => 'spaces/sPaCe504/members/mem_reg',
+                        'role' => 'MEMBER',
+                        'email' => 'alan.turing@pepponline.in',
+                    ]
+                ]
+            ]),
+            'error' => null,
+        ];
+    }
+    return ['status' => 200, 'body' => '{}', 'error' => null];
+});
+
+$resD = $liveMgr->provisionGoogleLiveSession(504);
+assertTest($resD['success'] === false, "Scenario D: Provisioning fails when faculty is verified as MEMBER instead of COHOST");
+assertTest($resD['cohost_status'] === 'cohost_failed', "Scenario D: cohost_status is cohost_failed");
+$sessD = $pdo->query("SELECT * FROM sessions WHERE id = 504")->fetch();
+assertTest($sessD['google_integration_status'] === 'failed', "Scenario D: sessions.google_integration_status is 'failed' (NOT 'synced')");
+assertTest(str_contains($sessD['google_error_message'] ?? '', "expected 'COHOST'"), "Scenario D: Error message confirms expected 'COHOST' vs actual 'MEMBER'");
+
+// Test E: Calendar event creation fails after Meet space is created
+$pdo->exec("
+    INSERT INTO sessions (id, topic, faculty_id, session_datetime, duration_hours, session_type, course_csv, status)
+    VALUES (505, 'Auditing Principles Class', 5, '2026-11-05 16:00:00', 1.00, 'live', 'B.Com Honours', 'scheduled');
+");
+
+GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?string $payload, array $headers) {
+    if ($url === GoogleWorkspaceClient::TOKEN_ENDPOINT) {
+        return ['status' => 200, 'body' => json_encode(['access_token' => 'mock_token_7e', 'expires_in' => 3600]), 'error' => null];
+    }
+    if ($method === 'POST' && preg_match('#meet\.googleapis\.com/v2/spaces$#', $url)) {
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/sPaCe505', 'meetingCode' => 'xyz-apc-505', 'meetingUri' => 'https://meet.google.com/xyz-apc-505']), 'error' => null];
+    }
+    if ($method === 'PATCH' && str_contains($url, 'spaces/sPaCe505')) {
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/sPaCe505']), 'error' => null];
+    }
+    if ($method === 'POST' && str_contains($url, 'spaces/sPaCe505/members')) {
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/sPaCe505/members/mem_505', 'role' => 'COHOST', 'email' => 'alan.turing@pepponline.in']), 'error' => null];
+    }
+    if ($method === 'GET' && str_contains($url, 'spaces/sPaCe505/members')) {
+        return ['status' => 200, 'body' => json_encode(['members' => [['name' => 'spaces/sPaCe505/members/mem_505', 'role' => 'COHOST', 'email' => 'alan.turing@pepponline.in']]]), 'error' => null];
+    }
+    if (str_contains($url, '/calendar/v3/calendars/primary/events')) {
+        return ['status' => 500, 'body' => json_encode(['error' => ['code' => 500, 'message' => 'Calendar service temporary 500 failure']]), 'error' => 'HTTP 500: Calendar service temporary 500 failure'];
+    }
+    return ['status' => 200, 'body' => '{}', 'error' => null];
+});
+
+$resE = $liveMgr->provisionGoogleLiveSession(505);
+assertTest($resE['success'] === false, "Scenario E: Provisioning reports failure when Calendar event creation fails");
+$sessE = $pdo->query("SELECT * FROM sessions WHERE id = 505")->fetch();
+assertTest($sessE['google_integration_status'] === 'failed', "Scenario E: sessions.google_integration_status is 'failed'");
+assertTest($sessE['google_meet_space_name'] === 'spaces/sPaCe505', "Scenario E: Pre-created Meet space is safely preserved in database");
+assertTest($sessE['google_meet_uri'] === 'https://meet.google.com/xyz-apc-505', "Scenario E: Pre-created Meet URI is preserved in database");
+assertTest(str_contains($sessE['google_error_message'] ?? '', 'Calendar event creation failed'), "Scenario E: Safe diagnostic records Calendar failure reason");
+
+// Test F: Retry does not create duplicate Meet space
+$spacesCreatedCount = 0;
+GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?string $payload, array $headers) use (&$spacesCreatedCount) {
+    if ($url === GoogleWorkspaceClient::TOKEN_ENDPOINT) {
+        return ['status' => 200, 'body' => json_encode(['access_token' => 'mock_token_7f', 'expires_in' => 3600]), 'error' => null];
+    }
+    if ($method === 'POST' && preg_match('#meet\.googleapis\.com/v2/spaces$#', $url)) {
+        $spacesCreatedCount++;
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/DUPLICATE_SPACE', 'meetingCode' => 'xyz-dup', 'meetingUri' => 'https://meet.google.com/xyz-dup']), 'error' => null];
+    }
+    if ($method === 'PATCH' && str_contains($url, 'spaces/sPaCe505')) {
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/sPaCe505']), 'error' => null];
+    }
+    if ($method === 'POST' && str_contains($url, 'spaces/sPaCe505/members')) {
+        return ['status' => 200, 'body' => json_encode(['name' => 'spaces/sPaCe505/members/mem_505', 'role' => 'COHOST', 'email' => 'alan.turing@pepponline.in']), 'error' => null];
+    }
+    if ($method === 'GET' && str_contains($url, 'spaces/sPaCe505/members')) {
+        return ['status' => 200, 'body' => json_encode(['members' => [['name' => 'spaces/sPaCe505/members/mem_505', 'role' => 'COHOST', 'email' => 'alan.turing@pepponline.in']]]), 'error' => null];
+    }
+    if ($method === 'POST' && str_contains($url, '/calendar/v3/calendars/primary/events')) {
+        return ['status' => 200, 'body' => json_encode(['id' => 'cal_event_505_recovered']), 'error' => null];
+    }
+    return ['status' => 200, 'body' => '{}', 'error' => null];
+});
+
+$resF = $liveMgr->provisionGoogleLiveSession(505);
+assertTest($resF['success'] === true, "Scenario F: Safe retry succeeds after Calendar recovery");
+assertTest($spacesCreatedCount === 0, "Scenario F: POST /v2/spaces was NOT called during retry (No duplicate Meet space created)");
+assertTest($resF['meet_space_name'] === 'spaces/sPaCe505', "Scenario F: Existing Meet space spaces/sPaCe505 was reused");
+$sessF = $pdo->query("SELECT * FROM sessions WHERE id = 505")->fetch();
+assertTest($sessF['google_integration_status'] === 'synced', "Scenario F: sessions.google_integration_status transitioned to 'synced'");
+assertTest($sessF['google_calendar_event_id'] === 'cal_event_505_recovered', "Scenario F: Recovered Calendar event ID recorded");
+
+// Test G: Retry does not create duplicate Calendar event
+$calendarCreatedCount = 0;
+GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?string $payload, array $headers) use (&$calendarCreatedCount) {
+    if ($url === GoogleWorkspaceClient::TOKEN_ENDPOINT) {
+        return ['status' => 200, 'body' => json_encode(['access_token' => 'mock_token_7g', 'expires_in' => 3600]), 'error' => null];
+    }
+    if ($method === 'POST' && str_contains($url, '/calendar/v3/calendars/primary/events')) {
+        $calendarCreatedCount++;
+        return ['status' => 200, 'body' => json_encode(['id' => 'cal_event_duplicate']), 'error' => null];
+    }
+    return ['status' => 200, 'body' => '{}', 'error' => null];
+});
+
+$resG = $liveMgr->provisionGoogleLiveSession(505);
+assertTest($resG['success'] === true, "Scenario G: Idempotent re-run on fully synced session succeeds immediately");
+assertTest($calendarCreatedCount === 0, "Scenario G: POST /events was NOT called on already synced session (No duplicate Calendar event created)");
+
+// Test H: Explicit End Live Session (endActiveConference)
+$pdo->exec("
+    INSERT INTO sessions (id, topic, faculty_id, session_datetime, duration_hours, session_type, course_csv, google_integrated, google_meet_space_name, google_meet_uri, google_calendar_event_id, google_integration_status, status)
+    VALUES (506, 'Final Live Class', 5, '2026-11-06 17:00:00', 1.00, 'live', 'B.Com Honours', 1, 'spaces/sPaCe506', 'https://meet.google.com/xyz-flc-506', 'cal_event_506', 'synced', 'scheduled');
+");
+
+$endActiveConfCalled = false;
+$calendarDeleteCalled = false;
+
+GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?string $payload, array $headers) use (&$endActiveConfCalled, &$calendarDeleteCalled) {
+    if ($url === GoogleWorkspaceClient::TOKEN_ENDPOINT) {
+        return ['status' => 200, 'body' => json_encode(['access_token' => 'mock_token_7h', 'expires_in' => 3600]), 'error' => null];
+    }
+    if ($method === 'POST' && str_contains($url, 'spaces/sPaCe506:endActiveConference')) {
+        $endActiveConfCalled = true;
+        return ['status' => 200, 'body' => '{}', 'error' => null];
+    }
+    if ($method === 'DELETE' && str_contains($url, '/events/')) {
+        $calendarDeleteCalled = true;
+        return ['status' => 204, 'body' => '', 'error' => null];
+    }
+    if (str_contains($url, 'conferenceRecords')) {
+        return ['status' => 200, 'body' => json_encode(['conferenceRecords' => []]), 'error' => null];
+    }
+    return ['status' => 200, 'body' => '{}', 'error' => null];
+});
+
+$endRes = $liveMgr->endGoogleLiveSession(506);
+assertTest($endRes['success'] === true, "Scenario H: endGoogleLiveSession succeeds");
+assertTest($endRes['conference_ended'] === true, "Scenario H: conference_ended flag is true");
+assertTest($endActiveConfCalled === true, "Scenario H: POST /v2/spaces/sPaCe506:endActiveConference was called");
+assertTest($calendarDeleteCalled === false, "Scenario H: Ending conference does NOT delete the Google Calendar event");
+
+$sessH = $pdo->query("SELECT * FROM sessions WHERE id = 506")->fetch();
+assertTest($sessH['status'] === 'completed', "Scenario H: sessions.status is updated to 'completed'");
+assertTest($sessH['google_calendar_event_id'] === 'cal_event_506', "Scenario H: Calendar event ID remains intact");
+
+// Safety checks on endGoogleLiveSession
+$nonGoogleEnd = $liveMgr->endGoogleLiveSession(301);
+assertTest($nonGoogleEnd['success'] === false, "Scenario H: endGoogleLiveSession rejects non-Google session 301");
+assertTest(str_contains($nonGoogleEnd['error'] ?? '', 'not Google-integrated'), "Scenario H: Rejection error message indicates not Google-integrated");
+
+$pdo->exec("INSERT INTO sessions (id, topic, google_integrated, status, session_datetime) VALUES (507, 'No Space Session', 1, 'scheduled', '2026-11-07 10:00:00')");
+$noSpaceEnd = $liveMgr->endGoogleLiveSession(507);
+assertTest($noSpaceEnd['success'] === false, "Scenario H: endGoogleLiveSession rejects session with missing space name");
+assertTest(str_contains($noSpaceEnd['error'] ?? '', 'does not have a Google Meet space name'), "Scenario H: Rejection error message indicates missing space name");
+
+// Clean up test sessions 501-507
+$pdo->exec("DELETE FROM session_attendance WHERE session_id IN (501, 502, 503, 504, 505, 506, 507)");
+$pdo->exec("DELETE FROM sessions WHERE id IN (501, 502, 503, 504, 505, 506, 507)");
 
 echo "\nSECTION 8: GOOGLE LIVE SESSION UX & CALENDAR LIFECYCLE ENHANCEMENTS\n";
 echo "------------------------------------------------------------------------\n";
@@ -1153,6 +1582,510 @@ assertTest(
 // Clean up forensic test session 401
 $pdo->prepare("DELETE FROM session_attendance WHERE session_id = 401")->execute();
 $pdo->prepare("DELETE FROM sessions WHERE id = 401")->execute();
+
+echo "\nSECTION 10: ATTENDANCE & ARTIFACT SYNCHRONIZATION AUDIT (SCENARIOS A–O)\n";
+echo "------------------------------------------------------------------------\n";
+
+// 1. Seed Faculty & Students for Scenario Testing
+$pdo->exec("
+    INSERT INTO faculties (id, name, email, status) VALUES
+    (77, 'Prof. Scenario', 'faculty_scenario@pepponline.in', 'active');
+");
+
+$pdo->exec("
+    INSERT INTO users (user_id, name, email, status, student_status, pepp_course) VALUES
+    ('STU_S1', 'Student Full Attendance', 'student_full@pepponline.in', 'approved', 'active', 'Scenario Batch'),
+    ('STU_S2', 'Student Partial Attendance', 'student_partial@pepponline.in', 'approved', 'active', 'Scenario Batch'),
+    ('STU_S3', 'Student Joined Attendance', 'student_joined@pepponline.in', 'approved', 'active', 'Scenario Batch'),
+    ('STU_S4', 'Student Absent Attendance', 'student_absent@pepponline.in', 'approved', 'active', 'Scenario Batch');
+");
+
+// 2. Seed Session 601 (Google-integrated live session)
+$pdo->exec("
+    INSERT INTO sessions (id, topic, faculty_id, session_datetime, duration_hours, session_type, course_csv, status, google_integrated, google_calendar_event_id, google_calendar_id, google_meet_space_name, google_meet_uri, google_meet_code, google_integration_status)
+    VALUES (601, 'Scenario Masterclass', 77, '2026-10-20 10:00:00', 1.00, 'live', 'Scenario Batch', 'scheduled', 1, 'cal_event_601', 'primary', 'spaces/space_601', 'https://meet.google.com/scen-ario-601', 'scen-ario-601', 'synced');
+");
+
+// Seed Pre-existing Google Session 801 to test Scenario O
+$pdo->exec("
+    INSERT INTO sessions (id, topic, faculty_id, session_datetime, duration_hours, session_type, course_csv, status, google_integrated, google_calendar_event_id, google_calendar_id, google_meet_space_name, google_meet_uri, google_meet_code, google_integration_status)
+    VALUES (801, 'Pre-existing Masterclass', 77, '2026-10-19 14:00:00', 1.50, 'live', 'Scenario Batch', 'scheduled', 1, 'cal_event_existing801', 'primary', 'spaces/space_existing801', 'https://meet.google.com/exi-sting-801', 'exi-sting-801', 'synced');
+");
+
+// Initialize invited students in session_attendance
+$attService = new GoogleAttendanceService($pdo, $client);
+foreach (['STU_S1' => 'student_full@pepponline.in', 'STU_S2' => 'student_partial@pepponline.in', 'STU_S3' => 'student_joined@pepponline.in', 'STU_S4' => 'student_absent@pepponline.in'] as $uId => $uEmail) {
+    $attService->upsertAttendanceRecord(601, $uId, 'Learner', $uEmail, null, null, null, 0, 'invited', 'synced', null, null);
+}
+
+// 3. Set Mock Transport for Scenarios A through O
+GoogleWorkspaceClient::setMockTransport(function(string $method, string $url, ?string $payload, array $headers) {
+    if ($url === GoogleWorkspaceClient::TOKEN_ENDPOINT) {
+        return ['status' => 200, 'body' => json_encode(['access_token' => 'mock_token_s10', 'expires_in' => 3600]), 'error' => null];
+    }
+
+    if (str_contains($url, '/spaces/space_601:endActiveConference')) {
+        return ['status' => 200, 'body' => '{}', 'error' => null];
+    }
+
+    if (str_contains($url, '/spaces/space_601/members')) {
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'members' => [
+                    ['name' => 'spaces/space_601/members/m_fac', 'user' => 'users/fac_601', 'email' => 'faculty_scenario@pepponline.in', 'role' => 'COHOST'],
+                    ['name' => 'spaces/space_601/members/m_stu1', 'user' => 'users/stu_601', 'email' => 'student_full@pepponline.in', 'role' => 'MEMBER'],
+                ]
+            ]),
+            'error' => null
+        ];
+    }
+
+    if (str_contains($url, 'meet.googleapis.com/v2/conferenceRecords?') || str_ends_with($url, '/conferenceRecords')) {
+        if (str_contains($url, 'space_602')) {
+            return [
+                'status' => 200,
+                'body' => json_encode([
+                    'conferenceRecords' => [
+                        [
+                            'name' => 'conferenceRecords/conf_rec_602',
+                            'startTime' => '2026-10-20T10:00:00Z',
+                            'endTime' => '2026-10-20T11:00:00Z',
+                            'space' => 'spaces/space_602',
+                        ]
+                    ]
+                ]),
+                'error' => null
+            ];
+        }
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'conferenceRecords' => [
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601',
+                        'startTime' => '2026-10-20T10:00:00Z',
+                        'endTime' => '2026-10-20T11:00:00Z',
+                        'space' => 'spaces/space_601',
+                    ]
+                ]
+            ]),
+            'error' => null
+        ];
+    }
+
+    if (str_contains($url, 'conferenceRecords/conf_rec_601/participants') && !str_contains($url, 'participantSessions')) {
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'participants' => [
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_fac',
+                        'signedinUser' => [
+                            'user' => 'users/fac_601',
+                            'displayName' => 'Prof. Scenario',
+                        ]
+                    ],
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_stu_full',
+                        'signedinUser' => [
+                            'user' => 'student_full@pepponline.in',
+                            'displayName' => 'Student Full Attendance',
+                        ]
+                    ],
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_stu_part',
+                        'signedinUser' => [
+                            'user' => 'student_partial@pepponline.in',
+                            'displayName' => 'Student Partial Attendance',
+                        ]
+                    ],
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_stu_join',
+                        'signedinUser' => [
+                            'user' => 'student_joined@pepponline.in',
+                            'displayName' => 'Student Joined Attendance',
+                        ]
+                    ],
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_unk_signed',
+                        'signedinUser' => [
+                            'user' => 'users/999111222',
+                            'displayName' => 'External Freelancer',
+                        ]
+                    ],
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_unk_anon',
+                        'anonymousUser' => [
+                            'displayName' => 'Anonymous Guest',
+                        ]
+                    ]
+                ]
+            ]),
+            'error' => null
+        ];
+    }
+
+    if (str_contains($url, 'participants/p_fac/participantSessions')) {
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'participantSessions' => [
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_fac/participantSessions/s1',
+                        'startTime' => '2026-10-20T10:00:00Z',
+                        'endTime' => '2026-10-20T10:55:00Z', // 55 mins = 3300s
+                    ]
+                ]
+            ]),
+            'error' => null
+        ];
+    }
+
+    if (str_contains($url, 'participants/p_stu_full/participantSessions')) {
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'participantSessions' => [
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_stu_full/participantSessions/s1',
+                        'startTime' => '2026-10-20T10:00:00Z',
+                        'endTime' => '2026-10-20T10:20:00Z', // 20m = 1200s
+                    ],
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_stu_full/participantSessions/s2',
+                        'startTime' => '2026-10-20T10:25:00Z',
+                        'endTime' => '2026-10-20T10:45:00Z', // 20m = 1200s
+                    ],
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_stu_full/participantSessions/s3',
+                        'startTime' => '2026-10-20T10:50:00Z',
+                        'endTime' => '2026-10-20T11:00:00Z', // 10m = 600s (Total = 3000s = 83.3% >= 80%)
+                    ],
+                ]
+            ]),
+            'error' => null
+        ];
+    }
+
+    if (str_contains($url, 'participants/p_stu_part/participantSessions')) {
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'participantSessions' => [
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_stu_part/participantSessions/s1',
+                        'startTime' => '2026-10-20T10:00:00Z',
+                        'endTime' => '2026-10-20T10:35:00Z', // 35m = 2100s = 58.3% >= 50%
+                    ]
+                ]
+            ]),
+            'error' => null
+        ];
+    }
+
+    if (str_contains($url, 'participants/p_stu_join/participantSessions')) {
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'participantSessions' => [
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_stu_join/participantSessions/s1',
+                        'startTime' => '2026-10-20T10:00:00Z',
+                        'endTime' => '2026-10-20T10:10:00Z', // 10m = 600s = 16.7% < 50%
+                    ]
+                ]
+            ]),
+            'error' => null
+        ];
+    }
+
+    if (str_contains($url, 'participants/p_unk_signed/participantSessions')) {
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'participantSessions' => [
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_unk_signed/participantSessions/s1',
+                        'startTime' => '2026-10-20T10:15:00Z',
+                        'endTime' => '2026-10-20T10:45:00Z', // 30m = 1800s
+                    ]
+                ]
+            ]),
+            'error' => null
+        ];
+    }
+
+    if (str_contains($url, 'participants/p_unk_anon/participantSessions')) {
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'participantSessions' => [
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/participants/p_unk_anon/participantSessions/s1',
+                        'startTime' => '2026-10-20T10:20:00Z',
+                        'endTime' => '2026-10-20T10:40:00Z', // 20m = 1200s
+                    ]
+                ]
+            ]),
+            'error' => null
+        ];
+    }
+
+    if (str_contains($url, 'conf_rec_601/recordings')) {
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'recordings' => [
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/recordings/rec_601',
+                        'state' => 'FILE_GENERATED',
+                        'driveDestination' => [
+                            'file' => 'drive_rec_file_601',
+                            'exportUri' => 'https://drive.google.com/file/d/drive_rec_file_601/view',
+                        ]
+                    ]
+                ]
+            ]),
+            'error' => null
+        ];
+    }
+
+    if (str_contains($url, 'conf_rec_601/transcripts')) {
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'transcripts' => [
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/transcripts/tr_601',
+                        'state' => 'FILE_GENERATED',
+                        'docsDestination' => [
+                            'document' => 'docs_tr_doc_601',
+                            'exportUri' => 'https://docs.google.com/document/d/docs_tr_doc_601/edit',
+                        ]
+                    ]
+                ]
+            ]),
+            'error' => null
+        ];
+    }
+
+    if (str_contains($url, 'conf_rec_601/smartNotes')) {
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'smartNotes' => [
+                    [
+                        'name' => 'conferenceRecords/conf_rec_601/smartNotes/sn_601',
+                        'state' => 'FILE_GENERATED',
+                        'driveDestination' => [
+                            'file' => 'docs_sn_doc_601',
+                            'exportUri' => 'https://docs.google.com/document/d/docs_sn_doc_601/edit',
+                        ]
+                    ]
+                ]
+            ]),
+            'error' => null
+        ];
+    }
+
+    if (str_contains($url, 'conf_rec_602/recordings')) {
+        return [
+            'status' => 200,
+            'body' => json_encode([
+                'recordings' => [
+                    [
+                        'name' => 'conferenceRecords/conf_rec_602/recordings/rec_602',
+                        'state' => 'PROCESSING',
+                    ]
+                ]
+            ]),
+            'error' => null
+        ];
+    }
+
+    if (str_contains($url, 'conf_rec_602/transcripts')) {
+        return ['status' => 200, 'body' => json_encode(['transcripts' => []]), 'error' => null];
+    }
+
+    if (str_contains($url, 'conf_rec_602/smartNotes')) {
+        return ['status' => 200, 'body' => json_encode(['smartNotes' => []]), 'error' => null];
+    }
+
+    return ['status' => 404, 'body' => '{}', 'error' => null];
+});
+
+// Run Initial Attendance Sync for Session 601
+$s10AttRes = $attService->syncSessionAttendance(601);
+assertTest($s10AttRes['success'], "Section 10: Attendance sync succeeded for session 601");
+
+// --- SCENARIO A: Registered student who joined (thresholds: full / partial / joined) ---
+$rowFull = $pdo->query("SELECT * FROM session_attendance WHERE session_id = 601 AND google_participant_email = 'student_full@pepponline.in'")->fetch();
+assertTest($rowFull['attendance_status'] === 'full attendance', "Scenario A: Student with 83.3% duration classified as 'full attendance'");
+assertTest((int)$rowFull['total_duration_seconds'] === 3000, "Scenario A: Full attendance duration recorded as 3000s");
+assertTest($rowFull['user_id'] === 'STU_S1', "Scenario A: Correctly linked to registered user_id STU_S1");
+
+$rowPart = $pdo->query("SELECT * FROM session_attendance WHERE session_id = 601 AND google_participant_email = 'student_partial@pepponline.in'")->fetch();
+assertTest($rowPart['attendance_status'] === 'partial attendance', "Scenario A: Student with 58.3% duration classified as 'partial attendance'");
+assertTest((int)$rowPart['total_duration_seconds'] === 2100, "Scenario A: Partial attendance duration recorded as 2100s");
+
+$rowJoin = $pdo->query("SELECT * FROM session_attendance WHERE session_id = 601 AND google_participant_email = 'student_joined@pepponline.in'")->fetch();
+assertTest($rowJoin['attendance_status'] === 'joined', "Scenario A: Student with 16.7% duration classified as 'joined'");
+assertTest((int)$rowJoin['total_duration_seconds'] === 600, "Scenario A: Joined attendance duration recorded as 600s");
+
+// --- SCENARIO B: Registered student who did not join (absent) ---
+$rowAbs = $pdo->query("SELECT * FROM session_attendance WHERE session_id = 601 AND google_participant_email = 'student_absent@pepponline.in'")->fetch();
+assertTest($rowAbs['attendance_status'] === 'absent', "Scenario B: Student invited but who never joined is classified as 'absent'");
+assertTest((int)$rowAbs['total_duration_seconds'] === 0, "Scenario B: Absent student duration is 0 seconds");
+assertTest($rowAbs['first_join_time'] === null || $rowAbs['first_join_time'] === '', "Scenario B: Absent student has no join time");
+
+// --- SCENARIO C: Faculty who joined (FACULTY record, Present/full attendance, separate) ---
+$rowFac = $pdo->query("SELECT * FROM session_attendance WHERE session_id = 601 AND user_id = 'FACULTY'")->fetch();
+assertTest($rowFac !== false, "Scenario C: Dedicated FACULTY attendance row exists");
+assertTest($rowFac['google_participant_email'] === 'faculty_scenario@pepponline.in', "Scenario C: Faculty email matches assigned faculty");
+assertTest($rowFac['attendance_status'] === 'full attendance', "Scenario C: Faculty attendance status is 'full attendance'");
+assertTest((int)$rowFac['total_duration_seconds'] === 3300, "Scenario C: Faculty duration correctly recorded as 3300s (55m)");
+
+$summary601 = $attService->getSessionAttendanceSummary(601, true);
+assertTest($summary601['summary']['faculty_status'] === 'Present', "Scenario C: Summary metrics report faculty_status = 'Present'");
+assertTest($summary601['summary']['faculty_present'] === true, "Scenario C: Summary metrics report faculty_present = true");
+assertTest($summary601['faculty']['name'] === 'Prof. Scenario', "Scenario C: Faculty object returns faculty name");
+assertTest($summary601['summary']['registered_students_count'] === 4, "Scenario C: Faculty is NEVER included in registered_students_count (count is exactly 4)");
+
+// --- SCENARIO D: Unknown / Unregistered participants ---
+$rowUnkSigned = $pdo->query("SELECT * FROM session_attendance WHERE session_id = 601 AND google_participant_resource LIKE '%p_unk_signed'")->fetch();
+assertTest($rowUnkSigned !== false, "Scenario D: Signed-in unknown participant recorded");
+assertTest($rowUnkSigned['user_id'] === null, "Scenario D: Unknown participant user_id is NULL");
+assertTest($rowUnkSigned['attendance_status'] === 'unknown/unmatched', "Scenario D: Unknown participant attendance_status is 'unknown/unmatched'");
+assertTest($rowUnkSigned['google_participant_email'] === 'uid_999111222@meet.google.internal', "Scenario D: Deterministic synthetic email generated: uid_999111222@meet.google.internal");
+
+$rowUnkAnon = $pdo->query("SELECT * FROM session_attendance WHERE session_id = 601 AND google_participant_resource LIKE '%p_unk_anon'")->fetch();
+assertTest($rowUnkAnon !== false, "Scenario D: Anonymous unknown participant recorded");
+assertTest($rowUnkAnon['user_id'] === null, "Scenario D: Anonymous participant user_id is NULL");
+assertTest(str_starts_with($rowUnkAnon['google_participant_email'], 'anon_') && str_ends_with($rowUnkAnon['google_participant_email'], '@meet.google.internal'), "Scenario D: Anonymous synthetic email matches anon_{hash}@meet.google.internal");
+
+$fakeUsersCount = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE email LIKE '%@meet.google.internal'")->fetchColumn();
+assertTest($fakeUsersCount === 0, "Scenario D: Security check: Zero ERP user accounts created for unknown participants");
+
+// --- SCENARIO E: Multi-session aggregation ---
+$pFullMeta = json_decode((string)$rowFull['google_participant_session'], true);
+assertTest(($pFullMeta['session_count'] ?? 0) === 3, "Scenario E: Participant with 3 drops/rejoins has session_count = 3");
+assertTest(str_contains((string)$rowFull['first_join_time'], '10:00:00'), "Scenario E: first_join_time reflects earliest join (10:00:00)");
+assertTest(str_contains((string)$rowFull['last_leave_time'], '11:00:00'), "Scenario E: last_leave_time reflects latest leave (11:00:00)");
+assertTest((int)$rowFull['total_duration_seconds'] === 3000, "Scenario E: Total duration aggregates all 3 sessions (1200 + 1200 + 600 = 3000s)");
+
+// --- SCENARIO F: Repeated attendance sync idempotency ---
+$rowsBeforeF = (int)$pdo->query("SELECT COUNT(*) FROM session_attendance WHERE session_id = 601")->fetchColumn();
+assertTest($rowsBeforeF === 7, "Scenario F: Initial sync produced exactly 7 rows (1 faculty + 4 students + 2 unknowns)");
+
+$s10AttRes2 = $attService->syncSessionAttendance(601);
+assertTest($s10AttRes2['success'], "Scenario F: Second attendance sync succeeded");
+$rowsAfterF = (int)$pdo->query("SELECT COUNT(*) FROM session_attendance WHERE session_id = 601")->fetchColumn();
+assertTest($rowsAfterF === 7, "Scenario F: Idempotency confirmed: Exactly 7 rows remain, 0 duplicate rows created");
+
+// --- SCENARIO G: Repeated artifact sync idempotency ---
+$artService = new GoogleArtifactService($pdo, $client);
+$artRes1 = $artService->syncSessionArtifacts(601);
+assertTest($artRes1['success'], "Scenario G: Initial artifacts sync succeeded");
+$artCount1 = (int)$pdo->query("SELECT COUNT(*) FROM session_google_artifacts WHERE session_id = 601")->fetchColumn();
+assertTest($artCount1 === 3, "Scenario G: Initial artifact sync created exactly 3 rows (recording, transcript, smart_notes)");
+
+$artRes2 = $artService->syncSessionArtifacts(601);
+assertTest($artRes2['success'], "Scenario G: Second artifacts sync succeeded");
+$artCount2 = (int)$pdo->query("SELECT COUNT(*) FROM session_google_artifacts WHERE session_id = 601")->fetchColumn();
+assertTest($artCount2 === 3, "Scenario G: Idempotency confirmed: Exactly 3 artifact rows remain, 0 duplicate rows created");
+
+// --- SCENARIO H: Recording artifact stored and displayed with Drive link ---
+$artRec = $pdo->query("SELECT * FROM session_google_artifacts WHERE session_id = 601 AND artifact_type = 'recording'")->fetch();
+assertTest($artRec['drive_file_id'] === 'drive_rec_file_601', "Scenario H: Recording drive_file_id correctly stored");
+assertTest($artRec['artifact_url'] === 'https://drive.google.com/file/d/drive_rec_file_601/view', "Scenario H: Recording artifact_url links to Drive");
+$artSummary601 = $artService->getSessionArtifactsSummary(601);
+assertTest($artSummary601['recording']['status'] === 'AVAILABLE', "Scenario H: Artifact summary reports recording status AVAILABLE");
+assertTest($artSummary601['recording']['url'] === 'https://drive.google.com/file/d/drive_rec_file_601/view', "Scenario H: Artifact summary returns direct Drive link");
+
+// --- SCENARIO I: Transcript artifact stored and displayed with Docs link ---
+$artTr = $pdo->query("SELECT * FROM session_google_artifacts WHERE session_id = 601 AND artifact_type = 'transcript'")->fetch();
+assertTest($artTr['drive_file_id'] === 'docs_tr_doc_601', "Scenario I: Transcript drive_file_id correctly stored");
+assertTest($artTr['artifact_url'] === 'https://docs.google.com/document/d/docs_tr_doc_601/edit', "Scenario I: Transcript artifact_url links to Docs");
+assertTest($artSummary601['transcript']['status'] === 'AVAILABLE', "Scenario I: Artifact summary reports transcript status AVAILABLE");
+assertTest($artSummary601['transcript']['url'] === 'https://docs.google.com/document/d/docs_tr_doc_601/edit', "Scenario I: Artifact summary returns direct Docs link");
+
+// --- SCENARIO J: Gemini Notes artifact stored and displayed with Docs link ---
+$artSn = $pdo->query("SELECT * FROM session_google_artifacts WHERE session_id = 601 AND artifact_type = 'smart_notes'")->fetch();
+assertTest($artSn['drive_file_id'] === 'docs_sn_doc_601', "Scenario J: Smart Notes drive_file_id correctly stored");
+assertTest($artSn['artifact_url'] === 'https://docs.google.com/document/d/docs_sn_doc_601/edit', "Scenario J: Smart Notes artifact_url links to Docs");
+assertTest($artSummary601['smart_notes']['status'] === 'AVAILABLE', "Scenario J: Artifact summary reports smart_notes status AVAILABLE");
+assertTest($artSummary601['smart_notes']['url'] === 'https://docs.google.com/document/d/docs_sn_doc_601/edit', "Scenario J: Artifact summary returns direct Docs link");
+
+// --- SCENARIO K: Artifact not yet available (PROCESSING / NOT AVAILABLE without marking session failed) ---
+$pdo->exec("
+    INSERT INTO sessions (id, topic, faculty_id, session_datetime, duration_hours, session_type, course_csv, status, google_integrated, google_calendar_event_id, google_meet_space_name, google_integration_status)
+    VALUES (602, 'Processing Session', 77, '2026-10-20 10:00:00', 1.00, 'live', 'Scenario Batch', 'completed', 1, 'cal_event_602', 'spaces/space_602', 'synced');
+");
+$artRes602 = $artService->syncSessionArtifacts(602);
+assertTest($artRes602['success'], "Scenario K: Artifact sync for pending session 602 succeeds without error");
+$artSummary602 = $artService->getSessionArtifactsSummary(602);
+assertTest($artSummary602['recording']['status'] === 'PROCESSING', "Scenario K: Recording in PROCESSING state reported as PROCESSING");
+assertTest($artSummary602['transcript']['status'] === 'NOT AVAILABLE', "Scenario K: Missing transcript reported as NOT AVAILABLE");
+assertTest($artSummary602['smart_notes']['status'] === 'NOT AVAILABLE', "Scenario K: Missing smart notes reported as NOT AVAILABLE");
+$sess602Status = $pdo->query("SELECT google_integration_status FROM sessions WHERE id = 602")->fetchColumn();
+assertTest($sess602Status === 'synced', "Scenario K: Session integration status remains 'synced' (NOT marked 'failed') while artifacts process");
+
+// --- SCENARIO L: endGoogleLiveSession flow ---
+// Seed active live session 603
+$pdo->exec("
+    INSERT INTO sessions (id, topic, faculty_id, session_datetime, duration_hours, session_type, course_csv, status, google_integrated, google_calendar_event_id, google_meet_space_name, google_integration_status)
+    VALUES (603, 'Ending Session', 77, '2026-10-20 10:00:00', 1.00, 'live', 'Scenario Batch', 'scheduled', 1, 'cal_event_601', 'spaces/space_601', 'synced');
+");
+$endRes603 = $liveMgr->endGoogleLiveSession(603);
+assertTest($endRes603['success'], "Scenario L: endGoogleLiveSession returns success");
+assertTest($endRes603['conference_ended'] === true, "Scenario L: endGoogleLiveSession confirms conference_ended = true");
+$sess603Db = $pdo->query("SELECT status FROM sessions WHERE id = 603")->fetchColumn();
+assertTest($sess603Db === 'completed', "Scenario L: Session status is transitioned to 'completed'");
+$sess603AttCount = (int)$pdo->query("SELECT COUNT(*) FROM session_attendance WHERE session_id = 603")->fetchColumn();
+assertTest($sess603AttCount > 0, "Scenario L: endGoogleLiveSession automatically triggered attendance synchronization");
+$sess603ArtCount = (int)$pdo->query("SELECT COUNT(*) FROM session_google_artifacts WHERE session_id = 603")->fetchColumn();
+assertTest($sess603ArtCount === 3, "Scenario L: endGoogleLiveSession automatically triggered artifact synchronization");
+
+// --- SCENARIO M: Unknown participants hidden from student views ---
+$studentViewSummary = $attService->getSessionAttendanceSummary(601, false);
+assertTest(count($studentViewSummary['unknown_participants']) === 0, "Scenario M: Student view: unknown_participants array is EMPTY (hidden)");
+assertTest(count($studentViewSummary['registered_students']) === 4, "Scenario M: Student view: registered students intact");
+
+$adminViewSummary = $attService->getSessionAttendanceSummary(601, true);
+assertTest(count($adminViewSummary['unknown_participants']) === 2, "Scenario M: Admin view: 2 unknown participants visible for audit");
+assertTest($adminViewSummary['unknown_participants'][0]['attendance_status'] === 'UNKNOWN / UNREGISTERED', "Scenario M: Admin view: labeled UNKNOWN / UNREGISTERED");
+assertTest($adminViewSummary['unknown_participants'][1]['attendance_status'] === 'UNKNOWN / UNREGISTERED', "Scenario M: Admin view: labeled UNKNOWN / UNREGISTERED");
+
+// --- SCENARIO N: Existing non-Google sessions unaffected ---
+$pdo->exec("
+    INSERT INTO sessions (id, topic, faculty_id, session_datetime, duration_hours, session_type, course_csv, status, google_integrated)
+    VALUES (701, 'Legacy Offline Lecture', 77, '2026-10-21 09:00:00', 2.00, 'offline', 'Scenario Batch', 'scheduled', 0);
+");
+$endLegacyRes = $liveMgr->endGoogleLiveSession(701);
+assertTest(!$endLegacyRes['success'], "Scenario N: endGoogleLiveSession safely rejects non-Google session");
+assertTest(str_contains(strtolower($endLegacyRes['error'] ?? ''), 'not google'), "Scenario N: Error explicitly notes not Google-integrated");
+$sess701Db = $pdo->query("SELECT * FROM sessions WHERE id = 701")->fetch();
+assertTest((int)$sess701Db['google_integrated'] === 0, "Scenario N: Non-Google session remains google_integrated = 0");
+assertTest($sess701Db['status'] === 'scheduled', "Scenario N: Non-Google session status untouched");
+$details701 = $liveMgr->getSessionDetails(701);
+assertTest($details701['success'], "Scenario N: getSessionDetails succeeds for non-Google session");
+assertTest($details701['google']['is_integrated'] === false, "Scenario N: getSessionDetails reports google.is_integrated = false");
+
+// --- SCENARIO O: Existing Google-integrated sessions unaffected ---
+$sess801DbCheck = $pdo->query("SELECT * FROM sessions WHERE id = 801")->fetch();
+assertTest($sess801DbCheck !== false, "Scenario O: Existing Google-integrated session remains intact in database");
+assertTest($sess801DbCheck['google_meet_space_name'] === 'spaces/space_existing801', "Scenario O: Space name spaces/space_existing801 preserved");
+assertTest($sess801DbCheck['google_calendar_event_id'] === 'cal_event_existing801', "Scenario O: Calendar event ID cal_event_existing801 preserved");
+assertTest($sess801DbCheck['google_integration_status'] === 'synced', "Scenario O: Integration status remains 'synced'");
+assertTest($sess801DbCheck['status'] === 'scheduled', "Scenario O: Session status remains untouched as 'scheduled'");
+
+// Clean up scenario test rows
+$pdo->exec("DELETE FROM session_attendance WHERE session_id IN (601, 602, 603, 701, 801)");
+$pdo->exec("DELETE FROM session_google_artifacts WHERE session_id IN (601, 602, 603, 701, 801)");
+$pdo->exec("DELETE FROM sessions WHERE id IN (601, 602, 603, 701, 801)");
+$pdo->exec("DELETE FROM users WHERE user_id LIKE 'STU_S%'");
+$pdo->exec("DELETE FROM faculties WHERE id = 77");
 
 echo "\nSECTION 9: ISOLATION OF PAUSED WHATSAPP FILES\n";
 echo "------------------------------------------------------------------------\n";

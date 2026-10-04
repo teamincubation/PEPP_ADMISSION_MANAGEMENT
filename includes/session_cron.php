@@ -59,7 +59,86 @@ function sessions_dispatch_due($pdo) {
                 notify_session_learners($pdo, $s, $w, 'auto');
             }
         }
+
+        // Post-session Google Meet artifacts & attendance background synchronization
+        google_sessions_dispatch_sync($pdo);
     } catch (Exception $e) { error_log('sessions_dispatch_due: ' . $e->getMessage()); }
+}
+
+/**
+ * Automatically poll and synchronize Google Meet artifacts (recording, transcript, smart notes)
+ * and attendance for completed Google-integrated sessions.
+ *
+ * Bounded & throttled:
+ * - Scoped to sessions completed/ended in the last 48 hours.
+ * - Throttled per session to once every 5 minutes to prevent Google API rate limits.
+ * - Maximum 3 sessions processed per admin request.
+ * - Idempotent upsert into session_google_artifacts and session_attendance.
+ */
+function google_sessions_dispatch_sync(PDO $pdo): void {
+    static $ranGoogle = false;
+    if ($ranGoogle) return;
+    $ranGoogle = true;
+
+    try {
+        if (!class_exists('GoogleWorkspaceClient')) {
+            require_once __DIR__ . '/google/GoogleWorkspaceClient.php';
+        }
+        if (!class_exists('GoogleArtifactService')) {
+            require_once __DIR__ . '/google/GoogleArtifactService.php';
+        }
+        if (!class_exists('GoogleAttendanceService')) {
+            require_once __DIR__ . '/google/GoogleAttendanceService.php';
+        }
+
+        // Candidate sessions: Google integrated, with meet space, ended within last 48 hours,
+        // and either never synced or last synced > 5 minutes ago.
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($driver === 'sqlite') {
+            $sql = "
+                SELECT id, status, session_datetime, google_meet_space_name, google_meet_code, google_last_sync_at
+                FROM sessions
+                WHERE google_integrated = 1
+                  AND (google_meet_space_name IS NOT NULL AND google_meet_space_name != '')
+                  AND (status = 'completed' OR datetime(session_datetime) <= datetime('now'))
+                  AND datetime(session_datetime) >= datetime('now', '-48 hours')
+                  AND (google_last_sync_at IS NULL OR datetime(google_last_sync_at) <= datetime('now', '-5 minutes'))
+                ORDER BY id DESC
+                LIMIT 3
+            ";
+        } else {
+            $sql = "
+                SELECT id, status, session_datetime, google_meet_space_name, google_meet_code, google_last_sync_at
+                FROM sessions
+                WHERE google_integrated = 1
+                  AND (google_meet_space_name IS NOT NULL AND google_meet_space_name != '')
+                  AND (status = 'completed' OR session_datetime <= NOW())
+                  AND session_datetime >= DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                  AND (google_last_sync_at IS NULL OR google_last_sync_at <= DATE_SUB(NOW(), INTERVAL 5 MINUTE))
+                ORDER BY id DESC
+                LIMIT 3
+            ";
+        }
+
+        $stmt = $pdo->query($sql);
+        $candidates = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+        if (empty($candidates)) return;
+
+        $artService = new GoogleArtifactService($pdo);
+        $attService = new GoogleAttendanceService($pdo);
+
+        foreach ($candidates as $s) {
+            $sid = (int)$s['id'];
+            try {
+                $attService->syncSessionAttendance($sid);
+                $artService->syncSessionArtifacts($sid);
+            } catch (Exception $syncEx) {
+                error_log("google_sessions_dispatch_sync session #{$sid} warning: " . $syncEx->getMessage());
+            }
+        }
+    } catch (Exception $e) {
+        error_log('google_sessions_dispatch_sync error: ' . $e->getMessage());
+    }
 }
 
 /** Automatic installment payment reminder dispatcher */

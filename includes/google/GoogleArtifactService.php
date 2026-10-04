@@ -2,7 +2,7 @@
 /**
  * PEPP Learning ERP — Google Artifact Service
  *
- * Synchronizes Google Meet conference artifacts (recordings, transcripts, smart notes)
+ * Synchronizes Google Meet conference artifacts (recordings, transcripts, smart notes / Gemini notes)
  * into `session_google_artifacts` as metadata and direct links to Google Drive / Docs.
  *
  * SAFETY INVARIANT:
@@ -93,10 +93,11 @@ class GoogleArtifactService {
 
                 $this->upsertArtifact($sessionId, 'recording', $recName, $driveFileId ?: null, $state, $exportUri ?: null);
                 $syncedItems[] = [
-                    'type' => 'recording',
+                    'type'     => 'recording',
                     'resource' => $recName,
-                    'file_id' => $driveFileId,
-                    'url' => $exportUri,
+                    'file_id'  => $driveFileId,
+                    'url'      => $exportUri,
+                    'state'    => $state,
                 ];
             }
 
@@ -113,14 +114,15 @@ class GoogleArtifactService {
 
                 $this->upsertArtifact($sessionId, 'transcript', $trName, $docId ?: null, $state, $docUri ?: null);
                 $syncedItems[] = [
-                    'type' => 'transcript',
+                    'type'     => 'transcript',
                     'resource' => $trName,
-                    'file_id' => $docId,
-                    'url' => $docUri,
+                    'file_id'  => $docId,
+                    'url'      => $docUri,
+                    'state'    => $state,
                 ];
             }
 
-            // 3. Sync Smart Notes / Recaps
+            // 3. Sync Smart Notes / Gemini Notes
             $smartNotes = $this->fetchSmartNotes($recordName);
             foreach ($smartNotes as $sn) {
                 $snName = (string)($sn['name'] ?? '');
@@ -133,10 +135,11 @@ class GoogleArtifactService {
 
                 $this->upsertArtifact($sessionId, 'smart_notes', $snName, $docId ?: null, $state, $docUri ?: null);
                 $syncedItems[] = [
-                    'type' => 'smart_notes',
+                    'type'     => 'smart_notes',
                     'resource' => $snName,
-                    'file_id' => $docId,
-                    'url' => $docUri,
+                    'file_id'  => $docId,
+                    'url'      => $docUri,
+                    'state'    => $state,
                 ];
             }
         }
@@ -145,11 +148,80 @@ class GoogleArtifactService {
         $this->pdo->prepare("UPDATE sessions SET google_last_sync_at = ? WHERE id = ?")->execute([$nowDt, $sessionId]);
 
         return [
-            'success' => true,
+            'success'          => true,
             'artifacts_synced' => count($syncedItems),
-            'error' => null,
-            'items' => $syncedItems,
+            'error'            => null,
+            'items'            => $syncedItems,
         ];
+    }
+
+    /**
+     * Retrieve structured summary of artifacts for this session.
+     * Categorizes into Recording, Transcript, and Smart Notes / Gemini Notes.
+     *
+     * @param int $sessionId
+     * @return array<string, mixed>
+     */
+    public function getSessionArtifactsSummary(int $sessionId): array {
+        $stmt = $this->pdo->prepare("
+            SELECT artifact_type, google_resource_name, drive_file_id, artifact_state, artifact_url, updated_at
+            FROM session_google_artifacts
+            WHERE session_id = ?
+            ORDER BY artifact_type ASC, id DESC
+        ");
+        $stmt->execute([$sessionId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $summary = [
+            'recording'   => ['available' => false, 'status' => 'NOT AVAILABLE', 'state' => 'not_available', 'url' => null, 'file_id' => null, 'resource' => null],
+            'transcript'  => ['available' => false, 'status' => 'NOT AVAILABLE', 'state' => 'not_available', 'url' => null, 'file_id' => null, 'resource' => null],
+            'smart_notes' => ['available' => false, 'status' => 'NOT AVAILABLE', 'state' => 'not_available', 'url' => null, 'file_id' => null, 'resource' => null],
+            'items'       => [],
+        ];
+
+        foreach ($rows as $r) {
+            $type = (string)$r['artifact_type'];
+            $state = (string)($r['artifact_state'] ?? 'active');
+            $url = !empty($r['artifact_url']) ? (string)$r['artifact_url'] : null;
+            $fileId = !empty($r['drive_file_id']) ? (string)$r['drive_file_id'] : null;
+            $resName = (string)($r['google_resource_name'] ?? '');
+
+            $upperState = strtoupper($state);
+            $isAvailable = ($url !== null || $fileId !== null) && ($state === 'active' || $upperState === 'FILE_GENERATED');
+            $statusText = $isAvailable ? 'AVAILABLE' : (in_array($upperState, ['STARTED', 'PROCESSING', 'GENERATING', 'ENDED'], true) ? 'PROCESSING' : 'NOT AVAILABLE');
+
+            $info = [
+                'available' => $isAvailable,
+                'status'    => $statusText,
+                'state'     => $state,
+                'url'       => $url,
+                'file_id'   => $fileId,
+                'resource'  => $resName,
+            ];
+
+            if (isset($summary[$type]) && !$summary[$type]['available']) {
+                $summary[$type] = $info;
+            }
+
+            $summary['items'][] = [
+                'type'       => $type,
+                'resource'   => $resName,
+                'file_id'    => $fileId,
+                'state'      => $state,
+                'status'     => $statusText,
+                'url'        => $url,
+                'updated_at' => (string)($r['updated_at'] ?? ''),
+            ];
+        }
+
+        $isConsolidated = (!empty($summary['transcript']['file_id'])
+            && !empty($summary['smart_notes']['file_id'])
+            && $summary['transcript']['file_id'] === $summary['smart_notes']['file_id']);
+        $summary['is_consolidated_notes_and_transcript'] = $isConsolidated;
+        $summary['transcript']['is_consolidated'] = $isConsolidated;
+        $summary['smart_notes']['is_consolidated'] = $isConsolidated;
+
+        return $summary;
     }
 
     protected function fetchConferenceRecords(string $spaceName, string $meetCode): array {

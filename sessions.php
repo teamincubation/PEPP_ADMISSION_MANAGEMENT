@@ -220,6 +220,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } else {
                     $error_message = "Artifact sync failed: " . htmlspecialchars($arRes['error'] ?? 'Unknown error');
                 }
+            } elseif ($action === 'end_live_session') {
+                $sid = (int)($_POST['session_id'] ?? 0);
+                require_once __DIR__ . '/includes/google/GoogleLiveSessionManager.php';
+                $googleMgr = new GoogleLiveSessionManager($pdo);
+                $endRes = $googleMgr->endGoogleLiveSession($sid);
+                if ($endRes['success']) {
+                    $success_message = "Google Meet conference ended for Session #{$sid}.";
+                    if (!empty($endRes['attendance_synced'])) {
+                        $success_message .= " Attendance synchronized ({$endRes['attendance_synced']} participant(s)).";
+                    }
+                    log_admin_activity($pdo, $admin_username, 'session_ended', "Ended Google Meet Live Session #{$sid}");
+                } else {
+                    $error_message = "Failed to end Live Session: " . htmlspecialchars($endRes['error'] ?? 'Unknown error');
+                }
             } elseif ($action === 'mark_status') {
                 $sid = (int)($_POST['session_id'] ?? 0);
                 $st = in_array($_POST['status'] ?? '', ['scheduled', 'completed', 'cancelled'], true) ? $_POST['status'] : 'scheduled';
@@ -301,15 +315,17 @@ if (isset($_GET['ajax']) && !empty($_GET['session_id'])) {
                 echo json_encode(['success' => false, 'error' => 'Attendance table not installed.']);
                 exit();
             }
-            $stmt = $pdo->prepare("
-                SELECT google_participant_name, first_join_time, last_leave_time, total_duration_seconds, attendance_status
-                FROM session_attendance
-                WHERE session_id = ?
-                ORDER BY attendance_status ASC, total_duration_seconds DESC
-            ");
-            $stmt->execute([$sessId]);
-            $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            echo json_encode(['success' => true, 'records' => $records]);
+            require_once __DIR__ . '/includes/google/GoogleAttendanceService.php';
+            $attService = new GoogleAttendanceService($pdo);
+            $summary = $attService->getSessionAttendanceSummary($sessId, true);
+            echo json_encode([
+                'success'              => true,
+                'summary'              => $summary['summary'],
+                'faculty'              => $summary['faculty'],
+                'registered_students'  => $summary['registered_students'],
+                'unknown_participants' => $summary['unknown_participants'],
+                'records'              => array_merge($summary['registered_students'], $summary['unknown_participants']),
+            ]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
         }
@@ -321,15 +337,14 @@ if (isset($_GET['ajax']) && !empty($_GET['session_id'])) {
                 echo json_encode(['success' => false, 'error' => 'Artifacts table not installed.']);
                 exit();
             }
-            $stmt = $pdo->prepare("
-                SELECT artifact_type, google_resource_name, drive_file_id, artifact_state, artifact_url, updated_at
-                FROM session_google_artifacts
-                WHERE session_id = ?
-                ORDER BY artifact_type ASC
-            ");
-            $stmt->execute([$sessId]);
-            $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            echo json_encode(['success' => true, 'records' => $records]);
+            require_once __DIR__ . '/includes/google/GoogleArtifactService.php';
+            $artService = new GoogleArtifactService($pdo);
+            $summary = $artService->getSessionArtifactsSummary($sessId);
+            echo json_encode([
+                'success' => true,
+                'summary' => $summary,
+                'records' => $summary['items'],
+            ]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'error' => $e->getMessage()]);
         }
@@ -471,6 +486,12 @@ include 'includes/admin_nav.php';
                                 <?php echo csrf_field(); ?><input type="hidden" name="action" value="sync_artifacts"><input type="hidden" name="session_id" value="<?php echo (int)$s['id']; ?>">
                                 <button type="submit" class="btn btn-sm btn-soft-violet" title="Sync Meet Recordings & Notes"><i class="fas fa-cloud-arrow-down"></i></button>
                             </form>
+                            <?php if (!empty($s['google_meet_space_name']) && $s['status'] !== 'completed'): ?>
+                                <form method="POST" style="display:inline;" onsubmit="return confirm('End this Google Meet Live Session? This will disconnect participants, finalize the conference, and process attendance and artifacts.');">
+                                    <?php echo csrf_field(); ?><input type="hidden" name="action" value="end_live_session"><input type="hidden" name="session_id" value="<?php echo (int)$s['id']; ?>">
+                                    <button type="submit" class="btn btn-sm btn-soft-red" title="End Live Session (Terminates Google Meet Conference)"><i class="fas fa-phone-slash"></i></button>
+                                </form>
+                            <?php endif; ?>
                         <?php endif; ?>
                         <?php if (empty($s['google_integrated']) && $s['status'] === 'scheduled' && $state !== 'ended' && in_array($s['session_type'], ['live','offline'], true)): ?>
                         <form method="POST" style="display:inline;" onsubmit="return confirm('Send a reminder email to all learners of the selected course(s)?');">
@@ -591,8 +612,8 @@ include 'includes/admin_nav.php';
         <div class="modal-body" style="padding:16px 24px;overflow-y:auto;flex:1;">
             <div class="tabs" style="margin-bottom:16px; border-bottom:1px solid var(--border); padding-bottom:8px;">
                 <button type="button" class="btn btn-sm btn-outline active" id="tab-btn-overview" onclick="switchDetailTab('overview')"><i class="fas fa-list-check"></i> Overview &amp; Google</button>
-                <button type="button" class="btn btn-sm btn-outline" id="tab-btn-students" onclick="switchDetailTab('students')"><i class="fas fa-user-graduate"></i> Invited Students <span id="detail-student-count-badge" class="badge blue" style="font-size:0.68rem;padding:2px 6px;">0</span></button>
-                <button type="button" class="btn btn-sm btn-outline" id="tab-btn-art" onclick="switchDetailTab('art')"><i class="fas fa-file-video"></i> Recordings &amp; Notes</button>
+                <button type="button" class="btn btn-sm btn-outline" id="tab-btn-students" onclick="switchDetailTab('students')"><i class="fas fa-user-graduate"></i> Attendance &amp; Learners <span id="detail-student-count-badge" class="badge blue" style="font-size:0.68rem;padding:2px 6px;">0</span></button>
+                <button type="button" class="btn btn-sm btn-outline" id="tab-btn-art" onclick="switchDetailTab('art')"><i class="fas fa-file-video"></i> Recordings &amp; Gemini Notes</button>
             </div>
 
             <!-- TAB 1: OVERVIEW & GOOGLE -->
@@ -602,23 +623,24 @@ include 'includes/admin_nav.php';
                 </div>
             </div>
 
-            <!-- TAB 2: INVITED STUDENTS -->
+            <!-- TAB 2: ATTENDANCE & LEARNERS -->
             <div id="pane-detail-students" style="display:none;">
+                <div id="attendance-summary-bar" style="margin-bottom:14px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;"></div>
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap;">
-                    <div style="font-size:0.85rem;color:var(--text-muted);">
-                        Active learners associated with this Google Calendar event:
+                    <div style="font-size:0.83rem;color:var(--text-muted);">
+                        Authoritative Google Meet participation, segregated faculty tracking, and registered student matching:
                     </div>
-                    <input type="text" id="detail-student-search" placeholder="Search learner name or course..." oninput="filterDetailStudents()" style="padding:6px 12px;font-size:0.8rem;border:1px solid var(--border);border-radius:8px;min-width:240px;">
+                    <input type="text" id="detail-student-search" placeholder="Search learner name, email, or course..." oninput="filterDetailStudents()" style="padding:6px 12px;font-size:0.8rem;border:1px solid var(--border);border-radius:8px;min-width:240px;">
                 </div>
-                <div id="students-content" style="max-height:360px; overflow-y:auto;">
-                    <div style="text-align:center; padding:24px; color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> Loading invited students...</div>
+                <div id="students-content" style="max-height:460px; overflow-y:auto;">
+                    <div style="text-align:center; padding:24px; color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> Loading attendance &amp; learners...</div>
                 </div>
             </div>
 
-            <!-- TAB 3: RECORDINGS & NOTES -->
+            <!-- TAB 3: RECORDINGS & GEMINI NOTES -->
             <div id="pane-detail-art" style="display:none;">
-                <div id="art-content" style="max-height:360px; overflow-y:auto;">
-                    <div style="text-align:center; padding:24px; color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> Loading artifacts...</div>
+                <div id="art-content" style="max-height:460px; overflow-y:auto;">
+                    <div style="text-align:center; padding:24px; color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> Loading recordings &amp; Gemini notes...</div>
                 </div>
             </div>
         </div>
@@ -833,10 +855,12 @@ function openSessionDetails(sessionId, topic) {
     var overviewEl = document.getElementById('overview-content');
     var studentsEl = document.getElementById('students-content');
     var artEl      = document.getElementById('art-content');
+    var sumBar     = document.getElementById('attendance-summary-bar');
 
     overviewEl.innerHTML = '<div style=\"text-align:center; padding:28px; color:var(--text-muted);\"><i class=\"fas fa-spinner fa-spin\"></i> Loading session details...</div>';
-    studentsEl.innerHTML = '<div style=\"text-align:center; padding:28px; color:var(--text-muted);\"><i class=\"fas fa-spinner fa-spin\"></i> Loading invited students...</div>';
-    artEl.innerHTML      = '<div style=\"text-align:center; padding:28px; color:var(--text-muted);\"><i class=\"fas fa-spinner fa-spin\"></i> Loading recordings &amp; notes...</div>';
+    studentsEl.innerHTML = '<div style=\"text-align:center; padding:28px; color:var(--text-muted);\"><i class=\"fas fa-spinner fa-spin\"></i> Loading attendance &amp; learners...</div>';
+    artEl.innerHTML      = '<div style=\"text-align:center; padding:28px; color:var(--text-muted);\"><i class=\"fas fa-spinner fa-spin\"></i> Loading recordings &amp; Gemini notes...</div>';
+    if (sumBar) sumBar.innerHTML = '';
 
     // Fetch complete session details
     fetch('sessions.php?ajax=session_details&session_id=' + sessionId)
@@ -854,10 +878,15 @@ function openSessionDetails(sessionId, topic) {
             var stList = res.invited_students || [];
             currentInvitedStudents = stList;
 
-            var stBadge = document.getElementById('detail-student-count-badge');
-            if (stBadge) stBadge.textContent = stList.length;
+            var regStudents = res.registered_students || [];
+            var unkStudents = res.unknown_participants || [];
+            var facAtt = res.faculty_attendance || {};
+            var sum = res.attendance_summary || {};
 
-            // Render Overview
+            var stBadge = document.getElementById('detail-student-count-badge');
+            if (stBadge) stBadge.textContent = regStudents.length > 0 ? regStudents.length : stList.length;
+
+            // Render Overview (Tab 1)
             var ovHtml = '';
             ovHtml += '<div style=\"display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px;\">';
 
@@ -881,7 +910,8 @@ function openSessionDetails(sessionId, topic) {
             if (f.email) {
                 ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Faculty Email:</span> ' + f.email + '</div>';
             }
-            ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Meet Co-host:</span> <span class=\"badge ' + (f.cohost_status.indexOf('Configured') !== -1 ? 'green' : 'gray') + '\">' + f.cohost_status + '</span></div>';
+            var coColor = (f.cohost_status.indexOf('Confirmed') !== -1 || f.cohost_status.indexOf('Configured') !== -1) ? 'green' : (f.cohost_status.indexOf('Failed') !== -1 ? 'red' : 'gray');
+            ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Meet Co-host:</span> <span class=\"badge ' + coColor + '\">' + f.cohost_status + '</span></div>';
             ovHtml += '</div></div>';
 
             // Section 3: Courses
@@ -902,6 +932,17 @@ function openSessionDetails(sessionId, topic) {
             ovHtml += '<div style=\"font-weight:700; font-size:0.9rem; margin-bottom:10px; color:var(--foreground,#0f172a); display:flex; align-items:center; gap:8px;\"><i class=\"fab fa-google\" style=\"color:#4285F4;\"></i> Section 5 — Google Workspace Integration</div>';
             ovHtml += '<div style=\"display:flex; flex-direction:column; gap:6px; font-size:0.83rem;\">';
             ovHtml += '<div><span style=\"color:var(--text-muted); width:110px; display:inline-block;\">Integration:</span> ' + (g.is_integrated ? '<span class=\"badge blue\"><i class=\"fab fa-google\"></i> Enabled</span>' : '<span class=\"badge gray\">Disabled</span>') + '</div>';
+
+            if (g.is_integrated) {
+                ovHtml += '<div style=\"margin:6px 0; padding:8px 12px; background:rgba(0,0,0,0.02); border-radius:8px; border:1px solid var(--border); font-size:0.8rem; display:flex; flex-direction:column; gap:4px;\">';
+                ovHtml += '<div style=\"font-weight:600; color:var(--text-muted); font-size:0.75rem; text-transform:uppercase;\">Google Setup Checklist</div>';
+                ovHtml += '<div>' + (g.meet_space_created ? '<span style=\"color:#10b981; font-weight:bold;\">✓</span> Meet Space Created' : '<span style=\"color:#ef4444; font-weight:bold;\">✗</span> Meet Space Not Created') + '</div>';
+                ovHtml += '<div>' + (g.cohost_confirmed ? '<span style=\"color:#10b981; font-weight:bold;\">✓</span> Faculty Co-host Confirmed' : (g.cohost_status === 'Co-host Setup Failed' ? '<span style=\"color:#ef4444; font-weight:bold;\">⚠</span> Faculty Co-host Setup Failed' : '<span style=\"color:#f59e0b; font-weight:bold;\">⏳</span> ' + (g.cohost_status || 'Co-host Pending'))) + '</div>';
+                ovHtml += '<div>' + (g.calendar_event_created ? '<span style=\"color:#10b981; font-weight:bold;\">✓</span> Calendar Event Created' : '<span style=\"color:#ef4444; font-weight:bold;\">✗</span> Calendar Event Not Created') + '</div>';
+                ovHtml += '<div>' + (g.integration_status === 'synced' ? '<span style=\"color:#10b981; font-weight:bold;\">✓</span> Google Integration Ready' : '<span style=\"color:#f59e0b; font-weight:bold;\">⚠</span> Integration Incomplete (' + g.integration_status + ')') + '</div>';
+                ovHtml += '</div>';
+            }
+
             if (g.meet_uri) {
                 ovHtml += '<div style=\"display:flex; align-items:center; gap:6px;\"><span style=\"color:var(--text-muted); width:110px;\">Meet Link:</span> <a href=\"' + g.meet_uri + '\" target=\"_blank\" style=\"font-weight:600; color:var(--primary); word-break:break-all;\">' + g.meet_uri + '</a> <button type=\"button\" class=\"btn btn-xs btn-outline\" onclick=\"copyMeetLink(\'' + g.meet_uri + '\')\"><i class=\"fas fa-copy\"></i></button></div>';
             }
@@ -923,56 +964,172 @@ function openSessionDetails(sessionId, topic) {
             ovHtml += '</div>';
             overviewEl.innerHTML = ovHtml;
 
-            // Render Section 4: Invited Students
-            if (stList.length === 0) {
-                studentsEl.innerHTML = '<div class=\"empty-state\" style=\"padding:24px;\"><p>No active students recorded for this session yet.</p></div>';
+            // Render Tab 2: Attendance & Learners
+            if (sumBar) {
+                var sbHtml = '';
+                var regCount = sum.registered_students_count || regStudents.length || stList.length;
+                var pCount = sum.present_count || 0;
+                var aCount = sum.absent_count || (regCount - pCount);
+                var fStatus = sum.faculty_status || (facAtt.attendance_status || 'Not Assigned');
+                var uCount = sum.unknown_count || unkStudents.length;
+
+                sbHtml += '<span class=\"badge blue\" style=\"font-size:0.8rem; padding:5px 12px;\"><i class=\"fas fa-user-graduate\"></i> Registered Students: <strong>' + regCount + '</strong></span>';
+                sbHtml += '<span class=\"badge green\" style=\"font-size:0.8rem; padding:5px 12px;\"><i class=\"fas fa-check\"></i> Present: <strong>' + pCount + '</strong></span>';
+                sbHtml += '<span class=\"badge red\" style=\"font-size:0.8rem; padding:5px 12px;\"><i class=\"fas fa-xmark\"></i> Absent: <strong>' + aCount + '</strong></span>';
+                var fCol = fStatus === 'Present' ? 'green' : (fStatus === 'Absent' ? 'red' : 'gray');
+                sbHtml += '<span class=\"badge ' + fCol + '\" style=\"font-size:0.8rem; padding:5px 12px;\"><i class=\"fas fa-chalkboard-user\"></i> Faculty: <strong>' + fStatus + '</strong></span>';
+                if (uCount > 0) {
+                    sbHtml += '<span class=\"badge amber\" style=\"font-size:0.8rem; padding:5px 12px;\"><i class=\"fas fa-triangle-exclamation\"></i> Unknown Participants: <strong>' + uCount + '</strong></span>';
+                }
+                sumBar.innerHTML = sbHtml;
+            }
+
+            var sHtml = '';
+
+            // Section 2A: Faculty Attendance Block
+            if (facAtt && facAtt.name && facAtt.name !== 'Not assigned') {
+                var fBadge = facAtt.attendance_status === 'Present' ? '<span class=\"badge green\">Present</span>' : '<span class=\"badge red\">Absent</span>';
+                sHtml += '<div style=\"background:var(--bg-hover,#f8fafc); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:16px;\">';
+                sHtml += '<div style=\"display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;\">';
+                sHtml += '<div>';
+                sHtml += '<div style=\"font-size:0.75rem; text-transform:uppercase; letter-spacing:0.5px; font-weight:700; color:var(--text-muted);\"><i class=\"fas fa-chalkboard-user\" style=\"color:#3b82f6;\"></i> Assigned Faculty Attendance</div>';
+                sHtml += '<div style=\"font-weight:700; font-size:0.95rem; margin-top:2px;\">' + facAtt.name + ' ' + (facAtt.email ? ('<span style=\"font-weight:normal; font-size:0.8rem; color:var(--text-muted);\">(' + facAtt.email + ')</span>') : '') + '</div>';
+                sHtml += '</div>';
+                sHtml += '<div style=\"display:flex; align-items:center; gap:14px; font-size:0.83rem;\">';
+                sHtml += '<div>' + fBadge + '</div>';
+                sHtml += '<div><span style=\"color:var(--text-muted);\">Joined:</span> <strong>' + (facAtt.first_join_time || '-') + '</strong></div>';
+                sHtml += '<div><span style=\"color:var(--text-muted);\">Left:</span> <strong>' + (facAtt.last_leave_time || '-') + '</strong></div>';
+                sHtml += '<div><span style=\"color:var(--text-muted);\">Duration:</span> <strong>' + (facAtt.duration || '0m') + '</strong></div>';
+                sHtml += '</div>';
+                sHtml += '</div></div>';
+            }
+
+            // Section 2B: Registered Students
+            sHtml += '<div style=\"font-size:0.82rem; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted); margin-bottom:8px;\"><i class=\"fas fa-user-graduate\" style=\"color:var(--primary);\"></i> Registered Students (' + (regStudents.length > 0 ? regStudents.length : stList.length) + ')</div>';
+
+            var effectiveStudents = regStudents.length > 0 ? regStudents : stList;
+
+            if (effectiveStudents.length === 0) {
+                sHtml += '<div class=\"empty-state\" style=\"padding:20px; margin-bottom:14px;\"><p>No registered students associated with this session.</p></div>';
             } else {
-                var sHtml = '<table class=\"data-table\" style=\"font-size:0.83rem;\"><thead><tr><th style=\"width:35px;\">#</th><th>Learner Name</th><th>Course</th><th>Status</th><th style=\"text-align:right;\">Duration</th></tr></thead><tbody id=\"students-table-body\">';
-                stList.forEach(function(st, idx){
-                    var stColor = {'full attendance':'green','partial attendance':'amber','joined':'blue','invited':'gray','absent':'red'}[st.status] || 'gray';
-                    sHtml += '<tr data-search=\"' + (st.name + ' ' + st.course).replace(/\"/g, '') + '\">';
+                sHtml += '<table class=\"data-table\" style=\"font-size:0.83rem; margin-bottom:16px;\"><thead><tr><th style=\"width:35px;\">#</th><th>Student Name</th><th>Course</th><th>Status</th><th>Joined</th><th>Left</th><th style=\"text-align:right;\">Duration</th></tr></thead><tbody id=\"students-table-body\">';
+                effectiveStudents.forEach(function(st, idx){
+                    var stColor = {'full attendance':'green','partial attendance':'amber','joined':'blue','invited':'gray','absent':'red'}[st.attendance_status || st.status] || 'gray';
+                    var statusText = st.attendance_status || st.status || 'invited';
+                    sHtml += '<tr data-search=\"' + (st.name + ' ' + (st.course || '')).replace(/\"/g, '') + '\">';
                     sHtml += '<td style=\"color:var(--text-muted);\">' + (idx + 1) + '</td>';
                     sHtml += '<td><strong>' + st.name + '</strong></td>';
-                    sHtml += '<td><span class=\"badge gray\" style=\"font-size:0.72rem;\">' + st.course + '</span></td>';
-                    sHtml += '<td><span class=\"badge ' + stColor + '\">' + st.status + '</span></td>';
-                    sHtml += '<td style=\"text-align:right;\">' + st.duration + '</td>';
+                    sHtml += '<td><span class=\"badge gray\" style=\"font-size:0.72rem;\">' + (st.course || '-') + '</span></td>';
+                    sHtml += '<td><span class=\"badge ' + stColor + '\">' + statusText + '</span></td>';
+                    sHtml += '<td style=\"font-size:0.78rem;\">' + (st.first_join_time || '-') + '</td>';
+                    sHtml += '<td style=\"font-size:0.78rem;\">' + (st.last_leave_time || '-') + '</td>';
+                    sHtml += '<td style=\"text-align:right; font-weight:600;\">' + (st.duration || '0m') + '</td>';
                     sHtml += '</tr>';
                 });
                 sHtml += '</tbody></table>';
-                sHtml += '<div id=\"students-search-empty\" style=\"display:none; text-align:center; padding:20px; color:var(--text-muted);\">No matching learners found.</div>';
-                studentsEl.innerHTML = sHtml;
+                sHtml += '<div id=\"students-search-empty\" style=\"display:none; text-align:center; padding:16px; color:var(--text-muted);\">No matching learners found.</div>';
             }
+
+            // Section 2C: Unknown / Unregistered Participants
+            if (unkStudents.length > 0) {
+                sHtml += '<div style=\"background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:14px 16px; margin-top:20px;\">';
+                sHtml += '<div style=\"display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;\">';
+                sHtml += '<div style=\"font-weight:700; font-size:0.86rem; color:#92400e; display:flex; align-items:center; gap:8px;\"><i class=\"fas fa-user-secret\" style=\"color:#f59e0b;\"></i> Unknown / Unregistered Participants (' + unkStudents.length + ')</div>';
+                sHtml += '<span class=\"badge amber\">OPEN Meet Guests</span>';
+                sHtml += '</div>';
+                sHtml += '<div style=\"font-size:0.76rem; color:#b45309; margin-bottom:10px;\">The following participant(s) entered the Google Meet URL without matching registered course students or assigned faculty. Kept strictly segregated for administrator audit:</div>';
+                sHtml += '<table class=\"data-table\" style=\"font-size:0.8rem; background:#ffffff;\"><thead><tr><th style=\"width:30px;\">#</th><th>Google Display Name</th><th>Google Email / ID</th><th>Joined</th><th>Left</th><th>Duration</th><th style=\"text-align:right;\">Classification</th></tr></thead><tbody>';
+                unkStudents.forEach(function(u, idx){
+                    sHtml += '<tr>';
+                    sHtml += '<td style=\"color:var(--text-muted);\">' + (idx + 1) + '</td>';
+                    sHtml += '<td><strong>' + u.name + '</strong></td>';
+                    sHtml += '<td style=\"font-family:monospace; font-size:0.75rem; color:var(--text-muted);\">' + u.email + '</td>';
+                    sHtml += '<td style=\"font-size:0.78rem;\">' + (u.first_join_time || '-') + '</td>';
+                    sHtml += '<td style=\"font-size:0.78rem;\">' + (u.last_leave_time || '-') + '</td>';
+                    sHtml += '<td>' + (u.duration || '0m') + '</td>';
+                    sHtml += '<td style=\"text-align:right;\"><span class=\"badge amber\">' + u.attendance_status + '</span></td>';
+                    sHtml += '</tr>';
+                });
+                sHtml += '</tbody></table>';
+                sHtml += '</div>';
+            }
+
+            studentsEl.innerHTML = sHtml;
+
+            // Render Tab 3: Artifacts Cards
+            var artSummary = res.artifacts_summary || {};
+            var rec = artSummary.recording || {};
+            var tr  = artSummary.transcript || {};
+            var sn  = artSummary.smart_notes || {};
+
+            var aHtml = '<div style=\"display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:16px;\">';
+
+            // Card 1: Recording
+            aHtml += '<div style=\"background:var(--bg-hover,#f8fafc); border:1px solid var(--border); border-radius:12px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; gap:14px;\">';
+            aHtml += '<div>';
+            aHtml += '<div style=\"display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;\">';
+            aHtml += '<div style=\"font-size:1.6rem; color:#ef4444;\"><i class=\"fas fa-video\"></i></div>';
+            aHtml += '<span class=\"badge ' + (rec.available ? 'green' : (rec.status === 'PROCESSING' ? 'amber' : 'gray')) + '\">' + (rec.status || 'NOT AVAILABLE') + '</span>';
+            aHtml += '</div>';
+            aHtml += '<div style=\"font-weight:700; font-size:0.95rem; margin-bottom:4px;\">Google Meet Recording</div>';
+            aHtml += '<div style=\"font-size:0.78rem; color:var(--text-muted);\">Official session recording video file hosted in Google Drive.</div>';
+            aHtml += '</div>';
+            if (rec.available && rec.url) {
+                aHtml += '<a href=\"' + rec.url + '\" target=\"_blank\" class=\"btn btn-sm btn-primary\" style=\"display:inline-flex; align-items:center; justify-content:center; gap:6px;\"><i class=\"fas fa-play\"></i> Open Recording</a>';
+            } else {
+                aHtml += '<button type=\"button\" class=\"btn btn-sm btn-outline\" disabled style=\"opacity:0.6;\"><i class=\"fas fa-clock\"></i> ' + (rec.status === 'PROCESSING' ? 'Processing...' : 'Not Available Yet') + '</button>';
+            }
+            aHtml += '</div>';
+
+            var isConsolidatedDoc = (tr.file_id && sn.file_id && tr.file_id === sn.file_id);
+
+            // Card 2: Transcript
+            aHtml += '<div style=\"background:var(--bg-hover,#f8fafc); border:1px solid var(--border); border-radius:12px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; gap:14px;\">';
+            aHtml += '<div>';
+            aHtml += '<div style=\"display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;\">';
+            aHtml += '<div style=\"font-size:1.6rem; color:#3b82f6;\"><i class=\"fas fa-file-lines\"></i></div>';
+            aHtml += '<span class=\"badge ' + (tr.available ? 'green' : (tr.status === 'PROCESSING' ? 'amber' : 'gray')) + '\">' + (tr.status || 'NOT AVAILABLE') + '</span>';
+            aHtml += '</div>';
+            aHtml += '<div style=\"font-weight:700; font-size:0.95rem; margin-bottom:4px;\">Google Meet Transcript</div>';
+            aHtml += '<div style=\"font-size:0.78rem; color:var(--text-muted);\">Verbatim speech transcription document generated in Google Docs.</div>';
+            if (isConsolidatedDoc) {
+                aHtml += '<div style=\"font-size:0.73rem; color:#2563eb; background:#eff6ff; padding:4px 8px; border-radius:6px; margin-top:6px;\"><i class=\"fas fa-layer-group\"></i> Consolidated with Gemini Smart Notes in Google Docs</div>';
+            }
+            aHtml += '</div>';
+            if (tr.available && tr.url) {
+                aHtml += '<a href=\"' + tr.url + '\" target=\"_blank\" class=\"btn btn-sm btn-primary\" style=\"display:inline-flex; align-items:center; justify-content:center; gap:6px;\"><i class=\"fas fa-arrow-up-right-from-square\"></i> Open Transcript</a>';
+            } else {
+                aHtml += '<button type=\"button\" class=\"btn btn-sm btn-outline\" disabled style=\"opacity:0.6;\"><i class=\"fas fa-clock\"></i> ' + (tr.status === 'PROCESSING' ? 'Processing...' : 'Not Available Yet') + '</button>';
+            }
+            aHtml += '</div>';
+
+            // Card 3: Gemini / Smart Notes
+            aHtml += '<div style=\"background:var(--bg-hover,#f8fafc); border:1px solid var(--border); border-radius:12px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; gap:14px;\">';
+            aHtml += '<div>';
+            aHtml += '<div style=\"display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;\">';
+            aHtml += '<div style=\"font-size:1.6rem; color:#8b5cf6;\"><i class=\"fas fa-wand-magic-sparkles\"></i></div>';
+            aHtml += '<span class=\"badge ' + (sn.available ? 'green' : (sn.status === 'PROCESSING' ? 'amber' : 'gray')) + '\">' + (sn.status || 'NOT AVAILABLE') + '</span>';
+            aHtml += '</div>';
+            aHtml += '<div style=\"font-weight:700; font-size:0.95rem; margin-bottom:4px;\">Gemini Smart Notes</div>';
+            aHtml += '<div style=\"font-size:0.78rem; color:var(--text-muted);\">AI-generated executive summary, recap notes, and key takeaways document.</div>';
+            if (isConsolidatedDoc) {
+                aHtml += '<div style=\"font-size:0.73rem; color:#7c3aed; background:#f5f3ff; padding:4px 8px; border-radius:6px; margin-top:6px;\"><i class=\"fas fa-wand-magic-sparkles\"></i> Includes Executive Summary, Action Items & Full Transcript</div>';
+            }
+            aHtml += '</div>';
+            if (sn.available && sn.url) {
+                aHtml += '<a href=\"' + sn.url + '\" target=\"_blank\" class=\"btn btn-sm btn-primary\" style=\"display:inline-flex; align-items:center; justify-content:center; gap:6px; background:#8b5cf6; border-color:#8b5cf6;\"><i class=\"fas fa-wand-magic-sparkles\"></i> Open Gemini Notes</a>';
+            } else {
+                aHtml += '<button type=\"button\" class=\"btn btn-sm btn-outline\" disabled style=\"opacity:0.6;\"><i class=\"fas fa-clock\"></i> ' + (sn.status === 'PROCESSING' ? 'Generating Notes...' : 'Not Available Yet') + '</button>';
+            }
+            aHtml += '</div>';
+
+            aHtml += '</div>';
+            aHtml += '<div style=\"margin-top:16px; font-size:0.77rem; color:var(--text-muted); text-align:center;\"><i class=\"fas fa-shield-halved\"></i> Google Workspace Drive references are stored in ERP. No large video files are stored locally on Hostinger.</div>';
+
+            artEl.innerHTML = aHtml;
         })
         .catch(function(err){
             overviewEl.innerHTML = '<div class=\"alert alert-error\">Failed to load session details.</div>';
-        });
-
-    // Fetch artifacts
-    fetch('sessions.php?ajax=artifacts&session_id=' + sessionId)
-        .then(function(r){ return r.json(); })
-        .then(function(data){
-            if (!data.success || !data.records || data.records.length === 0) {
-                artEl.innerHTML = '<div class=\"empty-state\" style=\"padding:24px;\"><p>No recordings or transcripts linked yet. Google Drive links populate after conference processing.</p></div>';
-                return;
-            }
-            var h = '<div style=\"display:flex; flex-direction:column; gap:10px;\">';
-            data.records.forEach(function(a){
-                var icon = a.artifact_type === 'recording' ? 'fa-video' : (a.artifact_type === 'transcript' ? 'fa-file-lines' : 'fa-brain');
-                var typeTitle = a.artifact_type.replace('_', ' ').toUpperCase();
-                h += '<div style=\"display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:var(--bg-hover,#f8fafc); border:1px solid var(--border); border-radius:10px;\">';
-                h += '<div style=\"display:flex; align-items:center; gap:10px;\"><i class=\"fas ' + icon + '\" style=\"font-size:1.2rem; color:var(--primary);\"></i><div><strong>' + typeTitle + '</strong><div style=\"font-size:0.75rem; color:var(--text-muted);\">Status: ' + a.artifact_state + '</div></div></div>';
-                if (a.artifact_url) {
-                    h += '<a href=\"' + a.artifact_url + '\" target=\"_blank\" class=\"btn btn-sm btn-primary\"><i class=\"fas fa-arrow-up-right-from-square\"></i> Open in Google Drive</a>';
-                } else {
-                    h += '<span class=\"badge gray\">Pending Drive export</span>';
-                }
-                h += '</div>';
-            });
-            h += '</div>';
-            artEl.innerHTML = h;
-        })
-        .catch(function(e){
-            artEl.innerHTML = '<div class=\"alert alert-error\">Failed to load artifacts.</div>';
         });
 }
 </script>";

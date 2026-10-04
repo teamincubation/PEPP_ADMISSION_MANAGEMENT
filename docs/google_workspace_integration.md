@@ -54,60 +54,63 @@ The Service Account uses **Domain-Wide Delegation (DWD)** to impersonate `admin@
 
 ## 4. Live Session Scheduling & Provisioning Workflow
 
-When an administrator schedules a Live Session from `sessions.php`:
+### Architectural Redesign: Native Meet Space Ownership
+Previously, Google Meet spaces were provisioned implicitly through Google Calendar using `conferenceData.createRequest`. Under Google's API authorization model, the OAuth scope `https://www.googleapis.com/auth/meetings.space.created` only grants management authority to meeting spaces **created directly by the application API client via `meet.googleapis.com/v2/spaces`**. Calendar-created spaces rejected `POST /v2/spaces/{space}/members` with `HTTP 403 Forbidden: Permission denied on resource MeetingSpace`.
+
+To ensure 100% reliable Co-Host assignment, the architecture provisions the native Google Meet space **first**, establishes ownership, assigns and verifies the Co-Host, and then links that native space into the Google Calendar event.
 
 ```
-Admin Form (sessions.php)
-    │
-    ▼
-1. Validate ERP Session & Course Selections
-    │
-    ▼
-2. Resolve Active Eligible Students
-    (users.status = 'approved' AND users.student_status = 'active' AND pepp_course IN (...))
-    Deduplicated by normalized email; invalid/blank emails discarded.
-    │
-    ▼
-3. Resolve Faculty Details
-    (faculties.email, faculties.name)
-    │
-    ▼
-4. Create Calendar Event via events.insert
-    - attendees: Faculty + Active Students
-    - guestsCanSeeOtherGuests = false (MANDATORY PRIVACY)
-    - guestsCanInviteOthers = false
-    - guestsCanModify = false
-    - reminders: 24h, 12h, 1h, 10m, 0m (organizer-side overrides)
-    - sendUpdates = 'all' (Calendar delivers invitations directly)
-    - conferenceData.createRequest: requestId = pepp_sess_{id}_{random}
-    │
-    ▼
-5. Poll / Resolve Meet Space Info
-    Extracts meet_uri and meeting_code; queries Meet API spaces.get to obtain spaces/{space}
-    │
-    ▼
-6. Configure Space Settings via spaces.patch
-    - accessType = RESTRICTED
-    - moderation = ON
-    - attendanceReportGenerationType = GENERATE_REPORT
-    - artifactConfig: autoRecordingGeneration = ON, autoTranscription = ON, smartNotes = ON
-    │
-    ▼
-7. Assign Faculty as Co-Host via spaces.members.create
-    { "email": faculty_email, "role": "COHOST" }
-    │
-    ▼
-8. Record Invited Attendees into session_attendance
-    (session_id, user_id, participant_name, participant_email, attendance_status = 'invited')
-    │
-    ▼
-9. Commit Metadata to sessions Table
-    (google_integrated = 1, google_calendar_event_id, google_meet_space_name, google_integration_status = 'synced')
-    │
-    ▼
-10. Suppress Duplicate ERP scheduled emails
-    (Calendar invitation serves as the primary notification)
+ERP Live Session
+    ↓
+Native Meet Space Creation (POST /v2/spaces, accessType = OPEN)
+    ↓
+Configure Meet Space (moderation=ON, accessType=OPEN, autoRecording=ON)
+    ↓
+Assign Faculty COHOST (POST /v2/{space}/members with role=COHOST)
+    ↓
+Verify COHOST (GET /v2/{space}/members read-back verification)
+    ↓
+Create Calendar Event (Using existing native Meet space link, NO createRequest)
+    ↓
+Store Meet URI + Calendar Event ID
+    ↓
+Session Ready
 ```
+
+### Detailed Lifecycle Steps:
+1. **Validate ERP Session & Course Selections**: Ensures required topic, valid start/end datetime, and courses.
+2. **Resolve Active Eligible Students**: Queries `users` where `status = 'approved' AND student_status = 'active'`, deduplicated by normalized email.
+3. **Resolve Faculty**: Retrieves assigned faculty name and email address.
+4. **Native Google Meet Space Creation (Step 1)**:  
+   Calls `POST https://meet.googleapis.com/v2/spaces` using `admin@pepponline.in` DWD impersonation with `accessType = 'OPEN'`.  
+   Reuses existing `google_meet_space_name` if retrying, ensuring duplicate spaces are never created.
+5. **Configure Meet Space Settings (Step 2)**:  
+   Configures `moderation = 'ON'` (Host Management), `accessType = 'OPEN'` (for all new Live Sessions), `attendanceReportGenerationType = 'GENERATE_REPORT'`, and `artifactConfig` (auto-recording, auto-transcription, smart notes).
+   *Note: OPEN Meet access means the Meet link itself becomes the access credential. Anyone possessing the link may join without requiring their account to match the calendar invitation, while Host Management and Faculty Co-host controls remain strictly active. Existing sessions retain their existing configuration without retroactive modification.*
+6. **Assign Faculty as Co-Host (Step 3)**:  
+   Calls `POST /v2/{parent=spaces/*}/members` with `{ "email": faculty_email, "role": "COHOST" }`.
+7. **Read-Back COHOST Verification (Step 4)**:  
+   Calls `GET /v2/{parent=spaces/*}/members` and verifies the faculty is confirmed with `role = 'COHOST'`. If verification fails, the session is NOT marked as synced; the partial state and a safe diagnostic are recorded in `google_error_message`.
+8. **Create Google Calendar Event (Step 5)**:  
+   Creates the event linking the **native Meet space link** directly (via `conferenceData` with `conferenceSolution` + `entryPoints`, or `location` fallback).  
+   **`conferenceData.createRequest` is NOT called**, preventing duplicate Meet spaces.  
+   Sets `guestsCanSeeOtherGuests = false`, `sendUpdates = 'all'`, and reminder overrides.
+9. **Record Invited Attendees**: Records all invited students into `session_attendance` with status `invited`.
+10. **Commit Metadata**: Sets `google_integration_status = 'synced'` and stores `google_calendar_event_id`, `google_meet_space_name`, `google_meet_uri`, and `google_meet_code`.
+
+> [!NOTE]
+> Auto-artifact start with a COHOST joining while the primary organizer does not join is supported by Google Meet policy, but must be verified with a controlled production test after this architecture change.
+
+---
+
+## 4.1. Explicit End Live Session (`endActiveConference`)
+
+When a faculty member simply closes their browser tab or leaves a meeting, the conference remains alive in Google's cloud infrastructure as long as other participants remain connected or until Google's idle timeout triggers (which can take several hours). During this period, recording, transcription, and smart notes finalization are delayed.
+
+PEPP ERP provides an explicit **"End Live Session"** backend action:
+* API: `POST https://meet.googleapis.com/v2/spaces/{space}:endActiveConference`
+* Scope: `https://www.googleapis.com/auth/meetings.space.created`
+* Behavior: Ejects all active participants, terminates the live conference, marks ERP session `status = 'completed'`, and triggers immediate attendance and artifact synchronization.
 
 ---
 

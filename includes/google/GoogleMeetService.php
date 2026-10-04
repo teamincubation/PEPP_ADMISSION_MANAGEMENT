@@ -8,7 +8,7 @@
  * API SPECIFICATION:
  * - Google Meet REST API v2
  * - Space resource: spaces/{space} (authoritative identifier)
- * - SpaceConfig: accessType = 'RESTRICTED', moderation = 'ON', artifactConfig
+ * - SpaceConfig: accessType = 'OPEN' (new Live Sessions) / 'RESTRICTED' (legacy), moderation = 'ON', artifactConfig
  * - Members: role = 'COHOST' for assigned faculty
  */
 
@@ -93,7 +93,7 @@ class GoogleMeetService {
      * @param string $accessType
      * @return array{success: bool, space_name: ?string, meeting_uri: ?string, meeting_code: ?string, error: ?string, raw: ?array<string, mixed>}
      */
-    public function createSpace(string $accessType = 'RESTRICTED'): array {
+    public function createSpace(string $accessType = 'OPEN'): array {
         $url = 'https://meet.googleapis.com/v2/spaces';
         $payload = [
             'config' => [
@@ -138,16 +138,17 @@ class GoogleMeetService {
 
     /**
      * Configure Google Meet space settings:
-     * - accessType = RESTRICTED
+     * - accessType = OPEN (or RESTRICTED for legacy spaces)
      * - moderation = ON
      * - autoRecordingGeneration = ON
      * - autoTranscriptionGeneration = ON
      * - autoSmartNotesGeneration = ON
      *
      * @param string $spaceName e.g. "spaces/sPaCeId"
+     * @param string $accessType 'OPEN' or 'RESTRICTED' (default 'OPEN' for new Live Sessions)
      * @return array{success: bool, error: ?string, details: array<string, mixed>}
      */
-    public function configureSpace(string $spaceName): array {
+    public function configureSpace(string $spaceName, string $accessType = 'OPEN'): array {
         $cleanSpace = trim($spaceName);
         if (!str_starts_with($cleanSpace, 'spaces/')) {
             $cleanSpace = 'spaces/' . $cleanSpace;
@@ -157,7 +158,7 @@ class GoogleMeetService {
 
         $body = [
             'config' => [
-                'accessType'       => 'RESTRICTED',
+                'accessType'       => $accessType,
                 'entryPointAccess' => 'ALL',
                 'moderation'       => 'ON',
                 'attendanceReportGenerationType' => 'GENERATE_REPORT',
@@ -194,7 +195,7 @@ class GoogleMeetService {
             $fallbackUrl = 'https://meet.googleapis.com/v2/' . $cleanSpace . '?updateMask=config.accessType,config.entryPointAccess,config.moderation,config.attendanceReportGenerationType,config.artifactConfig.recordingConfig.autoRecordingGeneration,config.artifactConfig.transcriptionConfig.autoTranscriptionGeneration';
             $fallbackBody = [
                 'config' => [
-                    'accessType'       => 'RESTRICTED',
+                    'accessType'       => $accessType,
                     'entryPointAccess' => 'ALL',
                     'moderation'       => 'ON',
                     'attendanceReportGenerationType' => 'GENERATE_REPORT',
@@ -280,4 +281,106 @@ class GoogleMeetService {
             'error'       => "Failed to add faculty co-host: " . ($res['error'] ?: 'Unknown error'),
         ];
     }
+
+    /**
+     * Read-back verification to check if the faculty is registered as COHOST in the space.
+     *
+     * @param string $spaceName e.g. "spaces/sPaCeId"
+     * @param string $facultyEmail
+     * @return array{success: bool, is_cohost: bool, role: ?string, error: ?string}
+     */
+    public function verifyFacultyCohost(string $spaceName, string $facultyEmail): array {
+        $cleanSpace = trim($spaceName);
+        if (!str_starts_with($cleanSpace, 'spaces/')) {
+            $cleanSpace = 'spaces/' . $cleanSpace;
+        }
+
+        $email = strtolower(trim($facultyEmail));
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return [
+                'success'   => false,
+                'is_cohost' => false,
+                'role'      => null,
+                'error'     => "Invalid faculty email: {$facultyEmail}",
+            ];
+        }
+
+        $url = 'https://meet.googleapis.com/v2/' . $cleanSpace . '/members';
+        $res = $this->client->apiRequest('GET', $url, null, [], [
+            GoogleWorkspaceClient::SCOPE_MEET_SPACE_REQ,
+        ]);
+
+        if (!$res['success']) {
+            return [
+                'success'   => false,
+                'is_cohost' => false,
+                'role'      => null,
+                'error'     => "Failed to list space members: " . ($res['error'] ?: 'Unknown error'),
+            ];
+        }
+
+        $members = $res['data']['members'] ?? [];
+        foreach ($members as $m) {
+            $mEmail = strtolower(trim((string)($m['email'] ?? '')));
+            if ($mEmail === $email) {
+                $role = (string)($m['role'] ?? '');
+                return [
+                    'success'   => true,
+                    'is_cohost' => ($role === 'COHOST'),
+                    'role'      => $role,
+                    'error'     => null,
+                ];
+            }
+        }
+
+        return [
+            'success'   => true,
+            'is_cohost' => false,
+            'role'      => 'NOT_FOUND',
+            'error'     => "Faculty member {$facultyEmail} was not found in Meet space members list",
+        ];
+    }
+
+    /**
+     * Terminate an active conference in a Google Meet space.
+     * Calls POST https://meet.googleapis.com/v2/{name=spaces/*}:endActiveConference
+     *
+     * @param string $spaceName e.g. "spaces/sPaCeId"
+     * @return array{success: bool, error: ?string}
+     */
+    public function endActiveConference(string $spaceName): array {
+        $cleanSpace = trim($spaceName);
+        if (!str_starts_with($cleanSpace, 'spaces/')) {
+            $cleanSpace = 'spaces/' . $cleanSpace;
+        }
+
+        $url = 'https://meet.googleapis.com/v2/' . $cleanSpace . ':endActiveConference';
+        $res = $this->client->apiRequest('POST', $url, (object)[], [], [
+            GoogleWorkspaceClient::SCOPE_MEET_SPACE_REQ,
+        ]);
+
+        if ($res['success'] || $res['status'] === 200) {
+            return [
+                'success' => true,
+                'error'   => null,
+            ];
+        }
+
+        // If conference is already not active (e.g. 400 or 404 with no active conference), handle gracefully
+        if ($res['status'] === 400 || $res['status'] === 404) {
+            $errMsg = strtolower($res['error'] ?? '');
+            if (str_contains($errMsg, 'no active conference') || str_contains($errMsg, 'not found')) {
+                return [
+                    'success' => true,
+                    'error'   => null,
+                ];
+            }
+        }
+
+        return [
+            'success' => false,
+            'error'   => "Failed to end active conference: " . ($res['error'] ?: 'Unknown error'),
+        ];
+    }
 }
+

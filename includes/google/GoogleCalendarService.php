@@ -112,7 +112,9 @@ class GoogleCalendarService {
         array $students,
         ?string $facultyEmail = null,
         ?string $facultyName = null,
-        array $courses = []
+        array $courses = [],
+        ?string $existingMeetUri = null,
+        ?string $existingMeetCode = null
     ): array {
         $startTime = strtotime($startDatetime);
         if ($startTime === false) {
@@ -139,7 +141,7 @@ class GoogleCalendarService {
         $courseStr = !empty($courses) ? implode(', ', $courses) : 'All Enrolled Batches';
         $facStr    = !empty($facultyName) ? $facultyName : 'Assigned Faculty';
 
-        $description = implode("\n", [
+        $descLines = [
             "PEPP Learning Live Class Session",
             "────────────────────────────────────────",
             "Topic: " . $topic,
@@ -147,9 +149,13 @@ class GoogleCalendarService {
             "Target Courses: " . $courseStr,
             "Duration: " . rtrim(rtrim(number_format($durationHours, 2), '0'), '.') . " hour(s)",
             "PEPP Session Reference: PEPP-SESS-" . $sessionId,
-            "────────────────────────────────────────",
-            "Please join promptly at the scheduled time. Host moderation and recording are enabled.",
-        ]);
+        ];
+        if (!empty($existingMeetUri)) {
+            $descLines[] = "Google Meet Link: " . $existingMeetUri;
+        }
+        $descLines[] = "────────────────────────────────────────";
+        $descLines[] = "Please join promptly at the scheduled time. Host moderation and recording are enabled.";
+        $description = implode("\n", $descLines);
 
         $attendees = self::buildAttendeeList($students, $facultyEmail, $facultyName);
         $requestId = 'pepp_sess_' . $sessionId . '_' . bin2hex(random_bytes(6));
@@ -184,20 +190,51 @@ class GoogleCalendarService {
                     ['method' => 'popup', 'minutes' => 0],    // At session start
                 ],
             ],
+        ];
 
-            // Unique Google Meet conference request
-            'conferenceData' => [
+        // Conference data handling:
+        // When an existing native Meet URI is supplied, attach it directly WITHOUT createRequest.
+        if (!empty($existingMeetUri)) {
+            $eventPayload['location'] = $existingMeetUri;
+            $eventPayload['conferenceData'] = [
+                'conferenceSolution' => [
+                    'key' => [
+                        'type' => 'hangoutsMeet',
+                    ],
+                    'name' => 'Google Meet',
+                ],
+                'entryPoints' => [
+                    [
+                        'entryPointType' => 'video',
+                        'uri'            => $existingMeetUri,
+                        'label'          => $existingMeetUri,
+                    ],
+                ],
+            ];
+        } else {
+            // Legacy / fallback: Request Calendar to create a conference
+            $eventPayload['conferenceData'] = [
                 'createRequest' => [
                     'requestId' => $requestId,
                     'conferenceSolutionKey' => [
                         'type' => 'hangoutsMeet',
                     ],
                 ],
-            ],
-        ];
+            ];
+        }
 
         $url = 'https://www.googleapis.com/calendar/v3/calendars/' . rawurlencode($this->calendarId) . '/events?conferenceDataVersion=1&sendUpdates=all';
         $res = $this->client->apiRequest('POST', $url, $eventPayload, [], [GoogleWorkspaceClient::SCOPE_CALENDAR]);
+
+        // Resilience fallback: If conferenceData was rejected for pre-existing link, retry without conferenceData
+        if (!$res['success'] && !empty($existingMeetUri) && isset($eventPayload['conferenceData'])) {
+            unset($eventPayload['conferenceData']);
+            $plainUrl = 'https://www.googleapis.com/calendar/v3/calendars/' . rawurlencode($this->calendarId) . '/events?sendUpdates=all';
+            $retryRes = $this->client->apiRequest('POST', $plainUrl, $eventPayload, [], [GoogleWorkspaceClient::SCOPE_CALENDAR]);
+            if ($retryRes['success'] && !empty($retryRes['data'])) {
+                $res = $retryRes;
+            }
+        }
 
         if (!$res['success'] || empty($res['data'])) {
             return [
@@ -231,14 +268,17 @@ class GoogleCalendarService {
             }
         }
 
+        $finalMeetUri = $conferenceExtraction['meet_uri'] ?: $existingMeetUri;
+        $finalMeetCode = $conferenceExtraction['meet_code'] ?: $existingMeetCode;
+
         return [
             'success' => true,
             'event_id' => $eventId,
             'calendar_id' => $this->calendarId,
-            'meet_uri' => $conferenceExtraction['meet_uri'],
-            'meet_code' => $conferenceExtraction['meet_code'],
+            'meet_uri' => $finalMeetUri,
+            'meet_code' => $finalMeetCode,
             'attendees_count' => count($attendees),
-            'conference_status' => $conferenceExtraction['status'],
+            'conference_status' => $conferenceExtraction['status'] ?: 'success',
             'error' => null,
             'raw' => $eventData,
         ];

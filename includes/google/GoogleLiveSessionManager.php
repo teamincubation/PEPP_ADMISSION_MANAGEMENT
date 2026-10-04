@@ -8,7 +8,7 @@
  * 3. Unique Calendar event creation with guestsCanSeeOtherGuests = false
  * 4. Google Meet conference generation (conferenceData.createRequest)
  * 5. Google Meet space resolution (spaces/{space})
- * 6. Space settings configuration (RESTRICTED, moderation, recording, transcripts, smart notes)
+ * 6. Space settings configuration (OPEN access, moderation, recording, transcripts, smart notes)
  * 7. Faculty COHOST assignment
  * 8. Recording invited attendees into session_attendance
  * 9. Updating sessions table with Google identifiers
@@ -94,7 +94,7 @@ class GoogleLiveSessionManager {
                   AND email IS NOT NULL
                   AND email <> ''
                   AND pepp_course IN ({$placeholders})
-                ORDER BY name ASC
+                ORDER BY user_id ASC, name ASC
             ";
             $stmt = $this->pdo->prepare($sql);
             $stmt->execute(array_values($courses));
@@ -170,26 +170,28 @@ class GoogleLiveSessionManager {
 
         if (!$session) {
             return [
-                'success' => false,
+                'success'           => false,
                 'calendar_event_id' => null,
-                'meet_uri' => null,
-                'meet_code' => null,
-                'meet_space_name' => null,
-                'invited_count' => 0,
-                'error' => "Session #{$sessionId} not found.",
+                'meet_uri'          => null,
+                'meet_code'         => null,
+                'meet_space_name'   => null,
+                'invited_count'     => 0,
+                'cohost_status'     => 'not_assigned',
+                'error'             => "Session #{$sessionId} not found.",
             ];
         }
 
-        // Idempotency: If already synced with event ID and meet link, avoid duplicate event creation
-        if (!empty($session['google_calendar_event_id']) && !empty($session['google_meet_uri']) && $session['google_integration_status'] === 'synced') {
+        // Idempotency: If already synced with event ID, meet space, and meet link, avoid duplicate creation
+        if (!empty($session['google_calendar_event_id']) && !empty($session['google_meet_uri']) && !empty($session['google_meet_space_name']) && $session['google_integration_status'] === 'synced') {
             return [
-                'success' => true,
+                'success'           => true,
                 'calendar_event_id' => $session['google_calendar_event_id'],
-                'meet_uri' => $session['google_meet_uri'],
-                'meet_code' => $session['google_meet_code'],
-                'meet_space_name' => $session['google_meet_space_name'],
-                'invited_count' => 0,
-                'error' => null,
+                'meet_uri'          => $session['google_meet_uri'],
+                'meet_code'         => $session['google_meet_code'],
+                'meet_space_name'   => $session['google_meet_space_name'],
+                'invited_count'     => 0,
+                'cohost_status'     => 'cohost_confirmed',
+                'error'             => null,
             ];
         }
 
@@ -207,23 +209,90 @@ class GoogleLiveSessionManager {
         $facultyEmail = $facInfo['email'];
         $facultyName  = $facInfo['name'];
 
-        // 3. Resolve or Create Google Calendar Event with Meet conferenceData
-        $eventId  = null;
-        $meetUri  = null;
-        $meetCode = null;
+        // 3. STEP 1: Create or Resolve Native Google Meet Space via POST /v2/spaces
+        $spaceName = (string)($session['google_meet_space_name'] ?? '');
+        $meetUri   = (string)($session['google_meet_uri'] ?? '');
+        $meetCode  = (string)($session['google_meet_code'] ?? '');
 
-        // If an event ID is already linked to this session, attempt to retrieve it to avoid duplicate events on retry
+        // If not already created on a prior attempt, create a fresh native Meet space with OPEN access
+        if (empty($spaceName) || empty($meetUri)) {
+            $meetRes = $this->meetService->createSpace('OPEN');
+            if (!$meetRes['success'] || empty($meetRes['space_name'])) {
+                $errorMsg = "Google Meet space creation failed: " . ($meetRes['error'] ?: 'Unknown error');
+                $this->recordFailure($sessionId, $errorMsg);
+                return [
+                    'success'           => false,
+                    'calendar_event_id' => null,
+                    'meet_uri'          => null,
+                    'meet_code'         => null,
+                    'meet_space_name'   => null,
+                    'invited_count'     => count($students),
+                    'cohost_status'     => 'cohost_pending',
+                    'error'             => $errorMsg,
+                ];
+            }
+            $spaceName = (string)($meetRes['space_name'] ?? '');
+            $meetUri   = (string)($meetRes['meeting_uri'] ?? $meetRes['meet_uri'] ?? '');
+            $meetCode  = (string)($meetRes['meeting_code'] ?? $meetRes['meet_code'] ?? '');
+        }
+
+        // 4. STEP 2: Configure Meet Space Settings (moderation=ON, OPEN, auto-recording=ON, transcription=ON, smartNotes=ON)
+        $configWarning = null;
+        $confRes = $this->meetService->configureSpace($spaceName, 'OPEN');
+        if (!$confRes['success'] && !empty($confRes['error'])) {
+            $configWarning = $confRes['error'];
+            error_log("GoogleLiveSessionManager space config warning for session #{$sessionId}: {$configWarning}");
+        }
+
+        // 5. STEP 3 & 4: Add Faculty as COHOST and Verify
+        $cohostStatus = 'cohost_pending';
+        $cohostError  = null;
+
+        if (!empty($facultyEmail)) {
+            $cohostRes = $this->meetService->addFacultyCohost($spaceName, $facultyEmail);
+            if (!$cohostRes['success']) {
+                $cohostStatus = 'cohost_failed';
+                $cohostError  = "Failed to assign faculty co-host: " . ($cohostRes['error'] ?: 'Unknown error');
+            } else {
+                // Read-back verification: Query space members and confirm role = 'COHOST'
+                $verifyRes = $this->meetService->verifyFacultyCohost($spaceName, $facultyEmail);
+                if ($verifyRes['success'] && $verifyRes['is_cohost']) {
+                    $cohostStatus = 'cohost_confirmed';
+                } else {
+                    $cohostStatus = 'cohost_failed';
+                    $cohostError  = "Faculty co-host verification failed: " . ($verifyRes['error'] ?: "Role is '{$verifyRes['role']}', expected 'COHOST'");
+                }
+            }
+        } else {
+            $cohostStatus = 'cohost_pending';
+            $cohostError  = "No faculty email configured for co-host assignment";
+        }
+
+        // If co-host assignment or verification failed, do NOT mark integration as synced!
+        if ($cohostStatus === 'cohost_failed') {
+            $errorMsg = "Google Meet Co-Host setup failed: {$cohostError}";
+            $this->recordPartialOrFailedState($sessionId, $spaceName, $meetUri, $meetCode, null, 'failed', $errorMsg);
+            return [
+                'success'           => false,
+                'calendar_event_id' => null,
+                'meet_uri'          => $meetUri,
+                'meet_code'         => $meetCode,
+                'meet_space_name'   => $spaceName,
+                'invited_count'     => count($students),
+                'cohost_status'     => $cohostStatus,
+                'error'             => $errorMsg,
+            ];
+        }
+
+        // 6. STEP 5: Create Google Calendar Event USING THE NATIVE MEET SPACE
+        $eventId = null;
         if (!empty($session['google_calendar_event_id'])) {
             $existingEvt = $this->calendarService->getEvent((string)$session['google_calendar_event_id']);
             if ($existingEvt['success'] && !empty($existingEvt['data'])) {
                 $eventId = (string)$session['google_calendar_event_id'];
-                $confData = $this->calendarService->extractConferenceData($existingEvt['data']);
-                $meetUri = $confData['meet_uri'] ?: ($session['google_meet_uri'] ?? null);
-                $meetCode = $confData['meet_code'] ?: ($session['google_meet_code'] ?? null);
             }
         }
 
-        // If not already existing or retrieval failed, create a fresh Calendar event
         if (!$eventId) {
             $calRes = $this->calendarService->createLiveSessionEvent(
                 $sessionId,
@@ -233,64 +302,32 @@ class GoogleLiveSessionManager {
                 $students,
                 $facultyEmail,
                 $facultyName,
-                $courses
+                $courses,
+                $meetUri,
+                $meetCode
             );
 
             if (!$calRes['success'] || empty($calRes['event_id'])) {
-                $errorMsg = $calRes['error'] ?: 'Calendar event creation failed';
-                $this->recordFailure($sessionId, $errorMsg);
+                $errorMsg = "Calendar event creation failed: " . ($calRes['error'] ?: 'Unknown error');
+                $this->recordPartialOrFailedState($sessionId, $spaceName, $meetUri, $meetCode, null, 'failed', $errorMsg);
                 return [
-                    'success' => false,
+                    'success'           => false,
                     'calendar_event_id' => null,
-                    'meet_uri' => null,
-                    'meet_code' => null,
-                    'meet_space_name' => null,
-                    'invited_count' => count($students),
-                    'error' => $errorMsg,
+                    'meet_uri'          => $meetUri,
+                    'meet_code'         => $meetCode,
+                    'meet_space_name'   => $spaceName,
+                    'invited_count'     => count($students),
+                    'cohost_status'     => $cohostStatus,
+                    'error'             => $errorMsg,
                 ];
             }
-
-            $eventId  = $calRes['event_id'];
-            $meetUri  = $calRes['meet_uri'];
-            $meetCode = $calRes['meet_code'];
-        }
-
-        $spaceName = null;
-        $configWarning = null;
-
-        // 4. Resolve Meet Space Resource
-        if ($meetCode || $meetUri) {
-            $spaceRes = $this->meetService->resolveSpace($meetCode ?: $meetUri);
-            if ($spaceRes['success'] && !empty($spaceRes['space_name'])) {
-                $spaceName = $spaceRes['space_name'];
-            }
-        }
-
-        if (!$spaceName && $meetCode) {
-            $spaceName = 'spaces/' . $meetCode;
-        }
-
-        // 5. Configure Space Settings (RESTRICTED, moderation, auto-record, transcription, smart notes)
-        if ($spaceName) {
-            $confRes = $this->meetService->configureSpace($spaceName);
-            if (!$confRes['success'] && !empty($confRes['error'])) {
-                $configWarning = $confRes['error'];
-                error_log("GoogleLiveSessionManager space config warning for session #{$sessionId}: {$configWarning}");
-            }
-
-            // 6. Add Faculty as COHOST
-            if ($facultyEmail) {
-                $cohostRes = $this->meetService->addFacultyCohost($spaceName, $facultyEmail);
-                if (!$cohostRes['success'] && !empty($cohostRes['error'])) {
-                    error_log("GoogleLiveSessionManager cohost warning for session #{$sessionId}: " . $cohostRes['error']);
-                }
-            }
+            $eventId = $calRes['event_id'];
         }
 
         // 7. Record invited students into session_attendance
         $this->recordInvitedAttendees($sessionId, $students);
 
-        // 8. Commit Google Metadata to sessions table
+        // 8. Commit Google Metadata to sessions table with 'synced' status
         $updateSql = "
             UPDATE sessions
             SET google_integrated = 1,
@@ -316,14 +353,22 @@ class GoogleLiveSessionManager {
             $sessionId,
         ]);
 
+        try {
+            $hasCohostCol = (bool)$this->pdo->query("SHOW COLUMNS FROM sessions LIKE 'google_cohost_status'")->fetchColumn();
+            if ($hasCohostCol) {
+                $this->pdo->prepare("UPDATE sessions SET google_cohost_status = ? WHERE id = ?")->execute([$cohostStatus, $sessionId]);
+            }
+        } catch (Exception $e) {}
+
         return [
-            'success' => true,
+            'success'           => true,
             'calendar_event_id' => $eventId,
-            'meet_uri' => $meetUri,
-            'meet_code' => $meetCode,
-            'meet_space_name' => $spaceName,
-            'invited_count' => count($students),
-            'error' => null,
+            'meet_uri'          => $meetUri,
+            'meet_code'         => $meetCode,
+            'meet_space_name'   => $spaceName,
+            'invited_count'     => count($students),
+            'cohost_status'     => $cohostStatus,
+            'error'             => null,
         ];
     }
 
@@ -424,7 +469,9 @@ class GoogleLiveSessionManager {
         $spaceName = (string)($session['google_meet_space_name'] ?? '');
         if ($facultyEmail && $spaceName !== '' && (int)($session['faculty_id'] ?? 0) !== $facultyId) {
             $cohostRes = $this->meetService->addFacultyCohost($spaceName, $facultyEmail);
-            if (!$cohostRes['success'] && !empty($cohostRes['error'])) {
+            if ($cohostRes['success']) {
+                $this->meetService->verifyFacultyCohost($spaceName, $facultyEmail);
+            } else {
                 error_log("GoogleLiveSessionManager update cohost warning for session #{$sessionId}: " . $cohostRes['error']);
             }
         }
@@ -578,12 +625,111 @@ class GoogleLiveSessionManager {
     }
 
     /**
+     * Programmatically end an active Google Meet live session conference.
+     * Ejects participants, ends active conference record, updates session status to completed,
+     * and triggers automatic attendance synchronization.
+     *
+     * @param int $sessionId
+     * @return array{
+     *     success: bool,
+     *     error: ?string,
+     *     conference_ended: bool,
+     *     attendance_synced: int
+     * }
+     */
+    public function endGoogleLiveSession(int $sessionId): array {
+        $stmt = $this->pdo->prepare("SELECT * FROM sessions WHERE id = ?");
+        $stmt->execute([$sessionId]);
+        $session = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$session) {
+            return [
+                'success'           => false,
+                'error'             => "Session #{$sessionId} not found.",
+                'conference_ended'  => false,
+                'attendance_synced' => 0,
+            ];
+        }
+
+        if (empty($session['google_integrated'])) {
+            return [
+                'success'           => false,
+                'error'             => "Session #{$sessionId} is not Google-integrated.",
+                'conference_ended'  => false,
+                'attendance_synced' => 0,
+            ];
+        }
+
+        $spaceName = (string)($session['google_meet_space_name'] ?? '');
+        if (empty($spaceName)) {
+            return [
+                'success'           => false,
+                'error'             => "Session #{$sessionId} does not have a Google Meet space name.",
+                'conference_ended'  => false,
+                'attendance_synced' => 0,
+            ];
+        }
+
+        // Call endActiveConference on Google Meet Service
+        $endRes = $this->meetService->endActiveConference($spaceName);
+        if (!$endRes['success']) {
+            return [
+                'success'           => false,
+                'error'             => $endRes['error'],
+                'conference_ended'  => false,
+                'attendance_synced' => 0,
+            ];
+        }
+
+        // Update session status in ERP database
+        $nowDt = date('Y-m-d H:i:s');
+        $this->pdo->prepare("
+            UPDATE sessions
+            SET status = 'completed',
+                google_last_sync_at = ?
+            WHERE id = ?
+        ")->execute([$nowDt, $sessionId]);
+
+        // Automatically trigger attendance synchronization if conference record is available
+        $participantsSynced = 0;
+        try {
+            $attRes = $this->attendanceService->syncSessionAttendance($sessionId);
+            if ($attRes['success']) {
+                $participantsSynced = (int)($attRes['participants_synced'] ?? 0);
+            }
+        } catch (Exception $attEx) {
+            error_log("Attendance sync notice following endActiveConference: " . $attEx->getMessage());
+        }
+
+        // Automatically trigger artifact synchronization (recordings, transcripts, Gemini notes)
+        $artifactsSynced = 0;
+        try {
+            $artRes = $this->artifactService->syncSessionArtifacts($sessionId);
+            if ($artRes['success']) {
+                $artifactsSynced = (int)($artRes['artifacts_synced'] ?? 0);
+            }
+        } catch (Exception $artEx) {
+            error_log("Artifact sync notice following endActiveConference: " . $artEx->getMessage());
+        }
+
+        return [
+            'success'           => true,
+            'error'             => null,
+            'conference_ended'  => true,
+            'attendance_synced' => $participantsSynced,
+            'artifacts_synced'  => $artifactsSynced,
+        ];
+    }
+
+    /**
      * Retrieve complete session details for the admin view modal:
      * - Section 1: Session Details
      * - Section 2: Faculty Information & Cohost status
      * - Section 3: Courses Information
      * - Section 4: Invited Students (Names, Courses, Status — NO email exposure)
      * - Section 5: Google Integration Details
+     * - Attendance Summary (Registered Students, Faculty, Unknown Participants)
+     * - Google Meet Artifacts (Recording, Transcript, Gemini Notes)
      *
      * @param int $sessionId
      * @return array<string, mixed>
@@ -621,16 +767,31 @@ class GoogleLiveSessionManager {
             FROM session_attendance a
             LEFT JOIN users u ON u.user_id = a.user_id
             WHERE a.session_id = ?
+              AND (a.user_id IS NULL OR a.user_id != 'FACULTY')
+              AND a.attendance_status != 'unknown/unmatched'
             ORDER BY a.google_participant_name ASC
         ");
         $studentsStmt->execute([$sessionId]);
         $invitedStudents = $studentsStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Faculty cohost status: if session is Google integrated and faculty has a valid email
+        // Fetch structured attendance summary
+        $attSummary = $this->attendanceService->getSessionAttendanceSummary($sessionId, true);
+
+        // Fetch artifacts summary
+        $artSummary = $this->artifactService->getSessionArtifactsSummary($sessionId);
+
+        // Faculty cohost status: check database and integration status
         $cohostStatus = 'Not Assigned';
         if (!empty($sess['google_integrated'])) {
-            if (!empty($sess['faculty_email'])) {
-                $cohostStatus = 'Co-host Configured';
+            $gStatus = (string)($sess['google_integration_status'] ?? '');
+            $gError = (string)($sess['google_error_message'] ?? '');
+
+            if ($gStatus === 'synced') {
+                $cohostStatus = 'Co-host Confirmed';
+            } elseif ($gStatus === 'failed' || str_contains(strtolower($gError), 'co-host') || str_contains(strtolower($gError), 'cohost')) {
+                $cohostStatus = 'Co-host Setup Failed';
+            } elseif (!empty($sess['faculty_email'])) {
+                $cohostStatus = 'Co-host Pending';
             } elseif (!empty($sess['faculty_name'])) {
                 $cohostStatus = 'Pending Email Configuration';
             }
@@ -666,15 +827,25 @@ class GoogleLiveSessionManager {
                     'duration' => round(((int)($st['total_duration_seconds'] ?? 0)) / 60) . 'm',
                 ];
             }, $invitedStudents),
+            'attendance_summary'   => $attSummary['summary'],
+            'faculty_attendance'   => $attSummary['faculty'],
+            'registered_students'  => $attSummary['registered_students'],
+            'unknown_participants' => $attSummary['unknown_participants'],
+            'artifacts_summary'    => $artSummary,
             'google' => [
-                'is_integrated'      => !empty($sess['google_integrated']),
-                'meet_uri'           => (string)($sess['google_meet_uri'] ?? $sess['meet_link'] ?? ''),
-                'meet_code'          => (string)($sess['google_meet_code'] ?? ''),
-                'meet_space_name'    => (string)($sess['google_meet_space_name'] ?? ''),
-                'calendar_event_id'  => (string)($sess['google_calendar_event_id'] ?? ''),
-                'integration_status' => (string)($sess['google_integration_status'] ?? 'none'),
-                'last_sync_at'       => (string)($sess['google_last_sync_at'] ?? ''),
-                'error_message'      => (string)($sess['google_error_message'] ?? ''),
+                'is_integrated'          => !empty($sess['google_integrated']),
+                'meet_uri'               => (string)($sess['google_meet_uri'] ?? $sess['meet_link'] ?? ''),
+                'meet_code'              => (string)($sess['google_meet_code'] ?? ''),
+                'meet_space_name'        => (string)($sess['google_meet_space_name'] ?? ''),
+                'calendar_event_id'      => (string)($sess['google_calendar_event_id'] ?? ''),
+                'calendar_id'            => (string)($sess['google_calendar_id'] ?? 'primary'),
+                'integration_status'     => (string)($sess['google_integration_status'] ?? 'none'),
+                'cohost_status'          => $cohostStatus,
+                'meet_space_created'     => !empty($sess['google_meet_space_name']),
+                'cohost_confirmed'       => ($cohostStatus === 'Co-host Confirmed'),
+                'calendar_event_created' => !empty($sess['google_calendar_event_id']),
+                'last_sync_at'           => (string)($sess['google_last_sync_at'] ?? ''),
+                'error_message'          => (string)($sess['google_error_message'] ?? ''),
             ],
         ];
     }
@@ -694,6 +865,55 @@ class GoogleLiveSessionManager {
             $stmt->execute([$errorMessage, $sessionId]);
         } catch (Exception $e) {
             error_log("Failed to record Google session failure: " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Record partial or failed state preserving resolved Meet space and/or Calendar IDs.
+     */
+    public function recordPartialOrFailedState(
+        int $sessionId,
+        ?string $spaceName,
+        ?string $meetUri,
+        ?string $meetCode,
+        ?string $eventId,
+        string $status,
+        string $errorMessage
+    ): void {
+        try {
+            $stmt = $this->pdo->prepare("
+                UPDATE sessions
+                SET google_integrated = 1,
+                    google_meet_space_name = COALESCE(?, google_meet_space_name),
+                    google_meet_uri = COALESCE(?, google_meet_uri),
+                    google_meet_code = COALESCE(?, google_meet_code),
+                    google_calendar_event_id = COALESCE(?, google_calendar_event_id),
+                    meet_link = COALESCE(?, meet_link),
+                    google_integration_status = ?,
+                    google_error_message = ?,
+                    google_last_sync_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([
+                $spaceName,
+                $meetUri,
+                $meetCode,
+                $eventId,
+                $meetUri,
+                $status,
+                $errorMessage,
+                $sessionId
+            ]);
+
+            try {
+                $hasCohostCol = (bool)$this->pdo->query("SHOW COLUMNS FROM sessions LIKE 'google_cohost_status'")->fetchColumn();
+                if ($hasCohostCol) {
+                    $coStatus = str_contains(strtolower($errorMessage), 'co-host') ? 'cohost_failed' : 'cohost_pending';
+                    $this->pdo->prepare("UPDATE sessions SET google_cohost_status = ? WHERE id = ?")->execute([$coStatus, $sessionId]);
+                }
+            } catch (Exception $e) {}
+        } catch (Exception $e) {
+            error_log("Failed to record Google session partial/failed state: " . $e->getMessage());
         }
     }
 }
