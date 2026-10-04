@@ -796,7 +796,7 @@ function validateSessionForm(e) {
             e.preventDefault();
             e.stopPropagation();
         }
-        alert('Please fill all mandatory fields before saving:\n\n• ' + errors.join('\n• '));
+        alert('Please fill all mandatory fields:\\n\\n• ' + errors.join('\\n• '));
         return false;
     }
 
