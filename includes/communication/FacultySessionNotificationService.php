@@ -20,6 +20,82 @@ class FacultySessionNotificationService {
     }
 
     /**
+     * Authoritative canonical variable mapping corresponding to approved Meta WhatsApp templates.
+     * This defines the exact semantic ERP variable for each {{N}} placeholder in the approved Meta templates.
+     */
+    public const CANONICAL_META_VARIABLE_MAP = [
+        'faculty_session_scheduled' => [
+            1 => 'faculty_name',
+            2 => 'session_type',
+            3 => 'session_topic',
+            4 => 'session_datetime',
+            5 => 'session_courses',
+            6 => 'session_duration'
+        ],
+        'faculty_session_reminder' => [
+            1 => 'faculty_name',
+            2 => 'session_datetime'
+        ],
+        'faculty_session_start' => [
+            1 => 'faculty_name',
+            2 => 'session_datetime',
+            3 => 'session_topic',
+            4 => 'session_courses',
+            5 => 'session_duration'
+        ],
+        'faculty_session_start_now' => [
+            1 => 'faculty_name'
+        ],
+        'faculty_session_cancelled' => [
+            1 => 'faculty_name',
+            2 => 'session_datetime',
+            3 => 'session_topic',
+            4 => 'session_courses'
+        ]
+    ];
+
+    /**
+     * Resolves body parameter values for a template.
+     * 1. Checks communication_templates.meta_data to derive canonical body indexes from Meta components.
+     * 2. Uses CANONICAL_META_VARIABLE_MAP to populate the exact semantic ERP variable values.
+     *
+     * @param string $templateName Name of the Meta template (e.g. 'faculty_session_scheduled')
+     * @param array $contextData Map of ERP variables (e.g. ['faculty_name' => '...', 'session_type' => '...'])
+     * @return array Ordered list of string values for template parameters
+     */
+    public function resolveTemplateParameters(string $templateName, array $contextData): array {
+        // Derive indexes from communication_templates.meta_data if available
+        try {
+            $stmtTpl = $this->pdo->prepare("SELECT meta_data FROM communication_templates WHERE template_name = ? LIMIT 1");
+            $stmtTpl->execute([$templateName]);
+            $metaData = $stmtTpl->fetchColumn();
+            if ($metaData) {
+                $paramDef = CommunicationHelper::getTemplateParameterDefinition($metaData);
+                $bodyIndexes = $paramDef['body']['indexes'];
+                if (!empty($bodyIndexes)) {
+                    $canonMap = self::CANONICAL_META_VARIABLE_MAP[$templateName] ?? [];
+                    $resolved = [];
+                    foreach ($bodyIndexes as $idx) {
+                        $varKey = $canonMap[$idx] ?? null;
+                        $resolved[] = $varKey ? (string)($contextData[$varKey] ?? '') : '';
+                    }
+                    return $resolved;
+                }
+            }
+        } catch (Exception $e) {
+            // Database not accessible or table missing; continue to canonical map fallback
+        }
+
+        // Fallback to authoritative canonical Meta variable map
+        $canonMap = self::CANONICAL_META_VARIABLE_MAP[$templateName] ?? [];
+        $resolved = [];
+        foreach ($canonMap as $idx => $varKey) {
+            $resolved[] = (string)($contextData[$varKey] ?? '');
+        }
+        return $resolved;
+    }
+
+    /**
      * Schedules all initial faculty notifications upon session creation.
      *
      * @param int $sessionId
@@ -67,14 +143,25 @@ class FacultySessionNotificationService {
         $durationHours = (float)($sess['duration_hours'] ?: 1.0);
         $durationStr = $durationHours == 1.0 ? '1 hour' : ($durationHours . ' hours');
 
+        $context = [
+            'faculty_name'     => $facultyName,
+            'session_type'     => $type,
+            'session_topic'    => $topic,
+            'session_datetime' => $formattedDt,
+            'session_courses'  => $courses,
+            'session_duration' => $durationStr,
+        ];
+
         $queued = [];
 
         // ── 1. Immediate Scheduled Notification (Phase 7) ────────────────────
+        // Meta template: {{1}} Name, {{2}} Type, {{3}} Topic, {{4}} Datetime, {{5}} Courses, {{6}} Duration
         $scheduledKey = "faculty:{$facultyId}:session:{$sessionId}:scheduled";
+        $scheduledParams = $this->resolveTemplateParameters('faculty_session_scheduled', $context);
         $scheduledTpl = [
             'name'       => 'faculty_session_scheduled',
             'language'   => 'en',
-            'parameters' => [$facultyName, $topic, $type, $formattedDt, $courses, $durationStr],
+            'parameters' => $scheduledParams,
             'buttons'    => [
                 'quick_reply' => [
                     ['text' => 'Read Instructions', 'payload' => 'READ_INSTRUCTIONS']
@@ -88,7 +175,7 @@ class FacultySessionNotificationService {
             $facultyName,
             "Live Session Scheduled: {$topic}",
             '',
-            "Hello {$facultyName},\n\nYou have been scheduled for a PEPP Live Session.\n\nSession: {$topic}\nType: {$type}\nDate & Time: {$formattedDt}\nCourses: {$courses}\nDuration: {$durationStr}\n\nPlease review the faculty instructions before the session. You are requested to join on time and not earlier than 5 minutes before the scheduled start.",
+            "Hi {$facultyName},\n\nConfirm the following schedule.\nThis is a {$type} session.\nTopic: {$topic}\nDate & Time: {$formattedDt}\nCourses: {$courses}\nProposed Duration: {$durationStr}\n\nPlease join on time and be ready before the scheduled start time.\nRead the faculty instructions before your session.",
             [],
             $scheduledTpl,
             $sentBy,
@@ -101,14 +188,16 @@ class FacultySessionNotificationService {
         $queued['scheduled'] = ['queue_id' => $qId1, 'idempotency_key' => $scheduledKey];
 
         // ── 2. 3-Hour Reminder Notification (Phase 8) ────────────────────────
+        // Meta template: {{1}} Name, {{2}} Datetime (Exactly 2 parameters; no topic or duration)
         $now = time();
         if ($timestamp && ($timestamp - $now) >= (3 * 3600)) {
             $reminder3hTime = date('Y-m-d H:i:s', $timestamp - (3 * 3600));
             $reminderKey = "faculty:{$facultyId}:session:{$sessionId}:reminder_3h";
+            $reminderParams = $this->resolveTemplateParameters('faculty_session_reminder', $context);
             $reminderTpl = [
                 'name'       => 'faculty_session_reminder',
                 'language'   => 'en',
-                'parameters' => [$facultyName, $topic, $formattedTime, $durationStr]
+                'parameters' => $reminderParams
             ];
 
             $qId2 = $this->engine->queueMessage(
@@ -117,7 +206,7 @@ class FacultySessionNotificationService {
                 $facultyName,
                 "Live Session Reminder: {$topic}",
                 '',
-                "Hello {$facultyName},\n\nThis is a reminder that you have a PEPP Live Session scheduled today.\n\nSession: {$topic}\nTime: {$formattedTime}\nDuration: {$durationStr}\n\nWe hope you are prepared well for the session.\n\nPlease ensure that your presentation, audio/video setup and internet connection are ready before the scheduled time.\n\nThank you!",
+                "Hi {$facultyName},\n\nThis is a reminder that you have a PEPP live session today at {$formattedDt}.\n\nWe hope you are prepared well for the session.\n\nThank you!",
                 [],
                 $reminderTpl,
                 $sentBy,
@@ -131,6 +220,8 @@ class FacultySessionNotificationService {
         }
 
         // ── 3. 1-Hour Start Live Notification (Phase 9) ──────────────────────
+        // Meta template: {{1}} Name, {{2}} Datetime, {{3}} Topic, {{4}} Courses, {{5}} Duration
+        // Dynamic CTA URL: Start Live -> https://meet.google.com/{{1}}
         if ($timestamp && $timestamp > $now) {
             $start1hTs = max($now, $timestamp - 3600);
             $start1hTime = date('Y-m-d H:i:s', $start1hTs);
@@ -138,10 +229,11 @@ class FacultySessionNotificationService {
             $meetUrl = $this->resolveMeetUrl($sess);
             $meetParam = $this->extractMeetButtonParam($meetUrl);
 
+            $start1hParams = $this->resolveTemplateParameters('faculty_session_start', $context);
             $start1hTpl = [
                 'name'              => 'faculty_session_start',
                 'language'          => 'en',
-                'parameters'        => [$facultyName, $topic, $formattedDt, $durationStr],
+                'parameters'        => $start1hParams,
                 'button_parameters' => [$meetParam]
             ];
 
@@ -151,7 +243,7 @@ class FacultySessionNotificationService {
                 $facultyName,
                 "Live Session Starting Soon: {$topic}",
                 '',
-                "Hello {$facultyName},\n\nYour PEPP Live Session starts in approximately 1 hour.\n\nSession: {$topic}\nDate & Time: {$formattedDt}\nDuration: {$durationStr}\n\nYour Google Meet session link is ready.\n\nImportant: Recording and Gemini meeting notes will start automatically when you enter the session. Please do not enter earlier than 5 minutes before the scheduled start time.",
+                "Dear {$facultyName},\n\nYour PEPP live session is scheduled to start at {$formattedDt}.\n\nSession: {$topic}\nCourses: {$courses}\nDuration: {$durationStr}\n\nNote:\n1. Automatic recording and Gemini notes will start when you enter the session.\n2. Please do not enter earlier than 5 minutes before the scheduled start time.",
                 [],
                 $start1hTpl,
                 $sentBy,
@@ -165,6 +257,8 @@ class FacultySessionNotificationService {
         }
 
         // ── 4. 2-Minute Start Now Notification (Phase 10) ────────────────────
+        // Meta template: {{1}} Name (Exactly 1 body parameter; no topic parameter)
+        // Dynamic CTA URL: Start Now -> https://meet.google.com/{{1}}
         if ($timestamp && $timestamp > $now) {
             $start2mTs = max($now, $timestamp - 120);
             $start2mTime = date('Y-m-d H:i:s', $start2mTs);
@@ -172,10 +266,11 @@ class FacultySessionNotificationService {
             $meetUrl = $this->resolveMeetUrl($sess);
             $meetParam = $this->extractMeetButtonParam($meetUrl);
 
+            $start2mParams = $this->resolveTemplateParameters('faculty_session_start_now', $context);
             $start2mTpl = [
                 'name'              => 'faculty_session_start_now',
                 'language'          => 'en',
-                'parameters'        => [$facultyName, $topic],
+                'parameters'        => $start2mParams,
                 'button_parameters' => [$meetParam]
             ];
 
@@ -185,7 +280,7 @@ class FacultySessionNotificationService {
                 $facultyName,
                 "Live Session Starting Now: {$topic}",
                 '',
-                "Hello {$facultyName},\n\nYour PEPP Live Session is starting now.\n\nSession: {$topic}\n\nPlease join using the button below.\n\nReminder: Recording and Gemini meeting notes will start automatically when you enter the session. Please join only now and not earlier.",
+                "Hi {$facultyName},\n\nYour PEPP live session is starting now.\nPlease join your session now and begin the session as scheduled.",
                 [],
                 $start2mTpl,
                 $sentBy,
@@ -281,6 +376,7 @@ class FacultySessionNotificationService {
         $this->invalidateInteractions($sessionId, $facultyId);
 
         // Send faculty_session_cancelled exactly once if phone is valid
+        // Meta template: {{1}} Name, {{2}} Datetime, {{3}} Topic, {{4}} Courses
         if ($facultyId > 0 && !empty($cleanPhone) && strlen($cleanPhone) >= 10) {
             $cancelKey = "faculty:{$facultyId}:session:{$sessionId}:cancelled";
             $facultyName = trim((string)($sess['faculty_name'] ?: 'Faculty'));
@@ -288,11 +384,21 @@ class FacultySessionNotificationService {
             $dtStr = (string)$sess['session_datetime'];
             $timestamp = strtotime($dtStr);
             $formattedDt = $timestamp ? date('d M Y, h:i A', $timestamp) : $dtStr;
+            $courses = trim((string)($sess['course_csv'] ?: 'PEPP Courses'));
+
+            $cancelContext = [
+                'faculty_name'     => $facultyName,
+                'session_datetime' => $formattedDt,
+                'session_topic'    => $topic,
+                'session_courses'  => $courses
+            ];
+
+            $cancelParams = $this->resolveTemplateParameters('faculty_session_cancelled', $cancelContext);
 
             $cancelTpl = [
                 'name'       => 'faculty_session_cancelled',
                 'language'   => 'en',
-                'parameters' => [$facultyName, $formattedDt, $topic]
+                'parameters' => $cancelParams
             ];
 
             $qId = $this->engine->queueMessage(
@@ -301,7 +407,7 @@ class FacultySessionNotificationService {
                 $facultyName,
                 "Live Session Cancelled: {$topic}",
                 '',
-                "Hello {$facultyName},\n\nYour PEPP Live Session scheduled for:\n\n{$formattedDt}\n\nSession: {$topic}\n\nhas been cancelled by the PEPP Admin.\n\nPlease do not use the previously shared session link.\n\nIf a new schedule is confirmed, you will receive a separate notification.\n\nThank you.",
+                "Hi {$facultyName},\n\nYour PEPP live session scheduled for {$formattedDt} has been cancelled.\n\nSession: {$topic}\nCourses: {$courses}\n\nPlease do not join the previously shared session link.",
                 [],
                 $cancelTpl,
                 $sentBy,
@@ -347,21 +453,32 @@ class FacultySessionNotificationService {
         $dtStr = (string)$sess['session_datetime'];
         $timestamp = strtotime($dtStr);
         $formattedDt = $timestamp ? date('d M Y, h:i A', $timestamp) : $dtStr;
-        $formattedTime = $timestamp ? date('h:i A', $timestamp) : '';
+        $courses = trim((string)($sess['course_csv'] ?: 'PEPP Courses'));
         $durationHours = (float)($sess['duration_hours'] ?: 1.0);
         $durationStr = $durationHours == 1.0 ? '1 hour' : ($durationHours . ' hours');
+
+        $context = [
+            'faculty_name'     => $facultyName,
+            'session_type'     => ucfirst(trim((string)($sess['session_type'] ?: 'Live'))),
+            'session_topic'    => $topic,
+            'session_datetime' => $formattedDt,
+            'session_courses'  => $courses,
+            'session_duration' => $durationStr,
+        ];
 
         $now = time();
         $queued = [];
 
         // 3-Hour Reminder
+        // Meta template: {{1}} Name, {{2}} Datetime (Exactly 2 parameters; no topic or duration)
         if ($timestamp && ($timestamp - $now) >= (3 * 3600)) {
             $reminder3hTime = date('Y-m-d H:i:s', $timestamp - (3 * 3600));
             $reminderKey = "faculty:{$facultyId}:session:{$sessionId}:reminder_3h";
+            $reminderParams = $this->resolveTemplateParameters('faculty_session_reminder', $context);
             $reminderTpl = [
                 'name'       => 'faculty_session_reminder',
                 'language'   => 'en',
-                'parameters' => [$facultyName, $topic, $formattedTime, $durationStr]
+                'parameters' => $reminderParams
             ];
 
             $qId = $this->engine->queueMessage(
@@ -370,7 +487,7 @@ class FacultySessionNotificationService {
                 $facultyName,
                 "Live Session Reminder: {$topic}",
                 '',
-                "Hello {$facultyName},\n\nThis is a reminder that you have a PEPP Live Session scheduled today.\n\nSession: {$topic}\nTime: {$formattedTime}\nDuration: {$durationStr}\n\nWe hope you are prepared well for the session.\n\nPlease ensure that your presentation, audio/video setup and internet connection are ready before the scheduled time.\n\nThank you!",
+                "Hi {$facultyName},\n\nThis is a reminder that you have a PEPP live session today at {$formattedDt}.\n\nWe hope you are prepared well for the session.\n\nThank you!",
                 [],
                 $reminderTpl,
                 $sentBy,
@@ -384,6 +501,8 @@ class FacultySessionNotificationService {
         }
 
         // 1-Hour Start Live
+        // Meta template: {{1}} Name, {{2}} Datetime, {{3}} Topic, {{4}} Courses, {{5}} Duration
+        // Dynamic CTA URL: Start Live -> https://meet.google.com/{{1}}
         if ($timestamp && $timestamp > $now) {
             $start1hTs = max($now, $timestamp - 3600);
             $start1hTime = date('Y-m-d H:i:s', $start1hTs);
@@ -391,10 +510,11 @@ class FacultySessionNotificationService {
             $meetUrl = $this->resolveMeetUrl($sess);
             $meetParam = $this->extractMeetButtonParam($meetUrl);
 
+            $start1hParams = $this->resolveTemplateParameters('faculty_session_start', $context);
             $start1hTpl = [
                 'name'              => 'faculty_session_start',
                 'language'          => 'en',
-                'parameters'        => [$facultyName, $topic, $formattedDt, $durationStr],
+                'parameters'        => $start1hParams,
                 'button_parameters' => [$meetParam]
             ];
 
@@ -404,7 +524,7 @@ class FacultySessionNotificationService {
                 $facultyName,
                 "Live Session Starting Soon: {$topic}",
                 '',
-                "Hello {$facultyName},\n\nYour PEPP Live Session starts in approximately 1 hour.\n\nSession: {$topic}\nDate & Time: {$formattedDt}\nDuration: {$durationStr}\n\nYour Google Meet session link is ready.\n\nImportant: Recording and Gemini meeting notes will start automatically when you enter the session. Please do not enter earlier than 5 minutes before the scheduled start time.",
+                "Dear {$facultyName},\n\nYour PEPP live session is scheduled to start at {$formattedDt}.\n\nSession: {$topic}\nCourses: {$courses}\nDuration: {$durationStr}\n\nNote:\n1. Automatic recording and Gemini notes will start when you enter the session.\n2. Please do not enter earlier than 5 minutes before the scheduled start time.",
                 [],
                 $start1hTpl,
                 $sentBy,
@@ -418,6 +538,8 @@ class FacultySessionNotificationService {
         }
 
         // 2-Minute Start Now
+        // Meta template: {{1}} Name (Exactly 1 body parameter; no topic parameter)
+        // Dynamic CTA URL: Start Now -> https://meet.google.com/{{1}}
         if ($timestamp && $timestamp > $now) {
             $start2mTs = max($now, $timestamp - 120);
             $start2mTime = date('Y-m-d H:i:s', $start2mTs);
@@ -425,10 +547,11 @@ class FacultySessionNotificationService {
             $meetUrl = $this->resolveMeetUrl($sess);
             $meetParam = $this->extractMeetButtonParam($meetUrl);
 
+            $start2mParams = $this->resolveTemplateParameters('faculty_session_start_now', $context);
             $start2mTpl = [
                 'name'              => 'faculty_session_start_now',
                 'language'          => 'en',
-                'parameters'        => [$facultyName, $topic],
+                'parameters'        => $start2mParams,
                 'button_parameters' => [$meetParam]
             ];
 
@@ -438,7 +561,7 @@ class FacultySessionNotificationService {
                 $facultyName,
                 "Live Session Starting Now: {$topic}",
                 '',
-                "Hello {$facultyName},\n\nYour PEPP Live Session is starting now.\n\nSession: {$topic}\n\nPlease join using the button below.\n\nReminder: Recording and Gemini meeting notes will start automatically when you enter the session. Please join only now and not earlier.",
+                "Hi {$facultyName},\n\nYour PEPP live session is starting now.\nPlease join your session now and begin the session as scheduled.",
                 [],
                 $start2mTpl,
                 $sentBy,

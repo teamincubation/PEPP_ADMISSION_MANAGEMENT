@@ -165,29 +165,29 @@ try {
     $insTplKw = ($driver === 'sqlite') ? 'INSERT OR IGNORE' : 'INSERT IGNORE';
     $facultyTplsToSeed = [
         'faculty_session_scheduled' => [
-            'body' => "Hello {{1}},\n\nYou have been scheduled for a PEPP Live Session.\n\nSession: {{2}}\nType: {{3}}\nDate & Time: {{4}}\nCourses: {{5}}\nDuration: {{6}}\n\nPlease review the faculty instructions before the session. You are requested to join on time and not earlier than 5 minutes before the scheduled start.",
+            'body' => "Hi *{{1}}*,\n\n✅Confirm the following schedule. \n\nThis is a {{2}} session.\nTopic: {{3}}\nDate & Time: *{{4}}*\nCourses: {{5}}\nProposed Duration: *{{6}}*\n\nPlease join on time and be ready before the scheduled start time.\n*Read the faculty instructions before your session.*",
             'buttons' => [
                 ['type' => 'QUICK_REPLY', 'text' => 'Read Instructions']
             ]
         ],
         'faculty_session_reminder' => [
-            'body' => "Hello {{1}},\n\nThis is a reminder that you have a PEPP Live Session scheduled today.\n\nSession: {{2}}\nTime: {{3}}\nDuration: {{4}}\n\nWe hope you are prepared well for the session.\n\nPlease ensure that your presentation, audio/video setup and internet connection are ready before the scheduled time.\n\nThank you!",
+            'body' => "Hi *{{1}}*, \n \nThis is a reminder that you have a PEPP live session today at *{{2}}*.  \n\nWe hope you are prepared well for the session.  \nThank you!",
             'buttons' => []
         ],
         'faculty_session_start' => [
-            'body' => "Hello {{1}},\n\nYour PEPP Live Session starts in approximately 1 hour.\n\nSession: {{2}}\nDate & Time: {{3}}\nDuration: {{4}}\n\nYour Google Meet session link is ready.\n\nImportant: Recording and Gemini meeting notes will start automatically when you enter the session. Please do not enter earlier than 5 minutes before the scheduled start time.",
+            'body' => "Dear *{{1}}*,  \n\nYour PEPP live session is scheduled to start at *{{2}}*.  \n\nSession: {{3}}\nCourses: {{4}}\nDuration: {{5}}\n\nNote: \n1. *Automatic recording* and Gemini notes *will start when you enter the session*.\n2. Please *do not enter the session earlier than 5 minutes* before the scheduled start time.",
             'buttons' => [
                 ['type' => 'URL', 'text' => 'Start Live', 'url' => 'https://meet.google.com/{{1}}']
             ]
         ],
         'faculty_session_start_now' => [
-            'body' => "Hello {{1}},\n\nYour PEPP Live Session is starting now.\n\nSession: {{2}}\n\nPlease join using the button below.\n\nReminder: Recording and Gemini meeting notes will start automatically when you enter the session. Please join only now and not earlier.",
+            'body' => "Hi *{{1}}*,  \n\n✅ *Your PEPP live session is starting now.*\n_Please join your session now and begin the session as scheduled._",
             'buttons' => [
                 ['type' => 'URL', 'text' => 'Start Now', 'url' => 'https://meet.google.com/{{1}}']
             ]
         ],
         'faculty_session_cancelled' => [
-            'body' => "Hello {{1}},\n\nYour PEPP Live Session scheduled for:\n\n{{2}}\n\nSession: {{3}}\n\nhas been cancelled by the PEPP Admin.\n\nPlease do not use the previously shared session link.\n\nIf a new schedule is confirmed, you will receive a separate notification.\n\nThank you.",
+            'body' => "Hi *{{1}}*,  \nYour PEPP live session scheduled for *{{2}}* has been cancelled. \n\nSession: {{3}}\nCourses: {{4}} \n\nPlease do not join the previously shared session link.",
             'buttons' => []
         ]
     ];
@@ -1102,8 +1102,8 @@ include 'includes/admin_nav.php';
             'trigger'     => 'Immediately upon session creation in sessions.php',
             'variables'   => [
                 ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
-                ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
-                ['idx' => 3, 'key' => 'session_type', 'label' => 'Session Type', 'sample' => 'Live'],
+                ['idx' => 2, 'key' => 'session_type', 'label' => 'Session Type', 'sample' => 'Live'],
+                ['idx' => 3, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
                 ['idx' => 4, 'key' => 'session_datetime', 'label' => 'Schedule Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
                 ['idx' => 5, 'key' => 'session_courses', 'label' => 'Target Courses', 'sample' => 'B.Com, BBA'],
                 ['idx' => 6, 'key' => 'session_duration', 'label' => 'Proposed Session Duration', 'sample' => '1 hour']
@@ -1120,9 +1120,7 @@ include 'includes/admin_nav.php';
             'trigger'     => '3 hours before session start time (cron)',
             'variables'   => [
                 ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
-                ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
-                ['idx' => 3, 'key' => 'session_datetime', 'label' => 'Scheduled Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
-                ['idx' => 4, 'key' => 'session_duration', 'label' => 'Proposed Session Duration', 'sample' => '1 hour']
+                ['idx' => 2, 'key' => 'session_datetime', 'label' => 'Scheduled Date & Time', 'sample' => '25 Oct 2026, 06:00 PM']
             ],
             'button_type' => 'None',
             'button_text' => '-',
@@ -1136,9 +1134,10 @@ include 'includes/admin_nav.php';
             'trigger'     => '1 hour before session start time (cron)',
             'variables'   => [
                 ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
-                ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
-                ['idx' => 3, 'key' => 'session_datetime', 'label' => 'Scheduled Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
-                ['idx' => 4, 'key' => 'session_duration', 'label' => 'Proposed Session Duration', 'sample' => '1 hour']
+                ['idx' => 2, 'key' => 'session_datetime', 'label' => 'Scheduled Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
+                ['idx' => 3, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
+                ['idx' => 4, 'key' => 'session_courses', 'label' => 'Target Courses', 'sample' => 'B.Com, BBA'],
+                ['idx' => 5, 'key' => 'session_duration', 'label' => 'Proposed Session Duration', 'sample' => '1 hour']
             ],
             'button_type' => 'Call To Action (URL)',
             'button_text' => 'Start Live',
@@ -1151,8 +1150,7 @@ include 'includes/admin_nav.php';
             'language'    => 'en',
             'trigger'     => '2 minutes before session start time (cron)',
             'variables'   => [
-                ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
-                ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting']
+                ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe']
             ],
             'button_type' => 'Call To Action (URL)',
             'button_text' => 'Start Now',
@@ -1167,7 +1165,8 @@ include 'includes/admin_nav.php';
             'variables'   => [
                 ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
                 ['idx' => 2, 'key' => 'session_datetime', 'label' => 'Scheduled Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
-                ['idx' => 3, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting']
+                ['idx' => 3, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
+                ['idx' => 4, 'key' => 'session_courses', 'label' => 'Target Courses', 'sample' => 'B.Com, BBA']
             ],
             'button_type' => 'None',
             'button_text' => '-',

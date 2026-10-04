@@ -221,18 +221,50 @@ $pdo->exec("
     ('hi', 'Hindi (हिन्दी)', 'लाइव सत्र निर्देश', '1. समय पर जुड़ें।\n2. ऑडियो/वीडियो सुनिश्चित करें।', 0);
 ");
 
-// Seed 5 templates into communication_templates
+// Seed 5 templates into communication_templates using authoritative Meta definitions
 $templates = [
-    'faculty_session_scheduled' => "Hello {{1}}, you have a session {{2}} on {{4}}.",
-    'faculty_session_reminder'  => "Reminder: Hello {{1}}, session {{2}} starts in 3 hours.",
-    'faculty_session_start'     => "Alert: Hello {{1}}, session {{2}} starts in 1 hour. Link: {{5}}",
-    'faculty_session_start_now' => "Starting now: Hello {{1}}, session {{2}} starting now! Link: {{4}}",
-    'faculty_session_cancelled' => "Notice: Hello {{1}}, session {{2}} on {{4}} is cancelled."
+    'faculty_session_scheduled' => [
+        'body' => "Hi *{{1}}*,\n\n✅Confirm the following schedule. \n\nThis is a {{2}} session.\nTopic: {{3}}\nDate & Time: *{{4}}*\nCourses: {{5}}\nProposed Duration: *{{6}}*\n\nPlease join on time and be ready before the scheduled start time.\n*Read the faculty instructions before your session.*",
+        'buttons' => [
+            ['type' => 'QUICK_REPLY', 'text' => 'Read Instructions']
+        ]
+    ],
+    'faculty_session_reminder' => [
+        'body' => "Hi *{{1}}*, \n \nThis is a reminder that you have a PEPP live session today at *{{2}}*.  \n\nWe hope you are prepared well for the session.  \nThank you!",
+        'buttons' => []
+    ],
+    'faculty_session_start' => [
+        'body' => "Dear *{{1}}*,  \n\nYour PEPP live session is scheduled to start at *{{2}}*.  \n\nSession: {{3}}\nCourses: {{4}}\nDuration: {{5}}\n\nNote: \n1. *Automatic recording* and Gemini notes *will start when you enter the session*.\n2. Please *do not enter the session earlier than 5 minutes* before the scheduled start time.",
+        'buttons' => [
+            ['type' => 'URL', 'text' => 'Start Live', 'url' => 'https://meet.google.com/{{1}}']
+        ]
+    ],
+    'faculty_session_start_now' => [
+        'body' => "Hi *{{1}}*,  \n\n✅ *Your PEPP live session is starting now.*\n_Please join your session now and begin the session as scheduled._",
+        'buttons' => [
+            ['type' => 'URL', 'text' => 'Start Now', 'url' => 'https://meet.google.com/{{1}}']
+        ]
+    ],
+    'faculty_session_cancelled' => [
+        'body' => "Hi *{{1}}*,  \nYour PEPP live session scheduled for *{{2}}* has been cancelled. \n\nSession: {{3}}\nCourses: {{4}} \n\nPlease do not join the previously shared session link.",
+        'buttons' => []
+    ]
 ];
 $stmtTpl = $pdo->prepare("INSERT INTO communication_templates (template_name, meta_data) VALUES (?, ?)");
-foreach ($templates as $tName => $bText) {
-    $stmtTpl->execute([$tName, json_encode(['body_text' => $bText])]);
+foreach ($templates as $tName => $tConf) {
+    $meta = [
+        'components' => [
+            ['type' => 'BODY', 'text' => $tConf['body']]
+        ],
+        'body_text' => $tConf['body'],
+        'buttons' => $tConf['buttons']
+    ];
+    if (!empty($tConf['buttons'])) {
+        $meta['components'][] = ['type' => 'BUTTONS', 'buttons' => $tConf['buttons']];
+    }
+    $stmtTpl->execute([$tName, json_encode($meta)]);
 }
+
 
 echo "--- SECTION 1: FORM VALIDATION (SCENARIOS A–H) ---\n";
 
@@ -325,18 +357,18 @@ $resI = $notifService->scheduleSessionCreation(101, 'admin');
 $scheduledJob = $pdo->query("SELECT * FROM communication_queue WHERE template_name = 'faculty_session_scheduled' AND recipient = '919876543210'")->fetch();
 assertTest(!empty($scheduledJob), 'Scenario I', 'faculty_session_scheduled job queued immediately');
 
-// Scenario J: faculty_session_scheduled contains correct 6 variables
+// Scenario J: faculty_session_scheduled contains correct 6 variables (Type before Topic)
 $tplData = json_decode($scheduledJob['template_data'], true);
 $params = $tplData['parameters'] ?? [];
 assertTest(
     count($params) === 6 &&
     $params[0] === 'Dr. Arshad Khan' &&
-    $params[1] === 'Advanced Taxation' &&
-    $params[2] === 'Live' &&
+    $params[1] === 'Live' &&
+    $params[2] === 'Advanced Taxation' &&
     $params[4] === 'B.Com, CA Inter' &&
     $params[5] === '2 hours',
     'Scenario J',
-    'Exact 6 parameters matched: Faculty, Topic, Type, Datetime, Courses, Duration'
+    'Exact 6 parameters matched: Faculty, Type, Topic, Datetime, Courses, Duration'
 );
 
 // Scenario K: faculty_session_scheduled has quick-reply button 'Read Instructions'
@@ -357,6 +389,43 @@ $job2m = $pdo->query("SELECT * FROM communication_queue WHERE template_name = 'f
 assertTest(!empty($job3h), 'Scenario L', '3-hour reminder job queued with scheduled execution time');
 assertTest(!empty($job1h), 'Scenario M', '1-hour start notice job queued with scheduled execution time');
 assertTest(!empty($job2m), 'Scenario N', '2-minute start now alert job queued with scheduled execution time');
+
+// Scenario L-Params: faculty_session_reminder parameter count and contents (strictly 2)
+$data3h = json_decode($job3h['template_data'], true);
+$params3h = $data3h['parameters'] ?? [];
+assertTest(
+    count($params3h) === 2 &&
+    $params3h[0] === 'Dr. Arshad Khan',
+    'Scenario L-Params',
+    'faculty_session_reminder has strictly 2 parameters: Faculty Name, Datetime (no topic/duration)'
+);
+
+// Scenario M-Params: faculty_session_start body parameter count and CTA button (strictly 5 body + 1 CTA URL)
+$data1h = json_decode($job1h['template_data'], true);
+$params1h = $data1h['parameters'] ?? [];
+$btn1h = $data1h['button_parameters'] ?? [];
+assertTest(
+    count($params1h) === 5 &&
+    $params1h[0] === 'Dr. Arshad Khan' &&
+    $params1h[2] === 'Advanced Taxation' &&
+    $params1h[3] === 'B.Com, CA Inter' &&
+    $params1h[4] === '2 hours' &&
+    $btn1h === ['xyz-tax-live'],
+    'Scenario M-Params',
+    'faculty_session_start has strictly 5 body parameters + separate dynamic CTA URL button'
+);
+
+// Scenario N-Params: faculty_session_start_now body parameter count and CTA button (strictly 1 body + 1 CTA URL)
+$data2m = json_decode($job2m['template_data'], true);
+$params2m = $data2m['parameters'] ?? [];
+$btn2m = $data2m['button_parameters'] ?? [];
+assertTest(
+    count($params2m) === 1 &&
+    $params2m[0] === 'Dr. Arshad Khan' &&
+    $btn2m === ['xyz-tax-live'],
+    'Scenario N-Params',
+    'faculty_session_start_now has strictly 1 body parameter + separate dynamic CTA URL button'
+);
 
 // Scenario O–Q: Session created within windows does NOT queue already-elapsed reminder jobs
 $dateIn2Hours = date('Y-m-d H:i:s', time() + (2 * 3600)); // 2 hours away (< 3h)
@@ -518,6 +587,18 @@ $cancelNotice = $pdo->query("SELECT * FROM communication_queue WHERE template_na
 
 assertTest((int)$cancelledJobs >= 3, 'Scenario AC', 'Session cancellation suppresses all pending jobs');
 assertTest(!empty($cancelNotice), 'Scenario AC', 'faculty_session_cancelled notice queued immediately for faculty');
+
+// Scenario AC-Params: faculty_session_cancelled parameter count and contents (strictly 4)
+$cancelData = json_decode($cancelNotice['template_data'], true);
+$cancelParams = $cancelData['parameters'] ?? [];
+assertTest(
+    count($cancelParams) === 4 &&
+    $cancelParams[0] === 'Dr. Arshad Khan' &&
+    $cancelParams[2] === 'Advanced Taxation' &&
+    $cancelParams[3] === 'B.Com, CA Inter',
+    'Scenario AC-Params',
+    'faculty_session_cancelled has strictly 4 parameters: Faculty Name, Datetime, Topic, Courses'
+);
 
 // Scenario AD: Faculty changed — old faculty jobs cancelled, new faculty scheduled
 $futureDateAD = date('Y-m-d H:i:s', time() + (30 * 3600));
