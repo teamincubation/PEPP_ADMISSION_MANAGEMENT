@@ -251,30 +251,48 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
             }
         } else if (($templateData['type'] ?? '') === 'interactive') {
             $payload['type'] = 'interactive';
-            $payload['interactive'] = [
-                'type' => $templateData['interactive_type'] ?? 'cta_url',
+            $intType = $templateData['interactive_type'] ?? 'cta_url';
+            
+            $interactiveObj = [
+                'type' => $intType,
                 'body' => [
                     'text' => $templateData['interactive_body'] ?? ($bodyText ?: strip_tags($bodyHtml))
-                ],
-                'action' => [
-                    'name' => $templateData['interactive_type'] ?? 'cta_url',
+                ]
+            ];
+
+            if ($intType === 'list') {
+                $interactiveObj['action'] = [
+                    'button'   => $templateData['interactive_button_text'] ?? 'Select Option',
+                    'sections' => $templateData['interactive_sections'] ?? []
+                ];
+            } elseif ($intType === 'button') {
+                $interactiveObj['action'] = [
+                    'buttons' => $templateData['interactive_buttons'] ?? []
+                ];
+            } else {
+                // Default / cta_url
+                $interactiveObj['action'] = [
+                    'name' => $intType,
                     'parameters' => [
                         'display_text' => $templateData['interactive_button_text'] ?? 'Click Here',
                         'url' => $templateData['interactive_button_url'] ?? ''
                     ]
-                ]
-            ];
+                ];
+            }
+
             if (!empty($templateData['interactive_header'])) {
-                $payload['interactive']['header'] = [
+                $interactiveObj['header'] = [
                     'type' => 'text',
                     'text' => $templateData['interactive_header']
                 ];
             }
             if (!empty($templateData['interactive_footer'])) {
-                $payload['interactive']['footer'] = [
+                $interactiveObj['footer'] = [
                     'text' => $templateData['interactive_footer']
                 ];
             }
+
+            $payload['interactive'] = $interactiveObj;
         } else {
             // Send as simple free-form text message (for customer responses / status updates within 24h window)
             $payload['type'] = 'text';

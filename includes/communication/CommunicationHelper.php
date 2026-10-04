@@ -663,6 +663,57 @@ class CommunicationHelper {
                 'description' => 'Permanent short URL to access reward instructions and voucher details',
                 'sample' => 'https://pepplearning.in/admissions/birthday-instructions.php/a1b2c3d4e5f6',
                 'is_financial' => false
+            ],
+
+            // Faculty Live Session Details
+            'faculty_name' => [
+                'label' => 'Faculty Name',
+                'category' => 'Live Session Details',
+                'description' => 'Assigned faculty member full name',
+                'sample' => 'Dr. Ananya Sharma',
+                'is_financial' => false
+            ],
+            'session_topic' => [
+                'label' => 'Session Topic',
+                'category' => 'Live Session Details',
+                'description' => 'Title or topic of the scheduled live session',
+                'sample' => 'Clinical Neuropsychology & Assessment',
+                'is_financial' => false
+            ],
+            'session_type' => [
+                'label' => 'Session Type',
+                'category' => 'Live Session Details',
+                'description' => 'Session delivery format (Live, Offline, Webinar)',
+                'sample' => 'Live',
+                'is_financial' => false
+            ],
+            'session_datetime' => [
+                'label' => 'Schedule Date & Time',
+                'category' => 'Live Session Details',
+                'description' => 'Formatted date and time of the session',
+                'sample' => '20 Oct 2026, 10:00 AM',
+                'is_financial' => false
+            ],
+            'session_courses' => [
+                'label' => 'Session Courses',
+                'category' => 'Live Session Details',
+                'description' => 'Target courses or batches assigned to this session',
+                'sample' => 'M. Clin. Psy., B.Sc. Psychology',
+                'is_financial' => false
+            ],
+            'session_duration' => [
+                'label' => 'Proposed Session Duration',
+                'category' => 'Live Session Details',
+                'description' => 'Allocated duration of the live session',
+                'sample' => '1 hour',
+                'is_financial' => false
+            ],
+            'google_meet_url' => [
+                'label' => 'Google Meet URL',
+                'category' => 'Live Session Details',
+                'description' => 'Direct Google Meet conference URL for the live session',
+                'sample' => 'https://meet.google.com/abc-defg-hij',
+                'is_financial' => false
             ]
         ];
     }

@@ -48,9 +48,20 @@ class CommunicationEngine {
      * @param string $sentBy Username of the administrator trigger
      * @param string|null $scheduledAt Timestamp string (Y-m-d H:i:s)
      * @param string|null $studentUid Associated student user_id for placeholder replacement
+     * @param string|null $eventName
+     * @param int|null $invoiceId
+     * @param string|null $idempotencyKey Unique deduplication key for queue job
      * @return int Queue Item ID
      */
-    public function queueMessage($channel, $recipient, $recipientName, $subject, $bodyHtml, $bodyText = '', array $attachments = [], array $templateData = [], $sentBy = 'system', $scheduledAt = null, $studentUid = null, $eventName = null, $invoiceId = null) {
+    public function queueMessage($channel, $recipient, $recipientName, $subject, $bodyHtml, $bodyText = '', array $attachments = [], array $templateData = [], $sentBy = 'system', $scheduledAt = null, $studentUid = null, $eventName = null, $invoiceId = null, $idempotencyKey = null) {
+        // Idempotency check: if an idempotency key is provided, return existing queue item ID immediately
+        if (!empty($idempotencyKey)) {
+            $existingId = $this->findQueueItemByIdempotencyKey((string)$idempotencyKey);
+            if ($existingId > 0) {
+                return $existingId;
+            }
+        }
+
         $status = 'pending';
         $nextAttempt = date('Y-m-d H:i:s');
         $errorMsg = null;
@@ -120,34 +131,66 @@ class CommunicationEngine {
             ];
         }
 
-        $stmt = $this->pdo->prepare("
-            INSERT INTO communication_queue
-            (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ");
-
         $templateJson = !empty($templateData) ? json_encode($templateData) : null;
         $attachmentsJson = !empty($processedAttachments) ? json_encode($processedAttachments) : null;
+        $hasIdemCol = $this->hasIdempotencyKeyColumn();
 
-        $stmt->execute([
-            $channel,
-            $recipient,
-            $recipientName,
-            $subject,
-            $bodyHtml,
-            $bodyText,
-            $templateData['name'] ?? null,
-            $templateJson,
-            $attachmentsJson,
-            $status,
-            $nextAttempt,
-            $sentBy,
-            $studentUid,
-            $eventName,
-            $invoiceId,
-            $errorMsg,
-            $retryCount
-        ]);
+        if ($hasIdemCol) {
+            $stmt = $this->pdo->prepare("
+                INSERT INTO communication_queue
+                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, idempotency_key, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ");
+            $stmt->execute([
+                $channel,
+                $recipient,
+                $recipientName,
+                $subject,
+                $bodyHtml,
+                $bodyText,
+                $templateData['name'] ?? null,
+                $templateJson,
+                $attachmentsJson,
+                $status,
+                $nextAttempt,
+                $sentBy,
+                $studentUid,
+                $eventName,
+                $invoiceId,
+                $errorMsg,
+                $retryCount,
+                $idempotencyKey
+            ]);
+        } else {
+            $effErrorMsg = $errorMsg;
+            if (!empty($idempotencyKey)) {
+                $effErrorMsg = ($effErrorMsg ? $effErrorMsg . ' ' : '') . "[idempotency:{$idempotencyKey}]";
+            }
+            $stmt = $this->pdo->prepare("
+                INSERT INTO communication_queue
+                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ");
+            $stmt->execute([
+                $channel,
+                $recipient,
+                $recipientName,
+                $subject,
+                $bodyHtml,
+                $bodyText,
+                $templateData['name'] ?? null,
+                $templateJson,
+                $attachmentsJson,
+                $status,
+                $nextAttempt,
+                $sentBy,
+                $studentUid,
+                $eventName,
+                $invoiceId,
+                $effErrorMsg,
+                $retryCount
+            ]);
+        }
 
         $queueId = (int)$this->pdo->lastInsertId();
 
@@ -472,13 +515,70 @@ class CommunicationEngine {
                 || strpos($eventName, 'auth_') === 0
                 || strpos($eventName, 'lead_') === 0
                 || strpos($eventName, 'alumni_') === 0
-                || strpos($eventName, 'referral_') === 0;
+                || strpos($eventName, 'referral_') === 0
+                || strpos($eventName, 'faculty_session_') === 0;
 
             $isSuspendedExempt = in_array($eventName, $suspended_exempt_events, true);
 
+            // Faculty Live Session notifications check & Google Meet URL verification (Phases 9, 10, 11, 16)
+            $isFacultySessionEvent = str_starts_with($eventName, 'faculty_session_') || (strpos((string)($item['idempotency_key'] ?? $item['error_message'] ?? ''), 'faculty:') !== false);
+
+            if ($isFacultySessionEvent) {
+                $fSessId = 0;
+                $idem = (string)($item['idempotency_key'] ?? $item['error_message'] ?? '');
+                if (preg_match('/session:(\d+)/', $idem, $sm)) {
+                    $fSessId = (int)$sm[1];
+                }
+
+                if ($fSessId > 0) {
+                    $stmtFSess = $this->pdo->prepare("SELECT id, status, session_datetime, google_meet_uri, meet_link FROM sessions WHERE id = ?");
+                    $stmtFSess->execute([$fSessId]);
+                    $fSess = $stmtFSess->fetch(PDO::FETCH_ASSOC);
+
+                    if (!$fSess || in_array($fSess['status'], ['cancelled', 'completed'], true)) {
+                        if ($eventName !== 'faculty_session_cancelled') {
+                            $cancelReason = "Suppressed: Session is " . ($fSess ? $fSess['status'] : 'not found');
+                            $updCancel = $this->pdo->prepare("UPDATE communication_queue SET status = 'cancelled', error_message = ?, updated_at = NOW() WHERE id = ?");
+                            $updCancel->execute([$cancelReason, $queueId]);
+                            error_log("[FACULTY_SESSION_SUPPRESSED] queue_id={$queueId} session_id={$fSessId} reason={$cancelReason}");
+                            $this->pdo->commit();
+                            return false;
+                        }
+                    }
+
+                    // For Start Live and Start Now, verify valid Google Meet URL (Phase 9 & Phase 16)
+                    if (in_array($eventName, ['faculty_session_start', 'faculty_session_start_now'], true)) {
+                        $meetUrl = trim((string)($fSess['google_meet_uri'] ?: $fSess['meet_link'] ?: ''));
+                        if (empty($meetUrl) || !filter_var($meetUrl, FILTER_VALIDATE_URL)) {
+                            // Delay message by 3 minutes so Meet link can finish provisioning
+                            $delayTime = date('Y-m-d H:i:s', time() + 180);
+                            $updDelay = $this->pdo->prepare("
+                                UPDATE communication_queue
+                                SET status = 'scheduled',
+                                    next_attempt_at = ?,
+                                    error_message = '[DELAYED] Google Meet link not yet ready for live session',
+                                    updated_at = NOW()
+                                WHERE id = ?
+                            ");
+                            $updDelay->execute([$delayTime, $queueId]);
+                            $this->pdo->commit();
+                            error_log("[FACULTY_SESSION_DELAYED] queue_id={$queueId} session_id={$fSessId}: Google Meet link unavailable. Delaying dispatch to {$delayTime}.");
+                            return false;
+                        }
+
+                        // Dynamically ensure template button parameters have the latest authoritative meet URL / code
+                        $tData = json_decode($item['template_data'], true) ?: [];
+                        $meetParam = preg_replace('#^https?://meet\.google\.com/#i', '', $meetUrl);
+                        $tData['button_parameters'] = [$meetParam];
+                        $item['template_data'] = json_encode($tData);
+                    }
+                }
+            }
+
             $recipientIdent = !empty($item['student_uid']) ? $item['student_uid'] : $item['recipient'];
             require_once __DIR__ . '/../auth.php';
-            $st_status = get_student_status($this->pdo, $recipientIdent);
+            // Skip student active check for faculty sessions
+            $st_status = $isFacultySessionEvent ? 'unknown' : get_student_status($this->pdo, $recipientIdent);
 
             // Guard against non-active students
             if ($st_status !== 'unknown' && !is_student_active($this->pdo, $recipientIdent)) {
@@ -1864,4 +1964,134 @@ class CommunicationEngine {
             error_log("Failed to trigger background cron: " . $e->getMessage());
         }
     }
+
+    /**
+     * Checks if communication_queue table has idempotency_key column.
+     * Caches the result in a static variable for efficiency.
+     */
+    public function hasIdempotencyKeyColumn(): bool {
+        static $hasCol = null;
+        if ($hasCol !== null) {
+            return $hasCol;
+        }
+        try {
+            $this->pdo->query("SELECT idempotency_key FROM communication_queue LIMIT 0");
+            $hasCol = true;
+        } catch (Exception $e) {
+            $hasCol = false;
+        }
+        return $hasCol;
+    }
+
+    /**
+     * Finds an existing queue item ID by idempotency key.
+     * Checks idempotency_key column if present, or error_message marker fallback.
+     */
+    public function findQueueItemByIdempotencyKey(string $key): int {
+        if (empty($key)) {
+            return 0;
+        }
+        try {
+            if ($this->hasIdempotencyKeyColumn()) {
+                $stmt = $this->pdo->prepare("SELECT id FROM communication_queue WHERE idempotency_key = ? AND status NOT IN ('cancelled') LIMIT 1");
+                $stmt->execute([$key]);
+                $id = (int)$stmt->fetchColumn();
+                if ($id > 0) {
+                    return $id;
+                }
+            }
+            // Fallback check in error_message column marker
+            $marker = "[idempotency:{$key}]";
+            $stmt = $this->pdo->prepare("SELECT id FROM communication_queue WHERE error_message LIKE ? AND status NOT IN ('cancelled') LIMIT 1");
+            $stmt->execute(["%{$marker}%"]);
+            return (int)$stmt->fetchColumn();
+        } catch (Exception $e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Schedules initial notifications for a newly created live session.
+     */
+    public function scheduleFacultySessionNotifications($sessionId, $sentBy = 'system'): array {
+        require_once __DIR__ . '/FacultySessionNotificationService.php';
+        $service = new FacultySessionNotificationService($this->pdo, $this);
+        return $service->scheduleSessionCreation((int)$sessionId, (string)$sentBy);
+    }
+
+    /**
+     * Updates scheduled notifications when session details are updated.
+     */
+    public function updateFacultySessionNotifications($sessionId, array $oldData, $sentBy = 'system'): array {
+        require_once __DIR__ . '/FacultySessionNotificationService.php';
+        $service = new FacultySessionNotificationService($this->pdo, $this);
+        return $service->handleSessionUpdate((int)$sessionId, $oldData, (string)$sentBy);
+    }
+
+    /**
+     * Cancels pending notifications and queues cancellation notification.
+     */
+    public function cancelFacultySessionNotifications($sessionId, $sentBy = 'system'): array {
+        require_once __DIR__ . '/FacultySessionNotificationService.php';
+        $service = new FacultySessionNotificationService($this->pdo, $this);
+        return $service->handleSessionCancellation((int)$sessionId, (string)$sentBy);
+    }
+
+    /**
+     * Handles inbound faculty interactive WhatsApp messages (Read Instructions, Language Selection, Read & Confirm).
+     */
+    public function handleFacultySessionInteraction(array $inboundMsg): ?array {
+        require_once __DIR__ . '/FacultySessionInteractionHandler.php';
+        $handler = new FacultySessionInteractionHandler($this->pdo, $this);
+        return $handler->handle($inboundMsg);
+    }
+
+    /**
+     * Pre-send validation for faculty live session queue items (Phases 10 & 12).
+     * Suppresses/cancels if session is cancelled or completed; delays dispatch if Google Meet URL is pending.
+     */
+    public function preCheckFacultySessionQueueItem(array $queueItem, ?array $sessionData = null): array {
+        $tName = $queueItem['template_name'] ?? '';
+        if (!in_array($tName, ['faculty_session_start', 'faculty_session_start_now', 'faculty_session_reminder', 'faculty_session_scheduled'], true)) {
+            return ['action' => 'proceed'];
+        }
+
+        if ($sessionData === null) {
+            $sessId = 0;
+            $idemKey = $queueItem['idempotency_key'] ?? '';
+            if (preg_match('/session:(\d+)/', $idemKey, $m)) {
+                $sessId = (int)$m[1];
+            }
+            if ($sessId > 0) {
+                $stmt = $this->pdo->prepare("SELECT * FROM sessions WHERE id = ?");
+                $stmt->execute([$sessId]);
+                $sessionData = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+        }
+
+        if ($sessionData) {
+            $sessStatus = strtolower((string)($sessionData['status'] ?? ''));
+            if (in_array($sessStatus, ['cancelled', 'completed'], true)) {
+                return [
+                    'action' => 'cancel',
+                    'reason' => "Session is {$sessStatus}; notification suppressed."
+                ];
+            }
+
+            // For start notifications (1h and 2m), check that Google Meet URL is present
+            if (in_array($tName, ['faculty_session_start', 'faculty_session_start_now'], true)) {
+                $meetUrl = trim((string)($sessionData['google_meet_uri'] ?? $sessionData['meet_link'] ?? ''));
+                if (empty($meetUrl)) {
+                    return [
+                        'action'             => 'reschedule',
+                        'reschedule_minutes' => 3,
+                        'reason'             => 'Google Meet URL is not yet generated; delaying dispatch by +3 minutes.'
+                    ];
+                }
+            }
+        }
+
+        return ['action' => 'proceed'];
+    }
 }
+

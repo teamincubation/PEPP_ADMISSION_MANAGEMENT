@@ -366,6 +366,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->commit();
 
                 $preventAutoResponse = false;
+
+                // ── FACULTY LIVE SESSION INTERACTIVE WORKFLOW (Phases 4, 5, 6) ──
+                try {
+                    require_once dirname(dirname(dirname(__DIR__))) . '/includes/communication/CommunicationEngine.php';
+                    $commEngine = CommunicationEngine::getInstance($pdo);
+                    $facultyInteraction = $commEngine->handleFacultySessionInteraction($msg);
+                    if ($facultyInteraction && !empty($facultyInteraction['success'])) {
+                        $preventAutoResponse = true;
+                        error_log("[FACULTY_SESSION_INTERACTION] Handled successfully: " . json_encode($facultyInteraction));
+                    }
+                } catch (Exception $eF) {
+                    error_log("[FACULTY_SESSION_INTERACTION_ERROR] " . $eF->getMessage());
+                }
+
                 // ── WHATSAPP TEMPLATE QUICK-REPLY BUTTON ACTION ROUTING ──
                 $isButtonClick = ($type === 'button' || ($type === 'interactive' && ($msg['interactive']['type'] ?? '') === 'button_reply'));
                 if ($isButtonClick) {

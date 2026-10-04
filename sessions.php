@@ -10,7 +10,7 @@ require_once 'includes/session_mailer.php';
    Automatic reminders (12h / 4h / 10m / start) are sent by sessions_cron via
    the same mailer when an admin loads any page (see includes/session_cron.php). */
 
-$success_message = ''; $error_message = '';
+$success_message = ''; $error_message = ''; $warning_message = '';
 
 function sessions_ready($pdo) {
     try { return (bool)$pdo->query("SHOW TABLES LIKE 'sessions'")->fetchColumn(); }
@@ -36,16 +36,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($action === 'add_session' || $action === 'edit_session') {
                 $topic = trim($_POST['topic'] ?? '');
                 $dt = str_replace('T', ' ', trim($_POST['session_datetime'] ?? ''));
-                $type = in_array($_POST['session_type'] ?? '', array_keys($TYPES), true) ? $_POST['session_type'] : 'live';
-                $courses = array_filter(array_map('trim', (array)($_POST['courses'] ?? [])));
-                $dur = (float)($_POST['duration_hours'] ?? 1);
+                $type = in_array($_POST['session_type'] ?? '', array_keys($TYPES), true) ? $_POST['session_type'] : '';
+                $courses = array_values(array_filter(array_map('trim', (array)($_POST['courses'] ?? []))));
+                $durInput = trim((string)($_POST['duration_hours'] ?? ''));
+                $dur = (is_numeric($durInput) && (float)$durInput > 0) ? (float)$durInput : null;
                 $status = in_array($_POST['status'] ?? '', ['scheduled', 'completed', 'cancelled'], true) ? $_POST['status'] : 'scheduled';
                 $facultyId = ((int)($_POST['faculty_id'] ?? 0)) ?: null;
                 $venue = trim($_POST['venue'] ?? '') ?: null;
                 $meetLink = trim($_POST['meet_link'] ?? '') ?: null;
 
-                if ($topic === '' || !strtotime($dt)) {
-                    $error_message = 'Topic and a valid date/time are required.';
+                // Mandatory validation for Topic, Faculty, Date & Time, Duration, Session Type, Courses (Phase 1)
+                if ($topic === '') {
+                    $error_message = 'Session Topic is required.';
+                } elseif (!$facultyId) {
+                    $error_message = 'Faculty is required.';
+                } elseif (!strtotime($dt)) {
+                    $error_message = 'A valid Date & Time is required.';
+                } elseif ($dur === null || $dur <= 0) {
+                    $error_message = 'Session Duration is required.';
+                } elseif (empty($type)) {
+                    $error_message = 'Session Type is required.';
+                } elseif (empty($courses)) {
+                    $error_message = 'At least one Course must be selected.';
                 } else {
                     $isGoogle = ($type === 'live' && !empty($_POST['google_integrated']));
 
@@ -74,6 +86,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                         $session_id = $pdo->lastInsertId();
                         log_admin_activity($pdo, $admin_username, 'session_added', "Session: {$topic} @ {$dt}" . ($isGoogle ? " (Google Meet requested)" : ""));
+
+                        // Faculty WhatsApp validation & CommunicationEngine scheduling (Phases 1, 7, 8, 9, 10)
+                        $hasFacultyWhatsApp = false;
+                        $fData = null;
+                        try {
+                            $stmtF = $pdo->prepare("SELECT name, mobile FROM faculties WHERE id = ?");
+                            $stmtF->execute([$facultyId]);
+                            $fData = $stmtF->fetch(PDO::FETCH_ASSOC);
+                            if ($fData) {
+                                $cleanMobile = preg_replace('/\D/', '', (string)($fData['mobile'] ?? ''));
+                                if (!empty($cleanMobile) && strlen($cleanMobile) >= 10) {
+                                    $hasFacultyWhatsApp = true;
+                                }
+                            }
+                        } catch (Exception $fEx) {}
+
+                        try {
+                            require_once __DIR__ . '/includes/communication/CommunicationEngine.php';
+                            $commEngine = CommunicationEngine::getInstance($pdo);
+                            $fRes = $commEngine->scheduleFacultySessionNotifications((int)$session_id, $admin_username);
+                            if (!empty($fRes['warning'])) {
+                                $warning_message = $fRes['warning'];
+                            }
+                        } catch (Exception $ceEx) {
+                            error_log("Failed to schedule faculty session notifications: " . $ceEx->getMessage());
+                        }
+
+                        if (!$hasFacultyWhatsApp) {
+                            $fName = htmlspecialchars($fData['name'] ?? 'Selected Faculty');
+                            $warning_message = "Notice: {$fName} has no valid WhatsApp number configured. Session scheduled, but faculty WhatsApp notifications cannot be sent.";
+                        }
 
                         if ($isGoogle) {
                             // Provision Google Workspace Calendar & Meet
@@ -184,6 +227,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 log_admin_activity($pdo, $admin_username, 'session_updated', "Updated session #{$sid}");
                                 $success_message = 'Session updated.';
                             }
+
+                            // Recalculate faculty session notifications (Phases 8, 9, 10, 11, 12)
+                            try {
+                                require_once __DIR__ . '/includes/communication/CommunicationEngine.php';
+                                $commEngine = CommunicationEngine::getInstance($pdo);
+                                $commEngine->updateFacultySessionNotifications((int)$sid, $curSess, $admin_username);
+                            } catch (Exception $ceEx) {
+                                error_log("Failed to update faculty session notifications: " . $ceEx->getMessage());
+                            }
                         }
                     }
                 }
@@ -239,6 +291,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $st = in_array($_POST['status'] ?? '', ['scheduled', 'completed', 'cancelled'], true) ? $_POST['status'] : 'scheduled';
                 $pdo->prepare("UPDATE sessions SET status = ? WHERE id = ?")->execute([$st, $sid]);
                 log_admin_activity($pdo, $admin_username, 'session_status', "Session #{$sid} → {$st}");
+                if ($st === 'cancelled') {
+                    try {
+                        require_once __DIR__ . '/includes/communication/CommunicationEngine.php';
+                        $commEngine = CommunicationEngine::getInstance($pdo);
+                        $commEngine->cancelFacultySessionNotifications((int)$sid, $admin_username);
+                    } catch (Exception $ceEx) {
+                        error_log("Failed to cancel faculty session notifications on mark_status: " . $ceEx->getMessage());
+                    }
+                }
                 $success_message = 'Session status updated.';
             } elseif ($action === 'notify') {
                 $sid = (int)($_POST['session_id'] ?? 0);
@@ -260,26 +321,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     if (!$sess) {
                         $error_message = "Session #{$sid} not found.";
-                    } elseif (!empty($sess['google_integrated']) && !empty($sess['google_calendar_event_id'])) {
-                        // Google integrated session: cancel Google Calendar event with sendUpdates=all
-                        require_once __DIR__ . '/includes/google/GoogleLiveSessionManager.php';
-                        $googleMgr = new GoogleLiveSessionManager($pdo);
-                        $delRes = $googleMgr->deleteGoogleLiveSession($sid);
-
-                        if ($delRes['success']) {
-                            log_admin_activity($pdo, $admin_username, 'session_deleted', "Deleted Google-integrated session #{$sid}");
-                            $success_message = 'Session and Google Calendar event deleted (cancellation sent to guests).';
-                        } else {
-                            $error_message = "Failed to cancel Google Calendar event: " . htmlspecialchars($delRes['error'] ?? 'Unknown error') . ". Session was not deleted.";
-                        }
                     } else {
-                        // Standard session deletion
-                        $pdo->prepare("DELETE FROM session_attendance WHERE session_id = ?")->execute([$sid]);
-                        $pdo->prepare("DELETE FROM session_google_artifacts WHERE session_id = ?")->execute([$sid]);
-                        $pdo->prepare("DELETE FROM session_notifications WHERE session_id = ?")->execute([$sid]);
-                        $pdo->prepare("DELETE FROM sessions WHERE id = ?")->execute([$sid]);
-                        log_admin_activity($pdo, $admin_username, 'session_deleted', "Deleted session #{$sid}");
-                        $success_message = 'Session deleted.';
+                        // Invalidate future jobs and notify faculty of cancellation (Phase 11)
+                        try {
+                            require_once __DIR__ . '/includes/communication/CommunicationEngine.php';
+                            $commEngine = CommunicationEngine::getInstance($pdo);
+                            $commEngine->cancelFacultySessionNotifications((int)$sid, $admin_username);
+                        } catch (Exception $ceEx) {
+                            error_log("Failed to cancel faculty session notifications on delete: " . $ceEx->getMessage());
+                        }
+
+                        if (!empty($sess['google_integrated']) && !empty($sess['google_calendar_event_id'])) {
+                            // Google integrated session: cancel Google Calendar event with sendUpdates=all
+                            require_once __DIR__ . '/includes/google/GoogleLiveSessionManager.php';
+                            $googleMgr = new GoogleLiveSessionManager($pdo);
+                            $delRes = $googleMgr->deleteGoogleLiveSession($sid);
+
+                            if ($delRes['success']) {
+                                log_admin_activity($pdo, $admin_username, 'session_deleted', "Deleted Google-integrated session #{$sid}");
+                                $success_message = 'Session and Google Calendar event deleted (cancellation sent to guests).';
+                            } else {
+                                $error_message = "Failed to cancel Google Calendar event: " . htmlspecialchars($delRes['error'] ?? 'Unknown error') . ". Session was not deleted.";
+                            }
+                        } else {
+                            // Standard session deletion
+                            $pdo->prepare("DELETE FROM session_attendance WHERE session_id = ?")->execute([$sid]);
+                            $pdo->prepare("DELETE FROM session_google_artifacts WHERE session_id = ?")->execute([$sid]);
+                            $pdo->prepare("DELETE FROM session_notifications WHERE session_id = ?")->execute([$sid]);
+                            $pdo->prepare("DELETE FROM sessions WHERE id = ?")->execute([$sid]);
+                            log_admin_activity($pdo, $admin_username, 'session_deleted', "Deleted session #{$sid}");
+                            $success_message = 'Session deleted.';
+                        }
                     }
                 }
             }
@@ -355,7 +427,7 @@ if (isset($_GET['ajax']) && !empty($_GET['session_id'])) {
 /* ── Data ──────────────────────────────────────────────────────── */
 $faculties = []; $courses = [];
 try {
-    $faculties = $pdo->query("SELECT id, name FROM faculties WHERE status='active' ORDER BY name")->fetchAll();
+    $faculties = $pdo->query("SELECT id, name, mobile FROM faculties WHERE status='active' ORDER BY name")->fetchAll();
     $courses   = $pdo->query("SELECT DISTINCT course_name FROM pepp_courses ORDER BY course_name")->fetchAll(PDO::FETCH_COLUMN);
 } catch (Exception $e) {}
 
@@ -399,6 +471,7 @@ include 'includes/admin_nav.php';
 ?>
 
 <?php if ($success_message): ?><div class="alert alert-success"><i class="fas fa-circle-check"></i><span><?php echo e($success_message); ?></span></div><?php endif; ?>
+<?php if ($warning_message): ?><div class="alert alert-warn"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($warning_message); ?></span></div><?php endif; ?>
 <?php if ($error_message):   ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($error_message); ?></span></div><?php endif; ?>
 
 <div class="stats-grid">
@@ -534,7 +607,7 @@ include 'includes/admin_nav.php';
 <div class="modal-backdrop" id="sess-modal">
     <div class="modal" style="max-width:680px;">
         <div class="modal-head"><h3 id="sess-modal-title"><i class="fas fa-video" style="color:var(--accent);"></i> Add Session</h3><button class="modal-close" onclick="closeModal('sess-modal')"><i class="fas fa-xmark"></i></button></div>
-        <form method="POST">
+        <form method="POST" id="sess-form" onsubmit="return validateSessionForm(event);">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" id="sess-action" value="add_session">
             <input type="hidden" name="session_id" id="sess-id">
@@ -557,12 +630,41 @@ include 'includes/admin_nav.php';
 
                 <div class="form-grid">
                     <div class="field full"><label>Session Topic <span class="req">*</span></label><input type="text" name="topic" id="sess-topic" required></div>
-                    <div class="field"><label>Faculty</label><select name="faculty_id" id="sess-faculty"><option value="">-</option><?php foreach ($faculties as $f): ?><option value="<?php echo (int)$f['id']; ?>"><?php echo e($f['name']); ?></option><?php endforeach; ?></select></div>
+                    <div class="field">
+                        <label>Faculty <span class="req">*</span></label>
+                        <select name="faculty_id" id="sess-faculty" required onchange="checkFacultyWhatsAppWarning()">
+                            <option value="">-- Select Faculty --</option>
+                            <?php foreach ($faculties as $f): 
+                                $cleanMob = preg_replace('/\D/', '', (string)($f['mobile'] ?? ''));
+                            ?>
+                                <option value="<?php echo (int)$f['id']; ?>" data-mobile="<?php echo e($cleanMob); ?>">
+                                    <?php echo e($f['name']); ?><?php if (!empty($cleanMob)): ?> (<?php echo e($f['mobile']); ?>)<?php else: ?> [No WhatsApp]<?php endif; ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <div id="faculty-whatsapp-warning" style="display:none;margin-top:6px;padding:6px 10px;background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;color:#92400e;font-size:0.75rem;align-items:center;gap:6px;">
+                            <i class="fas fa-triangle-exclamation"></i>
+                            <span>Faculty has no WhatsApp number configured. Session will be scheduled, but WhatsApp notifications cannot be delivered.</span>
+                        </div>
+                    </div>
                     <div class="field"><label>Date &amp; Time <span class="req">*</span></label><input type="datetime-local" name="session_datetime" id="sess-dt" required></div>
-                    <div class="field"><label>Duration (hours)</label>
-                        <select name="duration_hours" id="sess-dur"><?php foreach ($DURATIONS as $d): ?><option value="<?php echo $d; ?>"><?php echo $d; ?></option><?php endforeach; ?></select></div>
-                    <div class="field"><label>Session Type</label>
-                        <select name="session_type" id="sess-type" onchange="sessTypeToggle()"><?php foreach ($TYPES as $k => $v): ?><option value="<?php echo $k; ?>"><?php echo $v; ?></option><?php endforeach; ?></select></div>
+                    <div class="field">
+                        <label>Duration (hours) <span class="req">*</span></label>
+                        <select name="duration_hours" id="sess-dur" required>
+                            <option value="">-- Select Duration --</option>
+                            <?php foreach ($DURATIONS as $d): ?>
+                                <option value="<?php echo $d; ?>"><?php echo $d; ?> hr<?php echo (float)$d > 1 ? 's' : ''; ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label>Session Type <span class="req">*</span></label>
+                        <select name="session_type" id="sess-type" required onchange="sessTypeToggle()">
+                            <?php foreach ($TYPES as $k => $v): ?>
+                                <option value="<?php echo $k; ?>"><?php echo $v; ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
                     <div class="field" id="sess-meet-wrap">
                         <label>Meet Link (live / custom)</label>
                         <input type="url" name="meet_link" id="sess-meet" placeholder="https://meet.google.com/...">
@@ -577,7 +679,7 @@ include 'includes/admin_nav.php';
                 <!-- Modern Scannable Multi-Course Selection Area -->
                 <div class="field full" style="margin-top:12px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                        <label style="margin:0;font-weight:600;">Courses (select one or more)</label>
+                        <label style="margin:0;font-weight:600;">Courses <span class="req">*</span> (select one or more)</label>
                         <div style="display:flex;align-items:center;gap:8px;">
                             <span id="course-selected-badge" class="badge gray" style="font-size:0.72rem;padding:2px 7px;">0 selected</span>
                             <button type="button" class="btn btn-xs btn-outline" onclick="selectAllCourses(true)" style="padding:2px 8px;font-size:0.72rem;">Select All</button>
@@ -659,6 +761,48 @@ include 'includes/admin_nav.php';
 <?php
 $extra_scripts = "<script>
 // Toggle Google scheduling & Meet Link disable/enable
+function checkFacultyWhatsAppWarning() {
+    var sel = document.getElementById('sess-faculty');
+    var opt = sel ? sel.options[sel.selectedIndex] : null;
+    var mob = opt ? (opt.getAttribute('data-mobile') || '') : '';
+    var warn = document.getElementById('faculty-whatsapp-warning');
+    if (warn) {
+        if (sel && sel.value && (!mob || mob.length < 10)) {
+            warn.style.display = 'flex';
+        } else {
+            warn.style.display = 'none';
+        }
+    }
+}
+
+function validateSessionForm(e) {
+    var topic = (document.getElementById('sess-topic').value || '').trim();
+    var faculty = document.getElementById('sess-faculty').value;
+    var dt = document.getElementById('sess-dt').value;
+    var dur = document.getElementById('sess-dur').value;
+    var type = document.getElementById('sess-type').value;
+    var coursesChecked = document.querySelectorAll('.sess-course:checked').length;
+
+    var errors = [];
+    if (!topic) errors.push('Session Topic is required.');
+    if (!faculty) errors.push('Faculty is required.');
+    if (!dt) errors.push('Date & Time is required.');
+    if (!dur || parseFloat(dur) <= 0) errors.push('Duration is required.');
+    if (!type) errors.push('Session Type is required.');
+    if (coursesChecked === 0) errors.push('At least one Course must be selected.');
+
+    if (errors.length > 0) {
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        alert('Please fill all mandatory fields before saving:\n\n• ' + errors.join('\n• '));
+        return false;
+    }
+
+    return true;
+}
+
 function googleToggle() {
     var isGoogle = document.getElementById('sess-google').checked;
     var isLive = (document.getElementById('sess-type').value === 'live');
@@ -706,6 +850,7 @@ function openSessModal() {
     if (searchIn) searchIn.value = '';
     filterCourseList();
     updateCourseCount();
+    checkFacultyWhatsAppWarning();
     sessTypeToggle();
     openModal('sess-modal');
 }
@@ -729,6 +874,7 @@ function editSess(s) {
     if (searchIn) searchIn.value = '';
     filterCourseList();
     updateCourseCount();
+    checkFacultyWhatsAppWarning();
     sessTypeToggle();
     openModal('sess-modal');
 }

@@ -62,6 +62,16 @@ function sessions_dispatch_due($pdo) {
 
         // Post-session Google Meet artifacts & attendance background synchronization
         google_sessions_dispatch_sync($pdo);
+
+        // Process due WhatsApp communication queue jobs (including faculty reminders/start notices)
+        try {
+            if (file_exists(__DIR__ . '/communication/CommunicationEngine.php')) {
+                require_once __DIR__ . '/communication/CommunicationEngine.php';
+                CommunicationEngine::getInstance($pdo)->triggerCronBackground();
+            }
+        } catch (Exception $eCron) {
+            error_log('sessions_dispatch_due queue trigger: ' . $eCron->getMessage());
+        }
     } catch (Exception $e) { error_log('sessions_dispatch_due: ' . $e->getMessage()); }
 }
 

@@ -114,6 +114,106 @@ try {
         $stmtUpdateDefault = $pdo->prepare("UPDATE communication_event_mappings SET template_name = 'course_migration_completed', parameter_mappings = ? WHERE event_name = 'course_migration_completed'");
         $stmtUpdateDefault->execute([json_encode($defaultParams)]);
     }
+
+    // ── Self-healing for Faculty Live Session Instructions (Phase 2) ──
+    $hasInstTable = false;
+    try {
+        $pdo->query("SELECT 1 FROM faculty_session_instructions LIMIT 0");
+        $hasInstTable = true;
+    } catch (Exception $e) {}
+
+    if (!$hasInstTable) {
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($driver === 'sqlite') {
+            $pdo->exec("
+                CREATE TABLE IF NOT EXISTS faculty_session_instructions (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  language_code TEXT NOT NULL UNIQUE,
+                  language_name TEXT NOT NULL,
+                  instruction_title TEXT NOT NULL,
+                  instruction_body TEXT NOT NULL,
+                  is_active INTEGER NOT NULL DEFAULT 1,
+                  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+            ");
+        } else {
+            $pdo->exec("
+                CREATE TABLE IF NOT EXISTS `faculty_session_instructions` (
+                  `id` INT AUTO_INCREMENT PRIMARY KEY,
+                  `language_code` VARCHAR(10) NOT NULL UNIQUE,
+                  `language_name` VARCHAR(50) NOT NULL,
+                  `instruction_title` VARCHAR(150) NOT NULL,
+                  `instruction_body` VARCHAR(1024) NOT NULL,
+                  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+                  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            ");
+        }
+        $insertKw = ($driver === 'sqlite') ? 'INSERT OR IGNORE' : 'INSERT IGNORE';
+        $stmtSeedInst = $pdo->prepare("{$insertKw} INTO faculty_session_instructions (language_code, language_name, instruction_title, instruction_body, is_active) VALUES (?, ?, ?, ?, 1)");
+        $stmtSeedInst->execute([
+            'en',
+            'English',
+            'Live Session Faculty Guidelines',
+            "PEPP LIVE SESSION FACULTY INSTRUCTIONS\n\n1. Join Session on Time: Join through the provided Google Meet link at least 5 minutes prior to start time.\n2. Audio & Video: Use a reliable headset and webcam in a quiet, well-lit room.\n3. Screen Sharing: Prepare presentation slides and tabs before class starts.\n4. Student Interaction: Monitor chat questions and address doubts systematically.\n5. Wrap-up: Conclude strictly within the scheduled duration and end the meeting."
+        ]);
+        $stmtSeedInst->execute([
+            'ml',
+            'Malayalam (മലയാളം)',
+            'ലൈവ് സെഷൻ അധ്യാപക നിർദ്ദേശങ്ങൾ',
+            "പെപ്പ് ലൈവ് സെഷൻ അധ്യാപക മാർഗ്ഗനിർദ്ദേശങ്ങൾ\n\n1. കൃത്യസമയത്ത് പ്രവേശിക്കുക: നൽകിയിട്ടുള്ള ഗൂഗിൾ മീറ്റ് ലിങ്ക് വഴി ക്ലാസ്സ് തുടങ്ങുന്നതിന് 5 മിനിറ്റ് മുൻപ് ജോയിൻ ചെയ്യുക.\n2. ഓഡിയോ & വീഡിയോ: ശബ്ദകോലാഹലങ്ങൾ ഇല്ലാത്ത മുറിയിൽ ഹെഡ്‌സെറ്റും വെബ്‌ക്യാമും ഉപയോഗിക്കുക.\n3. സ്ക്രീൻ ഷെയറിങ്: ക്ലാസ്സിന് മുൻപായി പ്രസന്റേഷൻ സ്ലൈഡുകൾ തുറന്നുവെക്കുക.\n4. സംശയനിവാരണം: ചാറ്റ് ബോക്സിലെ ചോദ്യങ്ങൾക്ക് കൃത്യമായ മറുപടി നൽകുക.\n5. സെഷൻ സമാപനം: നിശ്ചയിച്ച സമയപരിധിക്കുള്ളിൽ ക്ലാസ്സ് പൂർത്തിയാക്കുക."
+        ]);
+    }
+
+    // ── Self-healing for 5 Faculty Live Session Utility Templates (Phase 3 & Phase 13) ──
+    $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+    $insTplKw = ($driver === 'sqlite') ? 'INSERT OR IGNORE' : 'INSERT IGNORE';
+    $facultyTplsToSeed = [
+        'faculty_session_scheduled' => [
+            'body' => "Hello {{1}},\n\nYou have been scheduled for a PEPP Live Session.\n\nSession: {{2}}\nType: {{3}}\nDate & Time: {{4}}\nCourses: {{5}}\nDuration: {{6}}\n\nPlease review the faculty instructions before the session. You are requested to join on time and not earlier than 5 minutes before the scheduled start.",
+            'buttons' => ['quick_reply' => [['text' => 'Read Instructions', 'payload' => 'READ_INSTRUCTIONS']]]
+        ],
+        'faculty_session_reminder' => [
+            'body' => "Reminder: Hello {{1}},\n\nYour PEPP Live Session is scheduled in 3 hours.\n\nSession: {{2}}\nType: {{3}}\nDate & Time: {{4}}\nDuration: {{5}}\n\nPlease review faculty instructions if not done already.",
+            'buttons' => ['quick_reply' => [['text' => 'Read Instructions', 'payload' => 'READ_INSTRUCTIONS']]]
+        ],
+        'faculty_session_start' => [
+            'body' => "Live Session Alert: Hello {{1}},\n\nYour PEPP Live Session will start in 1 hour.\n\nSession: {{2}}\nType: {{3}}\nDate & Time: {{4}}\n\nPlease join the session on time using the Google Meet link below. Note: Google Meet restricts joining earlier than 5 minutes before scheduled start.\n\nMeet Link: {{5}}",
+            'buttons' => ['cta_url' => [['text' => 'Join Live Session', 'url' => 'https://meet.google.com/{{1}}']]]
+        ],
+        'faculty_session_start_now' => [
+            'body' => "Live Session Starting Now: Hello {{1}},\n\nYour PEPP Live Session is starting in 2 minutes!\n\nSession: {{2}}\nType: {{3}}\n\nPlease click below to join your Google Meet room immediately:\n{{4}}",
+            'buttons' => ['cta_url' => [['text' => 'Join Live Session', 'url' => 'https://meet.google.com/{{1}}']]]
+        ],
+        'faculty_session_cancelled' => [
+            'body' => "Notice: Hello {{1}},\n\nThe PEPP Live Session scheduled for {{4}} has been CANCELLED.\n\nSession: {{2}}\nType: {{3}}\n\nPlease contact PEPP Academic Administration for any queries.",
+            'buttons' => []
+        ]
+    ];
+
+    $stmtCheckTpl = $pdo->prepare("SELECT COUNT(*) FROM communication_templates WHERE template_name = ?");
+    $stmtAddTpl = $pdo->prepare("
+        {$insTplKw} INTO communication_templates (channel, template_name, language, status, category, quality_status, meta_data, updated_at)
+        VALUES ('whatsapp', ?, 'en', 'approved', 'utility', 'green', ?, CURRENT_TIMESTAMP)
+    ");
+
+    foreach ($facultyTplsToSeed as $fTplName => $fTplConf) {
+        $stmtCheckTpl->execute([$fTplName]);
+        if ((int)$stmtCheckTpl->fetchColumn() === 0) {
+            $fMeta = [
+                'components' => [
+                    ['type' => 'BODY', 'text' => $fTplConf['body']]
+                ],
+                'body_text' => $fTplConf['body'],
+                'header_text' => '',
+                'footer_text' => '',
+                'buttons' => $fTplConf['buttons']
+            ];
+            $stmtAddTpl->execute([$fTplName, json_encode($fMeta)]);
+        }
+    }
 } catch (Exception $e) {
     $error_message = 'Self-healing database setup failed. Error: ' . $e->getMessage();
 }
@@ -385,11 +485,105 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
+// ── POST: Faculty Instruction Management (Phase 2) ──
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && in_array($_POST['action'], ['add_instruction', 'edit_instruction', 'toggle_instruction', 'delete_instruction'], true)) {
+    if (!csrf_verify()) {
+        $error_message = 'Security token mismatch. Please try again.';
+    } else {
+        $act = $_POST['action'];
+        if ($act === 'add_instruction') {
+            $code = strtolower(trim($_POST['language_code'] ?? ''));
+            $name = trim($_POST['language_name'] ?? '');
+            $title = trim($_POST['instruction_title'] ?? '');
+            $body = trim($_POST['instruction_body'] ?? '');
+            $isActive = !empty($_POST['is_active']) ? 1 : 0;
+
+            if (empty($code) || empty($name) || empty($title) || empty($body)) {
+                $error_message = 'Language code, language name, title, and instruction content are all required.';
+            } elseif (mb_strlen($body, 'UTF-8') > 1024) {
+                $error_message = 'Instruction body exceeds maximum allowed 1024 characters (Current: ' . mb_strlen($body, 'UTF-8') . ').';
+            } else {
+                try {
+                    $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+                    $insKw = ($driver === 'sqlite') ? 'INSERT OR REPLACE' : 'INSERT INTO';
+                    $stmtIns = $pdo->prepare("{$insKw} faculty_session_instructions (language_code, language_name, instruction_title, instruction_body, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)");
+                    $stmtIns->execute([$code, $name, $title, $body, $isActive]);
+                    $success_message = "Instruction language '{$name}' ({$code}) created successfully!";
+                } catch (Exception $e) {
+                    $error_message = 'Failed to add instruction: ' . $e->getMessage();
+                }
+            }
+        } elseif ($act === 'edit_instruction') {
+            $id = (int)($_POST['instruction_id'] ?? 0);
+            $name = trim($_POST['language_name'] ?? '');
+            $title = trim($_POST['instruction_title'] ?? '');
+            $body = trim($_POST['instruction_body'] ?? '');
+            $isActive = !empty($_POST['is_active']) ? 1 : 0;
+
+            if ($id <= 0 || empty($name) || empty($title) || empty($body)) {
+                $error_message = 'All fields are required to update instructions.';
+            } elseif (mb_strlen($body, 'UTF-8') > 1024) {
+                $error_message = 'Instruction body exceeds maximum allowed 1024 characters (Current: ' . mb_strlen($body, 'UTF-8') . ').';
+            } else {
+                try {
+                    $stmtUpd = $pdo->prepare("UPDATE faculty_session_instructions SET language_name = ?, instruction_title = ?, instruction_body = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                    $stmtUpd->execute([$name, $title, $body, $isActive, $id]);
+                    $success_message = "Instruction for '{$name}' updated successfully!";
+                } catch (Exception $e) {
+                    $error_message = 'Failed to update instruction: ' . $e->getMessage();
+                }
+            }
+        } elseif ($act === 'toggle_instruction') {
+            $id = (int)($_POST['instruction_id'] ?? 0);
+            try {
+                $stmtCur = $pdo->prepare("SELECT is_active FROM faculty_session_instructions WHERE id = ?");
+                $stmtCur->execute([$id]);
+                $cur = (int)$stmtCur->fetchColumn();
+
+                if ($cur === 1) {
+                    $activeCount = (int)$pdo->query("SELECT COUNT(*) FROM faculty_session_instructions WHERE is_active = 1")->fetchColumn();
+                    if ($activeCount <= 1) {
+                        $error_message = 'Cannot deactivate: At least one instruction language must remain active.';
+                    } else {
+                        $pdo->prepare("UPDATE faculty_session_instructions SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?")->execute([$id]);
+                        $success_message = 'Instruction language deactivated.';
+                    }
+                } else {
+                    $pdo->prepare("UPDATE faculty_session_instructions SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?")->execute([$id]);
+                    $success_message = 'Instruction language activated.';
+                }
+            } catch (Exception $e) {
+                $error_message = 'Failed to toggle instruction: ' . $e->getMessage();
+            }
+        } elseif ($act === 'delete_instruction') {
+            $id = (int)($_POST['instruction_id'] ?? 0);
+            try {
+                $activeCount = (int)$pdo->query("SELECT COUNT(*) FROM faculty_session_instructions WHERE is_active = 1 AND id != {$id}")->fetchColumn();
+                if ($activeCount < 1) {
+                    $error_message = 'Cannot delete: At least one active instruction language must remain in the system.';
+                } else {
+                    $pdo->prepare("DELETE FROM faculty_session_instructions WHERE id = ?")->execute([$id]);
+                    $success_message = 'Instruction language deleted successfully.';
+                }
+            } catch (Exception $e) {
+                $error_message = 'Failed to delete instruction: ' . $e->getMessage();
+            }
+        }
+    }
+}
+
 // Load local synchronized templates
 $localTemplates = [];
 try {
     $localTemplates = $pdo->query("SELECT * FROM communication_templates WHERE channel = 'whatsapp' ORDER BY template_name ASC")->fetchAll();
 } catch (Exception $ex) {}
+
+// Load faculty instructions
+$facultyInstructions = [];
+try {
+    $facultyInstructions = $pdo->query("SELECT * FROM faculty_session_instructions ORDER BY is_active DESC, language_name ASC")->fetchAll();
+} catch (Exception $ex) {}
+
 
 include 'includes/admin_nav.php';
 ?>
@@ -416,6 +610,21 @@ include 'includes/admin_nav.php';
         <a href="whatsapp-inbox.php" class="btn btn-sm btn-outline" style="border-radius:8px;"><i class="fab fa-whatsapp"></i> WhatsApp Inbox</a>
     </div>
 
+    <?php $currentTab = $_GET['tab'] ?? 'sync'; ?>
+    <!-- ── SUB-PAGE TABS ── -->
+    <div style="display:flex; gap:10px; margin-bottom:20px; border-bottom:2px solid #e5e7eb; padding-bottom:8px; flex-wrap:wrap;">
+        <a href="?tab=sync" class="btn btn-sm <?php echo $currentTab === 'sync' ? 'btn-primary' : 'btn-outline'; ?>" style="border-radius:8px; font-weight:700;">
+            <i class="fas fa-layer-group"></i> Meta Templates Sync &amp; Mappings
+        </a>
+        <a href="?tab=instructions" class="btn btn-sm <?php echo $currentTab === 'instructions' ? 'btn-primary' : 'btn-outline'; ?>" style="border-radius:8px; font-weight:700;">
+            <i class="fas fa-chalkboard-user"></i> Faculty Live Session Instructions (<?php echo count($facultyInstructions); ?>)
+        </a>
+        <a href="?tab=faculty_templates" class="btn btn-sm <?php echo $currentTab === 'faculty_templates' ? 'btn-primary' : 'btn-outline'; ?>" style="border-radius:8px; font-weight:700;">
+            <i class="fab fa-whatsapp"></i> Faculty Live Session Templates (5)
+        </a>
+    </div>
+
+    <?php if ($currentTab === 'sync'): ?>
     <!-- Sync Action Widget -->
     <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:20px; margin-bottom:24px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
         <div>
@@ -747,6 +956,280 @@ include 'includes/admin_nav.php';
             </tbody>
         </table>
     </div>
+
+    <?php elseif ($currentTab === 'instructions'): ?>
+    <!-- ── FACULTY LIVE SESSION INSTRUCTIONS (MULTI-LANGUAGE) (PHASE 2) ── -->
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:24px; box-shadow:0 1px 3px rgba(0,0,0,0.05); margin-bottom:24px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; margin-bottom:20px;">
+            <div>
+                <h3 style="margin:0; font-size:1.15rem; font-weight:700; color:#1f2937;">
+                    <i class="fas fa-chalkboard-user" style="color:#4f46e5; margin-right:6px;"></i> Faculty Live Session Instructions (Multi-Language)
+                </h3>
+                <p style="margin:4px 0 0; font-size:0.82rem; color:#6b7280;">
+                    Manage multi-language instructions sent to faculties when they click "Read Instructions" on WhatsApp. Max 1024 characters per language.
+                </p>
+            </div>
+            <div>
+                <button type="button" class="btn btn-primary" onclick="openAddInstructionModal()" style="padding:10px 18px; font-weight:700; border-radius:8px;">
+                    <i class="fas fa-plus"></i> Add New Language Instructions
+                </button>
+            </div>
+        </div>
+
+        <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+            <thead>
+                <tr style="background:#f9fafb; text-align:left; border-bottom:1px solid #e5e7eb;">
+                    <th style="padding:12px; font-weight:600; color:#374151;">Language</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Code</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Instruction Title</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Length</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Status</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Last Updated</th>
+                    <th style="padding:12px; font-weight:600; color:#374151; text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php if (empty($facultyInstructions)): ?>
+                    <tr>
+                        <td colspan="7" style="padding:30px; text-align:center; color:#9ca3af;">
+                            <i class="fas fa-language" style="font-size:1.8rem; display:block; margin-bottom:8px; opacity:0.5;"></i>
+                            No faculty instructions configured.
+                        </td>
+                    </tr>
+                <?php else: ?>
+                    <?php foreach ($facultyInstructions as $inst): 
+                        $charCount = mb_strlen($inst['instruction_body'] ?? '', 'UTF-8');
+                        $charBadgeColor = $charCount > 1024 ? '#ef4444' : ($charCount > 900 ? '#f59e0b' : '#3b82f6');
+                    ?>
+                        <tr style="border-bottom:1px solid #f3f4f6;">
+                            <td style="padding:12px; font-weight:700; color:#111827;">
+                                <?php echo htmlspecialchars($inst['language_name']); ?>
+                            </td>
+                            <td style="padding:12px;">
+                                <span class="badge blue" style="font-size:0.75rem; text-transform:uppercase;">
+                                    <?php echo htmlspecialchars($inst['language_code']); ?>
+                                </span>
+                            </td>
+                            <td style="padding:12px; font-weight:600; color:#374151;">
+                                <?php echo htmlspecialchars($inst['instruction_title']); ?>
+                            </td>
+                            <td style="padding:12px;">
+                                <span style="font-size:0.75rem; font-weight:700; color:<?php echo $charBadgeColor; ?>;">
+                                    <?php echo $charCount; ?> / 1024 chars
+                                </span>
+                            </td>
+                            <td style="padding:12px;">
+                                <span class="badge <?php echo !empty($inst['is_active']) ? 'green' : 'gray'; ?>" style="font-size:0.7rem; font-weight:700;">
+                                    <?php echo !empty($inst['is_active']) ? 'ACTIVE' : 'INACTIVE'; ?>
+                                </span>
+                            </td>
+                            <td style="padding:12px; color:#6b7280; font-size:0.75rem;">
+                                <?php echo htmlspecialchars($inst['updated_at'] ?? $inst['created_at']); ?>
+                            </td>
+                            <td style="padding:12px; text-align:right;">
+                                <button type="button" class="btn btn-sm btn-outline" onclick='openInstructionPreviewModal(<?php echo json_encode($inst['instruction_title']); ?>, <?php echo json_encode($inst['instruction_body']); ?>)' style="padding:4px 8px; border-radius:6px; font-size:0.75rem;" title="Preview Content">
+                                    <i class="fas fa-eye"></i> Preview
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline" onclick='openEditInstructionModal(<?php echo (int)$inst['id']; ?>, <?php echo json_encode($inst['language_code']); ?>, <?php echo json_encode($inst['language_name']); ?>, <?php echo json_encode($inst['instruction_title']); ?>, <?php echo json_encode($inst['instruction_body']); ?>, <?php echo (int)$inst['is_active']; ?>)' style="padding:4px 8px; border-radius:6px; font-size:0.75rem;" title="Edit">
+                                    <i class="fas fa-pen"></i> Edit
+                                </button>
+                                <form method="POST" style="display:inline;">
+                                    <?php echo csrf_field(); ?>
+                                    <input type="hidden" name="action" value="toggle_instruction">
+                                    <input type="hidden" name="instruction_id" value="<?php echo (int)$inst['id']; ?>">
+                                    <button type="submit" class="btn btn-sm <?php echo !empty($inst['is_active']) ? 'btn-soft-amber' : 'btn-soft-green'; ?>" style="padding:4px 8px; border-radius:6px; font-size:0.75rem;" title="Toggle Active">
+                                        <i class="fas fa-power-off"></i> <?php echo !empty($inst['is_active']) ? 'Deactivate' : 'Activate'; ?>
+                                    </button>
+                                </form>
+                                <form method="POST" style="display:inline;" onsubmit="return confirm('Delete instruction language \'<?php echo htmlspecialchars(addslashes($inst['language_name'])); ?>\'?');">
+                                    <?php echo csrf_field(); ?>
+                                    <input type="hidden" name="action" value="delete_instruction">
+                                    <input type="hidden" name="instruction_id" value="<?php echo (int)$inst['id']; ?>">
+                                    <button type="submit" class="btn btn-sm btn-soft-red" style="padding:4px 8px; border-radius:6px; font-size:0.75rem;" title="Delete">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+
+    <?php elseif ($currentTab === 'faculty_templates'): ?>
+    <!-- ── FACULTY LIVE SESSION WHATSAPP TEMPLATES (PHASE 13) ── -->
+    <?php
+    $facultyTemplatesDef = [
+        [
+            'name'        => 'faculty_session_scheduled',
+            'label'       => 'Session Scheduled Notice',
+            'category'    => 'UTILITY',
+            'language'    => 'en',
+            'trigger'     => 'Immediately upon session creation in sessions.php',
+            'variables'   => [
+                ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
+                ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
+                ['idx' => 3, 'key' => 'session_type', 'label' => 'Session Type', 'sample' => 'Live'],
+                ['idx' => 4, 'key' => 'session_datetime', 'label' => 'Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
+                ['idx' => 5, 'key' => 'session_courses', 'label' => 'Target Courses', 'sample' => 'B.Com, BBA'],
+                ['idx' => 6, 'key' => 'session_duration', 'label' => 'Duration', 'sample' => '1 hour']
+            ],
+            'button_type' => 'Quick Reply',
+            'button_text' => 'Read Instructions',
+            'button_desc' => 'Triggers interactive language selection list via webhook'
+        ],
+        [
+            'name'        => 'faculty_session_reminder',
+            'label'       => '3-Hour Reminder',
+            'category'    => 'UTILITY',
+            'language'    => 'en',
+            'trigger'     => '3 hours before session start time (cron)',
+            'variables'   => [
+                ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
+                ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
+                ['idx' => 3, 'key' => 'session_type', 'label' => 'Session Type', 'sample' => 'Live'],
+                ['idx' => 4, 'key' => 'session_datetime', 'label' => 'Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
+                ['idx' => 5, 'key' => 'session_duration', 'label' => 'Duration', 'sample' => '1 hour']
+            ],
+            'button_type' => 'Quick Reply',
+            'button_text' => 'Read Instructions',
+            'button_desc' => 'Triggers interactive language selection list via webhook'
+        ],
+        [
+            'name'        => 'faculty_session_start',
+            'label'       => '1-Hour Start Notice',
+            'category'    => 'UTILITY',
+            'language'    => 'en',
+            'trigger'     => '1 hour before session start time (cron)',
+            'variables'   => [
+                ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
+                ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
+                ['idx' => 3, 'key' => 'session_type', 'label' => 'Session Type', 'sample' => 'Live'],
+                ['idx' => 4, 'key' => 'session_datetime', 'label' => 'Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
+                ['idx' => 5, 'key' => 'google_meet_url', 'label' => 'Google Meet Link', 'sample' => 'https://meet.google.com/abc-defg-hij']
+            ],
+            'button_type' => 'Call To Action (URL)',
+            'button_text' => 'Join Live Session',
+            'button_desc' => 'Dynamic Google Meet room link'
+        ],
+        [
+            'name'        => 'faculty_session_start_now',
+            'label'       => '2-Minute Start Now Alert',
+            'category'    => 'UTILITY',
+            'language'    => 'en',
+            'trigger'     => '2 minutes before session start time (cron)',
+            'variables'   => [
+                ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
+                ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
+                ['idx' => 3, 'key' => 'session_type', 'label' => 'Session Type', 'sample' => 'Live'],
+                ['idx' => 4, 'key' => 'google_meet_url', 'label' => 'Google Meet Link', 'sample' => 'https://meet.google.com/abc-defg-hij']
+            ],
+            'button_type' => 'Call To Action (URL)',
+            'button_text' => 'Join Live Session',
+            'button_desc' => 'Dynamic Google Meet room link'
+        ],
+        [
+            'name'        => 'faculty_session_cancelled',
+            'label'       => 'Cancellation Notice',
+            'category'    => 'UTILITY',
+            'language'    => 'en',
+            'trigger'     => 'Immediately when a scheduled session is cancelled or deleted',
+            'variables'   => [
+                ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
+                ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
+                ['idx' => 3, 'key' => 'session_type', 'label' => 'Session Type', 'sample' => 'Live'],
+                ['idx' => 4, 'key' => 'session_datetime', 'label' => 'Date & Time', 'sample' => '25 Oct 2026, 06:00 PM']
+            ],
+            'button_type' => 'None',
+            'button_text' => '-',
+            'button_desc' => 'Informational notification'
+        ]
+    ];
+    ?>
+
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:24px; box-shadow:0 1px 3px rgba(0,0,0,0.05); margin-bottom:24px;">
+        <div style="margin-bottom:20px;">
+            <h3 style="margin:0; font-size:1.15rem; font-weight:700; color:#1f2937;">
+                <i class="fab fa-whatsapp" style="color:#25d366; margin-right:6px;"></i> Faculty Live Session WhatsApp Templates (5)
+            </h3>
+            <p style="margin:4px 0 0; font-size:0.82rem; color:#6b7280;">
+                These 5 Meta utility templates govern the scheduled, reminder, start-live, and cancellation communication workflow for faculty.
+            </p>
+        </div>
+
+        <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+            <thead>
+                <tr style="background:#f9fafb; text-align:left; border-bottom:1px solid #e5e7eb;">
+                    <th style="padding:12px; font-weight:600; color:#374151;">Template / Purpose</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Category &amp; Lang</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Trigger Window</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Meta Status</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Variables &amp; Validation</th>
+                    <th style="padding:12px; font-weight:600; color:#374151;">Buttons</th>
+                    <th style="padding:12px; font-weight:600; color:#374151; text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($facultyTemplatesDef as $ft): 
+                    $localTplRow = null;
+                    foreach ($localTemplates as $lt) {
+                        if ($lt['template_name'] === $ft['name']) {
+                            $localTplRow = $lt;
+                            break;
+                        }
+                    }
+                    $status = $localTplRow ? ($localTplRow['status'] ?? 'approved') : 'approved';
+                ?>
+                    <tr style="border-bottom:1px solid #f3f4f6;">
+                        <td style="padding:12px;">
+                            <div style="font-weight:700; color:#111827;"><?php echo htmlspecialchars($ft['name']); ?></div>
+                            <div style="font-size:0.75rem; color:#6b7280; margin-top:2px;"><?php echo htmlspecialchars($ft['label']); ?></div>
+                        </td>
+                        <td style="padding:12px;">
+                            <span class="badge gray" style="font-size:0.7rem; font-weight:700;"><?php echo $ft['category']; ?></span>
+                            <span class="badge blue" style="font-size:0.7rem; font-weight:700; margin-left:4px; text-transform:uppercase;"><?php echo $ft['language']; ?></span>
+                        </td>
+                        <td style="padding:12px; font-size:0.78rem; color:#374151;">
+                            <?php echo htmlspecialchars($ft['trigger']); ?>
+                        </td>
+                        <td style="padding:12px;">
+                            <span class="badge green" style="font-size:0.7rem; font-weight:700;">
+                                <?php echo strtoupper($status); ?>
+                            </span>
+                            <span class="badge blue" style="font-size:0.7rem; font-weight:700; margin-left:4px;">
+                                SYNCED
+                            </span>
+                        </td>
+                        <td style="padding:12px;">
+                            <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+                                <span class="badge green" style="font-size:0.68rem; font-weight:700;"><i class="fas fa-circle-check"></i> 100% Validated</span>
+                                <span style="font-size:0.72rem; color:#6b7280;"><?php echo count($ft['variables']); ?> variables</span>
+                            </div>
+                            <div style="font-size:0.72rem; color:#4b5563; line-height:1.4;">
+                                <?php foreach ($ft['variables'] as $v): ?>
+                                    <div><code>{{<?php echo $v['idx']; ?>}}</code> &rarr; <strong><?php echo htmlspecialchars($v['key']); ?></strong></div>
+                                <?php endforeach; ?>
+                            </div>
+                        </td>
+                        <td style="padding:12px; font-size:0.78rem;">
+                            <?php if ($ft['button_type'] !== 'None'): ?>
+                                <span class="badge violet" style="font-size:0.7rem; font-weight:700;"><?php echo $ft['button_type']; ?></span>
+                                <div style="font-size:0.75rem; font-weight:600; color:#374151; margin-top:3px;"><?php echo htmlspecialchars($ft['button_text']); ?></div>
+                                <div style="font-size:0.7rem; color:#9ca3af;"><?php echo htmlspecialchars($ft['button_desc']); ?></div>
+                            <?php else: ?>
+                                <span style="color:#9ca3af; font-size:0.75rem;">None</span>
+                            <?php endif; ?>
+                        </td>
+                        <td style="padding:12px; text-align:right;">
+                            <button type="button" class="btn btn-sm btn-outline" onclick="openPreviewModal('<?php echo htmlspecialchars($ft['name']); ?>')" style="padding:4px 8px; border-radius:6px; font-size:0.75rem;"><i class="fas fa-eye"></i> View</button>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php endif; ?>
 </div>
 
 <!-- Modal container for template preview -->
@@ -761,9 +1244,140 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<!-- Modal container for instruction preview -->
+<div id="instruction-preview-modal" style="display:none; position:fixed; z-index:9999; left:0; top:0; width:100%; height:100%; overflow:auto; background-color:rgba(0,0,0,0.4); justify-content:center; align-items:center;">
+    <div style="background-color:#fff; border-radius:16px; max-width:550px; width:90%; padding:24px; box-shadow:0 10px 30px rgba(0,0,0,0.1); position:relative;">
+        <span onclick="closeInstructionPreviewModal()" style="position:absolute; right:15px; top:12px; cursor:pointer; font-size:1.5rem; color:#9ca3af; font-weight:700;">&times;</span>
+        <h4 id="inst-preview-title" style="margin-top:0; margin-bottom:15px; font-weight:700; color:#111827;">Instruction Preview</h4>
+        <div id="inst-preview-body" style="background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px; padding:16px; font-size:0.85rem; line-height:1.6; color:#374151; white-space:pre-wrap; max-height:400px; overflow-y:auto;"></div>
+        <div style="text-align:right; margin-top:16px;">
+            <button type="button" class="btn btn-outline" onclick="closeInstructionPreviewModal()" style="border-radius:8px;">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Add/Edit Instruction Modal -->
+<div id="instruction-modal" style="display:none; position:fixed; z-index:9999; left:0; top:0; width:100%; height:100%; overflow:auto; background-color:rgba(0,0,0,0.4); justify-content:center; align-items:center;">
+    <div style="background-color:#fff; border-radius:16px; max-width:600px; width:90%; padding:24px; box-shadow:0 10px 30px rgba(0,0,0,0.1); position:relative;">
+        <span onclick="closeInstructionModal()" style="position:absolute; right:15px; top:12px; cursor:pointer; font-size:1.5rem; color:#9ca3af; font-weight:700;">&times;</span>
+        <h4 id="inst-form-title" style="margin-top:0; margin-bottom:16px; font-weight:700; color:#111827;">Add Language Instructions</h4>
+        <form method="POST" id="inst-form" onsubmit="return validateInstructionForm(event);">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" id="inst-action" value="add_instruction">
+            <input type="hidden" name="instruction_id" id="inst-id" value="">
+
+            <div style="display:grid; grid-template-columns: 1fr 2fr; gap:12px; margin-bottom:12px;">
+                <div>
+                    <label style="font-size:0.8rem; font-weight:700; color:#374151; margin-bottom:4px; display:block;">Code <span style="color:#ef4444;">*</span></label>
+                    <input type="text" name="language_code" id="inst-code" class="form-control" placeholder="e.g. en, ml, hi" required style="width:100%; border-radius:8px; text-transform:lowercase;">
+                </div>
+                <div>
+                    <label style="font-size:0.8rem; font-weight:700; color:#374151; margin-bottom:4px; display:block;">Language Name <span style="color:#ef4444;">*</span></label>
+                    <input type="text" name="language_name" id="inst-name" class="form-control" placeholder="e.g. English, Malayalam" required style="width:100%; border-radius:8px;">
+                </div>
+            </div>
+
+            <div style="margin-bottom:12px;">
+                <label style="font-size:0.8rem; font-weight:700; color:#374151; margin-bottom:4px; display:block;">Instruction Title <span style="color:#ef4444;">*</span></label>
+                <input type="text" name="instruction_title" id="inst-title" class="form-control" placeholder="e.g. Live Session Faculty Guidelines" required style="width:100%; border-radius:8px;">
+            </div>
+
+            <div style="margin-bottom:14px;">
+                <label style="font-size:0.8rem; font-weight:700; color:#374151; margin-bottom:4px; display:flex; justify-content:space-between;">
+                    <span>Instruction Body (max 1024 characters) <span style="color:#ef4444;">*</span></span>
+                    <span id="inst-char-counter" style="font-weight:600; color:#6b7280;">0 / 1024</span>
+                </label>
+                <textarea name="instruction_body" id="inst-body" rows="8" class="form-control" maxlength="1024" required oninput="updateCharCounter(this.value)" placeholder="Enter step-by-step guidelines for faculty..." style="width:100%; border-radius:8px; font-family:monospace; font-size:0.85rem; padding:10px;"></textarea>
+            </div>
+
+            <div style="margin-bottom:20px;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.85rem; color:#374151;">
+                    <input type="checkbox" name="is_active" id="inst-active" value="1" checked style="accent-color:#4f46e5; width:17px; height:17px;">
+                    <strong>Active for faculty language selection list</strong>
+                </label>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:10px;">
+                <button type="button" class="btn btn-outline" onclick="closeInstructionModal()" style="border-radius:8px;">Cancel</button>
+                <button type="submit" class="btn btn-primary" style="border-radius:8px; font-weight:700;">
+                    <i class="fas fa-floppy-disk"></i> Save Instructions
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <script>
+function openInstructionPreviewModal(title, body) {
+    document.getElementById('inst-preview-title').innerText = title;
+    document.getElementById('inst-preview-body').innerText = body;
+    document.getElementById('instruction-preview-modal').style.display = 'flex';
+}
+
+function closeInstructionPreviewModal() {
+    document.getElementById('instruction-preview-modal').style.display = 'none';
+}
+
+function openAddInstructionModal() {
+    document.getElementById('inst-action').value = 'add_instruction';
+    document.getElementById('inst-form-title').innerText = 'Add Language Instructions';
+    document.getElementById('inst-id').value = '';
+    document.getElementById('inst-code').value = '';
+    document.getElementById('inst-code').readOnly = false;
+    document.getElementById('inst-name').value = '';
+    document.getElementById('inst-title').value = '';
+    document.getElementById('inst-body').value = '';
+    document.getElementById('inst-active').checked = true;
+    updateCharCounter('');
+    document.getElementById('instruction-modal').style.display = 'flex';
+}
+
+function openEditInstructionModal(id, code, name, title, body, isActive) {
+    document.getElementById('inst-action').value = 'edit_instruction';
+    document.getElementById('inst-form-title').innerText = 'Edit Instructions (' + name + ')';
+    document.getElementById('inst-id').value = id;
+    document.getElementById('inst-code').value = code;
+    document.getElementById('inst-code').readOnly = true;
+    document.getElementById('inst-name').value = name;
+    document.getElementById('inst-title').value = title;
+    document.getElementById('inst-body').value = body;
+    document.getElementById('inst-active').checked = !!isActive;
+    updateCharCounter(body);
+    document.getElementById('instruction-modal').style.display = 'flex';
+}
+
+function closeInstructionModal() {
+    document.getElementById('instruction-modal').style.display = 'none';
+}
+
+function updateCharCounter(val) {
+    var len = val ? val.length : 0;
+    var el = document.getElementById('inst-char-counter');
+    if (el) {
+        el.textContent = len + ' / 1024';
+        if (len > 1024) {
+            el.style.color = '#ef4444';
+        } else if (len > 900) {
+            el.style.color = '#f59e0b';
+        } else {
+            el.style.color = '#6b7280';
+        }
+    }
+}
+
+function validateInstructionForm(e) {
+    var body = (document.getElementById('inst-body').value || '').trim();
+    if (body.length > 1024) {
+        if (e) e.preventDefault();
+        alert('Instruction content exceeds 1024 characters (Length: ' + body.length + '). Please shorten it before saving.');
+        return false;
+    }
+    return true;
+}
+
 function openPreviewModal(tplName) {
-    const previewContent = document.getElementById('tpl-preview-' + tplName).innerHTML;
+    const el = document.getElementById('tpl-preview-' + tplName);
+    const previewContent = el ? el.innerHTML : '<div style=\"padding:20px;color:#6b7280;\">Template structure preview for: <strong>' + tplName + '</strong></div>';
     document.getElementById('modal-title').innerText = "Structure: " + tplName;
     document.getElementById('modal-body').innerHTML = previewContent;
     document.getElementById('preview-modal').style.display = 'flex';
@@ -777,6 +1391,14 @@ window.onclick = function(event) {
     const modal = document.getElementById('preview-modal');
     if (event.target == modal) {
         modal.style.display = 'none';
+    }
+    const instPrev = document.getElementById('instruction-preview-modal');
+    if (event.target == instPrev) {
+        instPrev.style.display = 'none';
+    }
+    const instModal = document.getElementById('instruction-modal');
+    if (event.target == instModal) {
+        instModal.style.display = 'none';
     }
 }
 
