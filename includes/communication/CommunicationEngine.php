@@ -1009,6 +1009,14 @@ class CommunicationEngine {
                         $this->pdo->prepare("UPDATE birthday_notifications_sent SET status = 'sent' WHERE queue_id = ?")->execute([$queueId]);
                     } catch (Exception $exBday) {}
                 }
+
+                // Sync status to whatsapp_auto_reply_cooldown on successful auto_response dispatch
+                if (($item['event_name'] ?? '') === 'auto_response') {
+                    try {
+                        require_once __DIR__ . '/WhatsAppAutoReplyManager.php';
+                        (new WhatsAppAutoReplyManager($this->pdo))->recordSuccess($item['recipient']);
+                    } catch (Exception $exAr) {}
+                }
                 return true;
             } else {
                 $errMsg = 'Provider failed to dispatch message.';
@@ -1104,6 +1112,13 @@ class CommunicationEngine {
                     try {
                         $this->pdo->prepare("UPDATE birthday_notifications_sent SET status = 'failed' WHERE queue_id = ?")->execute([$queueId]);
                     } catch (Exception $bdayEx) {}
+                }
+
+                if (($item['event_name'] ?? '') === 'auto_response') {
+                    try {
+                        require_once __DIR__ . '/WhatsAppAutoReplyManager.php';
+                        (new WhatsAppAutoReplyManager($this->pdo))->recordFailure($item['recipient']);
+                    } catch (Exception $arEx) {}
                 }
             }
 

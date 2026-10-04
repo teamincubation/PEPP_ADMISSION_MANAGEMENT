@@ -186,6 +186,19 @@ if ($is_local_dev) {
                 status TEXT,
                 updated_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS whatsapp_auto_reply_cooldown (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phone_number TEXT NOT NULL UNIQUE,
+                last_reply_at TEXT DEFAULT NULL,
+                last_reply_ts INTEGER DEFAULT NULL,
+                cooldown_until TEXT DEFAULT NULL,
+                cooldown_until_ts INTEGER DEFAULT NULL,
+                last_reserved_at TEXT DEFAULT NULL,
+                last_reserved_ts INTEGER DEFAULT NULL,
+                status TEXT NOT NULL DEFAULT 'idle',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
             CREATE TABLE IF NOT EXISTS admins (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE,

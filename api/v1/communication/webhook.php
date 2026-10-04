@@ -575,37 +575,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
 
-                // ── AUTOMATED INTERACTIVE AUTO-RESPONSE TRIGGER ──
+                // ── AUTOMATED INTERACTIVE AUTO-RESPONSE TRIGGER (10-Minute Cooldown) ──
                 try {
                     $metadata = $payload['entry'][0]['changes'][0]['value']['metadata'] ?? [];
                     $displayNumber = preg_replace('/\D/', '', $metadata['display_phone_number'] ?? '');
                     
                     // Verify recipient WABA display number (916282563209)
                     if ((empty($displayNumber) || $displayNumber === '916282563209') && !$preventAutoResponse) {
-                        $cooldown = 3600; // 1 hour default cooldown
+                        $cooldown = 600; // 10 minutes default cooldown (600 seconds)
                         try {
                             $stmtCd = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_auto_response_cooldown' LIMIT 1");
                             $stmtCd->execute();
                             $cdVal = $stmtCd->fetchColumn();
                             if ($cdVal !== false && $cdVal !== null && $cdVal !== '') {
-                                $cooldown = (int)$cdVal;
+                                $cooldown = max(60, (int)$cdVal);
                             }
                         } catch (Exception $cdEx) {}
 
-                        // Check if auto-response was already sent within the cooldown window
-                        $stmtRecent = $pdo->prepare("
-                            SELECT COUNT(*) 
-                            FROM whatsapp_messages 
-                            WHERE conversation_id = ? 
-                              AND direction = 'outbound' 
-                              AND message_text LIKE '%Thank you for contacting PEPP Learning%'
-                              AND created_at >= DATE_SUB(NOW(), INTERVAL ? SECOND)
-                        ");
-                        $stmtRecent->execute([$convId, $cooldown]);
-                        $recentCount = (int)$stmtRecent->fetchColumn();
+                        require_once dirname(dirname(dirname(__DIR__))) . '/includes/communication/WhatsAppAutoReplyManager.php';
+                        $autoReplyMgr = new WhatsAppAutoReplyManager($pdo);
 
-                        if ($recentCount === 0) {
-                            require_once __DIR__ . '/../../../includes/communication/CommunicationEngine.php';
+                        if ($autoReplyMgr->checkAndReserve($cleanFrom, $cooldown)) {
+                            require_once dirname(dirname(dirname(__DIR__))) . '/includes/communication/CommunicationEngine.php';
                             $engine = CommunicationEngine::getInstance($pdo);
 
                             $autoText = "Thank you for contacting PEPP Learning.\n\nIf you have any query or need assistance, please contact our support team.";
@@ -633,9 +624,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 'auto_response'
                             );
 
+                            $dispatched = false;
                             if ($queueId) {
-                                $engine->dispatchQueueItemAsync($queueId);
+                                $dispatched = (bool)$engine->dispatchQueueItemAsync($queueId);
                             }
+
+                            if ($dispatched) {
+                                $autoReplyMgr->recordSuccess($cleanFrom, $cooldown);
+                            } else {
+                                $autoReplyMgr->recordFailure($cleanFrom);
+                            }
+                        } else {
+                            error_log("[AUTO_REPLY_SUPPRESSED] 10-minute cooldown active for sender {$cleanFrom}");
                         }
                     }
                 } catch (Exception $autoEx) {
