@@ -27,6 +27,66 @@ if (!sessions_ready($pdo)) {
 $TYPES = ['live' => 'Live', 'qpd' => 'QPD', 'recorded' => 'Recorded', 'offline' => 'Offline'];
 $DURATIONS = ['0.50','1.00','1.30','1.50','2.00','2.30','3.00'];
 
+$active_tab = $_POST['tab'] ?? $_GET['tab'] ?? 'sessions';
+if (!in_array($active_tab, ['sessions', 'instructions'], true)) {
+    $active_tab = 'sessions';
+}
+
+// ── Self-healing for Faculty Live Session Instructions Table ──
+$hasInstTable = false;
+try {
+    $pdo->query("SELECT 1 FROM faculty_session_instructions LIMIT 0");
+    $hasInstTable = true;
+} catch (Exception $e) {}
+
+if (!$hasInstTable) {
+    $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+    if ($driver === 'sqlite') {
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS faculty_session_instructions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              language_code TEXT NOT NULL UNIQUE,
+              language_name TEXT NOT NULL,
+              instruction_title TEXT NOT NULL,
+              instruction_body TEXT NOT NULL,
+              is_active INTEGER NOT NULL DEFAULT 1,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+        ");
+    } else {
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `faculty_session_instructions` (
+              `id` INT AUTO_INCREMENT PRIMARY KEY,
+              `language_code` VARCHAR(10) NOT NULL UNIQUE,
+              `language_name` VARCHAR(50) NOT NULL,
+              `instruction_title` VARCHAR(150) NOT NULL,
+              `instruction_body` VARCHAR(1024) NOT NULL,
+              `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+              `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ");
+    }
+    $insertKw = ($driver === 'sqlite') ? 'INSERT OR IGNORE' : 'INSERT IGNORE';
+    $stmtSeedInst = $pdo->prepare("{$insertKw} INTO faculty_session_instructions (language_code, language_name, instruction_title, instruction_body, is_active) VALUES (?, ?, ?, ?, 1)");
+    $stmtSeedInst->execute([
+        'en', 'English', 'Live Session Faculty Guidelines',
+        "PEPP LIVE SESSION FACULTY INSTRUCTIONS\n\n1. Join Session on Time: Join through the provided Google Meet link at least 5 minutes prior to start time.\n2. Audio & Video: Use a reliable headset and webcam in a quiet, well-lit room.\n3. Screen Sharing: Prepare presentation slides and tabs before class starts.\n4. Student Interaction: Monitor chat questions and address doubts systematically.\n5. Wrap-up: Conclude strictly within the scheduled duration and end the meeting."
+    ]);
+    $stmtSeedInst->execute([
+        'ml', 'Malayalam (മലയാളം)', 'ലൈവ് സെഷൻ അധ്യാപക നിർദ്ദേശങ്ങൾ',
+        "പെപ്പ് ലൈവ് സെഷൻ അധ്യാപക മാർഗ്ഗനിർദ്ദേശങ്ങൾ\n\n1. കൃത്യസമയത്ത് പ്രവേശിക്കുക: നൽകിയിട്ടുള്ള ഗൂഗിൾ മീറ്റ് ലിങ്ക് വഴി ക്ലാസ്സ് തുടങ്ങുന്നതിന് 5 മിനിറ്റ് മുൻപ് ജോയിൻ ചെയ്യുക.\n2. ഓഡിയോ & വീഡിയോ: ശബ്ദകോലാഹലങ്ങൾ ഇല്ലാത്ത മുറിയിൽ ഹെഡ്‌സെറ്റും വെബ്‌ക്യാമും ഉപയോഗിക്കുക.\n3. സ്ക്രീൻ ഷെയറിങ്: ക്ലാസ്സിന് മുൻപായി പ്രസന്റേഷൻ സ്ലൈഡുകൾ തുറന്നുവെക്കുക.\n4. സംശയനിവാരണം: ചാറ്റ് ബോക്സിലെ ചോദ്യങ്ങൾക്ക് കൃത്യമായ മറുപടി നൽകുക.\n5. സെഷൻ സമാപനം: നിശ്ചയിച്ച സമയപരിധിക്കുള്ളിൽ ക്ലാസ്സ് പൂർത്തിയാക്കുക."
+    ]);
+}
+
+$instActiveCol = 'is_active';
+try {
+    $pdo->query("SELECT is_active FROM faculty_session_instructions LIMIT 0");
+} catch (Exception $e) {
+    $instActiveCol = 'active';
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!csrf_verify()) {
         $error_message = 'Security token mismatch. Please retry.';
@@ -354,6 +414,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                     }
                 }
+            } elseif ($action === 'add_instruction') {
+                $code = strtolower(trim($_POST['language_code'] ?? ''));
+                $name = trim($_POST['language_name'] ?? '');
+                $title = trim($_POST['instruction_title'] ?? '');
+                $body = trim($_POST['instruction_body'] ?? '');
+                $isActive = !empty($_POST['is_active']) ? 1 : 0;
+
+                if (empty($code) || empty($name) || empty($title) || empty($body)) {
+                    $error_message = 'Language code, language name, title, and instruction content are all required.';
+                } elseif (mb_strlen($body, 'UTF-8') > 1024) {
+                    $error_message = 'Instruction body exceeds maximum allowed 1024 characters (Current: ' . mb_strlen($body, 'UTF-8') . ').';
+                } else {
+                    $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+                    $insKw = ($driver === 'sqlite') ? 'INSERT OR REPLACE INTO' : 'INSERT INTO';
+                    $stmtIns = $pdo->prepare("{$insKw} faculty_session_instructions (language_code, language_name, instruction_title, instruction_body, {$instActiveCol}, created_at, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)");
+                    $stmtIns->execute([$code, $name, $title, $body, $isActive]);
+                    $success_message = "Instruction language '{$name}' ({$code}) saved successfully!";
+                    log_admin_activity($pdo, $admin_username, 'instruction_added', "Added instructions for {$name} ({$code})");
+                }
+            } elseif ($action === 'edit_instruction') {
+                $id = (int)($_POST['instruction_id'] ?? 0);
+                $name = trim($_POST['language_name'] ?? '');
+                $title = trim($_POST['instruction_title'] ?? '');
+                $body = trim($_POST['instruction_body'] ?? '');
+                $isActive = !empty($_POST['is_active']) ? 1 : 0;
+
+                if ($id <= 0 || empty($name) || empty($title) || empty($body)) {
+                    $error_message = 'All fields are required to update instructions.';
+                } elseif (mb_strlen($body, 'UTF-8') > 1024) {
+                    $error_message = 'Instruction body exceeds maximum allowed 1024 characters (Current: ' . mb_strlen($body, 'UTF-8') . ').';
+                } else {
+                    $stmtUpd = $pdo->prepare("UPDATE faculty_session_instructions SET language_name = ?, instruction_title = ?, instruction_body = ?, {$instActiveCol} = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                    $stmtUpd->execute([$name, $title, $body, $isActive, $id]);
+                    $success_message = "Instruction for '{$name}' updated successfully!";
+                    log_admin_activity($pdo, $admin_username, 'instruction_updated', "Updated instructions for {$name} (#{$id})");
+                }
+            } elseif ($action === 'toggle_instruction') {
+                $id = (int)($_POST['instruction_id'] ?? 0);
+                $stmtCur = $pdo->prepare("SELECT {$instActiveCol} FROM faculty_session_instructions WHERE id = ?");
+                $stmtCur->execute([$id]);
+                $cur = (int)$stmtCur->fetchColumn();
+
+                if ($cur === 1) {
+                    $activeCount = (int)$pdo->query("SELECT COUNT(*) FROM faculty_session_instructions WHERE {$instActiveCol} = 1")->fetchColumn();
+                    if ($activeCount <= 1) {
+                        $error_message = 'Cannot deactivate: At least one instruction language must remain active.';
+                    } else {
+                        $pdo->prepare("UPDATE faculty_session_instructions SET {$instActiveCol} = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?")->execute([$id]);
+                        $success_message = 'Instruction language deactivated.';
+                        log_admin_activity($pdo, $admin_username, 'instruction_toggled', "Deactivated instruction #{$id}");
+                    }
+                } else {
+                    $pdo->prepare("UPDATE faculty_session_instructions SET {$instActiveCol} = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?")->execute([$id]);
+                    $success_message = 'Instruction language activated.';
+                    log_admin_activity($pdo, $admin_username, 'instruction_toggled', "Activated instruction #{$id}");
+                }
+            } elseif ($action === 'delete_instruction') {
+                if (!can_delete()) {
+                    $error_message = 'Only the Super Admin can delete faculty instructions.';
+                } else {
+                    $id = (int)($_POST['instruction_id'] ?? 0);
+                    $activeCount = (int)$pdo->query("SELECT COUNT(*) FROM faculty_session_instructions WHERE {$instActiveCol} = 1 AND id != {$id}")->fetchColumn();
+                    if ($activeCount < 1) {
+                        $error_message = 'Cannot delete: At least one active instruction language must remain in the system.';
+                    } else {
+                        $pdo->prepare("DELETE FROM faculty_session_instructions WHERE id = ?")->execute([$id]);
+                        $success_message = 'Instruction language deleted successfully.';
+                        log_admin_activity($pdo, $admin_username, 'instruction_deleted', "Deleted instruction #{$id}");
+                    }
+                }
             }
         } catch (Exception $e) {
             error_log('Sessions: ' . $e->getMessage());
@@ -424,12 +554,43 @@ if (isset($_GET['ajax']) && !empty($_GET['session_id'])) {
     }
 }
 
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'instruction_details') {
+    header('Content-Type: application/json; charset=utf-8');
+    $instId = (int)($_GET['id'] ?? 0);
+    $langCode = trim($_GET['code'] ?? '');
+    try {
+        if ($instId > 0) {
+            $stmt = $pdo->prepare("SELECT id, language_code, language_name, instruction_title, instruction_body, {$instActiveCol} AS is_active, created_at, updated_at FROM faculty_session_instructions WHERE id = ?");
+            $stmt->execute([$instId]);
+        } else {
+            $stmt = $pdo->prepare("SELECT id, language_code, language_name, instruction_title, instruction_body, {$instActiveCol} AS is_active, created_at, updated_at FROM faculty_session_instructions WHERE language_code = ?");
+            $stmt->execute([$langCode]);
+        }
+        $inst = $stmt->fetch(PDO::FETCH_ASSOC);
+        echo json_encode(['success' => (bool)$inst, 'instruction' => $inst]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit();
+}
+
 /* ── Data ──────────────────────────────────────────────────────── */
 $faculties = []; $courses = [];
 try {
     $faculties = $pdo->query("SELECT id, name, mobile FROM faculties WHERE status='active' ORDER BY name")->fetchAll();
     $courses   = $pdo->query("SELECT DISTINCT course_name FROM pepp_courses ORDER BY course_name")->fetchAll(PDO::FETCH_COLUMN);
 } catch (Exception $e) {}
+
+$facultyInstructions = [];
+try {
+    $facultyInstructions = $pdo->query("SELECT id, language_code, language_name, instruction_title, instruction_body, {$instActiveCol} AS is_active, created_at, updated_at FROM faculty_session_instructions ORDER BY {$instActiveCol} DESC, language_name ASC")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $ex) {
+    error_log("Failed to load faculty instructions: " . $ex->getMessage());
+}
+$activeInstCount = 0;
+foreach ($facultyInstructions as $fi) {
+    if (!empty($fi['is_active'])) $activeInstCount++;
+}
 
 $f_status = $_GET['status'] ?? '';
 $now = date('Y-m-d H:i:s');
@@ -474,11 +635,20 @@ include 'includes/admin_nav.php';
 <?php if ($warning_message): ?><div class="alert alert-warn"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($warning_message); ?></span></div><?php endif; ?>
 <?php if ($error_message):   ?><div class="alert alert-error"><i class="fas fa-triangle-exclamation"></i><span><?php echo e($error_message); ?></span></div><?php endif; ?>
 
+<div class="tabs" style="margin-bottom:18px;">
+    <a class="tab <?php echo $active_tab === 'sessions' ? 'active' : ''; ?>" href="sessions.php"><i class="fas fa-video"></i> Sessions Schedule</a>
+    <a class="tab <?php echo $active_tab === 'instructions' ? 'active' : ''; ?>" href="sessions.php?tab=instructions"><i class="fas fa-chalkboard-user"></i> Faculty Instructions <span class="count"><?php echo count($facultyInstructions); ?></span></a>
+</div>
+
+<?php if ($active_tab === 'sessions'): ?>
 <div class="stats-grid">
     <a href="?status=upcoming" class="stat-card" style="text-decoration:none;"><div class="stat-top"><span class="stat-label">Upcoming</span><span class="stat-icon violet"><i class="fas fa-calendar-day"></i></span></div><div class="stat-value"><?php echo $stats['upcoming']; ?></div><div class="stat-hint">Scheduled ahead</div></a>
     <a href="?status=ongoing" class="stat-card" style="text-decoration:none;"><div class="stat-top"><span class="stat-label">Ongoing</span><span class="stat-icon green"><i class="fas fa-circle-play"></i></span></div><div class="stat-value"><?php echo $stats['ongoing']; ?></div><div class="stat-hint">Happening now</div></a>
     <a href="?status=completed" class="stat-card" style="text-decoration:none;"><div class="stat-top"><span class="stat-label">Completed</span><span class="stat-icon green"><i class="fas fa-circle-check"></i></span></div><div class="stat-value"><?php echo $stats['completed']; ?></div><div class="stat-hint">Done</div></a>
-    <div class="stat-card" style="justify-content:center; align-items:center; display:flex;"><button class="btn btn-primary" onclick="openSessModal()"><i class="fas fa-plus"></i> Add Session</button></div>
+    <div class="stat-card" style="justify-content:center; align-items:center; display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="openSessModal()"><i class="fas fa-plus"></i> Add Session</button>
+        <a href="sessions.php?tab=instructions" class="btn btn-outline" title="Manage Faculty Live Session Instructions"><i class="fas fa-chalkboard-user"></i> Instructions</a>
+    </div>
 </div>
 
 <div class="panel">
@@ -602,6 +772,126 @@ include 'includes/admin_nav.php';
 </div>
 
 <div class="alert alert-info"><i class="fas fa-circle-info"></i><span>For <strong>Google-integrated Live Sessions</strong>, learners receive automated Google Calendar invitations with private guest lists, and automatic recording &amp; smart notes are configured. For standard sessions, automatic reminder emails dispatch according to the standard schedule.</span></div>
+<?php else: ?>
+<!-- ════ FACULTY INSTRUCTIONS VIEW & UPDATE (TAB) ════ -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-top"><span class="stat-label">Total Languages</span><span class="stat-icon blue"><i class="fas fa-language"></i></span></div>
+        <div class="stat-value"><?php echo count($facultyInstructions); ?></div>
+        <div class="stat-hint">Configured instructions</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-top"><span class="stat-label">Active Languages</span><span class="stat-icon green"><i class="fas fa-circle-check"></i></span></div>
+        <div class="stat-value"><?php echo $activeInstCount; ?></div>
+        <div class="stat-hint">Available on WhatsApp</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-top"><span class="stat-label">Body Max Length</span><span class="stat-icon violet"><i class="fas fa-text-width"></i></span></div>
+        <div class="stat-value">1,024</div>
+        <div class="stat-hint">Characters per instruction</div>
+    </div>
+    <div class="stat-card" style="justify-content:center; align-items:center; display:flex;">
+        <button class="btn btn-primary" onclick="openAddInstructionModal()"><i class="fas fa-plus"></i> Add Instructions</button>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-head">
+        <span class="head-icon" style="background:var(--accent-soft);color:var(--accent-dark);"><i class="fas fa-chalkboard-user"></i></span>
+        <h2>Faculty Live Session Instructions (<?php echo count($facultyInstructions); ?>)</h2>
+        <div class="head-right">
+            <button type="button" class="btn btn-sm btn-primary" onclick="openAddInstructionModal()">
+                <i class="fas fa-plus"></i> Add Language
+            </button>
+        </div>
+    </div>
+    <div class="panel-body flush table-wrap">
+        <?php if (empty($facultyInstructions)): ?>
+            <div class="empty-state"><i class="fas fa-language"></i><p>No faculty instructions configured yet. Add one to get started.</p></div>
+        <?php else: ?>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Language</th>
+                    <th>Code</th>
+                    <th>Instruction Title</th>
+                    <th>Length</th>
+                    <th>Status</th>
+                    <th>Last Updated</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($facultyInstructions as $inst): 
+                $charCount = mb_strlen($inst['instruction_body'] ?? '', 'UTF-8');
+                $charBadgeClass = $charCount > 1024 ? 'red' : ($charCount > 900 ? 'amber' : 'blue');
+            ?>
+                <tr>
+                    <td>
+                        <strong style="color:var(--foreground);"><?php echo e($inst['language_name']); ?></strong>
+                    </td>
+                    <td>
+                        <span class="badge blue" style="font-size:0.75rem; text-transform:uppercase;">
+                            <?php echo e($inst['language_code']); ?>
+                        </span>
+                    </td>
+                    <td class="cell-main">
+                        <?php echo e($inst['instruction_title']); ?>
+                    </td>
+                    <td>
+                        <span class="badge <?php echo $charBadgeClass; ?>" style="font-size:0.75rem; font-weight:700;">
+                            <?php echo $charCount; ?> / 1024 chars
+                        </span>
+                    </td>
+                    <td>
+                        <span class="badge <?php echo !empty($inst['is_active']) ? 'green' : 'gray'; ?>" style="font-size:0.7rem; font-weight:700;">
+                            <?php echo !empty($inst['is_active']) ? 'ACTIVE' : 'INACTIVE'; ?>
+                        </span>
+                    </td>
+                    <td class="cell-sub" style="font-size:0.75rem;">
+                        <?php echo date('d M Y, h:i A', strtotime($inst['updated_at'] ?? $inst['created_at'])); ?>
+                    </td>
+                    <td style="text-align:right; white-space:nowrap;">
+                        <button type="button" class="btn btn-sm btn-outline" onclick='openInstructionPreviewModal(<?php echo json_encode($inst['instruction_title']); ?>, <?php echo json_encode($inst['instruction_body']); ?>, <?php echo json_encode($inst['language_name']); ?>, <?php echo json_encode($inst['language_code']); ?>)' title="View Full Instructions">
+                            <i class="fas fa-eye"></i> View
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline" onclick='openEditInstructionModal(<?php echo (int)$inst['id']; ?>, <?php echo json_encode($inst['language_code']); ?>, <?php echo json_encode($inst['language_name']); ?>, <?php echo json_encode($inst['instruction_title']); ?>, <?php echo json_encode($inst['instruction_body']); ?>, <?php echo (int)$inst['is_active']; ?>)' title="Update Instructions">
+                            <i class="fas fa-pen"></i> Update
+                        </button>
+                        <form method="POST" style="display:inline;">
+                            <?php echo csrf_field(); ?>
+                            <input type="hidden" name="tab" value="instructions">
+                            <input type="hidden" name="action" value="toggle_instruction">
+                            <input type="hidden" name="instruction_id" value="<?php echo (int)$inst['id']; ?>">
+                            <button type="submit" class="btn btn-sm <?php echo !empty($inst['is_active']) ? 'btn-soft-amber' : 'btn-soft-green'; ?>" title="Toggle Active">
+                                <i class="fas fa-power-off"></i> <?php echo !empty($inst['is_active']) ? 'Deactivate' : 'Activate'; ?>
+                            </button>
+                        </form>
+                        <?php if (can_delete()): ?>
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Delete instruction language \'<?php echo htmlspecialchars(addslashes($inst['language_name'])); ?>\'?');">
+                            <?php echo csrf_field(); ?>
+                            <input type="hidden" name="tab" value="instructions">
+                            <input type="hidden" name="action" value="delete_instruction">
+                            <input type="hidden" name="instruction_id" value="<?php echo (int)$inst['id']; ?>">
+                            <button type="submit" class="btn btn-sm btn-soft-red" title="Delete">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </form>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+    </div>
+</div>
+
+<div class="alert alert-info">
+    <i class="fas fa-circle-info"></i>
+    <span>Faculty instructions are automatically sent when faculty members tap <strong>Read Instructions</strong> in their WhatsApp session schedule alert. Each active language is presented in an interactive list, and the selected instruction content is delivered with a 1,024-character maximum constraint.</span>
+</div>
+<?php endif; ?>
 
 <!-- ADD/EDIT MODAL -->
 <div class="modal-backdrop" id="sess-modal">
@@ -716,6 +1006,7 @@ include 'includes/admin_nav.php';
                 <button type="button" class="btn btn-sm btn-outline active" id="tab-btn-overview" onclick="switchDetailTab('overview')"><i class="fas fa-list-check"></i> Overview &amp; Google</button>
                 <button type="button" class="btn btn-sm btn-outline" id="tab-btn-students" onclick="switchDetailTab('students')"><i class="fas fa-user-graduate"></i> Attendance &amp; Learners <span id="detail-student-count-badge" class="badge blue" style="font-size:0.68rem;padding:2px 6px;">0</span></button>
                 <button type="button" class="btn btn-sm btn-outline" id="tab-btn-art" onclick="switchDetailTab('art')"><i class="fas fa-file-video"></i> Recordings &amp; Gemini Notes</button>
+                <button type="button" class="btn btn-sm btn-outline" id="tab-btn-instructions" onclick="switchDetailTab('instructions')"><i class="fas fa-chalkboard-user"></i> Faculty Instructions</button>
             </div>
 
             <!-- TAB 1: OVERVIEW & GOOGLE -->
@@ -745,6 +1036,34 @@ include 'includes/admin_nav.php';
                     <div style="text-align:center; padding:24px; color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> Loading recordings &amp; Gemini notes...</div>
                 </div>
             </div>
+
+            <!-- TAB 4: FACULTY INSTRUCTIONS -->
+            <div id="pane-detail-instructions" style="display:none;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:10px;">
+                    <div style="font-size:0.83rem; color:var(--text-muted);">
+                        Faculty live session guidelines delivered via WhatsApp when faculty tap "Read Instructions":
+                    </div>
+                    <a href="sessions.php?tab=instructions" class="btn btn-xs btn-outline" style="font-size:0.75rem;">
+                        <i class="fas fa-pen-to-square"></i> Manage All Instructions
+                    </a>
+                </div>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px;">
+                    <?php foreach ($facultyInstructions as $fi): if (empty($fi['is_active'])) continue; ?>
+                        <div style="background:var(--bg-hover, #f8fafc); border:1px solid var(--border); border-radius:10px; padding:14px;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                                <strong style="font-size:0.86rem; color:var(--foreground);"><?php echo e($fi['language_name']); ?></strong>
+                                <span class="badge blue" style="font-size:0.7rem; text-transform:uppercase;"><?php echo e($fi['language_code']); ?></span>
+                            </div>
+                            <div style="font-weight:600; font-size:0.8rem; color:var(--text-muted); margin-bottom:6px;">
+                                <?php echo e($fi['instruction_title']); ?>
+                            </div>
+                            <div style="font-size:0.78rem; line-height:1.5; color:var(--foreground); white-space:pre-wrap; max-height:160px; overflow-y:auto; background:#ffffff; border:1px solid var(--border); border-radius:6px; padding:8px 10px;">
+                                <?php echo e($fi['instruction_body']); ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
         </div>
         <div class="modal-foot" style="flex-shrink:0;">
             <button type="button" class="btn btn-outline" onclick="closeModal('sess-details-modal')">Close</button>
@@ -756,6 +1075,76 @@ include 'includes/admin_nav.php';
 <div id="sess-toast" style="position:fixed;bottom:24px;right:24px;z-index:99999;background:#0f172a;color:#ffffff;padding:12px 20px;border-radius:10px;box-shadow:0 10px 25px rgba(0,0,0,0.25);display:none;align-items:center;gap:10px;font-size:0.88rem;pointer-events:none;transition:opacity 0.3s ease;">
     <i class="fas fa-circle-check" style="color:#10b981;font-size:1.1rem;"></i>
     <span id="sess-toast-msg">Google Meet link copied.</span>
+</div>
+
+<!-- FACULTY INSTRUCTION PREVIEW MODAL -->
+<div class="modal-backdrop" id="instruction-preview-modal">
+    <div class="modal" style="max-width:580px;">
+        <div class="modal-head">
+            <h3 id="inst-preview-title"><i class="fas fa-chalkboard-user" style="color:var(--accent);"></i> Faculty Instructions</h3>
+            <button class="modal-close" onclick="closeModal('instruction-preview-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div class="modal-body">
+            <div id="inst-preview-meta" style="margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+                <span class="badge blue" id="inst-preview-code">EN</span>
+                <span id="inst-preview-lang" style="font-weight:600; font-size:0.88rem; color:var(--foreground);">English</span>
+            </div>
+            <div id="inst-preview-body" style="background:var(--bg-hover, #f8fafc); border:1px solid var(--border); border-radius:10px; padding:16px; font-size:0.86rem; line-height:1.6; color:var(--foreground); white-space:pre-wrap; max-height:420px; overflow-y:auto;"></div>
+        </div>
+        <div class="modal-foot">
+            <button type="button" class="btn btn-outline" onclick="closeModal('instruction-preview-modal')">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- ADD/EDIT FACULTY INSTRUCTION MODAL -->
+<div class="modal-backdrop" id="instruction-modal">
+    <div class="modal" style="max-width:620px;">
+        <div class="modal-head">
+            <h3 id="inst-form-title"><i class="fas fa-chalkboard-user" style="color:var(--accent);"></i> Add Faculty Instructions</h3>
+            <button class="modal-close" onclick="closeModal('instruction-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST" id="inst-form" onsubmit="return validateInstructionForm(event);">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="tab" value="instructions">
+            <input type="hidden" name="action" id="inst-action" value="add_instruction">
+            <input type="hidden" name="instruction_id" id="inst-id" value="">
+            <div class="modal-body">
+                <div class="form-grid">
+                    <div class="field">
+                        <label>Language Code <span class="req">*</span></label>
+                        <input type="text" name="language_code" id="inst-code" placeholder="e.g. en, ml, hi" required style="text-transform:lowercase;">
+                        <small style="color:var(--text-muted);font-size:0.75rem;">Short 2-letter ISO code</small>
+                    </div>
+                    <div class="field">
+                        <label>Language Name <span class="req">*</span></label>
+                        <input type="text" name="language_name" id="inst-name" placeholder="e.g. English, Malayalam" required>
+                    </div>
+                    <div class="field full">
+                        <label>Instruction Title <span class="req">*</span></label>
+                        <input type="text" name="instruction_title" id="inst-title" placeholder="e.g. Live Session Faculty Guidelines" required>
+                    </div>
+                    <div class="field full">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                            <label style="margin:0;">Instruction Content (max 1024 chars) <span class="req">*</span></label>
+                            <span id="inst-char-counter" style="font-size:0.78rem; font-weight:700; color:var(--text-muted);">0 / 1024</span>
+                        </div>
+                        <textarea name="instruction_body" id="inst-body" rows="8" maxlength="1024" required oninput="updateCharCounter(this.value)" placeholder="Enter step-by-step instructions sent to faculty on WhatsApp..." style="font-family:monospace; font-size:0.85rem; padding:10px;"></textarea>
+                    </div>
+                    <div class="field full">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.85rem; color:var(--foreground);">
+                            <input type="checkbox" name="is_active" id="inst-active" value="1" checked style="accent-color:var(--accent); width:18px; height:18px;">
+                            <strong>Active (Available in WhatsApp Interactive List &amp; Live Sessions)</strong>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('instruction-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save Instructions</button>
+            </div>
+        </form>
+    </div>
 </div>
 
 <?php
@@ -967,10 +1356,14 @@ function switchDetailTab(tab) {
     document.getElementById('pane-detail-overview').style.display = (tab === 'overview') ? 'block' : 'none';
     document.getElementById('pane-detail-students').style.display = (tab === 'students') ? 'block' : 'none';
     document.getElementById('pane-detail-art').style.display      = (tab === 'art') ? 'block' : 'none';
+    var pInst = document.getElementById('pane-detail-instructions');
+    if (pInst) pInst.style.display = (tab === 'instructions') ? 'block' : 'none';
 
     document.getElementById('tab-btn-overview').classList.toggle('active', tab === 'overview');
     document.getElementById('tab-btn-students').classList.toggle('active', tab === 'students');
     document.getElementById('tab-btn-art').classList.toggle('active', tab === 'art');
+    var bInst = document.getElementById('tab-btn-instructions');
+    if (bInst) bInst.classList.toggle('active', tab === 'instructions');
 }
 
 var currentInvitedStudents = [];
@@ -1277,6 +1670,74 @@ function openSessionDetails(sessionId, topic) {
         .catch(function(err){
             overviewEl.innerHTML = '<div class=\"alert alert-error\">Failed to load session details.</div>';
         });
+}
+
+function openInstructionPreviewModal(title, body, langName, langCode) {
+    var titleEl = document.getElementById('inst-preview-title');
+    var bodyEl = document.getElementById('inst-preview-body');
+    var langEl = document.getElementById('inst-preview-lang');
+    var codeEl = document.getElementById('inst-preview-code');
+    if (titleEl) titleEl.innerHTML = '<i class=\"fas fa-chalkboard-user\" style=\"color:var(--accent);\"></i> ' + title;
+    if (bodyEl) bodyEl.textContent = body;
+    if (langEl) langEl.textContent = langName || '';
+    if (codeEl) codeEl.textContent = (langCode || '').toUpperCase();
+    openModal('instruction-preview-modal');
+}
+
+function openAddInstructionModal() {
+    document.getElementById('inst-action').value = 'add_instruction';
+    document.getElementById('inst-form-title').innerHTML = '<i class=\"fas fa-plus\" style=\"color:var(--accent);\"></i> Add Faculty Instructions';
+    document.getElementById('inst-id').value = '';
+    document.getElementById('inst-code').value = '';
+    document.getElementById('inst-code').readOnly = false;
+    document.getElementById('inst-name').value = '';
+    document.getElementById('inst-title').value = '';
+    document.getElementById('inst-body').value = '';
+    document.getElementById('inst-active').checked = true;
+    updateCharCounter('');
+    openModal('instruction-modal');
+}
+
+function openEditInstructionModal(id, code, name, title, body, isActive) {
+    document.getElementById('inst-action').value = 'edit_instruction';
+    document.getElementById('inst-form-title').innerHTML = '<i class=\"fas fa-pen\" style=\"color:var(--accent);\"></i> Edit Instructions (' + name + ')';
+    document.getElementById('inst-id').value = id;
+    document.getElementById('inst-code').value = code;
+    document.getElementById('inst-code').readOnly = true;
+    document.getElementById('inst-name').value = name;
+    document.getElementById('inst-title').value = title;
+    document.getElementById('inst-body').value = body;
+    document.getElementById('inst-active').checked = !!isActive;
+    updateCharCounter(body);
+    openModal('instruction-modal');
+}
+
+function updateCharCounter(val) {
+    var len = val ? val.length : 0;
+    var el = document.getElementById('inst-char-counter');
+    if (el) {
+        el.textContent = len + ' / 1024';
+        if (len > 1024) {
+            el.style.color = 'var(--red, #ef4444)';
+        } else if (len > 900) {
+            el.style.color = 'var(--amber, #f59e0b)';
+        } else {
+            el.style.color = 'var(--text-muted, #64748b)';
+        }
+    }
+}
+
+function validateInstructionForm(e) {
+    var body = (document.getElementById('inst-body').value || '').trim();
+    if (body.length > 1024) {
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        alert('Instruction content exceeds maximum allowed 1024 characters (Current length: ' + body.length + '). Please shorten the content before saving.');
+        return false;
+    }
+    return true;
 }
 </script>";
 include 'includes/admin_footer.php';
