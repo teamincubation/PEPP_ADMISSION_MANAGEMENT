@@ -717,4 +717,160 @@ class CommunicationHelper {
             ]
         ];
     }
+
+    /**
+     * Canonical helper to extract structured template parameter definitions from Meta metadata.
+     *
+     * Distinguishes BODY parameters, HEADER variables, and dynamic CTA URL button variables.
+     * Supports non-contiguous {{N}} indexes, preserves component context, and prevents
+     * CTA URL parameters from leaking into the BODY parameter count.
+     *
+     * @param array|string|null $metaData Decoded array or raw JSON string of template meta_data.
+     * @return array{
+     *   body: array{indexes: int[], max_index: int, count: int, text: string, variables: array<int, array>},
+     *   header: array{has_variable: bool, indexes: int[], format: string, text: string},
+     *   button_url: array{has_variable: bool, indexes: int[], count: int, buttons: array<int, array>},
+     *   raw_components: array
+     * }
+     */
+    public static function getTemplateParameterDefinition($metaData): array {
+        $meta = is_array($metaData) ? $metaData : (json_decode((string)$metaData, true) ?: []);
+
+        $components = $meta['components'] ?? [];
+        $bodyText = '';
+        $headerText = '';
+        $headerFormat = 'TEXT';
+        $buttonUrlList = [];
+
+        if (!empty($components) && is_array($components)) {
+            foreach ($components as $comp) {
+                $type = strtoupper((string)($comp['type'] ?? ''));
+                if ($type === 'BODY') {
+                    $bodyText = (string)($comp['text'] ?? '');
+                } elseif ($type === 'HEADER') {
+                    $headerText = (string)($comp['text'] ?? '');
+                    $headerFormat = strtoupper((string)($comp['format'] ?? 'TEXT'));
+                } elseif ($type === 'BUTTONS') {
+                    $btns = $comp['buttons'] ?? [];
+                    if (is_array($btns)) {
+                        foreach ($btns as $btn) {
+                            $btnType = strtoupper((string)($btn['type'] ?? ''));
+                            if ($btnType === 'URL') {
+                                $url = (string)($btn['url'] ?? '');
+                                preg_match_all('/\{\{(\d+)\}\}/', $url, $btnMatches);
+                                $btnIdxs = !empty($btnMatches[1]) ? array_values(array_unique(array_map('intval', $btnMatches[1]))) : [];
+                                sort($btnIdxs);
+                                $buttonUrlList[] = [
+                                    'text' => (string)($btn['text'] ?? ''),
+                                    'url' => $url,
+                                    'indexes' => $btnIdxs
+                                ];
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Fallback if components array is not stored
+            $bodyText = (string)($meta['body_text'] ?? $meta['body'] ?? '');
+            $headerText = (string)($meta['header_text'] ?? '');
+        }
+
+        // Check fallback buttons if not found in components
+        if (empty($buttonUrlList) && !empty($meta['buttons']) && is_array($meta['buttons'])) {
+            $btnsToCheck = isset($meta['buttons'][0]) ? $meta['buttons'] : ($meta['buttons']['url'] ?? []);
+            foreach ($btnsToCheck as $btn) {
+                if (is_array($btn) && strtoupper((string)($btn['type'] ?? '')) === 'URL') {
+                    $url = (string)($btn['url'] ?? '');
+                    preg_match_all('/\{\{(\d+)\}\}/', $url, $btnMatches);
+                    $btnIdxs = !empty($btnMatches[1]) ? array_values(array_unique(array_map('intval', $btnMatches[1]))) : [];
+                    sort($btnIdxs);
+                    $buttonUrlList[] = [
+                        'text' => (string)($btn['text'] ?? ''),
+                        'url' => $url,
+                        'indexes' => $btnIdxs
+                    ];
+                }
+            }
+        }
+
+        // 1. Detect BODY parameters
+        preg_match_all('/\{\{(\d+)\}\}/', $bodyText, $bodyMatches);
+        $bodyIndexes = !empty($bodyMatches[1]) ? array_values(array_unique(array_map('intval', $bodyMatches[1]))) : [];
+        sort($bodyIndexes);
+        $maxBodyIndex = !empty($bodyIndexes) ? max($bodyIndexes) : 0;
+        
+        $bodyVariables = [];
+        foreach ($bodyIndexes as $idx) {
+            $bodyVariables[$idx] = [
+                'index' => $idx,
+                'component' => 'BODY',
+                'token' => '{{' . $idx . '}}'
+            ];
+        }
+
+        // 2. Detect HEADER parameters (if text header with variables)
+        $headerIndexes = [];
+        if ($headerFormat === 'TEXT' && $headerText !== '') {
+            preg_match_all('/\{\{(\d+)\}\}/', $headerText, $hdrMatches);
+            $headerIndexes = !empty($hdrMatches[1]) ? array_values(array_unique(array_map('intval', $hdrMatches[1]))) : [];
+            sort($headerIndexes);
+        }
+
+        // 3. Detect BUTTON CTA URL parameters
+        $allBtnUrlIndexes = [];
+        foreach ($buttonUrlList as $b) {
+            foreach ($b['indexes'] as $bIdx) {
+                $allBtnUrlIndexes[] = $bIdx;
+            }
+        }
+        $allBtnUrlIndexes = array_values(array_unique($allBtnUrlIndexes));
+        sort($allBtnUrlIndexes);
+
+        return [
+            'body' => [
+                'indexes' => $bodyIndexes,
+                'max_index' => $maxBodyIndex,
+                'count' => count($bodyIndexes),
+                'text' => $bodyText,
+                'variables' => $bodyVariables
+            ],
+            'header' => [
+                'has_variable' => !empty($headerIndexes),
+                'indexes' => $headerIndexes,
+                'format' => $headerFormat,
+                'text' => $headerText
+            ],
+            'button_url' => [
+                'has_variable' => !empty($allBtnUrlIndexes),
+                'indexes' => $allBtnUrlIndexes,
+                'count' => count($allBtnUrlIndexes),
+                'buttons' => $buttonUrlList
+            ],
+            'raw_components' => $components
+        ];
+    }
+
+    /**
+     * Interpolates ERP variables and custom text mappings into an ordered list of parameter values.
+     *
+     * @param array $parameterMappings Mappings stored as [index => ['type' => 'variable'|'custom', 'value' => ...]]
+     * @param array $contextData Key-value map of ERP variables (e.g. ['faculty_name' => '...', 'session_topic' => '...'])
+     * @return array Ordered list of resolved parameter values
+     */
+    public static function interpolateERPVariables(array $parameterMappings, array $contextData): array {
+        ksort($parameterMappings);
+        $resolved = [];
+        foreach ($parameterMappings as $idx => $m) {
+            $type = $m['type'] ?? 'variable';
+            $val = $m['value'] ?? '';
+            if ($type === 'custom') {
+                $resolved[] = (string)$val;
+            } else {
+                $resolved[] = isset($contextData[$val]) ? (string)$contextData[$val] : '';
+            }
+        }
+        return $resolved;
+    }
 }
+

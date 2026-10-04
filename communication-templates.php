@@ -71,14 +71,7 @@ try {
     ];
     $tplMetaJson = json_encode($tplMeta);
 
-    if ($tplExists) {
-        $stmtTplUpdate = $pdo->prepare("
-            UPDATE communication_templates
-            SET status = 'approved', category = 'utility', meta_data = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE template_name = 'course_migration_completed'
-        ");
-        $stmtTplUpdate->execute([$tplMetaJson]);
-    } else {
+    if (!$tplExists) {
         $stmtTplInsert = $pdo->prepare("
             INSERT INTO communication_templates (channel, template_name, language, status, category, quality_status, meta_data, updated_at)
             VALUES ('whatsapp', 'course_migration_completed', 'en', 'approved', 'utility', 'green', ?, CURRENT_TIMESTAMP)
@@ -173,22 +166,28 @@ try {
     $facultyTplsToSeed = [
         'faculty_session_scheduled' => [
             'body' => "Hello {{1}},\n\nYou have been scheduled for a PEPP Live Session.\n\nSession: {{2}}\nType: {{3}}\nDate & Time: {{4}}\nCourses: {{5}}\nDuration: {{6}}\n\nPlease review the faculty instructions before the session. You are requested to join on time and not earlier than 5 minutes before the scheduled start.",
-            'buttons' => ['quick_reply' => [['text' => 'Read Instructions', 'payload' => 'READ_INSTRUCTIONS']]]
+            'buttons' => [
+                ['type' => 'QUICK_REPLY', 'text' => 'Read Instructions']
+            ]
         ],
         'faculty_session_reminder' => [
-            'body' => "Reminder: Hello {{1}},\n\nYour PEPP Live Session is scheduled in 3 hours.\n\nSession: {{2}}\nType: {{3}}\nDate & Time: {{4}}\nDuration: {{5}}\n\nPlease review faculty instructions if not done already.",
-            'buttons' => ['quick_reply' => [['text' => 'Read Instructions', 'payload' => 'READ_INSTRUCTIONS']]]
+            'body' => "Hello {{1}},\n\nThis is a reminder that you have a PEPP Live Session scheduled today.\n\nSession: {{2}}\nTime: {{3}}\nDuration: {{4}}\n\nWe hope you are prepared well for the session.\n\nPlease ensure that your presentation, audio/video setup and internet connection are ready before the scheduled time.\n\nThank you!",
+            'buttons' => []
         ],
         'faculty_session_start' => [
-            'body' => "Live Session Alert: Hello {{1}},\n\nYour PEPP Live Session will start in 1 hour.\n\nSession: {{2}}\nType: {{3}}\nDate & Time: {{4}}\n\nPlease join the session on time using the Google Meet link below. Note: Google Meet restricts joining earlier than 5 minutes before scheduled start.\n\nMeet Link: {{5}}",
-            'buttons' => ['cta_url' => [['text' => 'Join Live Session', 'url' => 'https://meet.google.com/{{1}}']]]
+            'body' => "Hello {{1}},\n\nYour PEPP Live Session starts in approximately 1 hour.\n\nSession: {{2}}\nDate & Time: {{3}}\nDuration: {{4}}\n\nYour Google Meet session link is ready.\n\nImportant: Recording and Gemini meeting notes will start automatically when you enter the session. Please do not enter earlier than 5 minutes before the scheduled start time.",
+            'buttons' => [
+                ['type' => 'URL', 'text' => 'Start Live', 'url' => 'https://meet.google.com/{{1}}']
+            ]
         ],
         'faculty_session_start_now' => [
-            'body' => "Live Session Starting Now: Hello {{1}},\n\nYour PEPP Live Session is starting in 2 minutes!\n\nSession: {{2}}\nType: {{3}}\n\nPlease click below to join your Google Meet room immediately:\n{{4}}",
-            'buttons' => ['cta_url' => [['text' => 'Join Live Session', 'url' => 'https://meet.google.com/{{1}}']]]
+            'body' => "Hello {{1}},\n\nYour PEPP Live Session is starting now.\n\nSession: {{2}}\n\nPlease join using the button below.\n\nReminder: Recording and Gemini meeting notes will start automatically when you enter the session. Please join only now and not earlier.",
+            'buttons' => [
+                ['type' => 'URL', 'text' => 'Start Now', 'url' => 'https://meet.google.com/{{1}}']
+            ]
         ],
         'faculty_session_cancelled' => [
-            'body' => "Notice: Hello {{1}},\n\nThe PEPP Live Session scheduled for {{4}} has been CANCELLED.\n\nSession: {{2}}\nType: {{3}}\n\nPlease contact PEPP Academic Administration for any queries.",
+            'body' => "Hello {{1}},\n\nYour PEPP Live Session scheduled for:\n\n{{2}}\n\nSession: {{3}}\n\nhas been cancelled by the PEPP Admin.\n\nPlease do not use the previously shared session link.\n\nIf a new schedule is confirmed, you will receive a separate notification.\n\nThank you.",
             'buttons' => []
         ]
     ];
@@ -202,10 +201,17 @@ try {
     foreach ($facultyTplsToSeed as $fTplName => $fTplConf) {
         $stmtCheckTpl->execute([$fTplName]);
         if ((int)$stmtCheckTpl->fetchColumn() === 0) {
+            $components = [
+                ['type' => 'BODY', 'text' => $fTplConf['body']]
+            ];
+            if (!empty($fTplConf['buttons'])) {
+                $components[] = [
+                    'type' => 'BUTTONS',
+                    'buttons' => $fTplConf['buttons']
+                ];
+            }
             $fMeta = [
-                'components' => [
-                    ['type' => 'BODY', 'text' => $fTplConf['body']]
-                ],
+                'components' => $components,
                 'body_text' => $fTplConf['body'],
                 'header_text' => '',
                 'footer_text' => '',
@@ -347,16 +353,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     break;
                 }
 
-                // Get parameter count from Meta template definition
-                $meta = json_decode($tpl['meta_data'], true) ?: [];
-                $bodyTpl = $meta['body_text'] ?? '';
-                preg_match_all('/\{\{(\d+)\}\}/', $bodyTpl, $matches);
-                $expectedParamsCount = !empty($matches[1]) ? max(array_map('intval', $matches[1])) : 0;
+                // Get parameter definition from canonical helper
+                $paramDef = CommunicationHelper::getTemplateParameterDefinition($tpl['meta_data']);
+                $expectedIndexes = $paramDef['body']['indexes'];
 
                 $rawParams = $data['parameters'] ?? [];
 
                 // Ensure all expected parameters are mapped
-                for ($i = 1; $i <= $expectedParamsCount; $i++) {
+                foreach ($expectedIndexes as $i) {
                     if (!isset($rawParams[$i])) {
                         $validationError = "Parameter {{{$i}}} is required but missing in mapping for template '{$tplName}'.";
                         break 2;
@@ -383,10 +387,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     }
                 }
 
-                // Ensure no extra parameters beyond expected count are sent
+                // Ensure no extraneous parameters beyond expected indexes are sent
                 foreach ($rawParams as $idx => $param) {
-                    if ((int)$idx < 1 || (int)$idx > $expectedParamsCount) {
-                        $validationError = "Invalid variable index '{{{$idx}}}' for template '{$tplName}' (expects maximum {$expectedParamsCount} variables).";
+                    if (!in_array((int)$idx, $expectedIndexes, true)) {
+                        $validationError = "Invalid variable index '{{{$idx}}}' for template '{$tplName}' (not part of approved BODY variables).";
                         break 2;
                     }
                 }
@@ -404,11 +408,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
                     $rawParams = $data['parameters'] ?? [];
                     $params = [];
-                    foreach ($rawParams as $idx => $param) {
-                        $params[(int)$idx] = [
-                            'type' => $param['type'] ?? 'variable',
-                            'value' => trim($param['value'] ?? '')
-                        ];
+                    if ($tplName && isset($allTpls[$tplName])) {
+                        $paramDef = CommunicationHelper::getTemplateParameterDefinition($allTpls[$tplName]['meta_data'] ?? []);
+                        $expectedIndexes = $paramDef['body']['indexes'];
+                        foreach ($expectedIndexes as $idx) {
+                            if (isset($rawParams[$idx])) {
+                                $params[(int)$idx] = [
+                                    'type' => $rawParams[$idx]['type'] ?? 'variable',
+                                    'value' => trim($rawParams[$idx]['value'] ?? '')
+                                ];
+                            }
+                        }
                     }
 
                     $stmtUp->execute([$tplName, json_encode($params), $evName]);
@@ -452,11 +462,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     throw new Exception("Template '{$tplName}' is not approved (Status: {$template['status']}).");
                 }
 
-                // Parse parameters
+                require_once 'includes/communication/CommunicationHelper.php';
+                $paramDef = CommunicationHelper::getTemplateParameterDefinition($template['meta_data']);
+                $expectedIndexes = $paramDef['body']['indexes'];
+
+                // Parse parameters strictly according to canonical BODY indexes
                 $resolvedParams = [];
-                ksort($paramsInput);
-                foreach ($paramsInput as $idx => $val) {
-                    $resolvedParams[] = trim($val);
+                foreach ($expectedIndexes as $idx) {
+                    $resolvedParams[] = trim($paramsInput[$idx] ?? '');
                 }
 
                 $templateData = [
@@ -661,19 +674,22 @@ include 'includes/admin_nav.php';
     ];
 
     // Build array of approved templates for JS
+    require_once 'includes/communication/CommunicationHelper.php';
     $approvedTemplates = [];
     foreach ($localTemplates as $tpl) {
         if (strtolower($tpl['status']) === 'approved') {
-            $meta = json_decode($tpl['meta_data'], true) ?: [];
-            $bodyTpl = $meta['body_text'] ?? '';
-            preg_match_all('/\{\{(\d+)\}\}/', $bodyTpl, $matches);
-            $expectedParamsCount = !empty($matches[1]) ? max(array_map('intval', $matches[1])) : 0;
+            $paramDef = CommunicationHelper::getTemplateParameterDefinition($tpl['meta_data']);
 
             $approvedTemplates[$tpl['template_name']] = [
                 'name' => $tpl['template_name'],
                 'language' => $tpl['language'],
-                'param_count' => $expectedParamsCount,
-                'body_text' => $bodyTpl
+                'param_count' => $paramDef['body']['count'],
+                'body_indexes' => $paramDef['body']['indexes'],
+                'body_text' => $paramDef['body']['text'],
+                'has_header_var' => $paramDef['header']['has_variable'],
+                'header_indexes' => $paramDef['header']['indexes'],
+                'has_button_url_var' => $paramDef['button_url']['has_variable'],
+                'button_url_indexes' => $paramDef['button_url']['indexes']
             ];
         }
     }
@@ -721,9 +737,11 @@ include 'includes/admin_nav.php';
                                     <?php if (!empty($mappedTpl) && isset($approvedTemplates[$mappedTpl])): ?>
                                         <?php
                                             $tplInfo = $approvedTemplates[$mappedTpl];
-                                            for ($i = 1; $i <= $tplInfo['param_count']; $i++):
-                                                $mType = $paramMappings[$i]['type'] ?? 'variable';
-                                                $mVal = $paramMappings[$i]['value'] ?? '';
+                                            $bodyIndexes = $tplInfo['body_indexes'] ?? [];
+                                            if (!empty($bodyIndexes)):
+                                                foreach ($bodyIndexes as $i):
+                                                    $mType = $paramMappings[$i]['type'] ?? 'variable';
+                                                    $mVal = $paramMappings[$i]['value'] ?? '';
                                         ?>
                                             <div style="display:flex; align-items:center; gap:8px;">
                                                 <span style="font-size:0.75rem; font-weight:700; color:#4b5563; min-width:40px;">{{<?php echo $i; ?>}} :</span>
@@ -764,8 +782,17 @@ include 'includes/admin_nav.php';
                                                 }
                                                 ?>
                                             </div>
-                                        <?php endfor; ?>
+                                        <?php endforeach; ?>
+                                        <?php if (!empty($tplInfo['has_button_url_var'])): ?>
+                                            <div style="font-size:0.75rem; color:#4338ca; background:#e0e7ff; padding:6px 10px; border-radius:6px; margin-top:4px; display:flex; align-items:center; gap:6px;">
+                                                <i class="fas fa-info-circle"></i>
+                                                <span>Dynamic Button URL parameter (Google Meet link) is automatically resolved by the notification service and does not require manual ERP mapping.</span>
+                                            </div>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <span style="font-size:0.75rem; color:#9ca3af;">No parameters required for this template.</span>
                                     <?php endif; ?>
+                                <?php endif; ?>
                                 </div>
 
                                 <!-- Mapping Preview Card -->
@@ -867,13 +894,14 @@ include 'includes/admin_nav.php';
                 <?php else: ?>
                     <?php foreach ($localTemplates as $tpl): ?>
                         <?php
-                            $meta = json_decode($tpl['meta_data'], true);
+                            $meta = json_decode($tpl['meta_data'], true) ?: [];
                             $bodyText = $meta['body_text'] ?? '';
                             $headerText = $meta['header_text'] ?? '';
                             $footerText = $meta['footer_text'] ?? '';
 
-                            preg_match_all('/\{\{(\d+)\}\}/', $bodyText, $matches);
-                            $expectedParamsCount = !empty($matches[1]) ? max(array_map('intval', $matches[1])) : 0;
+                            $paramDef = CommunicationHelper::getTemplateParameterDefinition($tpl['meta_data']);
+                            $bodyIndexes = $paramDef['body']['indexes'];
+                            $bodyCount = $paramDef['body']['count'];
 
                             $qColor = 'gray';
                             $qStatus = $tpl['quality_status'] ?? 'unknown';
@@ -896,10 +924,15 @@ include 'includes/admin_nav.php';
                                 <?php endif; ?>
                             </td>
                             <td style="padding:12px;">
-                                <?php if ($expectedParamsCount > 0): ?>
-                                    <span style="color:#6366f1; font-weight:700; font-size:0.75rem;"><i class="fas fa-brackets-curly"></i> {{1}} to {{<?php echo $expectedParamsCount; ?>}}</span>
+                                <?php if ($bodyCount > 0): ?>
+                                    <span style="color:#6366f1; font-weight:700; font-size:0.75rem;"><i class="fas fa-brackets-curly"></i> {{<?php echo implode('}}, {{', $bodyIndexes); ?>}} (<?php echo $bodyCount; ?> param<?php echo $bodyCount > 1 ? 's' : ''; ?>)</span>
                                 <?php else: ?>
                                     <span style="color:#9ca3af; font-size:0.75rem;">None</span>
+                                <?php endif; ?>
+                                <?php if (!empty($paramDef['button_url']['has_variable'])): ?>
+                                    <div style="font-size:0.7rem; color:#4338ca; margin-top:2px; font-weight:600;">
+                                        <i class="fas fa-link"></i> Dynamic CTA URL Button
+                                    </div>
                                 <?php endif; ?>
                                 <?php if (!empty($tpl['rejection_reason'])): ?>
                                     <div style="font-size:0.75rem; color:#ef4444; margin-top:4px; font-weight:500;">
@@ -1071,9 +1104,9 @@ include 'includes/admin_nav.php';
                 ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
                 ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
                 ['idx' => 3, 'key' => 'session_type', 'label' => 'Session Type', 'sample' => 'Live'],
-                ['idx' => 4, 'key' => 'session_datetime', 'label' => 'Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
+                ['idx' => 4, 'key' => 'session_datetime', 'label' => 'Schedule Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
                 ['idx' => 5, 'key' => 'session_courses', 'label' => 'Target Courses', 'sample' => 'B.Com, BBA'],
-                ['idx' => 6, 'key' => 'session_duration', 'label' => 'Duration', 'sample' => '1 hour']
+                ['idx' => 6, 'key' => 'session_duration', 'label' => 'Proposed Session Duration', 'sample' => '1 hour']
             ],
             'button_type' => 'Quick Reply',
             'button_text' => 'Read Instructions',
@@ -1088,13 +1121,12 @@ include 'includes/admin_nav.php';
             'variables'   => [
                 ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
                 ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
-                ['idx' => 3, 'key' => 'session_type', 'label' => 'Session Type', 'sample' => 'Live'],
-                ['idx' => 4, 'key' => 'session_datetime', 'label' => 'Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
-                ['idx' => 5, 'key' => 'session_duration', 'label' => 'Duration', 'sample' => '1 hour']
+                ['idx' => 3, 'key' => 'session_datetime', 'label' => 'Scheduled Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
+                ['idx' => 4, 'key' => 'session_duration', 'label' => 'Proposed Session Duration', 'sample' => '1 hour']
             ],
-            'button_type' => 'Quick Reply',
-            'button_text' => 'Read Instructions',
-            'button_desc' => 'Triggers interactive language selection list via webhook'
+            'button_type' => 'None',
+            'button_text' => '-',
+            'button_desc' => 'Informational reminder'
         ],
         [
             'name'        => 'faculty_session_start',
@@ -1105,13 +1137,12 @@ include 'includes/admin_nav.php';
             'variables'   => [
                 ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
                 ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
-                ['idx' => 3, 'key' => 'session_type', 'label' => 'Session Type', 'sample' => 'Live'],
-                ['idx' => 4, 'key' => 'session_datetime', 'label' => 'Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
-                ['idx' => 5, 'key' => 'google_meet_url', 'label' => 'Google Meet Link', 'sample' => 'https://meet.google.com/abc-defg-hij']
+                ['idx' => 3, 'key' => 'session_datetime', 'label' => 'Scheduled Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
+                ['idx' => 4, 'key' => 'session_duration', 'label' => 'Proposed Session Duration', 'sample' => '1 hour']
             ],
             'button_type' => 'Call To Action (URL)',
-            'button_text' => 'Join Live Session',
-            'button_desc' => 'Dynamic Google Meet room link'
+            'button_text' => 'Start Live',
+            'button_desc' => 'Dynamic CTA URL with Google Meet room code (https://meet.google.com/{{1}})'
         ],
         [
             'name'        => 'faculty_session_start_now',
@@ -1121,13 +1152,11 @@ include 'includes/admin_nav.php';
             'trigger'     => '2 minutes before session start time (cron)',
             'variables'   => [
                 ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
-                ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
-                ['idx' => 3, 'key' => 'session_type', 'label' => 'Session Type', 'sample' => 'Live'],
-                ['idx' => 4, 'key' => 'google_meet_url', 'label' => 'Google Meet Link', 'sample' => 'https://meet.google.com/abc-defg-hij']
+                ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting']
             ],
             'button_type' => 'Call To Action (URL)',
-            'button_text' => 'Join Live Session',
-            'button_desc' => 'Dynamic Google Meet room link'
+            'button_text' => 'Start Now',
+            'button_desc' => 'Dynamic CTA URL with Google Meet room code (https://meet.google.com/{{1}})'
         ],
         [
             'name'        => 'faculty_session_cancelled',
@@ -1137,9 +1166,8 @@ include 'includes/admin_nav.php';
             'trigger'     => 'Immediately when a scheduled session is cancelled or deleted',
             'variables'   => [
                 ['idx' => 1, 'key' => 'faculty_name', 'label' => 'Faculty Name', 'sample' => 'Dr. John Doe'],
-                ['idx' => 2, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting'],
-                ['idx' => 3, 'key' => 'session_type', 'label' => 'Session Type', 'sample' => 'Live'],
-                ['idx' => 4, 'key' => 'session_datetime', 'label' => 'Date & Time', 'sample' => '25 Oct 2026, 06:00 PM']
+                ['idx' => 2, 'key' => 'session_datetime', 'label' => 'Scheduled Date & Time', 'sample' => '25 Oct 2026, 06:00 PM'],
+                ['idx' => 3, 'key' => 'session_topic', 'label' => 'Session Topic', 'sample' => 'Advanced Accounting']
             ],
             'button_type' => 'None',
             'button_text' => '-',
@@ -1448,8 +1476,9 @@ function onMappingTemplateChange(eventName, selectedTemplateName) {
     const isSavedTpl = (savedInfo && savedInfo.template_name === selectedTemplateName);
     const savedParams = isSavedTpl ? (savedInfo.parameters || {}) : {};
 
-    if (tplInfo && tplInfo.param_count > 0) {
-        for (let i = 1; i <= tplInfo.param_count; i++) {
+    const bodyIndexes = (tplInfo && tplInfo.body_indexes) ? tplInfo.body_indexes : [];
+    if (bodyIndexes.length > 0) {
+        for (const i of bodyIndexes) {
             const pInfo = savedParams[i] || null;
             const pType = pInfo ? (pInfo.type || 'variable') : 'variable';
             const pVal = pInfo ? (pInfo.value || '') : '';
@@ -1512,6 +1541,20 @@ function onMappingTemplateChange(eventName, selectedTemplateName) {
             paramContainer.appendChild(descRow);
             paramList.appendChild(paramContainer);
         }
+        if (tplInfo && tplInfo.has_button_url_var) {
+            const btnNote = document.createElement('div');
+            btnNote.style.fontSize = '0.75rem';
+            btnNote.style.color = '#4338ca';
+            btnNote.style.background = '#e0e7ff';
+            btnNote.style.padding = '6px 10px';
+            btnNote.style.borderRadius = '6px';
+            btnNote.style.marginTop = '4px';
+            btnNote.style.display = 'flex';
+            btnNote.style.alignItems = 'center';
+            btnNote.style.gap = '6px';
+            btnNote.innerHTML = '<i class="fas fa-info-circle"></i> <span>Dynamic Button URL parameter (Google Meet link) is automatically resolved by the notification service and does not require manual ERP mapping.</span>';
+            paramList.appendChild(btnNote);
+        }
         updatePreviews(eventName);
     } else {
         paramList.innerHTML = '<span style="font-size:0.75rem; color:#9ca3af;">No parameters required for this template.</span>';
@@ -1560,7 +1603,8 @@ function updatePreviews(eventName) {
     const tplInfo = approvedTemplates[selectedTemplate];
     if (!tplInfo) return;
 
-    for (let i = 1; i <= tplInfo.param_count; i++) {
+    const bodyIndexes = tplInfo.body_indexes || [];
+    for (const i of bodyIndexes) {
         const typeSelect = document.querySelector(`select[name="mappings[${eventName}][parameters][${i}][type]"]`);
         const type = typeSelect ? typeSelect.value : 'variable';
 
@@ -1625,8 +1669,9 @@ function onTestTemplateSelect(selectedTemplateName) {
     section.style.display = 'block';
     const tplInfo = approvedTemplates[selectedTemplateName];
 
-    if (tplInfo && tplInfo.param_count > 0) {
-        for (let i = 1; i <= tplInfo.param_count; i++) {
+    const bodyIndexes = (tplInfo && tplInfo.body_indexes) ? tplInfo.body_indexes : [];
+    if (bodyIndexes.length > 0) {
+        for (const i of bodyIndexes) {
             const div = document.createElement('div');
             div.className = 'field';
             div.style.marginBottom = '8px';
@@ -1635,6 +1680,17 @@ function onTestTemplateSelect(selectedTemplateName) {
                 <input type="text" name="test_params[${i}]" class="form-control" style="width:100%; border-radius:8px; font-size:0.8rem;" placeholder="Test value for {{${i}}}" required>
             `;
             paramList.appendChild(div);
+        }
+        if (tplInfo && tplInfo.has_button_url_var) {
+            const btnNote = document.createElement('div');
+            btnNote.style.fontSize = '0.75rem';
+            btnNote.style.color = '#4338ca';
+            btnNote.style.background = '#e0e7ff';
+            btnNote.style.padding = '6px 10px';
+            btnNote.style.borderRadius = '6px';
+            btnNote.style.marginTop = '8px';
+            btnNote.innerHTML = '<i class="fas fa-info-circle"></i> Dynamic CTA URL Button is automatically tested at dispatch.';
+            paramList.appendChild(btnNote);
         }
     } else {
         paramList.innerHTML = '<span style="font-size:0.75rem; color:#9ca3af;">No parameters required.</span>';
