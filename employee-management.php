@@ -273,14 +273,32 @@ if (isset($_POST['action']) && $_POST['action'] === 'reveal_sensitive_data') {
         $stmt->execute([$emp_id]);
         $emp = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$emp) { echo json_encode(['error' => 'Employee not found.']); exit; }
-        if (!staff_is_generic_type($emp['application_for'] ?? 'employee')) { http_response_code(403); echo json_encode(['error' => 'Faculty records are managed in the Faculties module (faculties.php).']); exit; }
+
+        if ($field === 'bank_account') {
+            if (!can_admin_view_bank_credentials()) {
+                http_response_code(403);
+                echo json_encode(['error' => 'Permission denied: cannot view bank credentials.']);
+                exit;
+            }
+        }
+
+        // Generic employee management reveal endpoint is restricted to generic staff
+        if (!staff_is_generic_type($emp['application_for'] ?? 'employee')) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Faculty records are managed in the Faculties module (faculties.php).']);
+            exit;
+        }
 
         $cipher = ($field === 'aadhaar') ? $emp['aadhaar_encrypted'] : $emp['bank_account_encrypted'];
         $plain = $cipher ? pepp_decrypt($cipher) : '';
 
         // Audit log: NEVER persist decrypted plaintext in activity logs
-        $field_label = ($field === 'aadhaar') ? 'Aadhaar Number' : 'Bank Account Number';
-        log_admin_activity($pdo, $admin_username, 'sensitive_data_reveal', "Revealed {$field_label} for staff {$emp['full_name']} ({$emp['employee_id']})");
+        if ($field === 'bank_account') {
+            log_admin_activity($pdo, $admin_username, 'bank_credentials_viewed', "Revealed Bank Account Number for staff {$emp['full_name']} ({$emp['employee_id']})");
+        } else {
+            $field_label = ($field === 'aadhaar') ? 'Aadhaar Number' : 'Bank Account Number';
+            log_admin_activity($pdo, $admin_username, 'sensitive_data_reveal', "Revealed {$field_label} for staff {$emp['full_name']} ({$emp['employee_id']})");
+        }
 
         echo json_encode(['success' => true, 'field' => $field, 'value' => $plain]);
     } catch (Exception $e) {
@@ -306,7 +324,21 @@ if (isset($_POST['action']) && $_POST['action'] === 'copy_sensitive_data') {
         $stmt->execute([$emp_id]);
         $emp = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$emp) { echo json_encode(['error' => 'Employee not found.']); exit; }
-        if (!staff_is_generic_type($emp['application_for'] ?? 'employee')) { http_response_code(403); echo json_encode(['error' => 'Faculty records are managed in the Faculties module (faculties.php).']); exit; }
+
+        if (in_array($field, ['bank_account', 'ifsc_code', 'upi_id'], true)) {
+            if (!can_admin_copy_bank_credentials()) {
+                http_response_code(403);
+                echo json_encode(['error' => 'Permission denied: cannot copy bank credentials.']);
+                exit;
+            }
+        }
+
+        // Generic employee management copy endpoint is restricted to generic staff
+        if (!staff_is_generic_type($emp['application_for'] ?? 'employee')) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Faculty records are managed in the Faculties module (faculties.php).']);
+            exit;
+        }
 
         $plain = '';
         if ($field === 'bank_account') {
@@ -321,11 +353,214 @@ if (isset($_POST['action']) && $_POST['action'] === 'copy_sensitive_data') {
 
         // Audit log: NEVER persist plaintext in logs
         $field_label = strtoupper(str_replace('_', ' ', $field));
-        log_admin_activity($pdo, $admin_username, 'sensitive_data_copy', "Copied {$field_label} for staff {$emp['full_name']} ({$emp['employee_id']})");
+        if (in_array($field, ['bank_account', 'ifsc_code', 'upi_id'], true)) {
+            log_admin_activity($pdo, $admin_username, 'bank_credentials_copied', "Copied {$field_label} for staff {$emp['full_name']} ({$emp['employee_id']})");
+        } else {
+            log_admin_activity($pdo, $admin_username, 'sensitive_data_copy', "Copied {$field_label} for staff {$emp['full_name']} ({$emp['employee_id']})");
+        }
 
         echo json_encode(['success' => true, 'field' => $field, 'value' => $plain]);
     } catch (Exception $e) {
         echo json_encode(['error' => 'Failed to copy sensitive data.']);
+    }
+    exit;
+}
+
+// ── AJAX: Load Faculty Details for View/Edit Modal ────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'get_faculty_details' && isset($_GET['id'])) {
+    header('Content-Type: application/json');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+    if (!emp_tables_exist($pdo)) { echo json_encode(['error' => 'Tables not ready']); exit; }
+    try {
+        $stmt = $pdo->prepare("
+            SELECT e.*,
+                   f.id AS linked_faculty_id,
+                   f.name AS linked_faculty_name,
+                   f.status AS linked_faculty_status,
+                   f.academic_year AS linked_faculty_academic_year
+            FROM employees e
+            LEFT JOIN faculties f ON f.employee_management_faculty_id = e.id
+            WHERE e.id = ? AND e.application_for = 'faculty' LIMIT 1
+        ");
+        $stmt->execute([(int)$_GET['id']]);
+        $fac = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$fac) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Faculty record not found.']);
+            exit;
+        }
+
+        // NEVER expose ciphertexts
+        unset($fac['aadhaar_encrypted'], $fac['bank_account_encrypted']);
+
+        // Check bank view permission
+        $can_view_bank = can_admin_view_bank_credentials();
+        $can_copy_bank = can_admin_copy_bank_credentials();
+
+        if (!$can_view_bank) {
+            $fac['bank_name'] = !empty($fac['bank_name']) ? '[Restricted]' : '';
+            $fac['bank_account_masked'] = staff_mask_account_number($fac['bank_account_masked'] ?? '');
+            $fac['ifsc_code'] = staff_mask_ifsc($fac['ifsc_code'] ?? '');
+            $fac['upi_id'] = staff_mask_upi($fac['upi_id'] ?? '');
+        }
+
+        // Faculty-specific custom fields ONLY
+        $custom_fields = [];
+        if (function_exists('staff_get_custom_values')) {
+            $custom_fields = staff_get_custom_values($pdo, (int)$fac['id'], 'faculty');
+        }
+
+        echo json_encode([
+            'success' => true,
+            'faculty' => $fac,
+            'custom_fields' => $custom_fields,
+            'can_view_bank' => $can_view_bank,
+            'can_copy_bank' => $can_copy_bank
+        ]);
+    } catch (Exception $e) {
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── AJAX: Update Faculty Profile ──────────────────────────────────────
+if (isset($_POST['action']) && $_POST['action'] === 'update_faculty_profile') {
+    header('Content-Type: application/json');
+    if (!csrf_verify()) { echo json_encode(['error' => 'Security token mismatch.']); exit; }
+    $emp_id = (int)($_POST['id'] ?? 0);
+    try {
+        $stmt = $pdo->prepare("SELECT * FROM employees WHERE id = ? AND application_for = 'faculty' LIMIT 1");
+        $stmt->execute([$emp_id]);
+        $emp = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$emp) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Faculty record not found.']);
+            exit;
+        }
+
+        $full_name = trim($_POST['full_name'] ?? '');
+        $gender = trim($_POST['gender'] ?? '') ?: null;
+        $dob = trim($_POST['dob'] ?? '') ?: null;
+        $blood_group = trim($_POST['blood_group'] ?? '') ?: null;
+        $email = trim($_POST['email'] ?? '');
+        $mobile = trim($_POST['mobile_number'] ?? '');
+        $address = trim($_POST['permanent_address'] ?? '') ?: null;
+        $state = trim($_POST['state'] ?? '') ?: null;
+        $country = trim($_POST['country'] ?? 'India');
+        $place = trim($_POST['place'] ?? '') ?: null;
+        $pin = trim($_POST['pin'] ?? '') ?: null;
+        $academic_year = trim($_POST['academic_year'] ?? '') ?: null;
+        $status = in_array($_POST['status'] ?? '', ['active', 'inactive'], true) ? $_POST['status'] : 'active';
+
+        if (!$full_name) { echo json_encode(['error' => 'Full Name is required.']); exit; }
+        if (!$email || !filter_var($email, FILTER_VALIDATE_EMAIL)) { echo json_encode(['error' => 'Valid email address is required.']); exit; }
+        if (!$mobile) { echo json_encode(['error' => 'Mobile number is required.']); exit; }
+        if (!$academic_year) { echo json_encode(['error' => 'Academic Year is required.']); exit; }
+
+        // Bank updates (only if provided and not masked placeholder)
+        $bank_name = trim($_POST['bank_name'] ?? '');
+        $bank_account_raw = trim($_POST['bank_account_number'] ?? '');
+        $ifsc_code = strtoupper(trim($_POST['ifsc_code'] ?? ''));
+        $upi_id = trim($_POST['upi_id'] ?? '');
+
+        $bank_account_encrypted = $emp['bank_account_encrypted'];
+        $bank_account_masked = $emp['bank_account_masked'];
+
+        if ($bank_account_raw !== '' && strpos($bank_account_raw, 'X') === false && strpos($bank_account_raw, 'x') === false) {
+            $clean_acc = preg_replace('/\s+/', '', $bank_account_raw);
+            if (strlen($clean_acc) >= 4) {
+                $bank_account_encrypted = pepp_encrypt($clean_acc);
+                $bank_account_masked = staff_mask_account_number($clean_acc);
+            }
+        }
+        if ($bank_name === '' || strpos($bank_name, '[Restricted]') !== false) {
+            $bank_name = $emp['bank_name'];
+        }
+        if ($ifsc_code === '' || strpos($ifsc_code, 'XXXX') !== false) {
+            $ifsc_code = $emp['ifsc_code'];
+        }
+        if ($upi_id === '' || strpos($upi_id, 'Restricted') !== false) {
+            $upi_id = $emp['upi_id'];
+        }
+
+        $pdo->beginTransaction();
+
+        $stmt_upd = $pdo->prepare("
+            UPDATE employees SET
+                full_name = ?, gender = ?, dob = ?, blood_group = ?,
+                email = ?, mobile_number = ?, permanent_address = ?,
+                state = ?, country = ?, place = ?, pin = ?,
+                academic_year = ?, status = ?,
+                bank_name = ?, bank_account_encrypted = ?, bank_account_masked = ?,
+                ifsc_code = ?, upi_id = ?,
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt_upd->execute([
+            $full_name, $gender, $dob, $blood_group,
+            $email, $mobile, $address,
+            $state, $country, $place, $pin,
+            $academic_year, $status,
+            $bank_name, $bank_account_encrypted, $bank_account_masked,
+            $ifsc_code, $upi_id,
+            $emp_id
+        ]);
+
+        // Save faculty custom fields
+        if (function_exists('staff_save_custom_values') && isset($_POST['custom_fields']) && is_array($_POST['custom_fields'])) {
+            staff_save_custom_values($pdo, $emp_id, $_POST['custom_fields'], 'faculty');
+        }
+
+        // Synchronize linked faculties row (name, email, mobile, status, academic_year) WITHOUT overwriting rates, sessions, or payments
+        $pdo->prepare("
+            UPDATE faculties SET
+                name = ?, email = ?, mobile = ?, status = ?, academic_year = ?
+            WHERE employee_management_faculty_id = ?
+        ")->execute([$full_name, $email, $mobile, $status, $academic_year, $emp_id]);
+
+        $pdo->commit();
+
+        log_admin_activity($pdo, $admin_username, 'faculty_profile_updated', "Updated faculty profile {$full_name} ({$emp['employee_id']})");
+
+        echo json_encode(['success' => true, 'message' => 'Faculty profile updated successfully.']);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── AJAX: Toggle Faculty Status (Active / Inactive) ───────────────────
+if (isset($_POST['action']) && $_POST['action'] === 'toggle_faculty_status') {
+    header('Content-Type: application/json');
+    if (!csrf_verify()) { echo json_encode(['error' => 'Security token mismatch.']); exit; }
+    $emp_id = (int)($_POST['id'] ?? 0);
+    try {
+        $stmt = $pdo->prepare("SELECT id, employee_id, full_name, status FROM employees WHERE id = ? AND application_for = 'faculty' LIMIT 1");
+        $stmt->execute([$emp_id]);
+        $emp = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$emp) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Faculty record not found.']);
+            exit;
+        }
+
+        $new_status = ($emp['status'] === 'active') ? 'inactive' : 'active';
+
+        $pdo->beginTransaction();
+        $pdo->prepare("UPDATE employees SET status = ?, updated_at = NOW() WHERE id = ?")->execute([$new_status, $emp_id]);
+
+        // Synchronize linked faculties row status safely
+        $pdo->prepare("UPDATE faculties SET status = ? WHERE employee_management_faculty_id = ?")->execute([$new_status, $emp_id]);
+        $pdo->commit();
+
+        log_admin_activity($pdo, $admin_username, 'faculty_status_changed', "Changed status of faculty {$emp['full_name']} ({$emp['employee_id']}) from {$emp['status']} to {$new_status}");
+
+        echo json_encode(['success' => true, 'new_status' => $new_status, 'message' => "Faculty status changed to " . ucfirst($new_status)]);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
     }
     exit;
 }
@@ -1285,6 +1520,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
 // ── Load Data & Server-Side Filtering ─────────────────────────────────
 $employees = [];
 $applications = [];
+$faculty_list = [];
 $tab = $_GET['tab'] ?? 'employees';
 
 // Filters
@@ -1292,11 +1528,16 @@ $search = trim($_GET['search'] ?? '');
 $status_filter = trim($_GET['status'] ?? '');
 $type_filter = trim($_GET['type'] ?? '');
 $link_filter = trim($_GET['link'] ?? '');
+$fac_year_filter = trim($_GET['academic_year'] ?? '');
 
 $emp_total_count = 0;
 $emp_active_count = 0;
 $emp_prob_count = 0;
 $emp_linked_count = 0;
+
+$fac_total_count = 0;
+$fac_active_count = 0;
+$fac_inactive_count = 0;
 
 if (emp_tables_exist($pdo)) {
     try {
@@ -1305,6 +1546,46 @@ if (emp_tables_exist($pdo)) {
         $emp_active_count = (int)$pdo->query("SELECT COUNT(*) FROM employees WHERE status = 'active' AND " . staff_generic_type_sql())->fetchColumn();
         $emp_prob_count = (int)$pdo->query("SELECT COUNT(*) FROM employees WHERE status IN ('probation', 'contract') AND " . staff_generic_type_sql())->fetchColumn();
         $emp_linked_count = (int)$pdo->query("SELECT COUNT(*) FROM employees WHERE admin_id IS NOT NULL AND " . staff_generic_type_sql())->fetchColumn();
+
+        // Faculty tab counts (Approved faculties only: status NOT IN ('rejected', 'pending'))
+        $fac_total_count = (int)$pdo->query("SELECT COUNT(*) FROM employees WHERE application_for = 'faculty' AND status NOT IN ('rejected', 'pending')")->fetchColumn();
+        $fac_active_count = (int)$pdo->query("SELECT COUNT(*) FROM employees WHERE application_for = 'faculty' AND status = 'active'")->fetchColumn();
+        $fac_inactive_count = (int)$pdo->query("SELECT COUNT(*) FROM employees WHERE application_for = 'faculty' AND status = 'inactive'")->fetchColumn();
+
+        // Load faculties when on faculties tab
+        if ($tab === 'faculties') {
+            $fac_where = ["e.application_for = 'faculty'", "e.status NOT IN ('rejected', 'pending')"];
+            $fac_params = [];
+
+            if ($search !== '') {
+                $fac_where[] = "(e.full_name LIKE ? OR e.employee_id LIKE ? OR e.email LIKE ? OR e.mobile_number LIKE ? OR e.department LIKE ?)";
+                $term = "%{$search}%";
+                $fac_params = array_merge($fac_params, [$term, $term, $term, $term, $term]);
+            }
+            if ($status_filter !== '') {
+                $fac_where[] = "e.status = ?";
+                $fac_params[] = $status_filter;
+            }
+            if ($fac_year_filter !== '') {
+                $fac_where[] = "e.academic_year = ?";
+                $fac_params[] = $fac_year_filter;
+            }
+
+            $fac_sql = "
+                SELECT e.*,
+                       f.id AS linked_faculty_id,
+                       f.name AS linked_faculty_name,
+                       f.status AS linked_faculty_status,
+                       f.academic_year AS linked_faculty_academic_year
+                FROM employees e
+                LEFT JOIN faculties f ON f.employee_management_faculty_id = e.id
+                WHERE " . implode(' AND ', $fac_where) . "
+                ORDER BY e.id DESC
+            ";
+            $stmt_fac_list = $pdo->prepare($fac_sql);
+            $stmt_fac_list->execute($fac_params);
+            $faculty_list = $stmt_fac_list->fetchAll(PDO::FETCH_ASSOC);
+        }
 
         // Filtered employee list — Faculty is isolated (managed in faculties.php)
         $emp_where = [staff_generic_type_sql('e')];
@@ -1383,6 +1664,7 @@ include 'includes/admin_nav.php';
 <div class="panel" style="margin-bottom:1.2rem;">
     <div class="panel-head" style="gap:8px;flex-wrap:wrap;">
         <a href="?tab=employees" class="btn btn-sm <?php echo $tab==='employees' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-id-badge"></i> Approved Staff (<?php echo $emp_total_count; ?>)</a>
+        <a href="?tab=faculties" class="btn btn-sm <?php echo $tab==='faculties' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-chalkboard-user"></i> Faculties (<?php echo $fac_total_count; ?>)</a>
         <a href="?tab=applications" class="btn btn-sm <?php echo $tab==='applications' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-file-alt"></i> Registration Requests (<?php echo count($applications); ?>)
             <?php if ($pending_count > 0): ?><span class="nav-badge" style="background:#f59e0b;color:#fff;margin-left:4px;"><?php echo $pending_count; ?></span><?php endif; ?>
         </a>
@@ -1542,6 +1824,140 @@ include 'includes/admin_nav.php';
     </div>
 </div>
 
+<?php elseif ($tab === 'faculties'): ?>
+<!-- ═══ FACULTIES TAB ═══ -->
+
+<!-- Summary Metrics Cards -->
+<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:14px; margin-bottom:1.2rem;">
+    <div style="background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; display:flex; align-items:center; gap:14px;">
+        <div style="width:44px; height:44px; border-radius:10px; background:#f3e8ff; color:#7c3aed; display:flex; align-items:center; justify-content:center; font-size:1.2rem;"><i class="fas fa-chalkboard-user"></i></div>
+        <div>
+            <div style="font-size:0.75rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Total Faculties</div>
+            <div style="font-size:1.3rem; font-weight:800;"><?= $fac_total_count ?></div>
+        </div>
+    </div>
+    <div style="background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; display:flex; align-items:center; gap:14px;">
+        <div style="width:44px; height:44px; border-radius:10px; background:var(--green-soft); color:var(--green-ink); display:flex; align-items:center; justify-content:center; font-size:1.2rem;"><i class="fas fa-user-check"></i></div>
+        <div>
+            <div style="font-size:0.75rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Active Faculties</div>
+            <div style="font-size:1.3rem; font-weight:800; color:var(--brand-green,#16a34a);"><?= $fac_active_count ?></div>
+        </div>
+    </div>
+    <div style="background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; display:flex; align-items:center; gap:14px;">
+        <div style="width:44px; height:44px; border-radius:10px; background:#fee2e2; color:#ef4444; display:flex; align-items:center; justify-content:center; font-size:1.2rem;"><i class="fas fa-user-xmark"></i></div>
+        <div>
+            <div style="font-size:0.75rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Inactive Faculties</div>
+            <div style="font-size:1.3rem; font-weight:800; color:#ef4444;"><?= $fac_inactive_count ?></div>
+        </div>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-head">
+        <span class="head-icon" style="background:#f3e8ff;color:#7c3aed;"><i class="fas fa-chalkboard-user"></i></span>
+        <h2>Approved Faculty Directory (<?= count($faculty_list) ?>)</h2>
+    </div>
+
+    <!-- Filters Toolbar -->
+    <div class="panel-body filter-toolbar" style="padding:15px; border-bottom:1px solid var(--border); background:#f8fafc;">
+        <form method="GET" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:0; width:100%;">
+            <input type="hidden" name="tab" value="faculties">
+            <div style="flex:1.5; min-width:180px; position:relative;">
+                <i class="fas fa-search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:0.85rem; pointer-events:none;"></i>
+                <input type="text" name="search" value="<?= e($search) ?>" placeholder="Search name, ID, email, mobile, department…" style="width:100% !important; padding:8px 12px 8px 34px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); height:42px !important;">
+            </div>
+            <select name="status" onchange="this.form.submit()" style="flex:1; min-width:125px; width:auto !important; height:42px !important; padding:0 36px 0 12px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
+                <option value="">All Statuses</option>
+                <option value="active" <?= $status_filter === 'active' ? 'selected' : '' ?>>Active</option>
+                <option value="inactive" <?= $status_filter === 'inactive' ? 'selected' : '' ?>>Inactive</option>
+            </select>
+            <input type="text" name="academic_year" value="<?= e($fac_year_filter) ?>" placeholder="Academic Year (e.g. 2026-2027)" style="flex:1; min-width:150px; height:42px !important; padding:8px 12px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text);">
+            <button type="submit" class="btn btn-primary" style="flex-shrink:0; height:42px; padding:0 16px; border-radius:10px; white-space:nowrap; display:inline-flex; align-items:center; gap:6px;"><i class="fas fa-filter"></i> Filter</button>
+            <?php if ($search || $status_filter || $fac_year_filter): ?>
+                <a href="?tab=faculties" class="btn btn-outline" title="Reset Filters" style="flex-shrink:0; height:42px; padding:0 14px; border-radius:10px; white-space:nowrap; display:inline-flex; align-items:center; justify-content:center; gap:6px;"><i class="fas fa-rotate-left"></i> Reset</a>
+            <?php endif; ?>
+        </form>
+    </div>
+
+    <div class="panel-body flush table-wrap">
+        <?php if (empty($faculty_list)): ?>
+            <div style="padding:2.5rem; text-align:center; color:var(--text-muted);">
+                <i class="fas fa-user-slash" style="font-size:2.2rem; opacity:0.3; margin-bottom:10px;"></i>
+                <div>No faculty records found matching your filters.</div>
+            </div>
+        <?php else: ?>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Faculty Name</th>
+                    <th>Faculty ID</th>
+                    <th>Email</th>
+                    <th>Mobile</th>
+                    <th>Department</th>
+                    <th>Academic Year</th>
+                    <th>Faculty Status</th>
+                    <th>Linked Faculty Profile</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($faculty_list as $fac): ?>
+                <tr>
+                    <td>
+                        <div class="cell-main" style="display:flex; align-items:center; gap:8px;">
+                            <div style="width:32px; height:32px; border-radius:50%; background:#f3e8ff; color:#7c3aed; display:flex; align-items:center; justify-content:center; font-size:0.8rem; font-weight:700;">
+                                <?= strtoupper(substr($fac['full_name'], 0, 1)) ?>
+                            </div>
+                            <div>
+                                <span style="font-weight:600;"><?= e($fac['full_name']) ?></span>
+                                <div class="cell-sub" style="font-size:0.75rem;"><?= e($fac['designation'] ?: 'Faculty') ?></div>
+                            </div>
+                        </div>
+                    </td>
+                    <td>
+                        <span class="badge purple" style="font-size:0.75rem;"><?= e($fac['employee_id']) ?></span>
+                    </td>
+                    <td class="cell-sub"><?= e($fac['email']) ?></td>
+                    <td class="cell-sub"><?= e($fac['mobile_number']) ?></td>
+                    <td><?= e($fac['department'] ?: '—') ?></td>
+                    <td><?= e($fac['academic_year'] ?: '—') ?></td>
+                    <td>
+                        <?php if ($fac['status'] === 'active'): ?>
+                            <span class="badge green"><i class="fas fa-circle-check"></i> Active</span>
+                        <?php else: ?>
+                            <span class="badge red"><i class="fas fa-circle-xmark"></i> Inactive</span>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <?php if (!empty($fac['linked_faculty_id'])): ?>
+                            <a href="faculties.php?view=<?= (int)$fac['linked_faculty_id'] ?>" class="btn btn-sm btn-outline" style="font-size:0.75rem; gap:4px;" title="Open Faculty Operations Profile">
+                                <i class="fas fa-arrow-up-right-from-square"></i> Profile #<?= (int)$fac['linked_faculty_id'] ?>
+                            </a>
+                        <?php else: ?>
+                            <span class="badge gray" style="font-size:0.72rem;">Not Linked</span>
+                        <?php endif; ?>
+                    </td>
+                    <td style="text-align:right; white-space:nowrap;">
+                        <button type="button" class="btn btn-sm btn-primary" onclick="openFacultyEditModal(<?= (int)$fac['id'] ?>)" title="View &amp; Edit Faculty Profile">
+                            <i class="fas fa-pen-to-square"></i> View / Edit
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline" style="<?= $fac['status'] === 'active' ? 'color:#ef4444; border-color:#fca5a5;' : 'color:#16a34a; border-color:#86efac;' ?>" onclick="toggleFacultyStatus(<?= (int)$fac['id'] ?>, '<?= e($fac['status']) ?>', '<?= e(addslashes($fac['full_name'])) ?>')" title="Toggle Active / Inactive Status">
+                            <i class="fas <?= $fac['status'] === 'active' ? 'fa-user-slash' : 'fa-user-check' ?>"></i> <?= $fac['status'] === 'active' ? 'Make Inactive' : 'Make Active' ?>
+                        </button>
+                        <?php if (!empty($fac['linked_faculty_id'])): ?>
+                        <a href="faculties.php?view=<?= (int)$fac['linked_faculty_id'] ?>" class="btn btn-sm btn-outline" title="Open Faculty Schedule &amp; Payments">
+                            <i class="fas fa-calendar-days" style="color:#7c3aed;"></i>
+                        </a>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+    </div>
+</div>
+
 <?php elseif ($tab === 'applications'): ?>
 <!-- ═══ REGISTRATION REQUESTS TAB ═══ -->
 <div class="panel">
@@ -1639,6 +2055,176 @@ include 'includes/admin_nav.php';
 </div>
 <?php endif; ?>
 <?php endif; ?>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- ═══ MODAL: FACULTY VIEW / EDIT MODAL ══════════════════════════════ -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div id="facultyEditModal" class="modal-backdrop">
+    <div style="background:var(--card); border:1px solid var(--border); border-radius:16px; padding:1.8rem; max-width:860px; width:100%; max-height:92vh; overflow-y:auto; box-shadow:0 10px 30px rgba(0,0,0,0.2);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.2rem; border-bottom:1px solid var(--border); padding-bottom:12px;">
+            <div style="display:flex; align-items:center; gap:10px;">
+                <span class="head-icon" style="background:#f3e8ff;color:#7c3aed;"><i class="fas fa-chalkboard-user"></i></span>
+                <div>
+                    <h3 style="margin:0; font-size:1.15rem;" id="femTitle">Faculty Profile Details</h3>
+                    <div style="font-size:0.75rem; color:var(--text-muted);" id="femSubTitle">Approved Faculty Information &amp; Banking</div>
+                </div>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline" onclick="closeModal('facultyEditModal')" style="border-radius:50%; width:32px; height:32px; padding:0; display:flex; align-items:center; justify-content:center;">&times;</button>
+        </div>
+
+        <form method="POST" id="facultyEditForm" onsubmit="saveFacultyProfile(event)">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="update_faculty_profile">
+            <input type="hidden" name="emp_id" id="femEmpId">
+
+            <!-- SECTION 1: PERSONAL INFORMATION -->
+            <div style="font-size:0.85rem; font-weight:800; color:var(--accent,#7c3aed); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px; border-bottom:1px solid var(--border); padding-bottom:4px;">
+                <i class="fas fa-user"></i> Personal Information
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Full Name *</label>
+                    <input type="text" name="full_name" id="femFullName" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Gender *</label>
+                    <select name="gender" id="femGender" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        <option value="Male">Male</option>
+                        <option value="Female">Female</option>
+                        <option value="Other">Other</option>
+                        <option value="Prefer not to say">Prefer not to say</option>
+                    </select>
+                </div>
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Date of Birth *</label>
+                    <input type="date" name="date_of_birth" id="femDob" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Blood Group *</label>
+                    <select name="blood_group" id="femBloodGroup" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                        <option value="A+">A+</option><option value="A-">A-</option>
+                        <option value="B+">B+</option><option value="B-">B-</option>
+                        <option value="AB+">AB+</option><option value="AB-">AB-</option>
+                        <option value="O+">O+</option><option value="O-">O-</option>
+                    </select>
+                </div>
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Email Address *</label>
+                    <input type="email" name="email" id="femEmail" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Mobile Number *</label>
+                    <input type="text" name="mobile_number" id="femMobile" required pattern="[0-9]{10}" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                </div>
+            </div>
+
+            <div style="margin-bottom:12px;">
+                <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Address *</label>
+                <textarea name="address" id="femAddress" rows="2" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card); resize:vertical;"></textarea>
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:12px; margin-bottom:16px;">
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Place / City</label>
+                    <input type="text" name="place_post_office" id="femPlace" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">PIN Code</label>
+                    <input type="text" name="pincode" id="femPin" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">State</label>
+                    <input type="text" name="state" id="femState" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Country</label>
+                    <input type="text" name="country" id="femCountry" value="India" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                </div>
+            </div>
+
+            <!-- SECTION 2: FACULTY & ACADEMICS -->
+            <div style="font-size:0.85rem; font-weight:800; color:var(--accent,#7c3aed); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px; border-bottom:1px solid var(--border); padding-bottom:4px;">
+                <i class="fas fa-graduation-cap"></i> Faculty &amp; Academic Status
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:16px;">
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Faculty ID</label>
+                    <input type="text" id="femEmployeeId" readonly style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:#f1f5f9; font-weight:700; color:var(--text); cursor:not-allowed;">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Academic Year *</label>
+                    <input type="text" name="academic_year" id="femAcademicYear" required placeholder="e.g. 2026-2027" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Faculty Status *</label>
+                    <select name="status" id="femStatus" required style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card); font-weight:700;">
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="femLinkedInfo" style="display:none; margin-bottom:16px; padding:10px 14px; background:#f8fafc; border:1px solid var(--border); border-radius:10px; font-size:0.82rem; color:var(--text-muted);">
+                <i class="fas fa-link" style="color:#7c3aed;"></i> Linked to Faculty Operations Profile: <strong id="femLinkedName" style="color:var(--text);"></strong> (<span id="femLinkedId"></span>). <em>Session rates and schedules are managed in faculties.php.</em>
+            </div>
+
+            <!-- SECTION 3: BANKING DETAILS -->
+            <div style="font-size:0.85rem; font-weight:800; color:var(--accent,#7c3aed); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px; border-bottom:1px solid var(--border); padding-bottom:4px;">
+                <i class="fas fa-building-columns"></i> Banking Credentials
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Bank Name</label>
+                    <input type="text" name="bank_name" id="femBankName" placeholder="e.g. State Bank of India" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">Account Number</label>
+                    <div style="display:flex; gap:6px;">
+                        <input type="text" id="femBankAccDisplay" readonly style="flex:1; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:#f8fafc; font-family:monospace; letter-spacing:1px; color:var(--text);">
+                        <button type="button" class="btn btn-sm btn-outline" id="femRevealBankBtn" onclick="revealFacultyBankInModal()" style="font-size:0.75rem;"><i class="fas fa-eye"></i> Reveal</button>
+                        <button type="button" class="btn btn-sm btn-outline" id="femCopyBankBtn" onclick="copyFacultyBankInModal()" style="font-size:0.75rem;"><i class="fas fa-copy"></i> Copy</button>
+                    </div>
+                    <div style="margin-top:6px;">
+                        <input type="text" name="bank_account_number" id="femBankAccInput" placeholder="Update Account Number (Leave empty to keep existing)" style="width:100%; padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:0.8rem; background:var(--card);">
+                    </div>
+                </div>
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">IFSC Code</label>
+                    <input type="text" name="ifsc_code" id="femIfsc" placeholder="e.g. SBIN0001234" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card); font-family:monospace;">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">UPI ID</label>
+                    <input type="text" name="upi_id" id="femUpi" placeholder="e.g. name@upi" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">
+                </div>
+            </div>
+
+            <!-- SECTION 4: FACULTY CUSTOM FIELDS -->
+            <div id="femCustomFieldsWrap" style="display:none; margin-bottom:16px;">
+                <div style="font-size:0.85rem; font-weight:800; color:var(--accent,#7c3aed); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px; border-bottom:1px solid var(--border); padding-bottom:4px;">
+                    <i class="fas fa-puzzle-piece"></i> Faculty Custom Fields
+                </div>
+                <div id="femCustomFieldsContainer" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;"></div>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:8px; border-top:1px solid var(--border); padding-top:14px; margin-top:10px;">
+                <button type="button" class="btn btn-sm btn-outline" onclick="closeModal('facultyEditModal')">Cancel</button>
+                <button type="submit" class="btn btn-sm btn-primary" id="femSaveBtn"><i class="fas fa-check"></i> Save Faculty Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
 
 <!-- ═══════════════════════════════════════════════════════════════════ -->
 <!-- ═══ MODAL 1: COMPLETE STAFF VIEW / EDIT MODAL (TABBED) ════════════ -->
@@ -2932,10 +3518,224 @@ function viewApp(id) {
     }).catch(()=>{document.getElementById('viewContent').innerHTML='Error loading details.';});
 }
 
+// ═══ FACULTY PROFILE MODAL & STATUS JS ═══════════════════════════════
+function openFacultyEditModal(empId) {
+    document.getElementById('femEmpId').value = empId;
+    document.getElementById('femTitle').textContent = 'Loading Faculty Profile…';
+    document.getElementById('femSubTitle').textContent = 'Fetching faculty information…';
+    document.getElementById('femBankAccDisplay').value = 'XXXX1234';
+    document.getElementById('femBankAccInput').value = '';
+    document.getElementById('femRevealBankBtn').innerHTML = '<i class="fas fa-eye"></i> Reveal';
+    document.getElementById('femRevealBankBtn').disabled = false;
+    document.getElementById('femCopyBankBtn').innerHTML = '<i class="fas fa-copy"></i> Copy';
+    document.getElementById('femCopyBankBtn').disabled = false;
+
+    openModal('facultyEditModal');
+
+    fetch('employee-management.php?action=get_faculty_details&id=' + empId)
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success || !d.faculty) {
+                alert(d.error || 'Failed to load faculty details.');
+                closeModal('facultyEditModal');
+                return;
+            }
+            const fac = d.faculty;
+            document.getElementById('femTitle').textContent = fac.full_name + ' (' + fac.employee_id + ')';
+            document.getElementById('femSubTitle').textContent = 'Approved Faculty · ' + (fac.academic_year || 'Year Not Set');
+            document.getElementById('femFullName').value = fac.full_name || '';
+            document.getElementById('femGender').value = fac.gender || 'Male';
+            document.getElementById('femDob').value = fac.date_of_birth || '';
+            document.getElementById('femBloodGroup').value = fac.blood_group || 'O+';
+            document.getElementById('femEmail').value = fac.email || '';
+            document.getElementById('femMobile').value = fac.mobile_number || '';
+            document.getElementById('femAddress').value = fac.address || '';
+            document.getElementById('femPlace').value = fac.place_post_office || '';
+            document.getElementById('femPin').value = fac.pincode || '';
+            document.getElementById('femState').value = fac.state || '';
+            document.getElementById('femCountry').value = fac.country || 'India';
+
+            document.getElementById('femEmployeeId').value = fac.employee_id || '';
+            document.getElementById('femAcademicYear').value = fac.academic_year || '';
+            document.getElementById('femStatus').value = fac.status || 'active';
+
+            if (fac.linked_faculty_id) {
+                document.getElementById('femLinkedInfo').style.display = 'block';
+                document.getElementById('femLinkedName').textContent = fac.linked_faculty_name || fac.full_name;
+                document.getElementById('femLinkedId').textContent = 'Profile #' + fac.linked_faculty_id;
+            } else {
+                document.getElementById('femLinkedInfo').style.display = 'none';
+            }
+
+            document.getElementById('femBankName').value = fac.bank_name || '';
+            document.getElementById('femBankAccDisplay').value = fac.bank_account_masked || 'XXXX1234';
+            document.getElementById('femIfsc').value = fac.ifsc_code || '';
+            document.getElementById('femUpi').value = fac.upi_id || '';
+
+            // Custom fields render
+            const cfContainer = document.getElementById('femCustomFieldsContainer');
+            cfContainer.innerHTML = '';
+            if (d.custom_fields && d.custom_fields.length > 0) {
+                d.custom_fields.forEach(cf => {
+                    const wrap = document.createElement('div');
+                    const lbl = cf.field_label || cf.field_name || 'Custom Field';
+                    wrap.innerHTML = '<label style="display:block; font-size:0.8rem; font-weight:700; margin-bottom:4px;">' + lbl + (cf.is_required == 1 ? ' *' : '') + '</label>';
+                    let inp = '';
+                    const optionsStr = cf.field_options || cf.dropdown_options || '';
+                    if (cf.field_type === 'dropdown') {
+                        const opts = optionsStr ? optionsStr.split(',').map(o => o.trim()) : [];
+                        inp = '<select name="custom_fields[' + cf.id + ']" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">';
+                        inp += '<option value="">— Select —</option>';
+                        opts.forEach(o => {
+                            const escapedOpt = o.replace(/"/g, '&quot;');
+                            inp += '<option value="' + escapedOpt + '" ' + (cf.field_value === o ? 'selected' : '') + '>' + o + '</option>';
+                        });
+                        inp += '</select>';
+                    } else if (cf.field_type === 'textarea') {
+                        inp = '<textarea name="custom_fields[' + cf.id + ']" rows="2" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card); resize:vertical;">' + (cf.field_value || '') + '</textarea>';
+                    } else {
+                        inp = '<input type="' + (cf.field_type === 'number' ? 'number' : (cf.field_type === 'date' ? 'date' : 'text')) + '" name="custom_fields[' + cf.id + ']" value="' + (cf.field_value || '').replace(/"/g, '&quot;') + '" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card);">';
+                    }
+                    wrap.innerHTML += inp;
+                    cfContainer.appendChild(wrap);
+                });
+                document.getElementById('femCustomFieldsWrap').style.display = 'block';
+            } else {
+                document.getElementById('femCustomFieldsWrap').style.display = 'none';
+            }
+        })
+        .catch(() => {
+            alert('Server error loading faculty details.');
+            closeModal('facultyEditModal');
+        });
+}
+
+function revealFacultyBankInModal() {
+    const empId = document.getElementById('femEmpId').value;
+    const btn = document.getElementById('femRevealBankBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+    const fd = new FormData();
+    fd.append('action', 'reveal_sensitive_data');
+    fd.append('id', empId);
+    fd.append('field', 'bank_account');
+    fd.append('csrf_token', CSRF_TOKEN);
+
+    fetch('employee-management.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            if (d.success && d.value) {
+                document.getElementById('femBankAccDisplay').value = d.value;
+                btn.innerHTML = '<i class="fas fa-eye-slash"></i> Revealed';
+            } else {
+                alert(d.error || 'Permission denied: cannot reveal bank account.');
+                btn.innerHTML = '<i class="fas fa-eye"></i> Reveal';
+            }
+        })
+        .catch(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-eye"></i> Reveal';
+            alert('Server error revealing bank account.');
+        });
+}
+
+function copyFacultyBankInModal() {
+    const empId = document.getElementById('femEmpId').value;
+    const btn = document.getElementById('femCopyBankBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+    const fd = new FormData();
+    fd.append('action', 'copy_sensitive_data');
+    fd.append('id', empId);
+    fd.append('field', 'bank_account');
+    fd.append('csrf_token', CSRF_TOKEN);
+
+    fetch('employee-management.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            if (d.success && d.value) {
+                navigator.clipboard.writeText(d.value).then(() => {
+                    btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+                    setTimeout(() => { btn.innerHTML = '<i class="fas fa-copy"></i> Copy'; }, 2000);
+                }).catch(() => {
+                    alert('Clipboard access denied. Bank account: ' + d.value);
+                    btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+                });
+            } else {
+                alert(d.error || 'Permission denied: cannot copy bank account.');
+                btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+            }
+        })
+        .catch(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+            alert('Server error copying bank account.');
+        });
+}
+
+function saveFacultyProfile(e) {
+    e.preventDefault();
+    const btn = document.getElementById('femSaveBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…';
+
+    const form = document.getElementById('facultyEditForm');
+    const fd = new FormData(form);
+
+    fetch('employee-management.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-check"></i> Save Faculty Changes';
+            if (d.success) {
+                alert(d.message || 'Faculty profile updated successfully.');
+                closeModal('facultyEditModal');
+                window.location.reload();
+            } else {
+                alert(d.error || 'Failed to update faculty profile.');
+            }
+        })
+        .catch(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-check"></i> Save Faculty Changes';
+            alert('Server error saving faculty profile.');
+        });
+}
+
+function toggleFacultyStatus(empId, currentStatus, name) {
+    const nextStatus = currentStatus === 'active' ? 'Inactive' : 'Active';
+    if (!confirm('Are you sure you want to change status of faculty "' + name + '" to ' + nextStatus + '?')) {
+        return;
+    }
+
+    const fd = new FormData();
+    fd.append('action', 'toggle_faculty_status');
+    fd.append('id', empId);
+    fd.append('csrf_token', CSRF_TOKEN);
+
+    fetch('employee-management.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            if (d.success) {
+                alert(d.message || 'Status updated successfully.');
+                window.location.reload();
+            } else {
+                alert(d.error || 'Failed to update status.');
+            }
+        })
+        .catch(() => {
+            alert('Server error updating status.');
+        });
+}
+
 // Escape key to close open modals
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-        ['approvalModal', 'internApprovalModal', 'facultyApprovalModal', 'rejectModal', 'viewModal', 'cfModal', 'staffEditModal', 'quickStatusModal'].forEach(id => {
+        ['approvalModal', 'internApprovalModal', 'facultyApprovalModal', 'rejectModal', 'viewModal', 'cfModal', 'staffEditModal', 'quickStatusModal', 'facultyEditModal'].forEach(id => {
             const m = document.getElementById(id);
             if (m && m.classList.contains('open')) {
                 closeModal(id);

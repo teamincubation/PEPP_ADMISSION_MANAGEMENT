@@ -907,7 +907,7 @@ $conn = $pdo;
 
     // Centralized Version-Aware Schema Migration Architecture
     if (!defined('PEPP_DB_SCHEMA_VERSION')) {
-        define('PEPP_DB_SCHEMA_VERSION', '2026.10.05.1');
+        define('PEPP_DB_SCHEMA_VERSION', '2026.10.05.2');
     }
 
     // Staff application-type architecture (scoped employee email uniqueness + type-scoped custom fields)

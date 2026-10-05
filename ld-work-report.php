@@ -143,6 +143,117 @@ if (!empty($_GET['paid'])) {
     $success_message = "Payment logged successfully. Voucher: " . htmlspecialchars(strip_tags($_GET['paid']));
 }
 
+require_once __DIR__ . '/includes/encryption_helper.php';
+require_once __DIR__ . '/includes/staff_type_helper.php';
+
+function get_intern_employee_record($pdo, $admin_id) {
+    // 1. By admin_id in employees
+    $stmt = $pdo->prepare("SELECT id, employee_id, full_name, email, bank_name, bank_account_encrypted, bank_account_masked, ifsc_code, upi_id FROM employees WHERE admin_id = ? AND application_for = 'intern' AND application_for IN ('employee','intern') LIMIT 1");
+    $stmt->execute([$admin_id]);
+    $emp = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($emp) return $emp;
+
+    // 2. Via staff_registration_requests approved_admin_id -> employee_record_id
+    try {
+        $stmt_srr = $pdo->prepare("
+            SELECT e.id, e.employee_id, e.full_name, e.email, e.bank_name, e.bank_account_encrypted, e.bank_account_masked, e.ifsc_code, e.upi_id
+            FROM staff_registration_requests srr
+            JOIN employees e ON e.id = srr.employee_record_id
+            WHERE srr.approved_admin_id = ? AND e.application_for = 'intern' AND e.application_for IN ('employee','intern')
+            LIMIT 1
+        ");
+        $stmt_srr->execute([$admin_id]);
+        $emp2 = $stmt_srr->fetch(PDO::FETCH_ASSOC);
+        if ($emp2) return $emp2;
+    } catch (Exception $e) {}
+
+    // 3. Fallback: match by email from admins
+    $stmt_adm = $pdo->prepare("SELECT email FROM admins WHERE id = ? LIMIT 1");
+    $stmt_adm->execute([$admin_id]);
+    $adm_email = $stmt_adm->fetchColumn();
+    if ($adm_email) {
+        $stmt_em = $pdo->prepare("SELECT id, employee_id, full_name, email, bank_name, bank_account_encrypted, bank_account_masked, ifsc_code, upi_id FROM employees WHERE email = ? AND application_for = 'intern' AND application_for IN ('employee','intern') LIMIT 1");
+        $stmt_em->execute([$adm_email]);
+        $emp3 = $stmt_em->fetch(PDO::FETCH_ASSOC);
+        if ($emp3) return $emp3;
+    }
+
+    return null;
+}
+
+// ── AJAX: Reveal / Copy Intern Bank Credentials ─────────────────────────
+if (isset($_POST['action']) && in_array($_POST['action'], ['reveal_intern_bank', 'copy_intern_bank'], true)) {
+    header('Content-Type: application/json');
+    if (!csrf_verify()) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Security token mismatch.']);
+        exit;
+    }
+
+    $intern_admin_id = (int)($_POST['intern_id'] ?? 0);
+    $field = trim($_POST['field'] ?? 'bank_account');
+    $is_copy = ($_POST['action'] === 'copy_intern_bank');
+
+    // Server-side permission check
+    if ($is_copy) {
+        if (!can_admin_copy_bank_credentials($pdo)) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Permission denied: Cannot copy bank credentials.']);
+            exit;
+        }
+    } else {
+        if (!can_admin_view_bank_credentials($pdo)) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Permission denied: Cannot view bank credentials.']);
+            exit;
+        }
+    }
+
+    try {
+        $stmt_adm = $pdo->prepare("SELECT id, username, full_name FROM admins WHERE id = ? LIMIT 1");
+        $stmt_adm->execute([$intern_admin_id]);
+        $adm = $stmt_adm->fetch(PDO::FETCH_ASSOC);
+        if (!$adm) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Intern admin record not found.']);
+            exit;
+        }
+
+        $emp = get_intern_employee_record($pdo, $intern_admin_id);
+        if (!$emp) {
+            http_response_code(404);
+            echo json_encode(['error' => 'No linked approved Intern employee record found.']);
+            exit;
+        }
+
+        $val = null;
+        if ($field === 'bank_account') {
+            if (!empty($emp['bank_account_encrypted'])) {
+                $val = pepp_decrypt($emp['bank_account_encrypted']);
+            }
+        } elseif ($field === 'ifsc') {
+            $val = $emp['ifsc_code'] ?? '';
+        } elseif ($field === 'upi') {
+            $val = $emp['upi_id'] ?? '';
+        }
+
+        if ($val === null || $val === false || $val === '') {
+            echo json_encode(['error' => 'Requested credential is not on file.']);
+            exit;
+        }
+
+        $log_action = $is_copy ? 'bank_credentials_copied' : 'bank_credentials_viewed';
+        $log_detail = ($is_copy ? 'Copied' : 'Revealed') . " bank field '{$field}' for Intern {$adm['full_name']} (@{$adm['username']}, Emp: {$emp['employee_id']}) on ld-work-report.php";
+        log_admin_activity($pdo, $admin_username, $log_action, $log_detail);
+
+        echo json_encode(['success' => true, 'value' => (string)$val, 'field' => $field]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!csrf_verify()) {
         $action = $_POST['action'] ?? '';
@@ -976,7 +1087,31 @@ if ($tab === 'payments') {
             }
         } catch (Throwable $e) {}
 
+        $can_view_bank = can_admin_view_bank_credentials($pdo);
+
         foreach ($all_interns as $intern) {
+            $intern_bank = get_intern_employee_record($pdo, (int)$intern['id']);
+            $has_bank = !empty($intern_bank);
+
+            $bank_name = '';
+            $bank_acc_masked = '';
+            $ifsc = '';
+            $upi = '';
+
+            if ($has_bank) {
+                if ($can_view_bank) {
+                    $bank_name = $intern_bank['bank_name'] ?? '';
+                    $bank_acc_masked = $intern_bank['bank_account_masked'] ?? 'XXXX XXXX 1234';
+                    $ifsc = $intern_bank['ifsc_code'] ?? '';
+                    $upi = $intern_bank['upi_id'] ?? '';
+                } else {
+                    $bank_name = '[Masked / Restricted]';
+                    $bank_acc_masked = $intern_bank['bank_account_masked'] ?: 'XXXX XXXX 1234';
+                    $ifsc = 'XXXX0000000';
+                    $upi = 'Restricted';
+                }
+            }
+
             $intern_payouts[] = [
                 'id' => $intern['id'],
                 'username' => $intern['username'],
@@ -985,7 +1120,12 @@ if ($tab === 'payments') {
                 'joining_date' => $intern['joining_date'],
                 'expected' => $batch_expected[$intern['username']] ?? 0.00,
                 'paid' => $batch_paid[(int)$intern['id']] ?? 0.00,
-                'pending' => $batch_pending[$intern['username']] ?? 0.00
+                'pending' => $batch_pending[$intern['username']] ?? 0.00,
+                'has_bank' => $has_bank,
+                'bank_name' => $bank_name,
+                'bank_account_masked' => $bank_acc_masked,
+                'ifsc_code' => $ifsc,
+                'upi_id' => $upi,
             ];
         }
     } catch (Exception $e) {
@@ -2309,6 +2449,58 @@ include 'includes/admin_nav.php';
 
                     <div id="modal-alert-box" style="margin-bottom:12px;"></div>
 
+                    <!-- Intern Payment Credentials -->
+                    <div id="modal-bank-container" style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:14px; margin-bottom:14px;">
+                        <div style="font-weight:700; font-size:0.85rem; color:#166534; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px; display:flex; align-items:center; gap:6px;">
+                            <i class="fas fa-building-columns"></i> Intern Payment Credentials
+                        </div>
+                        
+                        <div id="modal-bank-no-details" style="display:none; color:var(--text-muted); font-size:0.85rem;">
+                            <i class="fas fa-circle-info"></i> No banking credentials on file for this intern in approved staff records.
+                        </div>
+
+                        <div id="modal-bank-restricted-alert" style="display:none; margin-bottom:10px; padding:8px 12px; background:#fef3c7; border:1px solid #fde68a; border-radius:6px; color:#92400e; font-size:0.8rem;">
+                            <i class="fas fa-lock"></i> Bank credentials are restricted for your account.
+                        </div>
+
+                        <div id="modal-bank-details-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:12px; font-size:0.85rem;">
+                            <div>
+                                <div style="font-size:0.75rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Bank Name</div>
+                                <div id="modal-bank-name" style="font-weight:700; color:var(--text); margin-top:2px;">—</div>
+                            </div>
+                            <div>
+                                <div style="font-size:0.75rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Account Number</div>
+                                <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
+                                    <span id="modal-bank-account" style="font-family:monospace; font-weight:700; letter-spacing:0.5px;">—</span>
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-reveal-intern-bank" onclick="revealInternBankModal()" style="padding:2px 8px; font-size:0.75rem; height:26px;">
+                                        <i class="fas fa-eye"></i> Reveal
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-copy-intern-bank" onclick="copyInternBankModal('bank_account')" style="padding:2px 8px; font-size:0.75rem; height:26px;">
+                                        <i class="fas fa-copy"></i> Copy
+                                    </button>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="font-size:0.75rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">IFSC Code</div>
+                                <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
+                                    <span id="modal-bank-ifsc" style="font-family:monospace; font-weight:700;">—</span>
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-copy-intern-ifsc" onclick="copyInternBankModal('ifsc')" style="padding:2px 8px; font-size:0.75rem; height:26px;">
+                                        <i class="fas fa-copy"></i> Copy
+                                    </button>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="font-size:0.75rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">UPI ID</div>
+                                <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
+                                    <span id="modal-bank-upi" style="font-weight:700;">—</span>
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-copy-intern-upi" onclick="copyInternBankModal('upi')" style="padding:2px 8px; font-size:0.75rem; height:26px;">
+                                        <i class="fas fa-copy"></i> Copy
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="form-grid">
                         <div class="field">
                             <label>Period Start Date <span class="req">*</span></label>
@@ -2395,12 +2587,10 @@ include 'includes/admin_nav.php';
 
     <!-- JS for Payout Dashboard -->
     <script>
+    const CAN_VIEW_BANK = <?php echo can_admin_view_bank_credentials($pdo) ? 'true' : 'false'; ?>;
+    const CAN_COPY_BANK = <?php echo can_admin_copy_bank_credentials($pdo) ? 'true' : 'false'; ?>;
     var selectedIntern = null;
     var currentExpected = 0.00;
-
-
-
-    var selectedIntern = null;
 
     function openPayModal(intern) {
         selectedIntern = intern;
@@ -2408,6 +2598,60 @@ include 'includes/admin_nav.php';
         document.getElementById('modal-intern-name').textContent = intern.full_name;
         document.getElementById('modal-intern-username').textContent = '@' + intern.username;
         document.getElementById('modal-intern-joining').textContent = intern.joining_date;
+
+        // Reset bank credentials display
+        document.getElementById('modal-bank-name').textContent = intern.bank_name || '—';
+        document.getElementById('modal-bank-account').textContent = intern.bank_account_masked || 'XXXX XXXX 1234';
+        document.getElementById('modal-bank-ifsc').textContent = intern.ifsc_code || '—';
+        document.getElementById('modal-bank-upi').textContent = intern.upi_id || '—';
+
+        const revealBtn = document.getElementById('btn-reveal-intern-bank');
+        const copyAccBtn = document.getElementById('btn-copy-intern-bank');
+        const copyIfscBtn = document.getElementById('btn-copy-intern-ifsc');
+        const copyUpiBtn = document.getElementById('btn-copy-intern-upi');
+        const restrictedAlert = document.getElementById('modal-bank-restricted-alert');
+        const noDetails = document.getElementById('modal-bank-no-details');
+        const detailsGrid = document.getElementById('modal-bank-details-grid');
+
+        if (revealBtn) {
+            revealBtn.disabled = false;
+            revealBtn.innerHTML = '<i class="fas fa-eye"></i> Reveal';
+        }
+        if (copyAccBtn) {
+            copyAccBtn.disabled = false;
+            copyAccBtn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+        }
+        if (copyIfscBtn) {
+            copyIfscBtn.disabled = false;
+            copyIfscBtn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+        }
+        if (copyUpiBtn) {
+            copyUpiBtn.disabled = false;
+            copyUpiBtn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+        }
+
+        if (!intern.has_bank) {
+            if (noDetails) noDetails.style.display = 'block';
+            if (detailsGrid) detailsGrid.style.display = 'none';
+            if (restrictedAlert) restrictedAlert.style.display = 'none';
+        } else {
+            if (noDetails) noDetails.style.display = 'none';
+            if (detailsGrid) detailsGrid.style.display = 'grid';
+
+            if (!CAN_VIEW_BANK) {
+                if (restrictedAlert) restrictedAlert.style.display = 'block';
+                if (revealBtn) revealBtn.style.display = 'none';
+                if (copyAccBtn) copyAccBtn.style.display = 'none';
+                if (copyIfscBtn) copyIfscBtn.style.display = 'none';
+                if (copyUpiBtn) copyUpiBtn.style.display = 'none';
+            } else {
+                if (restrictedAlert) restrictedAlert.style.display = 'none';
+                if (revealBtn) revealBtn.style.display = 'inline-flex';
+                if (copyAccBtn) copyAccBtn.style.display = CAN_COPY_BANK ? 'inline-flex' : 'none';
+                if (copyIfscBtn) copyIfscBtn.style.display = (CAN_COPY_BANK && intern.ifsc_code) ? 'inline-flex' : 'none';
+                if (copyUpiBtn) copyUpiBtn.style.display = (CAN_COPY_BANK && intern.upi_id) ? 'inline-flex' : 'none';
+            }
+        }
 
         // Reset fields
         document.getElementById('modal-period-start').value = '';
@@ -2427,6 +2671,86 @@ include 'includes/admin_nav.php';
 
         currentExpected = 0.00;
         openModal('pay-modal');
+    }
+
+    function revealInternBankModal() {
+        if (!selectedIntern || !selectedIntern.id) return;
+        const btn = document.getElementById('btn-reveal-intern-bank');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        }
+
+        const fd = new FormData();
+        fd.append('action', 'reveal_intern_bank');
+        fd.append('intern_id', selectedIntern.id);
+        fd.append('field', 'bank_account');
+        fd.append('csrf_token', '<?= csrf_token() ?>');
+
+        fetch('ld-work-report.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(d => {
+                if (btn) btn.disabled = false;
+                if (d.success && d.value) {
+                    document.getElementById('modal-bank-account').textContent = d.value;
+                    if (btn) btn.innerHTML = '<i class="fas fa-eye-slash"></i> Revealed';
+                } else {
+                    alert(d.error || 'Permission denied: Cannot reveal bank account.');
+                    if (btn) btn.innerHTML = '<i class="fas fa-eye"></i> Reveal';
+                }
+            })
+            .catch(() => {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-eye"></i> Reveal';
+                }
+                alert('Server error revealing bank credentials.');
+            });
+    }
+
+    function copyInternBankModal(field) {
+        if (!selectedIntern || !selectedIntern.id) return;
+        let btn = document.getElementById('btn-copy-intern-bank');
+        if (field === 'ifsc') btn = document.getElementById('btn-copy-intern-ifsc');
+        if (field === 'upi') btn = document.getElementById('btn-copy-intern-upi');
+
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        }
+
+        const fd = new FormData();
+        fd.append('action', 'copy_intern_bank');
+        fd.append('intern_id', selectedIntern.id);
+        fd.append('field', field);
+        fd.append('csrf_token', '<?= csrf_token() ?>');
+
+        fetch('ld-work-report.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(d => {
+                if (btn) btn.disabled = false;
+                if (d.success && d.value) {
+                    navigator.clipboard.writeText(d.value).then(() => {
+                        if (btn) {
+                            btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+                            setTimeout(() => { btn.innerHTML = '<i class="fas fa-copy"></i> Copy'; }, 2000);
+                        }
+                    }).catch(() => {
+                        alert('Clipboard access denied. Value: ' + d.value);
+                        if (btn) btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+                    });
+                } else {
+                    alert(d.error || 'Permission denied: Cannot copy bank credentials.');
+                    if (btn) btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+                }
+            })
+            .catch(() => {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+                }
+                alert('Server error copying bank credentials.');
+            });
     }
 
     function onPeriodDateChange() {

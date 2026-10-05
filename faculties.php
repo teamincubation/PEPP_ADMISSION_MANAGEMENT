@@ -28,6 +28,91 @@ $TYPE_RATE   = ['live' => 'rate_live', 'qpd' => 'rate_qpd', 'recorded' => 'rate_
 $sessions_ready = false;
 try { $sessions_ready = (bool)$pdo->query("SHOW TABLES LIKE 'sessions'")->fetchColumn(); } catch (Exception $e) {}
 
+require_once __DIR__ . '/includes/encryption_helper.php';
+require_once __DIR__ . '/includes/staff_type_helper.php';
+
+// ── AJAX: Reveal / Copy Bank Credentials for Faculty ───────────────────
+if (isset($_POST['action']) && in_array($_POST['action'], ['reveal_faculty_bank', 'copy_faculty_bank'], true)) {
+    header('Content-Type: application/json');
+    if (!csrf_verify()) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Security token mismatch.']);
+        exit;
+    }
+
+    $fac_id = (int)($_POST['faculty_id'] ?? 0);
+    $field = trim($_POST['field'] ?? 'bank_account');
+    $is_copy = ($_POST['action'] === 'copy_faculty_bank');
+
+    // Server-side permission check
+    if ($is_copy) {
+        if (!can_admin_copy_bank_credentials($pdo)) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Permission denied: Cannot copy bank credentials.']);
+            exit;
+        }
+    } else {
+        if (!can_admin_view_bank_credentials($pdo)) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Permission denied: Cannot view bank credentials.']);
+            exit;
+        }
+    }
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT f.id AS faculty_id, f.name AS faculty_name, f.employee_management_faculty_id,
+                   e.id AS emp_id, e.employee_id, e.full_name,
+                   e.bank_name, e.bank_account_encrypted, e.bank_account_masked,
+                   e.ifsc_code, e.upi_id
+            FROM faculties f
+            LEFT JOIN employees e ON e.id = f.employee_management_faculty_id
+            WHERE f.id = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$fac_id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Faculty record not found.']);
+            exit;
+        }
+
+        if (empty($row['emp_id'])) {
+            http_response_code(404);
+            echo json_encode(['error' => 'This faculty is not linked to an Employee Management record.']);
+            exit;
+        }
+
+        $val = null;
+        if ($field === 'bank_account') {
+            if (!empty($row['bank_account_encrypted'])) {
+                $val = pepp_decrypt($row['bank_account_encrypted']);
+            }
+        } elseif ($field === 'ifsc') {
+            $val = $row['ifsc_code'] ?? '';
+        } elseif ($field === 'upi') {
+            $val = $row['upi_id'] ?? '';
+        }
+
+        if ($val === null || $val === false || $val === '') {
+            echo json_encode(['error' => 'Requested credential is not on file.']);
+            exit;
+        }
+
+        $log_action = $is_copy ? 'bank_credentials_copied' : 'bank_credentials_viewed';
+        $log_detail = ($is_copy ? 'Copied' : 'Revealed') . " bank field '{$field}' for Faculty {$row['faculty_name']} (Faculty #{$fac_id}, Emp: {$row['employee_id']}) on faculties.php";
+        log_admin_activity($pdo, $admin_username, $log_action, $log_detail);
+
+        echo json_encode(['success' => true, 'value' => (string)$val, 'field' => $field]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!csrf_verify()) {
         $error_message = 'Security token mismatch. Please retry.';
@@ -268,6 +353,7 @@ function faculty_paid_total($pdo, $fid) {
 /* ── Single-faculty detail view ─────────────────────────────────── */
 $view_id = (int)($_GET['view'] ?? 0);
 $detail = null; $detail_sessions = []; $detail_payments = []; $detail_calc = null; $detail_custom = [];
+$detail_emp_bank = null;
 if ($view_id) {
     try {
         $stmt = $pdo->prepare("SELECT * FROM faculties WHERE id = ?"); $stmt->execute([$view_id]);
@@ -284,6 +370,12 @@ if ($view_id) {
                     staff_get_custom_values($pdo, (int)$detail['employee_management_faculty_id'], 'faculty'),
                     fn($r) => isset($r['field_value']) && $r['field_value'] !== ''
                 );
+            }
+            // Linked employee bank details (source of truth for payment banking)
+            if (!empty($detail['employee_management_faculty_id'])) {
+                $stmt_eb = $pdo->prepare("SELECT id, employee_id, full_name, bank_name, bank_account_masked, ifsc_code, upi_id FROM employees WHERE id = ?");
+                $stmt_eb->execute([(int)$detail['employee_management_faculty_id']]);
+                $detail_emp_bank = $stmt_eb->fetch(PDO::FETCH_ASSOC);
             }
             if ($sessions_ready) {
                 $stmt = $pdo->prepare("SELECT * FROM sessions WHERE faculty_id = ? ORDER BY session_datetime DESC LIMIT 100");
@@ -378,6 +470,95 @@ include 'includes/admin_nav.php';
 </div>
 <?php endif; ?>
 
+<!-- ═══ BANKING DETAILS FOR PAYMENT ═══ -->
+<?php
+$can_view_bank = can_admin_view_bank_credentials($pdo);
+$can_copy_bank = can_admin_copy_bank_credentials($pdo);
+?>
+<div class="panel" style="margin-bottom:16px;">
+    <div class="panel-head">
+        <span class="head-icon" style="background:#dcfce7;color:#16a34a;"><i class="fas fa-building-columns"></i></span>
+        <h2>Banking Details for Payment</h2>
+        <?php if (!empty($detail['employee_management_faculty_id'])): ?>
+            <div class="head-right">
+                <span class="badge blue" style="font-size:0.75rem;"><i class="fas fa-link"></i> Linked to Employee Management</span>
+            </div>
+        <?php endif; ?>
+    </div>
+    <div class="panel-body">
+        <?php if (!$detail_emp_bank): ?>
+            <div style="color:var(--text-muted); font-size:0.85rem;">
+                <i class="fas fa-info-circle"></i> No linked Employee Management record or banking details on file for this faculty member.
+            </div>
+        <?php elseif (!$can_view_bank): ?>
+            <div class="alert alert-warn" style="margin-bottom:12px; font-size:0.85rem;">
+                <i class="fas fa-lock"></i> <span>Bank credentials are restricted for your account.</span>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:14px;">
+                <div>
+                    <div class="cell-sub" style="font-size:0.75rem; text-transform:uppercase; font-weight:700;">Bank Name</div>
+                    <div style="font-weight:600; color:var(--text-muted);">[Masked / Restricted]</div>
+                </div>
+                <div>
+                    <div class="cell-sub" style="font-size:0.75rem; text-transform:uppercase; font-weight:700;">Account Number</div>
+                    <div style="font-family:monospace; font-weight:700; color:var(--text-muted);"><?= e($detail_emp_bank['bank_account_masked'] ?: 'XXXX XXXX 1234') ?></div>
+                </div>
+                <div>
+                    <div class="cell-sub" style="font-size:0.75rem; text-transform:uppercase; font-weight:700;">IFSC Code</div>
+                    <div style="font-family:monospace; font-weight:700; color:var(--text-muted);">XXXX0000000</div>
+                </div>
+                <div>
+                    <div class="cell-sub" style="font-size:0.75rem; text-transform:uppercase; font-weight:700;">UPI ID</div>
+                    <div style="font-weight:600; color:var(--text-muted);">Restricted</div>
+                </div>
+            </div>
+        <?php else: ?>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px; align-items:center;">
+                <div>
+                    <div class="cell-sub" style="font-size:0.75rem; text-transform:uppercase; font-weight:700;">Bank Name</div>
+                    <div style="font-weight:700; font-size:0.95rem;"><?= e($detail_emp_bank['bank_name'] ?: 'Not on file') ?></div>
+                </div>
+                <div>
+                    <div class="cell-sub" style="font-size:0.75rem; text-transform:uppercase; font-weight:700;">Account Number</div>
+                    <div style="display:flex; align-items:center; gap:8px; margin-top:2px;">
+                        <span id="facBankAccDisplay" style="font-family:monospace; font-weight:700; font-size:0.95rem; letter-spacing:0.5px;"><?= e($detail_emp_bank['bank_account_masked'] ?: 'XXXX XXXX 1234') ?></span>
+                        <button type="button" class="btn btn-sm btn-outline" id="facRevealBankBtn" onclick="revealFacultyBankDetail(<?= (int)$view_id ?>)" style="padding:2px 8px; font-size:0.75rem;">
+                            <i class="fas fa-eye"></i> Reveal
+                        </button>
+                        <?php if ($can_copy_bank): ?>
+                        <button type="button" class="btn btn-sm btn-outline" id="facCopyBankBtn" onclick="copyFacultyBankDetail(<?= (int)$view_id ?>)" style="padding:2px 8px; font-size:0.75rem;">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <div>
+                    <div class="cell-sub" style="font-size:0.75rem; text-transform:uppercase; font-weight:700;">IFSC Code</div>
+                    <div style="display:flex; align-items:center; gap:8px; margin-top:2px;">
+                        <span id="facIfscDisplay" style="font-family:monospace; font-weight:700; font-size:0.95rem;"><?= e($detail_emp_bank['ifsc_code'] ?: 'Not on file') ?></span>
+                        <?php if ($can_copy_bank && !empty($detail_emp_bank['ifsc_code'])): ?>
+                        <button type="button" class="btn btn-sm btn-outline" onclick="copyFacultyStaticDetail(<?= (int)$view_id ?>, 'ifsc', '<?= e($detail_emp_bank['ifsc_code']) ?>', this)" style="padding:2px 8px; font-size:0.75rem;">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <div>
+                    <div class="cell-sub" style="font-size:0.75rem; text-transform:uppercase; font-weight:700;">UPI ID</div>
+                    <div style="display:flex; align-items:center; gap:8px; margin-top:2px;">
+                        <span id="facUpiDisplay" style="font-weight:700; font-size:0.95rem;"><?= e($detail_emp_bank['upi_id'] ?: 'Not on file') ?></span>
+                        <?php if ($can_copy_bank && !empty($detail_emp_bank['upi_id'])): ?>
+                        <button type="button" class="btn btn-sm btn-outline" onclick="copyFacultyStaticDetail(<?= (int)$view_id ?>, 'upi', '<?= e($detail_emp_bank['upi_id']) ?>', this)" style="padding:2px 8px; font-size:0.75rem;">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+        <?php endif; ?>
+    </div>
+</div>
+
 <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start;" class="fac-grid">
     <div class="panel">
         <div class="panel-head"><span class="head-icon" style="background:var(--green-soft);color:var(--green-ink);"><i class="fas fa-money-bill-wave"></i></span><h2>Record Payment</h2>
@@ -439,6 +620,102 @@ include 'includes/admin_nav.php';
         </div>
     </div>
 </div>
+
+<script>
+const FAC_CSRF = '<?= csrf_token() ?>';
+
+function revealFacultyBankDetail(facId) {
+    const btn = document.getElementById('facRevealBankBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+    const fd = new FormData();
+    fd.append('action', 'reveal_faculty_bank');
+    fd.append('faculty_id', facId);
+    fd.append('field', 'bank_account');
+    fd.append('csrf_token', FAC_CSRF);
+
+    fetch('faculties.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            if (d.success && d.value) {
+                document.getElementById('facBankAccDisplay').textContent = d.value;
+                btn.innerHTML = '<i class="fas fa-eye-slash"></i> Revealed';
+            } else {
+                alert(d.error || 'Permission denied: cannot reveal bank account.');
+                btn.innerHTML = '<i class="fas fa-eye"></i> Reveal';
+            }
+        })
+        .catch(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-eye"></i> Reveal';
+            alert('Server error revealing bank credentials.');
+        });
+}
+
+function copyFacultyBankDetail(facId) {
+    const btn = document.getElementById('facCopyBankBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+    const fd = new FormData();
+    fd.append('action', 'copy_faculty_bank');
+    fd.append('faculty_id', facId);
+    fd.append('field', 'bank_account');
+    fd.append('csrf_token', FAC_CSRF);
+
+    fetch('faculties.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            if (d.success && d.value) {
+                navigator.clipboard.writeText(d.value).then(() => {
+                    btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+                    setTimeout(() => { btn.innerHTML = '<i class="fas fa-copy"></i> Copy'; }, 2000);
+                }).catch(() => {
+                    alert('Clipboard access denied. Bank account: ' + d.value);
+                    btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+                });
+            } else {
+                alert(d.error || 'Permission denied: cannot copy bank account.');
+                btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+            }
+        })
+        .catch(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-copy"></i> Copy';
+            alert('Server error copying bank credentials.');
+        });
+}
+
+function copyFacultyStaticDetail(facId, field, value, btn) {
+    const fd = new FormData();
+    fd.append('action', 'copy_faculty_bank');
+    fd.append('faculty_id', facId);
+    fd.append('field', field);
+    fd.append('csrf_token', FAC_CSRF);
+
+    fetch('faculties.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+            if (d.success) {
+                navigator.clipboard.writeText(value).then(() => {
+                    const originalHtml = btn.innerHTML;
+                    btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+                    setTimeout(() => { btn.innerHTML = originalHtml; }, 2000);
+                }).catch(() => {
+                    alert('Copied: ' + value);
+                });
+            } else {
+                alert(d.error || 'Permission denied: cannot copy this credential.');
+            }
+        })
+        .catch(() => {
+            alert('Server error verifying copy permissions.');
+        });
+}
+</script>
 
 <?php else: /* ===== LIST VIEW ===== */ ?>
 
@@ -865,6 +1142,6 @@ function triggerUnlinkFaculty() {
     document.getElementById('unlink-faculty-form').submit();
 }
 </script>\n";
-include 'includes/admin_footer.php';
 ?>
 <?php endif; ?>
+<?php include 'includes/admin_footer.php'; ?>

@@ -31,6 +31,8 @@ $form_ca_can_export = true;
 $form_ca_allow_copy_email = true;
 $form_ca_allow_whatsapp_chat = true;
 $form_ca_allow_phone_call = true;
+$form_ca_can_view_bank = false;
+$form_ca_can_copy_bank = false;
 $form_ca_perm_all = false;
 $form_ca_perms = [];
 
@@ -51,6 +53,8 @@ $form_ea_can_export = true;
 $form_ea_allow_copy_email = true;
 $form_ea_allow_whatsapp_chat = false;
 $form_ea_allow_phone_call = true;
+$form_ea_can_view_bank = false;
+$form_ea_can_copy_bank = false;
 $form_ea_perm_all = false;
 $form_ea_perms = [];
 
@@ -201,6 +205,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_admin_details' && isset($
                    a.credential_visibility, a.credential_visibility_scopes,
                    a.can_edit, a.can_delete, a.can_export,
                    a.allow_copy_email, a.allow_whatsapp_chat, a.allow_phone_call,
+                   a.can_view_bank_credentials, a.can_copy_bank_credentials,
                    e.id AS linked_staff_id,
                    e.employee_id AS linked_staff_code,
                    e.full_name AS linked_staff_name
@@ -245,6 +250,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $form_ca_allow_copy_email = isset($_POST['allow_copy_email']);
                 $form_ca_allow_whatsapp_chat = isset($_POST['allow_whatsapp_chat']);
                 $form_ca_allow_phone_call = isset($_POST['allow_phone_call']);
+                $form_ca_can_view_bank = isset($_POST['can_view_bank_credentials']);
+                $form_ca_can_copy_bank = isset($_POST['can_copy_bank_credentials']);
                 $form_ca_perm_all = isset($_POST['perm_all']);
                 $form_ca_perms = (array)($_POST['perms'] ?? []);
 
@@ -303,8 +310,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                                 $scopes = implode(',', $form_ca_cred_scopes);
                                 $stmt_ins = $pdo->prepare("
-                                    INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, admin_type, permissions, status, credential_visibility, credential_visibility_scopes, can_edit, can_delete, can_export, allow_copy_email, allow_whatsapp_chat, allow_phone_call, created_by, created_at)
-                                    VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                                    INSERT INTO admins (username, password_hash, full_name, email, google_email, phone, role, admin_type, permissions, status, credential_visibility, credential_visibility_scopes, can_edit, can_delete, can_export, allow_copy_email, allow_whatsapp_chat, allow_phone_call, can_view_bank_credentials, can_copy_bank_credentials, created_by, created_at)
+                                    VALUES (?, ?, ?, ?, ?, ?, 'admin', ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                                 ");
                                 $stmt_ins->execute([
                                     $form_ca_username,
@@ -323,6 +330,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     $form_ca_allow_copy_email ? 1 : 0,
                                     $form_ca_allow_whatsapp_chat ? 1 : 0,
                                     $form_ca_allow_phone_call ? 1 : 0,
+                                    $form_ca_can_view_bank ? 1 : 0,
+                                    $form_ca_can_copy_bank ? 1 : 0,
                                     $admin_username
                                 ]);
                                 $new_admin_id = (int)$pdo->lastInsertId();
@@ -375,6 +384,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $form_ca_allow_copy_email = true;
                                 $form_ca_allow_whatsapp_chat = true;
                                 $form_ca_allow_phone_call = true;
+                                $form_ca_can_view_bank = false;
+                                $form_ca_can_copy_bank = false;
                                 $form_ca_perm_all = false;
                                 $form_ca_perms = [];
                             } catch (Exception $ex) {
@@ -417,6 +428,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $allow_copy_email = isset($_POST['allow_copy_email']) ? 1 : 0;
                     $allow_whatsapp_chat = isset($_POST['allow_whatsapp_chat']) ? 1 : 0;
                     $allow_phone_call = isset($_POST['allow_phone_call']) ? 1 : 0;
+                    $can_view_bank = isset($_POST['can_view_bank_credentials']) ? 1 : 0;
+                    $can_copy_bank = isset($_POST['can_copy_bank_credentials']) ? 1 : 0;
 
                     if ($perms === '') {
                         $error_message = 'Grant at least one page, or tick Full access.';
@@ -437,6 +450,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $form_ea_allow_copy_email = (bool)$allow_copy_email;
                         $form_ea_allow_whatsapp_chat = (bool)$allow_whatsapp_chat;
                         $form_ea_allow_phone_call = (bool)$allow_phone_call;
+                        $form_ea_can_view_bank = (bool)$can_view_bank;
+                        $form_ea_can_copy_bank = (bool)$can_copy_bank;
                         $form_ea_perm_all = isset($_POST['perm_all']);
                         $form_ea_perms = (array)($_POST['perms'] ?? []);
                     } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -458,12 +473,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $form_ea_allow_copy_email = (bool)$allow_copy_email;
                         $form_ea_allow_whatsapp_chat = (bool)$allow_whatsapp_chat;
                         $form_ea_allow_phone_call = (bool)$allow_phone_call;
+                        $form_ea_can_view_bank = (bool)$can_view_bank;
+                        $form_ea_can_copy_bank = (bool)$can_copy_bank;
                         $form_ea_perm_all = isset($_POST['perm_all']);
                         $form_ea_perms = (array)($_POST['perms'] ?? []);
                     } else {
-                        $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ?, admin_type = ?, credential_visibility = ?, credential_visibility_scopes = ?, can_edit = ?, can_delete = ?, can_export = ?, allow_copy_email = ?, allow_whatsapp_chat = ?, allow_phone_call = ? WHERE id = ?")
-                            ->execute([$perms, $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $admin_type_upd, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $allow_copy_email, $allow_whatsapp_chat, $allow_phone_call, $id]);
-                        log_admin_activity($pdo, $admin_username, 'permissions_changed', "Access and visibility for \"{$target['username']}\" updated.");
+                        $pdo->prepare("UPDATE admins SET permissions = ?, full_name = ?, email = ?, google_email = ?, phone = ?, admin_type = ?, credential_visibility = ?, credential_visibility_scopes = ?, can_edit = ?, can_delete = ?, can_export = ?, allow_copy_email = ?, allow_whatsapp_chat = ?, allow_phone_call = ?, can_view_bank_credentials = ?, can_copy_bank_credentials = ? WHERE id = ?")
+                            ->execute([$perms, $name, $email ?: null, ($gemail ?: $email) ?: null, $phone ?: null, $admin_type_upd, $cred_vis, $scopes, $can_edit, $can_delete, $can_export, $allow_copy_email, $allow_whatsapp_chat, $allow_phone_call, $can_view_bank, $can_copy_bank, $id]);
+                        log_admin_activity($pdo, $admin_username, 'permissions_changed', "Access, bank permissions and visibility for \"{$target['username']}\" updated.");
                         $success_message = "Access and visibility updated for {$target['username']}.";
                     }
                 }
@@ -699,6 +716,15 @@ include 'includes/admin_nav.php';
                                 Scopes: <?php echo !empty($a['credential_visibility_scopes']) ? htmlspecialchars(str_replace(',', ', ', $a['credential_visibility_scopes'])) : 'None'; ?>
                             </div>
                             <?php endif; ?>
+                            <div style="margin-top:3px;">
+                                <?php if (!empty($a['can_view_bank_credentials']) && !empty($a['can_copy_bank_credentials'])): ?>
+                                    <span class="badge green" style="font-size:0.62rem;" title="Bank Access: View & Copy Allowed"><i class="fas fa-building-columns"></i> Bank: View &amp; Copy</span>
+                                <?php elseif (!empty($a['can_view_bank_credentials'])): ?>
+                                    <span class="badge amber" style="font-size:0.62rem;" title="Bank Access: View Only"><i class="fas fa-building-columns"></i> Bank: View Only</span>
+                                <?php else: ?>
+                                    <span class="badge gray" style="font-size:0.62rem;" title="Bank Access: Restricted"><i class="fas fa-building-columns"></i> Bank: Restricted</span>
+                                <?php endif; ?>
+                            </div>
                         <?php endif; ?>
                     </td>
                     <td style="max-width:280px;">
@@ -924,6 +950,19 @@ include 'includes/admin_nav.php';
                             </label>
                         </div>
                     </div>
+
+                    <!-- 13. Bank Credential Access -->
+                    <div class="field full" style="margin-top:-4px; margin-bottom:8px;">
+                        <label style="margin-bottom:6px; display:block;">Bank Credential Access</label>
+                        <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="can_view_bank_credentials" value="1" style="width:16px; height:16px; accent-color:var(--accent);" <?php echo $form_ca_can_view_bank ? 'checked' : ''; ?>> View Bank Credentials
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="can_copy_bank_credentials" value="1" style="width:16px; height:16px; accent-color:var(--accent);" <?php echo $form_ca_can_copy_bank ? 'checked' : ''; ?>> Allow Copy Bank Credentials
+                            </label>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- 13. Full Access & Page Permissions -->
@@ -1048,6 +1087,17 @@ include 'includes/admin_nav.php';
                             </label>
                             <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
                                 <input type="checkbox" name="allow_phone_call" value="1" id="pm-allow-phone-call" style="width:16px; height:16px; accent-color:var(--accent);"> Allow Phone Call
+                            </label>
+                        </div>
+                    </div>
+                    <div class="field" style="grid-column: span 2; margin-top:-4px; margin-bottom:12px;">
+                        <label style="margin-bottom:6px; display:block;">Bank Credential Access</label>
+                        <div style="display:flex; gap:16px; flex-wrap:wrap; background:#fafaf9; border:1px solid #e7e5e4; padding:8px 12px; border-radius:8px;">
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="can_view_bank_credentials" value="1" id="pm-can-view-bank" style="width:16px; height:16px; accent-color:var(--accent);"> View Bank Credentials
+                            </label>
+                            <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+                                <input type="checkbox" name="can_copy_bank_credentials" value="1" id="pm-can-copy-bank" style="width:16px; height:16px; accent-color:var(--accent);"> Allow Copy Bank Credentials
                             </label>
                         </div>
                     </div>
@@ -1377,6 +1427,8 @@ function populateAndOpenPermsModal(a) {
     if (document.getElementById('pm-allow-copy-email')) document.getElementById('pm-allow-copy-email').checked = (parseInt(a.allow_copy_email ?? 1) === 1);
     if (document.getElementById('pm-allow-wa-chat')) document.getElementById('pm-allow-wa-chat').checked = (parseInt(a.allow_whatsapp_chat ?? 1) === 1);
     if (document.getElementById('pm-allow-phone-call')) document.getElementById('pm-allow-phone-call').checked = (parseInt(a.allow_phone_call ?? 1) === 1);
+    if (document.getElementById('pm-can-view-bank')) document.getElementById('pm-can-view-bank').checked = (parseInt(a.can_view_bank_credentials ?? 0) === 1);
+    if (document.getElementById('pm-can-copy-bank')) document.getElementById('pm-can-copy-bank').checked = (parseInt(a.can_copy_bank_credentials ?? 0) === 1);
 
     document.getElementById('pm-admin-type').value = a.admin_type || 'erp_admin';
     document.getElementById('pm-username').textContent = a.username;

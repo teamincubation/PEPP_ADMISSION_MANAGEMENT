@@ -147,6 +147,16 @@ function ensure_credential_visibility_column($pdo) {
         if (!$cols_phone_call) {
             $pdo->exec("ALTER TABLE admins ADD COLUMN `allow_phone_call` TINYINT(1) NOT NULL DEFAULT 1");
         }
+        $cols_view_bank = $pdo->query("SHOW COLUMNS FROM admins LIKE 'can_view_bank_credentials'")->fetch();
+        if (!$cols_view_bank) {
+            $pdo->exec("ALTER TABLE admins ADD COLUMN `can_view_bank_credentials` TINYINT(1) NOT NULL DEFAULT 0");
+            $pdo->exec("UPDATE admins SET can_view_bank_credentials = 1 WHERE role = 'super_admin'");
+        }
+        $cols_copy_bank = $pdo->query("SHOW COLUMNS FROM admins LIKE 'can_copy_bank_credentials'")->fetch();
+        if (!$cols_copy_bank) {
+            $pdo->exec("ALTER TABLE admins ADD COLUMN `can_copy_bank_credentials` TINYINT(1) NOT NULL DEFAULT 0");
+            $pdo->exec("UPDATE admins SET can_copy_bank_credentials = 1 WHERE role = 'super_admin'");
+        }
 
         // Self-heal campaign_form_admin_access table
         try {
@@ -217,6 +227,58 @@ function can_admin_export() {
     global $admin_role, $admin_row;
     if ($admin_role === 'super_admin') return true;
     return isset($admin_row['can_export']) ? (int)$admin_row['can_export'] === 1 : true;
+}
+
+function can_admin_view_bank_credentials() {
+    global $admin_role, $admin_row, $admin_username, $pdo;
+    if (($admin_role ?? '') === 'super_admin' || (function_exists('is_super_admin') && is_super_admin())) return true;
+    if (isset($admin_row['can_view_bank_credentials'])) {
+        return (int)$admin_row['can_view_bank_credentials'] === 1;
+    }
+    if (!empty($admin_username) && isset($pdo) && $pdo instanceof PDO) {
+        try {
+            $stmt = $pdo->prepare("SELECT can_view_bank_credentials, role FROM admins WHERE username = ? LIMIT 1");
+            $stmt->execute([$admin_username]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                if (($row['role'] ?? '') === 'super_admin') return true;
+                return (int)($row['can_view_bank_credentials'] ?? 0) === 1;
+            }
+        } catch (Throwable $e) {}
+    }
+    return false;
+}
+
+function can_admin_copy_bank_credentials() {
+    global $admin_role, $admin_row, $admin_username, $pdo;
+    if (($admin_role ?? '') === 'super_admin' || (function_exists('is_super_admin') && is_super_admin())) return true;
+    if (isset($admin_row['can_copy_bank_credentials'])) {
+        return (int)$admin_row['can_copy_bank_credentials'] === 1;
+    }
+    if (!empty($admin_username) && isset($pdo) && $pdo instanceof PDO) {
+        try {
+            $stmt = $pdo->prepare("SELECT can_copy_bank_credentials, role FROM admins WHERE username = ? LIMIT 1");
+            $stmt->execute([$admin_username]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                if (($row['role'] ?? '') === 'super_admin') return true;
+                return (int)($row['can_copy_bank_credentials'] ?? 0) === 1;
+            }
+        } catch (Throwable $e) {}
+    }
+    return false;
+}
+
+if (!function_exists('can_view_bank_credentials')) {
+    function can_view_bank_credentials() {
+        return can_admin_view_bank_credentials();
+    }
+}
+
+if (!function_exists('can_copy_bank_credentials')) {
+    function can_copy_bank_credentials() {
+        return can_admin_copy_bank_credentials();
+    }
 }
 
 /**

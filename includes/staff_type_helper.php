@@ -293,10 +293,49 @@ if (!function_exists('ensure_staff_type_schema')) {
                     $report['idx_ecf_type'] = 'created';
                 }
             }
+
+            if ($tbl('admins')) {
+                if (!$col('admins', 'can_view_bank_credentials')) {
+                    $pdo->exec("ALTER TABLE `admins` ADD COLUMN `can_view_bank_credentials` TINYINT(1) NOT NULL DEFAULT 0");
+                    $report['can_view_bank_credentials'] = 'added';
+                }
+                if (!$col('admins', 'can_copy_bank_credentials')) {
+                    $pdo->exec("ALTER TABLE `admins` ADD COLUMN `can_copy_bank_credentials` TINYINT(1) NOT NULL DEFAULT 0");
+                    $report['can_copy_bank_credentials'] = 'added';
+                }
+                $pdo->exec("UPDATE `admins` SET `can_view_bank_credentials` = 1, `can_copy_bank_credentials` = 1 WHERE `role` = 'super_admin'");
+            }
         } catch (Throwable $e) {
             error_log('ensure_staff_type_schema error: ' . $e->getMessage());
             $report['error'] = $e->getMessage();
         }
         return $report;
+    }
+}
+
+if (!function_exists('staff_mask_account_number')) {
+    function staff_mask_account_number(?string $account): string {
+        $clean = preg_replace('/\s+/', '', (string)$account);
+        if ($clean === '') return '';
+        $len = strlen($clean);
+        if ($len <= 4) return str_repeat('X', $len);
+        $last4 = substr($clean, -4);
+        return 'XXXX XXXX ' . $last4;
+    }
+}
+
+if (!function_exists('staff_mask_ifsc')) {
+    function staff_mask_ifsc(?string $ifsc): string {
+        $clean = trim((string)$ifsc);
+        if ($clean === '') return '';
+        return 'XXXX0000000';
+    }
+}
+
+if (!function_exists('staff_mask_upi')) {
+    function staff_mask_upi(?string $upi): string {
+        $clean = trim((string)$upi);
+        if ($clean === '') return '';
+        return 'Restricted';
     }
 }
