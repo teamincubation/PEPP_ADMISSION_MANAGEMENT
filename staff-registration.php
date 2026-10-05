@@ -230,10 +230,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         goto render;
     }
 
-    // ─── Duplicate check (blocks pending/under_review/approved) ───
+    // ─── Duplicate check (scoped by application_for: blocks pending/under_review/approved) ───
     try {
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM staff_registration_requests WHERE (email = ? OR mobile_number = ?) AND status IN ('pending','under_review','approved')");
-        $stmt->execute([$email, $mobile]);
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM staff_registration_requests WHERE (email = ? OR mobile_number = ?) AND application_for = ? AND status IN ('pending','under_review','approved')");
+        $stmt->execute([$email, $mobile, $application_for]);
         if ((int)$stmt->fetchColumn() > 0) {
             $error_msg = 'We already have an active registration request associated with these details. Please contact PEPP Learning if you need to update your application.';
             goto render;
