@@ -62,18 +62,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $submittedLegacyPhoneId = trim($_POST['whatsapp_phone_id'] ?? '');
 
-                // Safety guard: Reject entering PEPP Updates (notifications) ID into the legacy admissions field
+                // Dynamic safety guard: Reject entering PEPP Updates (notifications) Phone ID into the legacy admissions field
                 require_once 'includes/communication/WhatsAppAccountResolver.php';
                 $resolver = WhatsAppAccountResolver::getInstance($pdo);
-                $notifAcc = $resolver->hasAccountsTable() ? $resolver->getAccount('notifications') : null;
-                $notifPhoneId = trim($notifAcc['phone_number_id'] ?? '');
+                if ($resolver->hasAccountsTable() && $submittedLegacyPhoneId !== '') {
+                    $notifAcc = $resolver->getAccount('notifications');
+                    $notifPhoneId = trim($notifAcc['phone_number_id'] ?? '');
 
-                if ($submittedLegacyPhoneId !== '') {
-                    if (($notifPhoneId !== '' && $submittedLegacyPhoneId === $notifPhoneId)
-                        || $submittedLegacyPhoneId === '1293652117171674'
-                        || $submittedLegacyPhoneId === '917994304400'
-                        || $submittedLegacyPhoneId === '7994304400') {
-                        throw new RuntimeException("Cannot save PEPP Updates ID into the legacy admissions phone ID field. Sender-specific Phone Number IDs must be configured under WhatsApp Sender Accounts.");
+                    if ($notifPhoneId !== '' && $submittedLegacyPhoneId === $notifPhoneId) {
+                        throw new RuntimeException("This Phone Number ID belongs to PEPP Updates. Configure it under WhatsApp Sender Accounts instead.");
                     }
                 }
 
@@ -106,7 +103,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
             } catch (Exception $e) {
                 $pdo->rollBack();
-                $error_message = 'Settings save error: ' . $e->getMessage();
+                $error_message = $e->getMessage();
             }
         } elseif ($action === 'test_send') {
             $testPhone = trim($_POST['test_phone'] ?? '');
@@ -1056,7 +1053,7 @@ include 'includes/admin_nav.php';
                                 <span>Meta Phone Number ID</span>
                                 <span style="font-weight:normal; font-size:0.75rem; color:#6b7280;">Current: <?php echo maskPhoneNumberId($admissionsAccount['phone_number_id'] ?? ''); ?></span>
                             </label>
-                            <input type="text" name="phone_number_id" value="<?php echo htmlspecialchars($admissionsAccount['phone_number_id'] ?? ''); ?>" placeholder="e.g. 1229563296908445" style="width:100%; padding:9px 12px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; font-family:monospace;" <?php echo !$hasAccountsTable ? 'disabled' : ''; ?> required>
+                            <input type="text" name="phone_number_id" value="<?php echo htmlspecialchars($admissionsAccount['phone_number_id'] ?? ''); ?>" placeholder="e.g. 10482939281829" style="width:100%; padding:9px 12px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; font-family:monospace;" <?php echo !$hasAccountsTable ? 'disabled' : ''; ?> required>
                             <span style="font-size:0.73rem; color:#64748b; display:block; margin-top:4px;">Unique Meta Phone ID for PEPP Learning admissions.</span>
                         </div>
 
@@ -1124,7 +1121,7 @@ include 'includes/admin_nav.php';
                                 <span>Meta Phone Number ID</span>
                                 <span style="font-weight:normal; font-size:0.75rem; color:#6b7280;">Current: <?php echo maskPhoneNumberId($notifPhoneId); ?></span>
                             </label>
-                            <input type="text" name="phone_number_id" value="<?php echo htmlspecialchars($notifPhoneId); ?>" placeholder="e.g. 1293652117171674" style="width:100%; padding:9px 12px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; font-family:monospace;" <?php echo !$hasAccountsTable ? 'disabled' : ''; ?>>
+                            <input type="text" name="phone_number_id" value="<?php echo htmlspecialchars($notifPhoneId); ?>" placeholder="e.g. 20482939281899" style="width:100%; padding:9px 12px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; font-family:monospace;" <?php echo !$hasAccountsTable ? 'disabled' : ''; ?>>
                             <span style="font-size:0.73rem; color:#64748b; display:block; margin-top:4px;">Unique Meta Phone ID for PEPP Updates marketing &amp; reminders.</span>
                         </div>
 

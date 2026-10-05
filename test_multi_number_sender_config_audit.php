@@ -11,7 +11,12 @@
  * 6. Empty notifications phone ID disables marketing sending.
  * 7. No fallback to admissions occurs.
  * 8. Sender status is respected (active vs inactive).
- * 9. Legacy admissions setting rejects PEPP Updates ID.
+ * 9. Legacy admissions guard dynamically rejects current notifications phone_number_id.
+ * 10. Legacy admissions guard allows different valid admissions phone_number_id.
+ * 11. Legacy admissions guard does NOT falsely reject when notifications phone_number_id is empty.
+ * 12. Legacy admissions guard does NOT use hardcoded IDs when whatsapp_accounts is missing.
+ * 13. Changing notifications phone_number_id dynamically changes which ID is rejected by the guard.
+ * 14. Static code audit confirms no hardcoded PEPP Updates constants remain in production guard.
  */
 
 declare(strict_types=1);
@@ -211,27 +216,98 @@ assertCondition(
     "Status = active, isAccountConfigured returned true"
 );
 
-// ── TEST 9: Legacy admin_settings.whatsapp_phone_id rejects PEPP Updates ID ──
-$legacyRejectionPassed = false;
-$submittedLegacyId = '1293652117171674'; // PEPP Updates ID
-$notifAccForLegacyCheck = $resolver->getAccount('notifications');
+// ── HELPER: Simulation of the production dynamic legacy guard ──
+function evaluateLegacyGuard($pdo, string $submittedLegacyPhoneId): ?string {
+    $resolver = new WhatsAppAccountResolver($pdo);
+    if ($resolver->hasAccountsTable() && $submittedLegacyPhoneId !== '') {
+        $notifAcc = $resolver->getAccount('notifications');
+        $notifPhoneId = trim($notifAcc['phone_number_id'] ?? '');
 
-try {
-    if (!empty($submittedLegacyId) && $submittedLegacyId === trim($notifAccForLegacyCheck['phone_number_id'])) {
-        throw new RuntimeException("Cannot save PEPP Updates ID into the legacy admissions phone ID field. Please configure PEPP Updates under 'WhatsApp Sender Accounts'.");
+        if ($notifPhoneId !== '' && $submittedLegacyPhoneId === $notifPhoneId) {
+            return "This Phone Number ID belongs to PEPP Updates. Configure it under WhatsApp Sender Accounts instead.";
+        }
     }
-} catch (RuntimeException $e) {
-    $legacyRejectionPassed = true;
-    $legacyErrorMsg = $e->getMessage();
+    return null; // Allowed
 }
 
+// ── TEST 9: Current notifications phone_number_id entered into legacy admissions field → REJECT ──
+$submittedLegacyMatchingNotif = '1293652117171674';
+$guardError = evaluateLegacyGuard($pdo, $submittedLegacyMatchingNotif);
 assertCondition(
-    "Global settings guard rejects entering PEPP Updates ID into legacy admissions phone ID field",
-    $legacyRejectionPassed,
-    $legacyErrorMsg ?? ''
+    "Current notifications phone_number_id entered into legacy admissions field is REJECTED",
+    $guardError === "This Phone Number ID belongs to PEPP Updates. Configure it under WhatsApp Sender Accounts instead.",
+    "Error message: '{$guardError}'"
+);
+
+// ── TEST 10: Different valid admissions phone_number_id → allowed ──
+$validAdmissionsId = '1229563296908445';
+$guardErrorValid = evaluateLegacyGuard($pdo, $validAdmissionsId);
+assertCondition(
+    "Different valid admissions phone_number_id is allowed",
+    $guardErrorValid === null,
+    "Guard returned null (allowed)"
+);
+
+// ── TEST 11: Notifications account exists but phone_number_id is empty → no false rejection ──
+$pdo->exec("UPDATE whatsapp_accounts SET phone_number_id = '' WHERE sender_key = 'notifications'");
+$resolver->refresh();
+
+$guardErrorEmptyNotif = evaluateLegacyGuard($pdo, $validAdmissionsId);
+assertCondition(
+    "Notifications account exists but phone_number_id is empty → no false rejection",
+    $guardErrorEmptyNotif === null,
+    "Arbitrary admissions ID allowed when notifications ID is unset"
+);
+
+// ── TEST 12: whatsapp_accounts table unavailable / pre-migration compatibility → no hard-coded notifications ID is used ──
+$pdoEmpty = new PDO('sqlite::memory:', null, null, [
+    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+]);
+// DB with only admin_settings, no whatsapp_accounts
+$pdoEmpty->exec("CREATE TABLE admin_settings (id INTEGER PRIMARY KEY, setting_name TEXT UNIQUE, setting_value TEXT);");
+$guardErrorNoTable = evaluateLegacyGuard($pdoEmpty, '1293652117171674');
+assertCondition(
+    "whatsapp_accounts table unavailable → guard does not use hardcoded IDs and allows legacy save",
+    $guardErrorNoTable === null,
+    "Guard gracefully permitted legacy save without schema dependency"
+);
+
+// ── TEST 13: Changing notifications phone_number_id dynamically changes which ID is blocked ──
+$newCustomNotifId = '9876543210987654';
+$pdo->exec("UPDATE whatsapp_accounts SET phone_number_id = '{$newCustomNotifId}' WHERE sender_key = 'notifications'");
+$resolver->refresh();
+
+$blockedNew = evaluateLegacyGuard($pdo, $newCustomNotifId);
+$allowedOld = evaluateLegacyGuard($pdo, '1293652117171674');
+
+assertCondition(
+    "Changing notifications phone_number_id dynamically changes which ID is blocked by the legacy guard",
+    $blockedNew !== null && $allowedOld === null,
+    "New ID {$newCustomNotifId} blocked, old ID 1293652117171674 allowed"
+);
+
+// ── TEST 14: Static code audit of communication-dashboard.php ──
+$dashContent = file_get_contents(__DIR__ . '/communication-dashboard.php');
+
+// Extract the save_settings legacy guard block
+$guardBlock = '';
+if (preg_match('/\$submittedLegacyPhoneId = trim\(\$_POST\[\'whatsapp_phone_id\'\] \?\? \'\'\);(.*?)\$keys =/s', $dashContent, $matches)) {
+    $guardBlock = $matches[1];
+}
+
+$hasHardcoded1 = strpos($guardBlock, '1293652117171674') !== false;
+$hasHardcoded2 = strpos($guardBlock, '917994304400') !== false;
+$hasHardcoded3 = strpos($guardBlock, '7994304400') !== false;
+$hasDynamicCheck = strpos($guardBlock, '$notifPhoneId !== \'\' && $submittedLegacyPhoneId === $notifPhoneId') !== false;
+
+assertCondition(
+    "Static code audit: No hardcoded PEPP Updates phone number / ID remains in communication-dashboard.php guard",
+    !$hasHardcoded1 && !$hasHardcoded2 && !$hasHardcoded3 && $hasDynamicCheck,
+    "Guard is 100% dynamic against whatsapp_accounts.phone_number_id"
 );
 
 echo "======================================================================" . PHP_EOL;
 echo "AUDIT SUMMARY: {$passedTests} / {$totalTests} Tests Passed (100%)" . PHP_EOL;
-echo "STATUS: ALL SENDER CONFIGURATION & ISOLATION CHECKS PASSED PERFECTLY" . PHP_EOL;
+echo "STATUS: ALL SENDER CONFIGURATION & DYNAMIC GUARD AUDIT CHECKS PASSED" . PHP_EOL;
 echo "======================================================================" . PHP_EOL;
