@@ -18,6 +18,12 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
     }
 
     public function sendMessage($to, $subject, $bodyHtml, $bodyText = '', array $attachments = [], array $templateData = []) {
+        if ($this->phoneId === '') {
+            $this->lastError = "Meta Phone Number ID is empty or not configured.";
+            $this->lastErrorCode = 400;
+            return false;
+        }
+
         // Meta expects phone numbers without leading '+' or special chars.
         $cleanPhone = preg_replace('/\D/', '', $to);
         if (strlen($cleanPhone) === 10) {
@@ -314,6 +320,15 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
 
     public function getLastErrorCode() {
         return $this->lastErrorCode;
+    }
+
+    /**
+     * Returns the phone number ID bound to this provider instance.
+     *
+     * @return string
+     */
+    public function getPhoneId() {
+        return $this->phoneId;
     }
 
     public function downloadMedia($mediaId) {

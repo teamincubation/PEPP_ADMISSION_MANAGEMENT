@@ -9,6 +9,7 @@ require_once __DIR__ . '/Providers/CommunicationProviderInterface.php';
 require_once __DIR__ . '/Providers/WhatsAppCloudProvider.php';
 require_once __DIR__ . '/Providers/EmailMailerProvider.php';
 require_once __DIR__ . '/CommunicationHelper.php';
+require_once __DIR__ . '/WhatsAppAccountResolver.php';
 
 if (file_exists(dirname(dirname(__DIR__)) . '/includes/template_helper.php')) {
     require_once dirname(dirname(__DIR__)) . '/includes/template_helper.php';
@@ -18,6 +19,8 @@ class CommunicationEngine {
     private static $instance = null;
     private $pdo;
     public $lastError = null;
+    private $accountResolver = null;
+    private $hasSenderAccountCol = null;
 
     private function __construct($pdo) {
         $this->pdo = $pdo;
@@ -31,6 +34,53 @@ class CommunicationEngine {
             self::$instance = new self($pdo);
         }
         return self::$instance;
+    }
+
+    /**
+     * Returns canonical WhatsApp account resolver.
+     */
+    public function getAccountResolver(): WhatsAppAccountResolver {
+        if ($this->accountResolver === null) {
+            $this->accountResolver = new WhatsAppAccountResolver($this->pdo);
+        }
+        return $this->accountResolver;
+    }
+
+    /**
+     * Resolves a WhatsApp account by sender_key (e.g. 'admissions', 'notifications') or account ID.
+     */
+    public function getWhatsAppAccount($identifier = null) {
+        return $this->getAccountResolver()->getAccount($identifier);
+    }
+
+    /**
+     * Resolves appropriate sender account for a specific event name.
+     */
+    public function resolveSenderAccountForEvent($eventName) {
+        return $this->getAccountResolver()->resolveAccountForEvent($eventName);
+    }
+
+    /**
+     * Checks if sender_account_id exists in communication_queue.
+     */
+    private function hasSenderAccountColumn(): bool {
+        if ($this->hasSenderAccountCol !== null) {
+            return $this->hasSenderAccountCol;
+        }
+        try {
+            $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $cols = $this->pdo->query("PRAGMA table_info(communication_queue)")->fetchAll(PDO::FETCH_ASSOC);
+                $names = array_column($cols, 'name');
+                $this->hasSenderAccountCol = in_array('sender_account_id', $names, true);
+            } else {
+                $stmt = $this->pdo->query("SHOW COLUMNS FROM communication_queue LIKE 'sender_account_id'");
+                $this->hasSenderAccountCol = (bool)$stmt->fetchColumn();
+            }
+        } catch (Throwable $e) {
+            $this->hasSenderAccountCol = false;
+        }
+        return $this->hasSenderAccountCol;
     }
 
     /**
@@ -53,7 +103,23 @@ class CommunicationEngine {
      * @param string|null $idempotencyKey Unique deduplication key for queue job
      * @return int Queue Item ID
      */
-    public function queueMessage($channel, $recipient, $recipientName, $subject, $bodyHtml, $bodyText = '', array $attachments = [], array $templateData = [], $sentBy = 'system', $scheduledAt = null, $studentUid = null, $eventName = null, $invoiceId = null, $idempotencyKey = null) {
+    public function queueMessage($channel, $recipient, $recipientName, $subject, $bodyHtml, $bodyText = '', array $attachments = [], array $templateData = [], $sentBy = 'system', $scheduledAt = null, $studentUid = null, $eventName = null, $invoiceId = null, $senderKeyOrIdempotency = null, $optionalIdempotencyKey = null) {
+        $senderKey = null;
+        $idempotencyKey = null;
+
+        if ($optionalIdempotencyKey !== null) {
+            $senderKey = $senderKeyOrIdempotency;
+            $idempotencyKey = $optionalIdempotencyKey;
+        } elseif ($senderKeyOrIdempotency !== null) {
+            if (strpos((string)$senderKeyOrIdempotency, ':') !== false) {
+                $idempotencyKey = (string)$senderKeyOrIdempotency;
+                $senderKey = null;
+            } else {
+                $senderKey = (string)$senderKeyOrIdempotency;
+                $idempotencyKey = null;
+            }
+        }
+
         // Idempotency check: if an idempotency key is provided, return existing queue item ID immediately
         if (!empty($idempotencyKey)) {
             $existingId = $this->findQueueItemByIdempotencyKey((string)$idempotencyKey);
@@ -66,10 +132,38 @@ class CommunicationEngine {
         $nextAttempt = date('Y-m-d H:i:s');
         $errorMsg = null;
         $retryCount = 0;
+        $senderAccountId = null;
 
         if ($scheduledAt && strtotime($scheduledAt) > time()) {
             $status = 'scheduled';
             $nextAttempt = date('Y-m-d H:i:s', strtotime($scheduledAt));
+        }
+
+        // WhatsApp Multi-Number Sender Resolution
+        if ($channel === 'whatsapp') {
+            if ($senderKey !== null && trim((string)$senderKey) !== '') {
+                $acc = $this->getWhatsAppAccount(trim((string)$senderKey));
+                if (!$acc) {
+                    $status = 'failed';
+                    $errorMsg = 'Invalid WhatsApp sender key: ' . $senderKey;
+                    $retryCount = 3;
+                } elseif (($acc['status'] ?? '') !== 'active') {
+                    $status = 'failed';
+                    $errorMsg = 'WhatsApp sender account is inactive: ' . $senderKey;
+                    $retryCount = 3;
+                    $senderAccountId = (int)$acc['id'];
+                } else {
+                    $senderAccountId = (int)$acc['id'];
+                }
+            } else {
+                if (!empty($eventName)) {
+                    $acc = $this->resolveSenderAccountForEvent($eventName);
+                    $senderAccountId = $acc ? (int)$acc['id'] : 1;
+                } else {
+                    $defaultAcc = $this->getWhatsAppAccount();
+                    $senderAccountId = $defaultAcc ? (int)$defaultAcc['id'] : 1;
+                }
+            }
         }
 
         // Validate recipient phone number (must be numeric and >= 10 digits for WhatsApp)
@@ -134,63 +228,48 @@ class CommunicationEngine {
         $templateJson = !empty($templateData) ? json_encode($templateData) : null;
         $attachmentsJson = !empty($processedAttachments) ? json_encode($processedAttachments) : null;
         $hasIdemCol = $this->hasIdempotencyKeyColumn();
+        $hasSenderAccCol = $this->hasSenderAccountColumn();
+
+        $cols = ['channel', 'recipient', 'recipient_name', 'subject', 'body_html', 'body_text', 'template_name', 'template_data', 'attachments', 'status', 'next_attempt_at', 'sent_by', 'student_uid', 'event_name', 'invoice_id', 'error_message', 'retry_count'];
+        $vals = [
+            $channel,
+            $recipient,
+            $recipientName,
+            $subject,
+            $bodyHtml,
+            $bodyText,
+            $templateData['name'] ?? null,
+            $templateJson,
+            $attachmentsJson,
+            $status,
+            $nextAttempt,
+            $sentBy,
+            $studentUid,
+            $eventName,
+            $invoiceId,
+            $errorMsg,
+            $retryCount
+        ];
+
+        if ($hasSenderAccCol) {
+            $cols[] = 'sender_account_id';
+            $vals[] = $senderAccountId;
+        }
 
         if ($hasIdemCol) {
-            $stmt = $this->pdo->prepare("
-                INSERT INTO communication_queue
-                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, idempotency_key, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ");
-            $stmt->execute([
-                $channel,
-                $recipient,
-                $recipientName,
-                $subject,
-                $bodyHtml,
-                $bodyText,
-                $templateData['name'] ?? null,
-                $templateJson,
-                $attachmentsJson,
-                $status,
-                $nextAttempt,
-                $sentBy,
-                $studentUid,
-                $eventName,
-                $invoiceId,
-                $errorMsg,
-                $retryCount,
-                $idempotencyKey
-            ]);
+            $cols[] = 'idempotency_key';
+            $vals[] = $idempotencyKey;
         } else {
-            $effErrorMsg = $errorMsg;
             if (!empty($idempotencyKey)) {
-                $effErrorMsg = ($effErrorMsg ? $effErrorMsg . ' ' : '') . "[idempotency:{$idempotencyKey}]";
+                $vals[15] = ($vals[15] ? $vals[15] . ' ' : '') . "[idempotency:{$idempotencyKey}]";
             }
-            $stmt = $this->pdo->prepare("
-                INSERT INTO communication_queue
-                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ");
-            $stmt->execute([
-                $channel,
-                $recipient,
-                $recipientName,
-                $subject,
-                $bodyHtml,
-                $bodyText,
-                $templateData['name'] ?? null,
-                $templateJson,
-                $attachmentsJson,
-                $status,
-                $nextAttempt,
-                $sentBy,
-                $studentUid,
-                $eventName,
-                $invoiceId,
-                $effErrorMsg,
-                $retryCount
-            ]);
         }
+
+        $colSql = implode(', ', $cols) . ', created_at, updated_at';
+        $phSql = implode(', ', array_fill(0, count($cols), '?')) . ', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP';
+
+        $stmt = $this->pdo->prepare("INSERT INTO communication_queue ({$colSql}) VALUES ({$phSql})");
+        $stmt->execute($vals);
 
         $queueId = (int)$this->pdo->lastInsertId();
 
@@ -235,18 +314,66 @@ class CommunicationEngine {
 
     /**
      * Instantiates and returns the configured channel provider.
+     * Supports multi-number WhatsApp provider instantiation dynamically.
+     *
+     * @param string $channel e.g. 'whatsapp' or 'email'
+     * @param string|int|null $phoneIdOrAccount Specific phone_number_id, sender_key, or account_id
+     * @return CommunicationProviderInterface
      */
-    public function getProvider($channel) {
-        if ($this->mockProvider !== null) {
-            return $this->mockProvider;
-        }
-        // Read dynamic configuration options from the general database settings
-        $stmt = $this->pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%'");
-        $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
-
+    public function getProvider($channel, $phoneIdOrAccount = null) {
         if ($channel === 'whatsapp') {
+            $phoneId = '';
+            if ($phoneIdOrAccount !== null) {
+                if (is_array($phoneIdOrAccount)) {
+                    $account = $phoneIdOrAccount;
+                } else {
+                    $phoneIdOrAccountStr = trim((string)$phoneIdOrAccount);
+                    if ($phoneIdOrAccountStr === '') {
+                        throw new Exception("Explicitly requested WhatsApp account does not have a Meta Phone Number ID configured.");
+                    }
+                    if (is_numeric($phoneIdOrAccountStr) && strlen($phoneIdOrAccountStr) > 8) {
+                        $phoneId = $phoneIdOrAccountStr;
+                        $account = null;
+                    } else {
+                        $account = $this->getWhatsAppAccount($phoneIdOrAccount);
+                        if (!$account) {
+                            throw new Exception("WhatsApp sender account '{$phoneIdOrAccount}' was not found.");
+                        }
+                    }
+                }
+
+                if ($account !== null) {
+                    $displayName = $account['display_name'] ?? 'WhatsApp Sender';
+                    if (($account['status'] ?? '') !== 'active') {
+                        throw new Exception("Configured WhatsApp account '{$displayName}' is inactive or disabled.");
+                    }
+                    $phoneId = trim((string)($account['phone_number_id'] ?? ''));
+                    if ($phoneId === '') {
+                        throw new Exception("Configured WhatsApp account '{$displayName}' does not have a Meta Phone Number ID configured.");
+                    }
+                }
+            } else {
+                // No sender specified (null) -> legacy admissions fallback allowed
+                $defaultAccount = $this->getWhatsAppAccount('admissions');
+                $phoneId = trim((string)($defaultAccount['phone_number_id'] ?? ''));
+                if ($phoneId === '') {
+                    // Fallback to legacy admin_settings
+                    try {
+                        $stmt = $this->pdo->query("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_phone_id'");
+                        $phoneId = trim((string)($stmt->fetchColumn() ?: ''));
+                    } catch (Throwable $e) {}
+                }
+            }
+
+            if ($this->mockProvider !== null) {
+                return $this->mockProvider;
+            }
+
+            // Read dynamic configuration options from the general database settings
+            $stmt = $this->pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%'");
+            $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+
             $businessId  = $settings['whatsapp_business_id'] ?? '';
-            $phoneId     = $settings['whatsapp_phone_id'] ?? '';
             $accessToken = $settings['whatsapp_access_token'] ?? '';
             $apiVersion  = $settings['whatsapp_api_version'] ?? 'v20.0';
 
@@ -256,6 +383,9 @@ class CommunicationEngine {
 
             return new WhatsAppCloudProvider($businessId, $phoneId, $accessToken, $apiVersion);
         } elseif ($channel === 'email') {
+            if ($this->mockProvider !== null) {
+                return $this->mockProvider;
+            }
             return new EmailMailerProvider();
         }
 
@@ -302,6 +432,37 @@ class CommunicationEngine {
             $stmt = $this->pdo->prepare("SELECT * FROM communication_queue WHERE id = ?");
             $stmt->execute([$queueId]);
             $item = $stmt->fetch();
+
+            // Guard: Inactive / Disabled / Missing WhatsApp Sender Check
+            if ($item && $item['channel'] === 'whatsapp' && !empty($item['sender_account_id'])) {
+                $senderAcc = $this->getWhatsAppAccount((int)$item['sender_account_id']);
+                if (!$senderAcc) {
+                    $updDis = $this->pdo->prepare("
+                        UPDATE communication_queue
+                        SET status = 'failed',
+                            retry_count = 3,
+                            error_message = ?,
+                            updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $updDis->execute(["WhatsApp sender account ID #{$item['sender_account_id']} was not found.", $queueId]);
+                    $this->pdo->commit();
+                    return false;
+                } elseif (($senderAcc['status'] ?? '') !== 'active') {
+                    $displayName = $senderAcc['display_name'] ?? 'WhatsApp Sender';
+                    $updDis = $this->pdo->prepare("
+                        UPDATE communication_queue
+                        SET status = 'failed',
+                            retry_count = 3,
+                            error_message = ?,
+                            updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $updDis->execute(["Configured WhatsApp account '{$displayName}' is inactive or disabled.", $queueId]);
+                    $this->pdo->commit();
+                    return false;
+                }
+            }
 
             // Permanent WhatsApp recipient suppression check
             if ($item && $item['channel'] === 'whatsapp' && in_array($item['sent_by'] ?? 'system', ['system', 'system_scheduler', 'system_test'], true)) {
@@ -777,7 +938,30 @@ class CommunicationEngine {
                 }
             }
 
-            $provider = $this->getProvider($channel);
+            $provider = null;
+            if ($channel === 'whatsapp') {
+                $senderAccId = !empty($item['sender_account_id']) ? (int)$item['sender_account_id'] : null;
+                if ($senderAccId !== null) {
+                    $senderAccount = $this->getWhatsAppAccount($senderAccId);
+                    if (!$senderAccount) {
+                        throw new Exception("WhatsApp sender account ID #{$senderAccId} was not found.");
+                    }
+                    $displayName = $senderAccount['display_name'] ?? 'WhatsApp Sender';
+                    if (($senderAccount['status'] ?? '') !== 'active') {
+                        throw new Exception("Configured WhatsApp account '{$displayName}' is inactive or disabled.");
+                    }
+                    $targetPhoneId = trim((string)($senderAccount['phone_number_id'] ?? ''));
+                    if ($targetPhoneId === '') {
+                        throw new Exception("Configured WhatsApp account '{$displayName}' does not have a Meta Phone Number ID configured.");
+                    }
+                    $provider = $this->getProvider($channel, $senderAccount);
+                } else {
+                    // Legacy message without sender specified -> default admissions account fallback allowed
+                    $provider = $this->getProvider($channel, null);
+                }
+            } else {
+                $provider = $this->getProvider($channel);
+            }
 
             // Race-condition revalidation right before Meta API dispatch
             $checkStmt = $this->pdo->prepare("SELECT status, recipient, student_uid, event_name, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, sent_by, invoice_id FROM communication_queue WHERE id = ?");
