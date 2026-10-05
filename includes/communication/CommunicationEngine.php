@@ -27,6 +27,35 @@ class CommunicationEngine {
     }
 
     /**
+     * Helper to classify if a Meta or communication error is retryable.
+     */
+    public static function isRetryableError($errCodeOrMsg, $msg = ''): bool {
+        if (is_numeric($errCodeOrMsg)) {
+            $code = (int)$errCodeOrMsg;
+            $message = (string)$msg;
+        } else {
+            $code = 0;
+            $message = (string)$errCodeOrMsg;
+        }
+
+        $lower = strtolower($message);
+        if (
+            strpos($lower, 'invalid parameter') !== false ||
+            strpos($lower, 'invalid phone') !== false ||
+            strpos($lower, 'invalid number') !== false ||
+            strpos($lower, 'invalid whatsapp') !== false ||
+            (strpos($lower, 'invalid') !== false && (strpos($lower, 'phone') !== false || strpos($lower, 'number') !== false)) ||
+            strpos($lower, 'not approved') !== false ||
+            strpos($lower, 'does not exist') !== false ||
+            strpos($lower, 'undeliverable') !== false
+        ) {
+            return false;
+        }
+
+        return !CommunicationHelper::isPermanentMetaFailure($code, $message);
+    }
+
+    /**
      * Singleton instance retriever.
      */
     public static function getInstance($pdo) {
@@ -286,7 +315,7 @@ class CommunicationEngine {
                 ");
                 $legacyStmt->execute([
                     $legacyPhone,
-                    $bodyText ?: strip_tags($bodyHtml),
+                    $bodyText ?: strip_tags((string)$bodyHtml),
                     $recipientName,
                     $sentBy,
                     $status === 'failed' ? 'failed' : 'pending',
@@ -547,12 +576,15 @@ class CommunicationEngine {
                         $exists = (int)$dupStmt->fetchColumn();
 
                         if ($exists === 0) {
+                            $hasSenderAccCol = $this->hasSenderAccountColumn();
+                            $extraCol = $hasSenderAccCol ? ', sender_account_id' : '';
+                            $extraPh  = $hasSenderAccCol ? ', ?' : '';
                             $insStmt = $this->pdo->prepare("
                                 INSERT INTO communication_queue
-                                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, ?, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at{$extraCol})
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, ?, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP{$extraPh})
                             ");
-                            $insStmt->execute([
+                            $execVals = [
                                 $item['channel'],
                                 $currentPhone,
                                 $item['recipient_name'],
@@ -566,7 +598,11 @@ class CommunicationEngine {
                                 $item['student_uid'],
                                 $item['event_name'],
                                 $item['invoice_id']
-                            ]);
+                            ];
+                            if ($hasSenderAccCol) {
+                                $execVals[] = $item['sender_account_id'] ?? null;
+                            }
+                            $insStmt->execute($execVals);
                             $newQueueId = (int)$this->pdo->lastInsertId();
 
                             // Update tracking table installment_whatsapp_reminders
@@ -964,7 +1000,7 @@ class CommunicationEngine {
             }
 
             // Race-condition revalidation right before Meta API dispatch
-            $checkStmt = $this->pdo->prepare("SELECT status, recipient, student_uid, event_name, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, sent_by, invoice_id FROM communication_queue WHERE id = ?");
+            $checkStmt = $this->pdo->prepare("SELECT * FROM communication_queue WHERE id = ?");
             $checkStmt->execute([$queueId]);
             $chkItem = $checkStmt->fetch();
 
@@ -1001,12 +1037,15 @@ class CommunicationEngine {
                         $exists = (int)$dupStmt->fetchColumn();
 
                         if ($exists === 0) {
+                            $hasSenderAccCol = $this->hasSenderAccountColumn();
+                            $extraCol = $hasSenderAccCol ? ', sender_account_id' : '';
+                            $extraPh  = $hasSenderAccCol ? ', ?' : '';
                             $insStmt = $this->pdo->prepare("
                                 INSERT INTO communication_queue
-                                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, ?, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                                (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at{$extraCol})
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, ?, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP{$extraPh})
                             ");
-                            $insStmt->execute([
+                            $execVals = [
                                 'whatsapp',
                                 $currentPhone,
                                 $chkItem['recipient_name'],
@@ -1020,7 +1059,11 @@ class CommunicationEngine {
                                 $chkItem['student_uid'],
                                 $chkItem['event_name'],
                                 $chkItem['invoice_id']
-                            ]);
+                            ];
+                            if ($hasSenderAccCol) {
+                                $execVals[] = $chkItem['sender_account_id'] ?? null;
+                            }
+                            $insStmt->execute($execVals);
                             $newQueueId = (int)$this->pdo->lastInsertId();
 
                             // Update tracking table installment_whatsapp_reminders
@@ -1258,7 +1301,19 @@ class CommunicationEngine {
             $chan = $item ? $item['channel'] : 'whatsapp';
             $legacyErr = $item ? (string)$item['error_message'] : '';
 
-            if ($retryCount >= $maxRetries) {
+            $isRateLimited = ($chan === 'whatsapp') && !$isPermanentFailure
+                && CommunicationHelper::isRateLimitFailure($errCode, $errMsg);
+
+            if ($isRateLimited) {
+                // Meta throttling: do not burn a retry attempt, pause ALL WhatsApp dispatch
+                // for a cooldown window so the worker does not hammer the API.
+                require_once __DIR__ . '/CampaignConfig.php';
+                $cooldown = CampaignConfig::recordRateLimit($this->pdo);
+                $retryCount = ($item ? (int)$item['retry_count'] : 0) + 1;
+                $status = 'retrying';
+                $nextAttempt = date('Y-m-d H:i:s', time() + $cooldown);
+                $errMsg = '[rate_limited] ' . $errMsg;
+            } elseif ($retryCount >= $maxRetries) {
                 $status = 'failed';
                 $nextAttempt = date('Y-m-d H:i:s', time() + 3600 * 24 * 365); // Far future
             } else {
@@ -2064,13 +2119,16 @@ class CommunicationEngine {
                 $exists = (int)$dupStmt->fetchColumn();
 
                 if ($exists === 0) {
+                    $hasSenderAccCol = $this->hasSenderAccountColumn();
+                    $extraCol = $hasSenderAccCol ? ', sender_account_id' : '';
+                    $extraPh  = $hasSenderAccCol ? ', ?' : '';
                     // Clone queue item targeting the new number
                     $insStmt = $this->pdo->prepare("
                         INSERT INTO communication_queue
-                        (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, ?, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at{$extraCol})
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), ?, ?, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP{$extraPh})
                     ");
-                    $insStmt->execute([
+                    $execVals = [
                         $item['channel'],
                         $newPhone,
                         $item['recipient_name'],
@@ -2084,7 +2142,11 @@ class CommunicationEngine {
                         $studentUid,
                         $item['event_name'],
                         $item['invoice_id']
-                    ]);
+                    ];
+                    if ($hasSenderAccCol) {
+                        $execVals[] = $item['sender_account_id'] ?? null;
+                    }
+                    $insStmt->execute($execVals);
                     $newQueueId = (int)$this->pdo->lastInsertId();
 
                     // Update tracking table installment_whatsapp_reminders

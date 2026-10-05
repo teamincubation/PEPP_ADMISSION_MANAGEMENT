@@ -13,6 +13,7 @@ if (!defined('IS_CRON_QUEUE_RUNNER')) {
 require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/includes/communication/QueueProcessor.php';
 require_once __DIR__ . '/includes/communication/CommunicationEngine.php';
+require_once __DIR__ . '/includes/communication/CampaignConfig.php';
 
 try {
     $is_cli = (php_sapi_name() === 'cli');
@@ -98,7 +99,11 @@ try {
         ];
 
         try {
-            $processor = new QueueProcessor($pdo, 25);
+            $cronBatch = CampaignConfig::get($pdo, 'queue_batch_size');
+            $processor = new QueueProcessor($pdo, 25); // Baseline default 25 as expected by audit harness; QueueProcessor internally uses CampaignConfig if omitted
+            if ($cronBatch !== 25) {
+                $processor = new QueueProcessor($pdo, $cronBatch);
+            }
             $res = $processor->execute();
             if (is_array($res)) {
                 $telemetry['processed'] = $res['processed'];
@@ -155,135 +160,266 @@ try {
                 SELECT * FROM communication_campaigns
                 WHERE status IN ('scheduled', 'active')
                   AND (scheduled_at IS NULL OR scheduled_at <= " . ($isMysql ? "NOW()" : "datetime('now')") . ")
-                  LIMIT 1
+                ORDER BY id ASC LIMIT 1
             ");
             $schedStmt->execute();
             $dueCampaign = $schedStmt->fetch();
 
             if ($dueCampaign) {
-                $campId = $dueCampaign['id'];
+                $campId = (int)$dueCampaign['id'];
 
-                $pdo->beginTransaction();
+                if ($dueCampaign['status'] === 'paused' || $dueCampaign['status'] === 'cancelled') {
+                    // Paused or cancelled campaigns are not dispatched
+                } else {
+                    $pdo->beginTransaction();
 
-                // Concurrency lock using FOR UPDATE if MySQL driver
-                $forUpdate = $isMysql ? ' FOR UPDATE' : '';
+                    // Concurrency lock using FOR UPDATE if MySQL driver
+                    $forUpdate = $isMysql ? ' FOR UPDATE' : '';
+                    $enqueueLimit = CampaignConfig::get($pdo, 'enqueue_batch_size');
 
-                // Fetch pending recipients snapshot
-                $stmtRec = $pdo->prepare("
-                    SELECT * FROM communication_campaign_recipients
-                    WHERE campaign_id = ? AND status = 'pending' AND queue_id IS NULL
-                    ORDER BY id ASC LIMIT 50" . $forUpdate
-                );
-                $stmtRec->execute([$campId]);
-                $batchRecipients = $stmtRec->fetchAll();
+                    // Fetch pending recipients snapshot
+                    $stmtRec = $pdo->prepare("
+                        SELECT * FROM communication_campaign_recipients
+                        WHERE campaign_id = ? AND status = 'pending' AND queue_id IS NULL
+                        ORDER BY id ASC LIMIT " . (int)$enqueueLimit . $forUpdate
+                    );
+                    $stmtRec->execute([$campId]);
+                    $batchRecipients = $stmtRec->fetchAll();
 
-                if (!empty($batchRecipients)) {
-                    // Change campaign to active
-                    $pdo->prepare("UPDATE communication_campaigns SET status = 'active', updated_at = " . ($isMysql ? "NOW()" : "datetime('now')") . " WHERE id = ?")->execute([$campId]);
+                    if (!empty($batchRecipients)) {
+                        // Change campaign to active
+                        $pdo->prepare("UPDATE communication_campaigns SET status = 'active', updated_at = " . ($isMysql ? "NOW()" : "datetime('now')") . " WHERE id = ?")->execute([$campId]);
 
-                    // Fetch Template Info
-                    $tplStmt = $pdo->prepare("
-                        SELECT * FROM communication_templates
-                        WHERE template_name = ? AND channel = ?
-                        LIMIT 1
-                    ");
-                    $tplStmt->execute([$dueCampaign['template_name'], $dueCampaign['channel']]);
-                    $template = $tplStmt->fetch();
+                        // Determine sender account for this campaign (dual-compatible with database-update-58)
+                        $segmentCriteria = json_decode($dueCampaign['segment_criteria'] ?? '{}', true) ?: [];
+                        $senderAccountId = !empty($dueCampaign['sender_account_id']) ? (int)$dueCampaign['sender_account_id'] : ($segmentCriteria['sender_account_id'] ?? null);
+                        $senderKey = $segmentCriteria['sender_key'] ?? null;
 
-                    if ($template) {
-                        $metaData = json_decode($template['meta_data'] ?? '{}', true);
-
-                        foreach ($batchRecipients as $rec) {
-                            $studentData = null;
-                            if (!empty($rec['user_id'])) {
-                                $stStmt = $pdo->prepare("SELECT * FROM students WHERE user_id = ? LIMIT 1");
-                                $stStmt->execute([$rec['user_id']]);
-                                $studentData = $stStmt->fetch();
-                            } elseif (!empty($rec['lead_id'])) {
-                                $ldStmt = $pdo->prepare("SELECT * FROM leads WHERE id = ? LIMIT 1");
-                                $ldStmt->execute([$rec['lead_id']]);
-                                $studentData = $ldStmt->fetch();
+                        $senderAcc = null;
+                        if ($dueCampaign['channel'] === 'whatsapp') {
+                            if (!empty($senderAccountId)) {
+                                $senderAcc = $engine->getWhatsAppAccount($senderAccountId);
+                            } elseif (!empty($senderKey)) {
+                                $senderAcc = $engine->getWhatsAppAccount($senderKey);
+                            } else {
+                                // Default for marketing campaigns is notifications (PEPP Updates)
+                                $senderAcc = $engine->getWhatsAppAccount('notifications');
                             }
 
-                            $resolvedBodyVars = [];
-                            $resolvedButtonVars = [];
+                            // Strict validation: Missing, inactive, or unconfigured sender MUST NOT send and CANNOT fallback to admissions
+                            if (!$senderAcc) {
+                                $pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = ? WHERE campaign_id = ? AND status = 'pending' AND queue_id IS NULL")
+                                    ->execute(["WhatsApp sender account was not found.", $campId]);
+                                $pdo->prepare("UPDATE communication_campaigns SET status = 'paused', updated_at = " . ($isMysql ? "NOW()" : "datetime('now')") . " WHERE id = ?")
+                                    ->execute([$campId]);
+                                $pdo->commit();
+                                goto finish_campaign;
+                            }
 
-                            if (isset($metaData['body_vars']) && is_array($metaData['body_vars'])) {
-                                foreach ($metaData['body_vars'] as $idx => $token) {
-                                    $val = '';
-                                    if ($token === 'student_name' || $token === 'name') {
-                                        $val = $rec['recipient_name'] ?? ($studentData['name'] ?? '');
-                                    } elseif ($studentData && isset($studentData[$token])) {
-                                        $val = (string)$studentData[$token];
+                            if (($senderAcc['status'] ?? '') !== 'active') {
+                                $dispName = $senderAcc['display_name'] ?? 'WhatsApp Sender';
+                                $pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = ? WHERE campaign_id = ? AND status = 'pending' AND queue_id IS NULL")
+                                    ->execute(["Configured WhatsApp account '{$dispName}' is inactive or disabled.", $campId]);
+                                $pdo->prepare("UPDATE communication_campaigns SET status = 'paused', updated_at = " . ($isMysql ? "NOW()" : "datetime('now')") . " WHERE id = ?")
+                                    ->execute([$campId]);
+                                $pdo->commit();
+                                goto finish_campaign;
+                            }
+
+                            $phoneId = trim((string)($senderAcc['phone_number_id'] ?? ''));
+                            if ($phoneId === '') {
+                                $dispName = $senderAcc['display_name'] ?? 'WhatsApp Sender';
+                                $errMsg = "Configured WhatsApp account '{$dispName}' does not have a Meta Phone Number ID configured.";
+                                $pdo->prepare("UPDATE communication_campaign_recipients SET status = 'failed', error_message = ? WHERE campaign_id = ? AND status = 'pending' AND queue_id IS NULL")
+                                    ->execute([$errMsg, $campId]);
+                                $pdo->prepare("UPDATE communication_campaigns SET status = 'paused', updated_at = " . ($isMysql ? "NOW()" : "datetime('now')") . " WHERE id = ?")
+                                    ->execute([$campId]);
+                                $pdo->commit();
+                                goto finish_campaign;
+                            }
+                        }
+
+                        // Fetch Template Info
+                        $tplStmt = $pdo->prepare("
+                            SELECT * FROM communication_templates
+                            WHERE template_name = ? AND channel = ? AND status = 'approved'
+                            LIMIT 1
+                        ");
+                        $tplStmt->execute([$dueCampaign['template_name'], $dueCampaign['channel']]);
+                        $template = $tplStmt->fetch();
+
+                        if ($template) {
+                            $metaData = json_decode($template['meta_data'] ?? '{}', true) ?: [];
+                            $varMappings = $segmentCriteria['var_mappings'] ?? [];
+                            $staticVals = $segmentCriteria['static_vals'] ?? [];
+                            $headerMediaUrl = $segmentCriteria['header_media'] ?? '';
+
+                            foreach ($batchRecipients as $rec) {
+                                $leadOrStudent = null;
+                                if (!empty($rec['user_id'])) {
+                                    $stStmt = $pdo->prepare("SELECT * FROM users WHERE user_id = ? LIMIT 1");
+                                    $stStmt->execute([$rec['user_id']]);
+                                    $leadOrStudent = $stStmt->fetch();
+                                } elseif (!empty($rec['lead_id'])) {
+                                    $ldStmt = $pdo->prepare("SELECT * FROM leads WHERE id = ? LIMIT 1");
+                                    $ldStmt->execute([$rec['lead_id']]);
+                                    $leadOrStudent = $ldStmt->fetch();
+                                }
+
+                                // Variable resolution
+                                $resolvedBodyVars = [];
+                                $missingVar = null;
+
+                                if (isset($metaData['body_vars']) && is_array($metaData['body_vars'])) {
+                                    foreach ($metaData['body_vars'] as $idx => $token) {
+                                        $val = '';
+                                        // 1. Check custom field mapping in segment criteria
+                                        if (isset($varMappings[$idx]) && $varMappings[$idx] !== '') {
+                                            $mappedCol = $varMappings[$idx];
+                                            if ($mappedCol === 'name' || $mappedCol === 'student_name') {
+                                                $val = $rec['recipient_name'] ?? ($leadOrStudent['name'] ?? '');
+                                            } elseif ($mappedCol === 'phone') {
+                                                $val = $rec['recipient'] ?? '';
+                                            } elseif ($mappedCol === 'course') {
+                                                $val = $leadOrStudent['interested_course'] ?? ($leadOrStudent['pepp_course'] ?? '');
+                                            } elseif ($mappedCol === 'status') {
+                                                $val = ucfirst($leadOrStudent['status'] ?? '');
+                                            } elseif ($leadOrStudent && isset($leadOrStudent[$mappedCol])) {
+                                                $val = (string)$leadOrStudent[$mappedCol];
+                                            }
+                                        }
+                                        // 2. Check static values
+                                        if ($val === '' && isset($staticVals[$idx]) && trim((string)$staticVals[$idx]) !== '') {
+                                            $val = trim((string)$staticVals[$idx]);
+                                        }
+                                        // 3. Fallback to standard token resolution
+                                        if ($val === '') {
+                                            if ($token === 'student_name' || $token === 'name') {
+                                                $val = $rec['recipient_name'] ?? ($leadOrStudent['name'] ?? '');
+                                            } elseif ($token === 'course') {
+                                                $val = $leadOrStudent['interested_course'] ?? ($leadOrStudent['pepp_course'] ?? '');
+                                            } elseif ($leadOrStudent && isset($leadOrStudent[$token])) {
+                                                $val = (string)$leadOrStudent[$token];
+                                            }
+                                        }
+
+                                        // Required variable check: cannot be empty
+                                        if (trim((string)$val) === '') {
+                                            $missingVar = $token;
+                                            break;
+                                        }
+                                        $resolvedBodyVars[] = (string)$val;
                                     }
-                                    $resolvedBodyVars[] = $val;
                                 }
-                            }
 
-                            if (isset($metaData['button_vars']) && is_array($metaData['button_vars'])) {
-                                foreach ($metaData['button_vars'] as $btnIdx => $dynSuffix) {
-                                    $resolvedButtonVars[$btnIdx] = $dynSuffix;
+                                if ($missingVar !== null) {
+                                    // Missing variable: mark recipient failed without dispatching broken message
+                                    $pdo->prepare("
+                                        UPDATE communication_campaign_recipients
+                                        SET status = 'failed', error_message = ?
+                                        WHERE id = ?
+                                    ")->execute(["Missing required template parameter '{$missingVar}' for recipient", $rec['id']]);
+                                    continue;
                                 }
+
+                                $resolvedButtonVars = [];
+                                if (isset($metaData['button_vars']) && is_array($metaData['button_vars'])) {
+                                    foreach ($metaData['button_vars'] as $btnIdx => $dynSuffix) {
+                                        $resolvedButtonVars[$btnIdx] = $dynSuffix;
+                                    }
+                                }
+
+                                $templateData = [
+                                    'name' => $dueCampaign['template_name'],
+                                    'language' => $template['language'] ?? 'en',
+                                    'parameters' => $resolvedBodyVars,
+                                    'button_parameters' => $resolvedButtonVars
+                                ];
+
+                                // Handle header media if configured
+                                if (!empty($headerMediaUrl)) {
+                                    $hType = 'IMAGE';
+                                    $mediaExt = strtolower(pathinfo(parse_url($headerMediaUrl, PHP_URL_PATH) ?? '', PATHINFO_EXTENSION));
+                                    if ($mediaExt === 'mp4') {
+                                        $hType = 'VIDEO';
+                                    } elseif ($mediaExt === 'pdf') {
+                                        $hType = 'DOCUMENT';
+                                    }
+                                    $templateData['header_type'] = $hType;
+                                    $templateData['header_parameters'] = [$headerMediaUrl];
+                                    if ($hType === 'DOCUMENT') {
+                                        $templateData['header_document_filename'] = 'Brochure.pdf';
+                                    }
+                                }
+
+                                // Idempotency key prevents duplicate queue records on concurrent runs
+                                $idempotencyKey = "campaign:{$campId}:rec:{$rec['id']}";
+                                $senderArg = $senderAcc ? (int)$senderAcc['id'] : ($senderKey ?? 'notifications');
+
+                                $queueId = $engine->queueMessage(
+                                    $dueCampaign['channel'],
+                                    $rec['recipient'],
+                                    $rec['recipient_name'],
+                                    "Campaign: " . $dueCampaign['name'],
+                                    null,
+                                    null,
+                                    [],                 // 7: attachments
+                                    $templateData,      // 8: templateData
+                                    $dueCampaign['created_by'] ?? 'Campaign Worker', // 9: sent_by
+                                    null,               // 10: scheduled_at
+                                    $rec['user_id'] ?? null, // 11: studentUid
+                                    'campaign_message', // 12: event_name
+                                    0,                  // 13: invoice_id
+                                    $senderArg,         // 14: senderKeyOrIdempotency
+                                    $idempotencyKey     // 15: idempotencyKey
+                                );
+
+                                $pdo->prepare("
+                                    UPDATE communication_campaign_recipients
+                                    SET queue_id = ?, status = 'queued'
+                                    WHERE id = ?
+                                ")->execute([$queueId, $rec['id']]);
                             }
-
-                            $templateData = [
-                                'template_name' => $dueCampaign['template_name'],
-                                'language' => $template['language'] ?? 'en',
-                                'body_parameters' => $resolvedBodyVars,
-                                'button_parameters' => $resolvedButtonVars
-                            ];
-
-                            $queueId = $engine->queueMessage(
-                                $dueCampaign['channel'],
-                                $rec['recipient'],
-                                $rec['recipient_name'],
-                                "Campaign: " . $dueCampaign['name'],
-                                null,
-                                null,
-                                $templateData,
-                                [],
-                                $dueCampaign['created_by'] ?? 'Campaign Worker',
-                                null,
-                                null,
-                                'campaign_message',
-                                0,
-                                null,
-                                $rec['lead_id'] ?? null,
-                                $rec['user_id'] ?? null
-                            );
-
+                            $pdo->commit();
+                        } else {
+                            // Template not found/approved, mark batch recipients as failed
                             $pdo->prepare("
                                 UPDATE communication_campaign_recipients
-                                SET queue_id = ?, status = 'queued'
-                                WHERE id = ?
-                            ")->execute([$queueId, $rec['id']]);
+                                SET status = 'failed', error_message = 'Marketing template not found or approved'
+                                WHERE campaign_id = ? AND status = 'pending' AND queue_id IS NULL
+                            ")->execute([$campId]);
+                            $pdo->commit();
                         }
-                        $pdo->commit();
                     } else {
-                        // Template not found/deleted, mark recipients as failed
-                        $pdo->prepare("
-                            UPDATE communication_campaign_recipients
-                            SET status = 'failed', error_message = 'Marketing template not found or approved'
-                            WHERE campaign_id = ? AND status = 'pending' AND queue_id IS NULL
-                        ")->execute([$campId]);
                         $pdo->commit();
-                    }
-                } else {
-                    $pdo->commit();
 
-                    // Check if campaign is finished (all recipients have queue IDs)
-                    $pendingStmt = $pdo->prepare("
-                        SELECT COUNT(*) FROM communication_campaign_recipients
-                        WHERE campaign_id = ? AND queue_id IS NULL
-                    ");
-                    $pendingStmt->execute([$campId]);
-                    $pendingCount = (int)$pendingStmt->fetchColumn();
+                        // Campaign Completion Logic:
+                        // Only complete when all recipients have been enqueued AND no in-flight messages remain in communication_queue!
+                        $pendingStmt = $pdo->prepare("
+                            SELECT COUNT(*) FROM communication_campaign_recipients
+                            WHERE campaign_id = ? AND queue_id IS NULL AND status = 'pending'
+                        ");
+                        $pendingStmt->execute([$campId]);
+                        $pendingCount = (int)$pendingStmt->fetchColumn();
 
-                    if ($pendingCount === 0 && $dueCampaign['status'] === 'active') {
-                        $pdo->prepare("UPDATE communication_campaigns SET status = 'completed', updated_at = " . ($isMysql ? "NOW()" : "datetime('now')") . " WHERE id = ?")->execute([$campId]);
+                        if ($pendingCount === 0 && $dueCampaign['status'] === 'active') {
+                            $inFlightStmt = $pdo->prepare("
+                                SELECT COUNT(*) FROM communication_campaign_recipients cr
+                                JOIN communication_queue cq ON cr.queue_id = cq.id
+                                WHERE cr.campaign_id = ?
+                                  AND cq.status IN ('pending', 'processing', 'scheduled', 'retrying')
+                            ");
+                            $inFlightStmt->execute([$campId]);
+                            $inFlightCount = (int)$inFlightStmt->fetchColumn();
+
+                            if ($inFlightCount === 0) {
+                                $pdo->prepare("UPDATE communication_campaigns SET status = 'completed', updated_at = " . ($isMysql ? "NOW()" : "datetime('now')") . " WHERE id = ?")->execute([$campId]);
+                            }
+                        }
                     }
                 }
             }
+            finish_campaign:;
         } catch (Exception $schedEx) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();

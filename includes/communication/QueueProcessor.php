@@ -4,14 +4,17 @@
  */
 
 require_once __DIR__ . '/CommunicationEngine.php';
+require_once __DIR__ . '/CampaignConfig.php';
 
 class QueueProcessor {
     private $pdo;
     private $batchSize;
 
-    public function __construct($pdo, $batchSize = 25) {
+    public function __construct($pdo, $batchSize = null) {
         $this->pdo = $pdo;
-        $this->batchSize = (int)$batchSize;
+        $this->batchSize = ($batchSize !== null && (int)$batchSize > 0)
+            ? (int)$batchSize
+            : CampaignConfig::get($pdo, 'queue_batch_size');
     }
 
     /**
@@ -152,9 +155,12 @@ class QueueProcessor {
             error_log("QueueProcessor stale-recovery error: " . $staleEx->getMessage());
         }
 
-        // Query pending, scheduled, failed, or retrying items that are ready for attempt
+        // Query pending, scheduled, failed, or retrying items that are ready for attempt.
+        // - Paused-campaign rows are excluded so they cannot hog the batch (starvation).
+        // - During a global Meta rate-limit cooldown only non-WhatsApp rows are eligible.
         $nowCutoff = date('Y-m-d H:i:s');
-        $stmt = $this->pdo->prepare("
+        $rateLimited = CampaignConfig::isRateLimited($this->pdo);
+        $baseSql = "
             SELECT id FROM communication_queue
             WHERE status IN ('pending', 'scheduled', 'failed', 'retrying')
               AND next_attempt_at <= ?
@@ -163,14 +169,33 @@ class QueueProcessor {
                 (channel = 'email' AND retry_count < 5) OR
                 (channel NOT IN ('whatsapp', 'email') AND retry_count < 3)
               )
-            ORDER BY priority DESC, created_at ASC
-            LIMIT ?
-        ");
-        $stmt->bindValue(1, $nowCutoff, PDO::PARAM_STR);
-        $stmt->bindValue(2, $this->batchSize, PDO::PARAM_INT);
-        $stmt->execute();
+        " . ($rateLimited ? " AND channel <> 'whatsapp' " : "");
+        $pausedClause = "
+              AND NOT EXISTS (
+                SELECT 1 FROM communication_campaign_recipients cr
+                JOIN communication_campaigns cc ON cc.id = cr.campaign_id
+                WHERE cr.queue_id = communication_queue.id AND cc.status = 'paused'
+              )
+        ";
+        $orderSql = " ORDER BY priority DESC, created_at ASC LIMIT ?";
 
-        $itemIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        $itemIds = null;
+        foreach ([$baseSql . $pausedClause . $orderSql, $baseSql . $orderSql] as $sql) {
+            try {
+                $stmt = $this->pdo->prepare($sql);
+                $stmt->bindValue(1, $nowCutoff, PDO::PARAM_STR);
+                $stmt->bindValue(2, $this->batchSize, PDO::PARAM_INT);
+                $stmt->execute();
+                $itemIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
+                break;
+            } catch (Throwable $selEx) {
+                // Campaign tables absent (very old/minimal schema): retry without the paused filter.
+                $itemIds = null;
+            }
+        }
+        if ($itemIds === null) {
+            $itemIds = [];
+        }
         if (empty($itemIds)) {
             return [
                 'processed' => 0,
@@ -188,20 +213,34 @@ class QueueProcessor {
 
         $engine = CommunicationEngine::getInstance($this->pdo);
         $processedCount = 0;
+        $attempted = 0;
+        $testing = isset($_SERVER['HTTP_X_TESTING_MODE']) && $_SERVER['HTTP_X_TESTING_MODE'] === 'true';
+        $delayUs = $testing ? 0 : CampaignConfig::get($this->pdo, 'per_message_delay_ms') * 1000;
+        $deadline = $startTime + CampaignConfig::get($this->pdo, 'max_run_seconds');
 
         foreach ($itemIds as $id) {
+            // Soft time budget: leave the rest for the next cron tick (rows stay pending).
+            if (!$testing && microtime(true) >= $deadline) {
+                break;
+            }
+            $attempted++;
             $success = $engine->processQueueItem($id);
             if ($success) {
                 $processedCount++;
             }
-            // Optional micro-sleep to throttle API requests (Meta recommends under 80/sec)
-            if (!isset($_SERVER['HTTP_X_TESTING_MODE']) || $_SERVER['HTTP_X_TESTING_MODE'] !== 'true') {
-                usleep(100000); // 100ms
+            // Stop immediately if Meta throttled us during this item.
+            if (CampaignConfig::isRateLimited($this->pdo)) {
+                error_log("QueueProcessor: Meta rate limit detected, halting batch for cooldown.");
+                break;
+            }
+            // Configurable per-message pacing (admin setting campaign_per_message_delay_ms).
+            if ($delayUs > 0) {
+                usleep($delayUs);
             }
         }
 
         $duration = round(microtime(true) - $startTime, 2);
-        $failedCount = $eligibleCount - $processedCount;
+        $failedCount = $attempted - $processedCount;
         error_log("QueueProcessor completed. Dispatched: {$processedCount}. Failed/skipped: {$failedCount}. Duration: {$duration}s.");
 
         return [

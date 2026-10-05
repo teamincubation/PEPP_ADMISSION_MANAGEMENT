@@ -3,6 +3,29 @@
  * Helper utilities for Meta API error classification and communication status mappings.
  */
 class CommunicationHelper {
+    /** Meta/HTTP codes that indicate API throttling (transient, require global backoff). */
+    const RATE_LIMIT_CODES = [130429, 131056, 131021, 131048, 80007, 4, 17, 32, 613, 429];
+
+    /**
+     * True when the failure indicates Meta API throttling / rate limiting.
+     * Used to apply a global cooldown so the worker stops hammering the API.
+     *
+     * @param int|string|null $errorCode
+     * @param string|null $errorMessage
+     * @return bool
+     */
+    public static function isRateLimitFailure($errorCode, $errorMessage) {
+        $code = ($errorCode !== null) ? (int)$errorCode : 0;
+        if ($code > 0 && in_array($code, self::RATE_LIMIT_CODES, true)) {
+            return true;
+        }
+        $m = strtolower((string)$errorMessage);
+        return strpos($m, 'rate limit') !== false
+            || strpos($m, 'too many requests') !== false
+            || strpos($m, 'http 429') !== false
+            || strpos($m, 'throttl') !== false;
+    }
+
     /**
      * Determines whether a Meta API error code and/or message indicates a permanent
      * (non-retryable) failure.
@@ -19,7 +42,7 @@ class CommunicationHelper {
         // 131021: Rate limit reached
         // 131048: Spammer protection rate limit
         // 429: Too Many Requests (Transient HTTP status)
-        if (in_array($code, [131021, 131048, 429], true)) {
+        if (in_array($code, [131021, 131048, 429, 130429, 131056, 80007], true)) {
             return false;
         }
 
@@ -43,7 +66,11 @@ class CommunicationHelper {
             strpos($lowerMsg, '131026') !== false ||
             strpos($lowerMsg, 'policy') !== false ||
             strpos($lowerMsg, 'not in allowed list') !== false ||
-            strpos($lowerMsg, 'invalid phone number') !== false ||
+            strpos($lowerMsg, 'invalid phone') !== false ||
+            strpos($lowerMsg, 'invalid number') !== false ||
+            strpos($lowerMsg, 'invalid recipient') !== false ||
+            strpos($lowerMsg, 'invalid whatsapp') !== false ||
+            (strpos($lowerMsg, 'invalid') !== false && (strpos($lowerMsg, 'phone') !== false || strpos($lowerMsg, 'number') !== false)) ||
             strpos($lowerMsg, 'does not exist') !== false ||
             strpos($lowerMsg, 'recipient') !== false ||
             strpos($lowerMsg, 'undeliverable') !== false ||

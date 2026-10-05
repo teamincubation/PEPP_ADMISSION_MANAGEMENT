@@ -5,6 +5,8 @@
 
 require_once 'includes/auth.php';
 require_once 'config/database.php';
+require_once 'includes/communication/WhatsAppAccountResolver.php';
+require_once 'includes/communication/CampaignConfig.php';
 require_permission('communication');
 
 $active_page = 'communication';
@@ -227,6 +229,8 @@ if (isset($_GET['action'])) {
             ];
         }
 
+        $est = CampaignConfig::estimateProcessing($pdo, count($eligibleList));
+
         echo json_encode([
             'success' => true,
             'total_matching' => $totalMatching,
@@ -234,6 +238,8 @@ if (isset($_GET['action'])) {
             'duplicates' => $duplicates,
             'opted_out' => $optedOut,
             'invalid' => $invalid,
+            'estimated_time' => $est['label'],
+            'estimated_details' => $est,
             'recipients' => array_slice($eligibleList, 0, 100) // Limit list size returned to client
         ]);
         exit;
@@ -336,9 +342,10 @@ if (isset($_GET['action'])) {
                 echo json_encode(['success' => false, 'message' => 'Cancellation failed: ' . $e->getMessage()]);
             }
         } elseif ($act === 'retry') {
-            // Fetch failed recipients
+            // Fetch failed recipients with sender and context data
             $stmtFailed = $pdo->prepare("
-                SELECT r.*, q.template_name, q.template_data, q.attachments, q.subject, q.body_html, q.body_text 
+                SELECT r.*, q.template_name, q.template_data, q.attachments, q.subject, q.body_html, q.body_text,
+                       q.sender_account_id, q.event_name, q.lead_id AS q_lead_id
                 FROM communication_campaign_recipients r
                 JOIN communication_queue q ON r.queue_id = q.id
                 WHERE r.campaign_id = ? AND r.status = 'failed'
@@ -352,7 +359,24 @@ if (isset($_GET['action'])) {
             }
 
             require_once 'includes/communication/CommunicationEngine.php';
+            require_once 'includes/communication/WhatsAppAccountResolver.php';
+            require_once 'includes/communication/CampaignConfig.php';
             $engine = CommunicationEngine::getInstance($pdo);
+            $resolver = WhatsAppAccountResolver::getInstance($pdo);
+
+            // Determine campaign-level sender account fallback
+            $campSenderId = null;
+            if (!empty($camp['sender_account_id'])) {
+                $campSenderId = (int)$camp['sender_account_id'];
+            } else {
+                $crit = json_decode($camp['segment_criteria'] ?? '{}', true) ?: [];
+                if (!empty($crit['sender_account_id'])) {
+                    $campSenderId = (int)$crit['sender_account_id'];
+                } elseif (!empty($crit['sender_key'])) {
+                    $cAcc = $resolver->getAccount($crit['sender_key']);
+                    if ($cAcc) $campSenderId = (int)$cAcc['id'];
+                }
+            }
 
             $pdo->beginTransaction();
             try {
@@ -360,6 +384,16 @@ if (isset($_GET['action'])) {
                 foreach ($failedRecipients as $rec) {
                     $tplData = json_decode($rec['template_data'], true) ?: [];
                     $attData = json_decode($rec['attachments'], true) ?: [];
+
+                    $retrySenderAccountId = !empty($rec['sender_account_id']) ? (int)$rec['sender_account_id'] : $campSenderId;
+                    if ($retrySenderAccountId !== null) {
+                        $senderAcc = $resolver->getAccount($retrySenderAccountId);
+                        if (!$senderAcc || (isset($senderAcc['status']) && $senderAcc['status'] !== 'active') || empty($senderAcc['phone_number_id'])) {
+                            throw new RuntimeException("Configured sender account is inactive or missing Phone Number ID. Cannot retry without a valid configured sender.");
+                        }
+                    }
+
+                    $idempotencyKey = "campaign:{$id}:rec:{$rec['id']}:retry:" . time() . ":" . uniqid();
 
                     $newQueueId = $engine->queueMessage(
                         'whatsapp',
@@ -371,8 +405,12 @@ if (isset($_GET['action'])) {
                         $attData,
                         $tplData,
                         $admin_username,
-                        null,
-                        null
+                        $rec['event_name'] ?: 'campaign_broadcast',
+                        'lead',
+                        $rec['lead_id'] ?? $rec['q_lead_id'],
+                        $retrySenderAccountId,
+                        $idempotencyKey,
+                        CampaignConfig::CAMPAIGN_QUEUE_PRIORITY
                     );
 
                     $stmtUpdRec = $pdo->prepare("UPDATE communication_campaign_recipients SET status = 'pending', queue_id = ?, sent_at = NULL WHERE id = ?");
@@ -406,9 +444,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $error_message = 'Security token mismatch. Please try again.';
     } else {
         $campaignName = trim($_POST['campaign_name'] ?? '');
-        $targetAudience = $_POST['target_audience'] ?? 'students';
-        $templateName = $_POST['template_name'] ?? '';
-        
+        $targetAudience = 'leads'; // Marketing campaigns target leads
+        $templateName = trim($_POST['template_name'] ?? '');
+        $senderKey = trim($_POST['sender_key'] ?? 'notifications');
+        $senderAccountId = !empty($_POST['sender_account_id']) ? (int)$_POST['sender_account_id'] : null;
+
         $scheduleType = $_POST['schedule_type'] ?? 'now';
         $scheduleDate = $_POST['schedule_date'] ?? '';
         $scheduleTime = $_POST['schedule_time'] ?? '';
@@ -432,7 +472,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }
                 $safeName = preg_replace('/[^a-zA-Z0-9_\.-]/', '', pathinfo($file['name'], PATHINFO_FILENAME)) . '_' . time() . '.' . $ext;
                 if (move_uploaded_file($file['tmp_name'], $dir . $safeName)) {
-                    // Build public URL safely
                     $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
                     $headerMediaUrl = $protocol . '://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['SCRIPT_NAME']) . '/uploads/whatsapp_campaign_media/' . $safeName;
                 } else {
@@ -441,182 +480,179 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
 
+        // 1. Resolve and Validate WhatsApp Sender Account
+        $resolver = WhatsAppAccountResolver::getInstance($pdo);
+        $senderAcc = $senderAccountId ? $resolver->getAccount($senderAccountId) : $resolver->getAccount($senderKey);
+        if (!$senderAcc) {
+            $senderAcc = $resolver->getAccount('notifications');
+        }
+
         if (empty($error_message)) {
-            if (!$campaignName) {
+            if (!$senderAcc || (isset($senderAcc['status']) && $senderAcc['status'] !== 'active')) {
+                $error_message = 'Selected WhatsApp sender account is inactive or not found.';
+            } elseif (empty($senderAcc['phone_number_id'])) {
+                $error_message = ($senderAcc['display_name'] ?? 'Selected sender') . ' is not configured for WhatsApp sending (missing Phone Number ID). Campaign creation aborted. The system will never silently fall back to admissions.';
+            } elseif (!$campaignName) {
                 $error_message = 'Please specify a campaign name.';
             } elseif (!$templateName) {
-                $error_message = 'Please select a Meta Template for the WhatsApp campaign.';
+                $error_message = 'Please select a Meta Marketing Template for the WhatsApp campaign.';
             } else {
-                // Fetch template metadata to compile mappings
+                // 2. Fetch and Validate Template
                 $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? AND status='approved' LIMIT 1");
                 $stmtTpl->execute([$templateName]);
                 $template = $stmtTpl->fetch();
 
                 if (!$template) {
                     $error_message = 'Selected template is missing or not approved.';
+                } elseif (strtoupper($template['category'] ?? '') !== 'MARKETING') {
+                    $error_message = 'Only approved WhatsApp MARKETING templates can be used for bulk marketing campaigns.';
                 } else {
                     $meta = json_decode($template['meta_data'], true) ?: [];
                     $varMappings = $_POST['vars'] ?? [];
                     $staticVals = $_POST['static_vars'] ?? [];
 
-                    // ── Target segmentation ──
+                    // 3. Target Audience Segmentation (Leads)
                     $recipients = [];
-                    $segmentCriteria = [];
+                    $courses = $_POST['target_leads_courses'] ?? [];
+                    $statuses = $_POST['target_leads_statuses'] ?? [];
 
-                    if ($targetAudience === 'leads') {
-                        $courses = $_POST['target_leads_courses'] ?? [];
-                        $statuses = $_POST['target_leads_statuses'] ?? [];
-
-                        if (empty($courses) || empty($statuses)) {
-                            $error_message = 'Please select at least one course and one lead status.';
-                        } else {
-                            $where = [];
-                            $params = [];
-
-                            $coursePlaceholders = implode(',', array_fill(0, count($courses), '?'));
-                            $where[] = "interested_course IN ($coursePlaceholders)";
-                            $params = array_merge($params, $courses);
-
-                            $statusPlaceholders = implode(',', array_fill(0, count($statuses), '?'));
-                            $where[] = "status IN ($statusPlaceholders)";
-                            $params = array_merge($params, $statuses);
-
-                            $where_sql = implode(' AND ', $where);
-                            $stmt = $pdo->prepare("SELECT id, name, whatsapp_number, interested_course, status, is_opted_out FROM leads WHERE $where_sql ORDER BY id ASC");
-                            $stmt->execute($params);
-                            $leads = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-                            $seenPhones = [];
-                            foreach ($leads as $l) {
-                                if ((int)$l['is_opted_out'] === 1) continue;
-                                $phone = clean_wa_phone($l['whatsapp_number']);
-                                if (empty($phone) || strlen($phone) < 10) continue;
-                                if (in_array($phone, $seenPhones, true)) continue;
-
-                                $seenPhones[] = $phone;
-                                $recipients[] = [
-                                    'lead_id' => $l['id'],
-                                    'user_id' => null,
-                                    'name' => $l['name'] ?: 'Prospect',
-                                    'phone' => $phone,
-                                    'course' => $l['interested_course'],
-                                    'status' => $l['status'],
-                                    'raw_lead' => $l
-                                ];
-                            }
-                            $segmentCriteria = [
-                                'target_audience' => 'leads',
-                                'courses' => $courses,
-                                'statuses' => $statuses,
-                                'var_mappings' => $varMappings,
-                                'static_vals' => $staticVals,
-                                'header_media' => $headerMediaUrl
-                            ];
-                        }
+                    if (empty($courses) || empty($statuses)) {
+                        $error_message = 'Please select at least one course and one lead status.';
                     } else {
-                        // LEGACY Student targeting configuration
-                        $targetCourse = $_POST['target_course'] ?? '';
-                        $targetStatus = $_POST['target_status'] ?? '';
-
-                        $where = ["whatsapp_number IS NOT NULL AND whatsapp_number <> ''"];
+                        $where = [];
                         $params = [];
-                        if ($targetCourse) {
-                            $where[] = "pepp_course = ?";
-                            $params[] = $targetCourse;
-                        }
-                        if ($targetStatus) {
-                            $where[] = "status = ?";
-                            $params[] = $targetStatus;
-                        } else {
-                            $where[] = "status IN ('approved', 'pending')";
-                        }
 
-                        $queryStr = "SELECT user_id, name, whatsapp_country_code, whatsapp_number, pepp_course, status FROM users WHERE " . implode(' AND ', $where);
-                        $stmtUsers = $pdo->prepare($queryStr);
-                        $stmtUsers->execute($params);
-                        $students = $stmtUsers->fetchAll(PDO::FETCH_ASSOC);
+                        $coursePlaceholders = implode(',', array_fill(0, count($courses), '?'));
+                        $where[] = "interested_course IN ($coursePlaceholders)";
+                        $params = array_merge($params, $courses);
 
-                        foreach ($students as $stu) {
-                            $phone = clean_wa_phone($stu['whatsapp_country_code'] . $stu['whatsapp_number']);
+                        $statusPlaceholders = implode(',', array_fill(0, count($statuses), '?'));
+                        $where[] = "status IN ($statusPlaceholders)";
+                        $params = array_merge($params, $statuses);
+
+                        $where_sql = implode(' AND ', $where);
+                        $stmt = $pdo->prepare("SELECT id, name, whatsapp_number, interested_course, status, is_opted_out FROM leads WHERE $where_sql ORDER BY id ASC");
+                        $stmt->execute($params);
+                        $leads = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                        $seenPhones = [];
+                        foreach ($leads as $l) {
+                            if ((int)$l['is_opted_out'] === 1) continue;
+                            $phone = clean_wa_phone($l['whatsapp_number']);
+                            if (empty($phone) || strlen($phone) < 10) continue;
+                            if (in_array($phone, $seenPhones, true)) continue;
+
+                            $seenPhones[] = $phone;
                             $recipients[] = [
-                                'lead_id' => null,
-                                'user_id' => $stu['user_id'],
-                                'name' => $stu['name'],
+                                'lead_id' => $l['id'],
+                                'user_id' => null,
+                                'name' => $l['name'] ?: 'Prospect',
                                 'phone' => $phone,
-                                'course' => $stu['pepp_course'],
-                                'status' => $stu['status'],
-                                'raw_student' => $stu
+                                'course' => $l['interested_course'],
+                                'status' => $l['status'],
+                                'raw_lead' => $l
                             ];
                         }
+
                         $segmentCriteria = [
-                            'target_audience' => 'students',
-                            'course' => $targetCourse,
-                            'status' => $targetStatus,
+                            'target_audience' => 'leads',
+                            'courses' => $courses,
+                            'statuses' => $statuses,
                             'var_mappings' => $varMappings,
                             'static_vals' => $staticVals,
-                            'header_media' => $headerMediaUrl
+                            'header_media' => $headerMediaUrl,
+                            'sender_account_id' => (int)$senderAcc['id'],
+                            'sender_key' => $senderAcc['sender_key'],
+                            'sender_name' => $senderAcc['display_name']
                         ];
-                    }
 
-                    if (empty($recipients)) {
-                        $error_message = 'No eligible recipients found matching the target segmentation criteria.';
-                    } else {
-                        // Calculate scheduling datetime
-                        $nextAttempt = 'NOW()';
-                        $scheduledAtVal = null;
-                        $campaignStatus = 'active';
+                        if (empty($recipients)) {
+                            $error_message = 'No eligible recipients found matching the target segmentation criteria.';
+                        } else {
+                            // Calculate scheduling datetime
+                            $scheduledAtVal = null;
+                            $campaignStatus = 'active';
 
-                        if ($scheduleType === 'schedule' && !empty($scheduleDate) && !empty($scheduleTime)) {
-                            $scheduledAtVal = $scheduleDate . ' ' . $scheduleTime . ':00';
-                            $nextAttempt = '?' ;
-                            $campaignStatus = 'scheduled';
-                        }
-
-                        $pdo->beginTransaction();
-                        try {
-                            // Insert Campaign record
-                            $stmtCamp = $pdo->prepare("
-                                INSERT INTO communication_campaigns (name, channel, target_audience, template_name, segment_criteria, status, scheduled_at, created_by, created_at, updated_at) 
-                                VALUES (?, 'whatsapp', ?, ?, ?, ?, ?, ?, NOW(), NOW())
-                            ");
-                            $stmtCamp->execute([
-                                $campaignName,
-                                $targetAudience,
-                                $templateName,
-                                json_encode($segmentCriteria),
-                                $campaignStatus,
-                                $scheduledAtVal,
-                                $admin_username
-                            ]);
-                            $campaignId = (int)$pdo->lastInsertId();
-
-                            $stmtRecip = $pdo->prepare("
-                                INSERT INTO communication_campaign_recipients (campaign_id, lead_id, recipient, recipient_name, queue_id, status, created_at) 
-                                VALUES (?, ?, ?, ?, NULL, 'pending', NOW())
-                            ");
-
-                            $queuedCount = 0;
-                            foreach ($recipients as $rec) {
-                                $stmtRecip->execute([
-                                    $campaignId,
-                                    $rec['lead_id'],
-                                    $rec['phone'],
-                                    $rec['name']
-                                ]);
-                                $queuedCount++;
+                            if ($scheduleType === 'schedule' && !empty($scheduleDate) && !empty($scheduleTime)) {
+                                $scheduledAtVal = $scheduleDate . ' ' . $scheduleTime . ':00';
+                                $campaignStatus = 'scheduled';
                             }
 
-                            $pdo->commit();
+                            // Check if sender_account_id column exists on communication_campaigns (dual-compatibility)
+                            $hasCampSenderCol = false;
                             try {
-                                require_once 'includes/communication/CommunicationEngine.php';
-                                $commEngine = CommunicationEngine::getInstance($pdo);
-                                $commEngine->triggerCronBackground();
-                            } catch (Exception $bgEx) {}
+                                $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+                                if ($driver === 'sqlite') {
+                                    $colStmt = $pdo->query("PRAGMA table_info(communication_campaigns)");
+                                    while ($cRow = $colStmt->fetch(PDO::FETCH_ASSOC)) {
+                                        if ($cRow['name'] === 'sender_account_id') { $hasCampSenderCol = true; break; }
+                                    }
+                                } else {
+                                    $colStmt = $pdo->query("SHOW COLUMNS FROM communication_campaigns LIKE 'sender_account_id'");
+                                    $hasCampSenderCol = (bool)$colStmt->fetchColumn();
+                                }
+                            } catch (Throwable $e) {}
 
-                            $success_message = "Campaign successfully configured and snapshot saved! Enqueued {$queuedCount} recipients for background dispatch.";
-                        } catch (Exception $e) {
-                            $pdo->rollBack();
-                            $error_message = 'Campaign configuration failed: ' . $e->getMessage();
+                            $pdo->beginTransaction();
+                            try {
+                                if ($hasCampSenderCol) {
+                                    $stmtCamp = $pdo->prepare("
+                                        INSERT INTO communication_campaigns (name, channel, target_audience, template_name, segment_criteria, status, scheduled_at, sender_account_id, created_by, created_at, updated_at)
+                                        VALUES (?, 'whatsapp', 'leads', ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                                    ");
+                                    $stmtCamp->execute([
+                                        $campaignName,
+                                        $templateName,
+                                        json_encode($segmentCriteria),
+                                        $campaignStatus,
+                                        $scheduledAtVal,
+                                        (int)$senderAcc['id'],
+                                        $admin_username
+                                    ]);
+                                } else {
+                                    $stmtCamp = $pdo->prepare("
+                                        INSERT INTO communication_campaigns (name, channel, target_audience, template_name, segment_criteria, status, scheduled_at, created_by, created_at, updated_at)
+                                        VALUES (?, 'whatsapp', 'leads', ?, ?, ?, ?, ?, NOW(), NOW())
+                                    ");
+                                    $stmtCamp->execute([
+                                        $campaignName,
+                                        $templateName,
+                                        json_encode($segmentCriteria),
+                                        $campaignStatus,
+                                        $scheduledAtVal,
+                                        $admin_username
+                                    ]);
+                                }
+                                $campaignId = (int)$pdo->lastInsertId();
+
+                                $stmtRecip = $pdo->prepare("
+                                    INSERT INTO communication_campaign_recipients (campaign_id, lead_id, recipient, recipient_name, queue_id, status, created_at)
+                                    VALUES (?, ?, ?, ?, NULL, 'pending', NOW())
+                                ");
+
+                                $queuedCount = 0;
+                                foreach ($recipients as $rec) {
+                                    $stmtRecip->execute([
+                                        $campaignId,
+                                        $rec['lead_id'],
+                                        $rec['phone'],
+                                        $rec['name']
+                                    ]);
+                                    $queuedCount++;
+                                }
+
+                                $pdo->commit();
+                                try {
+                                    require_once 'includes/communication/CommunicationEngine.php';
+                                    $commEngine = CommunicationEngine::getInstance($pdo);
+                                    $commEngine->triggerCronBackground();
+                                } catch (Exception $bgEx) {}
+
+                                $success_message = "Campaign successfully configured and snapshot saved! Enqueued {$queuedCount} recipients for background dispatch using " . htmlspecialchars($senderAcc['display_name']) . ".";
+                            } catch (Exception $e) {
+                                $pdo->rollBack();
+                                $error_message = 'Campaign configuration failed: ' . $e->getMessage();
+                            }
                         }
                     }
                 }
@@ -662,10 +698,45 @@ try {
     $leadCourses = $pdo->query("SELECT DISTINCT interested_course FROM leads WHERE interested_course IS NOT NULL AND interested_course <> '' ORDER BY interested_course ASC")->fetchAll(PDO::FETCH_COLUMN);
 } catch (Exception $ex) {}
 
-$studentCourses = [];
-try {
-    $studentCourses = $pdo->query("SELECT DISTINCT pepp_course FROM users WHERE pepp_course IS NOT NULL AND pepp_course <> '' ORDER BY pepp_course ASC")->fetchAll(PDO::FETCH_COLUMN);
-} catch (Exception $ex) {}
+// Sender Accounts Resolution for UI
+$resolver = WhatsAppAccountResolver::getInstance($pdo);
+$allAccounts = $resolver->getAllAccounts(false);
+$notifAccount = $resolver->getAccount('notifications') ?: [
+    'id' => 2,
+    'sender_key' => 'notifications',
+    'display_name' => 'PEPP Updates',
+    'display_number' => '917994304400',
+    'phone_number_id' => '',
+    'purpose' => 'Session reminders, daily tasks & marketing campaigns',
+    'status' => 'active'
+];
+$admissionsAccount = $resolver->getAccount('admissions') ?: [
+    'id' => 1,
+    'sender_key' => 'admissions',
+    'display_name' => 'PEPP Learning',
+    'display_number' => '916282563209',
+    'phone_number_id' => '',
+    'purpose' => 'Admissions communication & student records',
+    'status' => 'active'
+];
+$isNotifConfigured = !empty($notifAccount['phone_number_id']);
+$isNotifActive = (!isset($notifAccount['status']) || $notifAccount['status'] === 'active');
+$isAdmissionsConfigured = !empty($admissionsAccount['phone_number_id']);
+$isAdmissionsActive = (!isset($admissionsAccount['status']) || $admissionsAccount['status'] === 'active');
+
+// Overall KPIs calculation
+$totalAudienceAll = 0;
+$totalSentAll = 0;
+$totalDeliveredAll = 0;
+$totalReadAll = 0;
+$totalFailedAll = 0;
+foreach ($campaigns as $cItem) {
+    $totalAudienceAll += (int)$cItem['total_recipients'];
+    $totalSentAll += (int)$cItem['sent_count'];
+    $totalDeliveredAll += (int)($cItem['delivered_count'] ?? 0);
+    $totalReadAll += (int)($cItem['read_count'] ?? 0);
+    $totalFailedAll += (int)$cItem['failed_count'];
+}
 
 include 'includes/admin_nav.php';
 ?>
@@ -1033,162 +1104,252 @@ include 'includes/admin_nav.php';
                 <form method="POST" id="campaign-create-form" enctype="multipart/form-data" onsubmit="return validateFormSubmit(event)">
                     <?php echo csrf_field(); ?>
                     <input type="hidden" name="action" value="create_campaign">
-                    <input type="hidden" name="target_audience" id="inp-target-audience" value="leads">
-                    
-                    <!-- STEP 1: CAMPAIGN DETAILS -->
+                    <input type="hidden" name="target_audience" value="leads">
+                    <input type="hidden" name="sender_account_id" id="inp-sender-account-id" value="<?php echo htmlspecialchars((string)($notifAccount['id'] ?? '2')); ?>">
+                    <input type="hidden" name="sender_key" id="inp-sender-key" value="<?php echo htmlspecialchars((string)($notifAccount['sender_key'] ?? 'notifications')); ?>">
+
+                    <!-- STEP 1 — TEMPLATE -->
                     <div class="form-step-section">
                         <div class="form-step-header">
                             <div class="form-step-number">01</div>
                             <div style="display:flex; flex-direction:column; gap:2px;">
-                                <div class="form-step-title">Campaign Details</div>
-                                <div style="font-size:0.7rem; color:#64748b; font-weight:500; text-transform:none;">Define campaign properties</div>
-                            </div>
-                        </div>
-                        <div style="margin-bottom:0;">
-                            <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Campaign Name <span style="color:#ef4444;">*</span></label>
-                            <input type="text" name="campaign_name" id="inp-campaign-name" class="form-control" placeholder="e.g. CUET PG August Admission Campaign" style="font-size:0.82rem;" required>
-                        </div>
-                    </div>
-
-                    <!-- STEP 2: AUDIENCE FILTERS -->
-                    <div class="form-step-section">
-                        <div class="form-step-header">
-                            <div class="form-step-number">02</div>
-                            <div style="display:flex; flex-direction:column; gap:2px;">
-                                <div class="form-step-title">Audience Filters</div>
-                                <div style="font-size:0.7rem; color:#64748b; font-weight:500; text-transform:none;">Choose target segmentation</div>
-                            </div>
-                        </div>
-                        
-                        <!-- Leads Target Filters Section -->
-                        <div id="section-target-leads" style="display:block;">
-                            <div style="margin-bottom:12px;">
-                                <label style="display:block; font-size:0.75rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Lead Statuses <span style="color:#ef4444;">*</span></label>
-                                <div class="chk-card-grid">
-                                    <label class="chk-card-label checked">
-                                        <input type="checkbox" name="target_leads_statuses[]" value="new" checked class="chk-status" onchange="triggerAudiencePreview(); this.parentElement.classList.toggle('checked', this.checked);"> New
-                                    </label>
-                                    <label class="chk-card-label checked">
-                                        <input type="checkbox" name="target_leads_statuses[]" value="contacted" checked class="chk-status" onchange="triggerAudiencePreview(); this.parentElement.classList.toggle('checked', this.checked);"> Contacted
-                                    </label>
-                                    <label class="chk-card-label checked">
-                                        <input type="checkbox" name="target_leads_statuses[]" value="interested" checked class="chk-status" onchange="triggerAudiencePreview(); this.parentElement.classList.toggle('checked', this.checked);"> Interested
-                                    </label>
-                                    <label class="chk-card-label checked">
-                                        <input type="checkbox" name="target_leads_statuses[]" value="follow_up" checked class="chk-status" onchange="triggerAudiencePreview(); this.parentElement.classList.toggle('checked', this.checked);"> Follow-up
-                                    </label>
-                                </div>
-                            </div>
-
-                            <div>
-                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                                    <label style="font-size:0.75rem; font-weight:700; color:#4b5563;">PEPP Course Targets <span style="color:#ef4444;">*</span></label>
-                                    <div style="display:flex; gap:6px;">
-                                        <button type="button" onclick="toggleLeadCheckboxes(true)" style="border:none; background:none; font-size:0.65rem; color:#8b5cf6; font-weight:700; cursor:pointer; padding:0;">Select All</button>
-                                        <span style="font-size:0.65rem; color:#94a3b8;">|</span>
-                                        <button type="button" onclick="toggleLeadCheckboxes(false)" style="border:none; background:none; font-size:0.65rem; color:#ef4444; font-weight:700; cursor:pointer; padding:0;">Clear All</button>
-                                    </div>
-                                </div>
-                                <div style="max-height:150px; overflow-y:auto; border:1.5px solid #cbd5e1; border-radius:10px; padding:10px; background:#fff;" id="leads-courses-checklist">
-                                    <?php foreach ($leadCourses as $lc): ?>
-                                        <label style="font-size:0.75rem; display:flex; align-items:center; gap:8px; margin-bottom:6px; cursor:pointer;"><input type="checkbox" name="target_leads_courses[]" value="<?php echo htmlspecialchars($lc); ?>" class="chk-course" onchange="triggerAudiencePreview()" style="width:15px; height:15px; accent-color:var(--accent-dark);"> <?php echo htmlspecialchars($lc); ?></label>
-                                    <?php endforeach; ?>
-                                </div>
+                                <div class="form-step-title">Select Marketing Template</div>
+                                <div style="font-size:0.7rem; color:#64748b; font-weight:500;">Approved WhatsApp marketing templates</div>
                             </div>
                         </div>
 
-                        <!-- Students Target Filters Section -->
-                        <div id="section-target-students" style="display:none;">
-                            <div style="display:flex; flex-direction:column; gap:12px;">
-                                <div>
-                                    <label style="font-size:0.75rem; font-weight:700; color:#4b5563; display:block; margin-bottom:4px;">Enrolled Course</label>
-                                    <select name="target_course" class="form-control" style="font-size:0.8rem;">
-                                        <option value="">All Courses</option>
-                                        <?php foreach ($studentCourses as $sc): ?>
-                                            <option value="<?php echo htmlspecialchars($sc); ?>"><?php echo htmlspecialchars($sc); ?></option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label style="font-size:0.75rem; font-weight:700; color:#4b5563; display:block; margin-bottom:4px;">Approval Status</label>
-                                    <select name="target_status" class="form-control" style="font-size:0.8rem;">
-                                        <option value="">Approved &amp; Pending</option>
-                                        <option value="approved">Approved Only</option>
-                                        <option value="pending">Pending Only</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- STEP 3: MESSAGE CONTENT -->
-                    <div class="form-step-section">
-                        <div class="form-step-header">
-                            <div class="form-step-number">03</div>
-                            <div style="display:flex; flex-direction:column; gap:2px;">
-                                <div class="form-step-title">Message Content</div>
-                                <div style="font-size:0.7rem; color:#64748b; font-weight:500; text-transform:none;">Configure WABA variables</div>
-                            </div>
-                        </div>
-                        
-                        <div style="margin-bottom:12px;">
-                            <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Meta Approved Template <span style="color:#ef4444;">*</span></label>
-                            <select name="template_name" id="sel-template-name" class="form-control" onchange="loadTemplateDetails(this.value)" required>
-                                <option value="">-- Select Marketing Template --</option>
+                        <div style="margin-bottom:10px;">
+                            <label style="display:block; font-size:0.78rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Approved Template <span style="color:#ef4444;">*</span></label>
+                            <select name="template_name" id="sel-template-name" class="form-control" onchange="onTemplateSelected(this.value)" required>
+                                <option value="">-- Choose Approved Marketing Template --</option>
                                 <?php foreach ($marketingTemplates as $m_tpl): ?>
-                                    <option value="<?php echo htmlspecialchars($m_tpl['template_name']); ?>"><?php echo htmlspecialchars($m_tpl['template_name']); ?> (<?php echo $m_tpl['language']; ?>)</option>
+                                    <option value="<?php echo htmlspecialchars($m_tpl['template_name']); ?>" data-lang="<?php echo htmlspecialchars($m_tpl['language']); ?>">
+                                        <?php echo htmlspecialchars($m_tpl['template_name']); ?> (<?php echo htmlspecialchars($m_tpl['language']); ?>)
+                                    </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
 
-                        <!-- Upload Image Header Block -->
-                        <div id="section-media-header" style="display:none; border:1.5px solid #cbd5e1; border-radius:12px; padding:12px; background:#fcfcfc; margin-bottom:12px;">
-                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#1e293b; margin-bottom:6px;"><i class="fas fa-file-image" style="color:var(--accent-dark);"></i> Required Header Media File</label>
-                            <input type="file" name="header_media_file" id="inp-media-file" class="form-control" style="font-size:0.75rem; height:auto !important; padding:6px 12px !important;" accept="image/*,video/mp4,application/pdf" onchange="onMediaFileChange(event)">
-                            <span style="font-size:0.65rem; color:#64748b; display:block; margin-top:4px;">Select JPG, PNG, MP4, or PDF. Max file size: 5MB.</span>
-                        </div>
-
-                        <!-- Dynamic Variables Mapping Block -->
-                        <div id="section-variable-mapping" style="display:none; border:1.5px solid #cbd5e1; border-radius:12px; padding:12px; background:#f8fafc; margin-bottom:0;">
-                            <span style="font-size:0.75rem; font-weight:700; color:#4b5563; display:block; margin-bottom:8px;"><i class="fas fa-brackets-curly" style="color:#6366f1;"></i> Variable Mappings</span>
-                            <div id="variable-mappings-inputs" style="display:flex; flex-direction:column; gap:10px;"></div>
+                        <!-- Template Preview Card -->
+                        <div id="tpl-info-card" style="display:none; border:1px solid #cbd5e1; border-radius:10px; padding:10px; background:#f8fafc; font-size:0.75rem;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                                <strong id="tpl-card-name" style="color:#1e293b; font-size:0.8rem;">-</strong>
+                                <div style="display:flex; gap:4px;">
+                                    <span class="badge blue" style="font-size:0.6rem;">MARKETING</span>
+                                    <span class="badge gray" id="tpl-card-lang" style="font-size:0.6rem;">en</span>
+                                </div>
+                            </div>
+                            <div id="tpl-card-body-preview" style="color:#475569; font-size:0.73rem; line-height:1.35; max-height:80px; overflow-y:auto; background:#fff; border:1px solid #e2e8f0; border-radius:6px; padding:8px; white-space:pre-wrap;"></div>
                         </div>
                     </div>
 
-                    <!-- STEP 4: SCHEDULING -->
+                    <!-- STEP 2 — AUDIENCE -->
+                    <div class="form-step-section">
+                        <div class="form-step-header">
+                            <div class="form-step-number">02</div>
+                            <div style="display:flex; flex-direction:column; gap:2px;">
+                                <div class="form-step-title">Target Audience</div>
+                                <div style="font-size:0.7rem; color:#64748b; font-weight:500;">Segment leads database</div>
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Lead Statuses <span style="color:#ef4444;">*</span></label>
+                            <div class="chk-card-grid">
+                                <label class="chk-card-label checked">
+                                    <input type="checkbox" name="target_leads_statuses[]" value="new" checked class="chk-status" onchange="onFilterChanged(); this.parentElement.classList.toggle('checked', this.checked);"> New
+                                </label>
+                                <label class="chk-card-label checked">
+                                    <input type="checkbox" name="target_leads_statuses[]" value="contacted" checked class="chk-status" onchange="onFilterChanged(); this.parentElement.classList.toggle('checked', this.checked);"> Contacted
+                                </label>
+                                <label class="chk-card-label checked">
+                                    <input type="checkbox" name="target_leads_statuses[]" value="interested" checked class="chk-status" onchange="onFilterChanged(); this.parentElement.classList.toggle('checked', this.checked);"> Interested
+                                </label>
+                                <label class="chk-card-label checked">
+                                    <input type="checkbox" name="target_leads_statuses[]" value="follow_up" checked class="chk-status" onchange="onFilterChanged(); this.parentElement.classList.toggle('checked', this.checked);"> Follow-up
+                                </label>
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom:12px;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                                <label style="font-size:0.75rem; font-weight:700; color:#4b5563;">Interested Course Targets <span style="color:#ef4444;">*</span></label>
+                                <div style="display:flex; gap:6px;">
+                                    <button type="button" onclick="toggleLeadCheckboxes(true)" style="border:none; background:none; font-size:0.65rem; color:#8b5cf6; font-weight:700; cursor:pointer; padding:0;">Select All</button>
+                                    <span style="font-size:0.65rem; color:#94a3b8;">|</span>
+                                    <button type="button" onclick="toggleLeadCheckboxes(false)" style="border:none; background:none; font-size:0.65rem; color:#ef4444; font-weight:700; cursor:pointer; padding:0;">Clear All</button>
+                                </div>
+                            </div>
+                            <div style="max-height:130px; overflow-y:auto; border:1.5px solid #cbd5e1; border-radius:10px; padding:10px; background:#fff;" id="leads-courses-checklist">
+                                <?php foreach ($leadCourses as $lc): ?>
+                                    <label style="font-size:0.75rem; display:flex; align-items:center; gap:8px; margin-bottom:6px; cursor:pointer;">
+                                        <input type="checkbox" name="target_leads_courses[]" value="<?php echo htmlspecialchars($lc); ?>" class="chk-course" onchange="onFilterChanged()" style="width:15px; height:15px; accent-color:#7c3aed;"> <?php echo htmlspecialchars($lc); ?>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+
+                        <!-- Live Summary Chips -->
+                        <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:8px; margin-bottom:10px;" id="audience-summary-chips">
+                            <div style="background:#ecfdf5; border:1px solid #10b981; border-radius:8px; padding:8px 10px; text-align:center;">
+                                <div style="font-size:1.1rem; font-weight:800; color:#047857;" id="chip-recipients-count">0</div>
+                                <div style="font-size:0.65rem; font-weight:700; color:#065f46;">FINAL RECIPIENTS</div>
+                            </div>
+                            <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px; padding:8px 10px; text-align:center;">
+                                <div style="font-size:1.1rem; font-weight:800; color:#475569;" id="chip-excluded-count">0</div>
+                                <div style="font-size:0.65rem; font-weight:700; color:#64748b;">EXCLUDED TOTAL</div>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; grid-column:span 2; font-size:0.68rem; color:#64748b; background:#f1f5f9; padding:6px 10px; border-radius:6px;">
+                                <span>Duplicates: <b id="chip-dup-count">0</b></span>
+                                <span>Invalid: <b id="chip-inv-count">0</b></span>
+                                <span>Opted-out: <b id="chip-opt-count">0</b></span>
+                            </div>
+                        </div>
+
+                        <button type="button" onclick="calculatePreview()" class="btn btn-outline" style="width:100%; border-radius:8px; font-weight:700; padding:8px; font-size:0.78rem; display:flex; align-items:center; justify-content:center; gap:6px;">
+                            <i class="fas fa-calculator"></i> Calculate &amp; Preview Recipients
+                        </button>
+                    </div>
+
+                    <!-- STEP 3 — SENDER -->
+                    <div class="form-step-section">
+                        <div class="form-step-header">
+                            <div class="form-step-number">03</div>
+                            <div style="display:flex; flex-direction:column; gap:2px;">
+                                <div class="form-step-title">Sender Account</div>
+                                <div style="font-size:0.7rem; color:#64748b; font-weight:500;">Multi-number WhatsApp routing</div>
+                            </div>
+                        </div>
+
+                        <div style="display:flex; flex-direction:column; gap:10px;">
+                            <!-- PEPP Updates Card (Default) -->
+                            <label class="sender-card-option" id="sender-card-notifications" style="display:block; border:1.5px solid <?php echo $isNotifConfigured ? '#7c3aed' : '#fca5a5'; ?>; border-radius:10px; padding:10px 12px; background:<?php echo $isNotifConfigured ? '#f5f3ff' : '#fef2f2'; ?>; cursor:pointer;">
+                                <div style="display:flex; align-items:flex-start; gap:10px;">
+                                    <input type="radio" name="selected_sender" value="notifications" <?php echo $isNotifConfigured ? 'checked' : 'disabled'; ?> onchange="onSenderSelected('notifications', <?php echo (int)($notifAccount['id'] ?? 2); ?>, 'PEPP Updates', <?php echo $isNotifConfigured ? 'true' : 'false'; ?>)" style="margin-top:2px; accent-color:#7c3aed;">
+                                    <div style="flex:1;">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <strong style="color:#1e293b; font-size:0.83rem;"><?php echo htmlspecialchars($notifAccount['display_name'] ?? 'PEPP Updates'); ?></strong>
+                                            <span class="badge <?php echo $isNotifConfigured ? 'blue' : 'red'; ?>" style="font-size:0.62rem;">
+                                                <?php echo $isNotifConfigured ? 'Default (Marketing)' : 'Not Configured'; ?>
+                                            </span>
+                                        </div>
+                                        <div style="font-size:0.75rem; color:#475569; margin-top:2px;">
+                                            <i class="fab fa-whatsapp" style="color:#25d366;"></i> +91 79943 04400
+                                        </div>
+                                        <div style="font-size:0.67rem; color:#64748b; margin-top:2px;">
+                                            Purpose: Marketing campaigns &amp; reminders
+                                        </div>
+                                    </div>
+                                </div>
+                                <?php if (!$isNotifConfigured): ?>
+                                    <div style="margin-top:8px; font-size:0.72rem; color:#b91c1c; background:#fee2e2; border-radius:6px; padding:6px 10px;">
+                                        <i class="fas fa-triangle-exclamation"></i> <strong>PEPP Updates is not configured for WhatsApp sending.</strong><br>
+                                        Meta Phone Number ID is missing. Sending via this account is disabled and will <em>never</em> silently fall back to admissions.
+                                    </div>
+                                <?php endif; ?>
+                            </label>
+
+                            <!-- PEPP Learning Card (Admissions) -->
+                            <label class="sender-card-option" id="sender-card-admissions" style="display:block; border:1.5px solid #cbd5e1; border-radius:10px; padding:10px 12px; background:#fff; cursor:pointer;">
+                                <div style="display:flex; align-items:flex-start; gap:10px;">
+                                    <input type="radio" name="selected_sender" value="admissions" <?php echo ($isAdmissionsConfigured && !$isNotifConfigured) ? 'checked' : ''; ?> <?php echo $isAdmissionsConfigured ? '' : 'disabled'; ?> onchange="onSenderSelected('admissions', <?php echo (int)($admissionsAccount['id'] ?? 1); ?>, 'PEPP Learning', <?php echo $isAdmissionsConfigured ? 'true' : 'false'; ?>)" style="margin-top:2px; accent-color:#7c3aed;">
+                                    <div style="flex:1;">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <strong style="color:#1e293b; font-size:0.83rem;"><?php echo htmlspecialchars($admissionsAccount['display_name'] ?? 'PEPP Learning'); ?></strong>
+                                            <span class="badge <?php echo $isAdmissionsConfigured ? 'gray' : 'red'; ?>" style="font-size:0.62rem;">
+                                                <?php echo $isAdmissionsConfigured ? 'Admissions Sender' : 'Not Configured'; ?>
+                                            </span>
+                                        </div>
+                                        <div style="font-size:0.75rem; color:#475569; margin-top:2px;">
+                                            <i class="fab fa-whatsapp" style="color:#25d366;"></i> +91 62825 63209
+                                        </div>
+                                        <div style="font-size:0.67rem; color:#64748b; margin-top:2px;">
+                                            Purpose: Admissions communication &amp; student records
+                                        </div>
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- STEP 4 — REVIEW & SEND -->
                     <div class="form-step-section">
                         <div class="form-step-header">
                             <div class="form-step-number">04</div>
                             <div style="display:flex; flex-direction:column; gap:2px;">
-                                <div class="form-step-title">Scheduling</div>
-                                <div style="font-size:0.7rem; color:#64748b; font-weight:500; text-transform:none;">Define launch schedule</div>
+                                <div class="form-step-title">Review &amp; Send</div>
+                                <div style="font-size:0.7rem; color:#64748b; font-weight:500;">Summary and dispatch</div>
                             </div>
                         </div>
-                        
-                        <div style="margin-bottom:0;">
-                            <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;"><i class="fas fa-clock" style="color:var(--accent-dark);"></i> Launch Schedule</label>
-                            <div style="display:flex; gap:16px; margin-bottom:12px;">
-                                <label style="font-size:0.78rem; display:flex; align-items:center; gap:6px; cursor:pointer; font-weight:600;"><input type="radio" name="schedule_type" value="now" checked onchange="toggleScheduleBlock(false)" style="width:16px; height:16px; accent-color:var(--accent-dark);"> Send Immediately</label>
-                                <label style="font-size:0.78rem; display:flex; align-items:center; gap:6px; cursor:pointer; font-weight:600;"><input type="radio" name="schedule_type" value="schedule" onchange="toggleScheduleBlock(true)" style="width:16px; height:16px; accent-color:var(--accent-dark);"> Schedule Launch</label>
+
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block; font-size:0.78rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Campaign Name <span style="color:#ef4444;">*</span></label>
+                            <input type="text" name="campaign_name" id="inp-campaign-name" class="form-control" placeholder="e.g. M.Phil Entrance Exam Campaign 2026" oninput="updateReviewCard()" required>
+                        </div>
+
+                        <!-- Schedule Option -->
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block; font-size:0.75rem; font-weight:700; color:#4b5563; margin-bottom:4px;"><i class="fas fa-clock" style="color:#7c3aed;"></i> Launch Schedule</label>
+                            <div style="display:flex; gap:16px; margin-bottom:8px;">
+                                <label style="font-size:0.75rem; display:flex; align-items:center; gap:6px; cursor:pointer; font-weight:600;">
+                                    <input type="radio" name="schedule_type" value="now" checked onchange="toggleScheduleBlock(false)" style="accent-color:#7c3aed;"> Send Immediately (ASAP)
+                                </label>
+                                <label style="font-size:0.75rem; display:flex; align-items:center; gap:6px; cursor:pointer; font-weight:600;">
+                                    <input type="radio" name="schedule_type" value="schedule" onchange="toggleScheduleBlock(true)" style="accent-color:#7c3aed;"> Schedule Launch
+                                </label>
                             </div>
-                            <div id="section-schedule-datetime" style="display:none; grid-template-columns:1fr 1fr; gap:10px; border:1.5px solid #cbd5e1; padding:10px; border-radius:10px; background:#f8fafc;">
+                            <div id="section-schedule-datetime" style="display:none; grid-template-columns:1fr 1fr; gap:10px; border:1px solid #cbd5e1; padding:8px; border-radius:8px; background:#f8fafc;">
                                 <div>
-                                    <label style="font-size:0.7rem; color:#64748b; font-weight:700; text-transform:uppercase; margin-bottom:4px; display:block;">Date</label>
-                                    <input type="date" name="schedule_date" id="inp-sched-date" class="form-control" style="font-size:0.8rem;">
+                                    <label style="font-size:0.65rem; color:#64748b; font-weight:700; text-transform:uppercase; margin-bottom:2px; display:block;">Date</label>
+                                    <input type="date" name="schedule_date" id="inp-sched-date" class="form-control" style="font-size:0.75rem; height:36px !important;">
                                 </div>
                                 <div>
-                                    <label style="font-size:0.7rem; color:#64748b; font-weight:700; text-transform:uppercase; margin-bottom:4px; display:block;">Time</label>
-                                    <input type="time" name="schedule_time" id="inp-sched-time" class="form-control" style="font-size:0.8rem;">
+                                    <label style="font-size:0.65rem; color:#64748b; font-weight:700; text-transform:uppercase; margin-bottom:2px; display:block;">Time</label>
+                                    <input type="time" name="schedule_time" id="inp-sched-time" class="form-control" style="font-size:0.75rem; height:36px !important;">
                                 </div>
                             </div>
                         </div>
+
+                        <!-- Review Summary Card -->
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px; margin-bottom:14px; font-size:0.75rem;">
+                            <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="color:#64748b;">Campaign:</span><strong id="rev-camp-name" style="color:#1e293b;">—</strong></div>
+                            <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="color:#64748b;">Template:</span><strong id="rev-template-name" style="color:#1e293b;">None selected</strong></div>
+                            <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="color:#64748b;">Sender:</span><strong id="rev-sender-name" style="color:#7c3aed;"><?php echo htmlspecialchars($isNotifConfigured ? ($notifAccount['display_name'] ?? 'PEPP Updates') : ($admissionsAccount['display_name'] ?? 'PEPP Learning')); ?></strong></div>
+                            <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="color:#64748b;">Recipients:</span><strong id="rev-recip-count" style="color:#047857;">0 leads</strong></div>
+                            <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span style="color:#64748b;">Excluded:</span><span id="rev-excluded-count" style="color:#64748b;">0</span></div>
+                            <div style="border-top:1px dashed #cbd5e1; padding-top:6px; margin-top:6px;">
+                                <span style="color:#64748b; display:block; font-size:0.7rem;">Estimated processing time:</span>
+                                <strong id="rev-est-time" style="color:#4f46e5; font-size:0.75rem;">Calculate audience to estimate</strong>
+                            </div>
+                        </div>
+
+                        <!-- Collapsible Advanced Settings -->
+                        <details style="margin-bottom:14px; border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; background:#fff;">
+                            <summary style="font-size:0.75rem; font-weight:700; color:#475569; cursor:pointer;">
+                                <i class="fas fa-sliders" style="margin-right:4px;"></i> Advanced Settings (Variables &amp; Media Header)
+                            </summary>
+
+                            <div style="padding-top:10px;">
+                                <!-- Upload Image Header Block -->
+                                <div id="section-media-header" style="display:none; border:1px solid #cbd5e1; border-radius:8px; padding:10px; background:#fcfcfc; margin-bottom:10px;">
+                                    <label style="display:block; font-size:0.72rem; font-weight:700; color:#1e293b; margin-bottom:4px;"><i class="fas fa-file-image" style="color:#7c3aed;"></i> Required Header Media File</label>
+                                    <input type="file" name="header_media_file" id="inp-media-file" class="form-control" style="font-size:0.75rem; height:auto !important; padding:4px 8px !important;" accept="image/*,video/mp4,application/pdf" onchange="onMediaFileChange(event)">
+                                    <span style="font-size:0.65rem; color:#64748b; display:block; margin-top:2px;">Select JPG, PNG, MP4, or PDF. Max file size: 5MB.</span>
+                                </div>
+
+                                <!-- Dynamic Variables Mapping Block -->
+                                <div id="section-variable-mapping" style="display:none; border:1px solid #cbd5e1; border-radius:8px; padding:10px; background:#f8fafc;">
+                                    <span style="font-size:0.72rem; font-weight:700; color:#4b5563; display:block; margin-bottom:6px;"><i class="fas fa-brackets-curly" style="color:#6366f1;"></i> Variable Mappings</span>
+                                    <div id="variable-mappings-inputs" style="display:flex; flex-direction:column; gap:8px;"></div>
+                                </div>
+                            </div>
+                        </details>
+
+                        <!-- Send Campaign Button -->
+                        <button type="submit" class="btn btn-primary" id="btn-submit-campaign" style="width:100%; border-radius:10px; font-weight:700; padding:12px; height:44px; display:flex; align-items:center; justify-content:center; gap:8px;" disabled>
+                            <i class="fas fa-paper-plane"></i> Send Campaign
+                        </button>
                     </div>
-
-                    <!-- Calculate Button -->
-                    <button type="button" onclick="calculatePreview()" class="btn btn-outline" style="width:100%; border-radius:10px; font-weight:700; margin-bottom:12px; padding:12px; height:44px; display:flex; align-items:center; justify-content:center; gap:8px;"><i class="fas fa-calculator"></i> Calculate &amp; Preview Recipients</button>
-
-                    <!-- Launch Submit Button -->
-                    <button type="submit" class="btn btn-primary" id="btn-submit-campaign" style="width:100%; border-radius:10px; font-weight:700; padding:12px; height:44px; display:flex; align-items:center; justify-content:center; gap:8px;" disabled><i class="fas fa-rocket"></i> Confirm &amp; Queue Campaign</button>
                 </form>
             </div>
         </div>
@@ -1198,15 +1359,48 @@ include 'includes/admin_nav.php';
             <!-- Active Campaigns List -->
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; overflow:hidden; box-shadow:0 4px 12px rgba(0,0,0,0.02); margin-bottom:20px;" id="panel-campaigns-list">
                 <div style="background:#f8fafc; border-bottom:1px solid #e5e7eb; padding:14px 20px;">
-                    <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;"><i class="fas fa-chart-column" style="margin-right:4px;"></i> Active &amp; Completed Campaigns (<?php echo count($campaigns); ?>)</h3>
+                    <h3 style="margin:0; font-size:1rem; font-weight:700; color:#1f2937;"><i class="fas fa-chart-column" style="margin-right:4px;"></i> Bulk Marketing Campaigns (<?php echo count($campaigns); ?>)</h3>
+                </div>
+
+                <div style="padding:16px 20px 0 20px;">
+                    <div class="kpi-grid">
+                        <div class="kpi-card">
+                            <div class="kpi-icon audience"><i class="fas fa-users"></i></div>
+                            <div class="kpi-info">
+                                <span class="kpi-value"><?php echo number_format($totalAudienceAll); ?></span>
+                                <span class="kpi-label">Audience Size</span>
+                            </div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-icon sent"><i class="fas fa-paper-plane"></i></div>
+                            <div class="kpi-info">
+                                <span class="kpi-value"><?php echo number_format($totalSentAll); ?></span>
+                                <span class="kpi-label">Dispatched</span>
+                            </div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-icon read"><i class="fas fa-check-double"></i></div>
+                            <div class="kpi-info">
+                                <span class="kpi-value"><?php echo number_format($totalReadAll); ?></span>
+                                <span class="kpi-label">Read Receipts</span>
+                            </div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-icon failed"><i class="fas fa-circle-xmark"></i></div>
+                            <div class="kpi-info">
+                                <span class="kpi-value"><?php echo number_format($totalFailedAll); ?></span>
+                                <span class="kpi-label">Failed</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 
                 <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
                     <thead>
                         <tr style="background:#f9fafb; text-align:left; border-bottom:1px solid #e5e7eb;">
                             <th style="padding:12px; font-weight:700; color:#374151;">Campaign Details</th>
-                            <th style="padding:12px; font-weight:700; color:#374151;">Target</th>
-                            <th style="padding:12px; font-weight:700; color:#374151;">Audience</th>
+                            <th style="padding:12px; font-weight:700; color:#374151;">Sender</th>
+                            <th style="padding:12px; font-weight:700; color:#374151;">Recipients</th>
                             <th style="padding:12px; font-weight:700; color:#374151;">Progress</th>
                             <th style="padding:12px; font-weight:700; color:#374151; text-align:right;">Actions</th>
                         </tr>
@@ -1214,7 +1408,7 @@ include 'includes/admin_nav.php';
                     <tbody>
                         <?php if (empty($campaigns)): ?>
                             <tr>
-                                <td colspan="5" style="padding:30px; text-align:center; color:#9ca3af;">No bulk campaigns have been created yet.</td>
+                                <td colspan="5" style="padding:30px; text-align:center; color:#9ca3af;">No bulk marketing campaigns have been created yet.</td>
                             </tr>
                         <?php else: ?>
                             <?php foreach ($campaigns as $camp): ?>
@@ -1229,23 +1423,39 @@ include 'includes/admin_nav.php';
                                     $processed = $sentCount + $failCount + $deliveredCount + $readCount + $cancelledCount;
                                     $prog = $recipCount > 0 ? round($processed / $recipCount * 100) : 0;
                                     if ($prog > 100) $prog = 100;
+                                    $remainingCount = max(0, $recipCount - $processed);
                                     
-                                    $statusColor = 'gray';
-                                    if ($camp['status'] === 'active') $statusColor = 'blue';
-                                    elseif ($camp['status'] === 'completed') $statusColor = 'green';
-                                    elseif ($camp['status'] === 'paused') $statusColor = 'orange';
-                                    elseif ($camp['status'] === 'cancelled') $statusColor = 'red';
+                                    // Resolve sender display
+                                    $campSenderKey = 'notifications';
+                                    $campSenderName = 'PEPP Updates';
+                                    $campCriteria = json_decode($camp['segment_criteria'] ?? '{}', true) ?: [];
+                                    if (!empty($campCriteria['sender_name'])) {
+                                        $campSenderName = $campCriteria['sender_name'];
+                                        $campSenderKey = $campCriteria['sender_key'] ?? 'notifications';
+                                    } elseif (!empty($camp['sender_account_id'])) {
+                                        $sAcc = $resolver->getAccount($camp['sender_account_id']);
+                                        if ($sAcc) {
+                                            $campSenderName = $sAcc['display_name'];
+                                            $campSenderKey = $sAcc['sender_key'];
+                                        }
+                                    }
+                                    $senderBadgeColor = ($campSenderKey === 'notifications') ? 'blue' : 'gray';
                                 ?>
                                 <tr style="border-bottom:1px solid #f3f4f6;">
                                     <td style="padding:12px;">
                                         <div style="font-weight:700; color:#111827;"><?php echo htmlspecialchars($camp['name']); ?></div>
-                                        <div style="font-size:0.7rem; color:#9ca3af; margin-top:2px;">Template: <b><?php echo htmlspecialchars($camp['template_name']); ?></b></div>
+                                        <div style="font-size:0.7rem; color:#64748b; margin-top:2px;">Template: <b><?php echo htmlspecialchars($camp['template_name']); ?></b> • <?php echo date('M d, Y H:i', strtotime($camp['created_at'])); ?></div>
                                     </td>
-                                    <td style="padding:12px;"><span class="badge gray" style="font-size:0.65rem; font-weight:700;"><?php echo strtoupper($camp['target_audience']); ?></span></td>
-                                    <td style="padding:12px; font-weight:700;"><?php echo $recipCount; ?></td>
+                                    <td style="padding:12px;">
+                                        <span class="badge <?php echo $senderBadgeColor; ?>" style="font-size:0.65rem; font-weight:700;">
+                                            <i class="fab fa-whatsapp" style="margin-right:2px;"></i> <?php echo htmlspecialchars($campSenderName); ?>
+                                        </span>
+                                    </td>
+                                    <td style="padding:12px; font-weight:700; color:#1e293b;"><?php echo number_format($recipCount); ?></td>
                                     <td style="padding:12px;">
                                         <div style="display:flex; justify-content:space-between; font-size:0.7rem; font-weight:700; color:#475569; margin-bottom:4px;">
-                                            <span>Progress: <?php echo $prog; ?>%</span>
+                                            <span><?php echo $prog; ?>% complete</span>
+                                            <span>Remaining: <?php echo $remainingCount; ?></span>
                                         </div>
                                         <div style="display:flex; flex-direction:column; gap:6px;">
                                             <div style="width:100%; height:6px; background:#e2e8f0; border-radius:3px; overflow:hidden;">
@@ -1253,17 +1463,19 @@ include 'includes/admin_nav.php';
                                             </div>
                                             <div style="display:flex; gap:6px; flex-wrap:wrap;">
                                                 <span style="font-size:0.68rem; padding:2px 6px; background:#f1f5f9; color:#475569; border-radius:4px; font-weight:700;" title="Sent">
-                                                    <i class="fas fa-paper-plane" style="margin-right:2px; font-size:0.6rem;"></i> <?php echo $sentCount; ?> S
+                                                    <i class="fas fa-paper-plane" style="margin-right:2px; font-size:0.6rem;"></i> <?php echo $sentCount; ?> Sent
                                                 </span>
                                                 <span style="font-size:0.68rem; padding:2px 6px; background:#e0f2fe; color:#0369a1; border-radius:4px; font-weight:700;" title="Delivered">
-                                                    <i class="fas fa-check" style="margin-right:2px; font-size:0.6rem;"></i> <?php echo $deliveredCount; ?> D
+                                                    <i class="fas fa-check" style="margin-right:2px; font-size:0.6rem;"></i> <?php echo $deliveredCount; ?> Delivered
                                                 </span>
                                                 <span style="font-size:0.68rem; padding:2px 6px; background:#dcfce7; color:#15803d; border-radius:4px; font-weight:700;" title="Read">
-                                                    <i class="fas fa-check-double" style="margin-right:2px; font-size:0.6rem;"></i> <?php echo $readCount; ?> R
+                                                    <i class="fas fa-check-double" style="margin-right:2px; font-size:0.6rem;"></i> <?php echo $readCount; ?> Read
                                                 </span>
-                                                <span style="font-size:0.68rem; padding:2px 6px; background:#fee2e2; color:#b91c1c; border-radius:4px; font-weight:700;" title="Failed">
-                                                    <i class="fas fa-circle-xmark" style="margin-right:2px; font-size:0.6rem;"></i> <?php echo $failCount; ?> F
-                                                </span>
+                                                <?php if ($failCount > 0): ?>
+                                                    <span style="font-size:0.68rem; padding:2px 6px; background:#fee2e2; color:#b91c1c; border-radius:4px; font-weight:700;" title="Failed">
+                                                        <i class="fas fa-circle-xmark" style="margin-right:2px; font-size:0.6rem;"></i> <?php echo $failCount; ?> Failed
+                                                    </span>
+                                                <?php endif; ?>
                                             </div>
                                         </div>
                                     </td>
@@ -1424,21 +1636,26 @@ include 'includes/admin_nav.php';
 <!-- Dynamic Preview Confirmation Dialog Overlay -->
 <div id="confirm-modal" class="popover-modal-backdrop" onclick="if(event.target===this)closeConfirmModal()">
     <div class="popover-modal" style="max-width:480px;">
-        <h4 style="margin-top:0; margin-bottom:12px; font-weight:800; color:#1e293b; font-size:1.1rem; border-bottom:1px solid #e2e8f0; padding-bottom:8px;"><i class="fas fa-triangle-exclamation" style="color:#f59e0b;"></i> Confirm Campaign Launch</h4>
+        <h4 style="margin-top:0; margin-bottom:12px; font-weight:800; color:#1e293b; font-size:1.1rem; border-bottom:1px solid #e2e8f0; padding-bottom:8px;">
+            <i class="fas fa-bullhorn" style="color:#7c3aed;"></i> Confirm Marketing Campaign
+        </h4>
         
-        <p style="font-size:0.82rem; color:#64748b; line-height:1.4; margin-bottom:16px;">You are about to launch a bulk campaign. Messages will be enqueued in the communication queue and processed asynchronously by the background runner.</p>
+        <p style="font-size:0.82rem; color:#475569; line-height:1.4; margin-bottom:16px;" id="modal-confirm-lead-text">
+            You are about to launch a bulk marketing campaign to <strong id="lbl-confirm-recipients-count">0</strong> leads.
+        </p>
         
         <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:12px; border-radius:10px; font-size:0.8rem; display:flex; flex-direction:column; gap:6px; margin-bottom:20px;">
             <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Campaign:</span><strong id="lbl-confirm-name">-</strong></div>
-            <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Target Audience:</span><strong id="lbl-confirm-audience">-</strong></div>
-            <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Total Recipients:</span><strong style="color:#10b981;" id="lbl-confirm-recipients">0</strong></div>
-            <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">WhatsApp Template:</span><strong id="lbl-confirm-template">-</strong></div>
+            <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Template:</span><strong id="lbl-confirm-template">-</strong></div>
+            <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Sender Account:</span><strong id="lbl-confirm-sender" style="color:#7c3aed;">PEPP Updates</strong></div>
+            <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Recipients:</span><strong style="color:#047857;" id="lbl-confirm-recipients">0 leads</strong></div>
+            <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Estimated Time:</span><strong style="color:#4f46e5;" id="lbl-confirm-time">-</strong></div>
             <div style="display:flex; justify-content:space-between;"><span style="color:#64748b;">Schedule:</span><strong id="lbl-confirm-schedule">-</strong></div>
         </div>
 
         <div style="display:flex; gap:12px; justify-content:flex-end;">
             <button type="button" class="btn btn-outline" onclick="closeConfirmModal()" style="border-radius:8px;">Cancel</button>
-            <button type="button" class="btn btn-primary" onclick="submitCampaignForm()" style="border-radius:8px; font-weight:700;"><i class="fas fa-rocket"></i> Confirm &amp; Queue Campaign</button>
+            <button type="button" class="btn btn-primary" onclick="submitCampaignForm()" style="border-radius:8px; font-weight:700;"><i class="fas fa-paper-plane"></i> Confirm &amp; Send Campaign</button>
         </div>
     </div>
 </div>
@@ -1485,76 +1702,103 @@ let currentAudience = 'leads';
 let currentTemplateMeta = null;
 let eligibleRecipientsList = [];
 let calculationValid = false;
+let currentSenderConfigured = <?php echo $isNotifConfigured ? 'true' : 'false'; ?>;
+let currentSenderName = '<?php echo addslashes($isNotifConfigured ? ($notifAccount['display_name'] ?? 'PEPP Updates') : ($admissionsAccount['display_name'] ?? 'PEPP Learning')); ?>';
 
 // Initialize switcher on page load if query parameter specifies leads target
 window.addEventListener('DOMContentLoaded', () => {
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('target') === 'leads') {
-        switchAudience('leads');
-    }
+    updateReviewCard();
 });
 
-function switchAudience(target) {
-    currentAudience = target;
-    document.getElementById('inp-target-audience').value = target;
+function onTemplateSelected(tplName) {
+    const infoCard = document.getElementById('tpl-info-card');
+    const revTpl = document.getElementById('rev-template-name');
+
+    if (!tplName) {
+        currentTemplateMeta = null;
+        infoCard.style.display = 'none';
+        revTpl.innerText = 'None selected';
+        document.getElementById('section-variable-mapping').style.display = 'none';
+        document.getElementById('section-media-header').style.display = 'none';
+        return;
+    }
+
+    revTpl.innerText = tplName;
+    document.getElementById('tpl-card-name').innerText = tplName;
+
+    // Auto populate campaign name if blank
+    const nameInp = document.getElementById('inp-campaign-name');
+    if (!nameInp.value || nameInp.value.includes('Campaign')) {
+        nameInp.value = tplName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) + ' Campaign';
+        updateReviewCard();
+    }
+
+    fetch(`communication-campaigns.php?action=ajax_get_template&template_name=${encodeURIComponent(tplName)}`)
+        .then(r => r.json())
+        .then(res => {
+            if (res.success && res.meta) {
+                currentTemplateMeta = res.meta;
+                infoCard.style.display = 'block';
+                document.getElementById('tpl-card-lang').innerText = res.meta.language || 'en';
+                document.getElementById('tpl-card-body-preview').innerText = res.meta.body_text || '(No body text preview)';
+                renderVariableMappingUI(res.meta);
+                renderMediaHeaderUI(res.meta);
+                updateVisualCardPreview();
+            } else {
+                infoCard.style.display = 'none';
+            }
+        });
+}
+
+function onFilterChanged() {
     calculationValid = false;
     document.getElementById('btn-submit-campaign').disabled = true;
+    document.getElementById('rev-recip-count').innerText = 'Recalculation needed';
+    document.getElementById('rev-est-time').innerText = 'Calculate audience to estimate';
+}
 
-    if (target === 'leads') {
-        document.getElementById('section-target-leads').style.display = 'block';
-        document.getElementById('section-target-students').style.display = 'none';
-        document.getElementById('btn-tab-leads').style.background = '#f1f5f9';
-        document.getElementById('btn-tab-leads').style.color = '#475569';
-        document.getElementById('btn-tab-students').style.background = '#fff';
-        document.getElementById('btn-tab-students').style.color = '#64748b';
+function onSenderSelected(key, id, name, isConfigured) {
+    document.getElementById('inp-sender-key').value = key;
+    document.getElementById('inp-sender-account-id').value = id;
+    currentSenderConfigured = isConfigured;
+    currentSenderName = name;
+
+    const cardNotif = document.getElementById('sender-card-notifications');
+    const cardAdm = document.getElementById('sender-card-admissions');
+
+    if (key === 'notifications') {
+        if (cardNotif) { cardNotif.style.borderColor = '#7c3aed'; cardNotif.style.background = '#f5f3ff'; }
+        if (cardAdm) { cardAdm.style.borderColor = '#cbd5e1'; cardAdm.style.background = '#fff'; }
     } else {
-        document.getElementById('section-target-leads').style.display = 'none';
-        document.getElementById('section-target-students').style.display = 'block';
-        document.getElementById('btn-tab-leads').style.background = '#fff';
-        document.getElementById('btn-tab-leads').style.color = '#64748b';
-        document.getElementById('btn-tab-students').style.background = '#f1f5f9';
-        document.getElementById('btn-tab-students').style.color = '#475569';
+        if (cardNotif) { cardNotif.style.borderColor = '#cbd5e1'; cardNotif.style.background = '#fff'; }
+        if (cardAdm) { cardAdm.style.borderColor = '#7c3aed'; cardAdm.style.background = '#f5f3ff'; }
     }
-    triggerAudiencePreview();
+
+    updateReviewCard();
+}
+
+function updateReviewCard() {
+    const nameVal = document.getElementById('inp-campaign-name').value.trim();
+    document.getElementById('rev-camp-name').innerText = nameVal || '—';
+    document.getElementById('rev-sender-name').innerText = currentSenderName;
+
+    if (!currentSenderConfigured) {
+        document.getElementById('btn-submit-campaign').disabled = true;
+    } else if (calculationValid) {
+        document.getElementById('btn-submit-campaign').disabled = false;
+    }
 }
 
 function toggleLeadCheckboxes(checked) {
     const checkBoxes = document.querySelectorAll('#leads-courses-checklist input[type="checkbox"]');
     checkBoxes.forEach(c => c.checked = checked);
-    triggerAudiencePreview();
-}
-
-function triggerAudiencePreview() {
-    calculationValid = false;
-    document.getElementById('btn-submit-campaign').disabled = true;
+    onFilterChanged();
 }
 
 function toggleScheduleBlock(show) {
     document.getElementById('section-schedule-datetime').style.display = show ? 'grid' : 'none';
     document.getElementById('inp-sched-date').required = show;
     document.getElementById('inp-sched-time').required = show;
-}
-
-function loadTemplateDetails(tplName) {
-    if (!tplName) {
-        currentTemplateMeta = null;
-        document.getElementById('section-variable-mapping').style.display = 'none';
-        document.getElementById('section-media-header').style.display = 'none';
-        return;
-    }
-
-    fetch(`communication-campaigns.php?action=ajax_get_template&template_name=${encodeURIComponent(tplName)}`)
-        .then(r => r.json())
-        .then(res => {
-            if (res.success) {
-                currentTemplateMeta = res.meta;
-                renderVariableMappingUI(res.meta);
-                renderMediaHeaderUI(res.meta);
-                updateVisualCardPreview();
-            } else {
-                alert(res.message || 'Failed to fetch template.');
-            }
-        });
 }
 
 function renderMediaHeaderUI(meta) {
@@ -1637,23 +1881,16 @@ function toggleStaticValueInput(idx, val) {
 
 function calculatePreview() {
     const formData = new FormData();
-    
-    if (currentAudience === 'leads') {
-        const statuses = Array.from(document.querySelectorAll('.chk-status:checked')).map(c => c.value);
-        const courses = Array.from(document.querySelectorAll('.chk-course:checked')).map(c => c.value);
+    const statuses = Array.from(document.querySelectorAll('.chk-status:checked')).map(c => c.value);
+    const courses = Array.from(document.querySelectorAll('.chk-course:checked')).map(c => c.value);
 
-        if (statuses.length === 0 || courses.length === 0) {
-            alert('Please select at least one course and status filter.');
-            return;
-        }
-
-        courses.forEach(c => formData.append('courses[]', c));
-        statuses.forEach(s => formData.append('statuses[]', s));
-    } else {
-        // Handle Students filter defaults
-        formData.append('courses[]', document.querySelector('select[name="target_course"]').value);
-        formData.append('statuses[]', document.querySelector('select[name="target_status"]').value);
+    if (statuses.length === 0 || courses.length === 0) {
+        alert('Please select at least one course and status filter.');
+        return;
     }
+
+    courses.forEach(c => formData.append('courses[]', c));
+    statuses.forEach(s => formData.append('statuses[]', s));
 
     fetch('communication-campaigns.php?action=ajax_preview_audience', {
         method: 'POST',
@@ -1663,24 +1900,44 @@ function calculatePreview() {
     .then(res => {
         if (res.success) {
             eligibleRecipientsList = res.recipients;
-            document.getElementById('lbl-matching-leads').innerText = res.total_matching;
-            document.getElementById('lbl-duplicates').innerText = res.duplicates;
-            document.getElementById('lbl-opted-out').innerText = res.opted_out;
-            document.getElementById('lbl-invalid').innerText = res.invalid;
-            document.getElementById('lbl-eligible-recipients').innerText = res.eligible_count;
+
+            // Step 2 Summary Chips
+            document.getElementById('chip-recipients-count').innerText = res.eligible_count.toLocaleString();
+            document.getElementById('chip-excluded-count').innerText = (res.duplicates + res.opted_out + res.invalid).toLocaleString();
+            document.getElementById('chip-dup-count').innerText = res.duplicates;
+            document.getElementById('chip-inv-count').innerText = res.invalid;
+            document.getElementById('chip-opt-count').innerText = res.opted_out;
+
+            // Step 4 Review Card
+            document.getElementById('rev-recip-count').innerText = res.eligible_count.toLocaleString() + ' leads';
+            document.getElementById('rev-excluded-count').innerText = (res.duplicates + res.opted_out + res.invalid).toLocaleString();
+            document.getElementById('rev-est-time').innerText = res.estimated_time || 'Calculating...';
+
+            // Preview Table Metrics
+            document.getElementById('lbl-matching-leads').innerText = res.total_matching.toLocaleString();
+            document.getElementById('lbl-duplicates').innerText = res.duplicates.toLocaleString();
+            document.getElementById('lbl-opted-out').innerText = res.opted_out.toLocaleString();
+            document.getElementById('lbl-invalid').innerText = res.invalid.toLocaleString();
+            document.getElementById('lbl-eligible-recipients').innerText = res.eligible_count.toLocaleString();
 
             renderRecipientPreviewTable(res.recipients);
             document.getElementById('panel-audience-preview').style.display = 'block';
 
-            if (res.eligible_count > 0) {
+            if (res.eligible_count > 0 && currentSenderConfigured) {
                 calculationValid = true;
                 document.getElementById('btn-submit-campaign').disabled = false;
             } else {
                 calculationValid = false;
                 document.getElementById('btn-submit-campaign').disabled = true;
-                alert('No eligible recipients match these filters.');
+                if (!currentSenderConfigured) {
+                    alert('Selected sender account is not configured with a valid WhatsApp phone number ID. Sending is disabled.');
+                } else {
+                    alert('No eligible recipients match these filters.');
+                }
             }
             updateVisualCardPreview();
+        } else {
+            alert(res.message || 'Audience preview calculation failed.');
         }
     });
 }
@@ -1847,12 +2104,23 @@ function validateFormSubmit(event) {
         alert('Please calculate and preview your target audience before launching.');
         return false;
     }
+    if (!currentSenderConfigured) {
+        alert('Selected WhatsApp sender account is not configured with a valid phone number ID.');
+        return false;
+    }
+
+    const recipText = document.getElementById('chip-recipients-count').innerText || '0';
+    const campName = document.getElementById('inp-campaign-name').value.trim();
+    const tplName = document.getElementById('sel-template-name').value;
+    const estTime = document.getElementById('rev-est-time').innerText;
 
     // Modal populate fields
-    document.getElementById('lbl-confirm-name').innerText = document.getElementById('inp-campaign-name').value;
-    document.getElementById('lbl-confirm-audience').innerText = currentAudience === 'leads' ? 'Leads Segment filters' : 'Students list';
-    document.getElementById('lbl-confirm-recipients').innerText = document.getElementById('lbl-eligible-recipients').innerText;
-    document.getElementById('lbl-confirm-template').innerText = document.getElementById('sel-template-name').value;
+    document.getElementById('lbl-confirm-name').innerText = campName || 'Untitled Campaign';
+    document.getElementById('lbl-confirm-template').innerText = tplName || 'None';
+    document.getElementById('lbl-confirm-sender').innerText = currentSenderName;
+    document.getElementById('lbl-confirm-recipients-count').innerText = recipText;
+    document.getElementById('lbl-confirm-recipients').innerText = recipText + ' leads';
+    document.getElementById('lbl-confirm-time').innerText = estTime;
 
     const isSched = document.querySelector('input[name="schedule_type"]:checked').value === 'schedule';
     if (isSched) {

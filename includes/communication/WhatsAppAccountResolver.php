@@ -51,6 +51,21 @@ class WhatsAppAccountResolver {
     }
 
     /**
+     * Checks if a WhatsApp account has a valid, non-empty Meta phone_number_id and is active.
+     */
+    public function isAccountConfigured(?array $account): bool {
+        if (!$account) {
+            return false;
+        }
+        $status = strtolower(trim((string)($account['status'] ?? 'active')));
+        if ($status !== 'active') {
+            return false;
+        }
+        $phoneId = trim((string)($account['phone_number_id'] ?? ''));
+        return $phoneId !== '';
+    }
+
+    /**
      * Resolves a WhatsApp account by sender_key (e.g. 'admissions', 'notifications'),
      * account id (e.g. 1, 2), or default if omitted.
      *
