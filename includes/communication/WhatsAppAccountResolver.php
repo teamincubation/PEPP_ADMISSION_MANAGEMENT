@@ -51,6 +51,21 @@ class WhatsAppAccountResolver {
     }
 
     /**
+     * Alias for hasWhatsAppAccountsTable().
+     */
+    public function hasAccountsTable(): bool {
+        return $this->hasWhatsAppAccountsTable();
+    }
+
+    /**
+     * Clears internal table/column existence caches.
+     */
+    public function refresh(): void {
+        $this->hasTableCache = null;
+        $this->hasEventSenderKeyCol = null;
+    }
+
+    /**
      * Checks if a WhatsApp account has a valid, non-empty Meta phone_number_id and is active.
      */
     public function isAccountConfigured(?array $account): bool {

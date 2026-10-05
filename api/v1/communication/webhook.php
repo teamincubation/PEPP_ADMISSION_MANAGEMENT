@@ -170,7 +170,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($payload['entry'][0]['changes'][0]['value']['messages'])) {
         $messages = $payload['entry'][0]['changes'][0]['value']['messages'];
         $contacts = $payload['entry'][0]['changes'][0]['value']['contacts'] ?? [];
-        
+        $metadata = $payload['entry'][0]['changes'][0]['value']['metadata'] ?? [];
+
+        // Canonical destination account resolution from metadata.phone_number_id (Phase 2G)
+        require_once dirname(dirname(dirname(__DIR__))) . '/includes/communication/WhatsAppAccountResolver.php';
+        $accountResolver = new WhatsAppAccountResolver($pdo);
+
+        $receivingPhoneId = trim((string)($metadata['phone_number_id'] ?? ''));
+        $receivingDisplayNumber = preg_replace('/\D/', '', (string)($metadata['display_phone_number'] ?? ''));
+
+        $receivingAccount = null;
+        if (!empty($receivingPhoneId)) {
+            $receivingAccount = $accountResolver->getAccountByPhoneId($receivingPhoneId);
+        }
+        if (!$receivingAccount && !empty($receivingDisplayNumber)) {
+            $receivingAccount = $accountResolver->getAccountByDisplayNumber($receivingDisplayNumber);
+        }
+
+        // Backward compatibility fallback if neither matched
+        if (!$receivingAccount) {
+            if ($receivingDisplayNumber === '917994304400' || substr($receivingDisplayNumber, -10) === '7994304400') {
+                $receivingAccount = $accountResolver->getAccount('notifications');
+            } else {
+                $receivingAccount = $accountResolver->getDefaultAccount();
+                if (!empty($receivingPhoneId) || !empty($receivingDisplayNumber)) {
+                    error_log("[WHATSAPP_WEBHOOK] Destination account ambiguity: phone_number_id={$receivingPhoneId}, display_number={$receivingDisplayNumber}. Defaulted to admissions.");
+                }
+            }
+        }
+
+        $isNotificationsInbound = ($receivingAccount && ($receivingAccount['sender_key'] ?? '') === 'notifications')
+            || ($receivingDisplayNumber === '917994304400');
+        $isAdmissionsInbound = ($receivingAccount && ($receivingAccount['sender_key'] ?? '') === 'admissions') && !$isNotificationsInbound;
+
         $contactNames = [];
         foreach ($contacts as $c) {
             $waId = $c['wa_id'] ?? '';
@@ -350,6 +382,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, media_id, media_mime_type, media_filename, caption, reply_to_wa_message_id, status, raw_payload, sent_at, created_at)
                     VALUES (?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, 'delivered', ?, NOW(), NOW())
                 ");
+                $rawPayloadArr = $msg;
+                $rawPayloadArr['receiving_account'] = [
+                    'sender_key' => $receivingAccount['sender_key'] ?? 'admissions',
+                    'phone_number_id' => $receivingAccount['phone_number_id'] ?? $receivingPhoneId,
+                    'display_number' => $receivingAccount['display_number'] ?? $receivingDisplayNumber
+                ];
+
                 $insMsg->execute([
                     $convId,
                     $msgId,
@@ -360,7 +399,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $mediaFilename,
                     $caption,
                     $replyToId,
-                    json_encode($msg)
+                    json_encode($rawPayloadArr)
                 ]);
 
                 $pdo->commit();
@@ -577,11 +616,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 // ── AUTOMATED INTERACTIVE AUTO-RESPONSE TRIGGER (10-Minute Cooldown) ──
                 try {
-                    $metadata = $payload['entry'][0]['changes'][0]['value']['metadata'] ?? [];
-                    $displayNumber = preg_replace('/\D/', '', $metadata['display_phone_number'] ?? '');
-                    
-                    // Verify recipient WABA display number (916282563209)
-                    if ((empty($displayNumber) || $displayNumber === '916282563209') && !$preventAutoResponse) {
+                    // Auto-response is STRICTLY restricted to admissions inbound (PEPP Learning).
+                    // PEPP Updates (notifications) MUST NEVER trigger the admissions auto-responder.
+                    if ($isAdmissionsInbound && !$isNotificationsInbound && !$preventAutoResponse) {
                         $cooldown = 600; // 10 minutes default cooldown (600 seconds)
                         try {
                             $stmtCd = $pdo->prepare("SELECT setting_value FROM admin_settings WHERE setting_name = 'whatsapp_auto_response_cooldown' LIMIT 1");
