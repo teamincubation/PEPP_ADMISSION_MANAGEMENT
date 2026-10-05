@@ -1402,7 +1402,7 @@ if (!function_exists('get_admin_mobile')) {
         } catch (Exception $e) {}
 
         try {
-            $stmt = $pdo->prepare("SELECT mobile_number FROM employees WHERE username = ? OR email = ? LIMIT 1");
+            $stmt = $pdo->prepare("SELECT mobile_number FROM employees WHERE (username = ? OR email = ?) AND application_for IN ('employee','intern') LIMIT 1");
             $stmt->execute([$adminUsername, $adminUsername]);
             $phone = $stmt->fetchColumn();
             if (!empty($phone)) return trim((string)$phone);

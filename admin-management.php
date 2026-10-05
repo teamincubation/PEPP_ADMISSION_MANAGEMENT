@@ -111,7 +111,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'check_staff_admin_match') {
         $stmt_a->execute([$admin_id]);
         $adm = $stmt_a->fetch(PDO::FETCH_ASSOC);
 
-        $stmt_e = $pdo->prepare("SELECT id, employee_id, full_name, email, mobile_number, photo, designation, department, status, admin_id FROM employees WHERE id = ? LIMIT 1");
+        $stmt_e = $pdo->prepare("SELECT id, employee_id, full_name, email, mobile_number, photo, designation, department, status, admin_id FROM employees WHERE id = ? AND application_for IN ('employee','intern') LIMIT 1");
         $stmt_e->execute([$emp_id]);
         $emp = $stmt_e->fetch(PDO::FETCH_ASSOC);
 
@@ -180,7 +180,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'check_staff_admin_match') {
 if (isset($_GET['action']) && $_GET['action'] === 'get_staff_list_for_linking') {
     header('Content-Type: application/json');
     try {
-        $staff_list = $pdo->query("SELECT id, employee_id, full_name, email, mobile_number, photo, designation, department, status, admin_id FROM employees ORDER BY full_name ASC")->fetchAll(PDO::FETCH_ASSOC);
+        $staff_list = $pdo->query("SELECT id, employee_id, full_name, email, mobile_number, photo, designation, department, status, admin_id FROM employees WHERE application_for IN ('employee','intern') ORDER BY full_name ASC")->fetchAll(PDO::FETCH_ASSOC);
         echo json_encode(['success' => true, 'staff' => $staff_list]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'staff' => []]);
@@ -205,7 +205,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_admin_details' && isset($
                    e.employee_id AS linked_staff_code,
                    e.full_name AS linked_staff_name
             FROM admins a
-            LEFT JOIN employees e ON a.id = e.admin_id
+            LEFT JOIN employees e ON a.id = e.admin_id AND e.application_for IN ('employee','intern')
             WHERE a.id = ? LIMIT 1
         ");
         $stmt->execute([$admin_id]);
@@ -271,7 +271,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         // Validate selected employee if provided
                         $selected_emp = null;
                         if ($form_ca_employee_id > 0) {
-                            $stmt_emp_chk = $pdo->prepare("SELECT id, employee_id, full_name, email, mobile_number, status, admin_id FROM employees WHERE id = ?");
+                            $stmt_emp_chk = $pdo->prepare("SELECT id, employee_id, full_name, email, mobile_number, status, admin_id FROM employees WHERE id = ? AND application_for IN ('employee','intern')");
                             $stmt_emp_chk->execute([$form_ca_employee_id]);
                             $selected_emp = $stmt_emp_chk->fetch(PDO::FETCH_ASSOC);
 
@@ -293,7 +293,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             try {
                                 if ($form_ca_employee_id > 0) {
                                     // Concurrency check inside transaction
-                                    $stmt_lock = $pdo->prepare("SELECT id, employee_id, full_name, admin_id FROM employees WHERE id = ?");
+                                    $stmt_lock = $pdo->prepare("SELECT id, employee_id, full_name, admin_id FROM employees WHERE id = ? AND application_for IN ('employee','intern')");
                                     $stmt_lock->execute([$form_ca_employee_id]);
                                     $lock_emp = $stmt_lock->fetch(PDO::FETCH_ASSOC);
                                     if (!$lock_emp || !empty($lock_emp['admin_id'])) {
@@ -506,7 +506,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt_a->execute([$admin_id]);
                 $adm = $stmt_a->fetch();
 
-                $stmt_e = $pdo->prepare("SELECT * FROM employees WHERE id = ?");
+                $stmt_e = $pdo->prepare("SELECT * FROM employees WHERE id = ? AND application_for IN ('employee','intern')");
                 $stmt_e->execute([$emp_id]);
                 $emp = $stmt_e->fetch();
 
@@ -608,7 +608,7 @@ try {
                e.linked_at,
                e.linked_by
         FROM admins a
-        LEFT JOIN employees e ON a.id = e.admin_id
+        LEFT JOIN employees e ON a.id = e.admin_id AND e.application_for IN ('employee','intern')
         ORDER BY a.role = 'super_admin' DESC, a.created_at ASC
     ")->fetchAll();
 } catch (Exception $e) {
@@ -623,6 +623,7 @@ try {
         SELECT id, employee_id, full_name, email, mobile_number, designation, department, application_for, status, admin_id
         FROM employees
         WHERE admin_id IS NULL
+          AND application_for IN ('employee','intern')
           AND (status IS NULL OR status = '' OR LOWER(status) NOT IN ('inactive', 'suspended', 'resigned', 'contract_ended', 'terminated'))
         ORDER BY full_name ASC
     ");

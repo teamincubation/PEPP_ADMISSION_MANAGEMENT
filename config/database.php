@@ -907,7 +907,12 @@ $conn = $pdo;
 
     // Centralized Version-Aware Schema Migration Architecture
     if (!defined('PEPP_DB_SCHEMA_VERSION')) {
-        define('PEPP_DB_SCHEMA_VERSION', '2026.08.31.3');
+        define('PEPP_DB_SCHEMA_VERSION', '2026.10.05.1');
+    }
+
+    // Staff application-type architecture (scoped employee email uniqueness + type-scoped custom fields)
+    if (is_file(__DIR__ . '/../includes/staff_type_helper.php')) {
+        require_once __DIR__ . '/../includes/staff_type_helper.php';
     }
 
     if (!function_exists('ensure_task_reminders_schema')) {
@@ -2293,6 +2298,12 @@ $conn = $pdo;
         if (!$task_rem_ok) {
             error_log("CRITICAL: Task Reminders schema verification failed. Schema version will not be advanced.");
             return false;
+        }
+
+        // Staff type scoping (database-update-56.sql): UNIQUE(email, application_for) + employee_custom_fields.application_for.
+        // Idempotent and non-destructive; failures are logged (SQL file remains the manual fallback).
+        if (function_exists('ensure_staff_type_schema')) {
+            ensure_staff_type_schema($pdo);
         }
 
         // Persist schema version to database only if all migrations succeeded

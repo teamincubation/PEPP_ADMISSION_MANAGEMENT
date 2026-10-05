@@ -18,6 +18,7 @@ require_once 'includes/auth.php';
 require_permission('employee-management');
 require_once 'includes/encryption_helper.php';
 require_once 'includes/file_helper.php';
+require_once 'includes/staff_type_helper.php';
 
 $active_page = 'employee-management';
 $page_title  = 'Employee Management';
@@ -113,12 +114,16 @@ try {
 if (isset($_GET['action']) && $_GET['action'] === 'appointment_pdf' && isset($_GET['id'])) {
     $table = ($_GET['source'] ?? '') === 'employee' ? 'employees' : 'staff_registration_requests';
     try {
-        $stmt = $pdo->prepare("SELECT appointment_snapshot, appointment_reference FROM {$table} WHERE id = ? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT appointment_snapshot, appointment_reference, application_for FROM {$table} WHERE id = ? LIMIT 1");
         $safe_id = (int)$_GET['id'];
         $stmt->execute([$safe_id]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$row) {
             throw new RuntimeException("Employee/application record not found for ID: " . $safe_id);
+        }
+        if ($table === 'employees' && !staff_is_generic_type($row['application_for'] ?? 'employee')) {
+            http_response_code(403);
+            throw new RuntimeException("Faculty records are managed in the Faculties module (faculties.php).");
         }
         if (empty($row['appointment_snapshot'])) {
             throw new RuntimeException("Appointment snapshot is missing for ID: " . $safe_id);
@@ -199,6 +204,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_employee_details' && isse
         $stmt->execute([(int)$_GET['id']]);
         $emp = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$emp) { echo json_encode(['error' => 'Employee record not found.']); exit; }
+        if (!staff_is_generic_type($emp['application_for'] ?? 'employee')) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Faculty records are managed in the Faculties module (faculties.php), not in Employee Management.']);
+            exit;
+        }
 
         // NEVER send encrypted ciphertexts over wire
         unset($emp['aadhaar_encrypted'], $emp['bank_account_encrypted']);
@@ -226,6 +236,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_employee_details' && isse
                 }
             }
             unset($cf_row);
+            // Scope to the employee's own application type (employee|intern)
+            $custom_fields = array_values(array_filter(
+                staff_normalize_custom_field_rows($custom_fields),
+                fn($r) => $r['application_for'] === staff_normalize_type($emp['application_for'] ?? '', 'employee')
+            ));
         } catch (Exception $e) {
             $custom_fields = [];
         }
@@ -254,10 +269,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'reveal_sensitive_data') {
         exit;
     }
     try {
-        $stmt = $pdo->prepare("SELECT id, employee_id, full_name, aadhaar_encrypted, bank_account_encrypted FROM employees WHERE id = ? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT id, employee_id, full_name, aadhaar_encrypted, bank_account_encrypted, application_for FROM employees WHERE id = ? LIMIT 1");
         $stmt->execute([$emp_id]);
         $emp = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$emp) { echo json_encode(['error' => 'Employee not found.']); exit; }
+        if (!staff_is_generic_type($emp['application_for'] ?? 'employee')) { http_response_code(403); echo json_encode(['error' => 'Faculty records are managed in the Faculties module (faculties.php).']); exit; }
 
         $cipher = ($field === 'aadhaar') ? $emp['aadhaar_encrypted'] : $emp['bank_account_encrypted'];
         $plain = $cipher ? pepp_decrypt($cipher) : '';
@@ -286,10 +302,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'copy_sensitive_data') {
         exit;
     }
     try {
-        $stmt = $pdo->prepare("SELECT id, employee_id, full_name, aadhaar_encrypted, bank_account_encrypted, ifsc_code, upi_id FROM employees WHERE id = ? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT id, employee_id, full_name, aadhaar_encrypted, bank_account_encrypted, ifsc_code, upi_id, application_for FROM employees WHERE id = ? LIMIT 1");
         $stmt->execute([$emp_id]);
         $emp = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$emp) { echo json_encode(['error' => 'Employee not found.']); exit; }
+        if (!staff_is_generic_type($emp['application_for'] ?? 'employee')) { http_response_code(403); echo json_encode(['error' => 'Faculty records are managed in the Faculties module (faculties.php).']); exit; }
 
         $plain = '';
         if ($field === 'bank_account') {
@@ -328,10 +345,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'change_staff_status') {
     }
 
     try {
-        $stmt = $pdo->prepare("SELECT id, employee_id, full_name, status FROM employees WHERE id = ? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT id, employee_id, full_name, status, application_for FROM employees WHERE id = ? LIMIT 1");
         $stmt->execute([$emp_id]);
         $emp = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$emp) { echo json_encode(['error' => 'Employee not found.']); exit; }
+        if (!staff_is_generic_type($emp['application_for'] ?? 'employee')) { http_response_code(403); echo json_encode(['error' => 'Faculty status is managed in the Faculties module (faculties.php).']); exit; }
 
         $old_status = $emp['status'];
         $pdo->prepare("UPDATE employees SET status = ?, updated_at = NOW() WHERE id = ?")->execute([$new_status, $emp_id]);
@@ -399,6 +417,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_custom_field' && isset($
             if (!isset($cf['field_options']) && isset($cf['dropdown_options'])) {
                 $cf['field_options'] = $cf['dropdown_options'];
             }
+            $cf['application_for'] = staff_normalize_type($cf['application_for'] ?? '', 'employee');
+            $cf['has_data'] = staff_custom_field_has_data($pdo, (int)$cf['id']);
         }
         echo json_encode($cf ?: ['error' => 'Not found']);
     } catch (Exception $e) { echo json_encode(['error' => $e->getMessage()]); }
@@ -521,6 +541,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
                     if (!$designation || !$department || !$joining_date || !$contract_from || !$contract_till || $monthly_salary <= 0) {
                         throw new Exception('All employment fields are required for Employee approval.');
                     }
+                }
+
+                // ── Same-type duplicate guard (DB: UNIQUE(email, application_for)) ──
+                // Different application_for with the same email is legitimate
+                // (Employee + Faculty + Intern), so only the SAME type blocks.
+                $dupe_chk = $pdo->prepare("SELECT COUNT(*) FROM employees WHERE email = ? AND application_for = ?");
+                $dupe_chk->execute([$app['email'], $app_for]);
+                if ((int)$dupe_chk->fetchColumn() > 0) {
+                    throw new Exception('An approved ' . ucfirst($app_for) . ' record with this email already exists.');
                 }
 
                 // ── SAVEPOINT: Allocate Employee ID ──
@@ -671,16 +700,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
                 $pdo->prepare($sql_srr)->execute($srr_vals);
 
                 // ── Copy custom field values to employee_custom_values ──
+                // Only fields belonging to this application type are copied. Faculty values
+                // are stored against employees.id internally and read by faculties.php.
                 if (!empty($app['custom_field_values'])) {
-                    $custom_vals = json_decode($app['custom_field_values'], true);
-                    if (is_array($custom_vals)) {
-                        $valid_field_ids = $pdo->query("SELECT id FROM employee_custom_fields")->fetchAll(PDO::FETCH_COLUMN);
+                    $custom_vals = staff_filter_custom_values_for_type($pdo, $app['custom_field_values'], $app_for);
+                    if (!empty($custom_vals)) {
                         $ins_cf = $pdo->prepare("INSERT INTO employee_custom_values (employee_id, field_id, field_value) VALUES (?,?,?)");
-                        foreach ($custom_vals as $fid => $fval) {
-                            $fid_int = (int)$fid;
-                            if (in_array($fid_int, $valid_field_ids, true) && $fval !== '' && $fval !== null) {
-                                $ins_cf->execute([$emp_record_id, $fid_int, (string)$fval]);
-                            }
+                        foreach ($custom_vals as $fid_int => $fval) {
+                            $ins_cf->execute([$emp_record_id, $fid_int, (string)$fval]);
                         }
                     }
                 }
@@ -745,6 +772,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
                 if (!$current_emp) {
                     $pdo->rollBack();
                     $error_message = 'Employee record not found.';
+                } elseif (!staff_is_generic_type($current_emp['application_for'] ?? 'employee')) {
+                    $pdo->rollBack();
+                    $error_message = 'Faculty records are managed in the Faculties module (faculties.php), not in Employee Management.';
                 } else {
                     $full_name = trim($_POST['full_name'] ?? '');
                     $gender = $_POST['gender'] ?? '';
@@ -1044,7 +1074,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
 
                         // Update custom field values
                         if (isset($_POST['custom_fields']) && is_array($_POST['custom_fields'])) {
-                            $valid_fids = $pdo->query("SELECT id FROM employee_custom_fields")->fetchAll(PDO::FETCH_COLUMN);
+                            $valid_fids = array_map(
+                                fn($r) => (int)$r['id'],
+                                array_filter(
+                                    staff_normalize_custom_field_rows($pdo->query("SELECT * FROM employee_custom_fields")->fetchAll(PDO::FETCH_ASSOC)),
+                                    fn($r) => $r['application_for'] === staff_normalize_type($application_for, 'employee')
+                                )
+                            );
                             $stmt_upsert_cf = $pdo->prepare("
                                 INSERT INTO employee_custom_values (employee_id, field_id, field_value)
                                 VALUES (?, ?, ?)
@@ -1084,9 +1120,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
         $cf_req   = isset($_POST['cf_required']) ? 1 : 0;
         $cf_order = (int)($_POST['cf_sort_order'] ?? 0);
         $allowed_types = ['text','number','email','date','dropdown','textarea','phone'];
+        $cf_app_for = staff_normalize_type($_POST['cf_application_for'] ?? '');
 
         if (!$cf_label) {
             $error_message = 'Field label is required.';
+        } elseif ($cf_app_for === '') {
+            $error_message = 'Please select a valid Application Type (Employee, Faculty or Intern).';
         } elseif (!empty($cf_key) && !preg_match('/^[a-z][a-z0-9_]{1,49}$/', $cf_key)) {
             $error_message = 'Field key must be lowercase letters/numbers/underscore, 2-50 chars, start with a letter.';
         } elseif (!in_array($cf_type, $allowed_types, true)) {
@@ -1119,6 +1158,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
                     if (in_array('field_type', $cols, true)) {
                         $insert_data['field_type'] = $cf_type;
                     }
+                    if (in_array('application_for', $cols, true)) {
+                        $insert_data['application_for'] = $cf_app_for;
+                    }
                     if (in_array('field_options', $cols, true)) {
                         $insert_data['field_options'] = $cf_opts ?: null;
                     } elseif (in_array('dropdown_options', $cols, true)) {
@@ -1142,7 +1184,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
                     $stmt = $pdo->prepare("INSERT INTO employee_custom_fields ({$col_names}) VALUES ({$placeholders})");
                     $stmt->execute(array_values($insert_data));
 
-                    log_admin_activity($pdo, $admin_username, 'custom_field_added', "Added custom field: {$cf_label} ({$cf_type})");
+                    log_admin_activity($pdo, $admin_username, 'custom_field_added', "Added custom field: {$cf_label} ({$cf_type}) for {$cf_app_for}");
                     $success_message = "Custom field \"{$cf_label}\" created.";
                 }
             } catch (Exception $e) { $error_message = 'Error: ' . $e->getMessage(); }
@@ -1158,9 +1200,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
         $cf_req   = isset($_POST['cf_required']) ? 1 : 0;
         $cf_order = (int)($_POST['cf_sort_order'] ?? 0);
         $allowed_types = ['text','number','email','date','dropdown','textarea','phone'];
+        $cf_app_for_raw = $_POST['cf_application_for'] ?? '';
+        $cf_app_for = staff_normalize_type($cf_app_for_raw);
 
         if (!$cf_label || !$cf_id) {
             $error_message = 'Field ID and label are required.';
+        } elseif ($cf_app_for === '') {
+            $error_message = 'Please select a valid Application Type (Employee, Faculty or Intern).';
         } elseif (!in_array($cf_type, $allowed_types, true)) {
             $error_message = 'Invalid field type.';
         } elseif ($cf_type === 'dropdown' && empty($cf_opts)) {
@@ -1170,6 +1216,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
                 $cols = get_employee_custom_field_columns($pdo);
                 $update_sets = [];
                 $update_vals = [];
+
+                if (in_array('application_for', $cols, true)) {
+                    $st_cur = $pdo->prepare("SELECT application_for FROM employee_custom_fields WHERE id = ? LIMIT 1");
+                    $st_cur->execute([$cf_id]);
+                    $cur_type = staff_normalize_type($st_cur->fetchColumn() ?: '', 'employee');
+                    if ($cur_type !== $cf_app_for) {
+                        if (staff_custom_field_has_data($pdo, $cf_id)) {
+                            throw new Exception('Application Type cannot be changed: this field already has submitted values for ' . ucfirst($cur_type) . ' staff. Deactivate it and create a new field for ' . ucfirst($cf_app_for) . ' instead.');
+                        }
+                        $update_sets[] = "application_for = ?";
+                        $update_vals[] = $cf_app_for;
+                    }
+                }
 
                 if (in_array('field_label', $cols, true)) {
                     $update_sets[] = "field_label = ?";
@@ -1242,13 +1301,13 @@ $emp_linked_count = 0;
 if (emp_tables_exist($pdo)) {
     try {
         // Overall statistics
-        $emp_total_count = (int)$pdo->query("SELECT COUNT(*) FROM employees")->fetchColumn();
-        $emp_active_count = (int)$pdo->query("SELECT COUNT(*) FROM employees WHERE status = 'active'")->fetchColumn();
-        $emp_prob_count = (int)$pdo->query("SELECT COUNT(*) FROM employees WHERE status IN ('probation', 'contract')")->fetchColumn();
-        $emp_linked_count = (int)$pdo->query("SELECT COUNT(*) FROM employees WHERE admin_id IS NOT NULL")->fetchColumn();
+        $emp_total_count = (int)$pdo->query("SELECT COUNT(*) FROM employees WHERE " . staff_generic_type_sql())->fetchColumn();
+        $emp_active_count = (int)$pdo->query("SELECT COUNT(*) FROM employees WHERE status = 'active' AND " . staff_generic_type_sql())->fetchColumn();
+        $emp_prob_count = (int)$pdo->query("SELECT COUNT(*) FROM employees WHERE status IN ('probation', 'contract') AND " . staff_generic_type_sql())->fetchColumn();
+        $emp_linked_count = (int)$pdo->query("SELECT COUNT(*) FROM employees WHERE admin_id IS NOT NULL AND " . staff_generic_type_sql())->fetchColumn();
 
-        // Filtered employee list
-        $emp_where = ["1=1"];
+        // Filtered employee list — Faculty is isolated (managed in faculties.php)
+        $emp_where = [staff_generic_type_sql('e')];
         $emp_params = [];
 
         if ($search !== '') {
@@ -1260,7 +1319,7 @@ if (emp_tables_exist($pdo)) {
             $emp_where[] = "e.status = ?";
             $emp_params[] = $status_filter;
         }
-        if ($type_filter !== '' && in_array($type_filter, ['employee', 'faculty', 'intern'], true)) {
+        if ($type_filter !== '' && in_array($type_filter, STAFF_GENERIC_TYPES, true)) {
             $emp_where[] = "e.application_for = ?";
             $emp_params[] = $type_filter;
         }
@@ -1302,7 +1361,7 @@ $status_colors = ['pending'=>'amber','under_review'=>'blue','approved'=>'green',
 // Load custom fields
 $custom_fields = [];
 try {
-    $custom_fields = $pdo->query("SELECT * FROM employee_custom_fields ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    $custom_fields = staff_normalize_custom_field_rows($pdo->query("SELECT * FROM employee_custom_fields ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC));
 } catch (Exception $e) { $custom_fields = []; }
 $cf_type_labels = ['text'=>'Text','number'=>'Number','email'=>'Email','date'=>'Date','dropdown'=>'Dropdown','textarea'=>'Textarea','phone'=>'Phone'];
 
@@ -1389,7 +1448,6 @@ include 'includes/admin_nav.php';
             <select name="type" onchange="this.form.submit()" style="flex:1; min-width:110px; width:auto !important; height:42px !important; padding:0 36px 0 12px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
                 <option value="">All Types</option>
                 <option value="employee" <?= $type_filter === 'employee' ? 'selected' : '' ?>>Employee</option>
-                <option value="faculty" <?= $type_filter === 'faculty' ? 'selected' : '' ?>>Faculty</option>
                 <option value="intern" <?= $type_filter === 'intern' ? 'selected' : '' ?>>Intern</option>
             </select>
             <select name="link" onchange="this.form.submit()" style="flex:1; min-width:125px; width:auto !important; height:42px !important; padding:0 36px 0 12px !important; border:1.5px solid var(--border); border-radius:10px; font-size:0.85rem; background:#fff; color:var(--text); cursor:pointer;">
@@ -1542,7 +1600,7 @@ include 'includes/admin_nav.php';
             <div style="padding:2rem;text-align:center;color:var(--text-muted);">No custom fields defined yet. Click "Add Field" to create one.</div>
         <?php else: ?>
         <table class="data-table">
-            <thead><tr><th>Order</th><th>Label</th><th>Key</th><th>Type</th><th>Required</th><th>Status</th><th style="text-align:right;">Actions</th></tr></thead>
+            <thead><tr><th>Order</th><th>Label</th><th>Key</th><th>Application Type</th><th>Type</th><th>Required</th><th>Status</th><th style="text-align:right;">Actions</th></tr></thead>
             <tbody>
             <?php foreach ($custom_fields as $cf):
                 $cf_lbl = $cf['field_label'] ?? $cf['field_name'] ?? ('Field #' . $cf['id']);
@@ -1553,6 +1611,7 @@ include 'includes/admin_nav.php';
                     <td class="cell-sub"><?php echo (int)($cf['sort_order'] ?? 0); ?></td>
                     <td class="cell-main"><?php echo e($cf_lbl); ?></td>
                     <td><code style="font-size:.75rem;background:var(--muted);padding:2px 6px;border-radius:4px;"><?php echo e($cf_key_display); ?></code></td>
+                    <td><span class="badge <?php echo ['employee'=>'blue','faculty'=>'purple','intern'=>'amber'][$cf['application_for']] ?? 'gray'; ?>" style="font-size:.7rem;"><?php echo e($type_labels[$cf['application_for']] ?? ucfirst($cf['application_for'])); ?></span></td>
                     <td><span class="badge blue" style="font-size:.7rem;"><?php echo $cf_type_labels[$cf['field_type']] ?? ucfirst($cf['field_type']); ?></span>
                         <?php if ($cf['field_type'] === 'dropdown' && !empty($cf_opts_display)): ?>
                         <div class="cell-sub" style="margin-top:2px;font-size:.65rem;"><?php echo e(mb_strimwidth($cf_opts_display, 0, 60, '…')); ?></div>
@@ -2196,6 +2255,15 @@ include 'includes/admin_nav.php';
                 <div style="font-size:.65rem;color:var(--text-muted);margin-top:2px;">Lowercase, letters/numbers/underscore</div>
             </div>
         </div>
+        <div style="margin-bottom:12px;">
+            <label style="display:block;font-size:.8rem;font-weight:600;margin-bottom:4px;">Application Type *</label>
+            <select name="cf_application_for" id="cfAppFor" required style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);">
+                <option value="employee">Employee</option>
+                <option value="faculty">Faculty</option>
+                <option value="intern">Intern</option>
+            </select>
+            <div id="cfAppForNote" style="font-size:.65rem;color:var(--text-muted);margin-top:2px;">This field appears only on the selected application type's registration form.</div>
+        </div>
         <div style="display:flex;gap:10px;margin-bottom:12px;">
             <div style="flex:1;">
                 <label style="display:block;font-size:.8rem;font-weight:600;margin-bottom:4px;">Field Type *</label>
@@ -2674,6 +2742,8 @@ function openCfModal(mode) {
     document.getElementById('cfKey').readOnly = false;
     document.getElementById('cfKeyWrap').style.display = '';
     document.getElementById('cfType').value = 'text';
+    document.getElementById('cfAppFor').value = 'employee';
+    document.getElementById('cfAppForNote').textContent = "This field appears only on the selected application type's registration form.";
     document.getElementById('cfOptions').value = '';
     document.getElementById('cfOrder').value = '0';
     document.getElementById('cfRequired').checked = false;
@@ -2696,6 +2766,10 @@ function editCf(id) {
         document.getElementById('cfLabel').value = d.field_label || d.field_name || '';
         document.getElementById('cfKey').value = d.field_key || '';
         document.getElementById('cfType').value = d.field_type || 'text';
+        document.getElementById('cfAppFor').value = d.application_for || 'employee';
+        if (d.has_data) {
+            document.getElementById('cfAppForNote').textContent = 'This field already has submitted values. Application Type can only be changed if no values exist (otherwise the save is blocked).';
+        }
         document.getElementById('cfOptions').value = d.field_options || d.dropdown_options || '';
         document.getElementById('cfOrder').value = d.sort_order || '0';
         document.getElementById('cfRequired').checked = (parseInt(d.is_required) === 1);

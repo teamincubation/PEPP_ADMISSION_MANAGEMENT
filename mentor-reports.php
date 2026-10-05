@@ -115,7 +115,7 @@ try { $has_email = (bool)$pdo->query("SELECT email FROM admins LIMIT 1"); } catc
 $admin_type_col = $has_admin_type ? "a.admin_type" : "a.role AS admin_type";
 $full_name_col  = $has_full_name ? "a.full_name" : "a.username AS full_name";
 $email_col      = $has_email ? "a.email" : "'' AS email";
-$staff_joins    = $has_employees ? "LEFT JOIN employees e ON a.id = e.admin_id" : "";
+$staff_joins    = $has_employees ? "LEFT JOIN employees e ON a.id = e.admin_id AND e.application_for IN ('employee','intern')" : "";
 $staff_cols     = $has_employees ? "e.photo AS staff_photo, e.employee_id AS staff_code" : "NULL AS staff_photo, NULL AS staff_code";
 
 $mentor_where_clauses = ["a.permissions LIKE '%student-mentoring%'"];

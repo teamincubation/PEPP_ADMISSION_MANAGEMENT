@@ -267,7 +267,7 @@ function faculty_paid_total($pdo, $fid) {
 
 /* ── Single-faculty detail view ─────────────────────────────────── */
 $view_id = (int)($_GET['view'] ?? 0);
-$detail = null; $detail_sessions = []; $detail_payments = []; $detail_calc = null;
+$detail = null; $detail_sessions = []; $detail_payments = []; $detail_calc = null; $detail_custom = [];
 if ($view_id) {
     try {
         $stmt = $pdo->prepare("SELECT * FROM faculties WHERE id = ?"); $stmt->execute([$view_id]);
@@ -276,6 +276,15 @@ if ($view_id) {
             $detail_calc = faculty_earned($pdo, $detail, $sessions_ready, $TYPE_RATE);
             $detail_calc['paid'] = faculty_paid_total($pdo, $view_id);
             $detail_calc['due'] = max(0, $detail_calc['earned'] - $detail_calc['paid']);
+            // Faculty-type custom-field values (stored against the linked employees.id internally;
+            // exposed ONLY here, never through generic Employee Management).
+            if (!empty($detail['employee_management_faculty_id']) && is_file(__DIR__ . '/includes/staff_type_helper.php')) {
+                require_once __DIR__ . '/includes/staff_type_helper.php';
+                $detail_custom = array_filter(
+                    staff_get_custom_values($pdo, (int)$detail['employee_management_faculty_id'], 'faculty'),
+                    fn($r) => isset($r['field_value']) && $r['field_value'] !== ''
+                );
+            }
             if ($sessions_ready) {
                 $stmt = $pdo->prepare("SELECT * FROM sessions WHERE faculty_id = ? ORDER BY session_datetime DESC LIMIT 100");
                 $stmt->execute([$view_id]); $detail_sessions = $stmt->fetchAll();
@@ -357,6 +366,17 @@ include 'includes/admin_nav.php';
     <div class="stat-card"><div class="stat-top"><span class="stat-label">Paid</span><span class="stat-icon green"><i class="fas fa-money-bill-wave"></i></span></div><div class="stat-value"><?php echo format_financial($detail_calc['paid'], 0); ?></div><div class="stat-hint">Total paid out</div></div>
     <div class="stat-card"><div class="stat-top"><span class="stat-label">Payment Pending</span><span class="stat-icon amber"><i class="fas fa-hourglass-half"></i></span></div><div class="stat-value"><?php echo format_financial($detail_calc['due'], 0); ?></div><div class="stat-hint">Earned minus paid</div></div>
 </div>
+
+<?php if (!empty($detail_custom)): ?>
+<div class="panel" style="margin-bottom:16px;">
+    <div class="panel-head"><h2>Registration Details</h2></div>
+    <div class="panel-body" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+        <?php foreach ($detail_custom as $dc): ?>
+        <div><div class="cell-sub" style="font-size:.7rem;text-transform:uppercase;font-weight:700;"><?php echo e($dc['field_label'] ?? $dc['field_name'] ?? ''); ?></div><div><?php echo e((string)$dc['field_value']); ?></div></div>
+        <?php endforeach; ?>
+    </div>
+</div>
+<?php endif; ?>
 
 <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start;" class="fac-grid">
     <div class="panel">

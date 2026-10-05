@@ -12,6 +12,7 @@ session_start();
 require_once 'config/database.php';
 require_once 'includes/encryption_helper.php';
 require_once 'includes/file_helper.php';
+require_once 'includes/staff_type_helper.php';
 
 // Self-healing database structure for photo columns
 try {
@@ -68,11 +69,10 @@ if (empty($_SESSION['staff_csrf_token'])) {
     $_SESSION['staff_csrf_token'] = bin2hex(random_bytes(32));
 }
 
-// ── Load active custom fields (for both form rendering and validation) ──
-$active_custom_fields = [];
-try {
-    $active_custom_fields = $pdo->query("SELECT * FROM employee_custom_fields WHERE status = 'active' ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) { /* Table may not exist yet */ }
+// ── Load active custom fields (all types; each carries application_for) ──
+// Rendering shows only the selected type's fields (client-side) and validation
+// re-filters by the selected application_for (server-side).
+$active_custom_fields = staff_load_active_custom_fields($pdo);
 
 // ── Process Form Submission ──
 $error_msg = '';
@@ -193,37 +193,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Photo upload is required. Please upload your best quality photo.';
     }
 
-    // ─── Validate custom fields ───
-    $custom_field_data = [];
-    foreach ($active_custom_fields as $cf) {
-        $cf_val = trim($_POST['cf_' . $cf['id']] ?? '');
-        if ($cf['is_required'] && $cf_val === '') {
-            $errors[] = htmlspecialchars($cf['field_label']) . ' is required.';
-            continue;
-        }
-        if ($cf_val === '') continue; // Optional and empty
-        // Type-specific validation
-        switch ($cf['field_type']) {
-            case 'email':
-                if (!filter_var($cf_val, FILTER_VALIDATE_EMAIL)) $errors[] = htmlspecialchars($cf['field_label']) . ': invalid email.';
-                break;
-            case 'number':
-                if (!is_numeric($cf_val)) $errors[] = htmlspecialchars($cf['field_label']) . ': must be a number.';
-                break;
-            case 'date':
-                if (!strtotime($cf_val)) $errors[] = htmlspecialchars($cf['field_label']) . ': invalid date.';
-                break;
-            case 'dropdown':
-                $allowed_opts = array_map('trim', explode(',', $cf['field_options'] ?? ''));
-                if (!in_array($cf_val, $allowed_opts, true)) $errors[] = htmlspecialchars($cf['field_label']) . ': invalid selection.';
-                break;
-            case 'phone':
-                if (strlen(preg_replace('/\D/', '', $cf_val)) < 7) $errors[] = htmlspecialchars($cf['field_label']) . ': invalid phone number.';
-                break;
-        }
-        $custom_field_data[$cf['id']] = $cf_val;
-    }
-    $custom_field_json = !empty($custom_field_data) ? json_encode($custom_field_data, JSON_UNESCAPED_UNICODE) : null;
+    // ─── Validate custom fields (SCOPED to the selected application type) ───
+    // Fields belonging to another type are ignored: not required, not validated, not stored.
+    $cf_result = staff_validate_custom_fields($active_custom_fields, (string)$application_for, $_POST);
+    foreach ($cf_result['errors'] as $cf_err) $errors[] = $cf_err;
+    $custom_field_data = $cf_result['data'];
+    $custom_field_json = $cf_result['json'];
 
     if ($errors) {
         $error_msg = implode(' ', $errors);
@@ -423,7 +398,7 @@ render:
             <div class="card-title"><i><i class="fas fa-briefcase"></i></i> Application Type</div>
             <div class="field full">
                 <label>Applying For <span class="req">*</span></label>
-                <select name="application_for" required>
+                <select name="application_for" id="applicationForSelect" required>
                     <option value="">— Select —</option>
                     <option value="employee" <?php echo ($_POST['application_for'] ?? '') === 'employee' ? 'selected' : ''; ?>>PEPP Employee</option>
                     <option value="faculty" <?php echo ($_POST['application_for'] ?? '') === 'faculty' ? 'selected' : ''; ?>>Faculty</option>
@@ -585,16 +560,16 @@ render:
         </div>
 
         <?php if (!empty($active_custom_fields)): ?>
-        <!-- Dynamic Custom Fields -->
-        <div class="card">
+        <!-- Dynamic Custom Fields (scoped by Application Type; hidden until a type is selected) -->
+        <div class="card" id="customFieldsCard" style="display:none;">
             <div class="card-title"><i><i class="fas fa-puzzle-piece"></i></i> Additional Information</div>
             <?php foreach ($active_custom_fields as $cf): ?>
-            <div class="field full" style="margin-bottom:12px;">
+            <div class="field full cf-field" data-application-for="<?php echo htmlspecialchars($cf['application_for']); ?>" style="margin-bottom:12px;display:none;">
                 <label><?php echo htmlspecialchars($cf['field_label']); ?><?php if ($cf['is_required']): ?> <span class="req">*</span><?php endif; ?></label>
                 <?php
                 $cf_name = 'cf_' . $cf['id'];
                 $cf_post = htmlspecialchars($_POST[$cf_name] ?? '');
-                $cf_req = $cf['is_required'] ? 'required' : '';
+                $cf_req = $cf['is_required'] ? 'data-was-required="1"' : '';
                 switch ($cf['field_type']):
                     case 'text': ?>
                         <input type="text" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?>>
@@ -694,6 +669,33 @@ fetch('staff-registration.php?get_banks')
             dl.appendChild(o);
         });
     }).catch(() => {});
+
+// ── Application-Type-driven custom fields ──
+// Only the selected type's fields are shown; hidden fields lose `required`
+// (restored when shown). Entered values are kept (never cleared) when toggling.
+// Server-side validation re-filters by application_for, so this is UX only.
+(function() {
+    const sel = document.getElementById('applicationForSelect');
+    const card = document.getElementById('customFieldsCard');
+    if (!sel || !card) return;
+    const fields = card.querySelectorAll('.cf-field');
+    function applyType() {
+        const type = sel.value;
+        let visible = 0;
+        fields.forEach(f => {
+            const show = type !== '' && f.getAttribute('data-application-for') === type;
+            f.style.display = show ? '' : 'none';
+            f.querySelectorAll('[data-was-required]').forEach(inp => {
+                if (show) inp.setAttribute('required', 'required');
+                else inp.removeAttribute('required');
+            });
+            if (show) visible++;
+        });
+        card.style.display = visible > 0 ? '' : 'none';
+    }
+    sel.addEventListener('change', applyType);
+    applyType();
+})();
 
 // ── Prevent double submit ──
 document.getElementById('staffRegForm').addEventListener('submit', function() {

@@ -1215,7 +1215,7 @@ if ($step === 'payment' && isset($_GET['user_id'])) {
                             <i class="fas fa-plus"></i> Update Another Payment
                         </a>
                         
-                        <a href="register.php" class="btn btn-primary btn-full">
+                        <a href="https://pepplearning.com" class="btn btn-primary btn-full">
                             <i class="fas fa-home"></i> Back to Home
                         </a>
                     </div>

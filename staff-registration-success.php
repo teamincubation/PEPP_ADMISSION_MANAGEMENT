@@ -109,7 +109,7 @@ $type_labels = ['employee'=>'PEPP Employee','faculty'=>'Faculty','intern'=>'Inte
         <i class="fas fa-info-circle" style="margin-right:6px;"></i>
         Please save your Application Reference Number. You may be contacted for additional information during the review process.
     </div>
-    <a href="https://pepplearning.in" class="btn-home">Back to PEPP Learning</a>
+    <a href="https://pepplearning.com" class="btn-home">Back to PEPP Learning</a>
 </div>
 </body>
 </html>
