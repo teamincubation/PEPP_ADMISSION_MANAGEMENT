@@ -2288,7 +2288,10 @@ include 'includes/admin_nav.php';
             Every registration submission captures an immutable snapshot of the exact policy version, timestamp, and client evidence agreed to.
         </p>
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
-            <?php foreach ($policies_data as $pkey => $pol): ?>
+            <?php foreach ($policies_data as $k => $pol):
+                $pkey = (string)($pol['policy_key'] ?? (is_string($k) ? $k : ''));
+                if ($pkey === '') continue;
+            ?>
             <div style="background:var(--card); border:1px solid var(--border); border-radius:12px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
                 <div>
                     <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px;">
@@ -2298,7 +2301,7 @@ include 'includes/admin_nav.php';
                         </span>
                     </div>
                     <h3 style="font-size:1.05rem; font-weight:700; margin:0 0 6px 0; color:var(--text);">
-                        <?php echo e($pol['title'] ?? ucfirst(str_replace('_', ' ', $pkey))); ?>
+                        <?php echo e($pol['title'] ?? policy_title_default($pkey)); ?>
                     </h3>
                     <div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:12px;">
                         Slug: <code style="background:var(--muted); padding:2px 6px; border-radius:4px;"><?php echo e($pkey); ?></code>

@@ -221,14 +221,30 @@ t('7. Invalid application-type custom field submission is rejected/ignored', fun
  * ─────────────────────────────────────────────────────────────────── */
 echo "\n--- Group 2: Policy & Terms Management ---\n";
 
-t('8. Four policy records exist and match allowed keys', function() use ($pdo) {
+t('8. Four policy records exist, keyed correctly, and employee-management derives policy_key', function() use ($pdo) {
     $all = policy_list_all($pdo);
-    $keys = array_column($all, 'policy_key');
-    return count($all) === 4
-        && in_array('faculty_policy', $keys, true)
-        && in_array('guest_faculty_policy', $keys, true)
-        && in_array('employee_staff_terms', $keys, true)
-        && in_array('internship_policy', $keys, true);
+    $expected_keys = ['faculty_policy', 'guest_faculty_policy', 'employee_staff_terms', 'internship_policy'];
+
+    if (count($all) !== 4) return false;
+    foreach ($expected_keys as $ek) {
+        if (!isset($all[$ek])) return false;
+        if (($all[$ek]['policy_key'] ?? '') !== $ek) return false;
+        if (empty($all[$ek]['title'])) return false;
+    }
+
+    // Verify employee-management.php renders policy_key directly and not array index
+    $em = src('employee-management.php');
+    if (!has($em, "\$pol['policy_key']")) return false;
+    if (!has($em, "openPolicyEdit('<?php echo e(\$pkey); ?>')")) return false;
+    if (!has($em, "policy-view.php?policy=<?php echo urlencode(\$pkey); ?>")) return false;
+
+    // Verify get_policy endpoint resolution succeeds for all 4 keys
+    foreach ($expected_keys as $ek) {
+        $p = policy_get($pdo, $ek);
+        if (!$p || ($p['policy_key'] ?? '') !== $ek) return false;
+    }
+
+    return true;
 });
 
 t('9. Only authorized admins can edit policies (employee-management permission checked)', function() {

@@ -254,11 +254,15 @@ function policy_get(PDO $pdo, string $policy_key, ?string $version = null): ?arr
 
 /**
  * List all four policies for admin management.
+ * Returns an associative array keyed by policy_key, with each policy guaranteed
+ * to have 'policy_key' populated and matching ALLOWED_POLICY_KEYS.
+ *
+ * @return array<string, array>
  */
 function policy_list_all(PDO $pdo): array {
     $defs = policy_default_documents();
     if (!policy_tables_exist($pdo)) {
-        return array_values($defs);
+        return $defs;
     }
 
     try {
@@ -266,16 +270,32 @@ function policy_list_all(PDO $pdo): array {
         $db_rows = $st->fetchAll(PDO::FETCH_ASSOC);
         $indexed = [];
         foreach ($db_rows as $r) {
-            $indexed[$r['policy_key']] = $r;
+            if (!empty($r['policy_key'])) {
+                $indexed[$r['policy_key']] = $r;
+            }
         }
 
         $result = [];
         foreach (ALLOWED_POLICY_KEYS as $k) {
-            $result[] = $indexed[$k] ?? $defs[$k];
+            $row = $indexed[$k] ?? ($defs[$k] ?? null);
+            if (!$row) {
+                $row = [
+                    'policy_key'      => $k,
+                    'title'           => policy_title_default($k),
+                    'current_version' => '1.0',
+                    'content'         => '',
+                    'status'          => 'active',
+                    'updated_by'      => 'System Initializer',
+                    'updated_at'      => date('Y-m-d H:i:s'),
+                    'created_at'      => date('Y-m-d H:i:s'),
+                ];
+            }
+            $row['policy_key'] = $k;
+            $result[$k] = $row;
         }
         return $result;
     } catch (Throwable $e) {
-        return array_values($defs);
+        return $defs;
     }
 }
 
