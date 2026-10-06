@@ -20,6 +20,7 @@ require_once 'includes/encryption_helper.php';
 require_once 'includes/file_helper.php';
 require_once 'includes/staff_type_helper.php';
 require_once 'includes/guest_faculty_helper.php';
+require_once 'includes/policy_helper.php';
 
 $active_page = 'employee-management';
 $page_title  = 'Employee Management';
@@ -619,6 +620,16 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_application' && isset($_
             $r['ifsc_code'] = $gbank['ifsc'];
             $r['upi_id'] = $gbank['upi'];
         }
+
+        // Decoded custom field values
+        $r['custom_fields_decoded'] = [];
+        if (!empty($r['custom_field_values'])) {
+            $r['custom_fields_decoded'] = is_string($r['custom_field_values'])
+                ? (json_decode($r['custom_field_values'], true) ?: [])
+                : (array)$r['custom_field_values'];
+        }
+        $r['policy_acceptance'] = policy_get_acceptance($pdo, (int)$r['id']);
+
         echo json_encode($r);
     } catch (Exception $e) { echo json_encode(['error' => $e->getMessage()]); }
     exit;
@@ -632,13 +643,15 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_guest_application' && is
     try {
         $gs = guest_faculty_schema_status($pdo);
         if (!$gs['ready']) { echo json_encode(['error' => 'Invited faculty tables are not installed yet (database-update-59-guest-faculty.sql).']); exit; }
-        $st = $pdo->prepare("SELECT id, application_reference, status, photo, full_name, mobile_country_code, mobile_number, email, qualifications, payment_mode, rate_live, rate_qpd, rate_recorded, rate_offline, bank_name, bank_account_masked, ifsc_code, upi_id, guest_banking_submitted, submitted_at FROM staff_registration_requests WHERE id = ? AND application_for = ? LIMIT 1");
+        $st = $pdo->prepare("SELECT id, application_reference, status, photo, full_name, mobile_country_code, mobile_number, email, qualifications, payment_mode, rate_live, rate_qpd, rate_recorded, rate_offline, bank_name, bank_account_masked, ifsc_code, upi_id, guest_banking_submitted, custom_field_values, submitted_at FROM staff_registration_requests WHERE id = ? AND application_for = ? LIMIT 1");
         $st->execute([(int)$_GET['id'], GUEST_FACULTY_TYPE]);
         $g = $st->fetch(PDO::FETCH_ASSOC);
         if (!$g) { echo json_encode(['error' => 'Invited faculty application not found.']); exit; }
         $bank = gf_admin_banking_view($g, can_admin_view_bank_credentials());
         $fq = $pdo->prepare("SELECT id FROM faculties WHERE guest_faculty_registration_id = ? LIMIT 1");
         $fq->execute([(int)$g['id']]);
+        $custom_fields = !empty($g['custom_field_values']) ? (json_decode($g['custom_field_values'], true) ?: []) : [];
+        $acceptance = policy_get_acceptance($pdo, (int)$g['id']);
         echo json_encode([
             'success' => true,
             'application' => [
@@ -649,6 +662,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_guest_application' && is
                 'payment_mode' => $g['payment_mode'],
             ],
             'banking' => $bank,
+            'custom_fields' => $custom_fields,
+            'policy_acceptance' => $acceptance,
             'faculty_id' => ($fid = $fq->fetchColumn()) ? (int)$fid : null,
         ]);
     } catch (Throwable $e) {
@@ -681,6 +696,25 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_academic_years') {
     exit;
 }
 
+// ── AJAX: Load policy details for editing ─────────────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'get_policy' && isset($_GET['key'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $pol_key = trim($_GET['key']);
+    if (!in_array($pol_key, ALLOWED_POLICY_KEYS, true)) {
+        http_response_code(404);
+        echo json_encode(['error' => 'Invalid policy key']);
+        exit;
+    }
+    $pol = policy_get($pdo, $pol_key);
+    if (!$pol) {
+        http_response_code(404);
+        echo json_encode(['error' => 'Policy not found']);
+        exit;
+    }
+    echo json_encode(['success' => true, 'policy' => $pol]);
+    exit;
+}
+
 // ── AJAX: Load custom field for editing ───────────────────────────────
 if (isset($_GET['action']) && $_GET['action'] === 'load_custom_field' && isset($_GET['id'])) {
     header('Content-Type: application/json');
@@ -695,7 +729,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_custom_field' && isset($
             if (!isset($cf['field_options']) && isset($cf['dropdown_options'])) {
                 $cf['field_options'] = $cf['dropdown_options'];
             }
-            $cf['application_for'] = staff_normalize_type($cf['application_for'] ?? '', 'employee');
+            $cf['application_for'] = staff_normalize_custom_field_type($cf['application_for'] ?? '', 'employee');
             $cf['has_data'] = staff_custom_field_has_data($pdo, (int)$cf['id']);
         }
         echo json_encode($cf ?: ['error' => 'Not found']);
@@ -1456,12 +1490,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
         $cf_req   = isset($_POST['cf_required']) ? 1 : 0;
         $cf_order = (int)($_POST['cf_sort_order'] ?? 0);
         $allowed_types = ['text','number','email','date','dropdown','textarea','phone'];
-        $cf_app_for = staff_normalize_type($_POST['cf_application_for'] ?? '');
+        $cf_app_for = staff_normalize_type($_POST['cf_application_for'] ?? '') ?: staff_normalize_custom_field_type($_POST['cf_application_for'] ?? '');
 
         if (!$cf_label) {
             $error_message = 'Field label is required.';
         } elseif ($cf_app_for === '') {
-            $error_message = 'Please select a valid Application Type (Employee, Faculty or Intern).';
+            $error_message = 'Please select a valid Application Type (Employee, Faculty, Intern or Guest Faculty).';
         } elseif (!empty($cf_key) && !preg_match('/^[a-z][a-z0-9_]{1,49}$/', $cf_key)) {
             $error_message = 'Field key must be lowercase letters/numbers/underscore, 2-50 chars, start with a letter.';
         } elseif (!in_array($cf_type, $allowed_types, true)) {
@@ -1537,12 +1571,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
         $cf_order = (int)($_POST['cf_sort_order'] ?? 0);
         $allowed_types = ['text','number','email','date','dropdown','textarea','phone'];
         $cf_app_for_raw = $_POST['cf_application_for'] ?? '';
-        $cf_app_for = staff_normalize_type($cf_app_for_raw);
+        $cf_app_for = staff_normalize_custom_field_type($cf_app_for_raw);
 
         if (!$cf_label || !$cf_id) {
             $error_message = 'Field ID and label are required.';
         } elseif ($cf_app_for === '') {
-            $error_message = 'Please select a valid Application Type (Employee, Faculty or Intern).';
+            $error_message = 'Please select a valid Application Type (Employee, Faculty, Intern or Guest Faculty).';
         } elseif (!in_array($cf_type, $allowed_types, true)) {
             $error_message = 'Invalid field type.';
         } elseif ($cf_type === 'dropdown' && empty($cf_opts)) {
@@ -1556,7 +1590,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
                 if (in_array('application_for', $cols, true)) {
                     $st_cur = $pdo->prepare("SELECT application_for FROM employee_custom_fields WHERE id = ? LIMIT 1");
                     $st_cur->execute([$cf_id]);
-                    $cur_type = staff_normalize_type($st_cur->fetchColumn() ?: '', 'employee');
+                    $cur_type = staff_normalize_custom_field_type($st_cur->fetchColumn() ?: '', 'employee');
                     if ($cur_type !== $cf_app_for) {
                         if (staff_custom_field_has_data($pdo, $cf_id)) {
                             throw new Exception('Application Type cannot be changed: this field already has submitted values for ' . ucfirst($cur_type) . ' staff. Deactivate it and create a new field for ' . ucfirst($cf_app_for) . ' instead.');
@@ -1614,6 +1648,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
                 log_admin_activity($pdo, $admin_username, 'custom_field_toggled', "Toggled custom field #{$cf_id} status");
                 $success_message = 'Custom field status updated.';
             } catch (Exception $e) { $error_message = 'Error: ' . $e->getMessage(); }
+        }
+    }
+
+    // ═══ SAVE POLICY & TERMS ═══
+    elseif ($action === 'save_policy') {
+        $pol_key = trim($_POST['policy_key'] ?? '');
+        $pol_title = trim($_POST['title'] ?? '');
+        $pol_content = (string)($_POST['content'] ?? '');
+        $bump_version = trim($_POST['bump_version'] ?? 'none');
+        $pol_status = trim($_POST['status'] ?? 'active');
+
+        if (!in_array($pol_key, ALLOWED_POLICY_KEYS, true)) {
+            $error_message = 'Invalid policy key.';
+        } elseif ($pol_title === '') {
+            $error_message = 'Policy title is required.';
+        } else {
+            try {
+                $saved = policy_save($pdo, $pol_key, $pol_title, $pol_content, $admin_username, $bump_version, $pol_status);
+                if (empty($saved['success'])) {
+                    $error_message = $saved['error'] ?? 'Failed to save policy.';
+                } else {
+                    log_admin_activity($pdo, $admin_username, 'policy_updated', "Updated policy: {$pol_key} ({$pol_title}) to version {$saved['version']}");
+                    $success_message = "Policy \"{$pol_title}\" successfully saved to version {$saved['version']}.";
+                }
+            } catch (Exception $e) {
+                $error_message = 'Failed to save policy: ' . $e->getMessage();
+            }
         }
     }
 }
@@ -1759,6 +1820,10 @@ $cf_type_labels = ['text'=>'Text','number'=>'Number','email'=>'Email','date'=>'D
 
 include 'includes/admin_nav.php';
 ?>
+<?php if ($tab === 'policy_terms'): ?>
+<link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
+<?php endif; ?>
 
 <?php if ($success_message): ?>
 <div class="alert alert-ok"><i class="fas fa-check-circle"></i><span><?php echo e($success_message); ?></span></div>
@@ -1780,6 +1845,7 @@ include 'includes/admin_nav.php';
             <?php if ($pending_count > 0): ?><span class="nav-badge" style="background:#f59e0b;color:#fff;margin-left:4px;"><?php echo $pending_count; ?></span><?php endif; ?>
         </a>
         <a href="?tab=custom_fields" class="btn btn-sm <?php echo $tab==='custom_fields' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-puzzle-piece"></i> Custom Fields (<?php echo count($custom_fields); ?>)</a>
+        <a href="?tab=policy_terms" class="btn btn-sm <?php echo $tab==='policy_terms' ? 'btn-primary' : 'btn-outline'; ?>"><i class="fas fa-file-contract"></i> Policy &amp; Terms</a>
     </div>
 </div>
 
@@ -2204,6 +2270,55 @@ include 'includes/admin_nav.php';
             </tbody>
         </table>
         <?php endif; ?>
+    </div>
+</div>
+<?php elseif ($tab === 'policy_terms'): ?>
+<!-- ═══ POLICY & TERMS MANAGEMENT TAB ═══ -->
+<?php
+    $policies_data = policy_list_all($pdo);
+?>
+<div class="panel" style="margin-bottom:1.2rem;">
+    <div class="panel-head">
+        <span class="head-icon" style="background:#e0f2fe;color:#0284c7;"><i class="fas fa-file-contract"></i></span>
+        <h2>Policy &amp; Terms Management</h2>
+    </div>
+    <div class="panel-body">
+        <p style="font-size:0.85rem; color:var(--text-muted); line-height:1.55; margin-bottom:1.2rem;">
+            Manage institutional terms, conditions and policies required during staff and faculty registrations.
+            Every registration submission captures an immutable snapshot of the exact policy version, timestamp, and client evidence agreed to.
+        </p>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
+            <?php foreach ($policies_data as $pkey => $pol): ?>
+            <div style="background:var(--card); border:1px solid var(--border); border-radius:12px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
+                <div>
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px;">
+                        <span class="badge blue" style="font-weight:700; font-size:0.75rem;">v<?php echo e($pol['current_version'] ?? '1.0'); ?></span>
+                        <span class="badge <?php echo ($pol['status'] ?? 'active') === 'active' ? 'green' : 'gray'; ?>" style="font-size:0.7rem; text-transform:uppercase;">
+                            <?php echo e($pol['status'] ?? 'active'); ?>
+                        </span>
+                    </div>
+                    <h3 style="font-size:1.05rem; font-weight:700; margin:0 0 6px 0; color:var(--text);">
+                        <?php echo e($pol['title'] ?? ucfirst(str_replace('_', ' ', $pkey))); ?>
+                    </h3>
+                    <div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:12px;">
+                        Slug: <code style="background:var(--muted); padding:2px 6px; border-radius:4px;"><?php echo e($pkey); ?></code>
+                    </div>
+                    <div style="font-size:0.75rem; color:var(--text-muted); line-height:1.5; margin-bottom:16px;">
+                        <div><strong>Last Updated:</strong> <?php echo !empty($pol['updated_at']) ? date('M j, Y, g:i A', strtotime($pol['updated_at'])) : 'Initial'; ?></div>
+                        <div><strong>Updated By:</strong> <?php echo e($pol['updated_by'] ?? 'System'); ?></div>
+                    </div>
+                </div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; border-top:1px solid var(--border); padding-top:12px;">
+                    <button type="button" class="btn btn-sm btn-primary" onclick="openPolicyEdit('<?php echo e($pkey); ?>')" style="flex:1; justify-content:center;">
+                        <i class="fas fa-pen"></i> Edit
+                    </button>
+                    <a href="policy-view.php?policy=<?php echo urlencode($pkey); ?>" target="_blank" rel="noopener" class="btn btn-sm btn-outline" style="flex:1; justify-content:center;" title="Preview public view in new tab">
+                        <i class="fas fa-external-link-alt"></i> Preview
+                    </a>
+                </div>
+            </div>
+            <?php endforeach; ?>
+        </div>
     </div>
 </div>
 <?php endif; ?>
@@ -3044,6 +3159,7 @@ include 'includes/admin_nav.php';
                 <option value="employee">Employee</option>
                 <option value="faculty">Faculty</option>
                 <option value="intern">Intern</option>
+                <option value="guest_faculty">Guest Faculty</option>
             </select>
             <div id="cfAppForNote" style="font-size:.65rem;color:var(--text-muted);margin-top:2px;">This field appears only on the selected application type's registration form.</div>
         </div>
@@ -3079,6 +3195,61 @@ include 'includes/admin_nav.php';
         <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button type="button" class="btn btn-sm btn-outline" onclick="closeModal('cfModal')">Cancel</button>
             <button type="submit" class="btn btn-sm btn-primary" id="cfSubmitBtn"><i class="fas fa-check"></i> Add Field</button>
+        </div>
+    </form>
+</div>
+</div>
+
+<!-- ═══ POLICY EDIT MODAL ═══ -->
+<div id="policyEditModal" class="modal-backdrop">
+<div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.8rem;max-width:820px;width:100%;max-height:92vh;overflow-y:auto;box-shadow:0 10px 30px rgba(0,0,0,0.2);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.2rem;border-bottom:1px solid var(--border);padding-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+            <span class="head-icon" style="background:#e0f2fe;color:#0284c7;"><i class="fas fa-file-contract"></i></span>
+            <div>
+                <h3 style="margin:0;font-size:1.15rem;" id="pemModalTitle">Edit Policy</h3>
+                <div style="font-size:0.75rem;color:var(--text-muted);" id="pemModalSubtitle">Manage text content and version</div>
+            </div>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline" onclick="closeModal('policyEditModal')" style="border-radius:50%;width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;">&times;</button>
+    </div>
+
+    <form method="POST" id="policyEditForm" onsubmit="return handlePolicySubmit(event);">
+        <?php echo csrf_field(); ?>
+        <input type="hidden" name="action" value="save_policy">
+        <input type="hidden" name="policy_key" id="pemKey" value="">
+        <input type="hidden" name="content" id="pemContentInput" value="">
+
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-bottom:14px;">
+            <div>
+                <label style="display:block;font-size:0.8rem;font-weight:700;margin-bottom:4px;">Policy Title *</label>
+                <input type="text" name="title" id="pemTitle" required style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);">
+            </div>
+            <div>
+                <label style="display:block;font-size:0.8rem;font-weight:700;margin-bottom:4px;">Version Bumping</label>
+                <select name="bump_version" id="pemBump" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);">
+                    <option value="minor" selected>Minor Bump (+0.1) — Recommended for Content Updates</option>
+                    <option value="major">Major Bump (+1.0) — Substantive / Annual Revision</option>
+                    <option value="none">Keep Current Version (Title/Status only — no content changes)</option>
+                </select>
+                <div style="font-size:0.68rem;color:var(--text-muted);margin-top:2px;">Current: <span id="pemCurrentVerBadge" style="font-weight:700;">v1.0</span></div>
+            </div>
+        </div>
+
+        <div style="margin-bottom:14px;">
+            <label style="display:block;font-size:0.8rem;font-weight:700;margin-bottom:6px;">Policy Content (Rich Text) *</label>
+            <div id="policy-quill-editor" style="min-height:260px;background:#fff;color:#1e293b;border-radius:0 0 8px 8px;font-size:0.9rem;"></div>
+            <div style="font-size:0.68rem;color:var(--text-muted);margin-top:4px;">Supports headings, bold, italic, numbered lists, bullet lists, links, and paragraphs. Unsafe script tags are strictly stripped on save.</div>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border);padding-top:12px;">
+            <button type="button" class="btn btn-sm btn-outline" id="pemLivePreviewBtn" onclick="previewPolicyInModal()">
+                <i class="fas fa-eye"></i> Quick Preview
+            </button>
+            <div style="display:flex;gap:8px;">
+                <button type="button" class="btn btn-sm btn-outline" onclick="closeModal('policyEditModal')">Cancel</button>
+                <button type="submit" class="btn btn-sm btn-primary" id="pemSubmitBtn"><i class="fas fa-save"></i> Save Policy</button>
+            </div>
         </div>
     </form>
 </div>
@@ -3776,6 +3947,20 @@ function viewApp(id) {
                 fields.push(['Live / QPD / Rec / Off', ['rate_live','rate_qpd','rate_recorded','rate_offline'].map(k => '₹' + (parseFloat(d[k]) || 0).toFixed(2)).join(' / ')]);
             }
         }
+        // Custom fields display (all roles)
+        if (d.custom_fields_decoded && typeof d.custom_fields_decoded === 'object') {
+            for (const [ck, cv] of Object.entries(d.custom_fields_decoded)) {
+                let cleanKey = ck.replace(/^cf_/, '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                fields.push(['[Custom] ' + cleanKey, cv || '—']);
+            }
+        }
+
+        // Policy acceptance audit display (all roles)
+        if (d.policy_acceptance) {
+            fields.push(['Policy Accepted', d.policy_acceptance.policy_title + ' (v' + d.policy_acceptance.policy_version + ')']);
+            fields.push(['Policy Accepted At', d.policy_acceptance.accepted_at + (d.policy_acceptance.ip_address ? ' [IP: ' + d.policy_acceptance.ip_address + ']' : '')]);
+        }
+
         if (d.rejection_reason) fields.push(['Rejection Reason', d.rejection_reason]);
         fields.forEach(([k,v])=>{
             h+='<tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;font-weight:600;color:var(--text);white-space:nowrap;width:140px;">'+k+'</td><td style="padding:6px 8px;">'+((v||'—').toString().replace(/</g,'&lt;'))+'</td></tr>';
@@ -4002,10 +4187,94 @@ function toggleFacultyStatus(empId, currentStatus, name) {
         });
 }
 
+// ═══ POLICY & TERMS MANAGEMENT JS ════════════════════════════════════
+let policyQuill = null;
+
+function initPolicyQuill() {
+    if (policyQuill) return;
+    const container = document.getElementById('policy-quill-editor');
+    if (!container) return;
+    policyQuill = new Quill('#policy-quill-editor', {
+        theme: 'snow',
+        placeholder: 'Enter official policy content here...',
+        modules: {
+            toolbar: [
+                [{ 'header': [1, 2, 3, false] }],
+                ['bold', 'italic', 'underline'],
+                [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+                ['link'],
+                ['clean']
+            ]
+        }
+    });
+}
+
+function openPolicyEdit(key) {
+    initPolicyQuill();
+    openModal('policyEditModal');
+    document.getElementById('pemKey').value = key;
+    document.getElementById('pemTitle').value = 'Loading…';
+    document.getElementById('pemCurrentVerBadge').textContent = 'Loading…';
+    if (policyQuill) {
+        policyQuill.root.innerHTML = '<p>Loading policy content…</p>';
+    }
+
+    fetch('employee-management.php?action=get_policy&key=' + encodeURIComponent(key))
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success || !d.policy) {
+                alert(d.error || 'Failed to load policy.');
+                closeModal('policyEditModal');
+                return;
+            }
+            const p = d.policy;
+            document.getElementById('pemModalTitle').textContent = 'Edit ' + (p.title || 'Policy');
+            document.getElementById('pemTitle').value = p.title || '';
+            document.getElementById('pemCurrentVerBadge').textContent = 'v' + (p.current_version || '1.0');
+            const curSpans = document.querySelectorAll('.pemVerCur');
+            curSpans.forEach(s => s.textContent = (p.current_version || '1.0'));
+            if (policyQuill) {
+                policyQuill.root.innerHTML = p.content || '';
+            }
+        })
+        .catch(() => {
+            alert('Server error loading policy.');
+            closeModal('policyEditModal');
+        });
+}
+
+function handlePolicySubmit(e) {
+    if (!policyQuill) return true;
+    const raw = policyQuill.getText().trim();
+    if (raw === '') {
+        alert('Policy content cannot be empty.');
+        e.preventDefault();
+        return false;
+    }
+    document.getElementById('pemContentInput').value = policyQuill.root.innerHTML;
+    const btn = document.getElementById('pemSubmitBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…';
+    return true;
+}
+
+function previewPolicyInModal() {
+    if (!policyQuill) return;
+    const win = window.open('', '_blank');
+    if (!win) {
+        alert('Please allow popups to preview the policy in a new window.');
+        return;
+    }
+    const title = document.getElementById('pemTitle').value || 'Policy Preview';
+    const content = policyQuill.root.innerHTML;
+    win.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Preview - ' + title + '</title><style>body{font-family:system-ui,-apple-system,sans-serif;max-width:800px;margin:2rem auto;padding:0 1.5rem;line-height:1.7;color:#1e293b;}h1,h2,h3{color:#0f172a;}hr{border:none;border-top:1px solid #e2e8f0;margin:1.5rem 0;}</style></head><body><h1>' + title + ' <small style="font-size:0.5em;color:#64748b;">(Draft Preview)</small></h1><hr/>' + content + '</body></html>');
+    win.document.close();
+}
+
 // Escape key to close open modals
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-        ['approvalModal', 'internApprovalModal', 'facultyApprovalModal', 'rejectModal', 'viewModal', 'cfModal', 'staffEditModal', 'quickStatusModal', 'facultyEditModal'].forEach(id => {
+        ['approvalModal', 'internApprovalModal', 'facultyApprovalModal', 'rejectModal', 'viewModal', 'cfModal', 'staffEditModal', 'quickStatusModal', 'facultyEditModal', 'policyEditModal'].forEach(id => {
             const m = document.getElementById(id);
             if (m && m.classList.contains('open')) {
                 closeModal(id);

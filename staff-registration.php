@@ -13,6 +13,7 @@ require_once 'config/database.php';
 require_once 'includes/encryption_helper.php';
 require_once 'includes/file_helper.php';
 require_once 'includes/staff_type_helper.php';
+require_once 'includes/policy_helper.php';
 
 // Self-healing database structure for photo columns
 try {
@@ -73,6 +74,12 @@ if (empty($_SESSION['staff_csrf_token'])) {
 // Rendering shows only the selected type's fields (client-side) and validation
 // re-filters by the selected application_for (server-side).
 $active_custom_fields = staff_load_active_custom_fields($pdo);
+
+// Selected application type (supports re-render after validation errors or URL params)
+$selected_app_for = strtolower(trim((string)($_POST['application_for'] ?? $_GET['type'] ?? $_GET['application_for'] ?? '')));
+if (!in_array($selected_app_for, ['employee', 'faculty', 'intern'], true)) {
+    $selected_app_for = '';
+}
 
 // ── Process Form Submission ──
 $error_msg = '';
@@ -200,6 +207,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $custom_field_data = $cf_result['data'];
     $custom_field_json = $cf_result['json'];
 
+    // ─── Mandatory Policy & Terms Consent ───
+    $policy_key = policy_key_from_application_type((string)$application_for);
+    $policy_doc = $policy_key ? policy_get($pdo, $policy_key) : null;
+    $policy_title = $policy_doc ? $policy_doc['title'] : ($policy_key ? policy_title_default($policy_key) : 'Institutional Policy');
+    $policy_version = $policy_doc ? $policy_doc['current_version'] : '1.0';
+
+    if (empty($_POST['policy_consent'])) {
+        $errors[] = 'You must read and agree to the ' . $policy_title . ' to register.';
+    }
+
     if ($errors) {
         $error_msg = implode(' ', $errors);
         goto render;
@@ -260,6 +277,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $aadhaar_enc, $aadhaar_mask, $bank_name, $bank_account_enc, $bank_account_mask, $ifsc, $upi_id,
             $application_for, $custom_field_json, $latitude, $longitude, $maps_url, $client_ip, substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 500)
         ]);
+        $req_id = (int)$pdo->lastInsertId();
+
+        // ─── Record Immutable Policy Acceptance ───
+        $accepted = policy_record_acceptance($pdo, $req_id, $policy_key, $policy_version, $client_ip, $_SERVER['HTTP_USER_AGENT'] ?? '');
+        if (!$accepted) {
+            throw new RuntimeException('Failed to record mandatory policy acceptance audit. Registration aborted.');
+        }
+
         $pdo->commit();
 
         // Regenerate CSRF token and clear photo session
@@ -400,9 +425,9 @@ render:
                 <label>Applying For <span class="req">*</span></label>
                 <select name="application_for" id="applicationForSelect" required>
                     <option value="">— Select —</option>
-                    <option value="employee" <?php echo ($_POST['application_for'] ?? '') === 'employee' ? 'selected' : ''; ?>>PEPP Employee</option>
-                    <option value="faculty" <?php echo ($_POST['application_for'] ?? '') === 'faculty' ? 'selected' : ''; ?>>Faculty</option>
-                    <option value="intern" <?php echo ($_POST['application_for'] ?? '') === 'intern' ? 'selected' : ''; ?>>Intern</option>
+                    <option value="employee" <?php echo $selected_app_for === 'employee' ? 'selected' : ''; ?>>PEPP Employee</option>
+                    <option value="faculty" <?php echo $selected_app_for === 'faculty' ? 'selected' : ''; ?>>Faculty</option>
+                    <option value="intern" <?php echo $selected_app_for === 'intern' ? 'selected' : ''; ?>>Intern</option>
                 </select>
             </div>
         </div>
@@ -559,34 +584,53 @@ render:
             </div>
         </div>
 
-        <?php if (!empty($active_custom_fields)): ?>
-        <!-- Dynamic Custom Fields (scoped by Application Type; hidden until a type is selected) -->
-        <div class="card" id="customFieldsCard" style="display:none;">
+        <?php
+        // Filter custom fields to staff types (employee, faculty, intern)
+        $reg_custom_fields = array_values(array_filter($active_custom_fields, function($cf) {
+            return in_array($cf['application_for'], ['employee', 'faculty', 'intern'], true);
+        }));
+        $has_active_cf_for_selected = false;
+        if (!empty($selected_app_for)) {
+            foreach ($reg_custom_fields as $cf) {
+                if ($cf['application_for'] === $selected_app_for) {
+                    $has_active_cf_for_selected = true;
+                    break;
+                }
+            }
+        }
+        ?>
+        <?php if (!empty($reg_custom_fields)): ?>
+        <!-- Dynamic Custom Fields (scoped by Application Type) -->
+        <div class="card" id="customFieldsCard" style="<?php echo $has_active_cf_for_selected ? '' : 'display:none;'; ?>">
             <div class="card-title"><i><i class="fas fa-puzzle-piece"></i></i> Additional Information</div>
-            <?php foreach ($active_custom_fields as $cf): ?>
-            <div class="field full cf-field" data-application-for="<?php echo htmlspecialchars($cf['application_for']); ?>" style="margin-bottom:12px;display:none;">
-                <label><?php echo htmlspecialchars($cf['field_label']); ?><?php if ($cf['is_required']): ?> <span class="req">*</span><?php endif; ?></label>
-                <?php
+            <?php foreach ($reg_custom_fields as $cf):
+                $is_for_selected = ($selected_app_for !== '' && $cf['application_for'] === $selected_app_for);
+                $cf_lbl = $cf['field_label'] ?? $cf['field_name'] ?? ('Field #' . $cf['id']);
                 $cf_name = 'cf_' . $cf['id'];
-                $cf_post = htmlspecialchars($_POST[$cf_name] ?? '');
+                $cf_post = htmlspecialchars($_POST[$cf_name] ?? $_POST[$cf['field_key']] ?? '');
                 $cf_req = $cf['is_required'] ? 'data-was-required="1"' : '';
+            ?>
+            <div class="field full cf-field" data-application-for="<?php echo htmlspecialchars($cf['application_for']); ?>" style="margin-bottom:12px;<?php echo $is_for_selected ? '' : 'display:none;'; ?>">
+                <label><?php echo htmlspecialchars($cf_lbl); ?><?php if ($cf['is_required']): ?> <span class="req">*</span><?php endif; ?></label>
+                <?php
                 switch ($cf['field_type']):
                     case 'text': ?>
-                        <input type="text" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?>>
+                        <input type="text" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?> <?php echo ($is_for_selected && $cf['is_required']) ? 'required' : ''; ?>>
                     <?php break; case 'number': ?>
-                        <input type="number" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?>>
+                        <input type="number" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?> <?php echo ($is_for_selected && $cf['is_required']) ? 'required' : ''; ?>>
                     <?php break; case 'email': ?>
-                        <input type="email" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?>>
+                        <input type="email" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?> <?php echo ($is_for_selected && $cf['is_required']) ? 'required' : ''; ?>>
                     <?php break; case 'date': ?>
-                        <input type="date" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?>>
+                        <input type="date" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?> <?php echo ($is_for_selected && $cf['is_required']) ? 'required' : ''; ?>>
                     <?php break; case 'phone': ?>
-                        <input type="tel" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?>>
+                        <input type="tel" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?> <?php echo ($is_for_selected && $cf['is_required']) ? 'required' : ''; ?>>
                     <?php break; case 'textarea': ?>
-                        <textarea name="<?php echo $cf_name; ?>" rows="3" <?php echo $cf_req; ?>><?php echo $cf_post; ?></textarea>
+                        <textarea name="<?php echo $cf_name; ?>" rows="3" <?php echo $cf_req; ?> <?php echo ($is_for_selected && $cf['is_required']) ? 'required' : ''; ?>><?php echo $cf_post; ?></textarea>
                     <?php break; case 'dropdown':
-                        $opts = array_map('trim', explode(',', $cf['field_options'] ?? ''));
+                        $opts_str = (string)($cf['field_options'] ?? $cf['dropdown_options'] ?? '');
+                        $opts = array_map('trim', explode(',', $opts_str));
                         ?>
-                        <select name="<?php echo $cf_name; ?>" <?php echo $cf_req; ?>>
+                        <select name="<?php echo $cf_name; ?>" <?php echo $cf_req; ?> <?php echo ($is_for_selected && $cf['is_required']) ? 'required' : ''; ?>>
                             <option value="">— Select —</option>
                             <?php foreach ($opts as $opt): if ($opt === '') continue; ?>
                             <option value="<?php echo htmlspecialchars($opt); ?>" <?php echo $cf_post === htmlspecialchars($opt) ? 'selected' : ''; ?>><?php echo htmlspecialchars($opt); ?></option>
@@ -597,6 +641,22 @@ render:
             <?php endforeach; ?>
         </div>
         <?php endif; ?>
+
+        <!-- Mandatory Policy & Terms Consent Card -->
+        <?php
+        $init_policy_key = policy_key_from_application_type($selected_app_for);
+        $init_policy_doc = $init_policy_key ? policy_get($pdo, $init_policy_key) : null;
+        $init_policy_title = $init_policy_doc ? $init_policy_doc['title'] : ($init_policy_key ? policy_title_default($init_policy_key) : '');
+        ?>
+        <div class="card" id="policyConsentCard" style="<?php echo $selected_app_for ? '' : 'display:none;'; ?>">
+            <div class="card-title"><i><i class="fas fa-file-contract"></i></i> Terms &amp; Policy Agreement</div>
+            <div style="display:flex; align-items:flex-start; gap:12px; padding:6px 0;">
+                <input type="checkbox" name="policy_consent" id="policyConsentCheckbox" value="1" <?php echo !empty($_POST['policy_consent']) ? 'checked' : ''; ?> required style="width:20px; height:20px; margin-top:2px; cursor:pointer; accent-color:#7c3aed; flex-shrink:0;">
+                <label for="policyConsentCheckbox" id="policyConsentLabel" style="font-size:0.9rem; line-height:1.5; color:#e2e8f0; cursor:pointer; font-weight:normal;">
+                    I have read and agree to the <a href="policy-view.php?policy=<?php echo htmlspecialchars($init_policy_key ?: 'faculty_policy'); ?>" id="policyConsentLink" target="_blank" rel="noopener" style="color:#a78bfa; font-weight:600; text-decoration:underline;"><?php echo htmlspecialchars($init_policy_title ?: 'Institutional Policy'); ?></a>. <span class="req">*</span>
+                </label>
+            </div>
+        </div>
 
         <div class="card" style="text-align:center;">
             <button type="submit" class="btn-submit" id="submitBtn">
@@ -677,24 +737,64 @@ fetch('staff-registration.php?get_banks')
 (function() {
     const sel = document.getElementById('applicationForSelect');
     const card = document.getElementById('customFieldsCard');
-    if (!sel || !card) return;
-    const fields = card.querySelectorAll('.cf-field');
-    function applyType() {
+    const consentCard = document.getElementById('policyConsentCard');
+    const consentLink = document.getElementById('policyConsentLink');
+    const consentCheckbox = document.getElementById('policyConsentCheckbox');
+
+    const policyMap = {
+        'faculty': {
+            'title': 'Faculty Policy',
+            'url': 'policy-view.php?policy=faculty_policy'
+        },
+        'employee': {
+            'title': 'Employee & Staff Terms & Conditions',
+            'url': 'policy-view.php?policy=employee_staff_terms'
+        },
+        'intern': {
+            'title': 'Internship Policy',
+            'url': 'policy-view.php?policy=internship_policy'
+        }
+    };
+
+    function applyType(isInitial) {
+        if (!sel) return;
         const type = sel.value;
-        let visible = 0;
-        fields.forEach(f => {
-            const show = type !== '' && f.getAttribute('data-application-for') === type;
-            f.style.display = show ? '' : 'none';
-            f.querySelectorAll('[data-was-required]').forEach(inp => {
-                if (show) inp.setAttribute('required', 'required');
-                else inp.removeAttribute('required');
+
+        // Dynamic custom fields display
+        if (card) {
+            const fields = card.querySelectorAll('.cf-field');
+            let visible = 0;
+            fields.forEach(f => {
+                const show = type !== '' && f.getAttribute('data-application-for') === type;
+                f.style.display = show ? '' : 'none';
+                f.querySelectorAll('[data-was-required]').forEach(inp => {
+                    if (show) inp.setAttribute('required', 'required');
+                    else inp.removeAttribute('required');
+                });
+                if (show) visible++;
             });
-            if (show) visible++;
-        });
-        card.style.display = visible > 0 ? '' : 'none';
+            card.style.display = visible > 0 ? '' : 'none';
+        }
+
+        // Dynamic policy & terms consent display
+        if (consentCard && consentLink) {
+            if (type !== '' && policyMap[type]) {
+                consentCard.style.display = '';
+                consentLink.textContent = policyMap[type].title;
+                consentLink.href = policyMap[type].url;
+                if (!isInitial && consentCheckbox) {
+                    consentCheckbox.checked = false;
+                }
+            } else {
+                consentCard.style.display = 'none';
+            }
+        }
     }
-    sel.addEventListener('change', applyType);
-    applyType();
+
+    if (sel) {
+        sel.addEventListener('change', function() { applyType(false); });
+        applyType(true);
+    }
 })();
 
 // ── Prevent double submit ──

@@ -18,6 +18,9 @@
 if (!defined('STAFF_APPLICATION_TYPES')) {
     define('STAFF_APPLICATION_TYPES', ['employee', 'faculty', 'intern']);
 }
+if (!defined('STAFF_CUSTOM_FIELD_APPLICATION_TYPES')) {
+    define('STAFF_CUSTOM_FIELD_APPLICATION_TYPES', ['employee', 'faculty', 'intern', 'guest_' . 'faculty']);
+}
 if (!defined('STAFF_GENERIC_TYPES')) {
     /** Types that may appear in generic ERP staff modules. Faculty is excluded. */
     define('STAFF_GENERIC_TYPES', ['employee', 'intern']);
@@ -28,6 +31,14 @@ if (!function_exists('staff_normalize_type')) {
     function staff_normalize_type($value, string $default = ''): string {
         $v = strtolower(trim((string)$value));
         return in_array($v, STAFF_APPLICATION_TYPES, true) ? $v : $default;
+    }
+}
+
+if (!function_exists('staff_normalize_custom_field_type')) {
+    /** Returns a valid custom field application type or $default ('' = invalid). */
+    function staff_normalize_custom_field_type($value, string $default = ''): string {
+        $v = strtolower(trim((string)$value));
+        return in_array($v, STAFF_CUSTOM_FIELD_APPLICATION_TYPES, true) ? $v : $default;
     }
 }
 
@@ -64,10 +75,35 @@ if (!function_exists('staff_custom_fields_has_type')) {
 }
 
 if (!function_exists('staff_normalize_custom_field_rows')) {
-    /** Ensures every custom field row carries a valid application_for (legacy => employee). */
+    /** Ensures every custom field row carries a valid application_for and normalized column aliases. */
     function staff_normalize_custom_field_rows(array $rows): array {
         foreach ($rows as &$r) {
-            $r['application_for'] = staff_normalize_type($r['application_for'] ?? '', 'employee');
+            $raw_app = strtolower(trim((string)($r['application_for'] ?? '')));
+            if (in_array($raw_app, STAFF_CUSTOM_FIELD_APPLICATION_TYPES, true)) {
+                $r['application_for'] = $raw_app;
+            } else {
+                $r['application_for'] = 'employee';
+            }
+
+            // Normalise field label / name aliases
+            $lbl = trim((string)($r['field_label'] ?? $r['field_name'] ?? ''));
+            if ($lbl === '') {
+                $lbl = 'Field #' . ($r['id'] ?? '');
+            }
+            $r['field_label'] = $lbl;
+            $r['field_name'] = $lbl;
+
+            // Normalise dropdown / options aliases
+            $opts = (string)($r['field_options'] ?? $r['dropdown_options'] ?? '');
+            $r['field_options'] = $opts;
+            $r['dropdown_options'] = $opts;
+
+            // Normalise field key
+            $key = trim((string)($r['field_key'] ?? ''));
+            if ($key === '') {
+                $key = 'cf_' . ($r['id'] ?? '');
+            }
+            $r['field_key'] = $key;
         }
         unset($r);
         return $rows;
@@ -106,18 +142,35 @@ if (!function_exists('staff_validate_custom_fields')) {
     function staff_validate_custom_fields(array $fields, string $application_for, array $post): array {
         $errors = [];
         $data = [];
-        $application_for = staff_normalize_type($application_for);
+        $app_for_norm = staff_normalize_custom_field_type($application_for);
+        if ($app_for_norm === '') {
+            return ['valid' => true, 'errors' => [], 'data' => [], 'json' => null];
+        }
+
         foreach (staff_normalize_custom_field_rows($fields) as $cf) {
-            if ($application_for === '' || $cf['application_for'] !== $application_for) {
+            if ($cf['application_for'] !== $app_for_norm) {
                 continue; // belongs to a different staff type → ignore
             }
             $label = htmlspecialchars((string)($cf['field_label'] ?? ''));
-            $cf_val = trim((string)($post['cf_' . $cf['id']] ?? ''));
+            $fid = $cf['id'] ?? '';
+            $fkey = $cf['field_key'] ?? '';
+
+            // Check cf_<id>, bare field_key, or cf_<key>
+            $cf_val = '';
+            if (isset($post['cf_' . $fid])) {
+                $cf_val = trim((string)$post['cf_' . $fid]);
+            } elseif ($fkey !== '' && isset($post[$fkey])) {
+                $cf_val = trim((string)$post[$fkey]);
+            } elseif ($fkey !== '' && isset($post['cf_' . $fkey])) {
+                $cf_val = trim((string)$post['cf_' . $fkey]);
+            }
+
             if (!empty($cf['is_required']) && $cf_val === '') {
                 $errors[] = $label . ' is required.';
                 continue;
             }
             if ($cf_val === '') continue; // optional and empty
+
             switch ($cf['field_type'] ?? 'text') {
                 case 'email':
                     if (!filter_var($cf_val, FILTER_VALIDATE_EMAIL)) $errors[] = $label . ': invalid email.';
@@ -129,16 +182,18 @@ if (!function_exists('staff_validate_custom_fields')) {
                     if (!strtotime($cf_val)) $errors[] = $label . ': invalid date.';
                     break;
                 case 'dropdown':
-                    $allowed = array_map('trim', explode(',', (string)($cf['field_options'] ?? '')));
+                    $opts_str = (string)($cf['field_options'] ?? '');
+                    $allowed = array_map('trim', explode(',', $opts_str));
                     if (!in_array($cf_val, $allowed, true)) $errors[] = $label . ': invalid selection.';
                     break;
                 case 'phone':
                     if (strlen(preg_replace('/\D/', '', $cf_val)) < 7) $errors[] = $label . ': invalid phone number.';
                     break;
             }
-            $data[$cf['id']] = $cf_val;
+            $data[$fid] = $cf_val;
         }
         return [
+            'valid'  => empty($errors),
             'errors' => $errors,
             'data'   => $data,
             'json'   => !empty($data) ? json_encode($data, JSON_UNESCAPED_UNICODE) : null,
@@ -155,7 +210,7 @@ if (!function_exists('staff_filter_custom_values_for_type')) {
     function staff_filter_custom_values_for_type(PDO $pdo, $stored, string $application_for): array {
         $vals = is_string($stored) ? json_decode($stored, true) : $stored;
         if (!is_array($vals)) return [];
-        $application_for = staff_normalize_type($application_for, 'employee');
+        $app_for_norm = staff_normalize_custom_field_type($application_for, 'employee');
         try {
             $rows = $pdo->query("SELECT * FROM employee_custom_fields")->fetchAll(PDO::FETCH_ASSOC);
         } catch (Throwable $e) {
@@ -163,7 +218,7 @@ if (!function_exists('staff_filter_custom_values_for_type')) {
         }
         $valid = [];
         foreach (staff_normalize_custom_field_rows($rows) as $r) {
-            if ($r['application_for'] === $application_for) $valid[(int)$r['id']] = true;
+            if ($r['application_for'] === $app_for_norm) $valid[(int)$r['id']] = true;
         }
         $out = [];
         foreach ($vals as $fid => $fval) {

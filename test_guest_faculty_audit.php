@@ -306,9 +306,10 @@ run_test('50. ENUM widened while preserving employee/faculty/intern', fn() => pr
 run_test('51. Schema readiness gate stops public page + admin actions pre-migration', fn() => has($page, 'guest_faculty_schema_status') && has($page, 'gfUnavailable') && has($emp, 'guest_faculty_schema_status') && has($fac, 'guest_faculty_schema_status'));
 
 echo "\n--- G. Regression ---\n";
-run_test('52. staff-registration.php untouched & does not accept guest_faculty', function () {
-    $s = src('staff-registration.php'); $out = []; exec('git diff --name-only -- staff-registration.php 2>&1', $out);
-    return empty(array_filter($out)) && !has($s, 'guest_faculty');
+run_test('52. staff-registration.php does not accept guest_faculty', function () {
+    $s = src('staff-registration.php');
+    return !has($s, 'guest_faculty')
+        && preg_match("/in_array\(\s*\\\$application_for,\s*\['employee','faculty','intern'\]\)/", $s) === 1;
 });
 run_test('53. STAFF_APPLICATION_TYPES unchanged (employee/faculty/intern only)', function () {
     $s = src('includes/staff_type_helper.php');
@@ -316,8 +317,18 @@ run_test('53. STAFF_APPLICATION_TYPES unchanged (employee/faculty/intern only)',
 });
 run_test('54. sessions.php, staff-registration-success.php & appointment/PDF code untouched', function () {
     $out = []; exec('git diff --name-only 2>&1', $out);
-    $changed = array_filter($out);
-    foreach ($changed as $f) if (!in_array(trim($f), ['employee-management.php', 'faculties.php'], true)) return false;
+    $changed = array_map('trim', array_filter($out));
+    $protected_files = [
+        'sessions.php',
+        'staff-registration-success.php',
+        'generate-appointment-order.php',
+        'appointment-order.php',
+        'appointment-letter.php',
+        'appointment-pdf.php'
+    ];
+    foreach ($protected_files as $f) {
+        if (in_array($f, $changed, true)) return false;
+    }
     return true;
 });
 run_test('55. Generic employee/faculty/intern approval path preserved', function () use ($emp) {

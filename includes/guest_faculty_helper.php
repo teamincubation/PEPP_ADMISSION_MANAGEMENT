@@ -374,17 +374,49 @@ function gf_insert_application(PDO $pdo, array $d, ?array $banking, ?callable $e
                 $acc_mask = $len <= 4 ? str_repeat('X', $len) : 'XXXX XXXX ' . substr($clean, -4);
             }
         }
-        $pdo->prepare("
-            INSERT INTO staff_registration_requests
-              (application_reference, photo, full_name, mobile_country_code, mobile_number, email, qualifications,
-               application_for, status, bank_name, bank_account_encrypted, bank_account_masked, ifsc_code, upi_id,
-               guest_banking_submitted, ip_address, user_agent, submitted_at)
-            VALUES (?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?)
-        ")->execute([
-            $ref, $d['photo'], $d['full_name'], $d['mobile_cc'], $d['mobile'], $d['email'], $d['qualifications'],
-            GUEST_FACULTY_TYPE, 'pending', $bank_name, $acc_enc, $acc_mask, $ifsc, $upi,
-            $submitted, $ip, substr($ua, 0, 500), gf_now(),
-        ]);
+        $cf_json = $d['custom_field_values'] ?? null;
+        $has_cf_col = false;
+        try {
+            $has_cf_col = (bool)$pdo->query("SELECT custom_field_values FROM staff_registration_requests LIMIT 0");
+        } catch (Throwable $e) {
+            $has_cf_col = false;
+        }
+
+        if ($has_cf_col) {
+            $pdo->prepare("
+                INSERT INTO staff_registration_requests
+                  (application_reference, photo, full_name, mobile_country_code, mobile_number, email, qualifications,
+                   application_for, status, bank_name, bank_account_encrypted, bank_account_masked, ifsc_code, upi_id,
+                   guest_banking_submitted, custom_field_values, ip_address, user_agent, submitted_at)
+                VALUES (?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?)
+            ")->execute([
+                $ref, $d['photo'], $d['full_name'], $d['mobile_cc'], $d['mobile'], $d['email'], $d['qualifications'],
+                GUEST_FACULTY_TYPE, 'pending', $bank_name, $acc_enc, $acc_mask, $ifsc, $upi,
+                $submitted, $cf_json, $ip, substr($ua, 0, 500), gf_now(),
+            ]);
+        } else {
+            $pdo->prepare("
+                INSERT INTO staff_registration_requests
+                  (application_reference, photo, full_name, mobile_country_code, mobile_number, email, qualifications,
+                   application_for, status, bank_name, bank_account_encrypted, bank_account_masked, ifsc_code, upi_id,
+                   guest_banking_submitted, ip_address, user_agent, submitted_at)
+                VALUES (?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?)
+            ")->execute([
+                $ref, $d['photo'], $d['full_name'], $d['mobile_cc'], $d['mobile'], $d['email'], $d['qualifications'],
+                GUEST_FACULTY_TYPE, 'pending', $bank_name, $acc_enc, $acc_mask, $ifsc, $upi,
+                $submitted, $ip, substr($ua, 0, 500), gf_now(),
+            ]);
+        }
+        $req_id = (int)$pdo->lastInsertId();
+
+        if (function_exists('policy_record_acceptance')) {
+            $policy_ver = $d['policy_version'] ?? '1.0';
+            $accepted = policy_record_acceptance($pdo, $req_id, 'guest_faculty_policy', $policy_ver, $ip, $ua);
+            if (!$accepted) {
+                throw new RuntimeException('Failed to record mandatory policy acceptance audit for guest faculty. Registration aborted.');
+            }
+        }
+
         if ($own) $pdo->commit();
         return $ref;
     } catch (Throwable $e) {

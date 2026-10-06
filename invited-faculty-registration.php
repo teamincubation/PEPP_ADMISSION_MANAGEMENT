@@ -18,6 +18,8 @@ session_start();
 require_once 'config/database.php';
 require_once 'includes/encryption_helper.php';
 require_once 'includes/guest_faculty_helper.php';
+require_once 'includes/staff_type_helper.php';
+require_once 'includes/policy_helper.php';
 
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: SAMEORIGIN');
@@ -28,6 +30,10 @@ if (!$form_ready) error_log('invited-faculty-registration: schema not ready: ' .
 
 // Server-side truth for the banking toggle (evaluated per request; never from the client).
 $banking_on = $form_ready && guest_faculty_banking_enabled($pdo);
+
+// Load active guest faculty custom fields
+$active_custom_fields = staff_load_active_custom_fields($pdo);
+$gf_custom_fields = array_values(array_filter($active_custom_fields, fn($cf) => $cf['application_for'] === 'guest_faculty'));
 
 if (empty($_SESSION['gf_csrf_token'])) {
     $_SESSION['gf_csrf_token'] = bin2hex(random_bytes(32));
@@ -82,6 +88,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $form_ready) {
         [$ok, $email, $e] = gf_validate_email((string)($_POST['email'] ?? ''));                  if (!$ok) $errors[] = $e;
         [$ok, $quals, $e] = gf_validate_qualifications((string)($_POST['qualifications'] ?? '')); if (!$ok) $errors[] = $e;
 
+        // ── Custom fields (scoped to guest_faculty) ──
+        $cf_result = staff_validate_custom_fields($active_custom_fields, 'guest_faculty', $_POST);
+        foreach ($cf_result['errors'] as $ce) $errors[] = $ce;
+        $custom_field_json = $cf_result['json'];
+
+        // ── Mandatory Policy Consent ──
+        if (empty($_POST['policy_consent'])) {
+            $errors[] = 'You must read and agree to the Guest Faculty Policy to submit your registration.';
+        }
+        $gf_policy_doc = policy_get($pdo, 'guest_faculty_policy');
+        $gf_policy_version = $gf_policy_doc ? $gf_policy_doc['current_version'] : '1.0';
+
         // ── Banking: server-side gate ──
         $banking = null;
         if ($banking_on) {
@@ -116,6 +134,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $form_ready) {
             $ref = gf_insert_application($pdo, [
                 'photo' => $photo_path, 'full_name' => $full_name, 'mobile_cc' => $cc, 'mobile' => $mobile,
                 'email' => $email, 'qualifications' => $quals,
+                'custom_field_values' => $custom_field_json,
+                'policy_version' => $gf_policy_version,
             ], $banking, 'pepp_encrypt', $client_ip, (string)($_SERVER['HTTP_USER_AGENT'] ?? ''));
             $_SESSION['gf_csrf_token'] = bin2hex(random_bytes(32));
             header('Location: invited-faculty-registration.php?submitted=' . urlencode($ref));
@@ -284,6 +304,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $form_ready) {
             </div>
         </section>
         <?php endif; ?>
+
+        <?php if (!empty($gf_custom_fields)): ?>
+        <section class="card" id="gfCustomFieldsCard">
+            <div class="card-title"><i class="fas fa-puzzle-piece"></i> Additional Information</div>
+            <?php foreach ($gf_custom_fields as $cf):
+                $cf_lbl = $cf['field_label'] ?? $cf['field_name'] ?? ('Field #' . $cf['id']);
+                $cf_name = 'cf_' . $cf['id'];
+                $cf_post = htmlspecialchars($_POST[$cf_name] ?? $_POST[$cf['field_key']] ?? '', ENT_QUOTES, 'UTF-8');
+                $cf_req = $cf['is_required'] ? 'required' : '';
+            ?>
+            <div class="row">
+                <div class="field full">
+                    <label for="<?php echo $cf_name; ?>"><?php echo htmlspecialchars($cf_lbl, ENT_QUOTES, 'UTF-8'); ?><?php if ($cf['is_required']): ?> <span class="req">*</span><?php endif; ?></label>
+                    <?php
+                    switch ($cf['field_type']):
+                        case 'text': ?>
+                            <input type="text" id="<?php echo $cf_name; ?>" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?>>
+                        <?php break; case 'number': ?>
+                            <input type="number" id="<?php echo $cf_name; ?>" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?>>
+                        <?php break; case 'email': ?>
+                            <input type="email" id="<?php echo $cf_name; ?>" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?>>
+                        <?php break; case 'date': ?>
+                            <input type="date" id="<?php echo $cf_name; ?>" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?>>
+                        <?php break; case 'phone': ?>
+                            <input type="tel" id="<?php echo $cf_name; ?>" name="<?php echo $cf_name; ?>" value="<?php echo $cf_post; ?>" <?php echo $cf_req; ?>>
+                        <?php break; case 'textarea': ?>
+                            <textarea id="<?php echo $cf_name; ?>" name="<?php echo $cf_name; ?>" rows="3" <?php echo $cf_req; ?>><?php echo $cf_post; ?></textarea>
+                        <?php break; case 'dropdown':
+                            $opts_str = (string)($cf['field_options'] ?? $cf['dropdown_options'] ?? '');
+                            $opts = array_map('trim', explode(',', $opts_str));
+                            ?>
+                            <select id="<?php echo $cf_name; ?>" name="<?php echo $cf_name; ?>" <?php echo $cf_req; ?>>
+                                <option value="">— Select —</option>
+                                <?php foreach ($opts as $opt): if ($opt === '') continue; ?>
+                                <option value="<?php echo htmlspecialchars($opt, ENT_QUOTES, 'UTF-8'); ?>" <?php echo $cf_post === htmlspecialchars($opt, ENT_QUOTES, 'UTF-8') ? 'selected' : ''; ?>><?php echo htmlspecialchars($opt, ENT_QUOTES, 'UTF-8'); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        <?php break; endswitch; ?>
+                </div>
+            </div>
+            <?php endforeach; ?>
+        </section>
+        <?php endif; ?>
+
+        <!-- Mandatory Guest Faculty Policy Consent -->
+        <section class="card" id="gfConsentCard">
+            <div class="card-title"><i class="fas fa-file-contract"></i> Policy Agreement</div>
+            <div style="display:flex; align-items:flex-start; gap:12px; padding:4px 0;">
+                <input type="checkbox" name="policy_consent" id="gfPolicyConsent" value="1" <?php echo !empty($_POST['policy_consent']) ? 'checked' : ''; ?> required style="width:20px; height:20px; margin-top:2px; cursor:pointer; accent-color:#2dd4bf; flex-shrink:0;">
+                <label for="gfPolicyConsent" style="font-size:0.88rem; line-height:1.5; color:#e2e8f0; cursor:pointer; font-weight:normal;">
+                    I have read and agree to the <a href="policy-view.php?policy=guest_faculty_policy" target="_blank" rel="noopener" style="color:#2dd4bf; font-weight:600; text-decoration:underline;">Guest Faculty Policy</a>. <span class="req">*</span>
+                </label>
+            </div>
+        </section>
 
         <section class="card" style="text-align:center;">
             <button type="submit" class="btn-submit" id="gfSubmitBtn"><i class="fas fa-paper-plane" style="margin-right:6px;"></i> Submit Registration</button>
