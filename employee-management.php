@@ -19,6 +19,7 @@ require_permission('employee-management');
 require_once 'includes/encryption_helper.php';
 require_once 'includes/file_helper.php';
 require_once 'includes/staff_type_helper.php';
+require_once 'includes/guest_faculty_helper.php';
 
 $active_page = 'employee-management';
 $page_title  = 'Employee Management';
@@ -610,8 +611,50 @@ if (isset($_GET['action']) && $_GET['action'] === 'load_application' && isset($_
         if (!$r) { echo json_encode(['error' => 'Not found']); exit; }
         // NEVER send encrypted values — only masked
         unset($r['aadhaar_encrypted'], $r['bank_account_encrypted']);
+        // Invited faculty: banking is permission-gated (masked unless the admin may view bank credentials)
+        if (($r['application_for'] ?? '') === GUEST_FACULTY_TYPE) {
+            $gbank = gf_admin_banking_view($r, can_admin_view_bank_credentials());
+            $r['bank_name'] = $gbank['bank_name'];
+            $r['bank_account_masked'] = $gbank['account_masked'];
+            $r['ifsc_code'] = $gbank['ifsc'];
+            $r['upi_id'] = $gbank['upi'];
+        }
         echo json_encode($r);
     } catch (Exception $e) { echo json_encode(['error' => $e->getMessage()]); }
+    exit;
+}
+
+// ── AJAX: Load invited (guest) faculty application for the dedicated approval modal ──
+if (isset($_GET['action']) && $_GET['action'] === 'load_guest_application' && isset($_GET['id'])) {
+    header('Content-Type: application/json');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+    try {
+        $gs = guest_faculty_schema_status($pdo);
+        if (!$gs['ready']) { echo json_encode(['error' => 'Invited faculty tables are not installed yet (database-update-59-guest-faculty.sql).']); exit; }
+        $st = $pdo->prepare("SELECT id, application_reference, status, photo, full_name, mobile_country_code, mobile_number, email, qualifications, payment_mode, rate_live, rate_qpd, rate_recorded, rate_offline, bank_name, bank_account_masked, ifsc_code, upi_id, guest_banking_submitted, submitted_at FROM staff_registration_requests WHERE id = ? AND application_for = ? LIMIT 1");
+        $st->execute([(int)$_GET['id'], GUEST_FACULTY_TYPE]);
+        $g = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$g) { echo json_encode(['error' => 'Invited faculty application not found.']); exit; }
+        $bank = gf_admin_banking_view($g, can_admin_view_bank_credentials());
+        $fq = $pdo->prepare("SELECT id FROM faculties WHERE guest_faculty_registration_id = ? LIMIT 1");
+        $fq->execute([(int)$g['id']]);
+        echo json_encode([
+            'success' => true,
+            'application' => [
+                'id' => (int)$g['id'], 'reference' => $g['application_reference'], 'status' => $g['status'],
+                'photo' => gf_photo_url_valid($g['photo'] ?? null) ? $g['photo'] : null,
+                'full_name' => $g['full_name'], 'mobile' => trim(($g['mobile_country_code'] ?: '+91') . ' ' . $g['mobile_number']),
+                'email' => $g['email'], 'qualifications' => $g['qualifications'], 'submitted_at' => $g['submitted_at'],
+                'payment_mode' => $g['payment_mode'],
+            ],
+            'banking' => $bank,
+            'faculty_id' => ($fid = $fq->fetchColumn()) ? (int)$fid : null,
+        ]);
+    } catch (Throwable $e) {
+        error_log('load_guest_application: ' . $e->getMessage());
+        echo json_encode(['error' => 'Could not load the application.']);
+    }
     exit;
 }
 
@@ -678,6 +721,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
                 $stmt->execute([$app_id]);
                 $app = $stmt->fetch(PDO::FETCH_ASSOC);
                 if (!$app) throw new Exception('Application not found or already processed.');
+                // Invited faculty NEVER goes through the employee/faculty/intern approval rules.
+                if (strtolower(trim((string)($app['application_for'] ?? ''))) === GUEST_FACULTY_TYPE) {
+                    throw new Exception('Invited faculty applications use the dedicated "Approve Invited Faculty" workflow.');
+                }
 
                 $app_for = strtolower(trim((string)($app['application_for'] ?? 'employee')));
 
@@ -962,6 +1009,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
         }
     }
 
+    // ═══ APPROVE INVITED (GUEST) FACULTY — dedicated flow; never creates an employee ═══
+    elseif ($action === 'approve_guest_faculty') {
+        $app_id = (int)($_POST['app_id'] ?? 0);
+        try {
+            $gs = guest_faculty_schema_status($pdo);
+            if (!$gs['ready']) throw new Exception('Invited faculty tables are not installed yet. Apply database-update-59-guest-faculty.sql first.');
+            if ($app_id <= 0) throw new Exception('Invalid application ID.');
+            $pr = gf_parse_rates($_POST);
+            if ($pr['error'] !== null) throw new Exception($pr['error']);
+            $res = gf_approve_request(
+                $pdo, $app_id, $pr['rates'], (string)$pr['mode'],
+                isset($admin_row['id']) ? (int)$admin_row['id'] : null, (string)$admin_username,
+                !empty($_POST['add_to_directory'])
+            );
+            if (!$res['ok']) throw new Exception((string)$res['error']);
+            if ($res['already']) {
+                $success_message = 'This invited faculty application was already approved. No changes were made.';
+            } else {
+                $rate_txt = 'Live ' . number_format($pr['rates']['rate_live'], 2) . ' / QPD ' . number_format($pr['rates']['rate_qpd'], 2)
+                          . ' / Recorded ' . number_format($pr['rates']['rate_recorded'], 2) . ' / Offline ' . number_format($pr['rates']['rate_offline'], 2);
+                log_admin_activity($pdo, $admin_username, 'guest_faculty_approved',
+                    "Approved invited faculty application #{$app_id}; payment: " . gf_payment_label($res['mode']) . " ({$rate_txt})"
+                    . ($res['faculty_id'] ? "; added to Faculty Directory as faculty #{$res['faculty_id']}" : ''));
+                $success_message = 'Invited faculty approved (' . gf_payment_label($res['mode']) . ').'
+                    . ($res['faculty_id'] ? ' Added to the Faculty Directory.' : ' Use "Add to Faculty Directory" in Faculties to make this faculty assignable to sessions.');
+            }
+        } catch (Throwable $e) {
+            error_log('approve_guest_faculty: ' . $e->getMessage());
+            $error_message = 'Approval failed: ' . $e->getMessage();
+        }
+    }
+
+    // ═══ GUEST FACULTY BANKING TOGGLE (Super Admin only, explicit value, audited) ═══
+    elseif ($action === 'set_guest_faculty_banking') {
+        try {
+            if (!is_super_admin()) throw new Exception('Only a Super Admin can change this setting.');
+            $v = (string)($_POST['banking_enabled'] ?? '');
+            if (!in_array($v, ['0', '1'], true)) throw new Exception('Invalid setting value.');
+            $prev = guest_faculty_set_banking_enabled($pdo, $v === '1');
+            log_admin_activity($pdo, $admin_username, 'guest_faculty_banking_setting',
+                'Guest Faculty Banking Details changed from ' . ($prev ? 'ON' : 'OFF') . ' to ' . ($v === '1' ? 'ON' : 'OFF'));
+            $success_message = 'Guest Faculty Banking Details is now ' . ($v === '1' ? 'ON' : 'OFF') . '.';
+        } catch (Throwable $e) {
+            $error_message = 'Could not update setting: ' . $e->getMessage();
+        }
+    }
+
     // ═══ REJECT APPLICATION ═══
     elseif ($action === 'reject_application') {
         $app_id = (int)($_POST['app_id'] ?? 0);
@@ -985,6 +1079,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
         $new_status = $_POST['new_status'] ?? '';
         if (in_array($new_status, ['under_review','cancelled'], true)) {
             try {
+                // An approved invited-faculty request is the source of a faculty record; freeze it.
+                $gchk = $pdo->prepare("SELECT application_for, status FROM staff_registration_requests WHERE id = ?");
+                $gchk->execute([$app_id]);
+                $grow = $gchk->fetch(PDO::FETCH_ASSOC);
+                if ($grow && $grow['application_for'] === GUEST_FACULTY_TYPE && $grow['status'] === 'approved') {
+                    throw new Exception('An approved invited faculty application cannot be changed. Set the faculty inactive in Faculties instead.');
+                }
                 $pdo->prepare("UPDATE staff_registration_requests SET status=?, reviewed_by=?, reviewed_at=NOW() WHERE id=?")->execute([$new_status, $admin_username, $app_id]);
                 log_admin_activity($pdo, $admin_username, 'staff_status_change', "Changed application #{$app_id} to {$new_status}");
                 $success_message = 'Status updated.';
@@ -1634,9 +1735,19 @@ if (srr_tables_exist($pdo)) {
     try {
         $applications = $pdo->query("SELECT id, application_reference, full_name, email, mobile_number, application_for, status, submitted_at, aadhaar_masked, bank_account_masked, approved_employee_id, appointment_reference FROM staff_registration_requests ORDER BY id DESC")->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) { $applications = []; }
+    // Invited-faculty columns exist only after database-update-59; enrich schema-tolerantly.
+    try {
+        $gf_extra = $pdo->query("SELECT id, payment_mode, guest_banking_submitted FROM staff_registration_requests WHERE application_for = 'guest_faculty'")->fetchAll(PDO::FETCH_UNIQUE | PDO::FETCH_ASSOC);
+        foreach ($applications as &$gf_app_row) {
+            $gx = $gf_extra[$gf_app_row['id']] ?? null;
+            $gf_app_row['payment_mode'] = $gx['payment_mode'] ?? null;
+            $gf_app_row['guest_banking_submitted'] = $gx['guest_banking_submitted'] ?? 0;
+        }
+        unset($gf_app_row);
+    } catch (Exception $e) { /* pre-migration: guest columns absent, no guest rows possible */ }
 }
 $pending_count = count(array_filter($applications, fn($a) => in_array($a['status'], ['pending','under_review'], true)));
-$type_labels = ['employee'=>'Employee','faculty'=>'Faculty','intern'=>'Intern'];
+$type_labels = ['employee'=>'Employee','faculty'=>'Faculty','intern'=>'Intern','guest_faculty'=>'Invited Faculty'];
 $status_colors = ['pending'=>'amber','under_review'=>'blue','approved'=>'green','rejected'=>'red','cancelled'=>'gray'];
 
 // Load custom fields
@@ -1979,9 +2090,16 @@ include 'includes/admin_nav.php';
                         <div class="cell-sub"><?php echo e($app['email']); ?> · <?php echo e($app['mobile_number']); ?></div>
                     </td>
                     <td><span class="badge violet" style="font-size:.7rem;"><?php echo e($app['application_reference']); ?></span></td>
-                    <td><span class="badge gray"><?php echo $type_labels[$app['application_for']] ?? ucfirst($app['application_for']); ?></span></td>
-                    <td class="cell-sub"><?php echo e($app['aadhaar_masked']); ?></td>
-                    <td class="cell-sub"><?php echo e($app['bank_account_masked']); ?></td>
+                    <?php $is_guest_app = ($app['application_for'] === GUEST_FACULTY_TYPE); ?>
+                    <td>
+                        <?php if ($is_guest_app): ?>
+                            <span class="badge teal" style="font-size:.7rem;background:#ccfbf1;color:#0f766e;font-weight:700;"><i class="fas fa-star"></i> INVITED FACULTY</span>
+                        <?php else: ?>
+                            <span class="badge gray"><?php echo $type_labels[$app['application_for']] ?? ucfirst($app['application_for']); ?></span>
+                        <?php endif; ?>
+                    </td>
+                    <td class="cell-sub"><?php echo $is_guest_app ? '—' : e($app['aadhaar_masked']); ?></td>
+                    <td class="cell-sub"><?php echo $is_guest_app ? (!empty($app['guest_banking_submitted']) ? 'Provided' : '—') : e($app['bank_account_masked']); ?></td>
                     <td><span class="badge <?php echo $status_colors[$app['status']] ?? 'gray'; ?>"><?php echo ucfirst(str_replace('_',' ',$app['status'])); ?></span></td>
                     <td style="text-align:right;white-space:nowrap;">
                         <button class="btn btn-sm btn-outline" onclick="viewApp(<?php echo $app['id']; ?>)" title="View Details"><i class="fas fa-eye"></i></button>
@@ -1991,6 +2109,10 @@ include 'includes/admin_nav.php';
                         <?php endif; ?>
                         <?php if (!empty($app['appointment_reference'])): ?>
                         <a href="?action=appointment_pdf&id=<?php echo $app['id']; ?>&source=application" class="btn btn-sm btn-outline" target="_blank" title="Appointment PDF"><i class="fas fa-file-pdf"></i></a>
+                        <?php endif; ?>
+                        <?php if ($is_guest_app && $app['status'] === 'approved'): ?>
+                        <span class="badge <?php echo ($app['payment_mode'] ?? '') === 'free' ? 'gray' : 'green'; ?>" style="font-size:.65rem;"><?php echo e(gf_payment_label($app['payment_mode'] ?? null)); ?></span>
+                        <a href="faculties.php#invited-faculty" class="btn btn-sm btn-outline" title="Add to Faculty Directory / view in Faculties"><i class="fas fa-chalkboard-user"></i></a>
                         <?php endif; ?>
                     </td>
                 </tr>
@@ -2003,6 +2125,37 @@ include 'includes/admin_nav.php';
 
 <?php elseif ($tab === 'custom_fields'): ?>
 <!-- ═══ CUSTOM FIELDS TAB ═══ -->
+<?php
+    $gf_banking_on = guest_faculty_banking_enabled($pdo);
+    $gf_super = is_super_admin();
+?>
+<!-- Guest Faculty Registration — admin-controlled banking collection (server-side enforced) -->
+<div class="panel" id="guestFacultyBankingSetting" style="margin-bottom:1.2rem;">
+    <div class="panel-head">
+        <span class="head-icon" style="background:#ccfbf1;color:#0f766e;"><i class="fas fa-university"></i></span>
+        <h2>Guest Faculty Banking Details</h2>
+        <div class="head-right">
+            <span class="badge <?php echo $gf_banking_on ? 'green' : 'gray'; ?>" id="gfBankingState" style="font-size:.8rem;font-weight:800;"><?php echo $gf_banking_on ? 'ON' : 'OFF'; ?></span>
+        </div>
+    </div>
+    <div class="panel-body">
+        <div style="font-size:.7rem;text-transform:uppercase;font-weight:700;color:var(--text-muted);margin-bottom:4px;">Guest Faculty Registration · Banking Details</div>
+        <p style="font-size:.85rem;color:var(--text-muted);line-height:1.55;margin-bottom:12px;">When enabled, invited faculty applicants can provide banking/payment details during registration. When disabled, these fields are completely hidden from new invited faculty registration forms. <strong>When OFF the server also rejects any submitted banking data — it is never stored.</strong></p>
+        <?php if ($gf_super): ?>
+        <form method="POST" style="display:inline;" onsubmit="return confirm('<?php echo $gf_banking_on ? 'Turn OFF banking details for new invited faculty registrations?' : 'Turn ON banking details for new invited faculty registrations?'; ?>');">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="set_guest_faculty_banking">
+            <input type="hidden" name="banking_enabled" value="<?php echo $gf_banking_on ? '0' : '1'; ?>">
+            <button type="submit" id="gfBankingToggleBtn" class="btn btn-sm <?php echo $gf_banking_on ? 'btn-outline' : 'btn-primary'; ?>">
+                <i class="fas fa-toggle-<?php echo $gf_banking_on ? 'off' : 'on'; ?>"></i> Turn <?php echo $gf_banking_on ? 'OFF' : 'ON'; ?>
+            </button>
+        </form>
+        <?php else: ?>
+            <span style="font-size:.8rem;color:var(--text-muted);"><i class="fas fa-lock"></i> Only a Super Admin can change this setting.</span>
+        <?php endif; ?>
+        <span style="font-size:.75rem;color:var(--text-muted);margin-left:10px;">Public form: <code>invited-faculty-registration.php</code></span>
+    </div>
+</div>
 <div class="panel">
     <div class="panel-head">
         <span class="head-icon" style="background:var(--accent-soft,#ede9fe);color:var(--accent,#7c3aed);"><i class="fas fa-puzzle-piece"></i></span>
@@ -2791,6 +2944,50 @@ include 'includes/admin_nav.php';
 </div>
 </div>
 
+<!-- ═══ INVITED (GUEST) FACULTY APPROVAL MODAL — dedicated; never uses employee rules ═══ -->
+<div id="guestFacultyApprovalModal" class="modal-backdrop">
+<div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.6rem;max-width:620px;width:100%;max-height:92vh;overflow-y:auto;">
+    <h3 style="margin-bottom:.4rem;"><i class="fas fa-star" style="color:#0f766e;"></i> Approve Invited Faculty</h3>
+    <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:1rem;">Applicant details are read-only. Set the payment terms below; approval does not create a payment or a session.</p>
+    <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:14px;">
+        <div id="gfaPhotoWrap" style="width:84px;height:84px;border-radius:12px;background:#e2e8f0;flex-shrink:0;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#64748b;"><i class="fas fa-user"></i></div>
+        <div style="flex:1;font-size:.84rem;line-height:1.6;">
+            <div><strong>Reference:</strong> <span id="gfaRef">—</span></div>
+            <div><strong>Full Name:</strong> <span id="gfaName">—</span></div>
+            <div><strong>Mobile:</strong> <span id="gfaMobile">—</span></div>
+            <div><strong>Email:</strong> <span id="gfaEmail">—</span></div>
+            <div><strong>Qualifications:</strong> <span id="gfaQuals" style="white-space:pre-wrap;">—</span></div>
+        </div>
+    </div>
+    <div id="gfaBank" style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:.8rem;margin-bottom:14px;"></div>
+    <form method="POST" id="gfaForm" onsubmit="return gfaSubmit(this);">
+        <?php echo csrf_field(); ?>
+        <input type="hidden" name="action" value="approve_guest_faculty">
+        <input type="hidden" name="app_id" id="gfaAppId">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <div style="font-size:.8rem;font-weight:700;color:var(--text-muted);">Faculty Payment Amount / Rate (₹ per hour) *</div>
+            <button type="button" class="btn btn-sm btn-outline" id="gfaFreeBtn" onclick="gfaSetFree()">Set all to ₹0.00 (Free)</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
+            <?php foreach (['rate_live' => 'Live Session', 'rate_qpd' => 'QPD', 'rate_recorded' => 'Recorded', 'rate_offline' => 'Offline Session'] as $gf_rk => $gf_rl): ?>
+            <div>
+                <label style="display:block;font-size:.75rem;font-weight:600;margin-bottom:4px;"><?php echo $gf_rl; ?> (₹/hr)</label>
+                <input type="number" step="0.01" min="0" max="999999.99" inputmode="decimal" name="<?php echo $gf_rk; ?>" id="gfa_<?php echo $gf_rk; ?>" placeholder="0.00" required oninput="gfaRefreshMode()" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);">
+            </div>
+            <?php endforeach; ?>
+        </div>
+        <div id="gfaMode" style="font-size:.78rem;font-weight:700;margin-bottom:12px;color:var(--text-muted);">Enter an amount for every session type. <strong>₹0.00 is valid</strong> and means Not Payable / Free Faculty.</div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:.82rem;margin-bottom:16px;">
+            <input type="checkbox" name="add_to_directory" value="1" id="gfaAddDir"> Also add to the Faculty Directory now (otherwise use “Add to Faculty Directory” in Faculties)
+        </label>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button type="button" class="btn btn-sm btn-outline" onclick="closeModal('guestFacultyApprovalModal')">Cancel</button>
+            <button type="submit" id="gfaSubmitBtn" class="btn btn-sm btn-primary" style="background:#0f766e;border-color:#0f766e;"><i class="fas fa-check"></i> Approve Invited Faculty</button>
+        </div>
+    </form>
+</div>
+</div>
+
 <!-- ═══ REJECT MODAL ═══ -->
 <div id="rejectModal" class="modal-backdrop">
 <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.6rem;max-width:460px;width:100%;">
@@ -3363,8 +3560,69 @@ function editCf(id) {
     });
 }
 
+// ═══ INVITED FACULTY APPROVAL (dedicated) ═══
+function gfaSetFree() {
+    ['rate_live','rate_qpd','rate_recorded','rate_offline'].forEach(k => { document.getElementById('gfa_' + k).value = '0.00'; });
+    gfaRefreshMode();
+}
+function gfaRefreshMode() {
+    const keys = ['rate_live','rate_qpd','rate_recorded','rate_offline'];
+    const el = document.getElementById('gfaMode');
+    let blank = false, sum = 0;
+    keys.forEach(k => { const v = document.getElementById('gfa_' + k).value.trim(); if (v === '') blank = true; else sum += parseFloat(v) || 0; });
+    if (blank) { el.innerHTML = 'Enter an amount for every session type. <strong>₹0.00 is valid</strong> and means Not Payable / Free Faculty.'; el.style.color = 'var(--text-muted)'; return; }
+    if (sum === 0) { el.textContent = 'FREE FACULTY — ₹0.00 · Not Payable'; el.style.color = '#64748b'; }
+    else { el.textContent = 'PAYABLE FACULTY — hourly rates as entered'; el.style.color = '#15803d'; }
+}
+function gfaSubmit(form) {
+    const b = document.getElementById('gfaSubmitBtn');
+    if (b.disabled) return false;
+    b.disabled = true;
+    b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Approving…';
+    return true;
+}
+function openGuestApproval(id) {
+    document.getElementById('gfaAppId').value = id;
+    ['rate_live','rate_qpd','rate_recorded','rate_offline'].forEach(k => { document.getElementById('gfa_' + k).value = ''; });
+    document.getElementById('gfaAddDir').checked = false;
+    const sb = document.getElementById('gfaSubmitBtn'); sb.disabled = false; sb.innerHTML = '<i class="fas fa-check"></i> Approve Invited Faculty';
+    gfaRefreshMode();
+    ['gfaRef','gfaName','gfaMobile','gfaEmail','gfaQuals'].forEach(i => { document.getElementById(i).textContent = '…'; });
+    document.getElementById('gfaBank').textContent = 'Loading…';
+    openModal('guestFacultyApprovalModal');
+    fetch('employee-management.php?action=load_guest_application&id=' + encodeURIComponent(id))
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert(d.error || 'Could not load application.'); closeModal('guestFacultyApprovalModal'); return; }
+            const a = d.application;
+            document.getElementById('gfaRef').textContent = a.reference || '—';
+            document.getElementById('gfaName').textContent = a.full_name || '—';
+            document.getElementById('gfaMobile').textContent = a.mobile || '—';
+            document.getElementById('gfaEmail').textContent = a.email || '—';
+            document.getElementById('gfaQuals').textContent = a.qualifications || '—';
+            const pw = document.getElementById('gfaPhotoWrap');
+            pw.textContent = '';
+            if (a.photo) {
+                const img = document.createElement('img');
+                img.src = '../' + a.photo; img.alt = 'Photo'; img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
+                const link = document.createElement('a'); link.href = img.src; link.target = '_blank'; link.rel = 'noopener'; link.appendChild(img);
+                pw.appendChild(link);
+            } else { const ic = document.createElement('i'); ic.className = 'fas fa-user'; pw.appendChild(ic); }
+            const bk = d.banking || {}; const bx = document.getElementById('gfaBank'); bx.textContent = '';
+            const title = document.createElement('div'); title.style.cssText = 'font-weight:700;margin-bottom:4px;'; title.textContent = 'Banking details'; bx.appendChild(title);
+            if (!bk.submitted) { const n = document.createElement('div'); n.textContent = 'Not provided by applicant.'; bx.appendChild(n); }
+            else {
+                if (bk.restricted) { const w = document.createElement('div'); w.style.color = '#b45309'; w.textContent = 'Restricted — your account is not permitted to view bank credentials.'; bx.appendChild(w); }
+                [['Bank', bk.bank_name], ['Account', bk.account_masked], ['IFSC', bk.ifsc], ['UPI', bk.upi]].forEach(p => { const r = document.createElement('div'); r.textContent = p[0] + ': ' + (p[1] || '—'); bx.appendChild(r); });
+            }
+            if (a.status === 'approved') { alert('This application is already approved.'); closeModal('guestFacultyApprovalModal'); }
+        })
+        .catch(() => { alert('Error loading application.'); closeModal('guestFacultyApprovalModal'); });
+}
+
 function openApproval(id, name, type) {
     const appType = (type || 'employee').toLowerCase();
+    if (appType === 'guest_faculty') { openGuestApproval(id); return; }
     if (appType === 'intern') {
         document.getElementById('internApprovalAppId').value = id;
         document.getElementById('internApprovalName').textContent = 'Approving Intern: ' + name;
@@ -3506,6 +3764,18 @@ function viewApp(id) {
             if (d.rate_offline !== undefined && d.rate_offline !== null) fields.push(['Offline Rate', '₹' + (parseFloat(d.rate_offline) || 0).toFixed(2) + '/hr']);
         }
 
+        // Invited faculty: show only the fields this workflow collects (banking already permission-masked server-side)
+        if (d.application_for === 'guest_faculty') {
+            fields.length = 0;
+            fields.push(['Reference', d.application_reference], ['Type', 'Invited Faculty'], ['Name', d.full_name],
+                ['Mobile', (d.mobile_country_code||'+91')+' '+d.mobile_number], ['Email', d.email],
+                ['Qualifications', d.qualifications], ['Bank', d.bank_name], ['Account', d.bank_account_masked],
+                ['IFSC', d.ifsc_code], ['UPI', d.upi_id||'—'], ['Status', d.status], ['Submitted', d.submitted_at]);
+            if (d.status === 'approved') {
+                fields.push(['Payment', d.payment_mode === 'free' ? 'Not Payable (Free Faculty)' : (d.payment_mode === 'paid' ? 'Payable' : 'Not configured')]);
+                fields.push(['Live / QPD / Rec / Off', ['rate_live','rate_qpd','rate_recorded','rate_offline'].map(k => '₹' + (parseFloat(d[k]) || 0).toFixed(2)).join(' / ')]);
+            }
+        }
         if (d.rejection_reason) fields.push(['Rejection Reason', d.rejection_reason]);
         fields.forEach(([k,v])=>{
             h+='<tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;font-weight:600;color:var(--text);white-space:nowrap;width:140px;">'+k+'</td><td style="padding:6px 8px;">'+((v||'—').toString().replace(/</g,'&lt;'))+'</td></tr>';

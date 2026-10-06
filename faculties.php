@@ -30,6 +30,7 @@ try { $sessions_ready = (bool)$pdo->query("SHOW TABLES LIKE 'sessions'")->fetchC
 
 require_once __DIR__ . '/includes/encryption_helper.php';
 require_once __DIR__ . '/includes/staff_type_helper.php';
+require_once __DIR__ . '/includes/guest_faculty_helper.php';
 
 // ── AJAX: Reveal / Copy Bank Credentials for Faculty ───────────────────
 if (isset($_POST['action']) && in_array($_POST['action'], ['reveal_faculty_bank', 'copy_faculty_bank'], true)) {
@@ -183,6 +184,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$orig_fac) {
                     $pdo->rollBack();
                     $error_message = 'Faculty record not found.';
+                } elseif (!empty($orig_fac['guest_faculty_registration_id'])) {
+                    // Invited faculty rows are authoritative from the approved registration; generic edit is not allowed.
+                    $pdo->rollBack();
+                    $error_message = 'Invited faculty profiles come from the approved registration and cannot be edited here. Use "Payment Terms" to revise rates.';
                 } else {
                     $has_col = false;
                     try {
@@ -284,6 +289,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$fac) {
                     $pdo->rollBack();
                     $error_message = 'Faculty record not found.';
+                } elseif (!empty($fac['guest_faculty_registration_id'])) {
+                    $pdo->rollBack();
+                    $error_message = 'Invited faculty are not linked to Employee Management; nothing to unlink.';
                 } else {
                     $has_col = false;
                     try {
@@ -295,6 +303,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $pdo->commit();
                     log_admin_activity($pdo, $admin_username, 'faculty_unlinked', "Unlinked faculty #{$id} ({$fac['name']}) from Employee Management");
                     $success_message = 'Faculty unlinked from Employee Management. All sessions, payment history, and faculty data remain intact.';
+                }
+            } elseif ($action === 'add_guest_faculty') {
+                $gf_app_id = (int)($_POST['guest_registration_id'] ?? 0);
+                $gf_schema = guest_faculty_schema_status($pdo);
+                if (!$gf_app_id || empty($gf_schema['ready'])) {
+                    $error_message = 'Invited faculty module is not ready or no application was selected.';
+                } else {
+                    $r = gf_add_to_directory($pdo, $gf_app_id, (string)$admin_username);
+                    if (!$r['ok']) {
+                        $error_message = $r['error'] ?: 'Could not add to Faculty Directory.';
+                    } elseif ($r['already']) {
+                        $success_message = 'This invited faculty is already in the Faculty Directory (no duplicate created).';
+                    } else {
+                        log_admin_activity($pdo, $admin_username, 'guest_faculty_added_to_directory', "Added invited faculty application #{$gf_app_id} to Faculty Directory as faculty #{$r['faculty_id']}");
+                        $success_message = 'Invited faculty added to the Faculty Directory. They can now be assigned to sessions.';
+                    }
+                }
+            } elseif ($action === 'update_guest_payment') {
+                if (is_credential_restricted('financials')) {
+                    $error_message = 'You do not have permission to change payment terms.';
+                } else {
+                    $gf_fid = (int)($_POST['faculty_id'] ?? 0);
+                    $pr = gf_parse_rates($_POST);
+                    if ($pr['error']) {
+                        $error_message = $pr['error'];
+                    } else {
+                        $r = gf_update_payment_terms($pdo, $gf_fid, $pr['rates'], $pr['mode']);
+                        if ($r['ok']) {
+                            log_admin_activity($pdo, $admin_username, 'guest_faculty_payment_updated', "Updated invited faculty #{$gf_fid} payment terms (mode: {$pr['mode']})");
+                            $success_message = 'Payment terms updated.';
+                        } else {
+                            $error_message = $r['error'];
+                        }
+                    }
                 }
             } elseif ($action === 'add_payment') {
                 $fid = (int)($_POST['faculty_id'] ?? 0);
@@ -312,6 +354,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!can_delete()) { $error_message = 'Only the Super Admin can delete a faculty.'; }
                 else {
                     $id = (int)($_POST['faculty_id'] ?? 0);
+                    $is_guest_row = false;
+                    try {
+                        $gchk = $pdo->prepare("SELECT guest_faculty_registration_id FROM faculties WHERE id = ?");
+                        $gchk->execute([$id]);
+                        $is_guest_row = (bool)$gchk->fetchColumn();
+                    } catch (Exception $ge) { /* column absent before migration 59 → legacy row */ }
+                    if ($is_guest_row) { throw new Exception('Invited faculty cannot be deleted here because they are linked to an approved registration.'); }
                     $pdo->prepare("DELETE FROM faculty_payments WHERE faculty_id = ?")->execute([$id]);
                     $pdo->prepare("DELETE FROM faculties WHERE id = ?")->execute([$id]);
                     log_admin_activity($pdo, $admin_username, 'faculty_deleted', "Deleted faculty #{$id}");
@@ -403,17 +452,34 @@ try {
         $has_emp_link_col = false;
     }
 }
+$has_gf_link_col = false;
+try {
+    $has_gf_link_col = (bool)$pdo->query("SHOW COLUMNS FROM faculties LIKE 'guest_faculty_registration_id'")->fetchColumn();
+} catch (Exception $e) {
+    $has_gf_link_col = false;
+}
+
+$gf_select = $has_gf_link_col
+    ? ", r.application_reference AS guest_ref, r.payment_mode AS approved_payment_mode, r.rate_live AS approved_rate_live, r.rate_qpd AS approved_rate_qpd, r.rate_recorded AS approved_rate_recorded, r.rate_offline AS approved_rate_offline, r.approved_at AS guest_approved_at"
+    : ", NULL AS guest_ref, NULL AS approved_payment_mode, NULL AS approved_rate_live, NULL AS approved_rate_qpd, NULL AS approved_rate_recorded, NULL AS approved_rate_offline, NULL AS guest_approved_at";
+$gf_join = $has_gf_link_col ? "LEFT JOIN staff_registration_requests r ON r.id = f.guest_faculty_registration_id" : "";
 
 try {
     if ($has_emp_link_col) {
         $faculties = $pdo->query("
-            SELECT f.*, e.employee_id AS emp_code, e.full_name AS emp_name
+            SELECT f.*, e.employee_id AS emp_code, e.full_name AS emp_name {$gf_select}
             FROM faculties f
             LEFT JOIN employees e ON e.id = f.employee_management_faculty_id
+            {$gf_join}
             ORDER BY f.status='active' DESC, f.name ASC
         ")->fetchAll();
     } else {
-        $faculties = $pdo->query("SELECT f.*, NULL AS emp_code, NULL AS emp_name FROM faculties f ORDER BY f.status='active' DESC, f.name ASC")->fetchAll();
+        $faculties = $pdo->query("
+            SELECT f.*, NULL AS emp_code, NULL AS emp_name {$gf_select}
+            FROM faculties f
+            {$gf_join}
+            ORDER BY f.status='active' DESC, f.name ASC
+        ")->fetchAll();
     }
     $payment_accounts = $pdo->query("SELECT * FROM payment_accounts WHERE status='active' ORDER BY account_name")->fetchAll();
     $academic_years = $pdo->query("SELECT year FROM academic_years ORDER BY start_date DESC")->fetchAll(PDO::FETCH_COLUMN);
@@ -439,6 +505,25 @@ try {
         ")->fetchAll(PDO::FETCH_ASSOC);
     }
 } catch (Exception $e) { error_log('Faculties list: ' . $e->getMessage()); }
+
+// Approved invited faculty (guest_faculty applications). Schema-tolerant: empty if migration 59 is not applied.
+$gf_ready = false;
+$gf_pending_dir = [];
+$gf_in_dir_count = 0;
+try {
+    $gf_st = guest_faculty_schema_status($pdo);
+    $gf_ready = !empty($gf_st['ready']);
+    if ($gf_ready) {
+        $gf_pending_dir = $pdo->query("
+            SELECT r.id, r.application_reference, r.full_name, r.mobile_country_code, r.mobile_number, r.email, r.qualifications,
+                   r.payment_mode, r.rate_live, r.rate_qpd, r.rate_recorded, r.rate_offline, r.approved_at
+            FROM staff_registration_requests r
+            LEFT JOIN faculties f ON f.guest_faculty_registration_id = r.id
+            WHERE r.application_for = 'guest_faculty' AND r.status = 'approved' AND f.id IS NULL
+            ORDER BY r.approved_at DESC, r.id DESC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (Exception $e) { error_log('Faculties invited list: ' . $e->getMessage()); $gf_ready = false; }
 
 $active_page = 'faculties';
 $page_title  = $detail ? $detail['name'] : 'Faculties';
@@ -719,6 +804,38 @@ function copyFacultyStaticDetail(facId, field, value, btn) {
 
 <?php else: /* ===== LIST VIEW ===== */ ?>
 
+<?php if ($gf_ready && !empty($gf_pending_dir)): ?>
+<div class="panel" id="invited-faculty" style="border-left:4px solid #0d9488;">
+    <div class="panel-head"><span class="head-icon"><i class="fas fa-user-graduate"></i></span><h2>Approved Invited Faculty (<?php echo count($gf_pending_dir); ?> awaiting directory)</h2></div>
+    <div class="panel-body flush table-wrap">
+        <table class="data-table">
+            <thead><tr><th>Invited Faculty</th><th>Reference</th><th>Qualifications</th><th>Payment Terms</th><th style="text-align:right;">Action</th></tr></thead>
+            <tbody>
+            <?php foreach ($gf_pending_dir as $g): ?>
+                <tr>
+                    <td><div class="cell-main"><?php echo e($g['full_name']); ?> <span class="badge blue">INVITED FACULTY</span></div>
+                        <div class="cell-sub"><?php echo format_credential(gf_faculty_mobile_value($g['mobile_country_code'] ?? '+91', $g['mobile_number'] ?? ''), 'phone', 'faculties') ?: '-'; ?><?php echo $g['email'] ? ' · ' . format_credential($g['email'], 'email', 'faculties') : ''; ?></div></td>
+                    <td class="cell-sub"><?php echo e($g['application_reference']); ?></td>
+                    <td class="cell-sub" style="max-width:260px;"><?php echo e(mb_strimwidth((string)$g['qualifications'], 0, 120, '…')); ?></td>
+                    <td class="cell-sub">
+                        <?php if (($g['payment_mode'] ?? '') === 'free'): ?><span class="badge gray">Not Payable (Free Faculty)</span>
+                        <?php elseif (is_credential_restricted('financials')): ?><span class="badge green">Payable</span> *** / *** / *** / ***
+                        <?php else: ?><span class="badge green">Payable</span> ₹<?php echo e(number_format((float)$g['rate_live'], 2)); ?> / ₹<?php echo e(number_format((float)$g['rate_qpd'], 2)); ?> / ₹<?php echo e(number_format((float)$g['rate_recorded'], 2)); ?> / ₹<?php echo e(number_format((float)$g['rate_offline'], 2)); ?><?php endif; ?>
+                    </td>
+                    <td style="text-align:right;">
+                        <form method="POST" style="display:inline;" onsubmit="var b=this.querySelector('button');if(b.disabled)return false;b.disabled=true;return true;">
+                            <?php echo csrf_field(); ?><input type="hidden" name="action" value="add_guest_faculty"><input type="hidden" name="guest_registration_id" value="<?php echo (int)$g['id']; ?>">
+                            <button type="submit" class="btn btn-sm btn-primary"><i class="fas fa-plus"></i> Add to Faculty Directory</button>
+                        </form>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+<?php endif; ?>
+
 <div class="panel">
     <div class="panel-head"><span class="head-icon"><i class="fas fa-chalkboard-user"></i></span><h2>Faculties (<?php echo count($faculties); ?>)</h2>
         <div class="head-right"><button class="btn btn-sm btn-primary" onclick="openFacModal()"><i class="fas fa-plus"></i> Add Faculty</button></div>
@@ -734,11 +851,14 @@ function copyFacultyStaticDetail(facId, field, value, btn) {
                 $calc = faculty_earned($pdo, $f, $sessions_ready, $TYPE_RATE);
                 $paid = faculty_paid_total($pdo, $f['id']);
                 $due = max(0, $calc['earned'] - $paid);
+                $is_guest_fac = !empty($f['guest_faculty_registration_id']);
             ?>
                 <tr>
                     <td><div class="cell-main"><?php echo e($f['name']); ?></div><div class="cell-sub"><?php echo format_credential($f['mobile'], 'phone', 'faculties') ?: '-'; ?><?php echo $f['email'] ? ' · ' . format_credential($f['email'], 'email', 'faculties') : ''; ?></div></td>
                     <td>
-                        <?php if (!empty($f['employee_management_faculty_id'])): ?>
+                        <?php if ($is_guest_fac): ?>
+                            <span class="badge blue" title="Source: invited faculty registration #<?php echo (int)$f['guest_faculty_registration_id']; ?>"><i class="fas fa-user-graduate"></i> Invited Faculty</span>
+                        <?php elseif (!empty($f['employee_management_faculty_id'])): ?>
                             <span class="badge blue" title="Linked to Employee Management"><i class="fas fa-link"></i> <?php echo e($f['emp_code'] ?: ('EMP #' . $f['employee_management_faculty_id'])); ?></span>
                         <?php else: ?>
                             <span class="badge gray"><i class="fas fa-link-slash"></i> Unlinked</span>
@@ -747,7 +867,10 @@ function copyFacultyStaticDetail(facId, field, value, btn) {
                     <td class="cell-sub">
                         <?php if (is_credential_restricted('financials')): ?>
                             *** / *** / *** / ***
+                        <?php elseif ($is_guest_fac && ($f['payment_mode'] ?? '') === 'free'): ?>
+                            <span class="badge gray">Not Payable (Free)</span>
                         <?php else: ?>
+                            <?php if ($is_guest_fac): ?><span class="badge green" style="font-size:.65rem;margin-right:4px;">Payable</span><?php endif; ?>
                             ₹<?php echo (int)$f['rate_live']; ?> / ₹<?php echo (int)$f['rate_qpd']; ?> / ₹<?php echo (int)$f['rate_recorded']; ?> / ₹<?php echo (int)$f['rate_offline']; ?>
                         <?php endif; ?>
                     </td>
@@ -755,9 +878,26 @@ function copyFacultyStaticDetail(facId, field, value, btn) {
                     <td><?php echo format_financial($calc['earned'], 0); ?></td>
                     <td><?php echo format_financial($paid, 0); ?></td>
                     <td><?php echo $due > 0 ? (is_credential_restricted('financials') ? '<span class="badge amber">' . format_financial($due, 0) . '</span>' : '<span class="badge amber">₹' . number_format($due, 0) . '</span>') : '<span class="badge green">Clear</span>'; ?></td>
-                    <td><span class="badge <?php echo $f['status'] === 'active' ? 'green' : 'gray'; ?>"><?php echo ucfirst($f['status']); ?></span></td>
+                    <td><span class="badge <?php echo $f['status'] === 'active' ? 'green' : 'gray'; ?>"><?php echo $f['status'] === 'active' && $is_guest_fac ? 'Active Faculty' : ucfirst($f['status']); ?></span></td>
                     <td style="text-align:right; white-space:nowrap;">
                         <a class="btn btn-sm btn-primary" href="faculties.php?view=<?php echo (int)$f['id']; ?>" title="Schedules & payments"><i class="fas fa-arrow-right"></i></a>
+                        <?php if ($is_guest_fac): ?>
+                        <?php if (!is_credential_restricted('financials')): ?>
+                        <button class="btn btn-sm btn-outline" title="Payment Terms" onclick='openGuestPay(<?php echo json_encode([
+                            "id"=>(int)$f["id"],"name"=>$f["name"],
+                            "rate_live"=>number_format((float)$f["rate_live"], 2, '.', ''),"rate_qpd"=>number_format((float)$f["rate_qpd"], 2, '.', ''),
+                            "rate_recorded"=>number_format((float)$f["rate_recorded"], 2, '.', ''),"rate_offline"=>number_format((float)$f["rate_offline"], 2, '.', ''),
+                            "payment_mode"=>(string)($f["payment_mode"] ?? "paid"),
+                            "guest_ref"=>(string)($f["guest_ref"] ?? ""),
+                            "guest_approved_at"=>(string)($f["guest_approved_at"] ?? ""),
+                            "approved_payment_mode"=>(string)($f["approved_payment_mode"] ?? ""),
+                            "approved_rate_live"=>isset($f["approved_rate_live"]) ? number_format((float)$f["approved_rate_live"], 2, '.', '') : "",
+                            "approved_rate_qpd"=>isset($f["approved_rate_qpd"]) ? number_format((float)$f["approved_rate_qpd"], 2, '.', '') : "",
+                            "approved_rate_recorded"=>isset($f["approved_rate_recorded"]) ? number_format((float)$f["approved_rate_recorded"], 2, '.', '') : "",
+                            "approved_rate_offline"=>isset($f["approved_rate_offline"]) ? number_format((float)$f["approved_rate_offline"], 2, '.', '') : "",
+                        ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-indian-rupee-sign"></i></button>
+                        <?php endif; ?>
+                        <?php else: ?>
                         <button class="btn btn-sm btn-outline" title="Edit" onclick='editFac(<?php echo json_encode([
                             "id"=>(int)$f["id"],"name"=>$f["name"],
                             "mobile"=>(string)format_credential_text($f["mobile"], "phone", "faculties"),
@@ -768,6 +908,7 @@ function copyFacultyStaticDetail(facId, field, value, btn) {
                             "emp_code"=>$f["emp_code"] ?? null,
                             "emp_name"=>$f["emp_name"] ?? null,
                         ], JSON_HEX_APOS|JSON_HEX_QUOT); ?>)'><i class="fas fa-pen"></i></button>
+                        <?php endif; ?>
                         <?php if (can_delete()): ?>
                         <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this faculty and their payment records?');">
                             <?php echo csrf_field(); ?><input type="hidden" name="action" value="delete_faculty"><input type="hidden" name="faculty_id" value="<?php echo (int)$f['id']; ?>">
@@ -782,6 +923,92 @@ function copyFacultyStaticDetail(facId, field, value, btn) {
         <?php endif; ?>
     </div>
 </div>
+
+<!-- INVITED FACULTY: PAYMENT TERMS MODAL (0.00 = Not Payable / Free) -->
+<div class="modal-backdrop" id="fac-guestpay-modal">
+    <div class="modal" style="max-width:540px;">
+        <div class="modal-head">
+            <h3><i class="fas fa-indian-rupee-sign" style="color:var(--accent);"></i> Payment Terms — <span id="gp-name"></span></h3>
+            <button class="modal-close" onclick="closeModal('fac-guestpay-modal')"><i class="fas fa-xmark"></i></button>
+        </div>
+        <form method="POST">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="update_guest_payment">
+            <input type="hidden" name="faculty_id" id="gp-id" value="">
+            <div class="modal-body">
+                <!-- IMMUTABLE APPROVAL SNAPSHOT -->
+                <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px; padding:12px; margin-bottom:14px; font-size:12px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <span style="font-weight:700; color:#475569; text-transform:uppercase;"><i class="fas fa-history"></i> Original Approval Snapshot (Immutable)</span>
+                        <span id="gp-approved-badge" class="badge gray" style="font-size:10px;">—</span>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; color:#334155; font-size:12px;">
+                        <div><strong>Ref:</strong> <span id="gp-approved-ref">—</span></div>
+                        <div><strong>Approved:</strong> <span id="gp-approved-at">—</span></div>
+                        <div style="grid-column:1 / -1;"><strong>Approved Rates:</strong> <span id="gp-approved-rates">—</span></div>
+                    </div>
+                </div>
+
+                <!-- EDIT OPERATIONAL RATES -->
+                <div style="font-weight:700; font-size:12px; color:var(--text); margin-bottom:6px;"><i class="fas fa-sliders"></i> Current Operational Rates</div>
+                <div class="alert alert-info" style="margin-bottom:12px;font-size:12px;padding:8px 10px;"><i class="fas fa-info-circle"></i><span>Enter an amount for every session type. <strong>0.00</strong> is valid and means <em>Not Payable (Free Faculty)</em>. Updating operational rates here does not modify the original approval snapshot.</span></div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+                    <div class="field"><label>Live (₹) *</label><input type="text" inputmode="decimal" name="rate_live" id="gp-live" required pattern="\d{1,6}(\.\d{1,2})?"></div>
+                    <div class="field"><label>QPD (₹) *</label><input type="text" inputmode="decimal" name="rate_qpd" id="gp-qpd" required pattern="\d{1,6}(\.\d{1,2})?"></div>
+                    <div class="field"><label>Recorded (₹) *</label><input type="text" inputmode="decimal" name="rate_recorded" id="gp-rec" required pattern="\d{1,6}(\.\d{1,2})?"></div>
+                    <div class="field"><label>Offline (₹) *</label><input type="text" inputmode="decimal" name="rate_offline" id="gp-off" required pattern="\d{1,6}(\.\d{1,2})?"></div>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <button type="button" class="btn btn-xs btn-outline" onclick="gpSetFree()"><i class="fas fa-ban"></i> Set All ₹0.00 (Free Faculty)</button>
+                    <button type="button" class="btn btn-xs btn-outline" id="gpResetBtn" onclick="gpResetToApproved()"><i class="fas fa-undo"></i> Reset to Approved Terms</button>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn btn-outline" onclick="closeModal('fac-guestpay-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Operational Rates</button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+var gpCurrentFaculty = null;
+function openGuestPay(f) {
+    gpCurrentFaculty = f;
+    document.getElementById('gp-id').value = f.id;
+    document.getElementById('gp-name').textContent = f.name;
+    document.getElementById('gp-live').value = f.rate_live;
+    document.getElementById('gp-qpd').value = f.rate_qpd;
+    document.getElementById('gp-rec').value = f.rate_recorded;
+    document.getElementById('gp-off').value = f.rate_offline;
+
+    document.getElementById('gp-approved-ref').textContent = f.guest_ref || '—';
+    document.getElementById('gp-approved-at').textContent = f.guest_approved_at || '—';
+    var badge = document.getElementById('gp-approved-badge');
+    var isFree = (f.approved_payment_mode === 'free');
+    badge.textContent = isFree ? 'Not Payable (Free Faculty)' : (f.approved_payment_mode === 'paid' ? 'Payable' : 'Not configured');
+    badge.className = 'badge ' + (isFree ? 'gray' : (f.approved_payment_mode === 'paid' ? 'green' : 'amber'));
+
+    var ratesTxt = '—';
+    if (f.approved_rate_live !== undefined && f.approved_rate_live !== '') {
+        ratesTxt = '₹' + f.approved_rate_live + ' (Live) / ₹' + f.approved_rate_qpd + ' (QPD) / ₹' + f.approved_rate_recorded + ' (Rec) / ₹' + f.approved_rate_offline + ' (Off)';
+    }
+    document.getElementById('gp-approved-rates').textContent = ratesTxt;
+
+    openModal('fac-guestpay-modal');
+}
+function gpSetFree() {
+    ['gp-live','gp-qpd','gp-rec','gp-off'].forEach(function(id) { document.getElementById(id).value = '0.00'; });
+}
+function gpResetToApproved() {
+    if (!gpCurrentFaculty) return;
+    if (gpCurrentFaculty.approved_rate_live !== undefined && gpCurrentFaculty.approved_rate_live !== '') {
+        document.getElementById('gp-live').value = gpCurrentFaculty.approved_rate_live;
+        document.getElementById('gp-qpd').value = gpCurrentFaculty.approved_rate_qpd;
+        document.getElementById('gp-rec').value = gpCurrentFaculty.approved_rate_recorded;
+        document.getElementById('gp-off').value = gpCurrentFaculty.approved_rate_offline;
+    }
+}
+</script>
 
 <!-- ADD FACULTY MODAL (Registered in Employee Management) -->
 <div class="modal-backdrop" id="fac-add-modal">
