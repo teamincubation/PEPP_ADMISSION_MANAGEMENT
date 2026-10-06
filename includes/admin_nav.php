@@ -1178,6 +1178,14 @@ $nav_data = [
                     </span>
                 </a>
 
+                <a class="nav-item" href="invited-faculty-registration.php" target="_blank" style="display: flex; align-items: center; width: 100%;">
+                    <i class="fas fa-arrow-up-right-from-square"></i>
+                    <span>Invited Faculty Registration</span>
+                    <span onclick="copyFormLink('invited-faculty-registration.php', this, event)" class="copy-link-btn" title="Copy Shareable Link">
+                        <i class="far fa-copy" style="font-size: 0.85rem; pointer-events: none;"></i>
+                    </span>
+                </a>
+
                 <a class="nav-item" href="alumni-portal.php" target="_blank" style="display: flex; align-items: center; width: 100%;">
                     <i class="fas fa-arrow-up-right-from-square"></i>
                     <span>Alumni Portal</span>
