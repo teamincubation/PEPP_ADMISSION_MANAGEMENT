@@ -1172,7 +1172,7 @@ $nav_data = [
 
                 <a class="nav-item" href="staff-registration.php" target="_blank" style="display: flex; align-items: center; width: 100%;">
                     <i class="fas fa-arrow-up-right-from-square"></i>
-                    <span>Staff Registration</span>
+                    <span>Employee/Intern/Faculty Registration</span>
                     <span onclick="copyFormLink('staff-registration.php', this, event)" class="copy-link-btn" title="Copy Shareable Link">
                         <i class="far fa-copy" style="font-size: 0.85rem; pointer-events: none;"></i>
                     </span>
