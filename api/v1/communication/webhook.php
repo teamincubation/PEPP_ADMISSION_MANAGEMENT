@@ -599,7 +599,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     if ($queueId) {
                                         // Synchronous immediate dispatch for WhatsApp Quick Reply button actions.
                                         // This removes the Hostinger cron latency for interactive responses.
-                                        $dispatched = $engine->processQueueItem($queueId);
+                                        $dispatched = $engine->processQueueItem($queueId, true);
 
                                         if ($dispatched) {
                                             error_log("SUCCESS: Button action dispatched synchronously. Queue ID: {$queueId} | Target: {$targetTplName} | Meta Template ID: {$targetMetaTemplateId}");

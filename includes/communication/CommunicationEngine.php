@@ -10,6 +10,7 @@ require_once __DIR__ . '/Providers/WhatsAppCloudProvider.php';
 require_once __DIR__ . '/Providers/EmailMailerProvider.php';
 require_once __DIR__ . '/CommunicationHelper.php';
 require_once __DIR__ . '/WhatsAppAccountResolver.php';
+require_once __DIR__ . '/CampaignConfig.php';
 
 if (file_exists(dirname(dirname(__DIR__)) . '/includes/template_helper.php')) {
     require_once dirname(dirname(__DIR__)) . '/includes/template_helper.php';
@@ -113,6 +114,23 @@ class CommunicationEngine {
     }
 
     /**
+     * Checks if priority column exists in communication_queue.
+     */
+    public function hasPriorityColumn(): bool {
+        static $hasCol = null;
+        if ($hasCol !== null) {
+            return $hasCol;
+        }
+        try {
+            $this->pdo->query("SELECT priority FROM communication_queue LIMIT 0");
+            $hasCol = true;
+        } catch (Throwable $e) {
+            $hasCol = false;
+        }
+        return $hasCol;
+    }
+
+    /**
      * Enqueues an outgoing message to the communication queue.
      * Maps to legacy log table in parallel to maintain backward compatibility.
      *
@@ -129,16 +147,25 @@ class CommunicationEngine {
      * @param string|null $studentUid Associated student user_id for placeholder replacement
      * @param string|null $eventName
      * @param int|null $invoiceId
-     * @param string|null $idempotencyKey Unique deduplication key for queue job
+     * @param string|null $senderKeyOrIdempotency
+     * @param string|null $optionalIdempotencyKey
+     * @param int|null $priority Queue dispatch priority (higher integer = higher priority; campaigns use CampaignConfig::CAMPAIGN_QUEUE_PRIORITY = -10, normal = 0)
      * @return int Queue Item ID
      */
-    public function queueMessage($channel, $recipient, $recipientName, $subject, $bodyHtml, $bodyText = '', array $attachments = [], array $templateData = [], $sentBy = 'system', $scheduledAt = null, $studentUid = null, $eventName = null, $invoiceId = null, $senderKeyOrIdempotency = null, $optionalIdempotencyKey = null) {
+    public function queueMessage($channel, $recipient, $recipientName, $subject, $bodyHtml, $bodyText = '', array $attachments = [], array $templateData = [], $sentBy = 'system', $scheduledAt = null, $studentUid = null, $eventName = null, $invoiceId = null, $senderKeyOrIdempotency = null, $optionalIdempotencyKey = null, $priority = null) {
         $senderKey = null;
         $idempotencyKey = null;
 
         if ($optionalIdempotencyKey !== null) {
-            $senderKey = $senderKeyOrIdempotency;
-            $idempotencyKey = $optionalIdempotencyKey;
+            // Support 15-arg callers where argument 14 was idempotency and argument 15 was numeric priority
+            if ($priority === null && is_numeric($optionalIdempotencyKey) && is_string($senderKeyOrIdempotency) && strpos($senderKeyOrIdempotency, ':') !== false) {
+                $priority = (int)$optionalIdempotencyKey;
+                $idempotencyKey = (string)$senderKeyOrIdempotency;
+                $senderKey = null;
+            } else {
+                $senderKey = $senderKeyOrIdempotency;
+                $idempotencyKey = $optionalIdempotencyKey;
+            }
         } elseif ($senderKeyOrIdempotency !== null) {
             if (strpos((string)$senderKeyOrIdempotency, ':') !== false) {
                 $idempotencyKey = (string)$senderKeyOrIdempotency;
@@ -147,6 +174,24 @@ class CommunicationEngine {
                 $senderKey = (string)$senderKeyOrIdempotency;
                 $idempotencyKey = null;
             }
+        }
+
+        // Priority Isolation:
+        // Transactional / operational messages (approvals, rejections, invoices, OTPs, receipts, installment reminders)
+        // must never be starved by bulk marketing campaigns.
+        // Explicit priority takes precedence.
+        // If not explicitly provided, marketing campaign events automatically receive CampaignConfig::CAMPAIGN_QUEUE_PRIORITY (-10).
+        // All other standard transactional messages default to 0.
+        if ($priority !== null && is_numeric($priority)) {
+            $effectivePriority = (int)$priority;
+        } elseif (
+            $eventName === 'campaign_message' ||
+            $eventName === 'campaign_broadcast' ||
+            (is_string($eventName) && stripos($eventName, 'campaign') !== false)
+        ) {
+            $effectivePriority = class_exists('CampaignConfig') ? CampaignConfig::CAMPAIGN_QUEUE_PRIORITY : -10;
+        } else {
+            $effectivePriority = 0;
         }
 
         // Idempotency check: if an idempotency key is provided, return existing queue item ID immediately
@@ -279,6 +324,11 @@ class CommunicationEngine {
             $errorMsg,
             $retryCount
         ];
+
+        if ($this->hasPriorityColumn()) {
+            $cols[] = 'priority';
+            $vals[] = $effectivePriority;
+        }
 
         if ($hasSenderAccCol) {
             $cols[] = 'sender_account_id';
@@ -423,8 +473,12 @@ class CommunicationEngine {
 
     /**
      * Executes the dispatch logic of a specific queued message.
+     *
+     * @param int $queueId The queue record ID
+     * @param bool $force When true, allows immediate synchronous claim of status='pending' items without next_attempt_at clock-gate blockage
+     * @return bool
      */
-    public function processQueueItem($queueId) {
+    public function processQueueItem($queueId, $force = false) {
         if ($this->isQueuePaused()) {
             error_log("[QUEUE_PAUSED] Global queue processing is paused. Skipping queue item #{$queueId}.");
             return false;
@@ -435,12 +489,14 @@ class CommunicationEngine {
             // Atomically lock and claim the queue item to prevent concurrency issues
             $this->pdo->beginTransaction();
 
+            $timeCondition = $force ? "((status = 'pending') OR next_attempt_at <= NOW())" : "next_attempt_at <= NOW()";
+
             $procStmt = $this->pdo->prepare("
                 UPDATE communication_queue
                 SET status = 'processing', worker_started_at = NOW(), updated_at = NOW()
                 WHERE id = ?
                   AND status IN ('pending', 'scheduled', 'failed', 'retrying')
-                  AND next_attempt_at <= NOW()
+                  AND {$timeCondition}
                   AND (
                     (channel = 'whatsapp' AND retry_count < 3) OR
                     (channel = 'email' AND retry_count < 5) OR
@@ -577,8 +633,9 @@ class CommunicationEngine {
 
                         if ($exists === 0) {
                             $hasSenderAccCol = $this->hasSenderAccountColumn();
-                            $extraCol = $hasSenderAccCol ? ', sender_account_id' : '';
-                            $extraPh  = $hasSenderAccCol ? ', ?' : '';
+                            $hasPriCol = $this->hasPriorityColumn();
+                            $extraCol = ($hasSenderAccCol ? ', sender_account_id' : '') . ($hasPriCol ? ', priority' : '');
+                            $extraPh  = ($hasSenderAccCol ? ', ?' : '') . ($hasPriCol ? ', ?' : '');
                             $insStmt = $this->pdo->prepare("
                                 INSERT INTO communication_queue
                                 (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at{$extraCol})
@@ -601,6 +658,9 @@ class CommunicationEngine {
                             ];
                             if ($hasSenderAccCol) {
                                 $execVals[] = $item['sender_account_id'] ?? null;
+                            }
+                            if ($hasPriCol) {
+                                $execVals[] = (int)($item['priority'] ?? 0);
                             }
                             $insStmt->execute($execVals);
                             $newQueueId = (int)$this->pdo->lastInsertId();
@@ -1038,8 +1098,9 @@ class CommunicationEngine {
 
                         if ($exists === 0) {
                             $hasSenderAccCol = $this->hasSenderAccountColumn();
-                            $extraCol = $hasSenderAccCol ? ', sender_account_id' : '';
-                            $extraPh  = $hasSenderAccCol ? ', ?' : '';
+                            $hasPriCol = $this->hasPriorityColumn();
+                            $extraCol = ($hasSenderAccCol ? ', sender_account_id' : '') . ($hasPriCol ? ', priority' : '');
+                            $extraPh  = ($hasSenderAccCol ? ', ?' : '') . ($hasPriCol ? ', ?' : '');
                             $insStmt = $this->pdo->prepare("
                                 INSERT INTO communication_queue
                                 (channel, recipient, recipient_name, subject, body_html, body_text, template_name, template_data, attachments, status, next_attempt_at, sent_by, student_uid, event_name, invoice_id, error_message, retry_count, created_at, updated_at{$extraCol})
@@ -1062,6 +1123,9 @@ class CommunicationEngine {
                             ];
                             if ($hasSenderAccCol) {
                                 $execVals[] = $chkItem['sender_account_id'] ?? null;
+                            }
+                            if ($hasPriCol) {
+                                $execVals[] = (int)($chkItem['priority'] ?? 0);
                             }
                             $insStmt->execute($execVals);
                             $newQueueId = (int)$this->pdo->lastInsertId();
@@ -2120,8 +2184,9 @@ class CommunicationEngine {
 
                 if ($exists === 0) {
                     $hasSenderAccCol = $this->hasSenderAccountColumn();
-                    $extraCol = $hasSenderAccCol ? ', sender_account_id' : '';
-                    $extraPh  = $hasSenderAccCol ? ', ?' : '';
+                    $hasPriCol = $this->hasPriorityColumn();
+                    $extraCol = ($hasSenderAccCol ? ', sender_account_id' : '') . ($hasPriCol ? ', priority' : '');
+                    $extraPh  = ($hasSenderAccCol ? ', ?' : '') . ($hasPriCol ? ', ?' : '');
                     // Clone queue item targeting the new number
                     $insStmt = $this->pdo->prepare("
                         INSERT INTO communication_queue
@@ -2145,6 +2210,9 @@ class CommunicationEngine {
                     ];
                     if ($hasSenderAccCol) {
                         $execVals[] = $item['sender_account_id'] ?? null;
+                    }
+                    if ($hasPriCol) {
+                        $execVals[] = (int)($item['priority'] ?? 0);
                     }
                     $insStmt->execute($execVals);
                     $newQueueId = (int)$this->pdo->lastInsertId();

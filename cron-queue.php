@@ -382,7 +382,8 @@ try {
                                     'campaign_message', // 12: event_name
                                     0,                  // 13: invoice_id
                                     $senderArg,         // 14: senderKeyOrIdempotency
-                                    $idempotencyKey     // 15: idempotencyKey
+                                    $idempotencyKey,    // 15: idempotencyKey
+                                    CampaignConfig::CAMPAIGN_QUEUE_PRIORITY // 16: priority (-10)
                                 );
 
                                 $pdo->prepare("
