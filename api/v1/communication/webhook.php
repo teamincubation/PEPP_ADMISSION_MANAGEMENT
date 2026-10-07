@@ -597,8 +597,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     );
                                     
                                     if ($queueId) {
-                                        $engine->dispatchQueueItemAsync($queueId);
-                                        error_log("SUCCESS: Button action enqueued. Queue ID: {$queueId} | Target: {$targetTplName} | Meta Template ID: {$targetMetaTemplateId}");
+                                        // Synchronous immediate dispatch for WhatsApp Quick Reply button actions.
+                                        // This removes the Hostinger cron latency for interactive responses.
+                                        $dispatched = $engine->processQueueItem($queueId);
+
+                                        if ($dispatched) {
+                                            error_log("SUCCESS: Button action dispatched synchronously. Queue ID: {$queueId} | Target: {$targetTplName} | Meta Template ID: {$targetMetaTemplateId}");
+                                        } else {
+                                            error_log("NOTICE: Button action synchronous dispatch deferred or failed for Queue ID: {$queueId}. Queue record preserved for cron retry.");
+                                        }
                                     } else {
                                         error_log("FAILED: Unable to enqueue button action response template.");
                                     }
