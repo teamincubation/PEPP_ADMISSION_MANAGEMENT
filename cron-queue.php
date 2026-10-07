@@ -257,13 +257,24 @@ try {
                             foreach ($batchRecipients as $rec) {
                                 $leadOrStudent = null;
                                 if (!empty($rec['user_id'])) {
-                                    $stStmt = $pdo->prepare("SELECT * FROM users WHERE user_id = ? LIMIT 1");
-                                    $stStmt->execute([$rec['user_id']]);
+                                    $stStmt = $pdo->prepare("SELECT * FROM users WHERE (id = ? OR user_id = ?) LIMIT 1");
+                                    $stStmt->execute([$rec['user_id'], $rec['user_id']]);
                                     $leadOrStudent = $stStmt->fetch();
                                 } elseif (!empty($rec['lead_id'])) {
                                     $ldStmt = $pdo->prepare("SELECT * FROM leads WHERE id = ? LIMIT 1");
                                     $ldStmt->execute([$rec['lead_id']]);
                                     $leadOrStudent = $ldStmt->fetch();
+                                }
+
+                                // Fallback: Resolve student from campaign segment_criteria when recipient table lacks user_id
+                                if (empty($leadOrStudent) && ($dueCampaign['target_audience'] ?? '') === 'students') {
+                                    $targetStuId = $segmentCriteria['student_id'] ?? null;
+                                    $targetAdmNo = $segmentCriteria['student_admission_number'] ?? null;
+                                    if (!empty($targetStuId) || !empty($targetAdmNo)) {
+                                        $stStmt = $pdo->prepare("SELECT * FROM users WHERE (id = ? OR user_id = ?) LIMIT 1");
+                                        $stStmt->execute([$targetStuId ?: 0, $targetAdmNo ?: '']);
+                                        $leadOrStudent = $stStmt->fetch();
+                                    }
                                 }
 
                                 // Variable resolution
@@ -367,7 +378,7 @@ try {
                                     $templateData,      // 8: templateData
                                     $dueCampaign['created_by'] ?? 'Campaign Worker', // 9: sent_by
                                     null,               // 10: scheduled_at
-                                    $rec['user_id'] ?? null, // 11: studentUid
+                                    !empty($rec['user_id']) ? (string)$rec['user_id'] : ($segmentCriteria['student_admission_number'] ?? ($segmentCriteria['student_id'] ?? null)), // 11: studentUid
                                     'campaign_message', // 12: event_name
                                     0,                  // 13: invoice_id
                                     $senderArg,         // 14: senderKeyOrIdempotency

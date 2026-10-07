@@ -182,9 +182,21 @@ try {
                                     }
                                 }
                             } else {
-                                $stmtUser = $pdo->prepare("SELECT * FROM users WHERE user_id = ? LIMIT 1");
-                                $stmtUser->execute([$rec['user_id']]);
-                                $user = $stmtUser->fetch();
+                                $user = null;
+                                if (!empty($rec['user_id'])) {
+                                    $stmtUser = $pdo->prepare("SELECT * FROM users WHERE (id = ? OR user_id = ?) LIMIT 1");
+                                    $stmtUser->execute([$rec['user_id'], $rec['user_id']]);
+                                    $user = $stmtUser->fetch();
+                                }
+                                if (empty($user)) {
+                                    $stuId = $criteria['student_id'] ?? null;
+                                    $stuAdm = $criteria['student_admission_number'] ?? null;
+                                    if (!empty($stuId) || !empty($stuAdm)) {
+                                        $stmtUser = $pdo->prepare("SELECT * FROM users WHERE (id = ? OR user_id = ?) LIMIT 1");
+                                        $stmtUser->execute([$stuId ?: 0, $stuAdm ?: '']);
+                                        $user = $stmtUser->fetch();
+                                    }
+                                }
                                 if ($user) {
                                     $skippedParam = '';
                                     foreach ($varMappings as $idx => $field) {
@@ -243,7 +255,7 @@ try {
                                 $templatePayload,
                                 $dueCampaign['created_by'],
                                 date('Y-m-d H:i:s'),
-                                $rec['user_id']
+                                !empty($rec['user_id']) ? (string)$rec['user_id'] : ($criteria['student_admission_number'] ?? ($criteria['student_id'] ?? null))
                             );
 
                             $pdo->prepare("UPDATE communication_campaign_recipients SET queue_id = ?, status = 'pending' WHERE id = ?")->execute([$queueId, $rec['id']]);

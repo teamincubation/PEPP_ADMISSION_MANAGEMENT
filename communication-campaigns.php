@@ -795,6 +795,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             }
                         } catch (Throwable $e) {}
 
+                        // Check if user_id column exists on communication_campaign_recipients (dual-compatibility)
+                        $hasRecipUserCol = false;
+                        try {
+                            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+                            if ($driver === 'sqlite') {
+                                $colStmt = $pdo->query("PRAGMA table_info(communication_campaign_recipients)");
+                                while ($cRow = $colStmt->fetch(PDO::FETCH_ASSOC)) {
+                                    if ($cRow['name'] === 'user_id') { $hasRecipUserCol = true; break; }
+                                }
+                            } else {
+                                $colStmt = $pdo->query("SHOW COLUMNS FROM communication_campaign_recipients LIKE 'user_id'");
+                                $hasRecipUserCol = (bool)$colStmt->fetchColumn();
+                            }
+                        } catch (Throwable $e) {}
+
                         $pdo->beginTransaction();
                         try {
                             if ($hasCampSenderCol) {
@@ -829,21 +844,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             }
                             $campaignId = (int)$pdo->lastInsertId();
 
-                            $stmtRecip = $pdo->prepare("
-                                INSERT INTO communication_campaign_recipients (campaign_id, lead_id, user_id, recipient, recipient_name, queue_id, status, created_at)
-                                VALUES (?, ?, ?, ?, ?, NULL, 'pending', NOW())
-                            ");
+                            if ($hasRecipUserCol) {
+                                $stmtRecip = $pdo->prepare("
+                                    INSERT INTO communication_campaign_recipients (campaign_id, lead_id, user_id, recipient, recipient_name, queue_id, status, created_at)
+                                    VALUES (?, ?, ?, ?, ?, NULL, 'pending', NOW())
+                                ");
 
-                            $queuedCount = 0;
-                            foreach ($recipients as $rec) {
-                                $stmtRecip->execute([
-                                    $campaignId,
-                                    $rec['lead_id'],
-                                    $rec['user_id'],
-                                    $rec['phone'],
-                                    $rec['name']
-                                ]);
-                                $queuedCount++;
+                                $queuedCount = 0;
+                                foreach ($recipients as $rec) {
+                                    $stmtRecip->execute([
+                                        $campaignId,
+                                        $rec['lead_id'],
+                                        $rec['user_id'],
+                                        $rec['phone'],
+                                        $rec['name']
+                                    ]);
+                                    $queuedCount++;
+                                }
+                            } else {
+                                $stmtRecip = $pdo->prepare("
+                                    INSERT INTO communication_campaign_recipients (campaign_id, lead_id, recipient, recipient_name, queue_id, status, created_at)
+                                    VALUES (?, ?, ?, ?, NULL, 'pending', NOW())
+                                ");
+
+                                $queuedCount = 0;
+                                foreach ($recipients as $rec) {
+                                    $stmtRecip->execute([
+                                        $campaignId,
+                                        $rec['lead_id'],
+                                        $rec['phone'],
+                                        $rec['name']
+                                    ]);
+                                    $queuedCount++;
+                                }
                             }
 
                                 $pdo->commit();
