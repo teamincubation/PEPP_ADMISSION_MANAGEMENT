@@ -22,8 +22,18 @@ $businessId  = $settings['whatsapp_business_id'] ?? '';
 $accessToken = $settings['whatsapp_access_token'] ?? '';
 $apiVersion  = $settings['whatsapp_api_version'] ?? 'v20.0';
 
+require_once 'includes/communication/WhatsAppAccountResolver.php';
+$resolver = WhatsAppAccountResolver::getInstance($pdo);
+$notificationsAccount = $resolver->getAccount('notifications');
+$notificationsWabaId = $resolver->getWabaId('notifications');
+$notificationsPhoneId = trim((string)($notificationsAccount['phone_number_id'] ?? ''));
+
+// PEPP Updates (Account 3 / notifications) is authoritative for marketing templates
+$marketingWabaId  = !empty($notificationsWabaId) ? $notificationsWabaId : '1099020233033644';
+$marketingPhoneId = !empty($notificationsPhoneId) ? $notificationsPhoneId : ($settings['whatsapp_phone_id'] ?? '');
+
 require_once 'includes/communication/Providers/WhatsAppCloudProvider.php';
-$provider = new WhatsAppCloudProvider($businessId, $settings['whatsapp_phone_id'] ?? '', $accessToken, $apiVersion);
+$provider = new WhatsAppCloudProvider($marketingWabaId, $marketingPhoneId, $accessToken, $apiVersion);
 
 // Support list of languages
 $supported_languages = [
@@ -64,7 +74,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if ($header_type === 'IMAGE' && empty($header_media_url)) {
                     $error_message = 'Please edit this draft and upload an image before submitting to Meta WABA.';
-                } elseif (empty($businessId) || empty($accessToken)) {
+                } elseif (empty($marketingWabaId) || empty($accessToken)) {
                     $error_message = 'Please configure Meta Business Account ID and Access Token in settings first.';
                 } else {
                     // If image header, upload media first and replace handle in components

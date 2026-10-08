@@ -236,39 +236,72 @@ $apiVersion  = $settings['whatsapp_api_version'] ?? 'v20.0';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'sync_templates') {
     if (!csrf_verify()) {
         $error_message = 'Security token mismatch. Please try again.';
-    } elseif (empty($businessId) || empty($accessToken)) {
-        $error_message = 'Please configure Business Account ID and Access Token in settings first.';
+    } elseif (empty($accessToken)) {
+        $error_message = 'Please configure the Global WhatsApp Access Token in communication settings first.';
     } else {
-        $url = "https://graph.facebook.com/{$apiVersion}/{$businessId}/message_templates?limit=100";
-        $headers = ["Authorization: Bearer {$accessToken}"];
+        require_once 'includes/communication/WhatsAppAccountResolver.php';
+        $resolver = WhatsAppAccountResolver::getInstance($pdo);
 
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 20);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        // Build list of target WABAs to sync using the single shared global access token
+        $wabaTargets = [];
+        $admissionsWaba = $resolver->getWabaId('admissions') ?: $businessId;
+        if (!empty($admissionsWaba)) {
+            $wabaTargets['admissions'] = [
+                'waba_id' => $admissionsWaba,
+                'account_id' => 1,
+                'sender_key' => 'admissions',
+                'label' => 'PEPP Learning'
+            ];
+        }
 
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err = curl_error($ch);
-        curl_close($ch);
+        $notifWaba = $resolver->getWabaId('notifications');
+        if (!empty($notifWaba) && $notifWaba !== $admissionsWaba) {
+            $wabaTargets['notifications'] = [
+                'waba_id' => $notifWaba,
+                'account_id' => 3,
+                'sender_key' => 'notifications',
+                'label' => 'PEPP Updates'
+            ];
+        }
 
-        if ($err) {
-            $error_message = "Meta API Connection Error: " . $err;
-        } else {
-            $data = json_decode($response, true);
-            if ($httpCode >= 200 && $httpCode < 300 && isset($data['data'])) {
-                $templates = $data['data'];
-                $syncedCount = 0;
+        $totalSynced = 0;
+        $syncBreakdown = [];
+        $syncErrors = [];
 
-                $pdo->beginTransaction();
-                try {
-                    $stmtUpsert = $pdo->prepare("
-                        INSERT INTO communication_templates (channel, template_name, language, status, category, quality_status, rejection_reason, meta_data, updated_at)
-                        VALUES ('whatsapp', ?, ?, ?, ?, ?, ?, ?, NOW())
-                        ON DUPLICATE KEY UPDATE status = VALUES(status), category = VALUES(category), quality_status = VALUES(quality_status), rejection_reason = VALUES(rejection_reason), meta_data = VALUES(meta_data), updated_at = NOW()
-                    ");
+        $pdo->beginTransaction();
+        try {
+            $stmtUpsert = $pdo->prepare("
+                INSERT INTO communication_templates (channel, template_name, language, status, category, quality_status, rejection_reason, meta_data, updated_at)
+                VALUES ('whatsapp', ?, ?, ?, ?, ?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE status = VALUES(status), category = VALUES(category), quality_status = VALUES(quality_status), rejection_reason = VALUES(rejection_reason), meta_data = VALUES(meta_data), updated_at = NOW()
+            ");
+
+            foreach ($wabaTargets as $tKey => $target) {
+                $targetWaba = $target['waba_id'];
+                $url = "https://graph.facebook.com/{$apiVersion}/{$targetWaba}/message_templates?limit=100";
+                $headers = ["Authorization: Bearer {$accessToken}"];
+
+                $ch = curl_init();
+                curl_setopt($ch, CURLOPT_URL, $url);
+                curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 20);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+
+                $response = curl_exec($ch);
+                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $err = curl_error($ch);
+                curl_close($ch);
+
+                if ($err) {
+                    $syncErrors[] = "{$target['label']} (WABA {$targetWaba}): CURL Error - {$err}";
+                    continue;
+                }
+
+                $data = json_decode($response, true);
+                if ($httpCode >= 200 && $httpCode < 300 && isset($data['data'])) {
+                    $templates = $data['data'];
+                    $wabaCount = 0;
 
                     foreach ($templates as $tpl) {
                         $name = $tpl['name'] ?? '';
@@ -296,23 +329,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             'components' => $tpl['components'] ?? [],
                             'body_text' => $bodyText,
                             'header_text' => $headerText,
-                            'footer_text' => $footerText
+                            'footer_text' => $footerText,
+                            'waba_id' => $targetWaba,
+                            'sender_key' => $target['sender_key'],
+                            'account_id' => $target['account_id']
                         ]);
 
                         $stmtUpsert->execute([$name, $lang, $status, $category, $qualityStatus, $rejectedReason, $metaData]);
-                        $syncedCount++;
+                        $wabaCount++;
                     }
 
-                    $pdo->commit();
-                    $success_message = "Successfully synchronized {$syncedCount} templates from Meta Cloud Account.";
-                } catch (Exception $e) {
-                    $pdo->rollBack();
-                    $error_message = "Database Synchronization failed: " . $e->getMessage();
+                    $totalSynced += $wabaCount;
+                    $syncBreakdown[] = "{$wabaCount} from {$target['label']}";
+                } else {
+                    $details = $data['error']['message'] ?? 'Meta API error';
+                    $syncErrors[] = "{$target['label']} (WABA {$targetWaba}) [{$httpCode}]: {$details}";
                 }
-            } else {
-                $details = $data['error']['message'] ?? 'Meta API responded with an error.';
-                $error_message = "Meta API Error [{$httpCode}]: " . $details;
             }
+
+            $pdo->commit();
+
+            if ($totalSynced > 0) {
+                $summary = implode(', ', $syncBreakdown);
+                $success_message = "Successfully synchronized {$totalSynced} templates ({$summary}) using global System User token.";
+            } elseif (!empty($syncErrors)) {
+                $error_message = "Template sync failed: " . implode(' | ', $syncErrors);
+            } else {
+                $success_message = "Synchronization complete. No templates found on configured WABAs.";
+            }
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            $error_message = "Database Synchronization failed: " . $e->getMessage();
         }
     }
 }
@@ -480,7 +529,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
                 require_once 'includes/communication/CommunicationEngine.php';
                 $engine = CommunicationEngine::getInstance($pdo);
-                $provider = $engine->getProvider('whatsapp');
+
+                // Determine sender account based on template WABA / metadata
+                $tplMeta = json_decode($template['meta_data'] ?? '', true) ?: [];
+                $tplWaba = $tplMeta['waba_id'] ?? null;
+                $senderAccId = ($tplWaba === '1099020233033644' || ($tplMeta['sender_key'] ?? '') === 'notifications') ? 3 : 1;
+                $provider = $engine->getProvider('whatsapp', $senderAccId);
 
                 // Trigger send directly via provider for instant feedback
                 $res = $provider->sendMessage($phone, 'Test Dispatch', '', '', [], $templateData);

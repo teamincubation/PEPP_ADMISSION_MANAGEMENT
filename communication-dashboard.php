@@ -52,58 +52,78 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
 
         if ($action === 'save_settings') {
-            $pdo->beginTransaction();
-            try {
-                $cronKey = trim($_POST['whatsapp_cron_worker_key'] ?? '');
-                if (empty($cronKey)) {
-                    $cronKey = $settings['whatsapp_cron_worker_key'] ?? bin2hex(random_bytes(16));
-                }
-                $_POST['whatsapp_cron_worker_key'] = $cronKey;
-
-                $submittedLegacyPhoneId = trim($_POST['whatsapp_phone_id'] ?? '');
-
-                // Dynamic safety guard: Reject entering PEPP Updates (notifications) Phone ID into the legacy admissions field
-                require_once 'includes/communication/WhatsAppAccountResolver.php';
-                $resolver = WhatsAppAccountResolver::getInstance($pdo);
-                if ($resolver->hasAccountsTable() && $submittedLegacyPhoneId !== '') {
-                    $notifAcc = $resolver->getAccount('notifications');
-                    $notifPhoneId = trim($notifAcc['phone_number_id'] ?? '');
-
-                    if ($notifPhoneId !== '' && $submittedLegacyPhoneId === $notifPhoneId) {
-                        throw new RuntimeException("This Phone Number ID belongs to PEPP Updates. Configure it under WhatsApp Sender Accounts instead.");
+            if (!is_super_admin()) {
+                $error_message = 'Access denied: Only Superadmin can modify global WhatsApp Cloud API settings.';
+            } else {
+                $pdo->beginTransaction();
+                try {
+                    $cronKey = trim($_POST['whatsapp_cron_worker_key'] ?? '');
+                    if (empty($cronKey)) {
+                        $cronKey = $settings['whatsapp_cron_worker_key'] ?? bin2hex(random_bytes(16));
                     }
+                    $_POST['whatsapp_cron_worker_key'] = $cronKey;
+
+                    $submittedLegacyPhoneId = trim($_POST['whatsapp_phone_id'] ?? '');
+
+                    // Dynamic safety guard: Reject entering PEPP Updates (notifications) Phone ID into the legacy admissions field
+                    require_once 'includes/communication/WhatsAppAccountResolver.php';
+                    $resolver = WhatsAppAccountResolver::getInstance($pdo);
+                    if ($resolver->hasAccountsTable() && $submittedLegacyPhoneId !== '') {
+                        $notifAcc = $resolver->getAccount('notifications');
+                        $notifPhoneId = trim($notifAcc['phone_number_id'] ?? '');
+
+                        if ($notifPhoneId !== '' && $submittedLegacyPhoneId === $notifPhoneId) {
+                            throw new RuntimeException("This Phone Number ID belongs to PEPP Updates. Configure it under WhatsApp Sender Accounts instead.");
+                        }
+                    }
+
+                    // Guard: admin_settings.whatsapp_business_id must NOT be changed to Account 3 WABA (1099020233033644)
+                    $submittedWaba = trim($_POST['whatsapp_business_id'] ?? '');
+                    if ($submittedWaba === '1099020233033644') {
+                        throw new RuntimeException("WABA ID 1099020233033644 belongs to PEPP Updates (Account 3). The global WABA setting belongs to PEPP Learning (Account 1). Configure Account 3 WABA under WhatsApp Sender Accounts.");
+                    }
+
+                    $keys = [
+                        'whatsapp_business_id',
+                        'whatsapp_phone_id',
+                        'whatsapp_app_secret',
+                        'whatsapp_webhook_verify_token',
+                        'whatsapp_cron_worker_key',
+                        'whatsapp_api_version'
+                    ];
+
+                    $saveStmt = $pdo->prepare("
+                        INSERT INTO admin_settings (setting_name, setting_value, updated_at)
+                        VALUES (?, ?, NOW())
+                        ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()
+                    ");
+
+                    foreach ($keys as $k) {
+                        $val = trim($_POST[$k] ?? '');
+                        $saveStmt->execute([$k, $val]);
+                    }
+
+                    // Access Token handling with masking preservation:
+                    // If user left it empty or it contains bullet/mask characters, do NOT overwrite the existing token
+                    $rawSubmittedToken = trim($_POST['whatsapp_access_token'] ?? '');
+                    $existingToken = $settings['whatsapp_access_token'] ?? '';
+                    if ($rawSubmittedToken !== '' && !str_contains($rawSubmittedToken, '••••') && !preg_match('/^(\*|•)+$/', $rawSubmittedToken)) {
+                        $saveStmt->execute(['whatsapp_access_token', $rawSubmittedToken]);
+                        if (function_exists('log_admin_activity')) {
+                            log_admin_activity($pdo, $admin_username, 'whatsapp_token_updated', 'Superadmin updated global WhatsApp permanent access token.');
+                        }
+                    }
+
+                    $pdo->commit();
+                    $success_message = 'Communication configuration settings saved successfully.';
+
+                    // Reload settings
+                    $stmt = $pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%' OR setting_name LIKE 'communication_%'");
+                    $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+                } catch (Exception $e) {
+                    $pdo->rollBack();
+                    $error_message = $e->getMessage();
                 }
-
-                $keys = [
-                    'whatsapp_business_id',
-                    'whatsapp_phone_id',
-                    'whatsapp_access_token',
-                    'whatsapp_app_secret',
-                    'whatsapp_webhook_verify_token',
-                    'whatsapp_cron_worker_key',
-                    'whatsapp_api_version'
-                ];
-
-                $saveStmt = $pdo->prepare("
-                    INSERT INTO admin_settings (setting_name, setting_value, updated_at)
-                    VALUES (?, ?, NOW())
-                    ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()
-                ");
-
-                foreach ($keys as $k) {
-                    $val = trim($_POST[$k] ?? '');
-                    $saveStmt->execute([$k, $val]);
-                }
-
-                $pdo->commit();
-                $success_message = 'Communication configuration settings saved successfully.';
-
-                // Reload settings
-                $stmt = $pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%' OR setting_name LIKE 'communication_%'");
-                $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
-            } catch (Exception $e) {
-                $pdo->rollBack();
-                $error_message = $e->getMessage();
             }
         } elseif ($action === 'test_send') {
             $testPhone = trim($_POST['test_phone'] ?? '');
@@ -146,59 +166,84 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
         } elseif ($action === 'save_whatsapp_sender_account' || $action === 'update_whatsapp_account_phone_id') {
-            require_once 'includes/communication/WhatsAppAccountResolver.php';
-            $resolver = WhatsAppAccountResolver::getInstance($pdo);
-            if ($resolver->hasAccountsTable()) {
-                $senderKey = trim($_POST['sender_key'] ?? '');
-                $accId = (int)($_POST['account_id'] ?? 0);
+            if (!is_super_admin()) {
+                $error_message = 'Access denied: Only Superadmin can modify WhatsApp sender account settings.';
+            } else {
+                require_once 'includes/communication/WhatsAppAccountResolver.php';
+                $resolver = WhatsAppAccountResolver::getInstance($pdo);
+                if ($resolver->hasAccountsTable()) {
+                    $senderKey = trim($_POST['sender_key'] ?? '');
+                    $accId = (int)($_POST['account_id'] ?? 0);
 
-                $acc = null;
-                if (!empty($senderKey) && in_array($senderKey, ['admissions', 'notifications'], true)) {
-                    $acc = $resolver->getAccount($senderKey);
-                } elseif ($accId > 0) {
-                    $acc = $resolver->getAccount($accId);
-                }
+                    $acc = null;
+                    if (!empty($senderKey) && in_array($senderKey, ['admissions', 'notifications'], true)) {
+                        $acc = $resolver->getAccount($senderKey);
+                    } elseif ($accId > 0) {
+                        $acc = $resolver->getAccount($accId);
+                    }
 
-                if ($acc) {
-                    $targetSenderKey = $acc['sender_key'];
-                    $rawPhoneId = trim($_POST['phone_number_id'] ?? '');
+                    if ($acc) {
+                        $targetSenderKey = $acc['sender_key'];
+                        $rawPhoneId = trim($_POST['phone_number_id'] ?? '');
+                        $rawWabaId = trim($_POST['waba_id'] ?? '');
 
-                    // Validation: phone_number_id must be digits only or empty
-                    if ($rawPhoneId !== '' && !preg_match('/^\d{1,50}$/', $rawPhoneId)) {
-                        $error_message = 'Invalid Meta Phone Number ID. Must contain only digits.';
-                    } else {
-                        // Prevent cross-assigning the other sender's phone ID if non-empty
-                        $otherKey = ($targetSenderKey === 'admissions') ? 'notifications' : 'admissions';
-                        $otherAcc = $resolver->getAccount($otherKey);
-                        $otherPhoneId = trim($otherAcc['phone_number_id'] ?? '');
-
-                        if ($rawPhoneId !== '' && $otherPhoneId !== '' && $rawPhoneId === $otherPhoneId) {
-                            $error_message = "Phone Number ID '{$rawPhoneId}' is already assigned to {$otherAcc['display_name']} ({$otherKey}). Each sender must have a distinct Meta Phone Number ID.";
+                        // Validation: phone_number_id must be digits only or empty
+                        if ($rawPhoneId !== '' && !preg_match('/^\d{1,50}$/', $rawPhoneId)) {
+                            $error_message = 'Invalid Meta Phone Number ID. Must contain only digits.';
+                        } elseif ($rawWabaId !== '' && !preg_match('/^\d{1,50}$/', $rawWabaId)) {
+                            $error_message = 'Invalid Meta WABA ID. Must contain only digits.';
                         } else {
-                            $newStatus = trim($_POST['status'] ?? ($acc['status'] ?? 'active'));
-                            if (!in_array($newStatus, ['active', 'inactive'], true)) {
-                                $newStatus = 'active';
+                            // Defaults if WABA ID is empty
+                            if ($rawWabaId === '') {
+                                $rawWabaId = ($targetSenderKey === 'notifications') ? '1099020233033644' : '1410328164305566';
                             }
 
-                            // Strictly update ONLY this specific sender account row in whatsapp_accounts
-                            $upd = $pdo->prepare("
-                                UPDATE whatsapp_accounts
-                                SET phone_number_id = ?, status = ?, updated_at = NOW()
-                                WHERE sender_key = ?
-                            ");
-                            $upd->execute([$rawPhoneId, $newStatus, $targetSenderKey]);
+                            // Prevent cross-assigning the other sender's phone ID if non-empty
+                            $otherKey = ($targetSenderKey === 'admissions') ? 'notifications' : 'admissions';
+                            $otherAcc = $resolver->getAccount($otherKey);
+                            $otherPhoneId = trim($otherAcc['phone_number_id'] ?? '');
 
-                            $success_message = "WhatsApp sender account '" . htmlspecialchars($acc['display_name']) . "' (" . htmlspecialchars($targetSenderKey) . ") updated successfully.";
+                            if ($rawPhoneId !== '' && $otherPhoneId !== '' && $rawPhoneId === $otherPhoneId) {
+                                $error_message = "Phone Number ID '{$rawPhoneId}' is already assigned to {$otherAcc['display_name']} ({$otherKey}). Each sender must have a distinct Meta Phone Number ID.";
+                            } else {
+                                $newStatus = trim($_POST['status'] ?? ($acc['status'] ?? 'active'));
+                                if (!in_array($newStatus, ['active', 'inactive'], true)) {
+                                    $newStatus = 'active';
+                                }
 
-                            // Invalidate resolver cache
-                            $resolver->refresh();
+                                // Update row in whatsapp_accounts
+                                if ($resolver->hasWabaIdColumn()) {
+                                    $upd = $pdo->prepare("
+                                        UPDATE whatsapp_accounts
+                                        SET phone_number_id = ?, waba_id = ?, status = ?, updated_at = NOW()
+                                        WHERE sender_key = ?
+                                    ");
+                                    $upd->execute([$rawPhoneId, $rawWabaId, $newStatus, $targetSenderKey]);
+                                } else {
+                                    $upd = $pdo->prepare("
+                                        UPDATE whatsapp_accounts
+                                        SET phone_number_id = ?, status = ?, updated_at = NOW()
+                                        WHERE sender_key = ?
+                                    ");
+                                    $upd->execute([$rawPhoneId, $newStatus, $targetSenderKey]);
+                                }
+
+                                if (function_exists('log_admin_activity')) {
+                                    log_admin_activity($pdo, $admin_username, 'whatsapp_sender_account_updated', "Updated sender account {$targetSenderKey}: phone_id=" . maskPhoneNumberId($rawPhoneId) . ", waba_id={$rawWabaId}, status={$newStatus}");
+                                }
+
+                                $success_message = "WhatsApp sender account '" . htmlspecialchars($acc['display_name']) . "' (" . htmlspecialchars($targetSenderKey) . ") updated successfully.";
+
+                                // Invalidate resolver cache
+                                $resolver->refresh();
+                            }
                         }
+                    } else {
+                        $error_message = "Valid sender account ('admissions' or 'notifications') required.";
                     }
                 } else {
-                    $error_message = "Valid sender account ('admissions' or 'notifications') required.";
+                    $error_message = "Sender account configuration requires the multi-number database migration (database-update-51.sql).";
                 }
-            } else {
-                $error_message = "Sender account configuration requires the multi-number database migration (database-update-51.sql).";
             }
         } elseif ($action === 'switch_whatsapp_mode') {
             $new_mode = $_POST['new_mode'] ?? '';
@@ -718,6 +763,29 @@ function maskPhoneNumberId($phoneId) {
     return '<code style="font-family:monospace; font-size:0.8rem; background:#f1f5f9; padding:2px 6px; border-radius:4px;">' . htmlspecialchars($masked) . '</code>';
 }
 
+// Helper to safely display WABA IDs
+function maskWabaId($wabaId) {
+    $wabaId = trim((string)$wabaId);
+    if (empty($wabaId)) {
+        return '<span class="badge gray" style="font-size:0.75rem;">DEFAULT / NOT SET</span>';
+    }
+    $len = strlen($wabaId);
+    if ($len <= 6) {
+        return '<code style="font-family:monospace; font-size:0.8rem; background:#f1f5f9; padding:2px 6px; border-radius:4px;">' . htmlspecialchars($wabaId) . '</code>';
+    }
+    $masked = substr($wabaId, 0, 4) . str_repeat('•', max(4, $len - 8)) . substr($wabaId, -4);
+    return '<code style="font-family:monospace; font-size:0.8rem; background:#f1f5f9; padding:2px 6px; border-radius:4px;">' . htmlspecialchars($masked) . '</code>';
+}
+
+// Helper to safely mask global access token status (never displays raw token in UI)
+function maskAccessToken($token) {
+    $token = trim((string)$token);
+    if (empty($token)) {
+        return '<span class="badge gray" style="font-size:0.75rem;"><i class="fas fa-triangle-exclamation"></i> NOT CONFIGURED</span>';
+    }
+    return '<span class="badge green" style="font-size:0.75rem;"><i class="fas fa-shield-alt"></i> SYSTEM USER TOKEN ACTIVE (••••••••)</span>';
+}
+
 // Multi-number sender accounts resolver
 require_once 'includes/communication/WhatsAppAccountResolver.php';
 $accountResolver = WhatsAppAccountResolver::getInstance($pdo);
@@ -1053,8 +1121,17 @@ include 'includes/admin_nav.php';
                                 <span>Meta Phone Number ID</span>
                                 <span style="font-weight:normal; font-size:0.75rem; color:#6b7280;">Current: <?php echo maskPhoneNumberId($admissionsAccount['phone_number_id'] ?? ''); ?></span>
                             </label>
-                            <input type="text" name="phone_number_id" value="<?php echo htmlspecialchars($admissionsAccount['phone_number_id'] ?? ''); ?>" placeholder="e.g. 10482939281829" style="width:100%; padding:9px 12px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; font-family:monospace;" <?php echo !$hasAccountsTable ? 'disabled' : ''; ?> required>
+                            <input type="text" name="phone_number_id" value="<?php echo htmlspecialchars($admissionsAccount['phone_number_id'] ?? ''); ?>" placeholder="e.g. 1229563296908445" style="width:100%; padding:9px 12px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; font-family:monospace;" <?php echo !$hasAccountsTable ? 'disabled' : ''; ?> required>
                             <span style="font-size:0.73rem; color:#64748b; display:block; margin-top:4px;">Unique Meta Phone ID for PEPP Learning admissions.</span>
+                        </div>
+
+                        <div style="margin-bottom:14px;">
+                            <label style="display:flex; justify-content:space-between; font-size:0.8rem; font-weight:700; color:#374151; margin-bottom:6px;">
+                                <span>Meta WABA ID</span>
+                                <span style="font-weight:normal; font-size:0.75rem; color:#6b7280;">Current: <?php echo maskWabaId($admissionsAccount['waba_id'] ?? '1410328164305566'); ?></span>
+                            </label>
+                            <input type="text" name="waba_id" value="<?php echo htmlspecialchars($admissionsAccount['waba_id'] ?? '1410328164305566'); ?>" placeholder="1410328164305566" style="width:100%; padding:9px 12px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; font-family:monospace;" <?php echo !$hasAccountsTable ? 'disabled' : ''; ?> required>
+                            <span style="font-size:0.73rem; color:#64748b; display:block; margin-top:4px;">Authoritative WABA ID for PEPP Learning admissions.</span>
                         </div>
 
                         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:16px; align-items:end;">
@@ -1121,8 +1198,17 @@ include 'includes/admin_nav.php';
                                 <span>Meta Phone Number ID</span>
                                 <span style="font-weight:normal; font-size:0.75rem; color:#6b7280;">Current: <?php echo maskPhoneNumberId($notifPhoneId); ?></span>
                             </label>
-                            <input type="text" name="phone_number_id" value="<?php echo htmlspecialchars($notifPhoneId); ?>" placeholder="e.g. 20482939281899" style="width:100%; padding:9px 12px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; font-family:monospace;" <?php echo !$hasAccountsTable ? 'disabled' : ''; ?>>
+                            <input type="text" name="phone_number_id" value="<?php echo htmlspecialchars($notifPhoneId); ?>" placeholder="e.g. 1293652117171674" style="width:100%; padding:9px 12px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; font-family:monospace;" <?php echo !$hasAccountsTable ? 'disabled' : ''; ?>>
                             <span style="font-size:0.73rem; color:#64748b; display:block; margin-top:4px;">Unique Meta Phone ID for PEPP Updates marketing &amp; reminders.</span>
+                        </div>
+
+                        <div style="margin-bottom:14px;">
+                            <label style="display:flex; justify-content:space-between; font-size:0.8rem; font-weight:700; color:#374151; margin-bottom:6px;">
+                                <span>Meta WABA ID</span>
+                                <span style="font-weight:normal; font-size:0.75rem; color:#6b7280;">Current: <?php echo maskWabaId($notificationsAccount['waba_id'] ?? '1099020233033644'); ?></span>
+                            </label>
+                            <input type="text" name="waba_id" value="<?php echo htmlspecialchars($notificationsAccount['waba_id'] ?? '1099020233033644'); ?>" placeholder="1099020233033644" style="width:100%; padding:9px 12px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.85rem; font-family:monospace;" <?php echo !$hasAccountsTable ? 'disabled' : ''; ?> required>
+                            <span style="font-size:0.73rem; color:#64748b; display:block; margin-top:4px;">Authoritative WABA ID for PEPP Updates alerts &amp; marketing.</span>
                         </div>
 
                         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:16px; align-items:end;">
@@ -1198,17 +1284,25 @@ include 'includes/admin_nav.php';
                             </span>
                         </div>
                         <div>
-                            <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">WhatsApp Business Account ID (WABA)</label>
-                            <input type="text" name="whatsapp_business_id" value="<?php echo htmlspecialchars($settings['whatsapp_business_id'] ?? ''); ?>" placeholder="e.g. 10283928471829" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:0.85rem;" required>
+                            <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">
+                                Primary Admissions WABA ID <span style="font-size:0.75rem; color:#9ca3af; font-weight:normal;">(Compatibility)</span>
+                            </label>
+                            <input type="text" name="whatsapp_business_id" value="<?php echo htmlspecialchars($settings['whatsapp_business_id'] ?? '1410328164305566'); ?>" placeholder="1410328164305566" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:0.85rem;" required>
                             <span style="font-size:0.75rem; color:#6b7280; display:block; margin-top:4px;">
-                                Shared Meta WABA ID for both PEPP Learning and PEPP Updates.
+                                Primary Account 1 WABA ID (1410328164305566) for admissions &amp; legacy fallback. Sender-specific WABA IDs are stored under <strong>WhatsApp Sender Accounts</strong> above.
                             </span>
                         </div>
                     </div>
 
                     <div style="margin-bottom:16px;">
-                        <label style="display:block; font-size:0.8rem; font-weight:700; color:#4b5563; margin-bottom:6px;">Permanent Access Token</label>
-                        <textarea name="whatsapp_access_token" rows="3" placeholder="Enter System User Token..." style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:0.85rem; font-family:monospace;" required><?php echo htmlspecialchars($settings['whatsapp_access_token'] ?? ''); ?></textarea>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <label style="font-size:0.8rem; font-weight:700; color:#4b5563; margin:0;">Global Permanent Access Token (Shared System User Token)</label>
+                            <div><?php echo maskAccessToken($settings['whatsapp_access_token'] ?? ''); ?></div>
+                        </div>
+                        <textarea name="whatsapp_access_token" rows="2" placeholder="<?php echo !empty($settings['whatsapp_access_token']) ? '•••••••••••••••• (Global System User token configured. Leave blank to keep existing token unchanged, or paste a new token to update)' : 'Paste System User Token here...'; ?>" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:0.85rem; font-family:monospace;"></textarea>
+                        <span style="font-size:0.75rem; color:#6b7280; display:block; margin-top:4px;">
+                            <i class="fas fa-shield-alt" style="color:#059669;"></i> <strong>Security:</strong> Single global System User token verified across both WABAs. Token is never displayed in plaintext after saving and never exposed through API/AJAX responses.
+                        </span>
                     </div>
 
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-bottom:16px;">

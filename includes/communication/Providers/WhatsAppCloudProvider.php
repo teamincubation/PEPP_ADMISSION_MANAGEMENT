@@ -331,6 +331,27 @@ class WhatsAppCloudProvider implements CommunicationProviderInterface {
         return $this->phoneId;
     }
 
+    /**
+     * Returns the WhatsApp Business Account ID (WABA) bound to this provider instance.
+     *
+     * @return string
+     */
+    public function getBusinessId() {
+        return $this->businessId;
+    }
+
+    /**
+     * Prevents raw access token exposure in debug dumps, logs, or stack traces.
+     */
+    public function __debugInfo() {
+        return [
+            'businessId' => $this->businessId,
+            'phoneId' => $this->phoneId,
+            'apiVersion' => $this->apiVersion,
+            'accessToken' => !empty($this->accessToken) ? substr($this->accessToken, 0, 7) . '••••' . substr($this->accessToken, -6) : '[EMPTY]'
+        ];
+    }
+
     public function downloadMedia($mediaId) {
         $url = "https://graph.facebook.com/{$this->apiVersion}/{$mediaId}";
         

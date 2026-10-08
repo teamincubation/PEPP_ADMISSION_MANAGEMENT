@@ -536,6 +536,7 @@ class CommunicationEngine {
     public function getProvider($channel, $phoneIdOrAccount = null) {
         if ($channel === 'whatsapp') {
             $phoneId = '';
+            $account = null;
             if ($phoneIdOrAccount !== null) {
                 if (is_array($phoneIdOrAccount)) {
                     $account = $phoneIdOrAccount;
@@ -546,7 +547,7 @@ class CommunicationEngine {
                     }
                     if (is_numeric($phoneIdOrAccountStr) && strlen($phoneIdOrAccountStr) > 8) {
                         $phoneId = $phoneIdOrAccountStr;
-                        $account = null;
+                        $account = $this->getAccountResolver()->getAccountByPhoneId($phoneId);
                     } else {
                         $account = $this->getWhatsAppAccount($phoneIdOrAccount);
                         if (!$account) {
@@ -576,6 +577,7 @@ class CommunicationEngine {
                         $phoneId = trim((string)($stmt->fetchColumn() ?: ''));
                     } catch (Throwable $e) {}
                 }
+                $account = $defaultAccount;
             }
 
             if ($this->mockProvider !== null) {
@@ -586,9 +588,22 @@ class CommunicationEngine {
             $stmt = $this->pdo->query("SELECT setting_name, setting_value FROM admin_settings WHERE setting_name LIKE 'whatsapp_%'");
             $settings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
 
-            $businessId  = $settings['whatsapp_business_id'] ?? '';
-            $accessToken = $settings['whatsapp_access_token'] ?? '';
-            $apiVersion  = $settings['whatsapp_api_version'] ?? 'v20.0';
+            $legacyBusinessId = $settings['whatsapp_business_id'] ?? '1410328164305566';
+            $accessToken      = $settings['whatsapp_access_token'] ?? '';
+            $apiVersion       = $settings['whatsapp_api_version'] ?? 'v20.0';
+
+            // Resolve sender-specific WABA ID (Account 1: 1410328164305566, Account 3: 1099020233033644)
+            // Single global System User access token is used across both WABAs
+            $businessId = '';
+            if ($account !== null && !empty($account['waba_id'])) {
+                $businessId = trim((string)$account['waba_id']);
+            } elseif ($account !== null && (($account['sender_key'] ?? '') === 'notifications' || (int)($account['id'] ?? 0) === 3)) {
+                $businessId = '1099020233033644';
+            } elseif ($phoneId === '1293652117171674') {
+                $businessId = '1099020233033644';
+            } else {
+                $businessId = !empty($legacyBusinessId) ? $legacyBusinessId : '1410328164305566';
+            }
 
             if (empty($phoneId) || empty($accessToken)) {
                 throw new Exception("WhatsApp Cloud API configuration is missing or incomplete.");

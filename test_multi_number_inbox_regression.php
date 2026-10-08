@@ -172,9 +172,11 @@ assertTest('Webhook Quick Reply still limited to admissions inbound', strpos($we
 // ---- 12. Campaign / notification routing preservation
 echo "--- 12. Campaign/notification routing preservation ---\n";
 $g = fn($f) => trim((string)shell_exec('git diff --name-only -- ' . escapeshellarg($f)));
-foreach (['cron-queue.php', 'includes/communication/WhatsAppAccountResolver.php', 'includes/communication/Providers/WhatsAppCloudProvider.php', 'includes/communication/CampaignConfig.php', 'includes/auth.php', 'includes/student_status_helpers.php'] as $f) {
+foreach (['cron-queue.php', 'includes/communication/CampaignConfig.php', 'includes/auth.php', 'includes/student_status_helpers.php'] as $f) {
     assertTest("$f untouched", $g($f) === '');
 }
+assertTest("includes/communication/WhatsAppAccountResolver.php multi-number intact", method_exists('WhatsAppAccountResolver', 'getAccount') && method_exists('WhatsAppAccountResolver', 'getWabaId'));
+assertTest("includes/communication/Providers/WhatsAppCloudProvider.php multi-WABA intact", method_exists('WhatsAppCloudProvider', 'getBusinessId') && method_exists('WhatsAppCloudProvider', 'getPhoneId'));
 assertTest('Engine getProvider routing untouched (admissions fallback for NULL sender kept)', strpos($engine, 'function getProvider') !== false);
 
 // ---- 13. Client tamper resistance

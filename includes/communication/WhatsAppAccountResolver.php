@@ -82,7 +82,7 @@ class WhatsAppAccountResolver {
 
     /**
      * Resolves a WhatsApp account by sender_key (e.g. 'admissions', 'notifications'),
-     * account id (e.g. 1, 2), or default if omitted.
+     * account id (e.g. 1, 2, 3), or default if omitted.
      *
      * @param string|int|null $identifier
      * @return array|null Returns associative account array or null if not found
@@ -103,7 +103,7 @@ class WhatsAppAccountResolver {
                 }
                 $acc = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($acc) {
-                    return $acc;
+                    return $this->normalizeAccountArray($acc);
                 }
             } catch (Throwable $e) {
                 error_log("WhatsAppAccountResolver error: " . $e->getMessage());
@@ -114,16 +114,19 @@ class WhatsAppAccountResolver {
         $cleanKey = strtolower(trim((string)$identifier));
         if ($cleanKey === 'admissions' || $cleanKey === '1') {
             return $this->getLegacyAdmissionsAccount();
-        } elseif ($cleanKey === 'notifications' || $cleanKey === '2') {
+        } elseif ($cleanKey === 'notifications' || $cleanKey === '2' || $cleanKey === '3') {
             return [
-                'id' => 2,
+                'id' => 3,
                 'sender_key' => 'notifications',
                 'phone_number_id' => '',
+                'waba_id' => '1099020233033644',
                 'display_number' => '917994304400',
                 'display_name' => 'PEPP Updates',
                 'purpose' => 'Session reminders, faculty session reminders, daily task reminders and university admission notifications',
                 'is_default' => 0,
-                'status' => 'active'
+                'status' => 'active',
+                'created_at' => date('Y-m-d H:i:s'),
+                'updated_at' => date('Y-m-d H:i:s')
             ];
         }
 
@@ -145,9 +148,14 @@ class WhatsAppAccountResolver {
                 $stmt->execute([$cleanPhoneId]);
                 $acc = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($acc) {
-                    return $acc;
+                    return $this->normalizeAccountArray($acc);
                 }
             } catch (Throwable $e) {}
+        }
+
+        // Check against PEPP Updates canonical phone ID
+        if ($cleanPhoneId === '1293652117171674') {
+            return $this->getAccount('notifications');
         }
 
         // Check against legacy admin_settings
@@ -174,7 +182,7 @@ class WhatsAppAccountResolver {
                 $stmt->execute([$cleanNumber]);
                 $acc = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($acc) {
-                    return $acc;
+                    return $this->normalizeAccountArray($acc);
                 }
             } catch (Throwable $e) {}
         }
@@ -197,14 +205,14 @@ class WhatsAppAccountResolver {
                 $stmt = $this->pdo->query("SELECT * FROM whatsapp_accounts WHERE is_default = 1 AND status = 'active' LIMIT 1");
                 $acc = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($acc) {
-                    return $acc;
+                    return $this->normalizeAccountArray($acc);
                 }
                 // Fallback to admissions key
                 $stmt = $this->pdo->prepare("SELECT * FROM whatsapp_accounts WHERE sender_key = 'admissions' LIMIT 1");
                 $stmt->execute();
                 $acc = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($acc) {
-                    return $acc;
+                    return $this->normalizeAccountArray($acc);
                 }
             } catch (Throwable $e) {}
         }
@@ -265,7 +273,8 @@ class WhatsAppAccountResolver {
         if ($this->hasWhatsAppAccountsTable()) {
             try {
                 $sql = "SELECT * FROM whatsapp_accounts" . ($onlyActive ? " WHERE status = 'active'" : "") . " ORDER BY is_default DESC, id ASC";
-                return $this->pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                $rows = $this->pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                return array_map([$this, 'normalizeAccountArray'], $rows);
             } catch (Throwable $e) {}
         }
 
@@ -273,9 +282,10 @@ class WhatsAppAccountResolver {
         $list = [
             $this->getLegacyAdmissionsAccount(),
             [
-                'id' => 2,
+                'id' => 3,
                 'sender_key' => 'notifications',
                 'phone_number_id' => '',
+                'waba_id' => '1099020233033644',
                 'display_number' => '917994304400',
                 'display_name' => 'PEPP Updates',
                 'purpose' => 'Session reminders, faculty session reminders, daily task reminders and university admission notifications',
@@ -289,12 +299,73 @@ class WhatsAppAccountResolver {
         return $list;
     }
 
+    /**
+     * Resolves the authoritative WABA ID for a given account array or identifier.
+     */
+    public function getWabaId($accountOrIdentifier = null): string {
+        $acc = is_array($accountOrIdentifier) ? $accountOrIdentifier : $this->getAccount($accountOrIdentifier);
+        if ($acc && !empty($acc['waba_id'])) {
+            return trim((string)$acc['waba_id']);
+        }
+        if ($acc && (($acc['sender_key'] ?? '') === 'notifications' || (int)($acc['id'] ?? 0) === 3)) {
+            return '1099020233033644';
+        }
+        $legacy = $this->getLegacySetting('whatsapp_business_id');
+        return !empty($legacy) ? $legacy : '1410328164305566';
+    }
+
+    /**
+     * Checks if waba_id column exists in whatsapp_accounts table.
+     */
+    public function hasWabaIdColumn(): bool {
+        static $hasCol = null;
+        if ($hasCol !== null) {
+            return $hasCol;
+        }
+        try {
+            $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'sqlite') {
+                $cols = $this->pdo->query("PRAGMA table_info(whatsapp_accounts)")->fetchAll(PDO::FETCH_ASSOC);
+                $names = array_column($cols, 'name');
+                $hasCol = in_array('waba_id', $names, true);
+            } else {
+                $stmt = $this->pdo->query("SHOW COLUMNS FROM whatsapp_accounts LIKE 'waba_id'");
+                $hasCol = (bool)$stmt->fetchColumn();
+            }
+        } catch (Throwable $e) {
+            $hasCol = false;
+        }
+        return $hasCol;
+    }
+
+    /**
+     * Ensures every account array has an authoritative waba_id assigned.
+     */
+    private function normalizeAccountArray(?array $acc): ?array {
+        if (!$acc) {
+            return null;
+        }
+        if (empty($acc['waba_id'])) {
+            $senderKey = strtolower(trim((string)($acc['sender_key'] ?? '')));
+            $accId = (int)($acc['id'] ?? 0);
+            if ($senderKey === 'notifications' || $accId === 3 || $accId === 2) {
+                $acc['waba_id'] = '1099020233033644';
+            } else {
+                $legacyWaba = $this->getLegacySetting('whatsapp_business_id');
+                $acc['waba_id'] = !empty($legacyWaba) ? $legacyWaba : '1410328164305566';
+            }
+        }
+        return $acc;
+    }
+
     private function getLegacyAdmissionsAccount(): array {
         $phoneId = $this->getLegacySetting('whatsapp_phone_id');
+        $wabaId  = $this->getLegacySetting('whatsapp_business_id') ?: '1410328164305566';
         return [
             'id' => 1,
             'sender_key' => 'admissions',
             'phone_number_id' => $phoneId ?: '',
+            'waba_id' => $wabaId,
             'display_number' => '916282563209',
             'display_name' => 'PEPP Learning',
             'purpose' => 'Admissions, student onboarding, approvals, payment receipts and 2-way inbox',

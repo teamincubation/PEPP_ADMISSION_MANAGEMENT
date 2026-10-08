@@ -441,8 +441,8 @@ $campSenderTestId = $engine->queueMessage(
 
 $senderRow = $pdo->query("SELECT id, priority, sender_account_id FROM communication_queue WHERE id = {$campSenderTestId}")->fetch(PDO::FETCH_ASSOC);
 assertTest(
-    "Scenario E.1: Campaign item has priority = -10 AND sender_account_id = 2 (PEPP Updates)",
-    (int)$senderRow['priority'] === -10 && (int)$senderRow['sender_account_id'] === 2,
+    "Scenario E.1: Campaign item has priority = -10 AND sender_account_id in (2, 3) (PEPP Updates)",
+    (int)$senderRow['priority'] === -10 && in_array((int)$senderRow['sender_account_id'], [2, 3], true),
     "Priority: {$senderRow['priority']}, sender_account_id: {$senderRow['sender_account_id']}"
 );
 
