@@ -198,6 +198,94 @@ function mentor_tables_exist($pdo) {
     return $ok;
 }
 
+/** Check if admin_user_preferences table exists & auto-create if missing (MySQL & SQLite compatible). */
+function ensure_admin_user_preferences_table($pdo) {
+    static $checked = null;
+    if ($checked !== null) return $checked;
+    try {
+        $driver = '';
+        try { $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME); } catch (Exception $ed) {}
+        if ($driver === 'sqlite') {
+            $pdo->exec("
+                CREATE TABLE IF NOT EXISTS admin_user_preferences (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id INTEGER NOT NULL,
+                    preference_key TEXT NOT NULL,
+                    preference_value TEXT NOT NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (admin_id, preference_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_aup_admin_id ON admin_user_preferences (admin_id);
+            ");
+        } else {
+            $pdo->exec("
+                CREATE TABLE IF NOT EXISTS admin_user_preferences (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    admin_id INT NOT NULL,
+                    preference_key VARCHAR(100) NOT NULL,
+                    preference_value VARCHAR(255) NOT NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_admin_pref (admin_id, preference_key),
+                    KEY idx_aup_admin_id (admin_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            ");
+        }
+        $checked = true;
+    } catch (Exception $e) {
+        try {
+            $checked = (bool)$pdo->query("SELECT 1 FROM admin_user_preferences LIMIT 1");
+        } catch (Exception $e2) {
+            $checked = false;
+        }
+    }
+    return $checked;
+}
+
+/** Get a preference value for a specific admin user. */
+function get_admin_user_preference($pdo, $admin_id, $key, $default = null) {
+    if (!$admin_id || !ensure_admin_user_preferences_table($pdo)) return $default;
+    try {
+        $stmt = $pdo->prepare("SELECT preference_value FROM admin_user_preferences WHERE admin_id = ? AND preference_key = ? LIMIT 1");
+        $stmt->execute([(int)$admin_id, $key]);
+        $val = $stmt->fetchColumn();
+        return ($val !== false && $val !== null) ? $val : $default;
+    } catch (Exception $e) {
+        return $default;
+    }
+}
+
+/** Set/persist a preference value for a specific admin user. */
+function set_admin_user_preference($pdo, $admin_id, $key, $value) {
+    if (!$admin_id || !ensure_admin_user_preferences_table($pdo)) return false;
+    try {
+        $driver = '';
+        try { $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME); } catch (Exception $ed) {}
+        if ($driver === 'sqlite') {
+            $stmt = $pdo->prepare("
+                INSERT INTO admin_user_preferences (admin_id, preference_key, preference_value, created_at, updated_at)
+                VALUES (?, ?, ?, datetime('now'), datetime('now'))
+                ON CONFLICT(admin_id, preference_key) DO UPDATE SET
+                    preference_value = excluded.preference_value,
+                    updated_at = datetime('now')
+            ");
+            return $stmt->execute([(int)$admin_id, $key, (string)$value]);
+        } else {
+            $stmt = $pdo->prepare("
+                INSERT INTO admin_user_preferences (admin_id, preference_key, preference_value, created_at, updated_at)
+                VALUES (?, ?, ?, NOW(), NOW())
+                ON DUPLICATE KEY UPDATE
+                    preference_value = VALUES(preference_value),
+                    updated_at = NOW()
+            ");
+            return $stmt->execute([(int)$admin_id, $key, (string)$value]);
+        }
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
 /** Get mentoring metrics (progress, attendance, streak, call and remark details) for a student. */
 function get_student_mentoring_details($pdo, $student) {
     $email = $student['email'];
@@ -226,6 +314,11 @@ function get_student_mentoring_details($pdo, $student) {
         }
     }
 
+    // Get total call count
+    $call_count_stmt = $pdo->prepare("SELECT COUNT(*) FROM mentor_call_logs WHERE student_user_id = ?");
+    $call_count_stmt->execute([$user_id]);
+    $total_call_count = (int)$call_count_stmt->fetchColumn();
+
     // Get count of remarks
     $remark_stmt = $pdo->prepare("SELECT COUNT(*) FROM mentor_remarks WHERE student_user_id = ?");
     $remark_stmt->execute([$user_id]);
@@ -241,6 +334,7 @@ function get_student_mentoring_details($pdo, $student) {
         'total_plan_calendar_days' => $course_analytics['total_plan_calendar_days'] ?? 0,
         'last_call_time' => $last_call_time,
         'last_called_status' => $last_called_status,
+        'total_call_count' => $total_call_count,
         'remarks_count' => $remarks_count,
         'total_tasks' => $course_analytics['total_tasks'],
         'completed_tasks' => $course_analytics['completed_tasks'],
@@ -252,6 +346,33 @@ function get_student_mentoring_details($pdo, $student) {
 // ── POST Actions ──
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
     $action = $_POST['action'] ?? '';
+
+    // Save Last Call sorting preference & lock state for logged-in admin
+    if ($action === 'save_last_call_preference') {
+        header('Content-Type: application/json');
+        $cur_admin_id = $admin_row['id'] ?? $admin_id;
+        if (!$cur_admin_id) {
+            echo json_encode(['success' => false, 'error' => 'Authentication required']);
+            exit;
+        }
+
+        $direction = strtoupper(trim($_POST['sort_direction'] ?? ''));
+        $locked = trim((string)($_POST['sort_locked'] ?? ''));
+
+        $updated = [];
+        if (in_array($direction, ['ASC', 'DESC'], true)) {
+            set_admin_user_preference($pdo, $cur_admin_id, 'student_mentoring_last_call_sort', $direction);
+            $updated['sort_direction'] = $direction;
+        }
+        if (in_array($locked, ['0', '1', 'true', 'false'], true)) {
+            $locked_val = ($locked === '1' || $locked === 'true') ? '1' : '0';
+            set_admin_user_preference($pdo, $cur_admin_id, 'student_mentoring_last_call_sort_locked', $locked_val);
+            $updated['sort_locked'] = $locked_val;
+        }
+
+        echo json_encode(['success' => true, 'updated' => $updated]);
+        exit;
+    }
 
     // Log a call (Authorized: Super Admin or currently active mentor)
     if ($action === 'log_call' && mentor_tables_exist($pdo)) {
@@ -506,6 +627,38 @@ $dropdown_courses = [];
 $selected_course_id = 0;
 $selected_course_name = '';
 
+// User preferences for Last Call sorting
+$saved_last_call_sort = get_admin_user_preference($pdo, $admin_id, 'student_mentoring_last_call_sort', 'ASC');
+if (!in_array($saved_last_call_sort, ['ASC', 'DESC'], true)) {
+    $saved_last_call_sort = 'ASC';
+}
+$saved_last_call_locked = (get_admin_user_preference($pdo, $admin_id, 'student_mentoring_last_call_sort_locked', '0') === '1');
+
+// Determine active sort on page load:
+// Priority:
+// 1. Explicit GET param if provided (?sort=last_call&order=ASC/DESC or ?sort=performance)
+// 2. If saved_last_call_locked is true -> 'last_call' with $saved_last_call_sort
+// 3. Default -> 'performance' (descending)
+$get_sort = strtolower(trim((string)($_GET['sort'] ?? '')));
+$get_order = strtoupper(trim((string)($_GET['order'] ?? '')));
+if (!in_array($get_order, ['ASC', 'DESC'], true)) {
+    $get_order = $saved_last_call_sort;
+}
+
+if ($get_sort === 'last_call') {
+    $active_sort = 'last_call';
+    $active_last_call_order = $get_order;
+} elseif ($get_sort === 'performance') {
+    $active_sort = 'performance';
+    $active_last_call_order = $saved_last_call_sort;
+} elseif ($saved_last_call_locked) {
+    $active_sort = 'last_call';
+    $active_last_call_order = $saved_last_call_sort;
+} else {
+    $active_sort = 'performance';
+    $active_last_call_order = $saved_last_call_sort;
+}
+
 if (mentor_tables_exist($pdo)) {
     // Mentor's assigned courses names
     $my_courses = get_mentor_courses($pdo, $admin_id);
@@ -654,15 +807,16 @@ if (mentor_tables_exist($pdo)) {
 
             // Fetch call logs, remarks counts, and active mentors in bulk
             $last_calls_by_student = [];
+            $call_counts_by_student = [];
             $remarks_count_by_student = [];
             $active_mentors_by_student = [];
 
             if (!empty($student_ids)) {
                 $id_placeholders = implode(',', array_fill(0, count($student_ids), '?'));
 
-                // Fetch last call timestamp
+                // Fetch last call timestamp and total call count in single indexed query
                 $call_stmt = $pdo->prepare("
-                    SELECT student_user_id, MAX(call_timestamp) as last_call
+                    SELECT student_user_id, MAX(call_timestamp) as last_call, COUNT(*) as call_count
                     FROM mentor_call_logs
                     WHERE student_user_id IN ($id_placeholders)
                     GROUP BY student_user_id
@@ -671,6 +825,7 @@ if (mentor_tables_exist($pdo)) {
                 $calls = $call_stmt->fetchAll(PDO::FETCH_ASSOC);
                 foreach ($calls as $c) {
                     $last_calls_by_student[$c['student_user_id']] = $c['last_call'];
+                    $call_counts_by_student[$c['student_user_id']] = (int)$c['call_count'];
                 }
 
                 // Fetch remarks counts
@@ -748,6 +903,7 @@ if (mentor_tables_exist($pdo)) {
                     'total_plan_calendar_days' => $course_analytics['total_plan_calendar_days'] ?? 0,
                     'last_call_time' => $last_call_time,
                     'last_called_status' => $last_called_status,
+                    'total_call_count' => $call_counts_by_student[$s['user_id']] ?? 0,
                     'remarks_count' => $remarks_count,
                     'total_tasks' => $course_analytics['total_tasks'],
                     'completed_tasks' => $course_analytics['completed_tasks'],
@@ -757,10 +913,46 @@ if (mentor_tables_exist($pdo)) {
                 $students_with_metrics[] = $s;
             }
 
-            // Sort by completion percentage (progress) descending
-            usort($students_with_metrics, function($a, $b) {
-                return $b['metrics']['progress'] <=> $a['metrics']['progress'];
-            });
+            // Apply sorting based on active sort mode (Last Call or Performance)
+            if ($active_sort === 'last_call') {
+                usort($students_with_metrics, function($a, $b) use ($active_last_call_order) {
+                    $time_a = !empty($a['metrics']['last_call_time']) ? strtotime($a['metrics']['last_call_time']) : 0;
+                    $time_b = !empty($b['metrics']['last_call_time']) ? strtotime($b['metrics']['last_call_time']) : 0;
+
+                    if ($active_last_call_order === 'ASC') {
+                        // Oldest → Newest: Never called (time = 0) is highest priority (waiting longest)
+                        // Never called -> Oldest last call -> Newest last call
+                        if ($time_a === 0 && $time_b === 0) {
+                            return strcasecmp($a['full_name'] ?? '', $b['full_name'] ?? '');
+                        }
+                        if ($time_a === 0) return -1;
+                        if ($time_b === 0) return 1;
+                        if ($time_a === $time_b) {
+                            return strcasecmp($a['full_name'] ?? '', $b['full_name'] ?? '');
+                        }
+                        return ($time_a < $time_b) ? -1 : 1;
+                    } else {
+                        // Newest → Oldest: Most recently called first, never called placed at bottom
+                        if ($time_a === 0 && $time_b === 0) {
+                            return strcasecmp($a['full_name'] ?? '', $b['full_name'] ?? '');
+                        }
+                        if ($time_a === 0) return 1;
+                        if ($time_b === 0) return -1;
+                        if ($time_a === $time_b) {
+                            return strcasecmp($a['full_name'] ?? '', $b['full_name'] ?? '');
+                        }
+                        return ($time_a > $time_b) ? -1 : 1;
+                    }
+                });
+            } else {
+                // Default: Sort by completion percentage (progress) descending
+                usort($students_with_metrics, function($a, $b) {
+                    if ($b['metrics']['progress'] !== $a['metrics']['progress']) {
+                        return $b['metrics']['progress'] <=> $a['metrics']['progress'];
+                    }
+                    return strcasecmp($a['full_name'] ?? '', $b['full_name'] ?? '');
+                });
+            }
 
             $students = $students_with_metrics;
 
@@ -873,6 +1065,18 @@ include 'includes/admin_nav.php';
     font-size: 0.8rem;
     text-transform: uppercase;
     color: var(--text-muted);
+}
+.mentoring-table th.col-student { width: 22%; min-width: 175px; }
+.mentoring-table th.col-mentor { width: 14%; min-width: 110px; }
+.mentoring-table th.col-progress { width: 18%; min-width: 135px; }
+.mentoring-table th.col-streak { width: 12%; min-width: 95px; }
+.mentoring-table th.col-last-call { width: 18%; min-width: 175px; }
+.mentoring-table th.col-actions { width: 16%; min-width: 190px; text-align: right; }
+.last-call-sort-btn {
+    transition: all 0.15s ease;
+}
+.last-call-sort-btn:hover {
+    filter: brightness(0.96);
 }
 .assign-student-item {
     display: flex;
@@ -1081,13 +1285,31 @@ include 'includes/admin_nav.php';
             <table class="data-table mentoring-table">
                 <thead>
                     <tr>
-                        <th>Student</th>
-                        <th>Course</th>
-                        <th>Mentor</th>
-                        <th>Progress</th>
-                        <th>Streak</th>
-                        <th>Last Call</th>
-                        <th style="text-align:right;">Actions</th>
+                        <th class="col-student">Student</th>
+                        <th class="col-mentor">Mentor</th>
+                        <th class="col-progress">Progress</th>
+                        <th class="col-streak">Streak</th>
+                        <th class="col-last-call" style="min-width:175px;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap;">
+                                <span style="font-weight:700;">Last Call</span>
+                                <div class="last-call-sort-controls" style="display:inline-flex; align-items:center; gap:4px;">
+                                    <button type="button" id="btn-last-call-direction" class="btn btn-xs last-call-sort-btn"
+                                            onclick="toggleLastCallSortDirection()"
+                                            title="Click to toggle Last Call sort: Oldest ↔ Newest"
+                                            style="font-size:0.7rem; padding:2px 7px; border-radius:6px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:4px; line-height:1.2; background:<?= $active_sort === 'last_call' ? '#e0e7ff' : '#f1f5f9' ?>; color:<?= $active_sort === 'last_call' ? '#3730a3' : '#475569' ?>; border:1px solid <?= $active_sort === 'last_call' ? '#c7d2fe' : '#cbd5e1' ?>;">
+                                        <i id="icon-last-call-direction" class="fas <?= $active_last_call_order === 'ASC' ? 'fa-arrow-up-wide-short' : 'fa-arrow-down-wide-short' ?>"></i>
+                                        <span id="label-last-call-direction"><?= $active_last_call_order === 'ASC' ? 'Oldest → Newest' : 'Newest → Oldest' ?></span>
+                                    </button>
+                                    <button type="button" id="btn-last-call-lock" class="btn btn-xs last-call-sort-btn"
+                                            onclick="toggleLastCallLock()"
+                                            title="<?= $saved_last_call_locked ? 'Last Call sort is LOCKED (automatically loads this order on page load). Click to unlock.' : 'Last Call sort is UNLOCKED (loads default Performance order on page load). Click to lock.' ?>"
+                                            style="font-size:0.75rem; padding:2px 6px; border-radius:6px; cursor:pointer; line-height:1.2; background:<?= $saved_last_call_locked ? '#fef3c7' : '#f8fafc' ?>; color:<?= $saved_last_call_locked ? '#b45309' : '#94a3b8' ?>; border:1px solid <?= $saved_last_call_locked ? '#fde68a' : '#cbd5e1' ?>;">
+                                        <span id="icon-last-call-lock"><?= $saved_last_call_locked ? '🔒' : '🔓' ?></span>
+                                    </button>
+                                </div>
+                            </div>
+                        </th>
+                        <th class="col-actions" style="text-align:right;">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -1096,6 +1318,9 @@ include 'includes/admin_nav.php';
                     $m = $s['metrics'];
                     $wa_phone = preg_replace('/\D/', '', ($s['whatsapp_country_code'] ?: '+91') . $s['whatsapp_number']);
                     $has_mentor_flag = !empty($s['active_mentor_id']) ? '1' : '0';
+                    $call_ts = !empty($m['last_call_time']) ? strtotime($m['last_call_time']) : 0;
+                    $has_call = !empty($m['last_call_time']) ? '1' : '0';
+                    $tot_calls = (int)($m['total_call_count'] ?? 0);
                 ?>
                 <tr class="student-row"
                     data-name="<?= e(strtolower($s['full_name'])) ?>"
@@ -1108,7 +1333,10 @@ include 'includes/admin_nav.php';
                     data-completed="<?= (int)$m['completed_tasks'] ?>"
                     data-pending="<?= (int)$m['pending_tasks'] ?>"
                     data-overdue="<?= (int)$m['overdue_tasks'] ?>"
-                    data-attendance="<?= (int)$m['attendance'] ?>">
+                    data-attendance="<?= (int)$m['attendance'] ?>"
+                    data-last-call-ts="<?= $call_ts ?>"
+                    data-has-call="<?= $has_call ?>"
+                    data-call-count="<?= $tot_calls ?>">
                     <td data-label="Student">
                         <div class="cell-main">
                             <?= e($s['full_name']) ?>
@@ -1122,10 +1350,6 @@ include 'includes/admin_nav.php';
                             <?php endif; ?>
                         </div>
                         <div class="cell-sub"><?= htmlspecialchars(format_credential_text($s['email'], 'email', 'students'), ENT_QUOTES, 'UTF-8') ?> · <?= htmlspecialchars(($s['whatsapp_country_code'] ?: '+91') . ' ' . format_credential_text($s['whatsapp_number'], 'phone', 'students'), ENT_QUOTES, 'UTF-8') ?></div>
-                    </td>
-                    <td data-label="Course">
-                        <div class="cell-main"><?= e($s['course']) ?></div>
-                        <div class="cell-sub">Year: <?= e($s['pepp_academic_year'] ?? '') ?></div>
                     </td>
                     <td data-label="Mentor">
                         <?php if (!empty($s['active_mentor_name'])): ?>
@@ -1156,8 +1380,23 @@ include 'includes/admin_nav.php';
                     </td>
                     <td data-label="Last Call">
                         <div class="cell-sub" style="font-size:0.8rem;">
-                            <?= $m['last_call_time'] ? date('d M Y, h:i A', strtotime($m['last_call_time'])) : 'Never' ?><br>
-                            <span class="badge <?= $m['last_call_time'] ? 'blue' : 'gray' ?>" style="font-size:0.65rem; margin-top:2px; display:inline-block;"><?= $m['last_called_status'] ?></span>
+                            <?php if (!empty($m['last_call_time'])): ?>
+                                <div style="font-weight:600; color:var(--text);"><?= date('d M Y, h:i A', strtotime($m['last_call_time'])) ?></div>
+                                <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:3px;">
+                                    <span class="badge blue" style="font-size:0.65rem; padding:2px 6px;"><?= e($m['last_called_status']) ?></span>
+                                    <span class="badge" title="Total calls: <?= $tot_calls ?>" style="background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd; font-size:0.65rem; font-weight:700; padding:2px 6px; cursor:default;">
+                                        📞 <?= $tot_calls ?> <?= $tot_calls === 1 ? 'call' : 'calls' ?>
+                                    </span>
+                                </div>
+                            <?php else: ?>
+                                <div style="font-weight:600; color:var(--text-muted);">Never called</div>
+                                <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:3px;">
+                                    <span class="badge gray" style="font-size:0.65rem; padding:2px 6px;">Never called</span>
+                                    <span class="badge" title="Total calls: 0" style="background:#f1f5f9; color:#64748b; border:1px solid #e2e8f0; font-size:0.65rem; font-weight:700; padding:2px 6px; cursor:default;">
+                                        📞 0 calls
+                                    </span>
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </td>
                     <td class="actions-cell" style="text-align:right; white-space:nowrap;">
@@ -2096,6 +2335,171 @@ function resetStudentFilters() {
     if (document.getElementById('filter-overdue')) document.getElementById('filter-overdue').value = 'ALL';
     if (document.getElementById('filter-attendance')) document.getElementById('filter-attendance').value = 'ALL';
     applyStudentFilters();
+}
+
+let currentLastCallOrder = '<?= $active_last_call_order ?>'; // 'ASC' or 'DESC'
+let currentLastCallLocked = <?= $saved_last_call_locked ? 'true' : 'false' ?>;
+let activeSortType = '<?= $active_sort ?>'; // 'last_call' or 'performance'
+const csrfToken = '<?= csrf_token() ?>';
+
+function updateLastCallUI() {
+    const label = document.getElementById('label-last-call-direction');
+    const iconDir = document.getElementById('icon-last-call-direction');
+    const btnDir = document.getElementById('btn-last-call-direction');
+    const iconLock = document.getElementById('icon-last-call-lock');
+    const btnLock = document.getElementById('btn-last-call-lock');
+
+    if (label) {
+        label.textContent = (currentLastCallOrder === 'ASC') ? 'Oldest → Newest' : 'Newest → Oldest';
+    }
+    if (iconDir) {
+        iconDir.className = 'fas ' + ((currentLastCallOrder === 'ASC') ? 'fa-arrow-up-wide-short' : 'fa-arrow-down-wide-short');
+    }
+    if (btnDir) {
+        if (activeSortType === 'last_call') {
+            btnDir.style.background = '#e0e7ff';
+            btnDir.style.color = '#3730a3';
+            btnDir.style.borderColor = '#c7d2fe';
+        } else {
+            btnDir.style.background = '#f1f5f9';
+            btnDir.style.color = '#475569';
+            btnDir.style.borderColor = '#cbd5e1';
+        }
+    }
+    if (iconLock) {
+        iconLock.textContent = currentLastCallLocked ? '🔒' : '🔓';
+    }
+    if (btnLock) {
+        if (currentLastCallLocked) {
+            btnLock.style.background = '#fef3c7';
+            btnLock.style.color = '#b45309';
+            btnLock.style.borderColor = '#fde68a';
+            btnLock.title = 'Last Call sort is LOCKED (automatically loads this order on page load). Click to unlock.';
+        } else {
+            btnLock.style.background = '#f8fafc';
+            btnLock.style.color = '#94a3b8';
+            btnLock.style.borderColor = '#cbd5e1';
+            btnLock.title = 'Last Call sort is UNLOCKED (loads default Performance order on page load). Click to lock.';
+        }
+    }
+}
+
+function sortStudentRowsInDOM(direction) {
+    const tbody = document.querySelector('.mentoring-table tbody');
+    if (!tbody) return;
+    const rows = Array.from(tbody.querySelectorAll('.student-row'));
+    if (rows.length === 0) return;
+
+    rows.sort((a, b) => {
+        const tsA = parseInt(a.dataset.lastCallTs, 10) || 0;
+        const tsB = parseInt(b.dataset.lastCallTs, 10) || 0;
+        const nameA = a.dataset.name || '';
+        const nameB = b.dataset.name || '';
+
+        if (direction === 'ASC') {
+            // Oldest → Newest: Never called (ts=0) first (waiting longest)
+            // Order: Never called -> Oldest last call -> Newest last call
+            if (tsA === 0 && tsB === 0) return nameA.localeCompare(nameB);
+            if (tsA === 0) return -1;
+            if (tsB === 0) return 1;
+            if (tsA === tsB) return nameA.localeCompare(nameB);
+            return tsA - tsB;
+        } else {
+            // Newest → Oldest: Newest calls first, never called (ts=0) at bottom
+            if (tsA === 0 && tsB === 0) return nameA.localeCompare(nameB);
+            if (tsA === 0) return 1;
+            if (tsB === 0) return -1;
+            if (tsA === tsB) return nameA.localeCompare(nameB);
+            return tsB - tsA;
+        }
+    });
+
+    rows.forEach(r => tbody.appendChild(r));
+    activeSortType = 'last_call';
+    currentLastCallOrder = direction;
+    updateLastCallUI();
+    applyStudentFilters();
+}
+
+function sortStudentRowsByPerformance() {
+    const tbody = document.querySelector('.mentoring-table tbody');
+    if (!tbody) return;
+    const rows = Array.from(tbody.querySelectorAll('.student-row'));
+    if (rows.length === 0) return;
+
+    rows.sort((a, b) => {
+        const progA = parseInt(a.dataset.progress, 10) || 0;
+        const progB = parseInt(b.dataset.progress, 10) || 0;
+        const nameA = a.dataset.name || '';
+        const nameB = b.dataset.name || '';
+        if (progB !== progA) return progB - progA;
+        return nameA.localeCompare(nameB);
+    });
+
+    rows.forEach(r => tbody.appendChild(r));
+    activeSortType = 'performance';
+    updateLastCallUI();
+    applyStudentFilters();
+}
+
+function toggleLastCallSortDirection() {
+    const newDirection = (currentLastCallOrder === 'ASC') ? 'DESC' : 'ASC';
+    sortStudentRowsInDOM(newDirection);
+    saveLastCallPreference(newDirection, currentLastCallLocked ? 1 : 0);
+}
+
+function toggleLastCallLock() {
+    currentLastCallLocked = !currentLastCallLocked;
+    if (currentLastCallLocked) {
+        if (activeSortType !== 'last_call') {
+            sortStudentRowsInDOM(currentLastCallOrder);
+        } else {
+            updateLastCallUI();
+        }
+    } else {
+        // When unlocked, return to default performance ordering
+        sortStudentRowsByPerformance();
+    }
+    saveLastCallPreference(currentLastCallOrder, currentLastCallLocked ? 1 : 0);
+}
+
+function saveLastCallPreference(direction, locked) {
+    const formData = new FormData();
+    formData.append('action', 'save_last_call_preference');
+    formData.append('sort_direction', direction);
+    formData.append('sort_locked', locked);
+    formData.append('csrf_token', csrfToken);
+
+    fetch('student-mentoring.php', {
+        method: 'POST',
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-CSRF-Token': csrfToken
+        },
+        body: formData
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (!res.success) {
+            console.warn('Could not save Last Call preference:', res.error);
+        }
+    })
+    .catch(err => {
+        console.error('Network error saving Last Call preference:', err);
+    });
+
+    // Update URL query parameters cleanly
+    try {
+        const url = new URL(window.location.href);
+        if (locked) {
+            url.searchParams.set('sort', 'last_call');
+            url.searchParams.set('order', direction);
+        } else {
+            url.searchParams.delete('sort');
+            url.searchParams.delete('order');
+        }
+        window.history.replaceState({}, '', url.toString());
+    } catch (e) {}
 }
 
 document.addEventListener('DOMContentLoaded', function() {
