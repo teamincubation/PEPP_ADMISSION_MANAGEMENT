@@ -11,6 +11,20 @@ header('Content-Type: application/json');
 
 $filter = $_GET['filter'] ?? 'all'; // all, unread, students, unknown
 $search = trim($_GET['search'] ?? '');
+$accountFilter = trim((string)($_GET['account_id'] ?? '')); // '', numeric account id, or 'legacy'
+
+require_once '../../../includes/communication/CommunicationEngine.php';
+$inboxAware = CommunicationEngine::inboxAccountSchemaAvailable($pdo);
+
+$accountSelect = '';
+$accountJoin = '';
+if ($inboxAware) {
+    $accountSelect = ",
+               wa.display_name AS account_name,
+               wa.display_number AS account_display_number,
+               wa.sender_key AS account_sender_key";
+    $accountJoin = " LEFT JOIN whatsapp_accounts wa ON wa.id = wc.account_id";
+}
 
 $sql = "SELECT wc.*,
                (
@@ -26,8 +40,8 @@ $sql = "SELECT wc.*,
                    WHERE conversation_id = wc.id
                    ORDER BY created_at DESC, id DESC
                    LIMIT 1
-               ) AS latest_message_status
-        FROM whatsapp_conversations wc
+               ) AS latest_message_status{$accountSelect}
+        FROM whatsapp_conversations wc{$accountJoin}
         WHERE 1=1";
 $params = [];
 
@@ -37,6 +51,15 @@ if ($filter === 'unread') {
     $sql .= " AND student_uid IS NOT NULL";
 } elseif ($filter === 'unknown') {
     $sql .= " AND student_uid IS NULL";
+}
+
+if ($inboxAware && $accountFilter !== '') {
+    if (strtolower($accountFilter) === 'legacy') {
+        $sql .= " AND wc.account_id IS NULL";
+    } elseif (ctype_digit($accountFilter) && (int)$accountFilter > 0) {
+        $sql .= " AND wc.account_id = ?";
+        $params[] = (int)$accountFilter;
+    }
 }
 
 if ($search !== '') {

@@ -34,8 +34,22 @@ if ($convId <= 0) {
 }
 
 try {
-    // 1. Fetch conversation
-    $stmtConv = $pdo->prepare("SELECT * FROM whatsapp_conversations WHERE id = ? LIMIT 1");
+    require_once '../../../includes/communication/CommunicationEngine.php';
+    $inboxAware = CommunicationEngine::inboxAccountSchemaAvailable($pdo);
+
+    // 1. Fetch conversation (sender identity is derived ONLY from this verified DB record;
+    //    any client-supplied account/sender value in the request body is intentionally ignored)
+    if ($inboxAware) {
+        $stmtConv = $pdo->prepare("
+            SELECT wc.*, wa.sender_key AS account_sender_key, wa.display_name AS account_display_name,
+                   wa.display_number AS account_display_number, wa.status AS account_status
+            FROM whatsapp_conversations wc
+            LEFT JOIN whatsapp_accounts wa ON wa.id = wc.account_id
+            WHERE wc.id = ? LIMIT 1
+        ");
+    } else {
+        $stmtConv = $pdo->prepare("SELECT * FROM whatsapp_conversations WHERE id = ? LIMIT 1");
+    }
     $stmtConv->execute([$convId]);
     $conv = $stmtConv->fetch(PDO::FETCH_ASSOC);
 
@@ -45,11 +59,31 @@ try {
         exit;
     }
 
+    // Sender account bound to this conversation (null only in pre-migration compatibility mode)
+    $senderKey = null;
+    $senderLabel = null;
+    if ($inboxAware) {
+        // Tier C / unknown channel: never fall back to any account.
+        if ($conv['account_id'] === null || $conv['account_id'] === ''
+            || ($conv['classification_confidence'] ?? 'legacy_unclassified') === 'legacy_unclassified'
+            || empty($conv['account_sender_key'])) {
+            http_response_code(422);
+            echo json_encode(['error' => 'Replying is disabled for this conversation: it belongs to a legacy/unknown WhatsApp channel. To prevent cross-sender replies, outbound messages cannot be sent from this thread.']);
+            exit;
+        }
+        if (($conv['account_status'] ?? '') !== 'active') {
+            http_response_code(422);
+            echo json_encode(['error' => 'The WhatsApp sender account for this conversation is inactive. Reply was not sent.']);
+            exit;
+        }
+        $senderKey = (string)$conv['account_sender_key'];
+        $senderLabel = (string)($conv['account_display_name'] ?? $senderKey);
+    }
+
     $recipient = $conv['wa_phone_number'];
     $studentUid = $conv['student_uid'];
     $studentName = $conv['contact_name'];
 
-    require_once '../../../includes/communication/CommunicationEngine.php';
     $engine = CommunicationEngine::getInstance($pdo);
 
     $templateData = [];
@@ -129,7 +163,7 @@ try {
 
     $adminUser = $_SESSION['username'] ?? 'admin';
 
-    // 3. Queue the outbound message
+    // 3. Queue the outbound message, explicitly bound to the conversation's sender account (argument 14)
     $queueId = $engine->queueMessage(
         'whatsapp',
         $recipient,
@@ -142,7 +176,9 @@ try {
         $adminUser,
         null, // scheduledAt
         $studentUid,
-        empty($templateName) ? 'admin_reply' : $eventName
+        empty($templateName) ? 'admin_reply' : $eventName,
+        null, // invoiceId
+        $senderKey // conversation-bound sender_key (null only in pre-migration compatibility mode)
     );
 
     if ($queueId) {

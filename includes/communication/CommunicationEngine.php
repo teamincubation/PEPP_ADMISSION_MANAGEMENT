@@ -132,6 +132,139 @@ class CommunicationEngine {
     }
 
     /**
+     * Whether the WhatsApp Inbox tables carry the multi-number account columns
+     * (database-update-52-multi-number-inbox.sql applied).
+     * When false, every inbox code path behaves exactly as the legacy single-number inbox.
+     */
+    public static function inboxAccountSchemaAvailable($pdo, $refresh = false): bool {
+        static $cache = [];
+        $key = spl_object_id($pdo);
+        if (!$refresh && isset($cache[$key])) {
+            return $cache[$key];
+        }
+        $ok = true;
+        try {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            $required = [
+                'whatsapp_conversations' => ['account_id', 'classification_confidence'],
+                'whatsapp_messages'      => ['account_id', 'classification_confidence'],
+            ];
+            foreach ($required as $table => $cols) {
+                if ($driver === 'sqlite') {
+                    $names = array_column($pdo->query("PRAGMA table_info({$table})")->fetchAll(PDO::FETCH_ASSOC), 'name');
+                } else {
+                    $names = $pdo->query("SHOW COLUMNS FROM `{$table}`")->fetchAll(PDO::FETCH_COLUMN);
+                }
+                foreach ($cols as $c) {
+                    if (!in_array($c, $names, true)) {
+                        $ok = false;
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            $ok = false;
+        }
+        return $cache[$key] = $ok;
+    }
+
+    /**
+     * Maps a verified WhatsApp account id to the (account_id, classification_confidence) pair
+     * stored on inbox rows. Anything that is not a proven, known account is Tier C (NULL / legacy_unclassified)
+     * and is NEVER defaulted to Account 1.
+     *
+     * @return array{0: ?int, 1: string}
+     */
+    public static function classifyInboxAccount($accountId): array {
+        if ($accountId !== null && (int)$accountId === 1) {
+            return [1, 'proven_account_1'];
+        }
+        if ($accountId !== null && (int)$accountId === 3) {
+            return [3, 'proven_account_3'];
+        }
+        return [null, 'legacy_unclassified'];
+    }
+
+    /**
+     * Finds or creates the inbox conversation for (student phone, WhatsApp account) and refreshes its metadata.
+     * Must be called inside the caller's transaction. Safe under concurrent inserts
+     * (duplicate-key on UNIQUE(wa_phone_number, account_id) is recovered with a locking re-read).
+     *
+     * $ctx keys: student_uid, student_user_id, contact_name, snippet, inbound (bool).
+     * $accountId = null means Tier C (only meaningful when the account-aware schema is present).
+     */
+    public static function upsertInboxConversation($pdo, string $phone, $accountId, array $ctx): int {
+        $aware   = self::inboxAccountSchemaAvailable($pdo);
+        $inbound = !empty($ctx['inbound']);
+        $isMysql = ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'sqlite');
+
+        $findSql    = "SELECT id FROM whatsapp_conversations WHERE wa_phone_number = ?";
+        $findParams = [$phone];
+        if ($aware) {
+            if ($accountId === null) {
+                $findSql .= " AND account_id IS NULL";
+            } else {
+                $findSql .= " AND account_id = ?";
+                $findParams[] = (int)$accountId;
+            }
+        }
+        $findSql .= " LIMIT 1";
+
+        $stmtFind = $pdo->prepare($findSql);
+        $stmtFind->execute($findParams);
+        $convId = $stmtFind->fetchColumn();
+
+        if (!$convId) {
+            $cols = "wa_phone_number, student_uid, student_user_id, contact_name, last_message_text, last_message_at, "
+                  . ($inbound ? "last_inbound_at, unread_count, " : "unread_count, ")
+                  . "status, created_at, updated_at";
+            $vals = "?, ?, ?, ?, ?, NOW(), " . ($inbound ? "NOW(), 1, " : "0, ") . "'open', NOW(), NOW()";
+            $params = [$phone, $ctx['student_uid'] ?? null, $ctx['student_user_id'] ?? null, $ctx['contact_name'] ?? null, $ctx['snippet'] ?? ''];
+            if ($aware) {
+                [$accId, $confidence] = self::classifyInboxAccount($accountId);
+                $cols .= ", account_id, classification_confidence";
+                $vals .= ", ?, ?";
+                $params[] = $accId;
+                $params[] = $confidence;
+            }
+            try {
+                $pdo->prepare("INSERT INTO whatsapp_conversations ({$cols}) VALUES ({$vals})")->execute($params);
+                return (int)$pdo->lastInsertId();
+            } catch (PDOException $e) {
+                $dup = ($e->getCode() === '23000' || stripos($e->getMessage(), 'duplicate') !== false || stripos($e->getMessage(), 'unique') !== false);
+                if (!$dup) {
+                    throw $e;
+                }
+                // Lost the race: re-read with a locking read so we see the competing committed row.
+                $stmtAgain = $pdo->prepare(str_replace(' LIMIT 1', ' LIMIT 1' . ($isMysql ? ' FOR UPDATE' : ''), $findSql));
+                $stmtAgain->execute($findParams);
+                $convId = $stmtAgain->fetchColumn();
+                if (!$convId) {
+                    throw $e;
+                }
+            }
+        }
+
+        $convId = (int)$convId;
+        if ($inbound) {
+            $upd = $pdo->prepare("
+                UPDATE whatsapp_conversations
+                SET student_uid = ?, student_user_id = ?, contact_name = ?, last_message_text = ?,
+                    last_message_at = NOW(), last_inbound_at = NOW(), unread_count = unread_count + 1, updated_at = NOW()
+                WHERE id = ?
+            ");
+        } else {
+            $upd = $pdo->prepare("
+                UPDATE whatsapp_conversations
+                SET student_uid = ?, student_user_id = ?, contact_name = ?, last_message_text = ?,
+                    last_message_at = NOW(), updated_at = NOW()
+                WHERE id = ?
+            ");
+        }
+        $upd->execute([$ctx['student_uid'] ?? null, $ctx['student_user_id'] ?? null, $ctx['contact_name'] ?? null, $ctx['snippet'] ?? '', $convId]);
+        return $convId;
+    }
+
+    /**
      * Enqueues an outgoing message to the communication queue.
      * Maps to legacy log table in parallel to maintain backward compatibility.
      *
@@ -1211,10 +1344,18 @@ class CommunicationEngine {
 
                         $this->pdo->beginTransaction();
 
-                        // Find or create conversation
-                        $stmtConv = $this->pdo->prepare("SELECT id FROM whatsapp_conversations WHERE wa_phone_number = ? LIMIT 1");
-                        $stmtConv->execute([$cleanPhone]);
-                        $convId = $stmtConv->fetchColumn();
+                        // Multi-number inbox: the mirrored conversation belongs to the account that actually dispatched
+                        // this message (queue sender_account_id; a NULL queue sender is dispatched via 'admissions').
+                        $inboxAware = self::inboxAccountSchemaAvailable($this->pdo);
+                        $mirrorAccountId = null;
+                        if ($inboxAware) {
+                            if (!empty($item['sender_account_id'])) {
+                                $mirrorAccountId = (int)$item['sender_account_id'];
+                            } else {
+                                $admAcc = $this->getWhatsAppAccount('admissions');
+                                $mirrorAccountId = $admAcc ? (int)$admAcc['id'] : null;
+                            }
+                        }
 
                         $bodyText = $item['body_text'] ?? '';
                         $renderedText = null;
@@ -1249,35 +1390,32 @@ class CommunicationEngine {
                             $renderedText = $bodyText;
                         }
 
-                        if (!$convId) {
-                            $insConv = $this->pdo->prepare("
-                                INSERT INTO whatsapp_conversations (wa_phone_number, student_uid, student_user_id, contact_name, last_message_text, last_message_at, unread_count, status, created_at, updated_at)
-                                VALUES (?, ?, ?, ?, ?, NOW(), 0, 'open', NOW(), NOW())
-                            ");
-                            $insConv->execute([$cleanPhone, $studentUid, $studentUserId, $contactName, $renderedText]);
-                            $convId = (int)$this->pdo->lastInsertId();
-                        } else {
-                            $updConv = $this->pdo->prepare("
-                                UPDATE whatsapp_conversations
-                                SET student_uid = ?,
-                                    student_user_id = ?,
-                                    contact_name = ?,
-                                    last_message_text = ?,
-                                    last_message_at = NOW(),
-                                    updated_at = NOW()
-                                WHERE id = ?
-                            ");
-                            $updConv->execute([$studentUid, $studentUserId, $contactName, $renderedText, $convId]);
-                        }
+                        // Find or create the conversation scoped by (recipient + sender account) and refresh metadata
+                        $convId = self::upsertInboxConversation($this->pdo, $cleanPhone, $mirrorAccountId, [
+                            'student_uid'     => $studentUid,
+                            'student_user_id' => $studentUserId,
+                            'contact_name'    => $contactName,
+                            'snippet'         => $renderedText,
+                            'inbound'         => false,
+                        ]);
 
                         // Insert outbound message with status 'sent'
                         $msgType = (isset($templateData['type']) && $templateData['type'] === 'interactive') ? 'interactive' : 'text';
                         $rawPayloadJson = !empty($item['template_data']) ? $item['template_data'] : null;
-                        $insMsg = $this->pdo->prepare("
-                            INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, status, raw_payload, created_at, sent_at)
-                            VALUES (?, ?, 'outbound', ?, ?, 'sent', ?, NOW(), NOW())
-                        ");
-                        $insMsg->execute([$convId, $msgId, $msgType, $renderedText, $rawPayloadJson]);
+                        if ($inboxAware) {
+                            [$msgAccId, $msgConfidence] = self::classifyInboxAccount($mirrorAccountId);
+                            $insMsg = $this->pdo->prepare("
+                                INSERT INTO whatsapp_messages (conversation_id, account_id, classification_confidence, wa_message_id, direction, message_type, message_text, status, raw_payload, created_at, sent_at)
+                                VALUES (?, ?, ?, ?, 'outbound', ?, ?, 'sent', ?, NOW(), NOW())
+                            ");
+                            $insMsg->execute([$convId, $msgAccId, $msgConfidence, $msgId, $msgType, $renderedText, $rawPayloadJson]);
+                        } else {
+                            $insMsg = $this->pdo->prepare("
+                                INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, status, raw_payload, created_at, sent_at)
+                                VALUES (?, ?, 'outbound', ?, ?, 'sent', ?, NOW(), NOW())
+                            ");
+                            $insMsg->execute([$convId, $msgId, $msgType, $renderedText, $rawPayloadJson]);
+                        }
 
                         $this->pdo->commit();
                     } catch (Exception $e) {

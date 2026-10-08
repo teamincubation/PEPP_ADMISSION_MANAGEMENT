@@ -297,7 +297,23 @@ try {
     }
     unset($m);
 
-    echo json_encode(['success' => true, 'messages' => $messages]);
+    // Verified conversation/account context (null on pre-migration schema)
+    $conversationContext = null;
+    require_once '../../../includes/communication/CommunicationEngine.php';
+    if (CommunicationEngine::inboxAccountSchemaAvailable($pdo)) {
+        $stmtCtx = $pdo->prepare("
+            SELECT wc.id, wc.account_id, wc.classification_confidence,
+                   wa.display_name AS account_name, wa.display_number AS account_display_number,
+                   wa.sender_key AS account_sender_key
+            FROM whatsapp_conversations wc
+            LEFT JOIN whatsapp_accounts wa ON wa.id = wc.account_id
+            WHERE wc.id = ? LIMIT 1
+        ");
+        $stmtCtx->execute([$convId]);
+        $conversationContext = $stmtCtx->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
+
+    echo json_encode(['success' => true, 'conversation' => $conversationContext, 'messages' => $messages]);
 } catch (Exception $e) {
     http_response_code(500);
     echo json_encode(['error' => $e->getMessage()]);

@@ -18,6 +18,12 @@ try {
     $approvedTemplates = $stmtTpl->fetchAll(PDO::FETCH_COLUMN);
 } catch (Exception $e) {}
 
+// WhatsApp channels (accounts) for the optional inbox channel filter
+$inboxAccounts = [];
+try {
+    $inboxAccounts = $pdo->query("SELECT id, display_name, display_number FROM whatsapp_accounts ORDER BY is_default DESC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {}
+
 include 'includes/admin_nav.php';
 ?>
 
@@ -27,6 +33,15 @@ include 'includes/admin_nav.php';
     <div style="width: 320px; border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; background: #fff; flex-shrink: 0;">
         <!-- Search and Tabs -->
         <div style="padding: 16px; border-bottom: 1px solid #e2e8f0; display: flex; flex-direction: column; gap: 12px;">
+            <?php if (!empty($inboxAccounts)): ?>
+            <select id="account-filter" onchange="loadConversations()" aria-label="Filter by WhatsApp channel" style="width: 100%; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.8rem; font-weight: 600; color: #334155; background: #fff; outline: none;">
+                <option value="">All WhatsApp channels</option>
+                <?php foreach ($inboxAccounts as $acc): ?>
+                    <option value="<?php echo (int)$acc['id']; ?>"><?php echo htmlspecialchars($acc['display_name']); ?> (+<?php echo htmlspecialchars($acc['display_number']); ?>)</option>
+                <?php endforeach; ?>
+                <option value="legacy">Legacy / Unknown WhatsApp Channel</option>
+            </select>
+            <?php endif; ?>
             <div style="position: relative;">
                 <i class="fas fa-search" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #94a3b8; font-size: 0.85rem;"></i>
                 <input type="text" id="search-input" oninput="loadConversations()" placeholder="Search name, phone, UID..." style="width: 100%; padding: 8px 12px 8px 36px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.85rem; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor='#cbd5e1'">
@@ -58,6 +73,7 @@ include 'includes/admin_nav.php';
                 <div>
                     <div style="font-weight: 700; color: #1e293b; font-size: 0.9rem;" id="chat-contact-name">Select a Conversation</div>
                     <div style="font-size: 0.75rem; color: #64748b;" id="chat-phone">No thread selected</div>
+                    <div style="font-size: 0.72rem; margin-top: 2px; display: none;" id="chat-channel"></div>
                 </div>
             </div>
             <div id="24h-status-badge"></div>
@@ -73,6 +89,16 @@ include 'includes/admin_nav.php';
 
         <!-- Input / Reply Bar -->
         <div id="reply-container" style="border-top: 1px solid #e2e8f0; background: #fff; padding: 16px; display: none; flex-direction: column; gap: 10px; flex-shrink: 0;">
+            <!-- Tier C: legacy / unknown channel lockout (server also rejects replies) -->
+            <div id="legacy-reply-lock" style="display: none; background: #fffbeb; border: 1.5px solid #fde68a; border-radius: 10px; padding: 14px; color: #92400e; font-size: 0.82rem; align-items: center; gap: 12px;">
+                <i class="fas fa-triangle-exclamation" style="font-size: 1.4rem; color: #d97706;"></i>
+                <div>
+                    <strong>Outbound Messaging Disabled (Legacy / Unknown WhatsApp Channel)</strong>
+                    <div style="font-size: 0.75rem; color: #b45309; margin-top: 2px;">This conversation predates multi-number channel verification. Replies are disabled on this thread to prevent cross-sender WhatsApp replies.</div>
+                </div>
+            </div>
+            <!-- Immutable sender notice for verified conversations -->
+            <div id="reply-sender-lock" style="display: none; font-size: 0.72rem; color: #64748b; padding: 4px 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;"></div>
             <!-- Meta 24 Hour Warning and Template Selector -->
             <div id="twentyfour-hour-warning" style="display: none; flex-direction: column; gap: 12px; background: #fffdf5; border: 1.5px solid #fef3c7; border-radius: 12px; padding: 14px 16px; box-shadow: 0 2px 6px rgba(245, 158, 11, 0.06);">
                 <!-- Notice Header Banner -->
@@ -317,9 +343,28 @@ function switchTab(filter, btn) {
     loadConversations();
 }
 
+function channelBadgeHtml(c) {
+    // Only account-aware responses carry classification_confidence
+    if (typeof c.classification_confidence === 'undefined') return '';
+    if (!c.account_id || c.classification_confidence === 'legacy_unclassified') {
+        return '<span style="background:#fef3c7; color:#92400e; font-size:0.6rem; font-weight:700; padding:1px 6px; border-radius:4px; white-space:nowrap;"><i class="fas fa-clock-rotate-left"></i> Legacy / Unknown WhatsApp Channel</span>';
+    }
+    if (c.account_sender_key === 'notifications') {
+        return '<span style="background:#f3e8ff; color:#7e22ce; font-size:0.6rem; font-weight:700; padding:1px 6px; border-radius:4px; white-space:nowrap;"><i class="fas fa-bell"></i> ' + escapeHtml(c.account_name || 'PEPP Updates') + '</span>';
+    }
+    return '<span style="background:#e0f2fe; color:#0369a1; font-size:0.6rem; font-weight:700; padding:1px 6px; border-radius:4px; white-space:nowrap;"><i class="fas fa-graduation-cap"></i> ' + escapeHtml(c.account_name || 'PEPP Learning') + '</span>';
+}
+
+function isLegacyConversation(c) {
+    if (!c || typeof c.classification_confidence === 'undefined') return false;
+    return !c.account_id || c.classification_confidence === 'legacy_unclassified';
+}
+
 function loadConversations(isBackground = false) {
     const search = document.getElementById('search-input').value;
-    fetch(`api/v1/communication/fetch-conversations.php?filter=${currentFilter}&search=${encodeURIComponent(search)}`)
+    const accountSel = document.getElementById('account-filter');
+    const accountParam = accountSel ? accountSel.value : '';
+    fetch(`api/v1/communication/fetch-conversations.php?filter=${currentFilter}&search=${encodeURIComponent(search)}&account_id=${encodeURIComponent(accountParam)}`)
         .then(async r => {
             const isJson = (r.headers.get('content-type') || '').includes('application/json');
             const data = isJson ? await r.json() : null;
@@ -392,6 +437,7 @@ function renderConversations(isBackground) {
                             <span style="font-size: 0.75rem; color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%;">${lastMsgSnippet}</span>
                             ${unreadBadge}
                         </div>
+                        <div style="margin-top: 3px;">${channelBadgeHtml(c)}</div>
                     </div>
                 </div>
             </div>
@@ -455,6 +501,15 @@ function renderMessages(messages, isBackground) {
     document.getElementById('chat-contact-name').innerText = conv.contact_name || 'Unknown Contact';
     document.getElementById('chat-phone').innerText = '+' + conv.wa_phone_number + (conv.student_uid ? ` (UID: ${conv.student_uid})` : '');
     document.getElementById('chat-avatar').innerText = (conv.contact_name || 'U').charAt(0).toUpperCase();
+    const channelEl = document.getElementById('chat-channel');
+    if (channelEl) {
+        if (typeof conv.classification_confidence === 'undefined') {
+            channelEl.style.display = 'none';
+        } else {
+            channelEl.style.display = 'block';
+            channelEl.innerHTML = channelBadgeHtml(conv) + (conv.account_id && conv.account_display_number ? ` <span style="color:#475569; font-weight:600;">+${escapeHtml(conv.account_display_number)}</span>` : '');
+        }
+    }
 
     let html = '';
     messages.forEach(m => {
@@ -758,6 +813,28 @@ function updateWindowPolicies() {
     replyContainer.style.display = 'flex';
     tplPreview.style.display = 'none';
 
+    const legacyLock = document.getElementById('legacy-reply-lock');
+    const senderLock = document.getElementById('reply-sender-lock');
+    if (isLegacyConversation(conv)) {
+        // Tier C: sender cannot be proven -> replies disabled (server also rejects)
+        if (legacyLock) legacyLock.style.display = 'flex';
+        if (senderLock) senderLock.style.display = 'none';
+        warning.style.display = 'none';
+        freeTextInput.style.display = 'none';
+        tplPreview.style.display = 'none';
+        badge.innerHTML = '<span class="badge red" style="font-size:0.7rem; font-weight:700;">LEGACY - REPLY DISABLED</span>';
+        return;
+    }
+    if (legacyLock) legacyLock.style.display = 'none';
+    if (senderLock) {
+        if (conv.account_name) {
+            senderLock.textContent = 'Replies will be sent exclusively through ' + conv.account_name + (conv.account_display_number ? ' (+' + conv.account_display_number + ')' : '');
+            senderLock.style.display = 'block';
+        } else {
+            senderLock.style.display = 'none';
+        }
+    }
+
     if (!conv.last_inbound_at) {
         // No inbound messages yet -> templates only
         warning.style.display = 'flex';
@@ -952,6 +1029,10 @@ function loadStudentContext(studentUid) {
 }
 
 function sendReply() {
+    const activeConv = conversationsData.find(c => c.id == currentConversationId);
+    if (isLegacyConversation(activeConv)) {
+        return; // Tier C: never send; server also rejects with 422
+    }
     const text = document.getElementById('reply-textarea').value;
     const tplSelect = document.getElementById('template-select');
     const templateName = tplSelect ? tplSelect.value : '';

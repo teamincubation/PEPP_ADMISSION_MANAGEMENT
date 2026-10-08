@@ -180,23 +180,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $receivingDisplayNumber = preg_replace('/\D/', '', (string)($metadata['display_phone_number'] ?? ''));
 
         $receivingAccount = null;
+        $receivingAccountResolved = false;
         if (!empty($receivingPhoneId)) {
             $receivingAccount = $accountResolver->getAccountByPhoneId($receivingPhoneId);
         }
         if (!$receivingAccount && !empty($receivingDisplayNumber)) {
             $receivingAccount = $accountResolver->getAccountByDisplayNumber($receivingDisplayNumber);
         }
+        if ($receivingAccount) {
+            $receivingAccountResolved = true;
+        }
 
         // Backward compatibility fallback if neither matched
         if (!$receivingAccount) {
             if ($receivingDisplayNumber === '917994304400' || substr($receivingDisplayNumber, -10) === '7994304400') {
                 $receivingAccount = $accountResolver->getAccount('notifications');
+                $receivingAccountResolved = (bool)$receivingAccount;
             } else {
                 $receivingAccount = $accountResolver->getDefaultAccount();
                 if (!empty($receivingPhoneId) || !empty($receivingDisplayNumber)) {
                     error_log("[WHATSAPP_WEBHOOK] Destination account ambiguity: phone_number_id={$receivingPhoneId}, display_number={$receivingDisplayNumber}. Defaulted to admissions.");
                 }
             }
+        }
+
+        // Multi-number inbox: conversation ownership is only ever assigned from a positively resolved account.
+        // An unresolvable destination is stored as Tier C (NULL account) and is never defaulted to Account 1.
+        require_once dirname(dirname(dirname(__DIR__))) . '/includes/communication/CommunicationEngine.php';
+        $inboxAware = CommunicationEngine::inboxAccountSchemaAvailable($pdo);
+        $receivingInboxAccountId = $receivingAccountResolved ? (int)($receivingAccount['id'] ?? 0) : null;
+        if ($inboxAware && $receivingInboxAccountId === null) {
+            error_log("[WHATSAPP_WEBHOOK] Inbound stored as legacy/unclassified conversation (unresolved destination): phone_number_id={$receivingPhoneId}, display_number={$receivingDisplayNumber}");
         }
 
         $isNotificationsInbound = ($receivingAccount && ($receivingAccount['sender_key'] ?? '') === 'notifications')
@@ -349,39 +363,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 $pdo->beginTransaction();
 
-                // Find or create conversation
-                $stmtConv = $pdo->prepare("SELECT id FROM whatsapp_conversations WHERE wa_phone_number = ? LIMIT 1");
-                $stmtConv->execute([$cleanFrom]);
-                $convId = $stmtConv->fetchColumn();
-
-                if (!$convId) {
-                    $insConv = $pdo->prepare("
-                        INSERT INTO whatsapp_conversations (wa_phone_number, student_uid, student_user_id, contact_name, last_message_text, last_message_at, last_inbound_at, unread_count, status, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, NOW(), NOW(), 1, 'open', NOW(), NOW())
-                    ");
-                    $insConv->execute([$cleanFrom, $studentUid, $studentUserId, $contactName, $convSnippet ?: $text]);
-                    $convId = (int)$pdo->lastInsertId();
-                } else {
-                    $updConv = $pdo->prepare("
-                        UPDATE whatsapp_conversations 
-                        SET student_uid = ?, 
-                            student_user_id = ?, 
-                            contact_name = ?, 
-                            last_message_text = ?, 
-                            last_message_at = NOW(), 
-                            last_inbound_at = NOW(), 
-                            unread_count = unread_count + 1, 
-                            updated_at = NOW() 
-                        WHERE id = ?
-                    ");
-                    $updConv->execute([$studentUid, $studentUserId, $contactName, $convSnippet ?: $text, $convId]);
-                }
+                // Find or create conversation scoped by (student phone, receiving WhatsApp account)
+                $convId = CommunicationEngine::upsertInboxConversation($pdo, $cleanFrom, $receivingInboxAccountId, [
+                    'student_uid'     => $studentUid,
+                    'student_user_id' => $studentUserId,
+                    'contact_name'    => $contactName,
+                    'snippet'         => $convSnippet ?: $text,
+                    'inbound'         => true,
+                ]);
 
                 // Insert inbound message record
-                $insMsg = $pdo->prepare("
-                    INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, media_id, media_mime_type, media_filename, caption, reply_to_wa_message_id, status, raw_payload, sent_at, created_at)
-                    VALUES (?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, 'delivered', ?, NOW(), NOW())
-                ");
+                if ($inboxAware) {
+                    $insMsg = $pdo->prepare("
+                        INSERT INTO whatsapp_messages (conversation_id, account_id, classification_confidence, wa_message_id, direction, message_type, message_text, media_id, media_mime_type, media_filename, caption, reply_to_wa_message_id, status, raw_payload, sent_at, created_at)
+                        VALUES (?, ?, ?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, 'delivered', ?, NOW(), NOW())
+                    ");
+                } else {
+                    $insMsg = $pdo->prepare("
+                        INSERT INTO whatsapp_messages (conversation_id, wa_message_id, direction, message_type, message_text, media_id, media_mime_type, media_filename, caption, reply_to_wa_message_id, status, raw_payload, sent_at, created_at)
+                        VALUES (?, ?, 'inbound', ?, ?, ?, ?, ?, ?, ?, 'delivered', ?, NOW(), NOW())
+                    ");
+                }
                 $rawPayloadArr = $msg;
                 $rawPayloadArr['receiving_account'] = [
                     'sender_key' => $receivingAccount['sender_key'] ?? 'admissions',
@@ -389,7 +391,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'display_number' => $receivingAccount['display_number'] ?? $receivingDisplayNumber
                 ];
 
-                $insMsg->execute([
+                $msgParams = [
                     $convId,
                     $msgId,
                     $type,
@@ -400,7 +402,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $caption,
                     $replyToId,
                     json_encode($rawPayloadArr)
-                ]);
+                ];
+                if ($inboxAware) {
+                    [$msgAccountId, $msgConfidence] = CommunicationEngine::classifyInboxAccount($receivingInboxAccountId);
+                    array_splice($msgParams, 1, 0, [$msgAccountId, $msgConfidence]);
+                }
+                $insMsg->execute($msgParams);
 
                 $pdo->commit();
 
