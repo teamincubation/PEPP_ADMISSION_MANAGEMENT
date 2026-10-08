@@ -1167,6 +1167,10 @@ class CommunicationEngine {
                 if (count($providedParams) < $expectedParamsCount) {
                     throw new Exception("Parameter count mismatch: Template expects {$expectedParamsCount} parameters, only " . count($providedParams) . " provided.");
                 }
+                // Prevent parameter inflation: slice excess parameters beyond expected count
+                if ($expectedParamsCount > 0 && count($providedParams) > $expectedParamsCount) {
+                    $templateData['parameters'] = array_slice($providedParams, 0, $expectedParamsCount);
+                }
 
                 // Dynamically inject Quick Reply payloads from template metadata if configured
                 $quickReplyPayloads = [];

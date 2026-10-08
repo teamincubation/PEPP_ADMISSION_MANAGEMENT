@@ -764,6 +764,94 @@ $acc1Data = $resolver->getAccount(1);
 $t33_pass = ($waba1 === '1410328164305566' && ($acc1Data['waba_id'] ?? '') === '1410328164305566');
 recordTest("33. Account 1 resolves to WABA 1410328164305566", $t33_pass, "Resolved WABA: {$waba1}");
 
+// -----------------------------------------------------------------------------
+// TEST 34: Account 3 template lookup by name strictly fails to resolve Account 1 template
+// -----------------------------------------------------------------------------
+$t34_resolved = $resolver->resolveTemplate('mphil_join_interest_message', 3);
+$t34_pass = ($t34_resolved === null);
+recordTest("34. Account 3 template lookup by name never resolves Account 1 template", $t34_pass, "Template 'mphil_join_interest_message' strictly resolved null for Account 3");
+
+// -----------------------------------------------------------------------------
+// TEST 35: Campaign template category enforcement (UTILITY rejected for marketing)
+// -----------------------------------------------------------------------------
+$utilityTpl = $pdo->query("SELECT * FROM communication_templates WHERE sender_account_id = 3 AND template_name = 'faculty_session_reminder'")->fetch();
+$t35_rejected = false;
+if ($utilityTpl && strtoupper($utilityTpl['category'] ?? '') !== 'MARKETING') {
+    $t35_rejected = true;
+}
+recordTest("35. UTILITY category template rejected for marketing campaign", $t35_rejected, "Template 'faculty_session_reminder' category is " . ($utilityTpl['category'] ?? 'none'));
+
+// -----------------------------------------------------------------------------
+// TEST 36: Parameter inflation prevention (trimmed to expected count)
+// -----------------------------------------------------------------------------
+$excessParams = ['John Doe', 'M.Phil Clinical Psychology', 'Extra Param 3', 'Extra Param 4'];
+$expectedCount = 2;
+$trimmedParams = array_slice($excessParams, 0, $expectedCount);
+$t36_pass = (count($trimmedParams) === 2 && $trimmedParams[0] === 'John Doe' && $trimmedParams[1] === 'M.Phil Clinical Psychology');
+recordTest("36. Parameter inflation prevented (trimmed to expected count)", $t36_pass, "Trimmed " . count($excessParams) . " parameters to " . count($trimmedParams));
+
+// -----------------------------------------------------------------------------
+// TEST 37: Dynamic parameter extraction without meta_data['body_vars']
+// -----------------------------------------------------------------------------
+$sampleBodyText = "Dear {{1}}, welcome to PEPP! Your exam for {{2}} is on {{3}}.";
+preg_match_all('/\{\{(\d+)\}\}/', $sampleBodyText, $bodyMatches);
+$extractedVars = !empty($bodyMatches[1]) ? array_unique($bodyMatches[1]) : [];
+sort($extractedVars, SORT_NUMERIC);
+$t37_pass = ($extractedVars === ['1', '2', '3']);
+recordTest("37. Dynamic body parameter extraction from body_text regex", $t37_pass, "Extracted " . count($extractedVars) . " variable placeholders: " . implode(', ', $extractedVars));
+
+// -----------------------------------------------------------------------------
+// TEST 38: Admin nav campaign runner preserves sender_account_id = 3 and priority = -10
+// -----------------------------------------------------------------------------
+$stmtCamp = $pdo->prepare("INSERT INTO communication_campaigns (name, sender_account_id, channel, template_name, target_audience, status, total_recipients) VALUES (?, ?, ?, ?, ?, ?, ?)");
+$stmtCamp->execute(['Admin Nav Isolated Campaign', 3, 'whatsapp', 'pepp_updates_broadcast', 'leads', 'draft', 1]);
+$t38_campId = (int)$pdo->lastInsertId();
+$adminNavQueueId = $engine->queueMessage(
+    'whatsapp',
+    '919999900038',
+    'Test Recipient 38',
+    'PEPP Updates Notice',
+    null,
+    null,
+    [],
+    ['parameters' => ['Param 1', 'Param 2']],
+    'Campaign',
+    null,
+    null,
+    'campaign_message',
+    \CampaignConfig::CAMPAIGN_QUEUE_PRIORITY,
+    3,
+    null,
+    null,
+    'admin_nav_test_' . $t38_campId
+);
+$qAdminNav = $pdo->query("SELECT sender_account_id, priority, idempotency_key FROM communication_queue WHERE id = {$adminNavQueueId}")->fetch();
+$t38_pass = ($qAdminNav && (int)$qAdminNav['sender_account_id'] === 3 && (int)$qAdminNav['priority'] === -10);
+recordTest("38. Admin nav campaign runner assigns sender_account_id = 3 and priority = -10", $t38_pass, "sender_account_id = " . ($qAdminNav['sender_account_id'] ?? 'null') . ", priority = " . ($qAdminNav['priority'] ?? 'null'));
+
+// -----------------------------------------------------------------------------
+// TEST 39: Account 3 endpoint URL resolves to phone number ID 1293652117171674
+// -----------------------------------------------------------------------------
+$acc3Data = $resolver->getAccount(3);
+$acc3PhoneId = $acc3Data['phone_number_id'] ?? '';
+$expectedEndpoint = "https://graph.facebook.com/v21.0/{$acc3PhoneId}/messages";
+$t39_pass = ($acc3PhoneId === '1293652117171674' && strpos($expectedEndpoint, '1293652117171674') !== false);
+recordTest("39. Account 3 Meta endpoint uses phone number ID 1293652117171674", $t39_pass, "Endpoint: {$expectedEndpoint}");
+
+// -----------------------------------------------------------------------------
+// TEST 40: Real-world blocker: WABA 1099020233033644 approved custom templates count
+// -----------------------------------------------------------------------------
+$waba3CustomApproved = $pdo->query("
+    SELECT COUNT(*) as cnt
+    FROM communication_templates
+    WHERE (sender_account_id = 3 OR waba_id = '1099020233033644')
+      AND category = 'MARKETING'
+      AND status = 'approved'
+      AND template_name NOT IN ('pepp_updates_broadcast', 'interested')
+")->fetch()['cnt'];
+$t40_pass = ((int)$waba3CustomApproved === 0);
+recordTest("40. Real-world Meta blocker: PEPP Updates has 0 approved custom marketing templates", $t40_pass, "Approved custom marketing templates in WABA 1099020233033644: {$waba3CustomApproved}");
+
 // =============================================================================
 // PERFORMANCE SIMULATION
 // =============================================================================

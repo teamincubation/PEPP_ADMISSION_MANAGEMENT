@@ -344,9 +344,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             }
                         }
 
+                        $bodyVars = [];
+                        preg_match_all('/\{\{(\d+)\}\}/', $bodyText, $bMatches);
+                        if (!empty($bMatches[1])) {
+                            $bodyVars = array_values(array_unique(array_map('intval', $bMatches[1])));
+                            sort($bodyVars);
+                        }
+
                         $metaData = json_encode([
                             'components' => $tpl['components'] ?? [],
                             'body_text' => $bodyText,
+                            'body_vars' => $bodyVars,
                             'header_text' => $headerText,
                             'footer_text' => $footerText,
                             'waba_id' => $targetWaba,

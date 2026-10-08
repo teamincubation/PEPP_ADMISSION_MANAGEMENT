@@ -517,7 +517,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 // Find target template details (Sender-aware)
                                 $receivingAccountId = $receivingAccount ? (int)$receivingAccount['id'] : null;
                                 $targetTpl = $accountResolver->resolveTemplate($targetTplName, $receivingAccountId);
-                                if (!$targetTpl || ($targetTpl['status'] ?? '') !== 'approved') {
+                                if ((!$targetTpl || ($targetTpl['status'] ?? '') !== 'approved') && $receivingAccountId === null) {
                                     $stmtTarget = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? AND channel = 'whatsapp' AND status = 'approved' LIMIT 1");
                                     $stmtTarget->execute([$targetTplName]);
                                     $targetTpl = $stmtTarget->fetch();

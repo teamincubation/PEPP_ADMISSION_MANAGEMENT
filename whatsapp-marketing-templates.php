@@ -431,6 +431,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             'sender_key'       => $targetAccount['sender_key'],
                             'components'       => $components,
                             'body_text'        => $body_text,
+                            'body_vars'        => array_values(array_unique($body_vars)),
                             'header_type'      => $header_type,
                             'header_text'      => $header_text,
                             'footer_text'      => $footer_text,
@@ -687,6 +688,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 }
                                 $existing_meta = json_decode($stmtLocal->fetchColumn() ?: '', true) ?: [];
 
+                                $bodyVars = [];
+                                preg_match_all('/\{\{(\d+)\}\}/', $bodyText, $bMatches);
+                                if (!empty($bMatches[1])) {
+                                    $bodyVars = array_values(array_unique(array_map('intval', $bMatches[1])));
+                                    sort($bodyVars);
+                                }
+
                                 $metaData = json_encode([
                                     'is_marketing' => isset($existing_meta['is_marketing']) ? $existing_meta['is_marketing'] : ($category === 'MARKETING'),
                                     'sender_account_id' => $syncSenderId,
@@ -695,6 +703,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     'meta_template_id' => $tpl['id'] ?? null,
                                     'components' => $tpl['components'] ?? [],
                                     'body_text' => $bodyText,
+                                    'body_vars' => $bodyVars,
                                     'header_text' => $headerText,
                                     'footer_text' => $footerText,
                                     'header_media_url' => $existing_meta['header_media_url'] ?? null

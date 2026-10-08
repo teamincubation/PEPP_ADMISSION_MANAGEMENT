@@ -141,12 +141,27 @@ try {
                         $pdo->prepare("UPDATE communication_campaigns SET status = 'active', updated_at = NOW() WHERE id = ?")->execute([$campId]);
                     }
 
-                    $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
-                    $stmtTpl->execute([$dueCampaign['template_name']]);
-                    $template = $stmtTpl->fetch();
+                    $criteria = json_decode($dueCampaign['segment_criteria'], true) ?: [];
+                    $campSenderId = !empty($dueCampaign['sender_account_id']) ? (int)$dueCampaign['sender_account_id'] : ($criteria['sender_account_id'] ?? null);
+                    $senderKey = $criteria['sender_key'] ?? null;
+                    require_once dirname(__DIR__) . '/includes/communication/WhatsAppAccountResolver.php';
+                    $tplResolver = WhatsAppAccountResolver::getInstance($pdo);
+                    $senderAcc = $campSenderId ? $tplResolver->getAccount($campSenderId) : ($senderKey ? $tplResolver->getAccount($senderKey) : $tplResolver->getAccount('notifications'));
+
+                    $template = null;
+                    if (!empty($dueCampaign['template_id'])) {
+                        $template = $tplResolver->getTemplateById((int)$dueCampaign['template_id'], $campSenderId);
+                    }
+                    if (!$template && !empty($dueCampaign['template_name'])) {
+                        $template = $tplResolver->resolveTemplate($dueCampaign['template_name'], $campSenderId);
+                    }
+                    if (!$template && $campSenderId === null) {
+                        $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? AND channel = 'whatsapp' AND status = 'approved' LIMIT 1");
+                        $stmtTpl->execute([$dueCampaign['template_name']]);
+                        $template = $stmtTpl->fetch();
+                    }
 
                     if ($template) {
-                        $criteria = json_decode($dueCampaign['segment_criteria'], true) ?: [];
                         $varMappings = $criteria['var_mappings'] ?? [];
                         $staticVals = $criteria['static_vals'] ?? [];
                         $mediaUrl = $criteria['header_media'] ?? '';
@@ -244,6 +259,8 @@ try {
                              }
 
                             $body = "Campaign message: {$dueCampaign['name']}";
+                            $senderArg = $senderAcc ? (int)$senderAcc['id'] : ($campSenderId ?: ($senderKey ?? 'notifications'));
+                            $idempotencyKey = "campaign:{$campId}:rec:{$rec['id']}";
                             $queueId = $engine->queueMessage(
                                 'whatsapp',
                                 $rec['recipient'],
@@ -255,7 +272,12 @@ try {
                                 $templatePayload,
                                 $dueCampaign['created_by'],
                                 date('Y-m-d H:i:s'),
-                                !empty($rec['user_id']) ? (string)$rec['user_id'] : ($criteria['student_admission_number'] ?? ($criteria['student_id'] ?? null))
+                                !empty($rec['user_id']) ? (string)$rec['user_id'] : ($criteria['student_admission_number'] ?? ($criteria['student_id'] ?? null)),
+                                'campaign_message',
+                                0,
+                                $senderArg,
+                                $idempotencyKey,
+                                CampaignConfig::CAMPAIGN_QUEUE_PRIORITY
                             );
 
                             $pdo->prepare("UPDATE communication_campaign_recipients SET queue_id = ?, status = 'pending' WHERE id = ?")->execute([$queueId, $rec['id']]);
@@ -268,9 +290,21 @@ try {
                 } else {
                     $pdo->commit();
 
-                    $pendingCount = (int)$pdo->query("SELECT COUNT(*) FROM communication_campaign_recipients WHERE campaign_id = {$campId} AND queue_id IS NULL")->fetchColumn();
+                    $pendingStmt = $pdo->prepare("SELECT COUNT(*) FROM communication_campaign_recipients WHERE campaign_id = ? AND queue_id IS NULL AND status = 'pending'");
+                    $pendingStmt->execute([$campId]);
+                    $pendingCount = (int)$pendingStmt->fetchColumn();
                     if ($pendingCount === 0 && $dueCampaign['status'] === 'active') {
-                        $pdo->prepare("UPDATE communication_campaigns SET status = 'completed', updated_at = NOW() WHERE id = ?")->execute([$campId]);
+                        $inFlightStmt = $pdo->prepare("
+                            SELECT COUNT(*) FROM communication_campaign_recipients cr
+                            JOIN communication_queue cq ON cr.queue_id = cq.id
+                            WHERE cr.campaign_id = ?
+                              AND cq.status IN ('pending', 'processing', 'scheduled', 'retrying')
+                        ");
+                        $inFlightStmt->execute([$campId]);
+                        $inFlightCount = (int)$inFlightStmt->fetchColumn();
+                        if ($inFlightCount === 0) {
+                            $pdo->prepare("UPDATE communication_campaigns SET status = 'completed', updated_at = NOW() WHERE id = ?")->execute([$campId]);
+                        }
                     }
                 }
             }

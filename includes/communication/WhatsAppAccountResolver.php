@@ -557,8 +557,8 @@ class WhatsAppAccountResolver {
                 }
             }
 
-            // If no sender-specific match, return first candidate normalized
-            if (!empty($candidates)) {
+            // If no sender-specific match and NO sender account was requested, return first candidate normalized (legacy fallback)
+            if ($senderAccountId === null && !empty($candidates)) {
                 return $this->normalizeTemplateRow($candidates[0]);
             }
         } catch (Throwable $e) {

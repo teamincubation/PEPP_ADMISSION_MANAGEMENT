@@ -126,7 +126,7 @@ try {
         $convAccId = !empty($conv['account_id']) ? (int)$conv['account_id'] : null;
         $resolver = WhatsAppAccountResolver::getInstance($pdo);
         $template = $resolver->resolveTemplate($templateName, $convAccId);
-        if (!$template) {
+        if (!$template && $convAccId === null) {
             $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
             $stmtTpl->execute([$templateName]);
             $template = $stmtTpl->fetch(PDO::FETCH_ASSOC);

@@ -251,7 +251,7 @@ try {
                         if (!$template && !empty($dueCampaign['template_name'])) {
                             $template = $tplResolver->resolveTemplate($dueCampaign['template_name'], $campSenderId);
                         }
-                        if (!$template) {
+                        if (!$template && $campSenderId === null) {
                             $tplStmt = $pdo->prepare("
                                 SELECT * FROM communication_templates
                                 WHERE template_name = ? AND channel = ? AND status = 'approved'
@@ -294,18 +294,56 @@ try {
                                 $resolvedBodyVars = [];
                                 $missingVar = null;
 
+                                // Dynamically detect expected body variables
+                                $bodyVarList = [];
                                 if (isset($metaData['body_vars']) && is_array($metaData['body_vars'])) {
-                                    foreach ($metaData['body_vars'] as $idx => $token) {
+                                    $bodyVarList = $metaData['body_vars'];
+                                } else {
+                                    $bText = $template['body_text'] ?? ($metaData['body_text'] ?? '');
+                                    if (empty($bText) && !empty($metaData['components'])) {
+                                        foreach ($metaData['components'] as $c) {
+                                            if (($c['type'] ?? '') === 'BODY') {
+                                                $bText = $c['text'] ?? '';
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (!empty($bText)) {
+                                        preg_match_all('/\{\{(\d+)\}\}/', $bText, $bMatches);
+                                        if (!empty($bMatches[1])) {
+                                            $indices = array_values(array_unique(array_map('intval', $bMatches[1])));
+                                            sort($indices);
+                                            foreach ($indices as $i) {
+                                                $bodyVarList[$i] = 'var_' . $i;
+                                            }
+                                        }
+                                    } elseif (!empty($varMappings) && is_array($varMappings)) {
+                                        foreach ($varMappings as $k => $v) {
+                                            $bodyVarList[$k] = 'var_' . $k;
+                                        }
+                                    }
+                                }
+
+                                if (!empty($bodyVarList)) {
+                                    foreach ($bodyVarList as $idx => $token) {
                                         $val = '';
-                                        // 1. Check custom field mapping in segment criteria
+                                        // 1. Check custom field mapping in segment criteria (0-based, 1-based, or token name)
+                                        $mappedCol = null;
                                         if (isset($varMappings[$idx]) && $varMappings[$idx] !== '') {
                                             $mappedCol = $varMappings[$idx];
+                                        } elseif (is_int($idx) && isset($varMappings[$idx + 1]) && $varMappings[$idx + 1] !== '') {
+                                            $mappedCol = $varMappings[$idx + 1];
+                                        } elseif (isset($varMappings[$token]) && $varMappings[$token] !== '') {
+                                            $mappedCol = $varMappings[$token];
+                                        }
+
+                                        if ($mappedCol !== null) {
                                             if ($mappedCol === 'name' || $mappedCol === 'student_name') {
                                                 $val = $rec['recipient_name'] ?? ($leadOrStudent['name'] ?? '');
-                                            } elseif ($mappedCol === 'phone') {
+                                            } elseif ($mappedCol === 'phone' || $mappedCol === 'whatsapp_number') {
                                                 $val = $rec['recipient'] ?? '';
-                                            } elseif ($mappedCol === 'course') {
-                                                $val = $leadOrStudent['interested_course'] ?? ($leadOrStudent['pepp_course'] ?? '');
+                                            } elseif ($mappedCol === 'course' || $mappedCol === 'interested_course') {
+                                                $val = $leadOrStudent['interested_course'] ?? ($leadOrStudent['pepp_course'] ?? ($leadOrStudent['course'] ?? ''));
                                             } elseif ($mappedCol === 'status') {
                                                 $val = ucfirst($leadOrStudent['status'] ?? '');
                                             } elseif ($leadOrStudent && isset($leadOrStudent[$mappedCol])) {
@@ -313,15 +351,19 @@ try {
                                             }
                                         }
                                         // 2. Check static values
-                                        if ($val === '' && isset($staticVals[$idx]) && trim((string)$staticVals[$idx]) !== '') {
-                                            $val = trim((string)$staticVals[$idx]);
+                                        if ($val === '') {
+                                            if (isset($staticVals[$idx]) && trim((string)$staticVals[$idx]) !== '') {
+                                                $val = trim((string)$staticVals[$idx]);
+                                            } elseif (is_int($idx) && isset($staticVals[$idx + 1]) && trim((string)$staticVals[$idx + 1]) !== '') {
+                                                $val = trim((string)$staticVals[$idx + 1]);
+                                            }
                                         }
                                         // 3. Fallback to standard token resolution
                                         if ($val === '') {
                                             if ($token === 'student_name' || $token === 'name') {
                                                 $val = $rec['recipient_name'] ?? ($leadOrStudent['name'] ?? '');
                                             } elseif ($token === 'course') {
-                                                $val = $leadOrStudent['interested_course'] ?? ($leadOrStudent['pepp_course'] ?? '');
+                                                $val = $leadOrStudent['interested_course'] ?? ($leadOrStudent['pepp_course'] ?? ($leadOrStudent['course'] ?? ''));
                                             } elseif ($leadOrStudent && isset($leadOrStudent[$token])) {
                                                 $val = (string)$leadOrStudent[$token];
                                             }
@@ -329,7 +371,7 @@ try {
 
                                         // Required variable check: cannot be empty
                                         if (trim((string)$val) === '') {
-                                            $missingVar = $token;
+                                            $missingVar = is_string($token) ? $token : "var_{$idx}";
                                             break;
                                         }
                                         $resolvedBodyVars[] = (string)$val;

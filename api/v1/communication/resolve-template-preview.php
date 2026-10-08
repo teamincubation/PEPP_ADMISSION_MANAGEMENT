@@ -38,7 +38,7 @@ try {
     if (!$template) {
         $template = $resolver->resolveTemplate($templateName, $senderAccountId);
     }
-    if (!$template) {
+    if (!$template && $senderAccountId === null) {
         $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
         $stmtTpl->execute([$templateName]);
         $template = $stmtTpl->fetch(PDO::FETCH_ASSOC);

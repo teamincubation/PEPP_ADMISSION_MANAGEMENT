@@ -163,7 +163,19 @@ if (isset($_GET['action'])) {
             $tpl = $resolver->resolveTemplate($name, $senderAccountId ?: null);
         }
 
+        if ($senderAccountId > 0 && $tpl) {
+            $tplSenderId = (int)($tpl['sender_account_id'] ?? 0);
+            if ($tplSenderId > 0 && $tplSenderId !== $senderAccountId) {
+                echo json_encode(['success' => false, 'message' => 'Template does not belong to the selected sender account.']);
+                exit;
+            }
+        }
+
         if ($tpl && ($tpl['status'] ?? '') === 'approved') {
+            if (strtoupper($tpl['category'] ?? '') !== 'MARKETING') {
+                echo json_encode(['success' => false, 'message' => 'Only approved WhatsApp MARKETING templates can be used for bulk marketing campaigns. Utility templates cannot be broadcast.']);
+                exit;
+            }
             $meta = json_decode($tpl['meta_data'] ?? '{}', true) ?: [];
             $sId = (int)($tpl['sender_account_id'] ?? 3);
             $account = $resolver->getAccount($sId) ?: $resolver->getAccount(3);
@@ -2334,8 +2346,8 @@ function onTemplateSelected(tplName, tplId) {
 
     const currentSenderId = parseInt(document.getElementById('inp-sender-account-id').value || 3, 10);
 
-    // Fast local lookup first
-    let found = allTemplatesData.find(t => (tplId && t.id == tplId) || (parseInt(t.sender_account_id, 10) === currentSenderId && t.template_name === tplName));
+    // Fast local lookup first (strictly bounded by selected sender account)
+    let found = allTemplatesData.find(t => parseInt(t.sender_account_id, 10) === currentSenderId && ((tplId && t.id == tplId) || t.template_name === tplName));
     if (found) {
         if (inpTplId && !inpTplId.value) inpTplId.value = found.id;
         let meta = {};
