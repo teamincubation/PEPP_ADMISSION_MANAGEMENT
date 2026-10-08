@@ -239,14 +239,27 @@ try {
                             }
                         }
 
-                        // Fetch Template Info
-                        $tplStmt = $pdo->prepare("
-                            SELECT * FROM communication_templates
-                            WHERE template_name = ? AND channel = ? AND status = 'approved'
-                            LIMIT 1
-                        ");
-                        $tplStmt->execute([$dueCampaign['template_name'], $dueCampaign['channel']]);
-                        $template = $tplStmt->fetch();
+                        // Fetch Template Info (Sender-aware & ID-based)
+                        require_once __DIR__ . '/includes/communication/WhatsAppAccountResolver.php';
+                        $tplResolver = WhatsAppAccountResolver::getInstance($pdo);
+                        $template = null;
+                        $campSenderId = $senderAcc ? (int)$senderAcc['id'] : null;
+
+                        if (!empty($dueCampaign['template_id'])) {
+                            $template = $tplResolver->getTemplateById((int)$dueCampaign['template_id'], $campSenderId);
+                        }
+                        if (!$template && !empty($dueCampaign['template_name'])) {
+                            $template = $tplResolver->resolveTemplate($dueCampaign['template_name'], $campSenderId);
+                        }
+                        if (!$template) {
+                            $tplStmt = $pdo->prepare("
+                                SELECT * FROM communication_templates
+                                WHERE template_name = ? AND channel = ? AND status = 'approved'
+                                LIMIT 1
+                            ");
+                            $tplStmt->execute([$dueCampaign['template_name'], $dueCampaign['channel']]);
+                            $template = $tplStmt->fetch();
+                        }
 
                         if ($template) {
                             $metaData = json_decode($template['meta_data'] ?? '{}', true) ?: [];

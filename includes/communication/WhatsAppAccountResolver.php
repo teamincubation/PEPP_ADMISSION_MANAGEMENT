@@ -114,7 +114,7 @@ class WhatsAppAccountResolver {
         $cleanKey = strtolower(trim((string)$identifier));
         if ($cleanKey === 'admissions' || $cleanKey === '1') {
             return $this->getLegacyAdmissionsAccount();
-        } elseif ($cleanKey === 'notifications' || $cleanKey === '2' || $cleanKey === '3') {
+        } elseif ($cleanKey === 'notifications' || $cleanKey === '3') {
             return [
                 'id' => 3,
                 'sender_key' => 'notifications',
@@ -348,7 +348,7 @@ class WhatsAppAccountResolver {
         if (empty($acc['waba_id'])) {
             $senderKey = strtolower(trim((string)($acc['sender_key'] ?? '')));
             $accId = (int)($acc['id'] ?? 0);
-            if ($senderKey === 'notifications' || $accId === 3 || $accId === 2) {
+            if ($senderKey === 'notifications' || $accId === 3) {
                 $acc['waba_id'] = '1099020233033644';
             } else {
                 $legacyWaba = $this->getLegacySetting('whatsapp_business_id');

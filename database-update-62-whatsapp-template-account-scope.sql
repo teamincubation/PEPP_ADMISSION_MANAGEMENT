@@ -97,42 +97,49 @@ BEGIN
             ADD KEY `idx_ct_meta_template_id` (`meta_template_id`);
         END IF;
 
-        -- 1.7 Backfill existing templates safely
-        -- Step A: Backfill Account 3 (PEPP Updates) from meta_data JSON or faculty templates
+        -- 1.7 Backfill existing templates with strict deterministic priority:
+        -- Priority 1: Explicit WABA ID in meta_data JSON
         UPDATE `communication_templates`
-        SET `sender_account_id` = 3,
-            `waba_id` = '1099020233033644'
+        SET `sender_account_id` = 3, `waba_id` = '1099020233033644'
         WHERE `channel` = 'whatsapp'
           AND (`sender_account_id` IS NULL OR `waba_id` IS NULL)
-          AND (
-              `meta_data` LIKE '%"waba_id":"1099020233033644"%'
-              OR `meta_data` LIKE '%"account_id":3%'
-              OR `meta_data` LIKE '%"sender_key":"notifications"%'
-              OR `template_name` IN (
-                  'faculty_session_reminder',
-                  'faculty_session_start',
-                  'faculty_session_start_now',
-                  'faculty_session_cancelled',
-                  'faculty_session_scheduled'
-              )
-          );
+          AND `meta_data` LIKE '%"waba_id":"1099020233033644"%';
 
-        -- Step B: Backfill Account 1 (PEPP Learning) from meta_data JSON
         UPDATE `communication_templates`
-        SET `sender_account_id` = 1,
-            `waba_id` = '1410328164305566'
+        SET `sender_account_id` = 1, `waba_id` = '1410328164305566'
         WHERE `channel` = 'whatsapp'
           AND (`sender_account_id` IS NULL OR `waba_id` IS NULL)
-          AND (
-              `meta_data` LIKE '%"waba_id":"1410328164305566"%'
-              OR `meta_data` LIKE '%"account_id":1%'
-              OR `meta_data` LIKE '%"sender_key":"admissions"%'
+          AND `meta_data` LIKE '%"waba_id":"1410328164305566"%';
+
+        -- Priority 2: Explicit sender_key / account_id in meta_data JSON
+        UPDATE `communication_templates`
+        SET `sender_account_id` = 3, `waba_id` = '1099020233033644'
+        WHERE `channel` = 'whatsapp'
+          AND (`sender_account_id` IS NULL OR `waba_id` IS NULL)
+          AND (`meta_data` LIKE '%"account_id":3%' OR `meta_data` LIKE '%"sender_key":"notifications"%');
+
+        UPDATE `communication_templates`
+        SET `sender_account_id` = 1, `waba_id` = '1410328164305566'
+        WHERE `channel` = 'whatsapp'
+          AND (`sender_account_id` IS NULL OR `waba_id` IS NULL)
+          AND (`meta_data` LIKE '%"account_id":1%' OR `meta_data` LIKE '%"sender_key":"admissions"%');
+
+        -- Priority 3: Known Account 3 faculty live session reminder templates
+        UPDATE `communication_templates`
+        SET `sender_account_id` = 3, `waba_id` = '1099020233033644'
+        WHERE `channel` = 'whatsapp'
+          AND (`sender_account_id` IS NULL OR `waba_id` IS NULL)
+          AND `template_name` IN (
+              'faculty_session_reminder',
+              'faculty_session_start',
+              'faculty_session_start_now',
+              'faculty_session_cancelled',
+              'faculty_session_scheduled'
           );
 
-        -- Step C: Backfill remaining legacy WhatsApp templates to Account 1 (PEPP Learning default)
+        -- Priority 4: Remaining legacy WhatsApp templates default to Account 1 (PEPP Learning Admissions)
         UPDATE `communication_templates`
-        SET `sender_account_id` = 1,
-            `waba_id` = '1410328164305566'
+        SET `sender_account_id` = 1, `waba_id` = '1410328164305566'
         WHERE `channel` = 'whatsapp'
           AND `sender_account_id` IS NULL;
 
@@ -146,12 +153,26 @@ BEGIN
           AND JSON_UNQUOTE(JSON_EXTRACT(`meta_data`, '$.meta_template_id')) != '';
 
         -- 1.8 Replace old single-WABA unique index with sender-aware unique index
-        -- First drop old unique index if it exists
+        -- Safely drop old unique index variants if they exist
         IF EXISTS (
             SELECT 1 FROM information_schema.statistics
             WHERE table_schema = DATABASE() AND table_name = 'communication_templates' AND index_name = 'uq_template_channel_name'
         ) THEN
             ALTER TABLE `communication_templates` DROP INDEX `uq_template_channel_name`;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.statistics
+            WHERE table_schema = DATABASE() AND table_name = 'communication_templates' AND index_name = 'uq_comm_tpl_channel_name_lang'
+        ) THEN
+            ALTER TABLE `communication_templates` DROP INDEX `uq_comm_tpl_channel_name_lang`;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.statistics
+            WHERE table_schema = DATABASE() AND table_name = 'communication_templates' AND index_name = 'uq_template_channel_name_lang'
+        ) THEN
+            ALTER TABLE `communication_templates` DROP INDEX `uq_template_channel_name_lang`;
         END IF;
 
         -- Create new sender-account aware unique index
@@ -207,29 +228,59 @@ BEGIN
         END IF;
 
         -- 2.5 Backfill sender_account_id on existing event mappings
-        -- Faculty & notification events -> Account 3 (PEPP Updates)
+        -- Priority 1: Existing explicit sender_key if present from migration 51
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = DATABASE() AND table_name = 'communication_event_mappings' AND column_name = 'sender_key'
+        ) THEN
+            UPDATE `communication_event_mappings`
+            SET `sender_account_id` = 3
+            WHERE `sender_account_id` IS NULL AND `sender_key` = 'notifications';
+
+            UPDATE `communication_event_mappings`
+            SET `sender_account_id` = 1
+            WHERE `sender_account_id` IS NULL AND `sender_key` = 'admissions';
+        END IF;
+
+        -- Priority 2: Faculty & notification events -> Account 3 (PEPP Updates)
         UPDATE `communication_event_mappings`
         SET `sender_account_id` = 3
         WHERE `sender_account_id` IS NULL
-          AND `event_name` IN (
-              'session_reminder',
-              'faculty_session_reminder',
-              'daily_task_reminder',
-              'university_admission_notification',
-              'task_reminder',
-              'scheduled_session_reminder'
+          AND (
+              `event_name` LIKE 'faculty_session_%'
+              OR `event_name` IN (
+                  'session_reminder',
+                  'daily_task_reminder',
+                  'university_admission_notification',
+                  'task_reminder',
+                  'scheduled_session_reminder'
+              )
           );
 
-        -- All other events -> Account 1 (PEPP Learning)
+        -- Priority 3: Admissions & student events -> Account 1 (PEPP Learning)
+        UPDATE `communication_event_mappings`
+        SET `sender_account_id` = 1
+        WHERE `sender_account_id` IS NULL
+          AND `event_name` IN (
+              'birthday_greeting',
+              'birthday_reward_claimed',
+              'onboarding_app_access',
+              'payment_received',
+              'invoice_generated',
+              'student_enrolled',
+              'admission_offer'
+          );
+
+        -- Priority 4: All other legacy events default to Account 1 (PEPP Learning)
         UPDATE `communication_event_mappings`
         SET `sender_account_id` = 1
         WHERE `sender_account_id` IS NULL;
 
-        -- 2.6 Backfill template_id by matching communication_templates
+        -- 2.6 Backfill template_id by matching communication_templates (strictly sender-scoped)
         UPDATE `communication_event_mappings` cem
         JOIN `communication_templates` ct
           ON ct.template_name = cem.template_name
-         AND (ct.sender_account_id = cem.sender_account_id OR ct.sender_account_id IS NULL)
+         AND (ct.sender_account_id = cem.sender_account_id OR (ct.sender_account_id IS NULL AND cem.sender_account_id = 1))
          AND ct.channel = 'whatsapp'
         SET cem.template_id = ct.id
         WHERE cem.template_id IS NULL
@@ -312,14 +363,33 @@ BEGIN
           AND JSON_VALID(`segment_criteria`)
           AND JSON_EXTRACT(`segment_criteria`, '$.sender_account_id') IS NOT NULL;
 
-        -- 3.6 Backfill template_id by matching communication_templates
+        -- 3.6 Backfill template_id by matching communication_templates when sender_account_id is known
         UPDATE `communication_campaigns` cc
         JOIN `communication_templates` ct
           ON ct.template_name = cc.template_name
-         AND (ct.sender_account_id = cc.sender_account_id OR cc.sender_account_id IS NULL)
+         AND ct.sender_account_id = cc.sender_account_id
          AND ct.channel = 'whatsapp'
         SET cc.template_id = ct.id
         WHERE cc.template_id IS NULL
+          AND cc.sender_account_id IS NOT NULL
+          AND cc.template_name IS NOT NULL
+          AND cc.template_name != '';
+
+        -- 3.7 For legacy campaigns with NULL sender_account_id, backfill ONLY if template_name uniquely exists in ONE sender account
+        -- If ambiguous across WABAs, DO NOT guess: leaves template_id and sender_account_id NULL for admin review
+        UPDATE `communication_campaigns` cc
+        JOIN (
+            SELECT template_name, MIN(id) AS single_template_id, MIN(sender_account_id) AS single_sender_id
+            FROM `communication_templates`
+            WHERE channel = 'whatsapp'
+            GROUP BY template_name
+            HAVING COUNT(DISTINCT sender_account_id) = 1
+        ) ct_single
+          ON ct_single.template_name = cc.template_name
+        SET cc.template_id = ct_single.single_template_id,
+            cc.sender_account_id = ct_single.single_sender_id
+        WHERE cc.template_id IS NULL
+          AND cc.sender_account_id IS NULL
           AND cc.template_name IS NOT NULL
           AND cc.template_name != '';
 

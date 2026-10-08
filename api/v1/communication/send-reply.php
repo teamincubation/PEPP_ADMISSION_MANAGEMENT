@@ -121,10 +121,16 @@ try {
             $eventName = 'installment_reminder'; // Fallback
         }
 
-        // Fetch template details to verify language & status
-        $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
-        $stmtTpl->execute([$templateName]);
-        $template = $stmtTpl->fetch(PDO::FETCH_ASSOC);
+        // Fetch template details to verify language & status (Sender-aware)
+        require_once dirname(dirname(dirname(__DIR__))) . '/includes/communication/WhatsAppAccountResolver.php';
+        $convAccId = !empty($conv['account_id']) ? (int)$conv['account_id'] : null;
+        $resolver = WhatsAppAccountResolver::getInstance($pdo);
+        $template = $resolver->resolveTemplate($templateName, $convAccId);
+        if (!$template) {
+            $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
+            $stmtTpl->execute([$templateName]);
+            $template = $stmtTpl->fetch(PDO::FETCH_ASSOC);
+        }
 
         if (!$template) {
             http_response_code(404);

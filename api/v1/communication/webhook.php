@@ -514,10 +514,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             if ($actionType === 'SEND_TEMPLATE' && !empty($targetTplName)) {
                                 $preventAutoResponse = true;
                                 
-                                // Find target template details
-                                $stmtTarget = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? AND channel = 'whatsapp' AND status = 'approved' LIMIT 1");
-                                $stmtTarget->execute([$targetTplName]);
-                                $targetTpl = $stmtTarget->fetch();
+                                // Find target template details (Sender-aware)
+                                $receivingAccountId = $receivingAccount ? (int)$receivingAccount['id'] : null;
+                                $targetTpl = $accountResolver->resolveTemplate($targetTplName, $receivingAccountId);
+                                if (!$targetTpl || ($targetTpl['status'] ?? '') !== 'approved') {
+                                    $stmtTarget = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? AND channel = 'whatsapp' AND status = 'approved' LIMIT 1");
+                                    $stmtTarget->execute([$targetTplName]);
+                                    $targetTpl = $stmtTarget->fetch();
+                                }
                                 
                                 if ($targetTpl) {
                                     $targetMeta = json_decode($targetTpl['meta_data'], true) ?: [];

@@ -17,6 +17,13 @@ if ($convId <= 0) {
     exit;
 }
 
+$convAccId = null;
+try {
+    $stc = $pdo->prepare("SELECT account_id FROM whatsapp_conversations WHERE id = ? LIMIT 1");
+    $stc->execute([$convId]);
+    $convAccId = $stc->fetchColumn();
+} catch (Exception $e) {}
+
 function extract_message_payload($rawPayload) {
     if (empty($rawPayload)) return null;
     $decoded = is_array($rawPayload) ? $rawPayload : json_decode($rawPayload, true);
@@ -27,7 +34,7 @@ function extract_message_payload($rawPayload) {
     return $decoded;
 }
 
-function get_resolved_message_text($pdo, $row) {
+function get_resolved_message_text($pdo, $row, $convAccId = null) {
     $text = $row['message_text'] ?? '';
     $type = $row['message_type'] ?? 'text';
     $rawPayload = extract_message_payload($row['raw_payload'] ?? '');
@@ -38,15 +45,21 @@ function get_resolved_message_text($pdo, $row) {
             $tplName = $rawPayload['name'];
             $params = $rawPayload['parameters'];
 
+            $cacheKey = "{$tplName}_" . ($convAccId ?: '0');
             static $tplCache = [];
-            if (!isset($tplCache[$tplName])) {
-                $stmt = $pdo->prepare("SELECT meta_data, updated_at FROM communication_templates WHERE template_name = ? LIMIT 1");
-                $stmt->execute([$tplName]);
-                $tpl = $stmt->fetch(PDO::FETCH_ASSOC);
-                $tplCache[$tplName] = $tpl ?: false;
+            if (!isset($tplCache[$cacheKey])) {
+                require_once dirname(dirname(dirname(__DIR__))) . '/includes/communication/WhatsAppAccountResolver.php';
+                $tResolver = WhatsAppAccountResolver::getInstance($pdo);
+                $tpl = $tResolver->resolveTemplate($tplName, $convAccId ? (int)$convAccId : null);
+                if (!$tpl) {
+                    $stmt = $pdo->prepare("SELECT meta_data, updated_at FROM communication_templates WHERE template_name = ? LIMIT 1");
+                    $stmt->execute([$tplName]);
+                    $tpl = $stmt->fetch(PDO::FETCH_ASSOC);
+                }
+                $tplCache[$cacheKey] = $tpl ?: false;
             }
 
-            $tpl = $tplCache[$tplName];
+            $tpl = $tplCache[$cacheKey];
             if ($tpl) {
                 $msgTime = strtotime($row['created_at']);
                 $tplUpdateTime = strtotime($tpl['updated_at']);
@@ -174,7 +187,7 @@ try {
 
     foreach ($messages as &$m) {
         $rawPayload = extract_message_payload($m['raw_payload'] ?? '');
-        $m['message_text'] = get_resolved_message_text($pdo, $m);
+        $m['message_text'] = get_resolved_message_text($pdo, $m, $convAccId);
 
         // Normalize message type if stored as unknown/unsupported
         $mType = $m['message_type'] ?? 'text';
@@ -193,14 +206,14 @@ try {
             if ($m['reaction_target_id']) {
                 if (isset($messagesByWaId[$m['reaction_target_id']])) {
                     $targetMsg = $messagesByWaId[$m['reaction_target_id']];
-                    $targetText = get_resolved_message_text($pdo, $targetMsg);
+                    $targetText = get_resolved_message_text($pdo, $targetMsg, $convAccId);
                     $m['reaction_target_snippet'] = mb_substr($targetText, 0, 80) . (mb_strlen($targetText) > 80 ? '...' : '');
                 } else {
                     $stmtTarget = $pdo->prepare("SELECT message_text, message_type, raw_payload, created_at FROM whatsapp_messages WHERE wa_message_id = ? LIMIT 1");
                     $stmtTarget->execute([$m['reaction_target_id']]);
                     $targetRow = $stmtTarget->fetch(PDO::FETCH_ASSOC);
                     if ($targetRow) {
-                        $targetText = get_resolved_message_text($pdo, $targetRow);
+                        $targetText = get_resolved_message_text($pdo, $targetRow, $convAccId);
                         $m['reaction_target_snippet'] = mb_substr($targetText, 0, 80) . (mb_strlen($targetText) > 80 ? '...' : '');
                     }
                 }
@@ -275,7 +288,7 @@ try {
             $targetWaId = $m['reply_to_wa_message_id'];
             if (isset($messagesByWaId[$targetWaId])) {
                 $tMsg = $messagesByWaId[$targetWaId];
-                $tText = get_resolved_message_text($pdo, $tMsg);
+                $tText = get_resolved_message_text($pdo, $tMsg, $convAccId);
                 $m['reply_context'] = [
                     'sender'  => ($tMsg['direction'] === 'outbound' ? 'Admin / System' : 'Student'),
                     'snippet' => mb_substr($tText, 0, 80) . (mb_strlen($tText) > 80 ? '...' : '')

@@ -153,7 +153,7 @@ $pdo->exec("
 $pdo->exec("
     INSERT INTO whatsapp_sender_accounts (id, sender_key, display_name, phone_number_id, phone_number, is_default, status)
     VALUES (1, 'admissions', 'PEPP Learning', 'PHONE_ID_111', '+916282563209', 1, 'active'),
-           (2, 'notifications', 'PEPP Updates', 'PHONE_ID_222', '+917994304400', 0, 'active');
+           (3, 'notifications', 'PEPP Updates', 'PHONE_ID_222', '+917994304400', 0, 'active');
 ");
 
 $engine = CommunicationEngine::getInstance($pdo);
@@ -434,15 +434,15 @@ $campSenderTestId = $engine->queueMessage(
     null,
     'campaign_message',
     0,
-    2, // sender_account_id = 2 (PEPP Updates)
+    3, // sender_account_id = 3 (PEPP Updates)
     'campaign:3:rec:101',
     CampaignConfig::CAMPAIGN_QUEUE_PRIORITY
 );
 
 $senderRow = $pdo->query("SELECT id, priority, sender_account_id FROM communication_queue WHERE id = {$campSenderTestId}")->fetch(PDO::FETCH_ASSOC);
 assertTest(
-    "Scenario E.1: Campaign item has priority = -10 AND sender_account_id in (2, 3) (PEPP Updates)",
-    (int)$senderRow['priority'] === -10 && in_array((int)$senderRow['sender_account_id'], [2, 3], true),
+    "Scenario E.1: Campaign item has priority = -10 AND sender_account_id = 3 (PEPP Updates)",
+    (int)$senderRow['priority'] === -10 && (int)$senderRow['sender_account_id'] === 3,
     "Priority: {$senderRow['priority']}, sender_account_id: {$senderRow['sender_account_id']}"
 );
 

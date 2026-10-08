@@ -810,7 +810,7 @@ if ($hasAccountsTable) {
         'is_default' => 1
     ];
     $notificationsAccount = [
-        'id' => 2,
+        'id' => 3,
         'sender_key' => 'notifications',
         'display_name' => 'PEPP Updates',
         'display_number' => '+91 79943 04400',
@@ -1191,7 +1191,7 @@ include 'includes/admin_nav.php';
                         <?php echo csrf_field(); ?>
                         <input type="hidden" name="action" value="save_whatsapp_sender_account">
                         <input type="hidden" name="sender_key" value="notifications">
-                        <input type="hidden" name="account_id" value="<?php echo (int)($notificationsAccount['id'] ?? 2); ?>">
+                        <input type="hidden" name="account_id" value="<?php echo (int)($notificationsAccount['id'] ?? 3); ?>">
 
                         <div style="margin-bottom:14px;">
                             <label style="display:flex; justify-content:space-between; font-size:0.8rem; font-weight:700; color:#374151; margin-bottom:6px;">

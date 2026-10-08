@@ -72,6 +72,7 @@ $pdo->exec("
         `phone_number_id` VARCHAR(100) NOT NULL DEFAULT '',
         `display_number` VARCHAR(30) NOT NULL,
         `display_name` VARCHAR(100) NOT NULL,
+        `waba_id` VARCHAR(100) DEFAULT NULL,
         `purpose` VARCHAR(255) DEFAULT NULL,
         `is_default` INTEGER DEFAULT 0,
         `status` VARCHAR(20) DEFAULT 'active',
@@ -115,7 +116,10 @@ $pdo->exec("
     CREATE TABLE IF NOT EXISTS `communication_templates` (
         `id` INTEGER PRIMARY KEY AUTOINCREMENT,
         `channel` VARCHAR(20) NOT NULL DEFAULT 'whatsapp',
-        `template_name` VARCHAR(100) NOT NULL UNIQUE,
+        `sender_account_id` INTEGER DEFAULT NULL,
+        `waba_id` VARCHAR(100) DEFAULT NULL,
+        `meta_template_id` VARCHAR(100) DEFAULT NULL,
+        `template_name` VARCHAR(100) NOT NULL,
         `language` VARCHAR(10) NOT NULL DEFAULT 'en',
         `status` VARCHAR(20) NOT NULL DEFAULT 'approved',
         `category` VARCHAR(50) DEFAULT 'utility',
@@ -130,6 +134,7 @@ $pdo->exec("
         `id` INTEGER PRIMARY KEY AUTOINCREMENT,
         `name` VARCHAR(255) NOT NULL,
         `sender_account_id` INTEGER DEFAULT NULL,
+        `template_id` INTEGER DEFAULT NULL,
         `channel` VARCHAR(20) NOT NULL DEFAULT 'whatsapp',
         `template_name` VARCHAR(100) NOT NULL,
         `target_audience` VARCHAR(50) NOT NULL DEFAULT 'leads',
@@ -193,15 +198,15 @@ $pdo->exec("
     );
 ");
 
-// Populate Base WhatsApp Accounts
+// Populate Base WhatsApp Accounts (Current Architecture: Account 1 = Admissions, Account 3 = Notifications)
 $pdo->exec("
-    INSERT INTO `whatsapp_accounts` (`id`, `sender_key`, `phone_number_id`, `display_number`, `display_name`, `purpose`, `is_default`, `status`)
+    INSERT INTO `whatsapp_accounts` (`id`, `sender_key`, `phone_number_id`, `display_number`, `display_name`, `waba_id`, `purpose`, `is_default`, `status`)
     VALUES 
-    (1, 'admissions', 'PHONE_ID_ADMISSIONS_111', '+91 62825 63209', 'PEPP Learning', 'Admissions communication', 1, 'active'),
-    (2, 'notifications', 'PHONE_ID_NOTIF_222', '+91 79943 04400', 'PEPP Updates', 'Marketing campaigns and notifications', 0, 'active');
+    (1, 'admissions', '1229563296908445', '+91 62825 63209', 'PEPP Learning', '1410328164305566', 'Admissions communication', 1, 'active'),
+    (3, 'notifications', '1293652117171674', '+91 79943 04400', 'PEPP Updates', '1099020233033644', 'Marketing campaigns and notifications', 0, 'active');
 ");
 
-// Populate Templates (4 marketing templates + 1 utility template + 1 unapproved template)
+// Populate Templates scoped to respective WABAs and Sender Accounts
 $metaSample = json_encode([
     'components' => [
         ['type' => 'HEADER', 'format' => 'TEXT', 'text' => 'M.Phil Entrance 2026'],
@@ -209,20 +214,26 @@ $metaSample = json_encode([
         ['type' => 'BUTTONS', 'buttons' => [['type' => 'QUICK_REPLY', 'text' => 'Interested']]]
     ]
 ]);
-$stmtTpl = $pdo->prepare("INSERT INTO `communication_templates` (`template_name`, `category`, `status`, `language`, `meta_data`) VALUES (?, ?, ?, ?, ?)");
-$stmtTpl->execute(['mphil_entrance_exam_target', 'MARKETING', 'approved', 'en', $metaSample]);
-$stmtTpl->execute(['mphil_join_interest_message', 'MARKETING', 'approved', 'en', $metaSample]);
-$stmtTpl->execute(['interested', 'MARKETING', 'approved', 'en', $metaSample]);
-$stmtTpl->execute(['notinterested', 'MARKETING', 'approved', 'en', $metaSample]);
-$stmtTpl->execute(['payment_receipt_instant', 'UTILITY', 'approved', 'en', $metaSample]);
-$stmtTpl->execute(['unapproved_promo_test', 'MARKETING', 'rejected', 'en', $metaSample]);
+$stmtTpl = $pdo->prepare("INSERT INTO `communication_templates` (`sender_account_id`, `waba_id`, `template_name`, `category`, `status`, `language`, `meta_data`) VALUES (?, ?, ?, ?, ?, ?, ?)");
+// Account 1 (PEPP Learning) templates:
+$stmtTpl->execute([1, '1410328164305566', 'mphil_entrance_exam_target', 'MARKETING', 'approved', 'en', $metaSample]);
+$stmtTpl->execute([1, '1410328164305566', 'mphil_join_interest_message', 'MARKETING', 'approved', 'en', $metaSample]);
+$stmtTpl->execute([1, '1410328164305566', 'interested', 'MARKETING', 'approved', 'en', $metaSample]);
+$stmtTpl->execute([1, '1410328164305566', 'notinterested', 'MARKETING', 'approved', 'en', $metaSample]);
+$stmtTpl->execute([1, '1410328164305566', 'payment_receipt_instant', 'UTILITY', 'approved', 'en', $metaSample]);
+$stmtTpl->execute([1, '1410328164305566', 'unapproved_promo_test', 'MARKETING', 'rejected', 'en', $metaSample]);
+
+// Account 3 (PEPP Updates) templates:
+$stmtTpl->execute([3, '1099020233033644', 'pepp_updates_broadcast', 'MARKETING', 'approved', 'en', $metaSample]);
+$stmtTpl->execute([3, '1099020233033644', 'faculty_session_reminder', 'UTILITY', 'approved', 'en', $metaSample]);
+$stmtTpl->execute([3, '1099020233033644', 'interested', 'MARKETING', 'approved', 'en', $metaSample]);
 
 // Set Admin Settings for WhatsApp
 $pdo->exec("
     INSERT INTO `admin_settings` (`setting_name`, `setting_value`) VALUES
-    ('whatsapp_access_token', 'TEST_WABA_TOKEN_XYZ'),
-    ('whatsapp_phone_number_id', 'PHONE_ID_ADMISSIONS_111'),
-    ('whatsapp_business_account_id', 'WABA_ID_TEST_999'),
+    ('whatsapp_access_token', 'TEST_GLOBAL_SYSTEM_USER_TOKEN'),
+    ('whatsapp_phone_number_id', '1229563296908445'),
+    ('whatsapp_business_account_id', '1410328164305566'),
     ('whatsapp_enabled', '1');
 ");
 
@@ -255,8 +266,8 @@ $engine = CommunicationEngine::getInstance($pdo);
 // TEST 1: Marketing campaign sender = notifications
 // -----------------------------------------------------------------------------
 $notifAcc = $resolver->getAccount('notifications');
-$t1_pass = ($notifAcc !== null && $notifAcc['sender_key'] === 'notifications' && $notifAcc['display_name'] === 'PEPP Updates');
-recordTest("1. Marketing campaign sender = notifications", $t1_pass, "Resolved: " . ($notifAcc['display_name'] ?? 'null'));
+$t1_pass = ($notifAcc !== null && (int)$notifAcc['id'] === 3 && $notifAcc['sender_key'] === 'notifications' && $notifAcc['display_name'] === 'PEPP Updates');
+recordTest("1. Marketing campaign sender = notifications (Account 3)", $t1_pass, "Resolved ID: " . ($notifAcc['id'] ?? 'null') . ", Name: " . ($notifAcc['display_name'] ?? 'null'));
 
 // -----------------------------------------------------------------------------
 // TEST 2: Sender ID propagates into queue
@@ -340,7 +351,7 @@ recordTest("5. Explicit notifications sender NEVER falls back to admissions", $t
 $admAcc = $resolver->getAccount('admissions');
 $providerAdm = new WhatsAppCloudProvider('WABA_ID_TEST_999', $admAcc['phone_number_id'], 'TEST_WABA_TOKEN_XYZ');
 $resolvedId = $providerAdm->getPhoneId();
-$t6_pass = ($resolvedId === 'PHONE_ID_ADMISSIONS_111');
+$t6_pass = ($resolvedId === '1229563296908445');
 recordTest("6. Admissions sender still works", $t6_pass, "Resolved phone_number_id = {$resolvedId}");
 
 // -----------------------------------------------------------------------------
@@ -557,7 +568,7 @@ recordTest("19. Cancel prevents pending dispatch", $t19_pass, "Pending recipient
 // TEST 20: Retry preserves sender
 // -----------------------------------------------------------------------------
 // Simulate a failed campaign queue item
-$qFailedId = $engine->queueMessage('whatsapp', '919876500001', 'Rahul', 'Campaign: Test', null, null, [], ['name' => 'mphil_entrance_exam_target', 'parameters' => ['Rahul', 'M.Phil']], 'Campaign', null, null, 'campaign_message', 0, 2);
+$qFailedId = $engine->queueMessage('whatsapp', '919876500001', 'Rahul', 'Campaign: Test', null, null, [], ['name' => 'mphil_entrance_exam_target', 'parameters' => ['Rahul', 'M.Phil']], 'Campaign', null, null, 'campaign_message', 0, 3);
 $pdo->prepare("UPDATE communication_queue SET status = 'failed', retry_count = 1, error_message = 'Rate limit exceeded' WHERE id = ?")->execute([$qFailedId]);
 
 // Execute retry logic matching ajax_campaign_control 'retry'
@@ -579,8 +590,8 @@ $requeuedId = $engine->queueMessage(
     !empty($origItem['sender_account_id']) ? (int)$origItem['sender_account_id'] : null
 );
 $requeuedRow = $pdo->query("SELECT * FROM communication_queue WHERE id = {$requeuedId}")->fetch();
-$t20_pass = ($requeuedRow && (int)$requeuedRow['sender_account_id'] === 2);
-recordTest("20. Retry preserves sender", $t20_pass, "Original sender 2 retained in retry item {$requeuedId}");
+$t20_pass = ($requeuedRow && (int)$requeuedRow['sender_account_id'] === 3);
+recordTest("20. Retry preserves sender", $t20_pass, "Original sender 3 retained in retry item {$requeuedId}");
 
 // -----------------------------------------------------------------------------
 // TEST 21: Retry preserves campaign association
@@ -610,7 +621,7 @@ recordTest("23. Permanent error is not endlessly retried", $t23_pass, "Permanent
 // Create completed campaign scenario: 0 pending recipients and 0 pending queue items
 $pdo->prepare("
     INSERT INTO communication_campaigns (id, name, sender_account_id, channel, template_name, target_audience, status, total_recipients, sent_count)
-    VALUES (102, 'Completed Campaign Test', 2, 'whatsapp', 'mphil_entrance_exam_target', 'leads', 'running', 2, 2)
+    VALUES (102, 'Completed Campaign Test', 3, 'whatsapp', 'mphil_entrance_exam_target', 'leads', 'running', 2, 2)
 ")->execute();
 $pdo->prepare("INSERT INTO communication_campaign_recipients (campaign_id, recipient, status) VALUES (102, '919999900001', 'sent'), (102, '919999900002', 'sent')")->execute();
 
@@ -643,6 +654,115 @@ $stats = $pdo->query("
 
 $t25_pass = ((int)$stats['total'] === 2 && (int)$stats['delivered_c'] === 1 && (int)$stats['read_c'] === 1);
 recordTest("25. Campaign counts are accurate", $t25_pass, "Counts match: Delivered = 1, Read = 1, Total = 2");
+
+// -----------------------------------------------------------------------------
+// TEST 26: Account 1 campaign -> sender_account_id = 1
+// -----------------------------------------------------------------------------
+$camp1QueueId = $engine->queueMessage(
+    'whatsapp',
+    '919111111111',
+    'Lead Admissions',
+    'Admissions Campaign',
+    null,
+    null,
+    [],
+    ['name' => 'mphil_entrance_exam_target'],
+    'Campaign',
+    null,
+    null,
+    'campaign_message',
+    0,
+    1 // Account 1 (PEPP Learning)
+);
+$q1Row = $pdo->query("SELECT * FROM communication_queue WHERE id = {$camp1QueueId}")->fetch();
+$t26_pass = ($q1Row && (int)$q1Row['sender_account_id'] === 1);
+recordTest("26. Account 1 campaign -> sender_account_id = 1", $t26_pass, "Queue sender_account_id = " . ($q1Row['sender_account_id'] ?? 'null'));
+
+// -----------------------------------------------------------------------------
+// TEST 27: Account 3 campaign -> sender_account_id = 3
+// -----------------------------------------------------------------------------
+$camp3QueueId = $engine->queueMessage(
+    'whatsapp',
+    '919333333333',
+    'Lead Notifications',
+    'Updates Campaign',
+    null,
+    null,
+    [],
+    ['name' => 'pepp_updates_broadcast'],
+    'Campaign',
+    null,
+    null,
+    'campaign_message',
+    0,
+    3 // Account 3 (PEPP Updates)
+);
+$q3Row = $pdo->query("SELECT * FROM communication_queue WHERE id = {$camp3QueueId}")->fetch();
+$t27_pass = ($q3Row && (int)$q3Row['sender_account_id'] === 3);
+recordTest("27. Account 3 campaign -> sender_account_id = 3", $t27_pass, "Queue sender_account_id = " . ($q3Row['sender_account_id'] ?? 'null'));
+
+// -----------------------------------------------------------------------------
+// TEST 28: Account 1 template cannot be used with Account 3
+// -----------------------------------------------------------------------------
+$acc1Tpl = $pdo->query("SELECT id, template_name FROM communication_templates WHERE sender_account_id = 1 AND template_name = 'mphil_join_interest_message'")->fetch();
+$crossLookup1to3 = $resolver->getTemplateById((int)$acc1Tpl['id'], 3);
+$t28_pass = ($crossLookup1to3 === null);
+recordTest("28. Account 1 template cannot be used with Account 3", $t28_pass, "Resolver strictly returned null for Account 1 template under Account 3");
+
+// -----------------------------------------------------------------------------
+// TEST 29: Account 3 template cannot be used with Account 1
+// -----------------------------------------------------------------------------
+$acc3Tpl = $pdo->query("SELECT id, template_name FROM communication_templates WHERE sender_account_id = 3 AND template_name = 'pepp_updates_broadcast'")->fetch();
+$crossLookup3to1 = $resolver->getTemplateById((int)$acc3Tpl['id'], 1);
+$t29_pass = ($crossLookup3to1 === null);
+recordTest("29. Account 3 template cannot be used with Account 1", $t29_pass, "Resolver strictly returned null for Account 3 template under Account 1");
+
+// -----------------------------------------------------------------------------
+// TEST 30: Queue preserves sender_account_id across multiple accounts
+// -----------------------------------------------------------------------------
+$t30_pass = ($q1Row && (int)$q1Row['sender_account_id'] === 1 && $q3Row && (int)$q3Row['sender_account_id'] === 3);
+recordTest("30. Queue preserves sender_account_id", $t30_pass, "Account 1 stored 1, Account 3 stored 3");
+
+// -----------------------------------------------------------------------------
+// TEST 31: Retry preserves sender_account_id for Account 3 and Account 1
+// -----------------------------------------------------------------------------
+$pdo->prepare("UPDATE communication_queue SET status = 'failed' WHERE id = ?")->execute([$camp3QueueId]);
+$fItem3 = $pdo->query("SELECT * FROM communication_queue WHERE id = {$camp3QueueId}")->fetch();
+$retriedId3 = $engine->queueMessage(
+    $fItem3['channel'],
+    $fItem3['recipient'],
+    $fItem3['recipient_name'],
+    $fItem3['subject'],
+    null,
+    null,
+    [],
+    json_decode($fItem3['template_data'], true) ?: [],
+    'Campaign Retry',
+    null,
+    null,
+    'campaign_message',
+    0,
+    (int)$fItem3['sender_account_id']
+);
+$r3Row = $pdo->query("SELECT * FROM communication_queue WHERE id = {$retriedId3}")->fetch();
+$t31_pass = ($r3Row && (int)$r3Row['sender_account_id'] === 3);
+recordTest("31. Retry preserves sender_account_id", $t31_pass, "Retried Account 3 item retains sender_account_id = 3");
+
+// -----------------------------------------------------------------------------
+// TEST 32: Account 3 resolves to WABA 1099020233033644
+// -----------------------------------------------------------------------------
+$waba3 = $resolver->getWabaId(3);
+$acc3Data = $resolver->getAccount(3);
+$t32_pass = ($waba3 === '1099020233033644' && ($acc3Data['waba_id'] ?? '') === '1099020233033644');
+recordTest("32. Account 3 resolves to WABA 1099020233033644", $t32_pass, "Resolved WABA: {$waba3}");
+
+// -----------------------------------------------------------------------------
+// TEST 33: Account 1 resolves to WABA 1410328164305566
+// -----------------------------------------------------------------------------
+$waba1 = $resolver->getWabaId(1);
+$acc1Data = $resolver->getAccount(1);
+$t33_pass = ($waba1 === '1410328164305566' && ($acc1Data['waba_id'] ?? '') === '1410328164305566');
+recordTest("33. Account 1 resolves to WABA 1410328164305566", $t33_pass, "Resolved WABA: {$waba1}");
 
 // =============================================================================
 // PERFORMANCE SIMULATION

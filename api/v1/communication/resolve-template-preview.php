@@ -25,9 +25,24 @@ if (empty($templateName)) {
 }
 
 try {
-    $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
-    $stmtTpl->execute([$templateName]);
-    $template = $stmtTpl->fetch(PDO::FETCH_ASSOC);
+    require_once '../../../includes/communication/WhatsAppAccountResolver.php';
+    $resolver = WhatsAppAccountResolver::getInstance($pdo);
+
+    $templateId = !empty($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
+    $senderAccountId = !empty($_GET['sender_account_id']) ? (int)$_GET['sender_account_id'] : (!empty($_GET['account_id']) ? (int)$_GET['account_id'] : null);
+
+    $template = null;
+    if ($templateId > 0) {
+        $template = $resolver->getTemplateById($templateId, $senderAccountId);
+    }
+    if (!$template) {
+        $template = $resolver->resolveTemplate($templateName, $senderAccountId);
+    }
+    if (!$template) {
+        $stmtTpl = $pdo->prepare("SELECT * FROM communication_templates WHERE template_name = ? LIMIT 1");
+        $stmtTpl->execute([$templateName]);
+        $template = $stmtTpl->fetch(PDO::FETCH_ASSOC);
+    }
 
     if (!$template) {
         http_response_code(404);

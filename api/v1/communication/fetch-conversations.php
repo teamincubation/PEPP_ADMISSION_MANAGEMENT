@@ -89,15 +89,22 @@ try {
                     $tplName = $rawPayload['name'];
                     $paramsList = $rawPayload['parameters'];
 
+                    $convAccId = !empty($c['account_id']) ? (int)$c['account_id'] : null;
+                    $cacheKey = "{$tplName}_{$convAccId}";
                     static $tplCache = [];
-                    if (!isset($tplCache[$tplName])) {
-                        $stmtTpl = $pdo->prepare("SELECT meta_data, updated_at FROM communication_templates WHERE template_name = ? LIMIT 1");
-                        $stmtTpl->execute([$tplName]);
-                        $tpl = $stmtTpl->fetch(PDO::FETCH_ASSOC);
-                        $tplCache[$tplName] = $tpl ?: false;
+                    if (!isset($tplCache[$cacheKey])) {
+                        require_once dirname(dirname(dirname(__DIR__))) . '/includes/communication/WhatsAppAccountResolver.php';
+                        $tResolver = WhatsAppAccountResolver::getInstance($pdo);
+                        $tpl = $tResolver->resolveTemplate($tplName, $convAccId);
+                        if (!$tpl) {
+                            $stmtTpl = $pdo->prepare("SELECT meta_data, updated_at FROM communication_templates WHERE template_name = ? LIMIT 1");
+                            $stmtTpl->execute([$tplName]);
+                            $tpl = $stmtTpl->fetch(PDO::FETCH_ASSOC);
+                        }
+                        $tplCache[$cacheKey] = $tpl ?: false;
                     }
 
-                    $tpl = $tplCache[$tplName];
+                    $tpl = $tplCache[$cacheKey];
                     if ($tpl) {
                         $msgTime = strtotime($lastMsg['created_at']);
                         $tplUpdateTime = strtotime($tpl['updated_at']);
