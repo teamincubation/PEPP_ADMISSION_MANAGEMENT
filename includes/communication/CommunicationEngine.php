@@ -11,6 +11,7 @@ require_once __DIR__ . '/Providers/EmailMailerProvider.php';
 require_once __DIR__ . '/CommunicationHelper.php';
 require_once __DIR__ . '/WhatsAppAccountResolver.php';
 require_once __DIR__ . '/CampaignConfig.php';
+require_once dirname(__DIR__) . '/student_status_helpers.php';
 
 if (file_exists(dirname(dirname(__DIR__)) . '/includes/template_helper.php')) {
     require_once dirname(dirname(__DIR__)) . '/includes/template_helper.php';
@@ -833,7 +834,7 @@ class CommunicationEngine {
             }
 
             $recipientIdent = !empty($item['student_uid']) ? $item['student_uid'] : $item['recipient'];
-            require_once __DIR__ . '/../auth.php';
+            require_once __DIR__ . '/../student_status_helpers.php';
             // Skip student active check for faculty sessions
             $st_status = $isFacultySessionEvent ? 'unknown' : get_student_status($this->pdo, $recipientIdent);
 

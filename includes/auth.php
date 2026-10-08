@@ -752,68 +752,7 @@ function is_student_assigned_to_mentor($pdo, $student_user_id, $admin_id) {
     } catch (Exception $e) { return false; }
 }
 
-if (!function_exists('get_student_status')) {
-    function get_student_status($pdo, $student_user_id_or_email) {
-        if (!$pdo || empty($student_user_id_or_email)) return 'unknown';
-        try {
-            $stmt = $pdo->prepare("SELECT student_status, status FROM users WHERE user_id = ? OR email = ? LIMIT 1");
-            $stmt->execute([$student_user_id_or_email, $student_user_id_or_email]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$row) return 'unknown';
-            if ($row['status'] !== 'approved') {
-                return strtolower(trim((string)$row['status'])) ?: 'unknown';
-            }
-            $st = strtolower(trim((string)$row['student_status']));
-            $valid_statuses = ['active', 'suspended', 'inactive', 'dropout', 'completed'];
-            return in_array($st, $valid_statuses, true) ? $st : 'unknown';
-        } catch (Exception $e) {
-            error_log('get_student_status error: ' . $e->getMessage());
-            return 'unknown';
-        }
-    }
-}
-
-if (!function_exists('is_student_active')) {
-    function is_student_active($pdo, $student_user_id_or_email) {
-        return (get_student_status($pdo, $student_user_id_or_email) === 'active');
-    }
-}
-
-if (!function_exists('get_student_status_reason')) {
-    function get_student_status_reason($pdo, $student_user_id_or_email, $target_status = null) {
-        if (!$pdo || empty($student_user_id_or_email)) return null;
-        try {
-            $user_id = $student_user_id_or_email;
-            if (strpos($student_user_id_or_email, '@') !== false) {
-                $stmt_u = $pdo->prepare("SELECT user_id FROM users WHERE email = ? LIMIT 1");
-                $stmt_u->execute([$student_user_id_or_email]);
-                $resolved = $stmt_u->fetchColumn();
-                if ($resolved) $user_id = $resolved;
-            }
-
-            if ($target_status !== null) {
-                $stmt = $pdo->prepare("
-                    SELECT reason FROM student_status_log
-                    WHERE user_id = ? AND LOWER(new_status) = LOWER(?)
-                    ORDER BY changed_at DESC, id DESC LIMIT 1
-                ");
-                $stmt->execute([$user_id, $target_status]);
-            } else {
-                $stmt = $pdo->prepare("
-                    SELECT reason FROM student_status_log
-                    WHERE user_id = ?
-                    ORDER BY changed_at DESC, id DESC LIMIT 1
-                ");
-                $stmt->execute([$user_id]);
-            }
-            $reason = $stmt->fetchColumn();
-            return ($reason && trim((string)$reason) !== '') ? trim((string)$reason) : null;
-        } catch (Exception $e) {
-            error_log('get_student_status_reason error: ' . $e->getMessage());
-            return null;
-        }
-    }
-}
+require_once __DIR__ . '/student_status_helpers.php';
 
 if (!function_exists('can_student_access_study_plan')) {
     function can_student_access_study_plan($pdo, $student_user_id_or_email) {
